@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
 tokio = { version = "1", default-features = false, features = [
-  "rt-multi-thread",
+  "rt",
   "macros",
   "io-std",
   "io-util",

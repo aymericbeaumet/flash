@@ -75,8 +75,7 @@ Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssig
 Tests/BrowserSnapshots/              # Browser integration offline HTML snapshots discovered by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
 Plugins/                             # Official bundled plugins, each a hermetic standalone build (no shared cargo workspace), symlinked into the dev app
-Plugins/_flash_plugin_rust/          # Shared Rust plugin SDK crate (package flash_plugin, own 2-member workspace + lock + canonical clippy.toml); no Flash business concepts
-Plugins/_flash_plugin_<language>/    # Shared per-language plugin SDKs (python/typescript/ruby/go/zig/swift), same no-business-concepts rule
+Plugins/_flash_plugin_rust/          # Sole maintained plugin SDK crate (package flash_plugin, own 2-member workspace + lock + canonical clippy.toml); no Flash business concepts
 Plugins/_flash_plugin_specs/         # Language-agnostic JSON protocol-conformance specs, run by Scripts/plugin-protocol-spec.py
 Resources/Info.plist                 # LSUIElement, AppleEvent usage description
 Scripts/build-plugins.sh                     # per-crate hermetic cargo builds for [dev|release] [id…] → flash-plugin-<id> binary beside its manifest (dev = plugin-dev profile, current arch; release = universal lipo; ids filter to the single-plugin hot loop)
@@ -401,27 +400,12 @@ never fork a per-screen layout copy. Overflow is handled by the elastic
 `#[shrink]…#[noshrink]` span (pixel-accurate ellipsis; fixed content keeps
 full width) and layout keeps a 16 pt margin around a notch.
 
-**Bundled plugins default to Rust, macOS-only.** Twelve official plugins
-are deliberately non-Rust — two per language, so each language's shared SDK
-has real consumers — to keep the wire protocol honestly language-agnostic
-(`docs/plugin-protocol.md`): `aiproviders` + `timezones` (Python),
-`emojis` + `colors` (TypeScript/Bun), `screenshot` + `caffeinate` (Ruby),
-`spotify` + `netinfo` (Go), `searchengines` + `httpstatus` (Zig, whose
-`@embedFile` replaces the old build.rs codegen), and `reminders` +
-`shortcuts` (Swift — its SDK answers lifecycle/ping on the read
-thread and runs handlers on a worker queue; single-threaded blocking SDKs
-are equally conformant, since pings never race in-flight requests). New
-plugins use Rust unless there is a deliberate reason not to. Every plugin —
-regardless of language — obeys the same manifest schema, push-catalog
-contract, latency deadlines, and payload quotas: host-side enforcement IS
-the contract; the Rust SDK's compile-time enforcement is a Rust nicety.
-**mise is the toolchain authority** (repo `mise.toml` pins
-python/ruby/bun/go/zig — never system toolchains; rust stays
-rustup-managed for its multi-target universal builds). Interpreted plugins
-declare their runtime by bare name in `exec` (`["python3", "main.py"]`);
-the host resolves it at spawn via `mise which` first (cwd-aware, so repo
-pins apply in dev), then a login-PATH walk, and logs the resolved path as
-`[plugin] runtime <name> -> <path>`.
+**Every executable bundled plugin is Rust and macOS-only.** The wire protocol
+remains language-neutral for third-party executables, but the repository
+maintains one SDK, one conformance probe, and one build path. Official plugin
+manifests use `["./flash-plugin-<id>"]`; only manifest-only plugins omit a
+binary. Rust stays rustup-managed for universal builds. `mise.toml` pins only
+Python for the language-neutral conformance runner.
 
 Rust plugins under `Plugins/<id>/` are **hermetic standalone crates** — there
 is no cargo workspace under `Plugins/` (the SDK dir's own two-member
@@ -444,32 +428,19 @@ trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
 need safely; the SDK confines its own unsafe to `process.rs`/`runtime.rs`).
-Each non-Rust language has its own shared SDK under
-`Plugins/_flash_plugin_<language>/` (a single ~100–250-line `flashplugin.*`:
-JSON-lines framing + the v1 lifecycle, a call_host correlation map, and a
-FLASH_PLUGIN_CONFIG accessor — no Flash business concepts, mirroring the
-Rust crate's role). Compiled languages link it at build time
-(go.mod `replace`, the Zig `flashplugin` module, Swift source compiled
-alongside `main.swift`); interpreted plugins import it by bare module name
-via host-injected `PYTHONPATH`/`RUBYLIB`/`NODE_PATH`
-(`PluginRepository.interpreterSDKEnvironment`, mirrored by the spec runner),
-and `Scripts/_common.sh` stages the python/ruby/typescript SDK dirs into the
-release bundle. `Plugins/_flash_plugin_specs/*.json` is the language-agnostic
+`Plugins/_flash_plugin_specs/*.json` is the language-agnostic
 conformance suite (lifecycle + wire-noise robustness always;
 snapshot/query gated on the manifest's provider sections);
 `Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
-it without a host, and CI runs it against every SDK — Rust included
-(calculator + snippets).
-`Scripts/build-plugins.sh [dev|release] [id…]` builds every compiled plugin
-by per-dir convention — `Cargo.toml` → one cargo invocation per hermetic
-crate, `go.mod` → `go build`, `main.zig` → `zig build-exe` (both via
-`mise exec`) — into a shared `build/plugin-target` (kept out of the watched
+it without a host, and CI runs it against every official plugin and the Rust
+probe. `Scripts/build-plugins.sh [dev|release] [id…]` builds every executable
+plugin with one cargo invocation per hermetic crate into a shared
+`build/plugin-target` (kept out of the watched
 plugin trees) and stages each `flash-plugin-<id>` binary next to its
-`manifest.json` through the same sign-then-atomic-rename flow; interpreted
-plugins need no build at all. `dev` uses the `plugin-dev` cargo profile
+`manifest.json` through the same sign-then-atomic-rename flow. `dev` uses the `plugin-dev` cargo profile
 (opt-level=1, line-tables-only debuginfo — mildly optimized, incremental,
-current arch) and native Go/Zig builds; `release` produces optimized
-universal binaries (x86_64 + arm64) joined with `lipo` for all three.
+current arch); `release` produces optimized universal binaries (x86_64 +
+arm64) joined with `lipo`.
 Trailing ids restrict the build to those plugins:
 `Scripts/build-plugins.sh dev tmux` is the single-plugin hot loop. Candidate providers declare manifest root `sources` descriptors, build
 their complete row set from light host events such as `core:apps.changed`,
@@ -586,8 +557,9 @@ query text, candidate titles/URLs/payloads, clipboard text, event payload, or
 other user data.
 
 **Plugins must never block the async runtime (enforced, no exceptions).** Every
-plugin runs on a small (2-worker) tokio runtime shared by all its async work —
-events, catalog refreshes, hint discovery. One blocking syscall pins a worker
+plugin runs on one current-thread Tokio executor shared by all its async work —
+events, catalog refreshes, hint discovery. Async I/O and `spawn_blocking` still
+make progress, but one blocking syscall pins the executor
 thread and stalls every other in-flight operation (this is exactly how a
 flashlight open ends up waiting hundreds of ms on a single plugin). So sync/
 blocking I/O is **banned outright in plugin code** — there is no
@@ -612,9 +584,7 @@ build its own (`tokio::runtime::Builder`/`block_on`); do async startup work in
 
 (`flash_plugin_macros` reads `manifest.json` at *compile* time, where there
 is no async runtime — its single read site carries a scoped
-`#[allow(clippy::disallowed_methods)]`. The lint regime is
-Rust-only by construction; non-Rust plugins answer to the host's runtime
-enforcement instead.)
+`#[allow(clippy::disallowed_methods)]`.)
 
 Tests should pin these invariants in place — see
 `Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,

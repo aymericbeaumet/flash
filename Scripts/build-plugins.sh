@@ -1,33 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build every compiled bundled plugin and drop each binary next to its
-# manifest.json as `flash-plugin-<id>`. Language is detected per plugin dir
-# by convention — Rust is the default for new plugins:
-#   Cargo.toml  → Rust   (hermetic standalone crate, one cargo run per dir)
-#   go.mod      → Go     (mise-pinned toolchain)
-#   main.zig    → Zig    (mise-pinned toolchain)
-#   main.swift  → Swift  (Xcode toolchain, same as the host app)
-#   none        → interpreted (python3/ruby/bun via manifest exec; nothing
-#                 to build — sources run in place)
-#
-# Every language links its shared per-language SDK from the sibling
-# Plugins/_flash_plugin_<language> directory: Rust via a path dep in the
-# plugin's own Cargo.toml, Go via a go.mod replace, Zig via the flashplugin
-# module below, Swift by compiling the SDK source alongside main.swift.
-# Interpreted SDKs (python/ruby/typescript) are imported by bare module name
-# via host-injected PYTHONPATH/RUBYLIB/NODE_PATH and staged into the release
-# bundle by Scripts/_common.sh.
+# Build every executable bundled plugin as a hermetic Rust crate and drop
+# each binary next to its manifest.json as `flash-plugin-<id>`. Plugins with
+# no Cargo.toml are manifest-only and have no process to build.
 #
 # All build artifacts land under build/plugin-target (never inside the
 # watched plugin trees, so the dev file-watcher never sees intermediate
-# files). Toolchains come from mise (repo mise.toml pins them); rust stays
-# rustup-managed for its multi-target universal builds.
+# files). Rust is rustup-managed for its multi-target universal builds.
 #
 # Usage: build-plugins.sh [dev|release] [id…]
-#   dev       — native-arch build (`plugin-dev` cargo profile / go build /
-#               zig ReleaseSafe), signed with the stable dev identity so
-#               TCC grants persist across rebuilds.
+#   dev       — native-arch `plugin-dev` build, signed with the stable dev
+#               identity so TCC grants persist across rebuilds.
 #   release   — optimized universal binaries (x86_64 + arm64) via lipo.
 #   id…       — optional plugin ids; `build-plugins.sh dev tmux` is the
 #               single-plugin hot loop.
@@ -41,7 +25,7 @@ cd "$PROJECT_DIR"
 
 TARGET_DIR="$PROJECT_DIR/build/plugin-target"
 export CARGO_TARGET_DIR="$TARGET_DIR"
-mkdir -p "$TARGET_DIR/other"
+mkdir -p "$TARGET_DIR"
 
 if [[ "$MODE" == "release" ]]; then
   # Make sure both Apple targets are available; harmless if already added.
@@ -90,9 +74,7 @@ fi
 
 build_dirs=()
 for dir in "${plugin_dirs[@]}"; do
-  if [[ -f "$dir/Cargo.toml" || -f "$dir/go.mod" || -f "$dir/main.zig" || -f "$dir/main.swift" ]]; then
-    build_dirs+=("$dir")
-  fi
+  [[ -f "$dir/Cargo.toml" ]] && build_dirs+=("$dir")
 done
 
 echo "==> Building ${#build_dirs[@]} compiled plugin(s) of ${#plugin_dirs[@]} selected ($MODE)"
@@ -103,7 +85,6 @@ echo "==> Building ${#build_dirs[@]} compiled plugin(s) of ${#plugin_dirs[@]} se
 # builds run --locked so a stale or missing committed Cargo.lock fails
 # loudly; dev builds may refresh a lock during the hot loop (commit it).
 for dir in "${build_dirs[@]}"; do
-  [[ -f "$dir/Cargo.toml" ]] || continue
   if [[ "$MODE" == "release" ]]; then
     cargo build --manifest-path "$dir/Cargo.toml" --release --locked \
       --target x86_64-apple-darwin \
@@ -112,40 +93,6 @@ for dir in "${build_dirs[@]}"; do
     cargo build --manifest-path "$dir/Cargo.toml" --profile plugin-dev
   fi
 done
-
-# Build a Go or Zig plugin into $TARGET_DIR/other/<name>; echoes nothing,
-# artifacts stay out of the watched plugin trees.
-build_other() {
-  local dir="$1" id="$2" out="$3" arch="$4" # arch: native|x86_64|aarch64
-  if [[ -f "$dir/go.mod" ]]; then
-    local goenv=(GOFLAGS=-trimpath CGO_ENABLED=0)
-    case "$arch" in
-      x86_64) goenv+=(GOOS=darwin GOARCH=amd64) ;;
-      aarch64) goenv+=(GOOS=darwin GOARCH=arm64) ;;
-    esac
-    (cd "$dir" && env "${goenv[@]}" mise exec go -- go build -o "$out" .)
-  elif [[ -f "$dir/main.swift" ]]; then
-    local swiftargs=(-O)
-    case "$arch" in
-      x86_64) swiftargs+=(-target x86_64-apple-macos14.0) ;;
-      aarch64) swiftargs+=(-target arm64-apple-macos14.0) ;;
-    esac
-    (cd "$dir" && xcrun swiftc "${swiftargs[@]}" \
-      main.swift ../_flash_plugin_swift/flashplugin.swift -o "$out")
-  else
-    # -target (and every global flag) must precede the -M module args: the
-    # Zig CLI applies flags positionally, and a trailing -target is silently
-    # ignored — both "cross" outputs come out native and lipo refuses them.
-    local zigargs=(-O ReleaseSafe -lc -femit-bin="$out")
-    case "$arch" in
-      x86_64) zigargs+=(-target x86_64-macos) ;;
-      aarch64) zigargs+=(-target aarch64-macos) ;;
-    esac
-    (cd "$dir" && mise exec zig -- zig build-exe "${zigargs[@]}" \
-      --dep flashplugin -Mroot=main.zig \
-      -Mflashplugin=../_flash_plugin_zig/flashplugin.zig)
-  fi
-}
 
 # Stage every binary at a temp path, sign the staged files, then swap each
 # in with an atomic `mv`. Overwriting the destination *in place* modifies an
@@ -162,28 +109,13 @@ for dir in "${build_dirs[@]}"; do
   id="$(basename "$dir")"
   bin="flash-plugin-$id"
   staged="$dir/$bin.staged"
-  if [[ -f "$dir/Cargo.toml" ]]; then
-    if [[ "$MODE" == "release" ]]; then
-      lipo -create \
-        "$TARGET_DIR/x86_64-apple-darwin/release/$bin" \
-        "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
-        -output "$staged"
-    else
-      cp "$TARGET_DIR/plugin-dev/$bin" "$staged"
-    fi
+  if [[ "$MODE" == "release" ]]; then
+    lipo -create \
+      "$TARGET_DIR/x86_64-apple-darwin/release/$bin" \
+      "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
+      -output "$staged"
   else
-    echo "==> Building plugin $id ($MODE)"
-    if [[ "$MODE" == "release" ]]; then
-      build_other "$dir" "$id" "$TARGET_DIR/other/$bin-x86_64" x86_64
-      build_other "$dir" "$id" "$TARGET_DIR/other/$bin-aarch64" aarch64
-      lipo -create \
-        "$TARGET_DIR/other/$bin-x86_64" \
-        "$TARGET_DIR/other/$bin-aarch64" \
-        -output "$staged"
-    else
-      build_other "$dir" "$id" "$TARGET_DIR/other/$bin" native
-      cp "$TARGET_DIR/other/$bin" "$staged"
-    fi
+    cp "$TARGET_DIR/plugin-dev/$bin" "$staged"
   fi
   chmod +x "$staged"
   staged_paths+=("$staged")

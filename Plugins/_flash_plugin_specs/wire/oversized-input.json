@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#framing",
-  "description": "An inbound line over the 10 MiB cap is dropped — never fatal — and the stream self-heals at the next newline. The 11 MiB junk line (sent without its newline first, then terminated) must not kill the plugin or poison the framing: the follow-up ping still answers. This used to be process-death in the Zig SDK (fixed 1 MiB static buffers).",
+  "description": "An inbound line over the 10 MiB cap is dropped — never fatal — and the stream self-heals at the next newline. The 11 MiB junk line (sent without its newline first, then terminated) must not kill the plugin or poison the framing: the follow-up ping still answers.",
   "timeout_ms": 60000,
   "steps": [
     {

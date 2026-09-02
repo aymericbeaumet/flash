@@ -5,8 +5,7 @@
   "description": "World-clock answers in the flashlight: `time in tokyo`, `time new york`, or plain `time` show the current time there, copyable.",
   "sandbox": {},
   "exec": [
-    "python3",
-    "main.py"
+    "./flash-plugin-timezones"
   ],
   "query": {}
 }

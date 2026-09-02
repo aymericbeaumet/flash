@@ -4,7 +4,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use flash_plugin::{
-    run, ActionRequest, Candidate, Context, Event, NavigateRequest, PerformResponse,
+    run, ActionRequest, Candidate, Context, Event, NavigateRequest, PerformResponse, RefreshGate,
     RunningApplication,
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,18 @@ const MAX_SESSIONSTORE_DECODED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SESSION_TABS: usize = 100_000;
 const FIREFOX: &str = "org.mozilla.firefox";
 const FIREFOX_DEV: &str = "org.mozilla.firefoxdeveloperedition";
+const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+
+#[derive(Default)]
+struct RefreshLogState {
+    outcome: String,
+    warning: bool,
+    last_warning: Option<Instant>,
+}
+
+static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
+    LazyLock::new(|| Mutex::new(RefreshLogState::default()));
 
 /// Serialize AX work per Firefox pid. The host broker purges one pid's handle
 /// table at the start of `host.ax_snapshot`, so same-pid snapshots and presses
@@ -206,11 +218,18 @@ fn firefox_apps(apps: &[RunningApplication]) -> Vec<(String, i64)> {
 }
 
 async fn refresh_locations(ctx: &Context) -> bool {
+    REFRESH_GATE
+        .run(ctx, |ctx, running| async move {
+            refresh_locations_for_apps(&ctx, firefox_apps(&running)).await
+        })
+        .await
+}
+
+async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, i64)>) -> bool {
     let started_at = Instant::now();
-    let apps = firefox_apps(&ctx.running_applications());
     if apps.is_empty() {
-        publish_rows(ctx, Vec::new());
-        log_refresh(ctx, "empty", 0, started_at);
+        let changed = publish_rows(ctx, Vec::new());
+        log_refresh(ctx, "empty", 0, started_at, changed);
         return true;
     }
     let session_tabs = Arc::new(firefox_session_tabs().await);
@@ -282,7 +301,7 @@ async fn refresh_locations(ctx: &Context) -> bool {
     }
     if successful_apps == 0 {
         // Publish nothing: the host keeps its last-good catalog.
-        log_refresh(ctx, "failed", candidates.len(), started_at);
+        log_refresh(ctx, "failed", candidates.len(), started_at, false);
         return false;
     }
     let outcome = if !failed_pids.is_empty() {
@@ -293,34 +312,68 @@ async fn refresh_locations(ctx: &Context) -> bool {
         "ok"
     };
     let count = candidates.len();
-    publish_rows(ctx, candidates);
-    log_refresh(ctx, outcome, count, started_at);
+    let changed = publish_rows(ctx, candidates);
+    log_refresh(ctx, outcome, count, started_at, changed);
     true
 }
 
 /// Last-published rows, kept so a partial cycle (one edition's AX snapshot
 /// failed) can re-publish that edition's previous tabs — `publish` is a full
 /// replacement, so dropped rows would vanish from the host store.
-static LAST_ROWS: Mutex<Vec<Candidate>> = Mutex::new(Vec::new());
+static LAST_ROWS: Mutex<Option<Vec<Candidate>>> = Mutex::new(None);
 
-fn publish_rows(ctx: &Context, rows: Vec<Candidate>) {
+fn publish_rows(ctx: &Context, rows: Vec<Candidate>) -> bool {
     if let Ok(mut last) = LAST_ROWS.lock() {
-        *last = rows.clone();
+        if last.as_ref() == Some(&rows) {
+            return false;
+        }
+        *last = Some(rows.clone());
     }
     ctx.publish(rows);
+    true
 }
 
 fn last_rows() -> Vec<Candidate> {
     LAST_ROWS
         .lock()
-        .map(|rows| rows.clone())
+        .ok()
+        .and_then(|rows| rows.clone())
         .unwrap_or_default()
 }
 
-fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) {
+fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant, changed: bool) {
     let elapsed_ms = started_at.elapsed().as_millis();
+    let warning = elapsed_ms >= 1_000 || matches!(outcome, "failed" | "partial");
+    let now = Instant::now();
+    let (should_log, recovery) = REFRESH_LOG_STATE
+        .lock()
+        .map(|mut state| {
+            let transition = state.outcome != outcome || state.warning != warning;
+            let recovery = state.warning && !warning;
+            let repeat_warning = warning
+                && state
+                    .last_warning
+                    .is_none_or(|last| now.duration_since(last) >= REPEAT_WARNING_INTERVAL);
+            let should_log = changed || transition || repeat_warning;
+            state.outcome = outcome.to_string();
+            state.warning = warning;
+            if warning && should_log {
+                state.last_warning = Some(now);
+            }
+            (should_log, recovery)
+        })
+        .unwrap_or((true, false));
+    if !should_log {
+        return;
+    }
     ctx.log(
-        if elapsed_ms >= 1_000 { "warn" } else { "debug" },
+        if warning {
+            "warn"
+        } else if recovery {
+            "info"
+        } else {
+            "debug"
+        },
         &format!(
             "[firefox] refresh outcome={} count={} elapsed_ms={}",
             outcome, count, elapsed_ms

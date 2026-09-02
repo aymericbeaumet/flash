@@ -49,7 +49,7 @@ jobs:
     runs-on: macos-15
     env:
       # Shared across every hermetic crate: cargo keys artifacts by
-      # package-id + metadata hash, so the SDK compiles once, not 21 times.
+      # package-id + metadata hash, so the SDK compiles once, not 32 times.
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
       - name: fmt + clippy + build + test per hermetic crate
-        # One fail-fast loop over the SDK workspace and the 20 standalone
+        # One fail-fast loop over the SDK workspace and the 32 standalone
         # plugin crates. `cd` (not --manifest-path) is load-bearing: clippy
         # discovers each crate's clippy.toml by walking up from the cwd.
         # `--locked` doubles as the committed-Cargo.lock freshness gate, and
@@ -88,8 +88,6 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
       - uses: actions/checkout@v4
-      - name: Install pinned toolchains
-        uses: jdx/mise-action@v2
       - name: Cache Cargo registry + plugin target
         uses: actions/cache@v4
         with:
@@ -109,10 +107,10 @@ jobs:
             ${{ runner.os }}-spm-build-
       - name: Full plugin pipeline
         # Scripts/test-plugins.sh runs everything: spec-schema validation,
-        # the minimal per-language lint set, per-crate cargo unit tests,
-        # dev builds of all compiled plugins + the 7 conformance probes,
+        # Rust lint, per-crate cargo unit tests, dev builds of all executable
+        # plugins + the Rust conformance probe,
         # then the conformance matrix — every bundled plugin × every
-        # applicable spec, every probe × the full suite, and the sandbox
+        # applicable spec, the Rust probe × the full suite, and the sandbox
         # lane booting each sandboxed plugin under its REAL generated
         # seatbelt profile. Coverage is by manifest glob: a new plugin or
         # spec is exercised by construction, never by editing this file.
@@ -170,9 +168,6 @@ jobs:
           key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - name: Install pinned toolchains
-        # spotify is Go — its smoke binary needs the mise-pinned toolchain.
-        uses: jdx/mise-action@v2
       - name: Build smoke-test plugin binaries
         # The two end-to-end subprocess smoke tests XCTSkip without these
         # three binaries — building them turns silent skips into real runs.

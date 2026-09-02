@@ -117,41 +117,34 @@ if [[ -d Plugins ]]; then
     "async fn evaluate\\(" \
     Plugins
 
-  # Every SDK (and the host) hardcodes the one protocol version; a drift
-  # here means a stale SDK shipping against a redefined wire. Pattern-based
-  # on purpose — the SDKs are rewritten wholesale and only the constant is
-  # contractual (naming varies per language convention).
-  for sdk in \
-    Plugins/_flash_plugin_rust/src/runtime.rs \
-    Plugins/_flash_plugin_python/flashplugin.py \
-    Plugins/_flash_plugin_ruby/flashplugin.rb \
-    Plugins/_flash_plugin_typescript/flashplugin.ts \
-    Plugins/_flash_plugin_go/flashplugin.go \
-    Plugins/_flash_plugin_zig/flashplugin.zig \
-    Plugins/_flash_plugin_swift/flashplugin.swift; do
-    [[ -f "$sdk" ]] || {
-      echo "GUARDRAIL FAILED: missing SDK file: $sdk" >&2
-      fail=1
-      continue
-    }
-    if ! rg -qi 'protocol_?version(:\s*\w+)?\s*=\s*1\b' "$sdk"; then
-      echo "GUARDRAIL FAILED: $sdk must pin PROTOCOL_VERSION = 1" >&2
-      fail=1
-    fi
-  done
+  # The Rust SDK and host hardcode the one protocol version; drift means a
+  # stale implementation is shipping against the redefined wire.
+  sdk=Plugins/_flash_plugin_rust/src/runtime.rs
+  if ! rg -qi 'protocol_?version(:\s*\w+)?\s*=\s*1\b' "$sdk"; then
+    echo "GUARDRAIL FAILED: $sdk must pin PROTOCOL_VERSION = 1" >&2
+    fail=1
+  fi
   if ! rg -q 'static let version = 1\b' Sources/flash/App/Plugins/PluginProtocol.swift; then
     echo "GUARDRAIL FAILED: PluginProtocol.swift must pin protocol version 1" >&2
     fail=1
   fi
 
-  # The Rust-SDK contract greps apply only to Rust plugins (src/main.rs);
-  # non-Rust official plugins satisfy the same push-catalog contract through
-  # host-side runtime enforcement (quotas, deadlines) instead of source greps.
   for manifest in Plugins/*/manifest.json; do
     plugin_dir="${manifest%/manifest.json}"
-    # Hermetic-crate invariants: every Rust plugin is a standalone crate with
-    # a committed lock and a byte-identical copy of the canonical clippy
-    # config (Plugins/_flash_plugin_rust/clippy.toml) — no workspace anywhere.
+    plugin_id="${plugin_dir##*/}"
+    if rg -q '^[[:space:]]{2}"exec"[[:space:]]*:' "$manifest"; then
+      if [[ ! -f "$plugin_dir/Cargo.toml" || ! -f "$plugin_dir/src/main.rs" ]]; then
+        echo "GUARDRAIL FAILED: executable official plugin must be Rust: $plugin_dir" >&2
+        fail=1
+        continue
+      fi
+      if ! rg -q '"\./flash-plugin-'"$plugin_id"'"' "$manifest"; then
+        echo "GUARDRAIL FAILED: official plugin exec must be ./flash-plugin-$plugin_id: $manifest" >&2
+        fail=1
+      fi
+    fi
+    # Hermetic-crate invariants: every executable plugin is a standalone
+    # crate with a committed lock and canonical clippy config.
     if [[ -f "$plugin_dir/Cargo.toml" ]]; then
       if rg -q 'workspace' "$plugin_dir/Cargo.toml"; then
         echo "GUARDRAIL FAILED: hermetic plugin crates must not reference a cargo workspace: $plugin_dir" >&2

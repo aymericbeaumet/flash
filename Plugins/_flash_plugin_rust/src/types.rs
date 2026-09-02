@@ -148,7 +148,7 @@ impl JumpTarget {
 /// `perform {kind: "resolve"}`) the host echoes the row back with the same
 /// shape — read structured payload via [`payload_str`](Candidate::payload_str)
 /// / [`payload_as`](Candidate::payload_as).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     /// The manifest `sources[].name` this row belongs to — first-class on the
     /// wire; the host stamps its own routing `source_id`.
@@ -174,7 +174,7 @@ pub struct Candidate {
     pub effect: Option<CandidateEffect>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CandidateEffect {
     CopyText {

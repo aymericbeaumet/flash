@@ -250,39 +250,16 @@ assemble_app() {
       bin="$dir/flash-plugin-$id"
       mkdir -p "$plugins_dest/$id"
       cp "$manifest" "$plugins_dest/$id/manifest.json"
-      # Compiled plugins (Rust/Go/Zig) ship their built binary; interpreted
-      # plugins (python/ruby/bun) ship their runtime sources and data files;
-      # manifest-only plugins ship just the manifest. Build sources
-      # (src/, Cargo.toml, go.mod, *.go, *.zig, *.swift) never ship.
-      if [[ -f "$dir/Cargo.toml" || -f "$dir/go.mod" || -f "$dir/main.zig" || -f "$dir/main.swift" ]]; then
+      # Rust plugins ship their built binary; manifest-only plugins ship just
+      # the manifest. Build sources and Cargo metadata never ship.
+      if [[ -f "$dir/Cargo.toml" ]]; then
         if [[ ! -x "$bin" ]]; then
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1
         fi
         cp "$bin" "$plugins_dest/$id/flash-plugin-$id"
         chmod +x "$plugins_dest/$id/flash-plugin-$id"
-      else
-        local runtime_file
-        for runtime_file in "$dir"/*.py "$dir"/*.rb "$dir"/*.ts "$dir"/*.txt; do
-          [[ -e "$runtime_file" ]] || continue
-          cp "$runtime_file" "$plugins_dest/$id/"
-        done
       fi
-    done
-    # Interpreted plugins import their shared per-language SDK by bare module
-    # name via host-injected PYTHONPATH/RUBYLIB/NODE_PATH pointing at these
-    # staged dirs (PluginRepository.interpreterSDKEnvironment), so the SDK
-    # sources ship beside the plugin dirs. Compiled-language SDKs
-    # (rust/go/zig/swift) are linked at build time and never ship.
-    local sdk_dir sdk_file
-    for sdk_dir in _flash_plugin_python _flash_plugin_ruby _flash_plugin_typescript; do
-      mkdir -p "$plugins_dest/$sdk_dir"
-      for sdk_file in "$PROJECT_DIR/Plugins/$sdk_dir"/*.py \
-        "$PROJECT_DIR/Plugins/$sdk_dir"/*.rb \
-        "$PROJECT_DIR/Plugins/$sdk_dir"/*.ts; do
-        [[ -e "$sdk_file" ]] || continue
-        cp "$sdk_file" "$plugins_dest/$sdk_dir/"
-      done
     done
   else
     if [[ -d "$PROJECT_DIR/Plugins" ]]; then

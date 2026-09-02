@@ -33,24 +33,15 @@ def frame_bytes(obj):
     return json.dumps(obj, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
-def build_environment(plugins_dir, plugin_id, data_dir, config_json, parent_pid, spec):
+def build_environment(_plugins_dir, plugin_id, data_dir, config_json, parent_pid, spec):
     env = {}
     for key in ENV_ALLOWLIST:
         if key in os.environ:
             env[key] = os.environ[key]
-    # Interpreted plugins import their shared SDK by bare module name, exactly
-    # as the host injects at spawn (PluginRepository.interpreterSDKEnvironment).
-    for variable, sdk_dir in (
-        ("PYTHONPATH", "_flash_plugin_python"),
-        ("RUBYLIB", "_flash_plugin_ruby"),
-        ("NODE_PATH", "_flash_plugin_typescript"),
-    ):
-        env[variable] = str(plugins_dir / sdk_dir)
     env["FLASH_PLUGIN_ID"] = plugin_id
     env["FLASH_PLUGIN_VERSION"] = os.environ.get("FLASH_PLUGIN_VERSION", "0.1.0")
     env["FLASH_PLUGIN_DATA_DIR"] = data_dir
     env["FLASH_PLUGIN_PARENT_PID"] = str(parent_pid)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
     if config_json is not None:
         env["FLASH_PLUGIN_CONFIG"] = config_json
     for key, value in spec.get("env", {}).items():

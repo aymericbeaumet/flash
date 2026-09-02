@@ -1,5 +1,5 @@
 //! Conformance probe, in Rust. See ../../README.md — the normative behavior
-//! contract all seven per-language probes follow. Test fixture only: driven
+//! contract the maintained Rust SDK follows. Test fixture only: driven
 //! by Scripts/plugin-protocol-spec.py --probes, never shipped.
 
 use std::sync::Mutex;

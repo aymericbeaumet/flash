@@ -4,7 +4,7 @@
 FIRST, then the fix lands in every affected SDK, then any temporary
 `overrides.json` xfail entry is deleted.** An xfail that starts passing fails
 the run, so parity debt can only shrink — this directory is the permanent,
-growing proof that fixed bugs stay fixed in all seven languages at once.
+growing proof that fixed bugs stay fixed in the host and Rust SDK.
 
 Conventions:
 

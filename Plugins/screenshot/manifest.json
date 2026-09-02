@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "description": "Control macOS native Screenshot shortcuts without capturing pixels inside Flash.",
   "exec": [
-    "ruby",
-    "main.rb"
+    "./flash-plugin-screenshot"
   ],
   "commands": [
     {

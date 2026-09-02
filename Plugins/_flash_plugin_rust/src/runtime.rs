@@ -192,12 +192,12 @@ async fn run_event_worker<P: Plugin>(
     }
 }
 
-/// Run the plugin: spin up a bounded multi-thread tokio runtime and serve
-/// NDJSON protocol v1 until stdin closes. This is the single entry point a
-/// plugin's `main` calls.
+/// Run the plugin on one async executor and serve NDJSON protocol v1 until
+/// stdin closes. Plugin callbacks are intentionally serialized; async I/O and
+/// `spawn_blocking` still make progress without paying for two resident worker
+/// threads in every plugin process.
 pub fn run<P: Plugin>(plugin: P) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("flash-plugin: tokio runtime");

@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "description": "Keep the Mac awake through /usr/bin/caffeinate: `:caffeinate on [minutes]`, `:caffeinate off`, `:caffeinate toggle`, with a status-bar segment.",
   "exec": [
-    "ruby",
-    "main.rb"
+    "./flash-plugin-caffeinate"
   ],
   "capabilities": [
     "subprocess"

@@ -27,7 +27,9 @@ if [[ ! "$ID" =~ ^[a-z0-9._-]+$ ]]; then
   exit 2
 fi
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Tests may point the scaffold at a temporary repo-shaped root. Normal use
+# keeps deriving the real checkout from this script's location.
+PROJECT_DIR="${FLASH_PLUGIN_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 DIR="$PROJECT_DIR/Plugins/$ID"
 
 if [[ -e "$DIR" ]]; then
@@ -44,15 +46,13 @@ cat >"$DIR/manifest.json" <<JSON
   "version": "0.1.0",
   "description": "$DESCRIPTION",
   "exec": ["./flash-plugin-$ID"],
-  "commands": {
-    "items": [
-      {
-        "command": "$ID",
-        "subcommand": "ping",
-        "description": "Smoke-test the $NAME plugin"
-      }
-    ]
-  }
+  "commands": [
+    {
+      "command": "$ID",
+      "subcommand": "ping",
+      "description": "Smoke-test the $NAME plugin"
+    }
+  ]
 }
 JSON
 

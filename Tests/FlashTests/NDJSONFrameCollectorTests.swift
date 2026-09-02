@@ -39,4 +39,14 @@ final class NDJSONFrameCollectorTests: XCTestCase {
       collector.append(data("GH\n{\"a\":1}\n")),
       [.oversized(18), .frame(data("{\"a\":1}"))])
   }
+
+  func testScansLargeCoalescedBatchWithoutLosingOrder() {
+    var collector = NDJSONFrameCollector()
+    let expected = (0..<10_000).map { data("{\"id\":\($0)}") }
+    let batch = data(
+      expected.compactMap { String(data: $0, encoding: .utf8) }.joined(separator: "\n") + "\n")
+
+    XCTAssertEqual(collector.append(batch), expected.map(NDJSONFrameCollector.Output.frame))
+    XCTAssertEqual(collector.append(data("{\"id\":10000}\n")), [.frame(data("{\"id\":10000}"))])
+  }
 }

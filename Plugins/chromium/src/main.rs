@@ -8,11 +8,22 @@ use flash_plugin::{
 use serde::{Deserialize, Serialize};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+
+#[derive(Default)]
+struct RefreshLogState {
+    outcome: String,
+    warning: bool,
+    last_warning: Option<Instant>,
+}
+
+static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
+    LazyLock::new(|| Mutex::new(RefreshLogState::default()));
 /// Last-published rows, kept so a partial cycle (one browser's AppleScript
 /// failed) can re-publish that browser's previous tabs — `publish` is a full
 /// replacement, so dropped rows would vanish from the host store.
-static LAST_ROWS: Mutex<Vec<Candidate>> = Mutex::new(Vec::new());
+static LAST_ROWS: Mutex<Option<Vec<Candidate>>> = Mutex::new(None);
 
 const CHROMIUM_BUNDLES: &[&str] = &[
     "com.google.Chrome",
@@ -165,8 +176,8 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
     // A complete running-app snapshot with no matching browser is authoritative:
     // clear dead tab rows.
     if apps.is_empty() {
-        publish_rows(ctx, Vec::new());
-        log_refresh(ctx, "empty", 0, started_at);
+        let changed = publish_rows(ctx, Vec::new());
+        log_refresh(ctx, "empty", 0, started_at, changed);
         return true;
     }
     // Fetch each browser's tab list concurrently: each osascript is hundreds of
@@ -264,7 +275,7 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
     }
     if successful_apps == 0 {
         // Publish nothing: the host keeps its last-good catalog.
-        log_refresh(ctx, "failed", candidates.len(), started_at);
+        log_refresh(ctx, "failed", candidates.len(), started_at, false);
         return false;
     }
     let outcome = if !failed_pids.is_empty() {
@@ -275,29 +286,63 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
         "ok"
     };
     let count = candidates.len();
-    publish_rows(ctx, candidates);
-    log_refresh(ctx, outcome, count, started_at);
+    let changed = publish_rows(ctx, candidates);
+    log_refresh(ctx, outcome, count, started_at, changed);
     true
 }
 
-fn publish_rows(ctx: &Context, rows: Vec<Candidate>) {
+fn publish_rows(ctx: &Context, rows: Vec<Candidate>) -> bool {
     if let Ok(mut last) = LAST_ROWS.lock() {
-        *last = rows.clone();
+        if last.as_ref() == Some(&rows) {
+            return false;
+        }
+        *last = Some(rows.clone());
     }
     ctx.publish(rows);
+    true
 }
 
 fn last_rows() -> Vec<Candidate> {
     LAST_ROWS
         .lock()
-        .map(|rows| rows.clone())
+        .ok()
+        .and_then(|rows| rows.clone())
         .unwrap_or_default()
 }
 
-fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) {
+fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant, changed: bool) {
     let elapsed_ms = started_at.elapsed().as_millis();
+    let warning = elapsed_ms >= 1_000 || matches!(outcome, "failed" | "partial");
+    let now = Instant::now();
+    let (should_log, recovery) = REFRESH_LOG_STATE
+        .lock()
+        .map(|mut state| {
+            let transition = state.outcome != outcome || state.warning != warning;
+            let recovery = state.warning && !warning;
+            let repeat_warning = warning
+                && state
+                    .last_warning
+                    .is_none_or(|last| now.duration_since(last) >= REPEAT_WARNING_INTERVAL);
+            let should_log = changed || transition || repeat_warning;
+            state.outcome = outcome.to_string();
+            state.warning = warning;
+            if warning && should_log {
+                state.last_warning = Some(now);
+            }
+            (should_log, recovery)
+        })
+        .unwrap_or((true, false));
+    if !should_log {
+        return;
+    }
     ctx.log(
-        if elapsed_ms >= 1_000 { "warn" } else { "debug" },
+        if warning {
+            "warn"
+        } else if recovery {
+            "info"
+        } else {
+            "debug"
+        },
         &format!(
             "[chromium] refresh outcome={} count={} elapsed_ms={}",
             outcome, count, elapsed_ms

@@ -527,6 +527,28 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(store.rows(for: "p").map(\.title), ["later"])
   }
 
+  func testCatalogStoreIgnoresSemanticNoOpPublish() throws {
+    let store = PluginCatalogStore()
+    let first = Candidate(
+      title: "Same",
+      url: URL(string: "https://example.com"),
+      metadata: ["source": "same.items"],
+      effect: .copyText("Same"))
+    store.publish(pluginID: "same", rows: [first], encodedBytes: 20)
+    let generation = try XCTUnwrap(store.entry(for: "same")?.generation)
+    let publishedAt = try XCTUnwrap(store.entry(for: "same")?.publishedAt)
+
+    var derivedCopy = first
+    derivedCopy.displayTitle = "derived"
+    derivedCopy.normalizedSearchText = "same"
+    store.publish(pluginID: "same", rows: [derivedCopy], encodedBytes: 999)
+
+    let entry = try XCTUnwrap(store.entry(for: "same"))
+    XCTAssertEqual(entry.generation, generation)
+    XCTAssertEqual(entry.publishedAt, publishedAt)
+    XCTAssertEqual(entry.encodedBytes, 20)
+  }
+
   // MARK: - Status segments
 
   func testStatusSegmentUpdatesMergeWithoutLostUpdates() throws {
@@ -1056,11 +1078,13 @@ final class PluginSystemTests: XCTestCase {
       from: Data(#"{"name": "notes.notes"}"#.utf8))
     XCTAssertFalse(warm.live)
     // Encoding omits the default, mirroring kind/priority.
-    let encoded = try JSONSerialization.jsonObject(
-      with: JSONEncoder().encode(warm)) as? [String: Any]
+    let encoded =
+      try JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(warm)) as? [String: Any]
     XCTAssertNil(encoded?["live"])
-    let encodedLive = try JSONSerialization.jsonObject(
-      with: JSONEncoder().encode(live)) as? [String: Any]
+    let encodedLive =
+      try JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(live)) as? [String: Any]
     XCTAssertEqual(encodedLive?["live"] as? Bool, true)
   }
 
@@ -1424,6 +1448,47 @@ final class PluginSystemTests: XCTestCase {
 
   func testRustPluginExitsWhenHostClosesStdin() throws {
     try runPluginStdinEOFSmoke(pluginID: "calculator")
+  }
+
+  func testNewPluginScaffoldIsStrictlyDecodableAndBuilds() throws {
+    let repository = repositoryRoot()
+    let temp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-plugin-scaffold-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: temp) }
+    let plugins = temp.appendingPathComponent("Plugins")
+    try FileManager.default.createDirectory(at: plugins, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: plugins.appendingPathComponent("_flash_plugin_rust"),
+      withDestinationURL: repository.appendingPathComponent("Plugins/_flash_plugin_rust"))
+
+    let scaffold = Process()
+    scaffold.executableURL = URL(fileURLWithPath: "/bin/bash")
+    scaffold.arguments = [
+      repository.appendingPathComponent("Scripts/new-plugin.sh").path,
+      "fixture", "Fixture", "Scaffold fixture",
+    ]
+    var environment = ProcessInfo.processInfo.environment
+    environment["FLASH_PLUGIN_PROJECT_DIR"] = temp.path
+    scaffold.environment = environment
+    try scaffold.run()
+    scaffold.waitUntilExit()
+    XCTAssertEqual(scaffold.terminationStatus, 0)
+
+    let root = plugins.appendingPathComponent("fixture")
+    let manifest = try JSONDecoder().decode(
+      PluginManifest.self,
+      from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+    try manifest.validate()
+    XCTAssertEqual(manifest.commands.map(\.subcommand), ["ping"])
+
+    let check = Process()
+    check.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    check.arguments = ["cargo", "check", "--locked", "--quiet"]
+    check.currentDirectoryURL = root
+    check.environment = environment
+    try check.run()
+    check.waitUntilExit()
+    XCTAssertEqual(check.terminationStatus, 0)
   }
 
   // MARK: - Fixture helpers

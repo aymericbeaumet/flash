@@ -211,6 +211,7 @@ Run the unit and guardrail suites, then install the real app before manual UI ve
 ```bash
 swift test
 ./Scripts/test-plugins.sh --lane all   # plugin lint + units + builds + conformance matrix
+./Scripts/benchmark-plugins.py --build # report plugin startup, ping, RSS, and threads
 ./Scripts/check-guardrails.sh
 ./Scripts/install.sh --dev
 ```

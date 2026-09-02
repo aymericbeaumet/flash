@@ -31,6 +31,10 @@ final class PluginCatalogStore {
 
   func publish(pluginID: String, rows: [Candidate], encodedBytes: Int) {
     lock.lock()
+    if let current = entries[pluginID], Self.sameCatalog(current.rows, rows) {
+      lock.unlock()
+      return
+    }
     generation &+= 1
     entries[pluginID] = Entry(
       rows: rows,
@@ -39,6 +43,19 @@ final class PluginCatalogStore {
       encodedBytes: encodedBytes)
     lock.unlock()
     scheduleNotify()
+  }
+
+  /// Compare only the source-owned catalog contract. Ranking caches are
+  /// derived later on value copies and must not turn an identical publish
+  /// into observable catalog churn.
+  private static func sameCatalog(_ lhs: [Candidate], _ rhs: [Candidate]) -> Bool {
+    guard lhs.count == rhs.count else { return false }
+    return zip(lhs, rhs).allSatisfy { left, right in
+      left.title == right.title
+        && left.url == right.url
+        && left.metadata == right.metadata
+        && left.effect == right.effect
+    }
   }
 
   /// Drop one plugin's catalog (unload or `failed` park). Plain restarts do

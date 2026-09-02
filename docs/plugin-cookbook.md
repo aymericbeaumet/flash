@@ -1,8 +1,9 @@
 # Plugin cookbook
 
-Graded, real exemplars — read them in order. Each one is bundled, small, and
-idiomatic; copy its shape. Rust is the default for new plugins; the polyglot
-section exists to keep the wire protocol honestly language-agnostic.
+Graded, real Rust exemplars — read them in order. Each one is bundled, small,
+and idiomatic; copy its shape. The stdio protocol remains language-neutral,
+but Rust is the sole maintained SDK and implementation language for official
+plugins.
 
 ## Rust (the default path)
 
@@ -30,55 +31,17 @@ section exists to keep the wire protocol honestly language-agnostic.
    background through `host.fetch` (the `network_fetch` capability),
    atomically replacing state; `query.prefixes = ["="]` routing.
 
-## Polyglot (the protocol is the boundary)
-
-Twelve official plugins are deliberately non-Rust — two per language, so
-each language's shared SDK (`Plugins/_flash_plugin_<language>/`, a single
-`flashplugin.*` implementing the complete protocol with no Flash business
-concepts) has real consumers. All seven SDKs are full-parity "same program,
-seven dialects": identical section order, identical behaviors, identical
-canonical error strings — the conformance suite holds them to it. Interpreted
-plugins import their SDK by bare module name via host-injected
-PYTHONPATH/RUBYLIB/NODE_PATH; compiled languages link at build time
-(third-party compiled plugins vendor the single SDK file):
-
-- **Python** (mise-pinned `python3`): `Plugins/aiproviders` — `!chatgpt`-
-  style bangs arriving as `perform` kind `command`, `host.open` by awaited
-  `call_host`; `Plugins/timezones` — a pure `on_evaluate` evaluator over a
-  startup-warmed zone index.
-- **Ruby**: `Plugins/screenshot` — osascript keystroke commands;
-  `Plugins/caffeinate` — a managed `/usr/bin/caffeinate` child plus a
-  `status` segment, cleaned up by the `on_shutdown` EOF hook.
-- **TypeScript/Bun**: `Plugins/emojis` — the push-catalog contract in an
-  interpreted language (dataset files read in `onStart`, then one
-  `publish` of the whole set — initialize never waits);
-  `Plugins/colors` — a pure hex/rgb/hsl `onEvaluate` evaluator.
-- **Go**: `Plugins/spotify` — compiled command wrapper, on-demand spawned,
-  built by `build-plugins.sh` alongside the Rust crates; `Plugins/netinfo` —
-  a polled catalog that fingerprint-diffs and re-`Publish`es on change
-  (publishing IS the invalidation).
-- **Zig**: `Plugins/searchengines` — compiled push catalog; `@embedFile`
-  replaces the old build.rs codegen for the vendored bangs.tsv, and the
-  catch-all bang awaits the `host.open` verdict before replying;
-  `Plugins/httpstatus` — the same embedded-data shape with openable MDN
-  URLs.
-- **Swift**: `Plugins/reminders` — the full surface in one port — push
-  catalog from an AppleScript listing, `onResolve`, commands, and lifecycle
-  events; ping and lifecycle answer on the read thread while handlers run
-  on a worker queue; `Plugins/shortcuts` — the same shape against the
-  faceless "Shortcuts Events" service.
-
 `Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
 the language-agnostic JSON specs in `Plugins/_flash_plugin_specs/`
 (lifecycle + wire-noise robustness always; publish/evaluate/perform gated on
-the manifest) with a PASS/FAIL exit code — the conformance suite for every
-SDK, Rust included, and CI runs the full matrix against every bundled plugin.
+the manifest) with a PASS/FAIL exit code. CI runs the full matrix against
+every bundled plugin and the Rust SDK probe.
 
 ## The loop
 
 ```bash
 ./Scripts/new-plugin.sh myplugin "My Plugin" "What it does"   # Rust scaffold, zero-edit green
-./Scripts/build-plugins.sh dev myplugin                        # per-id hot build (any compiled language)
+./Scripts/build-plugins.sh dev myplugin                        # per-id Rust hot build
 tail -f ~/Library/Logs/Flash/flash.log                         # watcher restart + plugin logs
 CARGO_TARGET_DIR=build/plugin-target cargo test --manifest-path Plugins/myplugin/Cargo.toml
 ```

@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
 use crate::emit::Emitter;
-use crate::process;
+use crate::process::{self, ManagedChild, ManagedChildError};
 use crate::types::{Candidate, PerformResponse, RunningApplication};
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
@@ -597,21 +597,8 @@ pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> C
         .filter(|name| !name.is_empty())
         .unwrap_or("<unknown>");
     let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .current_dir(ctx.data_dir())
-        .env("HOME", ctx.home_dir())
-        .env("XDG_CONFIG_HOME", ctx.config_dir())
-        .env("XDG_CACHE_HOME", ctx.cache_dir())
-        .env("XDG_DATA_HOME", ctx.share_dir())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                ctx.bin_dir().display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
+    command.args(args);
+    configure_command(ctx, &mut command);
     let output = match process::capture(
         &mut command,
         None,
@@ -651,6 +638,37 @@ pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> C
     };
     log_command_latency(ctx, executable, &output, started_at.elapsed(), timeout);
     output
+}
+
+/// Spawn a long-lived subprocess with the same scrubbed directories and PATH
+/// as [`run_command`]. The child has null stdio and a dedicated process group;
+/// callers own its complete replacement and shutdown lifecycle through
+/// [`ManagedChild`].
+pub fn spawn_managed(ctx: &Context, argv: &[String]) -> Result<ManagedChild, ManagedChildError> {
+    let Some((program, args)) = argv.split_first() else {
+        return Err(ManagedChildError::EmptyArgv);
+    };
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    configure_command(ctx, &mut command);
+    ManagedChild::spawn(&mut command)
+}
+
+fn configure_command(ctx: &Context, command: &mut tokio::process::Command) {
+    command
+        .current_dir(ctx.data_dir())
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
 }
 
 fn command_latency_requires_warning(output: &CommandOutput, elapsed: Duration) -> bool {

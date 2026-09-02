@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The one-command plugin test entry point: spec validation, per-language
-# lint, per-crate unit tests, builds, and the full conformance matrix
-# (bundled plugins + the 7 conformance probes + the sandbox lane).
+# The one-command plugin test entry point: spec validation, Rust lint,
+# per-crate unit tests, builds, and the full conformance matrix
+# (bundled plugins + the Rust probe + the sandbox lane).
 #
 # Usage: test-plugins.sh [--lane validate|lint|units|build|conformance|all]…
 #        test-plugins.sh --plugin <id> [--plugin <id>…]   # scoped conformance
@@ -12,12 +12,8 @@ set -euo pipefail
 #
 # Lane inventory (all = the full pipeline, the CI conformance job's body):
 #   validate     spec-file schema validation (fast, no processes)
-#   lint         gofmt+go vet, zig fmt --check, ruby -cw, python compile,
-#                bun syntax build, swift-format lint over Plugins/**/*.swift.
-#                Deliberately minimal and dependency-free: rust fmt/clippy
-#                live in the per-crate cargo loop (CI `plugins` job), and
-#                heavier linters (ruff/tsc/rubocop) are out until they earn
-#                their toolchain weight.
+#   lint         Rust fmt/clippy for the SDK and every executable plugin;
+#                Python compile-check for the protocol test runner.
 #   units        per-crate `cargo test --locked` for the SDK + all Rust
 #                plugins (same loop CI runs)
 #   build        all compiled plugins (dev profile) + the conformance probes
@@ -59,45 +55,16 @@ if want validate; then
 fi
 
 if want lint; then
-  echo "==> lint: go"
-  for dir in Plugins/*/ Plugins/_flash_plugin_specs/probes/*/; do
-    [[ -f "$dir/go.mod" ]] || continue
-    unformatted="$(gofmt -l "$dir")"
-    if [[ -n "$unformatted" ]]; then
-      echo "gofmt needed:" "$unformatted" >&2
-      exit 1
-    fi
-    (cd "$dir" && mise exec go -- go vet ./...)
+  echo "==> lint: Rust"
+  for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/ \
+    Plugins/_flash_plugin_specs/probes/rust; do
+    [[ -f "$dir/Cargo.toml" ]] || continue
+    (cd "$dir" &&
+      cargo fmt --all --check &&
+      cargo clippy --workspace --all-targets --locked -- -D warnings)
   done
-  echo "==> lint: zig fmt"
-  mise exec zig -- zig fmt --check \
-    Plugins/_flash_plugin_zig/flashplugin.zig \
-    Plugins/*/main.zig \
-    Plugins/_flash_plugin_specs/probes/zig/main.zig
-  echo "==> lint: ruby -cw"
-  for file in Plugins/_flash_plugin_ruby/flashplugin.rb Plugins/*/main.rb \
-    Plugins/_flash_plugin_specs/probes/ruby/main.rb; do
-    [[ -e "$file" ]] || continue
-    mise exec ruby -- ruby -cw "$file" >/dev/null
-  done
-  echo "==> lint: python compile"
-  mise exec python -- python3 -m py_compile \
-    Plugins/_flash_plugin_python/flashplugin.py Plugins/*/main.py \
-    Plugins/_flash_plugin_specs/probes/python/main.py \
-    Scripts/plugin-protocol-spec.py Scripts/flash_spec_runner/*.py
-  echo "==> lint: bun syntax"
-  # Transpile-to-stdout is the parse check (an --outdir/--outfile write path
-  # trips a bun bug on external bare specifiers); type errors are out of
-  # scope — this pins syntax, the conformance matrix pins behavior.
-  for file in Plugins/_flash_plugin_typescript/flashplugin.ts Plugins/*/main.ts \
-    Plugins/_flash_plugin_specs/probes/typescript/main.ts; do
-    [[ -e "$file" ]] || continue
-    mise exec bun -- bun build --no-bundle "$file" >/dev/null
-  done
-  echo "==> lint: swift-format"
-  xcrun swift format lint --strict --recursive \
-    Plugins/_flash_plugin_swift Plugins/reminders Plugins/shortcuts \
-    Plugins/_flash_plugin_specs/probes/swift
+  echo "==> lint: Python protocol runner"
+  python3 -m py_compile Scripts/plugin-protocol-spec.py Scripts/flash_spec_runner/*.py
 fi
 
 if want units; then

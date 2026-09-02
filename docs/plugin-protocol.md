@@ -1,17 +1,17 @@
 # Plugin wire protocol
 
 This is the complete, language-agnostic contract between Flash and a plugin.
-Any executable that speaks it over stdio is a valid plugin — the seven SDKs
-(`docs/plugin-sdks.md`) are the blessed implementations, not a wall.
+Any executable that speaks it over stdio is a valid plugin. The maintained
+Rust SDK (`docs/plugin-rust-sdk.md`) is the blessed implementation, not a wall.
 
 Normativity order: `Plugins/_flash_plugin_specs/protocol.json` (the
 machine-readable constants: version, deadlines, quotas, error strings,
 capability registry) plus the conformance scenarios in
 `Plugins/_flash_plugin_specs/` **are** the specification. This prose explains
-them; the SDKs implement them; any divergence is a bug in the derived
+them; the Rust SDK implements them; any divergence is a bug in the derived
 artifact, never in the spec. `Scripts/plugin-protocol-spec.py` runs the
 scenarios against any plugin process, host-free, and CI runs the full matrix
-against every bundled plugin and every SDK conformance probe.
+against every bundled plugin and the Rust SDK conformance probe.
 
 ## Process model
 
@@ -23,17 +23,15 @@ materializer fetches exactly that commit and refuses a mismatched checkout) or
 only) runs sandboxed from the plugin root; `exec` is an argv array exec'd
 directly with the scrubbed plugin environment — no shell wrap. Its first
 element resolves in order: absolute paths pass through, `./`-style paths
-resolve against the plugin root (compiled plugins), and bare names resolve
-through `mise which` (the repo's mise.toml pins interpreter versions) then a
-login-PATH walk — interpreted plugins declare `["python3", "main.py"]`
-without hardcoding machine paths.
+resolve against the plugin root (official Rust plugins), and bare names resolve
+through `mise which` then a login-PATH walk. This keeps the protocol open to
+third-party executables without adding runtime bridges to the official bundle.
 
 Runtime children receive `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`,
 `FLASH_PLUGIN_DATA_DIR`, `FLASH_PLUGIN_PARENT_PID`, and the plugin's
 `[plugin.<id>]` settings as a JSON object in `FLASH_PLUGIN_CONFIG`. Flash
 builds a scrubbed environment containing only basic locale/path/process keys
-plus those values and the interpreted-SDK search paths
-(`PYTHONPATH`/`RUBYLIB`/`NODE_PATH`); ambient tokens, agent sockets, and
+plus those values; ambient tokens, agent sockets, SDK search paths, and
 login-shell secrets are not inherited — put credentials in the plugin's
 config table. Install CLI tools under `FLASH_PLUGIN_DATA_DIR`, never into
 global shell paths.
@@ -105,7 +103,7 @@ content, or config values.
 
 ## Deadlines
 
-One table, in `protocol.json`, that the host, the SDKs, the runner, and this
+One table, in `protocol.json`, that the host, Rust SDK, runner, and this
 doc all share:
 
 | name | value | applies to |
@@ -253,7 +251,7 @@ reads the process table and SIGTERMs pids host-side. Omitted capabilities
 are default-denied. The registry is frozen: additions are allowed, renames
 never.
 
-**SDK `call_host` convention (all seven languages):** `call_host` never
+**SDK `call_host` convention:** `call_host` never
 throws and never returns nil — it always yields a result object. Capability
 NAKs, host death (`{"ok": false, "error": "host closed stdin"}`), and the
 5 s default timeout (`{"ok": false, "error": "host call timed out"}`, per-
@@ -405,7 +403,7 @@ after external plugins exist is a migration, not an edit:
    sources are plugin-id-scoped host-side.
 10. Content-free logging.
 11. Normativity order: `protocol.json` + conformance specs > this prose >
-    SDKs.
+    the Rust SDK.
 
 Debugging is a first-class feature of this transport: run any plugin binary
 in a terminal and type NDJSON at it — no host required. The conformance

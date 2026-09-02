@@ -19,9 +19,10 @@ mod types;
 pub use flash_plugin_macros::plugin;
 
 pub use context::{
-    applescript_quote, run_command, run_osascript, shorten, CommandOutput, Context,
+    applescript_quote, run_command, run_osascript, shorten, spawn_managed, CommandOutput, Context,
     NormalModeTarget, RefreshGate,
 };
+pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{run, Plugin};
 pub use types::{
     candidate_metadata, ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest,

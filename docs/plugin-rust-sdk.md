@@ -75,6 +75,11 @@ Handed to every handler; cheap to clone. Key surface:
   bounded capture (4 MiB stdout / 256 KiB stderr caps, process-group kill on
   timeout), cwd = data dir, scrubbed env with the plugin `bin/` on PATH.
   `.into_perform()` turns a capture into a `PerformResponse`.
+- Managed subprocess: `spawn_managed(&ctx, argv)` returns a `ManagedChild`
+  for long-lived helpers such as `/usr/bin/caffeinate`. It uses the same
+  scrubbed environment/directories, null stdio, and a dedicated process
+  group. Own it in explicit plugin state and call `terminate(grace).await`
+  during replacement and `on_shutdown`; kill-on-drop is only a backstop.
 - Host RPC: `call_host(method, params)` / `call_host_timeout` never error —
   the result object carries `{"ok": false, "error": ...}` sentinels for
   capability NAKs, timeouts, and host death. Typed wrappers exist for the
@@ -90,8 +95,11 @@ Handed to every handler; cheap to clone. Key surface:
 
 ## Async rules (enforced)
 
-Plugins share a small 2-worker tokio runtime; one blocking syscall stalls
-every in-flight operation. Blocking I/O is banned outright by each crate's
+Each plugin uses one current-thread Tokio executor because callbacks are
+serialized by contract; async I/O and `spawn_blocking` still make progress
+without multiplying resident worker threads across every plugin process. One
+blocking syscall stalls every in-flight operation. Blocking I/O is banned
+outright by each crate's
 `clippy.toml` (`std::fs::*`, `std::process::Command`) with no `#[allow]`
 escape: use `tokio::fs`, `tokio::process`, `tokio::time`. The SDK builds the
 runtime in `run()` — never build your own. Do async startup work in

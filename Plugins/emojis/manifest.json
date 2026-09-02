@@ -5,9 +5,7 @@
   "description": "Emoji catalog for the flashlight: fuzzy-find a glyph by name or Slack-style shortcode and insert or copy it.",
   "sandbox": {},
   "exec": [
-    "bun",
-    "run",
-    "main.ts"
+    "./flash-plugin-emojis"
   ],
   "sources": [
     {

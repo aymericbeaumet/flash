@@ -1,16 +1,5 @@
-# Toolchains for building and running Flash's official plugins. mise is the
-# single authority — no system toolchains (/usr/bin/python3 is an xcrun shim
-# that breaks under seatbelt; Homebrew rubies drift). `mise install` from the
-# repo root provisions everything. Rust stays rustup-managed (~/.cargo), the
-# one deliberate exception: build-plugins.sh needs rustup's multi-target
-# support for universal release builds.
-#
-# Interpreted official plugins resolve their runtime by bare name through the
-# login-shell PATH at spawn (see docs/plugin-protocol.md), so the mise
-# versions below are what actually runs them.
+# Python drives the language-neutral protocol conformance runner. Official
+# plugins are Rust crates built with rustup-managed Cargo; build-plugins.sh
+# uses rustup's multi-target support for universal release builds.
 [tools]
 python = "3.13"
-ruby = "3.4"
-bun = "1.3"
-go = "1.25"
-zig = "0.16"
