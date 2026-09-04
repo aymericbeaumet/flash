@@ -325,7 +325,7 @@ fn render_status(
 fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
     let (mut text, color, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("BAT {:>3}%", battery.percent),
+            format!("BAT {}%", battery.percent),
             if snapshot.source == PowerSource::Adapter || battery.percent > 25 {
                 "colour178"
             } else {
@@ -333,7 +333,7 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
             },
             snapshot.source == PowerSource::Adapter,
         ),
-        None => ("BAT   — ".to_string(), "colour245", false),
+        None => ("BAT —".to_string(), "colour245", false),
     };
     if summary_mode == SummaryMode::Full {
         let secondary = snapshot
@@ -465,8 +465,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_power_summary_reserves_three_percentage_columns() {
-        for (percent, color, padded) in [(0, "red", "  0"), (100, "colour178", "100")] {
+    fn compact_power_summary_uses_natural_percentage_width() {
+        for (percent, color) in [(0, "red"), (100, "colour178")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
                 battery: Some(BatterySnapshot {
@@ -478,7 +478,7 @@ mod tests {
             assert_eq!(
                 visible_summary(&snapshot, SummaryMode::Compact),
                 format!(
-                    "#[push-default]#[range=user|bat-prefs fg={color}]BAT {padded}%#[norange]#[default]#[pop-default]"
+                    "#[push-default]#[range=user|bat-prefs fg={color}]BAT {percent}%#[norange]#[default]#[pop-default]"
                 )
             );
         }
@@ -486,7 +486,7 @@ mod tests {
             source: PowerSource::Adapter,
             battery: None,
         };
-        assert!(visible_summary(&no_battery, SummaryMode::Compact).contains("BAT   — "));
+        assert!(visible_summary(&no_battery, SummaryMode::Compact).contains("BAT —"));
     }
 
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";
@@ -572,11 +572,11 @@ mod tests {
 
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT  73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT 73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Full),
-            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT  73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT 73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert!(status.summary.starts_with("#[popup=inline:"));
         assert!(status.summary.ends_with("#[nopopup]"));
@@ -600,7 +600,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[push-default]#[range=user|bat-prefs fg=red]BAT  25%#[norange]#[default]#[pop-default]"
+            "#[push-default]#[range=user|bat-prefs fg=red]BAT 25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             render_status(&snapshot, None, SummaryMode::Compact).details,

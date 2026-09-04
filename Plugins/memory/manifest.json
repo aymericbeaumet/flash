@@ -2,7 +2,7 @@
   "id": "memory",
   "name": "Memory",
   "version": "0.1.0",
-  "description": "Publish fixed-width memory usage with allocation, swap, and history details on hover; summary_mode=full restores history inline.",
+  "description": "Publish compact memory usage with allocation, swap, and history details on hover; summary_mode=full restores history inline.",
   "exec": [
     "./flash-plugin-memory"
   ],

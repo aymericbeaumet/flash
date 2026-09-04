@@ -2,7 +2,7 @@
   "id": "cpu",
   "name": "CPU & GPU",
   "version": "0.1.0",
-  "description": "Publish fixed-width CPU activity with GPU and history details on hover; summary_mode=full restores them inline.",
+  "description": "Publish compact CPU activity with GPU and history details on hover; summary_mode=full restores them inline.",
   "exec": [
     "./flash-plugin-cpu"
   ],

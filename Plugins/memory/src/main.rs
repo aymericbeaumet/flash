@@ -400,7 +400,7 @@ fn visible_summary(
     summary_mode: SummaryMode,
 ) -> String {
     let mut visible = format!(
-        "#[fg=colour75,bold]MEM#[default] {:>3.0}%",
+        "#[fg=colour75,bold]MEM#[default] {:.0}%",
         snapshot.occupied_percent()
     );
     if summary_mode == SummaryMode::Full && !history.is_empty() {
@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_memory_summary_reserves_three_percentage_columns() {
+    fn compact_memory_summary_uses_natural_percentage_width() {
         let mut snapshot = MemorySnapshot {
             total: 100,
             occupied: 0,
@@ -442,7 +442,7 @@ mod tests {
         };
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour75,bold]MEM#[default]   0%"
+            "#[fg=colour75,bold]MEM#[default] 0%"
         );
         snapshot.occupied = 100;
         snapshot.free = 0;
@@ -537,15 +537,15 @@ mod tests {
         let rendered = render_status(&snapshot, &history, SummaryMode::Compact);
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered.summary.contains("MEM#[default]  75%"));
+        assert!(rendered.summary.contains("MEM#[default] 75%"));
         assert!(!rendered.summary.contains("▅▆"));
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Compact),
-            "#[fg=colour75,bold]MEM#[default]  75%"
+            "#[fg=colour75,bold]MEM#[default] 75%"
         );
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Full),
-            "#[fg=colour75,bold]MEM#[default]  75% ▅▆"
+            "#[fg=colour75,bold]MEM#[default] 75% ▅▆"
         );
         assert!(rendered
             .details
