@@ -1,0 +1,31 @@
+{
+  "id": "memory",
+  "name": "Memory",
+  "version": "0.1.0",
+  "description": "Publish compact macOS memory use with wired, compressed, swap, and history details.",
+  "exec": [
+    "./flash-plugin-memory"
+  ],
+  "commands": [
+    {
+      "command": "memory",
+      "subcommand": "",
+      "description": "Show the latest memory snapshot"
+    },
+    {
+      "command": "memory",
+      "subcommand": "refresh",
+      "description": "Refresh memory status immediately"
+    }
+  ],
+  "status": [
+    "summary",
+    "details"
+  ],
+  "sandbox": {
+    "exec": [
+      "/usr/bin/vm_stat",
+      "/usr/sbin/sysctl"
+    ]
+  }
+}

@@ -224,14 +224,14 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]#{plugin:ready_count} | #{plugin:system.battery} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
+      template = "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]#{plugin:ready_count} | #{plugin:power.summary} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
       """)
 
     let template = c.statusBar.template
     XCTAssertEqual(
       template.template,
       "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]"
-        + "#{plugin:ready_count} | #{plugin:system.battery} | "
+        + "#{plugin:ready_count} | #{plugin:power.summary} | "
         + "#{script:~/bin/right-status.sh} | "
         + "#{command:date +%H:%M}")
     XCTAssertEqual(
@@ -240,7 +240,7 @@ final class ConfigLoaderTests: XCTestCase {
         "active_bundle_identifier",
         "mode",
         "plugin:ready_count",
-        "plugin:system.battery",
+        "plugin:power.summary",
         "script:~/bin/right-status.sh",
         "command:date +%H:%M",
       ])
@@ -251,7 +251,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(template.variables[2].source, .plugin(.readyCount))
     XCTAssertEqual(
       template.variables[3].source,
-      .plugin(.statusSegment(pluginID: "system", name: "battery")))
+      .plugin(.statusSegment(pluginID: "power", name: "summary")))
     XCTAssertEqual(
       template.variables[4].source,
       .command(FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/right-status.sh"])))

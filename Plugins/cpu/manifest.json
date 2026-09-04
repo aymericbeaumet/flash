@@ -1,0 +1,31 @@
+{
+  "id": "cpu",
+  "name": "CPU & GPU",
+  "version": "0.1.0",
+  "description": "Publish compact CPU and best-effort GPU activity with a detailed status-bar popup.",
+  "exec": [
+    "./flash-plugin-cpu"
+  ],
+  "commands": [
+    {
+      "command": "cpu",
+      "subcommand": "",
+      "description": "Show the latest CPU and GPU snapshot"
+    },
+    {
+      "command": "cpu",
+      "subcommand": "refresh",
+      "description": "Refresh CPU and GPU status immediately"
+    }
+  ],
+  "status": [
+    "summary",
+    "details"
+  ],
+  "sandbox": {
+    "exec": [
+      "/usr/sbin/iostat",
+      "/usr/sbin/ioreg"
+    ]
+  }
+}

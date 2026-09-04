@@ -193,7 +193,8 @@ async fn run_event_worker<P: Plugin>(
 }
 
 /// Run the plugin on one async executor and serve NDJSON protocol v1 until
-/// stdin closes. Plugin callbacks are intentionally serialized; async I/O and
+/// stdin closes. Events preserve wire order, while startup and request
+/// callbacks run as independent tasks and may overlap. Async I/O and
 /// `spawn_blocking` still make progress without paying for two resident worker
 /// threads in every plugin process.
 pub fn run<P: Plugin>(plugin: P) {

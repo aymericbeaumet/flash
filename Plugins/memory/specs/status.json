@@ -1,0 +1,72 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "description": "The initial bounded vm_stat/sysctl collection publishes both memory status segments, and concurrent explicit refreshes coalesce instead of queueing.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "status",
+        "params": {
+          "segments": {
+            "summary": { "$contains": "#[nopopup]" },
+            "details": { "$contains": "Memory" }
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send_batch": [
+        {
+          "id": 2,
+          "method": "perform",
+          "params": {
+            "kind": "command",
+            "command": "memory",
+            "subcommand": "refresh",
+            "args": [],
+            "raw": ":memory refresh"
+          }
+        },
+        {
+          "id": 3,
+          "method": "perform",
+          "params": {
+            "kind": "command",
+            "command": "memory",
+            "subcommand": "refresh",
+            "args": [],
+            "raw": ":memory refresh"
+          }
+        }
+      ]
+    },
+    {
+      "expect_all": [
+        {
+          "id": 2,
+          "result": {
+            "ok": true,
+            "message": { "$type": "string", "$min_len": 1 }
+          }
+        },
+        {
+          "id": 3,
+          "result": {
+            "ok": true,
+            "message": { "$type": "string", "$min_len": 1 }
+          }
+        }
+      ],
+      "within_ms": 4000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

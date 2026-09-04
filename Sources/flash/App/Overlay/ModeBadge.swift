@@ -473,14 +473,14 @@ extension OverlayPanel {
     // against the pill's right edge: the gap to whatever follows is driven
     // entirely by the template's own spacing.
     let leftTrailingX = surface.modeButtonLayer.frame.maxX
-    // Elastic fit: the `#[shrink]` span in the left run absorbs overflow so
-    // fixed content (the HN label, a story's domain and arrow) always keeps
-    // its full width. The limit stops at the right section, and never
-    // crosses a notch.
+    // Elastic fit: the `#[shrink]` span in the left run absorbs overflow first
+    // so fixed content (the HN label, a story's domain and arrow) keeps its
+    // full width whenever possible; the hard fallback trims the whole run.
+    // The limit stops at the right section, and never crosses a notch.
     let leftLimit = min(
       rightSectionStart,
       notchBar.map { $0.minX - Self.statusBarNotchMargin } ?? .greatestFiniteMagnitude)
-    let leftTrailingDisplay = FlashStatusBarRenderer.fitToWidth(
+    let leftTrailingDisplay = Self.fitStatusBarText(
       leftTrailingRaw, font: rightFont,
       available: leftLimit - Self.statusBarMinimumGap - leftTrailingX)
     // A `#{cycle:…}` run arrives wrapped in `#[cyc]…#[nocyc]`. Pull it out
@@ -554,18 +554,18 @@ extension OverlayPanel {
 
     // Geometric centring for the `#[align=centre]` bucket. Position around
     // `barFrame.width / 2`, clamped so the centre label never collides with
-    // the left run or the reserved right section. If it doesn't fit, hide
-    // it rather than letting an overlap mangle the bar. A NOTCHED screen
-    // hides the centre outright: its honest position is under the camera
-    // housing, and shoving it off-centre beside the notch reads worse than
-    // not showing it.
+    // the left run or the reserved right section. If it doesn't fit, trim it
+    // inside that lane rather than letting an overlap mangle the bar. A
+    // NOTCHED screen hides the centre outright: its honest position is under
+    // the camera housing, and shoving it off-centre beside the notch reads
+    // worse than not showing it.
     let modeMaxX =
       hasLeftTrailing ? leftTrailingMaxX : surface.modeButtonLayer.frame.maxX
     let centreLimitMaxX = rightSectionStart
     let centreAvailable = max(0, centreLimitMaxX - modeMaxX - Self.statusBarMinimumGap * 2)
     let centreDisplay =
       notchBar == nil
-      ? FlashStatusBarRenderer.fitToWidth(
+      ? Self.fitStatusBarText(
         centreRaw, font: rightFont, available: centreAvailable)
       : ""
     let centreAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
@@ -593,26 +593,33 @@ extension OverlayPanel {
       attributed: centreAttributed,
       previous: surface.lastCentre)
 
-    // Right section is right-aligned: pin its `maxX` to the bar edge (minus
-    // padding) regardless of where the left run or the centre bucket end.
-    // On a notched screen the right region additionally never reaches past
-    // the notch's right edge (+ margin).
-    var rightWidth = max(
-      0,
-      barFrame.width - modeMaxX - Self.statusBarMinimumGap
-        - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
-        - Self.statusBarEdgePadding)
-    if let notchBar {
-      rightWidth = min(
-        rightWidth,
-        max(
-          0,
-          barFrame.width - Self.statusBarEdgePadding
-            - (notchBar.maxX + Self.statusBarNotchMargin)))
-    }
-    let rightDisplay = FlashStatusBarRenderer.fitToWidth(
-      rightRaw, font: rightFont, available: rightWidth)
-    let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
+    // Right section is right-aligned: pin its `maxX` to the bar edge, but
+    // derive its left boundary from the ACTUAL centre frame. Subtracting the
+    // centre width from the whole bar is insufficient when the centre run is
+    // geometrically centred; it lets a long right run start underneath it.
+    // On a notched screen the camera housing is another hard left boundary.
+    let rightEdge = barFrame.width - Self.statusBarEdgePadding
+    let centreBoundary =
+      centreWidth > 0 ? surface.appLabel.frame.maxX : modeMaxX
+    let notchBoundary =
+      notchBar.map { $0.maxX + Self.statusBarNotchMargin } ?? 0
+    let rightBoundary = max(
+      modeMaxX + Self.statusBarMinimumGap,
+      centreBoundary + Self.statusBarMinimumGap,
+      notchBoundary)
+    let rightAvailable = max(0, rightEdge - rightBoundary)
+    // When no explicit `#[shrink]` span exists, keep the rightmost content
+    // (typically battery/date) and put the ellipsis at its leading edge.
+    let rightDisplay = Self.fitStatusBarText(
+      rightRaw, font: rightFont, available: rightAvailable, fromTail: true)
+    let measuredRightWidth =
+      rightDisplay.isEmpty
+      ? 0
+      : ceil(
+        FlashStatusBarRenderer.attributedStatusString(from: rightDisplay, font: rightFont)
+          .size().width)
+    let rightWidth = min(rightAvailable, measuredRightWidth)
+    let rightX = rightEdge - rightWidth
     surface.rightLabel.frame = CGRect(
       x: rightX,
       y: textY,
@@ -989,6 +996,56 @@ final class PrimaryStatusBarSurface: StatusBarSurface {
 }
 
 extension OverlayPanel {
+  /// Fit one rendered status region into a hard pixel budget. The explicit
+  /// `#[shrink]` span gets first refusal; when fixed content still overflows,
+  /// truncate the complete marker-bearing run without dropping markers so
+  /// links, popups, animated spans, and cycle sentinels remain well-scoped.
+  /// Right-aligned regions request tail preservation, keeping their terminal
+  /// battery/date values visible under pressure.
+  static func fitStatusBarText(
+    _ raw: String,
+    font: NSFont,
+    available: CGFloat,
+    fromTail: Bool = false
+  ) -> String {
+    guard !raw.isEmpty, available > 0 else { return "" }
+    let elastic = FlashStatusBarRenderer.fitToWidth(raw, font: font, available: available)
+    func width(of value: String) -> CGFloat {
+      ceil(FlashStatusBarRenderer.attributedStatusString(from: value, font: font).size().width)
+    }
+    guard width(of: elastic) > available else { return elastic }
+
+    let tokens = FlashStatusBarMarkup.tokenizeValue(raw)
+    let visibleCount = FlashStatusBarMarkup.visibleCount(tokens)
+    guard visibleCount > 0 else { return "" }
+
+    func truncated(to limit: Int) -> String {
+      FlashStatusBarMarkup.serialize(
+        FlashStatusBarMarkup.truncate(
+          tokens, limit: limit, fromTail: fromTail, ellipsis: true))
+    }
+
+    let narrowest = truncated(to: 1)
+    guard width(of: narrowest) <= available else { return "" }
+
+    // Find the longest prefix/suffix that fits. Marker-preserving truncation
+    // has monotonic visible width for the status bar's monospaced font.
+    var low = 1
+    var high = max(1, visibleCount - 1)
+    var best = narrowest
+    while low <= high {
+      let mid = low + (high - low) / 2
+      let candidate = truncated(to: mid)
+      if width(of: candidate) <= available {
+        best = candidate
+        low = mid + 1
+      } else {
+        high = mid - 1
+      }
+    }
+    return best
+  }
+
   static func statusLeftText(modeText: String) -> String {
     modeText
   }

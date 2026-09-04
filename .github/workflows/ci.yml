@@ -47,7 +47,7 @@ jobs:
     runs-on: macos-15
     env:
       # Shared across every hermetic crate: cargo keys artifacts by
-      # package-id + metadata hash, so the SDK compiles once, not 32 times.
+      # package-id + metadata hash, so the SDK compiles once, not 36 times.
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
       - name: fmt + clippy + build + test per hermetic crate
-        # One fail-fast loop over the SDK workspace and the 32 standalone
+        # One fail-fast loop over the SDK workspace and the 36 standalone
         # plugin crates. `cd` (not --manifest-path) is load-bearing: clippy
         # discovers each crate's clippy.toml by walking up from the cwd.
         # `--locked` doubles as the committed-Cargo.lock freshness gate, and

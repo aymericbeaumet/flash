@@ -1437,7 +1437,7 @@ enum FlashStatusBarRenderer {
       case "noblink": style.blink = false
       // Flash extension. `breathing` rides a slow opacity sinusoid
       // calibrated to feel like a calm exhale (~4-second cycle, never
-      // dimmer than 35%). The battery plugin wraps its percent in
+      // dimmer than 35%). The power plugin wraps its percent in
       // `#[breathing]…#[nobreathing]` while charging.
       case "breathing", "breathe": style.breathing = true
       case "nobreathing", "nobreathe": style.breathing = false

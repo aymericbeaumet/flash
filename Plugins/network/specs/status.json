@@ -1,0 +1,27 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "description": "The initial bounded route/netstat collection publishes both declared network status segments.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "status",
+        "params": {
+          "segments": {
+            "summary": { "$type": "string", "$min_len": 1 },
+            "details": { "$type": "string", "$min_len": 1 }
+          }
+        }
+      },
+      "within_ms": 7000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

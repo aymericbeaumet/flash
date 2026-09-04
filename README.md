@@ -108,6 +108,47 @@ the same rich text used by named popups, while keeping it out of the bar's
 layout. Because the body travels in the same value as the visible row, an open
 popup updates atomically when the value changes.
 
+Left, centre, and right status lanes never overlap. Flash first contracts an
+explicit `#[shrink]…#[noshrink]` span, then applies a marker-safe ellipsis to
+the whole lane when needed; right-aligned lanes preserve their trailing values.
+
+### System monitors
+
+The bundled `cpu`, `memory`, `disks`, `network`, and `power` plugins form a
+text-first system monitor suite. Each publishes a compact `summary` status
+segment with an attached live hover popup and a standalone `details` segment
+for custom layouts. Compose the summaries in the status template for a single
+iStat-style strip:
+
+```toml
+[statusbar]
+enabled = true
+template = """
+#[align=left]#{mode}
+#[align=center]#{active_app_name}
+#[align=right]#{plugin:cpu.summary}
+#[fg=colour245] · #{plugin:memory.summary}
+#[fg=colour245] · #{plugin:disks.summary}
+#[fg=colour245] · #{plugin:network.summary}
+#[fg=colour245] · #{plugin:power.summary}
+#[fg=colour245] · #{date}
+"""
+```
+
+The modules cover CPU load and best-effort GPU activity, memory composition,
+mounted-volume capacity and disk I/O, default-interface traffic plus copyable
+addresses, and battery/power health. Use `:cpu`, `:memory`, `:disks`,
+`:network`, or `:power` for the current textual report, and
+`:flashlight @network.addresses` to copy an interface address. Date/time stays
+in the core status renderer (with the `timezones` plugin for lookup), and the
+dedicated `caffeinate` plugin remains the sole owner of sleep assertions.
+
+The suite deliberately stays unprivileged: temperature sensors, fan control,
+CPU/GPU frequency, and S.M.A.R.T. details that require a helper are not
+invented from unstable or permission-heavy interfaces. Weather is not folded
+into `network`; it needs an explicit location/network policy and remains a
+separate plugin concern.
+
 ### flashlight
 
 `:flashlight` is a fast, typo-tolerant command bar for locations and plugin data. Its default results include apps, browser tabs, tmux windows, and other destinations. Select an explicit source for richer searches:

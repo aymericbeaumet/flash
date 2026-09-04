@@ -603,12 +603,12 @@ final class StatusBarTests: XCTestCase {
 
   func testStatusTemplateCanReadPluginStatusSegment() {
     let template = FlashStatusBarTemplate(
-      template: "#[align=right]#{plugin:system.battery}",
+      template: "#[align=right]#{plugin:power.summary}",
       variables: [
         FlashStatusBarTemplateVariable(
-          id: "battery",
-          token: "plugin:system.battery",
-          source: .plugin(.statusSegment(pluginID: "system", name: "battery")))
+          id: "power-summary",
+          token: "plugin:power.summary",
+          source: .plugin(.statusSegment(pluginID: "power", name: "summary")))
       ])
 
     let model = FlashStatusBarTemplateEngine.render(
@@ -616,35 +616,35 @@ final class StatusBarTests: XCTestCase {
       context: FlashStatusBarContext(
         pluginStatuses: [
           pluginStatus(
-            id: "system",
+            id: "power",
             state: "running",
             lastError: nil,
             statusSegments: [
-              "battery": "#[range=user|bat-prefs fg=colour178]82%#[norange]"
+              "summary": "#[range=user|bat-prefs fg=colour178]BAT 82%#[norange]"
             ])
         ]))
 
     // Ranges ride through the model — the renderer turns them into
     // actionable spans instead of stripping them.
     XCTAssertEqual(
-      model.rightText, "#[range=user|bat-prefs fg=colour178]82%#[norange]")
+      model.rightText, "#[range=user|bat-prefs fg=colour178]BAT 82%#[norange]")
   }
 
   func testMissingPluginStatusSegmentRendersEmpty() {
     let template = FlashStatusBarTemplate(
-      template: "#[align=right]#{plugin:system.battery}",
+      template: "#[align=right]#{plugin:power.summary}",
       variables: [
         FlashStatusBarTemplateVariable(
-          id: "battery",
-          token: "plugin:system.battery",
-          source: .plugin(.statusSegment(pluginID: "system", name: "battery")))
+          id: "power-summary",
+          token: "plugin:power.summary",
+          source: .plugin(.statusSegment(pluginID: "power", name: "summary")))
       ])
 
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(
         pluginStatuses: [
-          pluginStatus(id: "system", state: "running", lastError: nil)
+          pluginStatus(id: "power", state: "running", lastError: nil)
         ]))
 
     XCTAssertEqual(model.rightText, "")
@@ -973,6 +973,48 @@ final class StatusBarTests: XCTestCase {
     XCTAssertTrue(fitted.contains("…"), fitted)
   }
 
+  func testFitToWidthFallsBackToWholeRunTruncationFromEitherEdge() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "#[cyc]#[link=https://example.com]#[popup=metrics]"
+      + "CPU 22% · GPU 60% · MEM 98% · BAT 100%"
+      + "#[nopopup]#[nolink]#[nocyc]"
+    let available: CGFloat = 100
+
+    let leading = OverlayPanel.fitStatusBarText(
+      raw, font: font, available: available)
+    let trailing = OverlayPanel.fitStatusBarText(
+      raw, font: font, available: available, fromTail: true)
+
+    let leadingText = FlashStatusBarRenderer.attributedStatusString(
+      from: leading, font: font
+    ).string
+    let trailingText = FlashStatusBarRenderer.attributedStatusString(
+      from: trailing, font: font
+    ).string
+    XCTAssertTrue(leadingText.hasSuffix("…"), leadingText)
+    XCTAssertTrue(trailingText.hasPrefix("…"), trailingText)
+    XCTAssertTrue(trailingText.hasSuffix("BAT 100%"), trailingText)
+    XCTAssertTrue(leading.contains("#[nopopup]"), leading)
+    XCTAssertTrue(trailing.contains("#[popup=metrics]"), trailing)
+    XCTAssertTrue(leading.contains("#[nolink]"), leading)
+    XCTAssertTrue(trailing.contains("#[link=https://example.com]"), trailing)
+    XCTAssertTrue(leading.contains("#[cyc]"), leading)
+    XCTAssertTrue(trailing.contains("#[nocyc]"), trailing)
+    XCTAssertLessThanOrEqual(
+      ceil(FlashStatusBarRenderer.attributedStatusString(from: leading, font: font).size().width),
+      available)
+    XCTAssertLessThanOrEqual(
+      ceil(FlashStatusBarRenderer.attributedStatusString(from: trailing, font: font).size().width),
+      available)
+  }
+
+  func testFitToWidthHidesContentWhenEvenEllipsisDoesNotFit() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    XCTAssertEqual(
+      OverlayPanel.fitStatusBarText("overflow", font: font, available: 1), "")
+  }
+
   func testTruncatedCycleLineKeepsBothSlideSentinels() {
     // Regression: the user's `#{=80…:cycle:hn.sh}` — any line longer than
     // the cap used to lose the trailing `#[nocyc]` sentinel, so
@@ -1175,6 +1217,28 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(
       panel.statusRightLabel.fontSize,
       OverlayPanel.statusBarFontSize(overlayFontSize: 12))
+  }
+
+  func testOverflowingRightRegionNeverPaintsAcrossVisibleCentreRegion() {
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    panel.setStatusBarModel(
+      FlashStatusBarModel(
+        appText: "Claude 53% · Fable 10% · Codex 42%",
+        modeText: "#[pill]NORMAL#[nopill] · HN compact title",
+        rightText: String(repeating: "CPU 22% · GPU 60% · MEM 98% · ", count: 5)
+          + "BAT 100% · Fri Sep 4 15:09"))
+    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+
+    XCTAssertFalse(panel.statusAppLabel.isHidden)
+    XCTAssertFalse(panel.statusRightLabel.isHidden)
+    XCTAssertGreaterThanOrEqual(
+      panel.statusRightLabel.frame.minX,
+      panel.statusAppLabel.frame.maxX + OverlayPanel.statusBarMinimumGap)
+    guard let rendered = panel.statusRightLabel.string as? NSAttributedString else {
+      return XCTFail("expected attributed right-region content")
+    }
+    XCTAssertLessThanOrEqual(ceil(rendered.size().width), panel.statusRightLabel.frame.width)
   }
 
   func testStatusBarUsesCurvedScreenEdgePadding() {
@@ -1534,7 +1598,7 @@ final class StatusBarTests: XCTestCase {
     guard case .command = c.statusBar.clickActions["quota"] else {
       return XCTFail("expected a command action")
     }
-    // Defaults ship the battery binding (the system plugin emits the span).
+    // Defaults ship the battery binding (the power plugin emits the span).
     XCTAssertEqual(
       ConfigLoader.parse("").statusBar.clickActions["bat-prefs"],
       .url("x-apple.systempreferences:com.apple.preference.battery"))

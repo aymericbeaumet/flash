@@ -1,0 +1,3 @@
++-o AGXAcceleratorG16X  <class AGXAcceleratorG16X, id 0x1000007c3, registered, matched, active, busy 0>
+  |   "PerformanceStatistics" = {"Tiler Utilization %"=22,"Renderer Utilization %"=47,"Device Utilization %"=59}
+  |   "model" = "Apple M4 Pro"

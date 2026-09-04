@@ -1,0 +1,31 @@
+{
+  "id": "disks",
+  "name": "Disks",
+  "version": "0.1.0",
+  "description": "Visible-volume capacity and aggregate disk read/write activity for the status bar.",
+  "sandbox": {
+    "exec": [
+      "/bin/df",
+      "/usr/sbin/ioreg"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-disks"
+  ],
+  "commands": [
+    {
+      "command": "disks",
+      "subcommand": "",
+      "description": "Show current disk capacity and activity"
+    },
+    {
+      "command": "disks",
+      "subcommand": "refresh",
+      "description": "Refresh disk capacity and activity"
+    }
+  ],
+  "status": [
+    "summary",
+    "details"
+  ]
+}

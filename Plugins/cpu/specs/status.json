@@ -1,0 +1,72 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "description": "The initial bounded iostat/ioreg collection publishes both CPU status segments, and concurrent explicit refreshes coalesce instead of exceeding the perform deadline.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "status",
+        "params": {
+          "segments": {
+            "summary": { "$contains": "#[nopopup]" },
+            "details": { "$contains": "CPU" }
+          }
+        }
+      },
+      "within_ms": 7000
+    },
+    {
+      "send_batch": [
+        {
+          "id": 2,
+          "method": "perform",
+          "params": {
+            "kind": "command",
+            "command": "cpu",
+            "subcommand": "refresh",
+            "args": [],
+            "raw": ":cpu refresh"
+          }
+        },
+        {
+          "id": 3,
+          "method": "perform",
+          "params": {
+            "kind": "command",
+            "command": "cpu",
+            "subcommand": "refresh",
+            "args": [],
+            "raw": ":cpu refresh"
+          }
+        }
+      ]
+    },
+    {
+      "expect_all": [
+        {
+          "id": 2,
+          "result": {
+            "ok": true,
+            "message": { "$type": "string", "$min_len": 1 }
+          }
+        },
+        {
+          "id": 3,
+          "result": {
+            "ok": true,
+            "message": { "$type": "string", "$min_len": 1 }
+          }
+        }
+      ],
+      "within_ms": 6000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

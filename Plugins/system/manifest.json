@@ -2,21 +2,13 @@
   "id": "system",
   "name": "System",
   "version": "0.1.0",
-  "description": "macOS system commands and status segments: lock, sleep, restart, shutdown, logout, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
+  "description": "macOS system actions: lock, sleep, restart, shutdown, logout, empty trash, dark mode, and screen saver.",
   "sandbox": {
     "exec": [
       "/usr/bin/osascript",
-      "/usr/bin/pmset",
-      "/usr/bin/killall",
-      "/usr/bin/caffeinate",
-      "/bin/sh",
-      "/bin/bash",
-      "/bin/zsh",
-      "/bin/dash",
-      "/usr/bin/nohup"
+      "/usr/bin/pmset"
     ],
     "appleevents": true,
-    "signal": true,
     "mach": [
       "com.apple.PowerManagement.control"
     ]
@@ -73,24 +65,7 @@
       "command": "system",
       "subcommand": "screensaver",
       "description": "Start the screen saver"
-    },
-    {
-      "command": "system",
-      "subcommand": "caffeinate",
-      "description": "Prevent the machine from sleeping"
-    },
-    {
-      "command": "system",
-      "subcommand": "decaffeinate",
-      "description": "Allow the machine to sleep again"
     }
-  ],
-  "status": [
-    "battery",
-    "battery_details"
-  ],
-  "listen": [
-    "core:power.changed"
   ],
   "sources": [
     {

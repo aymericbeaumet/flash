@@ -1008,7 +1008,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   /// Bridge macOS power-source notifications into the plugin event stream.
-  /// The system plugin samples `pmset -g batt` only when this fires, rather
+  /// The power plugin samples `pmset -g batt` only when this fires, rather
   /// than waking up every N seconds.
   private func startPowerSourceMonitor() {
     powerSourceMonitor = PowerSourceMonitor { [weak self] in

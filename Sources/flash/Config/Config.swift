@@ -392,7 +392,7 @@ struct Config {
       case command(MappingCommand)
     }
     var clickActions: [String: ClickAction] = Self.defaultClickActions
-    /// The bundled system plugin wraps its battery chip in
+    /// The bundled power plugin wraps its battery chip in
     /// `#[range=user|bat-prefs]`, so the default map makes that span open
     /// the Battery pane out of the box.
     static let defaultClickActions: [String: ClickAction] = [

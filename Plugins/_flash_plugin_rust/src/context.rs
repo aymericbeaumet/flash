@@ -27,6 +27,7 @@ pub(crate) type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
 const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
+const DEFAULT_COMMAND_SLOW_THRESHOLD: Duration = Duration::from_secs(1);
 
 /// Canonical `call_host` sentinels (spec-pinned): `call_host` never errors and
 /// never returns nil — host death and the call timeout arrive as these result
@@ -79,6 +80,21 @@ impl RefreshGate {
         let _guard = self.inner.lock().await;
         let applications = ctx.running_applications();
         operation(ctx.clone(), applications).await
+    }
+
+    /// Run a refresh only when the gate is immediately available.
+    ///
+    /// Interactive requests should prefer this over queueing behind a slow
+    /// background refresh: `None` lets them return cached state within their
+    /// protocol deadline while the in-flight producer finishes normally.
+    pub async fn try_run<T, F, Fut>(&self, ctx: &Context, operation: F) -> Option<T>
+    where
+        F: FnOnce(Context, Vec<RunningApplication>) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let _guard = self.inner.try_lock().ok()?;
+        let applications = ctx.running_applications();
+        Some(operation(ctx.clone(), applications).await)
     }
 }
 
@@ -462,7 +478,7 @@ impl Context {
 
     /// Current host-owned running-app snapshot, fed by `core:apps.changed`
     /// events (the host delivers the first one right after initialize) and
-    /// replaced atomically by the SDK before each serialized callback.
+    /// replaced atomically before that ordered event reaches plugin code.
     pub fn running_applications(&self) -> Vec<RunningApplication> {
         self.running_applications
             .lock()
@@ -592,6 +608,18 @@ pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> Co
 /// dir prepended to `PATH`, no stdin, piped stdout/stderr, `kill_on_drop`, and a
 /// hard timeout. The single audited home for how a plugin shells out.
 pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
+    run_command_with_slow_threshold(ctx, argv, timeout, DEFAULT_COMMAND_SLOW_THRESHOLD).await
+}
+
+/// Run a subprocess while treating only durations at or above `slow_threshold`
+/// as unexpectedly slow. Use this for commands whose documented operation
+/// deliberately includes a sampling delay; timeouts are always warned.
+pub async fn run_command_with_slow_threshold(
+    ctx: &Context,
+    argv: &[String],
+    timeout: Duration,
+    slow_threshold: Duration,
+) -> CommandOutput {
     let started_at = Instant::now();
     let Some((program, args)) = argv.split_first() else {
         let output = CommandOutput {
@@ -600,7 +628,14 @@ pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> C
             status: -1,
             ..Default::default()
         };
-        log_command_latency(ctx, "<empty>", &output, started_at.elapsed(), timeout);
+        log_command_latency(
+            ctx,
+            "<empty>",
+            &output,
+            started_at.elapsed(),
+            timeout,
+            slow_threshold,
+        );
         return output;
     };
     let executable = Path::new(program)
@@ -648,7 +683,14 @@ pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> C
             }
         }
     };
-    log_command_latency(ctx, executable, &output, started_at.elapsed(), timeout);
+    log_command_latency(
+        ctx,
+        executable,
+        &output,
+        started_at.elapsed(),
+        timeout,
+        slow_threshold,
+    );
     output
 }
 
@@ -683,8 +725,42 @@ fn configure_command(ctx: &Context, command: &mut tokio::process::Command) {
         );
 }
 
-fn command_latency_requires_warning(output: &CommandOutput, elapsed: Duration) -> bool {
-    output.status == 124 || elapsed >= Duration::from_secs(1)
+/// Escape plain text before inserting it into a rich status value.
+///
+/// The status grammar uses `#` to open markup and `##` for a literal hash.
+/// Apply this only to externally sourced text, not to intentional markup.
+pub fn escape_status_text(value: &str) -> String {
+    value.replace('#', "##")
+}
+
+/// Attach a self-contained rich popup to a visible status-bar value.
+///
+/// The popup body is encoded byte-for-byte so status markup, newlines, and
+/// non-ASCII text survive the `#[popup=inline:…]` marker without being parsed
+/// as part of the surrounding status template.
+pub fn inline_status_popup(visible: &str, body: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(body.len());
+    for byte in body.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+
+    format!("#[popup=inline:{encoded}]{visible}#[nopopup]")
+}
+
+fn command_latency_requires_warning(
+    output: &CommandOutput,
+    elapsed: Duration,
+    slow_threshold: Duration,
+) -> bool {
+    output.status == 124 || elapsed >= slow_threshold
 }
 
 fn log_command_latency(
@@ -693,8 +769,9 @@ fn log_command_latency(
     output: &CommandOutput,
     elapsed: Duration,
     timeout: Duration,
+    slow_threshold: Duration,
 ) {
-    if !command_latency_requires_warning(output, elapsed) {
+    if !command_latency_requires_warning(output, elapsed, slow_threshold) {
         return;
     }
     ctx.log_fields(
@@ -833,19 +910,33 @@ mod tests {
 
         assert!(!command_latency_requires_warning(
             &success,
-            Duration::from_millis(999)
-        ));
-        assert!(command_latency_requires_warning(
-            &success,
+            Duration::from_millis(999),
             Duration::from_secs(1)
         ));
         assert!(command_latency_requires_warning(
+            &success,
+            Duration::from_secs(1),
+            Duration::from_secs(1)
+        ));
+        assert!(!command_latency_requires_warning(
+            &success,
+            Duration::from_secs(1),
+            Duration::from_millis(1_500)
+        ));
+        assert!(command_latency_requires_warning(
+            &success,
+            Duration::from_millis(1_500),
+            Duration::from_millis(1_500)
+        ));
+        assert!(command_latency_requires_warning(
             &timeout,
-            Duration::from_millis(1)
+            Duration::from_millis(1),
+            Duration::from_secs(10)
         ));
         assert!(!command_latency_requires_warning(
             &expected_probe_failure,
-            Duration::from_millis(1)
+            Duration::from_millis(1),
+            Duration::from_secs(1)
         ));
     }
 
@@ -869,6 +960,25 @@ mod tests {
         assert_eq!(
             failed.into_perform().to_value(),
             serde_json::json!({ "ok": false, "error": "command exited with status 2" })
+        );
+    }
+
+    #[test]
+    fn inline_status_popup_percent_encodes_markup_whitespace_and_unicode() {
+        assert_eq!(
+            inline_status_popup(
+                "CPU 18%",
+                "#[fg=colour178,bold]CPU#[default]\nCafé: 18% / 82%"
+            ),
+            "#[popup=inline:%23%5Bfg%3Dcolour178%2Cbold%5DCPU%23%5Bdefault%5D%0ACaf%C3%A9%3A%2018%25%20%2F%2082%25]CPU 18%#[nopopup]"
+        );
+    }
+
+    #[test]
+    fn status_text_escapes_literal_hashes_before_rich_rendering() {
+        assert_eq!(
+            escape_status_text("Backup #[fg=colour196] #1"),
+            "Backup ##[fg=colour196] ##1"
         );
     }
 
@@ -947,5 +1057,32 @@ mod tests {
 
         assert_eq!(first.await.unwrap(), "com.example.Old");
         assert_eq!(second.await.unwrap(), "com.example.New");
+    }
+
+    #[tokio::test]
+    async fn refresh_gate_try_run_skips_instead_of_queueing() {
+        let ctx = test_context();
+        let gate = RefreshGate::default();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let running = {
+            let gate = gate.clone();
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                gate.run(&ctx, move |_, _| async move {
+                    started_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                })
+                .await;
+            })
+        };
+        started_rx.await.unwrap();
+
+        let skipped = gate.try_run(&ctx, |_, _| async { 42 }).await;
+
+        assert_eq!(skipped, None);
+        release_tx.send(()).unwrap();
+        running.await.unwrap();
+        assert_eq!(gate.try_run(&ctx, |_, _| async { 42 }).await, Some(42));
     }
 }

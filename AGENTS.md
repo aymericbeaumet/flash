@@ -367,10 +367,12 @@ the OS primitives `#{host}` (`#H`), `#{host_short}` (`#h`), `#{user}`,
 through the script's stdout lines). Any other bare `#{token}` is a config
 error — there is no silently-empty tmux dialect. tmux session/window/pane
 state comes from the bundled tmux plugin's status segments
-(`#{plugin:tmux.session}`, `#{plugin:tmux.window}`, `#{plugin:tmux.pane}`),
-and the bundled system plugin exposes `#{plugin:system.battery}` plus
-`#{plugin:system.battery_details}`. The bundled aiproviders plugin owns the
-Claude, Fable, and Codex compact/detail usage segments declared in its manifest.
+(`#{plugin:tmux.session}`, `#{plugin:tmux.window}`, `#{plugin:tmux.pane}`). The
+bundled `cpu`, `memory`, `disks`, `network`, and `power` monitor plugins each
+expose `#{plugin:<id>.summary}` plus `#{plugin:<id>.details}`; every summary
+atomically carries its own inline hover popup. `processes.focused_app_details`
+owns focused-app telemetry, and the bundled aiproviders plugin owns the Claude,
+Fable, and Codex compact/detail usage segments declared in its manifest.
 The format grammar is a strict tmux superset: modifiers `#{?cond,a,b}`,
 `#{==:}`/`#{!=:}`/`#{<:}`/`#{>:}`/`#{<=:}`/`#{>=:}`/`#{&&:}`/`#{||:}`,
 `#{s/re/repl/[i]:var}`, `#{pN:}`/`#{p-N:}`, `#{=N:}`/`#{=-N:}` (Flash `…`
@@ -402,9 +404,10 @@ animate via render-server CAKeyframeAnimations on pooled overlay layers
 is the curve oracle) — the status bar does ZERO periodic work, main-thread
 or otherwise, beyond rendering actual model changes. All screens lay out
 through ONE function (`configureStatusBarSurface` + `StatusBarSurface`);
-never fork a per-screen layout copy. Overflow is handled by the elastic
-`#[shrink]…#[noshrink]` span (pixel-accurate ellipsis; fixed content keeps
-full width) and layout keeps a 16 pt margin around a notch.
+never fork a per-screen layout copy. Overflow first contracts the elastic
+`#[shrink]…#[noshrink]` span, then marker-safely truncates the whole lane to
+its hard pixel budget (the right lane preserves its suffix); lane frames never
+overlap, and layout keeps a 16 pt margin around a notch.
 
 **Every executable bundled plugin is Rust and macOS-only.** The wire protocol
 remains language-neutral for third-party executables, but the repository

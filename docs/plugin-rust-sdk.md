@@ -71,10 +71,16 @@ Handed to every handler; cheap to clone. Key surface:
 - Events: `running_applications()` is the host-maintained app snapshot (fed
   by `core:apps.changed`, delivered right after initialize). `RefreshGate`
   serializes refresh producers against it.
+- Status text: `escape_status_text(value)` doubles literal `#` characters in
+  externally sourced text before insertion into a rich status value. Do not
+  apply it to intentional `#[…]` markup.
 - Subprocess: `run_command(&ctx, argv, timeout)` and `run_osascript` —
   bounded capture (4 MiB stdout / 256 KiB stderr caps, process-group kill on
   timeout), cwd = data dir, scrubbed env with the plugin `bin/` on PATH.
-  `.into_perform()` turns a capture into a `PerformResponse`.
+  Use `run_command_with_slow_threshold` only when the command deliberately
+  waits while sampling; it preserves timeout warnings while moving that call's
+  default one-second slow warning. `.into_perform()` turns a capture into a
+  `PerformResponse`.
 - Managed subprocess: `spawn_managed(&ctx, argv)` returns a `ManagedChild`
   for long-lived helpers such as `/usr/bin/caffeinate`. It uses the same
   scrubbed environment/directories, null stdio, and a dedicated process
@@ -90,15 +96,20 @@ Handed to every handler; cheap to clone. Key surface:
   `ping`).
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
   (content-free); `status(segments)` feeds `#{plugin:<id>.<segment>}`.
+  `inline_status_popup(visible, body)` wraps a visible value with a correctly
+  percent-encoded rich hover body for publishing both atomically.
 - Timers: `interval(period, cb)` — non-overlapping ticks; plugins may also
   `tokio::spawn` freely.
 
 ## Async rules (enforced)
 
-Each plugin uses one current-thread Tokio executor because callbacks are
-serialized by contract; async I/O and `spawn_blocking` still make progress
-without multiplying resident worker threads across every plugin process. One
-blocking syscall stalls every in-flight operation. Blocking I/O is banned
+Each plugin uses one current-thread Tokio executor. Events preserve wire order
+and each `interval` callback is non-overlapping, but startup and request
+callbacks are independent tasks and may overlap; coordinate shared refreshes
+explicitly (`RefreshGate::try_run` keeps an interactive request from queueing
+behind slow background work). Async I/O and `spawn_blocking` still make
+progress without multiplying resident worker threads across every plugin
+process. One blocking syscall stalls every in-flight operation. Blocking I/O is banned
 outright by each crate's
 `clippy.toml` (`std::fs::*`, `std::process::Command`) with no `#[allow]`
 escape: use `tokio::fs`, `tokio::process`, `tokio::time`. The SDK builds the

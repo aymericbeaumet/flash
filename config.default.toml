@@ -201,7 +201,7 @@ popup_offset = 8
 #                                     (80 → 100 % alpha) — well below a
 #                                     baseline meditation breath so the
 #                                     chip never signals, just sits alive.
-#                                     Used by the system plugin to mark
+#                                     Used by the power plugin to mark
 #                                     a battery that's plugged in.
 #   #[popup=<name>] / #[nopopup]     — show the named `[statusbar.popup]`
 #                                     body while this text is hovered.
@@ -250,7 +250,7 @@ popup_offset = 8
 #   #{plugin:loaded_count}
 #   #{plugin:ready_count}
 #   #{plugin:error_count}
-#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:system.battery};
+#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:power.summary};
 #                                    # tmux state comes from the tmux plugin:
 #                                    # #{plugin:tmux.session} / #{plugin:tmux.window}
 #                                    # / #{plugin:tmux.pane}
@@ -273,11 +273,16 @@ popup_offset = 8
 # template contains them and keep their previous successful value until
 # a replacement is ready.
 template = "#[align=left]#{mode}#[align=right]#{date}"
-# Example with a custom right-side composition:
+# The bundled CPU, memory, disks, network, and power summaries carry their
+# own live hover popups. Compose them here for an iStat-style combined view:
 # template = """
 #   #[align=left]#{mode}
 #   #[align=center]#{active_app_name}
-#   #[align=right]#{plugin:system.battery}
+#   #[align=right]#{plugin:cpu.summary}
+#   #[fg=colour245] · #{plugin:memory.summary}
+#   #[fg=colour245] · #{plugin:disks.summary}
+#   #[fg=colour245] · #{plugin:network.summary}
+#   #[fg=colour245] · #{plugin:power.summary}
 #   #[fg=colour245] · #{date}
 #   """
 
@@ -299,7 +304,7 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 # ["flash", "<verb>", …] action array (same power as a keybinding).
 # `#[link=URL]…#[nolink]` remains the shorthand for plain URL spans.
 [statusbar.click]
-# The bundled system plugin wraps its battery chip in
+# The bundled power plugin wraps its battery chip in
 # #[range=user|bat-prefs], so a click opens the Battery pane.
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
 

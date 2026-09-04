@@ -1,16 +1,15 @@
 [package]
-name = "flash-plugin-netinfo"
+name = "flash-plugin-disks"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [[bin]]
-name = "flash-plugin-netinfo"
+name = "flash-plugin-disks"
 path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
-nix = { version = "0.31", default-features = false, features = ["net", "hostname"] }
 tokio = { version = "1", default-features = false, features = [
   "rt",
   "macros",
@@ -22,15 +21,11 @@ tokio = { version = "1", default-features = false, features = [
   "sync",
 ] }
 
-# Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
-# (fully-unoptimized tokio is visibly slow under the plugin latency contracts),
-# line-tables-only debuginfo keeps the shared target dir small.
 [profile.plugin-dev]
 inherits = "dev"
 opt-level = 1
 debug = "line-tables-only"
 
-# Long-lived resident child process: optimize for size and cold start.
 [profile.release]
 opt-level = "z"
 lto = true

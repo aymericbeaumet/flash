@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, run_osascript, Candidate, CommandRequest, Context, Event, PerformResponse,
+    run, run_command, run_osascript, Candidate, CommandRequest, Context, PerformResponse,
 };
 use serde_json::Value;
 
@@ -75,18 +75,6 @@ const ACTIONS: &[SystemAction] = &[
         subtitle: "Launch ScreenSaverEngine",
         aliases: &["screen saver", "screensave"],
     },
-    SystemAction {
-        subcommand: "caffeinate",
-        title: "Keep display awake",
-        subtitle: "Start a detached caffeinate assertion",
-        aliases: &["awake", "prevent sleep"],
-    },
-    SystemAction {
-        subcommand: "decaffeinate",
-        title: "Allow display sleep",
-        subtitle: "Stop running caffeinate processes",
-        aliases: &["allow sleep", "stop caffeinate"],
-    },
 ];
 
 struct System;
@@ -95,19 +83,7 @@ flash_plugin::plugin!(System);
 
 impl FlashPlugin for System {
     async fn on_start(&self, ctx: Context) {
-        // The catalog is static and publishes immediately. Battery status is
-        // unrelated UI telemetry and may block in pmset for up to five
-        // seconds, so refresh it on a detached task.
         publish_system_actions(&ctx);
-        tokio::spawn(async move {
-            publish_battery_status(&ctx).await;
-        });
-    }
-
-    async fn on_event(&self, ctx: Context, event: Event) {
-        if event.name == "core:power.changed" {
-            publish_battery_status(&ctx).await;
-        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
@@ -207,17 +183,6 @@ async fn run_system_action(ctx: &Context, subcommand: &str) -> PerformResponse {
                 PerformResponse::fail("host.open ScreenSaverEngine failed")
             }
         }
-        // Spawn caffeinate detached so the command returns immediately and
-        // the assertion outlives this short-lived invocation.
-        "caffeinate" => {
-            sh(
-                ctx,
-                &["/bin/sh", "-c", "nohup caffeinate -d >/dev/null 2>&1 &"],
-                10,
-            )
-            .await
-        }
-        "decaffeinate" => sh(ctx, &["/usr/bin/killall", "caffeinate"], 10).await,
         other => PerformResponse::fail(format!("unknown subcommand: {other}")),
     }
 }
@@ -236,226 +201,6 @@ async fn lock_screen(ctx: &Context) -> PerformResponse {
                 .unwrap_or("host.post_global_key failed"),
         )
     }
-}
-
-async fn publish_battery_status(ctx: &Context) {
-    let argv = [
-        "/usr/bin/pmset".to_string(),
-        "-g".to_string(),
-        "batt".to_string(),
-    ];
-    // Bumped from 2s → 5s: under thermal pressure or right after wake
-    // pmset has been observed to take up to ~3s, which used to trip the
-    // 2s ceiling and surface "??" until the next power-source event.
-    let result = run_command(ctx, &argv, Duration::from_secs(5)).await;
-    // Parse stdout regardless of exit status. pmset writes the full
-    // battery line before any error so a non-zero exit (or even a
-    // timeout-induced SIGTERM) can still carry useful data; only fall
-    // back to "??" when there's genuinely no percent to display.
-    let snapshot = BatterySnapshot::parse(&result.stdout);
-    ctx.status([
-        ("battery", battery_segment_from_snapshot(snapshot)),
-        ("battery_details", battery_details_from_snapshot(snapshot)),
-    ]);
-}
-
-/// Reasoning for status markers below:
-/// - `range=user|bat-prefs` is the click range tmux uses for our battery
-///   chip (Energy preferences pane on click).
-/// - `#[breathing]` rides a subtle opacity sinusoid whenever the battery
-///   is on AC power — "plugged" as the user puts it, regardless of
-///   whether the cell is actively gaining charge or already topped up.
-///   The Flash renderer enforces the "very subtle" curve (88 → 100 %
-///   alpha, 6 s cycle); from the plugin's point of view we just have
-///   to drop the marker pair around the percent text. Older Flash
-///   builds that don't know the marker strip it and fall back to the
-///   plain colour, so the segment stays forward-compatible.
-#[cfg(test)]
-fn battery_segment(pmset_output: &str) -> String {
-    battery_segment_from_snapshot(BatterySnapshot::parse(pmset_output))
-}
-
-fn battery_segment_from_snapshot(snapshot: Option<BatterySnapshot>) -> String {
-    let Some(snapshot) = snapshot else {
-        return missing_battery_segment();
-    };
-    let percent = snapshot.percent;
-    let state = snapshot.state;
-    let color = if state.on_ac() || percent > 25 {
-        "colour178"
-    } else {
-        "red"
-    };
-    let (breathing_open, breathing_close) = if state.on_ac() {
-        ("#[breathing]", "#[nobreathing]")
-    } else {
-        ("", "")
-    };
-    format!(
-        "#[range=user|bat-prefs fg={color}]{breathing_open}{percent}%{breathing_close}#[norange]"
-    )
-}
-
-#[cfg(test)]
-fn battery_details(pmset_output: &str) -> String {
-    battery_details_from_snapshot(BatterySnapshot::parse(pmset_output))
-}
-
-fn battery_details_from_snapshot(snapshot: Option<BatterySnapshot>) -> String {
-    let Some(snapshot) = snapshot else {
-        return "Battery information unavailable".to_string();
-    };
-
-    let mut rows = vec![
-        format!("Charge: {}%", snapshot.percent),
-        format!("State: {}", snapshot.state.label()),
-        format!("Power: {}", snapshot.power.label()),
-    ];
-    if let Some(minutes) = snapshot.estimate_minutes {
-        let duration = natural_duration(minutes);
-        match snapshot.state {
-            BatteryState::Charging if minutes > 0 => rows.push(format!("Full in: {duration}")),
-            BatteryState::Discharging if minutes > 0 => {
-                rows.push(format!("Remaining: {duration}"));
-            }
-            _ => {}
-        }
-    }
-    rows.join("\n")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BatterySnapshot {
-    percent: u8,
-    state: BatteryState,
-    power: BatteryPower,
-    estimate_minutes: Option<u32>,
-}
-
-impl BatterySnapshot {
-    fn parse(pmset_output: &str) -> Option<Self> {
-        Some(Self {
-            percent: battery_percent(pmset_output)?,
-            state: battery_state(pmset_output),
-            power: battery_power(pmset_output),
-            estimate_minutes: battery_estimate_minutes(pmset_output),
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatteryState {
-    Charging,
-    Charged,
-    Discharging,
-    Unknown,
-}
-
-impl BatteryState {
-    fn on_ac(self) -> bool {
-        matches!(self, BatteryState::Charging | BatteryState::Charged)
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            BatteryState::Charging => "Charging",
-            BatteryState::Charged => "Fully charged",
-            BatteryState::Discharging => "Discharging",
-            BatteryState::Unknown => "Unknown",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatteryPower {
-    ACAdapter,
-    Battery,
-    Unknown,
-}
-
-impl BatteryPower {
-    fn label(self) -> &'static str {
-        match self {
-            BatteryPower::ACAdapter => "AC adapter",
-            BatteryPower::Battery => "Battery",
-            BatteryPower::Unknown => "Unknown",
-        }
-    }
-}
-
-fn battery_power(pmset_output: &str) -> BatteryPower {
-    if pmset_output.contains("AC Power") {
-        BatteryPower::ACAdapter
-    } else if pmset_output.contains("Battery Power") {
-        BatteryPower::Battery
-    } else {
-        BatteryPower::Unknown
-    }
-}
-
-fn battery_state(pmset_output: &str) -> BatteryState {
-    // Look at the per-battery status line, not just the header — `Now
-    // drawing from 'AC Power'` only tells us the source, not whether
-    // the battery is actively replenishing. We keep the three-state
-    // distinction so future styling decisions (e.g. a slightly slower
-    // breathe when the cell is `charged` vs `charging`) stay possible
-    // without re-parsing pmset.
-    if pmset_output.contains("; charging") || pmset_output.contains("; finishing charge") {
-        BatteryState::Charging
-    } else if pmset_output.contains("; charged") {
-        BatteryState::Charged
-    } else if pmset_output.contains("; discharging") {
-        BatteryState::Discharging
-    } else if pmset_output.contains("AC Power") {
-        BatteryState::Charged
-    } else {
-        BatteryState::Unknown
-    }
-}
-
-fn battery_percent(pmset_output: &str) -> Option<u8> {
-    // pmset reports the cell percentage as `NN%` followed by a `;`.
-    // Anchor on the `%` and look at the up-to-three preceding digits
-    // so we don't accidentally lock on to the `id=<digits>` token or
-    // the time-to-full minutes column. `u8` caps at 255 which is well
-    // outside any plausible battery percent.
-    let percent_idx = pmset_output.find('%')?;
-    let prefix = &pmset_output[..percent_idx];
-    let digits: String = prefix
-        .chars()
-        .rev()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    digits.parse::<u8>().ok()
-}
-
-fn battery_estimate_minutes(pmset_output: &str) -> Option<u32> {
-    let before_remaining = pmset_output.split(" remaining").next()?;
-    let token = before_remaining.split_whitespace().last()?;
-    let (hours, minutes) = token.split_once(':')?;
-    let hours = hours.parse::<u32>().ok()?;
-    let minutes = minutes.parse::<u32>().ok()?;
-    if minutes >= 60 {
-        return None;
-    }
-    hours.checked_mul(60)?.checked_add(minutes)
-}
-
-fn natural_duration(minutes: u32) -> String {
-    let hours = minutes / 60;
-    let minutes = minutes % 60;
-    match (hours, minutes) {
-        (0, minutes) => format!("{minutes}m"),
-        (hours, 0) => format!("{hours}h"),
-        (hours, minutes) => format!("{hours}h {minutes}m"),
-    }
-}
-
-fn missing_battery_segment() -> String {
-    "#[range=user|bat-prefs fg=red]??#[norange]".to_string()
 }
 
 async fn sh(ctx: &Context, argv: &[&str], timeout: u64) -> PerformResponse {
@@ -518,137 +263,9 @@ mod tests {
     }
 
     #[test]
-    fn formats_charged_battery_yellow_with_breathing() {
-        // On AC: the cell is "plugged" so we wrap the percent in the
-        // breathing markers regardless of whether it's actively gaining
-        // charge (`charging`) or already topped up (`charged`).
-        assert_eq!(
-            battery_segment(
-                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 82%; charged;"
-            ),
-            "#[range=user|bat-prefs fg=colour178]#[breathing]82%#[nobreathing]#[norange]"
-        );
-    }
-
-    #[test]
-    fn formats_healthy_discharging_battery_yellow_without_breathing() {
-        // On battery power: no breathing — the chip stays still so the
-        // user can tell at a glance whether the laptop is plugged in.
-        assert_eq!(
-            battery_segment(
-                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 26%; discharging;"
-            ),
-            "#[range=user|bat-prefs fg=colour178]26%#[norange]"
-        );
-    }
-
-    #[test]
-    fn formats_low_battery_red() {
-        assert_eq!(
-            battery_segment(
-                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 25%; discharging;"
-            ),
-            "#[range=user|bat-prefs fg=red]25%#[norange]"
-        );
-    }
-
-    #[test]
-    fn formats_missing_battery_red_unknown() {
-        assert_eq!(
-            battery_segment("No batteries are currently installed."),
-            "#[range=user|bat-prefs fg=red]??#[norange]"
-        );
-    }
-
-    #[test]
-    fn formats_charging_battery_with_breathing_marker() {
-        assert_eq!(
-            battery_segment(
-                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35127395) 73%; charging; 1:24 remaining present: true"
-            ),
-            "#[range=user|bat-prefs fg=colour178]#[breathing]73%#[nobreathing]#[norange]"
-        );
-    }
-
-    #[test]
-    fn formats_finishing_charge_with_breathing_marker() {
-        // pmset's `finishing charge` variant — on AC, last few % to top
-        // up. Same "plugged in" semantics as `charging`, same breathing.
-        assert_eq!(
-            battery_segment(
-                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 99%; finishing charge; 0:01 remaining present: true"
-            ),
-            "#[range=user|bat-prefs fg=colour178]#[breathing]99%#[nobreathing]#[norange]"
-        );
-    }
-
-    #[test]
-    fn describes_discharging_battery_from_the_same_pmset_snapshot() {
-        assert_eq!(
-            battery_details(
-                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 26%; discharging; 6:26 remaining present: true"
-            ),
-            "Charge: 26%\nState: Discharging\nPower: Battery\nRemaining: 6h 26m"
-        );
-    }
-
-    #[test]
-    fn describes_charging_battery_with_time_to_full() {
-        assert_eq!(
-            battery_details(
-                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 73%; charging; 1:24 remaining present: true"
-            ),
-            "Charge: 73%\nState: Charging\nPower: AC adapter\nFull in: 1h 24m"
-        );
-    }
-
-    #[test]
-    fn charged_battery_omits_the_meaningless_zero_estimate() {
-        assert_eq!(
-            battery_details(
-                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; charged; 0:00 remaining present: true"
-            ),
-            "Charge: 100%\nState: Fully charged\nPower: AC adapter"
-        );
-    }
-
-    #[test]
-    fn battery_without_an_estimate_omits_the_duration_row() {
-        assert_eq!(
-            battery_details(
-                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 42%; discharging; (no estimate) present: true"
-            ),
-            "Charge: 42%\nState: Discharging\nPower: Battery"
-        );
-    }
-
-    #[test]
-    fn missing_battery_has_a_readable_detail_fallback() {
-        assert_eq!(
-            battery_details("No batteries are currently installed."),
-            "Battery information unavailable"
-        );
-    }
-
-    #[test]
-    fn parses_percent_when_id_has_many_digits() {
-        // The old token-scan picked the first `<digits>%` token regardless
-        // of context. The new anchor-on-% scan must still resolve to the
-        // battery percent even when `id=` is a long number that would
-        // otherwise dominate a left-to-right token walk.
-        assert_eq!(
-            battery_percent(
-                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35127395)\t100%; charged; 0:00 remaining present: true"
-            ),
-            Some(100)
-        );
-    }
-
-    #[test]
-    fn parses_percent_when_pmset_output_has_trailing_garbage() {
-        // pmset writes the battery line before any error; a SIGTERM
-        // mid-flush should still surface the percent rather than the
-        // "??" fallback.
-        assert_eq!(battery_percent(" 42%; charging;"), Some(42));
+    fn caffeinate_actions_live_only_in_the_dedicated_plugin() {
+        assert!(!ACTIONS
+            .iter()
+            .any(|action| matches!(action.subcommand, "caffeinate" | "decaffeinate")));
     }
 }

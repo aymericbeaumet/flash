@@ -1,0 +1,33 @@
+[package]
+name = "flash-plugin-power"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-power"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_flash_plugin_rust" }
+tokio = { version = "1", default-features = false, features = [
+  "rt",
+  "macros",
+  "io-std",
+  "io-util",
+  "process",
+  "time",
+  "sync",
+] }
+
+[profile.plugin-dev]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

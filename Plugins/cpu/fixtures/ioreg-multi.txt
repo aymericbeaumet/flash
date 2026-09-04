@@ -1,0 +1,6 @@
++-o SlowAccelerator  <class SlowAccelerator, id 0x100000001, registered, matched, active>
+  |   "PerformanceStatistics" = {"Renderer Utilization %"=95,"Device Utilization %"=24}
+  |   "model" = "Integrated Example"
++-o FastAccelerator  <class FastAccelerator, id 0x100000002, registered, matched, active>
+  |   "PerformanceStatistics" = {"Renderer Utilization %"=70,"Device Utilization %"=81}
+  |   "model" = "Discrete Example"

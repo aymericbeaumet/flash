@@ -1,0 +1,56 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "description": "The bare disks command returns the last-good snapshot and refresh performs a bounded forced collection.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "status",
+        "params": { "segments": { "summary": { "$type": "string", "$min_len": 1 } } }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 2,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "disks",
+          "subcommand": "",
+          "args": [],
+          "raw": ":disks"
+        }
+      }
+    },
+    {
+      "expect": { "id": 2, "result": { "ok": true, "message": { "$contains": "Disks" } } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 3,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "disks",
+          "subcommand": "refresh",
+          "args": [],
+          "raw": ":disks refresh"
+        }
+      }
+    },
+    {
+      "expect": { "id": 3, "result": { "ok": true, "message": { "$contains": "Disks" } } },
+      "within_ms": 7000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

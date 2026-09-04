@@ -1,0 +1,40 @@
+{
+  "id": "network",
+  "name": "Network",
+  "version": "0.1.0",
+  "description": "Live default-interface traffic plus copyable local network addresses in `@network.addresses`.",
+  "sandbox": {
+    "exec": [
+      "/sbin/route",
+      "/usr/sbin/netstat"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-network"
+  ],
+  "capabilities": [
+    "network"
+  ],
+  "commands": [
+    {
+      "command": "network",
+      "subcommand": "",
+      "description": "Show current network traffic and addresses"
+    },
+    {
+      "command": "network",
+      "subcommand": "refresh",
+      "description": "Refresh network traffic, route, and addresses"
+    }
+  ],
+  "status": [
+    "summary",
+    "details"
+  ],
+  "sources": [
+    {
+      "name": "network.addresses",
+      "priority": "low"
+    }
+  ]
+}

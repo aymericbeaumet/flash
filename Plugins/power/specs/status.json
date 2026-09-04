@@ -1,0 +1,50 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "description": "The event-driven power collector publishes both declared status segments, and an explicit refresh returns its cached detail surface within the perform deadline.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "status",
+        "params": {
+          "segments": {
+            "summary": { "$contains": "#[popup=inline:" },
+            "details": { "$contains": "Charge:" }
+          }
+        }
+      },
+      "within_ms": 7000
+    },
+    {
+      "send": {
+        "id": 2,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "power",
+          "subcommand": "refresh",
+          "args": [],
+          "raw": ":power refresh"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 2,
+        "result": {
+          "ok": true,
+          "message": { "$contains": "Charge:" }
+        }
+      },
+      "within_ms": 7000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

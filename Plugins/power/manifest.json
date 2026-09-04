@@ -1,0 +1,37 @@
+{
+  "id": "power",
+  "name": "Power",
+  "version": "0.1.0",
+  "description": "Battery, charging, health, temperature, cycle, and adapter telemetry for the status bar.",
+  "sandbox": {
+    "exec": [
+      "/usr/bin/pmset",
+      "/usr/sbin/ioreg"
+    ],
+    "mach": [
+      "com.apple.PowerManagement.control"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-power"
+  ],
+  "commands": [
+    {
+      "command": "power",
+      "subcommand": "",
+      "description": "Show current battery and power details"
+    },
+    {
+      "command": "power",
+      "subcommand": "refresh",
+      "description": "Refresh battery and power details"
+    }
+  ],
+  "status": [
+    "summary",
+    "details"
+  ],
+  "listen": [
+    "core:power.changed"
+  ]
+}

@@ -26,6 +26,12 @@ MiB before the migration. All 28 initialized concurrently in 219 ms, the
 slowest handshake took 26 ms, and none timed out. Treat these figures as a
 machine-specific reference, not a portable guarantee.
 
+The five system-monitor plugins added on 2026-09-04 (`cpu`, `memory`, `disks`,
+`network`, and `power`) measured 15,336 KiB aggregate median RSS across 20
+samples each. Their cold-initialize p95 values were 2.09–2.30 ms and settled
+ping p95 values were 0.19–0.22 ms. The same build's 36 direct plugin binaries
+measured 121,504 KiB aggregate median RSS across five samples.
+
 Use these regression budgets when changing the runtime or an official plugin:
 
 | Metric | Budget |
@@ -69,9 +75,11 @@ least 50 ms.
 - Plugin stdout decoding and stdin writes stay off the lifecycle queue.
   Writes are FIFO and bounded; a stalled child is restarted instead of
   freezing every lifecycle operation.
-- The shared SDK uses one current-thread Tokio executor per child. Plugin
-  callbacks are serialized by contract, while async I/O and `spawn_blocking`
-  retain concurrency without multiplying idle worker threads.
+- The shared SDK uses one current-thread Tokio executor per child. Events keep
+  wire order and interval callbacks do not overlap themselves; startup and
+  request callbacks may overlap and must coordinate shared refresh state.
+  Async I/O and `spawn_blocking` retain concurrency without multiplying idle
+  worker threads.
 - Full catalog replacements that are semantically unchanged do not advance
   the store generation, timestamp, or subscriber notifications.
 - Browser refreshes are single-flight, publish only changed rows, and log
