@@ -517,7 +517,7 @@ fn render_status(
 Load: {:.2} · {:.2} · {:.2}",
         cpu.user, cpu.system, cpu.idle, cpu.load[0], cpu.load[1], cpu.load[2]
     );
-    let mut details = format!("#[fg=colour178,bold]CPU#[default] {total:.1}%\n{body}");
+    let mut details = format!("#[fg=colour178]CPU#[default]\nTotal: {total:.1}%\n{body}");
     let mut plain_details = format!("CPU {total:.1}%\n{body}");
     if !history.is_empty() {
         let history = format!("\nHistory: {}", sparkline(history));
@@ -703,9 +703,9 @@ mod tests {
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
                 .contains("#[fg=colour178]GPU#[default] 59% ▂▂")
         );
-        assert!(rendered
-            .details
-            .contains("User: 12.5% · System: 7.2% · Idle: 80.2%"));
+        assert!(rendered.details.starts_with(
+            "#[fg=colour178]CPU#[default]\nTotal: 19.8%\nUser: 12.5% · System: 7.2% · Idle: 80.2%"
+        ));
         assert!(rendered.details.contains("Load: 1.25 · 2.50 · 3.75"));
         assert!(rendered.details.contains("Apple M4 Pro: 59%"));
         assert!(!rendered.plain_details.contains("#["));

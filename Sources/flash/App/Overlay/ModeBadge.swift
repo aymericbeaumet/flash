@@ -261,6 +261,15 @@ extension OverlayPanel {
   }
 
   private func configureModeBadge(panelFrame: CGRect) {
+    configureModeBadge(
+      panelFrame: panelFrame,
+      screenSnapshot: Self.currentScreenSnapshot())
+  }
+
+  /// The status-bar surface layout with display geometry supplied explicitly.
+  /// Production passes the cached WindowServer snapshot; tests pass a stable
+  /// synthetic screen so notch behavior and lane boundaries are deterministic.
+  func configureModeBadge(panelFrame: CGRect, screenSnapshot snapshot: ScreenSnapshot) {
     let fontSize = Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
     let modeFontSize = Self.modeIndicatorFontSize(statusBarFontSize: fontSize)
     let labelFont = NSFont.monospacedSystemFont(ofSize: modeFontSize, weight: .bold)
@@ -276,7 +285,6 @@ extension OverlayPanel {
     let centreRaw = statusAppText.trimmed
     let rightRaw = Self.statusRightDisplayText(statusRightText)
 
-    let snapshot = OverlayPanel.currentScreenSnapshot()
     let visible = snapshot.mainVisibleFrame
     let mainScreenFrame = snapshot.mainFrame ?? visible
     let mainNotch =

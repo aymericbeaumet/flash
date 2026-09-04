@@ -170,6 +170,13 @@ final class PluginManager {
     set { hostRPC.onNotifyRequested = newValue }
   }
 
+  /// See `PluginHostRPC.wifiInfoProvider`; forwarded so AppDelegate owns the
+  /// system authorization provider while the manager owns RPC routing.
+  var wifiInfoProvider: WiFiInfoProviding? {
+    get { hostRPC.wifiInfoProvider }
+    set { hostRPC.wifiInfoProvider = newValue }
+  }
+
   /// See `PluginHostRPC.onSyntheticKeysRequested`; forwarded likewise.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)? {
     get { hostRPC.onSyntheticKeysRequested }

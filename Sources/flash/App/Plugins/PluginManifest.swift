@@ -47,6 +47,9 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// Show a transient host banner (`host.notify`). Capability-gated (and
   /// rate-limited host-side) so an arbitrary plugin cannot spam UI.
   case notify
+  /// Read the current Wi-Fi SSID through the host (`host.wifi_info`). The
+  /// host owns the Location authorization prompt and CoreWLAN access.
+  case wifiInfo = "wifi_info"
 }
 
 extension PluginCapability {

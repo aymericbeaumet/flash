@@ -222,6 +222,7 @@ manifest; the full method↔capability table lives in `protocol.json`):
 `host.activate` (`app_control`), `host.open` (`open`), `host.post_media_key`
 (`media_keys`), `host.process_table` + `host.signal` (`process_control`),
 `host.clipboard_write` (`clipboard`), `host.notify` (`notify`),
+`host.wifi_info` (`wifi_info`),
 `host.storage_get`/`host.storage_set` (no capability — plugin-data-dir
 scoped), `host.post_keys` + `host.post_global_key` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
@@ -229,6 +230,9 @@ scoped), `host.post_keys` + `host.post_global_key` + `host.ax_snapshot` /
 <capability> capability"}`.
 
 `host.clipboard_write` replaces the clipboard with `{"text"}` (≤ 1 MiB).
+`host.wifi_info` accepts `{}` and returns
+`{"ok": true, "present": true, "ssid": "…"}` for an associated network or
+`{"ok": true, "present": false}` when Wi-Fi information is unavailable.
 `host.notify` shows a transient banner from `{"message", "duration_ms"?}`
 (message ≤ 1 KiB, duration clamped 500–10000 ms, one accepted call per
 plugin per second). `host.storage_get`/`host.storage_set` are a host-managed
@@ -247,7 +251,8 @@ plugin keeps a fully network-denied sandbox; the two must be declared
 together), and `subprocess` (permits helpers that cannot run inside the
 profile). `open` hands URLs/bundle ids to LaunchServices host-side,
 `media_keys` posts NX_SYSTEM_DEFINED keys host-side, `process_control`
-reads the process table and SIGTERMs pids host-side. Omitted capabilities
+reads the process table and SIGTERMs pids host-side. `wifi_info` exposes only
+the current SSID after host-owned Location authorization. Omitted capabilities
 are default-denied. The registry is frozen: additions are allowed, renames
 never.
 

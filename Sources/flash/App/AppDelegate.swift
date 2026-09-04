@@ -111,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   var config = Config.default
   let pluginManager = PluginManager()
+  let wifiInfoProvider = WiFiInfoProvider()
   let statusItemController = StatusItemController()
   /// Flat-JSON frecency persistence — keyed by stable item key
   /// (`app.bundle:…`, `url:…`, `command:…`), boost capped below the
@@ -514,6 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onNotifyRequested = { [weak self] message, durationMs in
       self?.overlay.displayBanner(message, durationMs: durationMs)
     }
+    pluginManager.wifiInfoProvider = wifiInfoProvider
     pluginManager.onCatalogsChanged = { [weak self] in
       self?.handlePluginCatalogsChanged()
     }

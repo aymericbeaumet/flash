@@ -18,6 +18,7 @@ const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(10);
 const HISTORY_LEN: usize = 16;
 const NETSTAT: &str = "/usr/sbin/netstat";
+const POPUP_TITLE: &str = "#[fg=colour178]Network#[default]";
 
 static STATE: LazyLock<Mutex<NetworkState>> = LazyLock::new(|| Mutex::new(NetworkState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -129,6 +130,7 @@ fn warn_invalid_summary_mode(ctx: &Context) {
 #[derive(Default)]
 struct NetworkState {
     default_interface: Option<String>,
+    wifi_ssid: Option<String>,
     previous: Option<TimedCounters>,
     rates: Option<TransferRates>,
     received_history: VecDeque<f64>,
@@ -252,11 +254,12 @@ async fn refresh_network_locked(ctx: &Context, force_discovery: bool) {
     };
 
     let discovery = if discovery_due {
-        let (interface, catalog) = tokio::join!(
+        let (interface, wifi_ssid, catalog) = tokio::join!(
             collect_default_interface(ctx),
+            ctx.wifi_ssid(),
             tokio::task::spawn_blocking(collect_catalog)
         );
-        Some((interface, catalog))
+        Some((interface, wifi_ssid, catalog))
     } else {
         None
     };
@@ -265,8 +268,9 @@ async fn refresh_network_locked(ctx: &Context, force_discovery: bool) {
     let mut discovery_failed = false;
     let (interface, log_discovery_failure) = {
         let mut state = state();
-        if let Some((interface, catalog)) = discovery {
+        if let Some((interface, wifi_ssid, catalog)) = discovery {
             state.last_discovery_attempt = Some(Instant::now());
+            state.wifi_ssid = wifi_ssid;
             if let Some(interface) = interface {
                 state.set_interface(interface);
             } else {
@@ -543,8 +547,10 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
 }
 
 fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
-    let plain_details = render_details(state)?;
-    let details = escape_status_text(&plain_details);
+    let details = format!(
+        "{POPUP_TITLE}\n{}",
+        escape_status_text(&render_details_body(state)?)
+    );
     let visible = visible_summary(state, summary_mode);
     Some(RenderedStatus {
         summary: inline_status_popup(&visible, &details),
@@ -579,10 +585,17 @@ fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> String {
 }
 
 fn render_details(state: &NetworkState) -> Option<String> {
-    if state.default_interface.is_none() && state.catalog.is_none() {
+    Some(format!("Network\n{}", render_details_body(state)?))
+}
+
+fn render_details_body(state: &NetworkState) -> Option<String> {
+    if state.default_interface.is_none() && state.wifi_ssid.is_none() && state.catalog.is_none() {
         return None;
     }
-    let mut lines = vec!["Network".to_string()];
+    let mut lines = Vec::new();
+    if let Some(ssid) = &state.wifi_ssid {
+        lines.push(format!("Wi-Fi: {ssid}"));
+    }
     lines.push(format!(
         "Interface: {}",
         state.default_interface.as_deref().unwrap_or("unavailable")
@@ -874,6 +887,7 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
     fn renders_styled_summary_with_inline_popup_and_escaped_details() {
         let mut state = NetworkState {
             default_interface: Some("en#0".to_string()),
+            wifi_ssid: Some("Studio #[fg=colour196]".to_string()),
             rates: Some(TransferRates {
                 received: 1_572_864.0,
                 sent: 2_048.0,
@@ -894,6 +908,7 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
             visible_summary(&state, SummaryMode::Compact),
             "#[fg=colour178]NET#[default]"
         );
+        assert!(!visible_summary(&state, SummaryMode::Full).contains("Studio"));
         assert_eq!(
             visible_summary(&state, SummaryMode::Full),
             "#[fg=colour178]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
@@ -904,7 +919,24 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
         assert!(rendered.details.contains("Interface: en##0"));
         assert!(rendered
             .details
+            .starts_with("#[fg=colour178]Network#[default]\nWi-Fi: Studio ##[fg=colour196]\n"));
+        assert!(rendered
+            .details
             .contains("Hostname: moria ##[fg=colour196]"));
+    }
+
+    #[test]
+    fn popup_details_have_one_styled_title_then_the_network_body() {
+        let state = NetworkState {
+            default_interface: Some("en0".to_string()),
+            wifi_ssid: Some("Atelier".to_string()),
+            ..NetworkState::default()
+        };
+
+        assert_eq!(
+            render_status(&state, SummaryMode::Compact).unwrap().details,
+            "#[fg=colour178]Network#[default]\nWi-Fi: Atelier\nInterface: en0\nTraffic: sampling…"
+        );
     }
 
     #[test]

@@ -247,6 +247,15 @@ impl Context {
         ok(&self.call_host("host.ping", json!({})).await)
     }
 
+    /// Read the currently associated Wi-Fi network name from the host
+    /// (`host.wifi_info`). Requires the `wifi_info` capability. `None` covers
+    /// denied authorization, no association, malformed replies, and host-RPC
+    /// failure without exposing those transport details to callers.
+    pub async fn wifi_ssid(&self) -> Option<String> {
+        let response = self.call_host("host.wifi_info", json!({})).await;
+        wifi_ssid_from_response(&response)
+    }
+
     /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
     /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
     /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no
@@ -522,6 +531,17 @@ impl Context {
 
 fn ok(response: &Value) -> bool {
     response.get("ok").and_then(Value::as_bool) == Some(true)
+}
+
+fn wifi_ssid_from_response(response: &Value) -> Option<String> {
+    if !ok(response) || response.get("present").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    response
+        .get("ssid")
+        .and_then(Value::as_str)
+        .filter(|ssid| !ssid.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn env_or(name: &str, fallback: &str) -> String {
@@ -888,6 +908,52 @@ mod tests {
 
         assert_eq!(result["error"], json!(HOST_TIMEOUT_ERROR));
         assert!(ctx.host_pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn wifi_ssid_requests_wifi_info_with_empty_params() {
+        let (ctx, mut rx) = test_context_with_rx();
+        let pending = ctx.host_pending.clone();
+        let request = tokio::spawn(async move { ctx.wifi_ssid().await });
+
+        let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap()).unwrap();
+        assert_eq!(frame["method"], json!("host.wifi_info"));
+        assert_eq!(frame["params"], json!({}));
+        let id = frame["id"].as_u64().unwrap();
+        pending
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .unwrap()
+            .send(json!({
+                "ok": true,
+                "present": true,
+                "ssid": "Atelier"
+            }))
+            .unwrap();
+
+        assert_eq!(request.await.unwrap().as_deref(), Some("Atelier"));
+    }
+
+    #[test]
+    fn wifi_ssid_response_requires_ok_present_and_nonempty_ssid() {
+        assert_eq!(
+            wifi_ssid_from_response(&json!({
+                "ok": true,
+                "present": true,
+                "ssid": "Studio: 5 GHz"
+            }))
+            .as_deref(),
+            Some("Studio: 5 GHz")
+        );
+        for invalid in [
+            json!({ "ok": false, "present": true, "ssid": "Atelier" }),
+            json!({ "ok": true, "present": false, "ssid": "Atelier" }),
+            json!({ "ok": true, "present": true }),
+            json!({ "ok": true, "present": true, "ssid": "  " }),
+        ] {
+            assert_eq!(wifi_ssid_from_response(&invalid), None, "{invalid}");
+        }
     }
 
     #[test]

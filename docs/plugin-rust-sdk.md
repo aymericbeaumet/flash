@@ -90,8 +90,9 @@ Handed to every handler; cheap to clone. Key surface:
   the result object carries `{"ok": false, "error": ...}` sentinels for
   capability NAKs, timeouts, and host death. Typed wrappers exist for the
   full `host.*` surface (`fetch`, `open_url`, `open_app`, `activate_app`,
-  `normal_mode_target`, `clipboard_write`, `notify`, `storage_get`/`set`,
-  `post_media_key`, `process_table` / `process_metrics`, `signal`, `post_keys`,
+  `normal_mode_target`, `wifi_ssid`, `clipboard_write`, `notify`,
+  `storage_get`/`set`, `post_media_key`, `process_table` / `process_metrics`,
+  `signal`, `post_keys`,
   `post_global_key`, `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`,
   `ping`).
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications

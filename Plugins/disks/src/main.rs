@@ -477,7 +477,7 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
 
 fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
     let plain_details = render_details(state)?;
-    let details = escape_status_text(&plain_details);
+    let details = popup_details(&plain_details);
     let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
     let percent = primary
         .map(|volume| format!("{}%", volume.percent))
@@ -512,6 +512,16 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
         summary: inline_status_popup(&visible, &details),
         details,
     })
+}
+
+fn popup_details(plain_details: &str) -> String {
+    let body = plain_details
+        .strip_prefix("Disks\n")
+        .unwrap_or(plain_details);
+    format!(
+        "#[fg=colour178]Disks#[default]\n{}",
+        escape_status_text(body)
+    )
 }
 
 fn render_details(state: &DiskState) -> Option<String> {
@@ -858,6 +868,9 @@ mod tests {
                 &rendered.details
             )
         );
+        assert!(rendered
+            .details
+            .starts_with("#[fg=colour178]Disks#[default]\nRead: 1.5 MiB/s\nWrite: 2.0 KiB/s"));
         assert!(rendered.details.contains("Read: 1.5 MiB/s"));
         assert!(rendered.details.contains("Write: 2.0 KiB/s"));
         assert!(rendered.details.contains("Read history: █"));
@@ -898,9 +911,9 @@ mod tests {
         let rendered = render_status(&state, SummaryMode::Compact).unwrap();
 
         assert!(plain.contains("Backup #[fg=colour196] (/Volumes/#1)"));
-        assert!(rendered
-            .details
-            .contains("Backup ##[fg=colour196] (/Volumes/##1)"));
+        assert!(rendered.details.starts_with(
+            "#[fg=colour178]Disks#[default]\nActivity: sampling…\nVolumes\nBackup ##[fg=colour196] (/Volumes/##1)"
+        ));
     }
 
     #[test]

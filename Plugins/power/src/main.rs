@@ -313,7 +313,10 @@ fn render_status(
         }
     }
     let plain_details = rows.join("\n");
-    let details = escape_status_text(&plain_details);
+    let details = format!(
+        "#[fg=colour178]Battery#[default]\n{}",
+        escape_status_text(&plain_details)
+    );
     let visible = visible_summary(snapshot, summary_mode);
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
@@ -587,7 +590,7 @@ mod tests {
             .contains("]#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs"));
         assert_eq!(
             status.details,
-            "Charge: 73%\nState: Charging\nSource: AC adapter\nEstimate: Full in 1h 24m\nHealth: 91% of design (Good ##1)\nCycles: 187\nTemperature: 30.3°C\nAdapter: 67 W"
+            "#[fg=colour178]Battery#[default]\nCharge: 73%\nState: Charging\nSource: AC adapter\nEstimate: Full in 1h 24m\nHealth: 91% of design (Good ##1)\nCycles: 187\nTemperature: 30.3°C\nAdapter: 67 W"
         );
         assert!(status
             .plain_details
@@ -606,7 +609,7 @@ mod tests {
         );
         assert_eq!(
             render_status(&snapshot, None, SummaryMode::Compact).details,
-            "Charge: 25%\nState: Discharging\nSource: Battery\nEstimate: Unavailable"
+            "#[fg=colour178]Battery#[default]\nCharge: 25%\nState: Discharging\nSource: Battery\nEstimate: Unavailable"
         );
     }
 

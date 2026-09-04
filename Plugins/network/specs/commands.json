@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#host--plugin",
-  "description": "The bare network command returns the last-good snapshot and refresh performs bounded routing-table, address, and traffic collection.",
+  "description": "The bare network command returns the last-good snapshot and refresh performs bounded Wi-Fi, routing-table, address, and traffic collection.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
@@ -8,6 +8,11 @@
     {
       "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
       "within_ms": 5000
+    },
+    {
+      "expect_host_rpc": { "method": "host.wifi_info", "params": {} },
+      "within_ms": 5000,
+      "reply": { "ok": true, "present": true, "ssid": "Atelier" }
     },
     {
       "expect_notification": {
@@ -47,7 +52,15 @@
       }
     },
     {
-      "expect": { "id": 3, "result": { "ok": true, "message": { "$contains": "Network" } } },
+      "expect_host_rpc": { "method": "host.wifi_info", "params": {} },
+      "within_ms": 5000,
+      "reply": { "ok": true, "present": true, "ssid": "Office" }
+    },
+    {
+      "expect": {
+        "id": 3,
+        "result": { "ok": true, "message": { "$contains": "Wi-Fi: Office" } }
+      },
       "within_ms": 9000
     },
     { "close_stdin": true },

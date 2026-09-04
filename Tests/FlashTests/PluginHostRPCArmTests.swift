@@ -8,7 +8,7 @@ import XCTest
 /// `handleHostRequest` with synthetic capability sets. Side-effecting arms
 /// go through the closure/static seams (urlOpener, appOpener,
 /// mediaKeyPoster, signalSender, onNotifyRequested, onSyntheticKeysRequested,
-/// onGlobalSyntheticKeyRequested, onNormalModeTargetRequested) — no test
+/// onGlobalSyntheticKeyRequested, onNormalModeTargetRequested, wifiInfoProvider) — no test
 /// here ever opens a browser, posts a HID event, signals a process, or
 /// touches the clipboard.
 final class PluginHostRPCArmTests: XCTestCase {
@@ -74,7 +74,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 18, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 19, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -88,7 +88,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 15, "15 gated + host.ping + host.storage_get/set ungated")
+    XCTAssertEqual(gated, 16, "16 gated + host.ping + host.storage_get/set ungated")
     // The ungated arms answer without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
     XCTAssertEqual(
@@ -109,6 +109,39 @@ final class PluginHostRPCArmTests: XCTestCase {
     let reply = hostReply(PluginHostRPC(), "host.ping", params)
     XCTAssertEqual(reply["ok"] as? Bool, true)
     XCTAssertEqual(reply["echo"] as? NSDictionary, params as NSDictionary)
+  }
+
+  // MARK: - host.wifi_info (host-owned Location/CoreWLAN seam)
+
+  func testWiFiInfoReturnsPresentAndAbsentShapes() {
+    final class Stub: WiFiInfoProviding {
+      var ssid: String?
+
+      init(ssid: String?) {
+        self.ssid = ssid
+      }
+
+      func fetchSSID(_ completion: @escaping (String?) -> Void) {
+        completion(ssid)
+      }
+    }
+
+    let rpc = PluginHostRPC()
+    let provider = Stub(ssid: "Studio")
+    rpc.wifiInfoProvider = provider
+
+    let present = hostReply(rpc, "host.wifi_info", [:], capabilities: [.wifiInfo])
+    XCTAssertEqual(present["ok"] as? Bool, true)
+    XCTAssertEqual(present["present"] as? Bool, true)
+    XCTAssertEqual(present["ssid"] as? String, "Studio")
+    XCTAssertEqual(Set(present.keys), ["ok", "present", "ssid"])
+
+    provider.ssid = nil
+    let absent = hostReply(rpc, "host.wifi_info", [:], capabilities: [.wifiInfo])
+    XCTAssertEqual(absent["ok"] as? Bool, true)
+    XCTAssertEqual(absent["present"] as? Bool, false)
+    XCTAssertNil(absent["ssid"])
+    XCTAssertEqual(Set(absent.keys), ["ok", "present"])
   }
 
   // MARK: - host.open (urlOpener / appOpener seams)

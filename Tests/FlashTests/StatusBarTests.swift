@@ -4,6 +4,23 @@ import XCTest
 @testable import flash
 
 final class StatusBarTests: XCTestCase {
+  private func renderStatusBar(
+    _ panel: OverlayPanel,
+    width: CGFloat = 1_440,
+    notch: CGRect? = nil
+  ) {
+    let screenFrame = CGRect(x: 0, y: 0, width: width, height: 900)
+    let visibleFrame = CGRect(x: 0, y: 0, width: width, height: 875)
+    let snapshot = OverlayPanel.ScreenSnapshot(
+      screens: [(scale: 2, frame: screenFrame, visibleFrame: visibleFrame, notch: notch)],
+      unionFrame: screenFrame,
+      mainFrame: screenFrame,
+      mainScale: 2,
+      mainVisibleFrame: visibleFrame,
+      nativeStatusBarFallbackHeight: 25)
+    panel.configureModeBadge(panelFrame: screenFrame, screenSnapshot: snapshot)
+  }
+
   func testStatusBarFontSizeIsConstant() {
     XCTAssertEqual(OverlayPanel.statusBarFontSize(overlayFontSize: 12), 13)
     XCTAssertEqual(OverlayPanel.statusBarFontSize(overlayFontSize: 10), 13)
@@ -1328,6 +1345,7 @@ final class StatusBarTests: XCTestCase {
       (labels.command, .command),
     ] {
       panel.updateModeBadge(text: label, visible: true, captureInput: false, style: style)
+      renderStatusBar(panel)
       pillFrames.append(panel.modeBadgeButtonLayer.frame)
       centreFrames.append(panel.statusAppLabel.frame)
     }
@@ -1360,6 +1378,7 @@ final class StatusBarTests: XCTestCase {
         rightText: String(repeating: "CPU 22% · GPU 60% · MEM 98% · ", count: 5)
           + "BAT 100% · Fri Sep 4 15:09"))
     panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+    renderStatusBar(panel)
 
     XCTAssertFalse(panel.statusAppLabel.isHidden)
     XCTAssertFalse(panel.statusRightLabel.isHidden)
@@ -1372,14 +1391,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertLessThanOrEqual(ceil(rendered.size().width), panel.statusRightLabel.frame.width)
   }
 
-  func testNonNotchedStatusBarReservesStableCentreLaneBeforeSideContent() throws {
-    let snapshot = OverlayPanel.currentScreenSnapshot()
-    let mainScreen = try XCTUnwrap(
-      snapshot.screens.first(where: { $0.frame == snapshot.mainFrame }))
-    if mainScreen.notch != nil {
-      throw XCTSkip("centre status is intentionally hidden on the notched display")
-    }
-
+  func testNonNotchedStatusBarReservesStableCentreLaneBeforeSideContent() {
     let panel = OverlayPanel()
     panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
     let centre = "ACTIVE APP"
@@ -1389,6 +1401,7 @@ final class StatusBarTests: XCTestCase {
         modeText: "#[pill]NORMAL#[nopill] " + String(repeating: "left segment ", count: 80),
         rightText: String(repeating: "right segment ", count: 80) + "BAT 100% · Fri 15:09"))
     panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+    renderStatusBar(panel)
 
     XCTAssertFalse(panel.statusAppLabel.isHidden)
     XCTAssertEqual(
@@ -1411,8 +1424,24 @@ final class StatusBarTests: XCTestCase {
         appText: centre,
         modeText: "#[pill]NORMAL#[nopill] left",
         rightText: "BAT 100% · Fri 15:09"))
+    renderStatusBar(panel)
 
     XCTAssertEqual(panel.statusAppLabel.frame, reservedCentreFrame)
+  }
+
+  func testNotchedStatusBarHidesCentreLane() {
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    panel.setStatusBarModel(
+      FlashStatusBarModel(
+        appText: "ACTIVE APP",
+        modeText: "NORMAL",
+        rightText: "BAT 100% · Fri 15:09"))
+    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+
+    renderStatusBar(panel, notch: CGRect(x: 660, y: 875, width: 120, height: 25))
+
+    XCTAssertTrue(panel.statusAppLabel.isHidden)
   }
 
   func testStatusBarUsesCurvedScreenEdgePadding() {

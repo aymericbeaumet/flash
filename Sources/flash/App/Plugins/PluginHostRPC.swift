@@ -34,6 +34,9 @@ final class PluginHostRPC {
   /// given message and duration. Set by AppDelegate (routes to the overlay's
   /// banner surface).
   var onNotifyRequested: ((String, Int) -> Void)?
+  /// Host-owned Location/CoreWLAN provider for `host.wifi_info`. Set by
+  /// AppDelegate so plugins never access either framework directly.
+  var wifiInfoProvider: WiFiInfoProviding?
   /// Per-plugin timestamp of the last accepted `host.notify`, enforcing the
   /// 1-per-second rate limit. Main-thread only (notify hops to main).
   private var lastNotifyAt: [String: Date] = [:]
@@ -123,6 +126,22 @@ final class PluginHostRPC {
         return
       }
       hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, reply: reply)
+    case "host.wifi_info":
+      guard capabilities.contains(.wifiInfo) else {
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("wifi_info")])
+        return
+      }
+      guard let wifiInfoProvider else {
+        reply(["ok": true, "present": false])
+        return
+      }
+      wifiInfoProvider.fetchSSID { ssid in
+        guard let ssid else {
+          reply(["ok": true, "present": false])
+          return
+        }
+        reply(["ok": true, "present": true, "ssid": ssid])
+      }
     case "host.open":
       guard capabilities.contains(.open) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("open")])

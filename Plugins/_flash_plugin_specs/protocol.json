@@ -29,6 +29,7 @@
     "plugin_to_host_rpcs": {
       "host.ping": null,
       "host.fetch": "network_fetch",
+      "host.wifi_info": "wifi_info",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
@@ -100,7 +101,8 @@
     "notify",
     "open",
     "process_control",
-    "subprocess"
+    "subprocess",
+    "wifi_info"
   ],
   "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline"

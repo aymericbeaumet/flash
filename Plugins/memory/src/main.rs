@@ -384,7 +384,7 @@ Page size: {}",
     if !history.is_empty() {
         body.push_str(&format!("\nHistory: {}", sparkline(history)));
     }
-    let details = format!("#[fg=colour75,bold]Memory#[default]\n{body}");
+    let details = format!("#[fg=colour178]Memory#[default]\n{body}");
     let plain_details = format!("Memory\n{body}");
 
     StatusSegments {
@@ -549,7 +549,7 @@ mod tests {
         );
         assert!(rendered
             .details
-            .contains("Occupied: 12.0 GB / 16.0 GB (75%)"));
+            .starts_with("#[fg=colour178]Memory#[default]\nOccupied: 12.0 GB / 16.0 GB (75%)"));
         assert!(rendered.details.contains("Free: 4.0 GB"));
         assert!(rendered
             .details
