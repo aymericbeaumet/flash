@@ -309,6 +309,20 @@ struct Config {
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct StatusBar {
+    struct PopupStyle: Equatable {
+      /// Default text colour for popup content. Inline `#[fg=…]` markers
+      /// override it exactly as they do in the status bar.
+      var foreground: String = "#D8DEE9"
+      var background: String = "#2E3440"
+      var borderColor: String = "#4C566A"
+      var borderWidth: Double = 1
+      var cornerRadius: Double = 8
+      var padding: Double = 8
+      var maxWidth: Double = 480
+      /// Gap between the pointer and the popup's top edge.
+      var offset: Double = 8
+    }
+
     /// Which displays show the bar. `all` (default) puts it on every screen's
     /// top band; `primary` shows it only on the main (menu-bar) display.
     enum Monitor: String {
@@ -346,6 +360,10 @@ struct Config {
     ///   #[link=URL]…#[nolink]      — makes the wrapped run clickable; a
     ///                                 click opens URL. URL must be
     ///                                 whitespace/comma-free.
+    ///   #[popup=name]…#[nopopup]   — shows the named `[statusbar.popup]`
+    ///                                 rich-text body while hovered.
+    ///   #[popup=inline:<encoded>]  — shows a percent-encoded rich-text body
+    ///                                 carried atomically by a dynamic value.
     ///   #{token}                    — template variable (mode, date,
     ///                                 tmux-compatible vars,
     ///                                 plugin:<count>,
@@ -357,6 +375,14 @@ struct Config {
     /// `#{script:…}` paths. With layered configs the defining layer may not
     /// be the last file parsed. Not user-facing.
     var templateSourceURL: URL?
+    /// Rich-text bodies referenced by `#[popup=<name>]…#[nopopup]` spans.
+    /// Each body is compiled as a status template and refreshed by the same
+    /// source scheduler, so hovering never starts a subprocess.
+    var popups: [String: FlashStatusBarTemplate] = [:]
+    /// Defining config layer for each popup, used to resolve relative script
+    /// paths after all layers have merged. Not user-facing.
+    var popupSourceURLs: [String: URL] = [:]
+    var popupStyle = PopupStyle()
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
     /// tmux's status-line mouse model: the span names an action, the
     /// binding lives outside the string. `[statusbar.click]` values are a
@@ -914,6 +940,9 @@ extension URLCommand {
       let key = name.replacingOccurrences(of: "_", with: "-")
       return "--\(key)=\(value)"
     }
+    func percentage(_ value: Double) -> String {
+      value.rounded() == value ? "\(Int(value))%" : "\(value)%"
+    }
     switch self {
     case .mouseTarget(let command):
       return verb("mouse_target", command.argTokens)
@@ -1009,8 +1038,16 @@ extension URLCommand {
       return verb("plugin_command", tokens)
     case .moveWindow(let params):
       var parts: [String] = []
-      if let position = params.position {
+      switch params.layout {
+      case .position(let position):
         parts.append(kv("position", position.rawValue))
+      case .proportional(let frame):
+        parts.append(kv("x", percentage(frame.xPercent)))
+        parts.append(kv("y", percentage(frame.yPercent)))
+        parts.append(kv("width", percentage(frame.widthPercent)))
+        parts.append(kv("height", percentage(frame.heightPercent)))
+      case nil:
+        break
       }
       parts.append(kv("screen", params.screen))
       return verb("window_move", parts)

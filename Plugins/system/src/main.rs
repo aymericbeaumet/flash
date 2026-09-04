@@ -252,8 +252,11 @@ async fn publish_battery_status(ctx: &Context) {
     // battery line before any error so a non-zero exit (or even a
     // timeout-induced SIGTERM) can still carry useful data; only fall
     // back to "??" when there's genuinely no percent to display.
-    let segment = battery_segment(&result.stdout);
-    ctx.status([("battery", segment)]);
+    let snapshot = BatterySnapshot::parse(&result.stdout);
+    ctx.status([
+        ("battery", battery_segment_from_snapshot(snapshot)),
+        ("battery_details", battery_details_from_snapshot(snapshot)),
+    ]);
 }
 
 /// Reasoning for status markers below:
@@ -267,11 +270,17 @@ async fn publish_battery_status(ctx: &Context) {
 ///   to drop the marker pair around the percent text. Older Flash
 ///   builds that don't know the marker strip it and fall back to the
 ///   plain colour, so the segment stays forward-compatible.
+#[cfg(test)]
 fn battery_segment(pmset_output: &str) -> String {
-    let Some(percent) = battery_percent(pmset_output) else {
+    battery_segment_from_snapshot(BatterySnapshot::parse(pmset_output))
+}
+
+fn battery_segment_from_snapshot(snapshot: Option<BatterySnapshot>) -> String {
+    let Some(snapshot) = snapshot else {
         return missing_battery_segment();
     };
-    let state = battery_state(pmset_output);
+    let percent = snapshot.percent;
+    let state = snapshot.state;
     let color = if state.on_ac() || percent > 25 {
         "colour178"
     } else {
@@ -287,6 +296,53 @@ fn battery_segment(pmset_output: &str) -> String {
     )
 }
 
+#[cfg(test)]
+fn battery_details(pmset_output: &str) -> String {
+    battery_details_from_snapshot(BatterySnapshot::parse(pmset_output))
+}
+
+fn battery_details_from_snapshot(snapshot: Option<BatterySnapshot>) -> String {
+    let Some(snapshot) = snapshot else {
+        return "Battery information unavailable".to_string();
+    };
+
+    let mut rows = vec![
+        format!("Charge: {}%", snapshot.percent),
+        format!("State: {}", snapshot.state.label()),
+        format!("Power: {}", snapshot.power.label()),
+    ];
+    if let Some(minutes) = snapshot.estimate_minutes {
+        let duration = natural_duration(minutes);
+        match snapshot.state {
+            BatteryState::Charging if minutes > 0 => rows.push(format!("Full in: {duration}")),
+            BatteryState::Discharging if minutes > 0 => {
+                rows.push(format!("Remaining: {duration}"));
+            }
+            _ => {}
+        }
+    }
+    rows.join("\n")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BatterySnapshot {
+    percent: u8,
+    state: BatteryState,
+    power: BatteryPower,
+    estimate_minutes: Option<u32>,
+}
+
+impl BatterySnapshot {
+    fn parse(pmset_output: &str) -> Option<Self> {
+        Some(Self {
+            percent: battery_percent(pmset_output)?,
+            state: battery_state(pmset_output),
+            power: battery_power(pmset_output),
+            estimate_minutes: battery_estimate_minutes(pmset_output),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BatteryState {
     Charging,
@@ -298,6 +354,42 @@ enum BatteryState {
 impl BatteryState {
     fn on_ac(self) -> bool {
         matches!(self, BatteryState::Charging | BatteryState::Charged)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            BatteryState::Charging => "Charging",
+            BatteryState::Charged => "Fully charged",
+            BatteryState::Discharging => "Discharging",
+            BatteryState::Unknown => "Unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatteryPower {
+    ACAdapter,
+    Battery,
+    Unknown,
+}
+
+impl BatteryPower {
+    fn label(self) -> &'static str {
+        match self {
+            BatteryPower::ACAdapter => "AC adapter",
+            BatteryPower::Battery => "Battery",
+            BatteryPower::Unknown => "Unknown",
+        }
+    }
+}
+
+fn battery_power(pmset_output: &str) -> BatteryPower {
+    if pmset_output.contains("AC Power") {
+        BatteryPower::ACAdapter
+    } else if pmset_output.contains("Battery Power") {
+        BatteryPower::Battery
+    } else {
+        BatteryPower::Unknown
     }
 }
 
@@ -338,6 +430,28 @@ fn battery_percent(pmset_output: &str) -> Option<u8> {
         .rev()
         .collect();
     digits.parse::<u8>().ok()
+}
+
+fn battery_estimate_minutes(pmset_output: &str) -> Option<u32> {
+    let before_remaining = pmset_output.split(" remaining").next()?;
+    let token = before_remaining.split_whitespace().last()?;
+    let (hours, minutes) = token.split_once(':')?;
+    let hours = hours.parse::<u32>().ok()?;
+    let minutes = minutes.parse::<u32>().ok()?;
+    if minutes >= 60 {
+        return None;
+    }
+    hours.checked_mul(60)?.checked_add(minutes)
+}
+
+fn natural_duration(minutes: u32) -> String {
+    let hours = minutes / 60;
+    let minutes = minutes % 60;
+    match (hours, minutes) {
+        (0, minutes) => format!("{minutes}m"),
+        (hours, 0) => format!("{hours}h"),
+        (hours, minutes) => format!("{hours}h {minutes}m"),
+    }
 }
 
 fn missing_battery_segment() -> String {
@@ -465,6 +579,54 @@ mod tests {
                 "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 99%; finishing charge; 0:01 remaining present: true"
             ),
             "#[range=user|bat-prefs fg=colour178]#[breathing]99%#[nobreathing]#[norange]"
+        );
+    }
+
+    #[test]
+    fn describes_discharging_battery_from_the_same_pmset_snapshot() {
+        assert_eq!(
+            battery_details(
+                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 26%; discharging; 6:26 remaining present: true"
+            ),
+            "Charge: 26%\nState: Discharging\nPower: Battery\nRemaining: 6h 26m"
+        );
+    }
+
+    #[test]
+    fn describes_charging_battery_with_time_to_full() {
+        assert_eq!(
+            battery_details(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 73%; charging; 1:24 remaining present: true"
+            ),
+            "Charge: 73%\nState: Charging\nPower: AC adapter\nFull in: 1h 24m"
+        );
+    }
+
+    #[test]
+    fn charged_battery_omits_the_meaningless_zero_estimate() {
+        assert_eq!(
+            battery_details(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; charged; 0:00 remaining present: true"
+            ),
+            "Charge: 100%\nState: Fully charged\nPower: AC adapter"
+        );
+    }
+
+    #[test]
+    fn battery_without_an_estimate_omits_the_duration_row() {
+        assert_eq!(
+            battery_details(
+                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 42%; discharging; (no estimate) present: true"
+            ),
+            "Charge: 42%\nState: Discharging\nPower: Battery"
+        );
+    }
+
+    #[test]
+    fn missing_battery_has_a_readable_detail_fallback() {
+        assert_eq!(
+            battery_details("No batteries are currently installed."),
+            "Battery information unavailable"
         );
     }
 

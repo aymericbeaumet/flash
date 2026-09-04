@@ -219,6 +219,39 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertNotNil(mine?["comm"] as? String)
   }
 
+  func testProcessTableCanReturnDetailedMetricsForOnePID() throws {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["2"]
+    try child.run()
+    defer {
+      if child.isRunning { child.terminate() }
+      child.waitUntilExit()
+    }
+    let pid = Int(getpid())
+    let reply = hostReply(
+      PluginHostRPC(), "host.process_table",
+      ["sample_window_ms": 10, "pid": pid], capabilities: [.processControl])
+    XCTAssertEqual(reply["ok"] as? Bool, true)
+    let rows = reply["processes"] as? [[String: Any]] ?? []
+    XCTAssertEqual(rows.count, 1)
+    XCTAssertEqual(rows.first?["pid"] as? Int, pid)
+    XCTAssertNotNil(rows.first?["memory_bytes"] as? Int)
+    XCTAssertNotNil(rows.first?["disk_read_bytes"] as? Int)
+    XCTAssertNotNil(rows.first?["disk_write_bytes"] as? Int)
+    XCTAssertNotNil(rows.first?["uptime_seconds"] as? Int)
+    XCTAssertNotNil(rows.first?["thread_count"] as? Int)
+    XCTAssertNotNil(rows.first?["network_socket_count"] as? Int)
+    XCTAssertGreaterThanOrEqual(rows.first?["process_count"] as? Int ?? 0, 2)
+  }
+
+  func testProcessTableRejectsAnInvalidPidFilter() {
+    let reply = hostReply(
+      PluginHostRPC(), "host.process_table", ["pid": 0], capabilities: [.processControl])
+    XCTAssertEqual(reply["ok"] as? Bool, false)
+    XCTAssertEqual(reply["error"] as? String, "host.process_table pid must be positive")
+  }
+
   // MARK: - host.normal_mode_target (closure seam)
 
   func testNormalModeTargetReportsTheResolvedTargetOrAbsence() {

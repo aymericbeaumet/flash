@@ -106,6 +106,158 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(total, runs[0].width)  // total includes the prefix
   }
 
+  func testSegmentsCaptureNamedPopupMarkersWithoutAffectingLinks() {
+    let segs = FlashStatusBarRenderer.segments(
+      from: "#[popup=quota]#[link=https://example.com]Quota#[nolink]#[nopopup] x")
+
+    XCTAssertEqual(segs.count, 2)
+    XCTAssertEqual(segs[0].text, "Quota")
+    XCTAssertEqual(segs[0].popup, "quota")
+    XCTAssertEqual(segs[0].link, "https://example.com")
+    XCTAssertEqual(segs[1].text, " x")
+    XCTAssertNil(segs[1].popup)
+    XCTAssertNil(segs[1].link)
+  }
+
+  func testPopupWrappedModePillKeepsItsHoverName() {
+    XCTAssertEqual(
+      FlashStatusBarRenderer.popupNameForPill(
+        in: "#[popup=mode-help]#[pill]NORMAL#[nopill]#[nopopup] · rest"),
+      "mode-help")
+    XCTAssertNil(
+      FlashStatusBarRenderer.popupNameForPill(
+        in: "#[pill]NORMAL#[nopill] #[popup=rest]rest#[nopopup]"))
+  }
+
+  func testPopupRunsMergeAdjacentStyledSegmentsAndIgnoreUnknownDefinitions() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let (runs, total) = FlashStatusBarRenderer.popupRuns(
+      from: "ab#[popup=quota]#[fg=colour178]CD#[bold]EF#[nopopup]gh#[popup=missing]ij#[nopopup]",
+      font: font,
+      popupTexts: ["quota": "#[fg=colour178,bold]Claude#[default]\n5-hour 75% remaining"])
+
+    XCTAssertEqual(runs.count, 1)
+    XCTAssertEqual(runs[0].name, "quota")
+    XCTAssertEqual(runs[0].content, "#[fg=colour178,bold]Claude#[default]\n5-hour 75% remaining")
+    XCTAssertGreaterThan(runs[0].xOffset, 0)
+    XCTAssertGreaterThan(runs[0].width, 0)
+    XCTAssertGreaterThan(total, runs[0].xOffset + runs[0].width)
+  }
+
+  func testInlinePopupContentTravelsWithDynamicVisibleText() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "a#[popup=inline:%23%5Bfg%3Dcolour178%2Cbold%5DPreview%23%5Bdefault%5D%20body]#[link=https://example.com]Story#[nolink]#[nopopup]z"
+
+    let rendered = FlashStatusBarRenderer.attributedStatusString(from: raw, font: font)
+    let (popupRuns, total) = FlashStatusBarRenderer.popupRuns(
+      from: raw,
+      font: font,
+      popupTexts: [:])
+    let (linkRuns, _) = FlashStatusBarRenderer.linkRuns(from: raw, font: font)
+
+    XCTAssertEqual(rendered.string, "aStoryz")
+    XCTAssertEqual(popupRuns.count, 1)
+    XCTAssertEqual(popupRuns[0].name, "inline-0")
+    XCTAssertEqual(
+      popupRuns[0].content,
+      "#[fg=colour178,bold]Preview#[default] body")
+    XCTAssertGreaterThan(popupRuns[0].xOffset, 0)
+    XCTAssertGreaterThan(total, popupRuns[0].xOffset + popupRuns[0].width)
+    XCTAssertEqual(linkRuns.count, 1)
+    XCTAssertEqual(linkRuns[0].url, "https://example.com")
+  }
+
+  func testInlinePopupContentOverridesNamedTemplateOnlyForItsSpan() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "#[popup=inline:current%20preview]one#[nopopup] "
+      + "#[popup=story]two#[nopopup]"
+
+    let (runs, _) = FlashStatusBarRenderer.popupRuns(
+      from: raw,
+      font: font,
+      popupTexts: ["story": "configured details"])
+
+    XCTAssertEqual(runs.map(\.content), ["current preview", "configured details"])
+  }
+
+  func testMalformedAndOversizedInlinePopupBodiesArePassive() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let malformed = FlashStatusBarRenderer.popupRuns(
+      from: "#[popup=inline:%ZZ]visible#[nopopup]",
+      font: font,
+      popupTexts: [:])
+    let oversizedBody = String(repeating: "a", count: 16_385)
+    let oversized = FlashStatusBarRenderer.popupRuns(
+      from: "#[popup=inline:\(oversizedBody)]visible#[nopopup]",
+      font: font,
+      popupTexts: [:])
+
+    XCTAssertTrue(malformed.runs.isEmpty)
+    XCTAssertTrue(oversized.runs.isEmpty)
+    XCTAssertEqual(
+      FlashStatusBarRenderer.attributedStatusString(
+        from: "#[popup=inline:%ZZ]visible#[nopopup]",
+        font: font
+      ).string,
+      "visible")
+  }
+
+  func testPopupTextLayerWrapsLongText() {
+    XCTAssertTrue(OverlayPanel().statusPopupLabel.isWrapped)
+  }
+
+  func testPopupLayoutKeepsExactPaddingOnEveryEdge() {
+    let layout = OverlayPanel.statusBarPopupLayout(
+      textSize: CGSize(width: 137.25, height: 48.5),
+      padding: 10,
+      borderWidth: 1)
+
+    XCTAssertEqual(layout.popupSize, CGSize(width: 159.25, height: 70.5))
+    XCTAssertEqual(layout.labelFrame, CGRect(x: 11, y: 11, width: 137.25, height: 48.5))
+    XCTAssertEqual(layout.labelFrame.minX - 1, 10)
+    XCTAssertEqual(layout.labelFrame.minY - 1, 10)
+    XCTAssertEqual(layout.popupSize.width - layout.labelFrame.maxX - 1, 10)
+    XCTAssertEqual(layout.popupSize.height - layout.labelFrame.maxY - 1, 10)
+  }
+
+  func testPopupFrameIsCenteredBelowPointerAndClampedToVisibleScreen() {
+    let centred = OverlayPanel.statusBarPopupFrame(
+      pointer: CGPoint(x: 500, y: 700),
+      popupSize: CGSize(width: 200, height: 100),
+      visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800),
+      offset: 8)
+    XCTAssertEqual(centred, CGRect(x: 400, y: 592, width: 200, height: 100))
+
+    let clamped = OverlayPanel.statusBarPopupFrame(
+      pointer: CGPoint(x: -1_190, y: 900),
+      popupSize: CGSize(width: 1_400, height: 100),
+      visibleFrame: CGRect(x: -1_200, y: 0, width: 1_200, height: 800),
+      offset: 8)
+    XCTAssertEqual(clamped, CGRect(x: -1_200, y: 700, width: 1_200, height: 100))
+  }
+
+  func testPopupRectsHonorRightAlignmentAndPanelCoordinates() {
+    let panel = OverlayPanel()
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let regions = panel.statusPopupRects(
+      raw: "x#[popup=quota]YY#[nopopup]",
+      popupTexts: ["quota": "details"],
+      font: font,
+      labelFrame: CGRect(x: 600, y: 4, width: 300, height: 20),
+      alignment: .right,
+      barFrame: CGRect(x: 20, y: 760, width: 960, height: 40),
+      panelFrame: CGRect(x: -1_000, y: -200, width: 2_000, height: 1_000))
+
+    XCTAssertEqual(regions.count, 1)
+    XCTAssertEqual(regions[0].name, "quota")
+    XCTAssertEqual(regions[0].content, "details")
+    XCTAssertEqual(regions[0].rect.maxX, -80, accuracy: 0.001)
+    XCTAssertEqual(regions[0].rect.minY, 560, accuracy: 0.001)
+    XCTAssertEqual(regions[0].rect.height, 40, accuracy: 0.001)
+  }
+
   func testAnimatedSpansRenderHiddenInBaseAndFullInEffectRuns() {
     let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
     let raw = "ac #[breathing]82%#[nobreathing] rest"
@@ -197,6 +349,88 @@ final class StatusBarTests: XCTestCase {
       """)
     XCTAssertEqual(bad.statusBar.monitor, .all)
     XCTAssertTrue(bad.loadingDiagnostics.contains { $0.message.contains("statusbar.monitor") })
+  }
+
+  func testParsesNamedPopupTemplatesAndPopupStyle() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      popup_fg = "#ECEFF4"
+      popup_bg = "#2E3440"
+      popup_border = "#4C566A"
+      popup_border_size = 2
+      popup_corner_radius = 9
+      popup_padding = 10
+      popup_max_width = 420
+      popup_offset = 7
+
+      [statusbar.popup]
+      quota = '''#[fg=colour178,bold]Claude#[default]
+      #{script:/tmp/quota.sh --details=claude}'''
+      """)
+
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+    XCTAssertEqual(c.statusBar.popupStyle.foreground, "#ECEFF4")
+    XCTAssertEqual(c.statusBar.popupStyle.background, "#2E3440")
+    XCTAssertEqual(c.statusBar.popupStyle.borderColor, "#4C566A")
+    XCTAssertEqual(c.statusBar.popupStyle.borderWidth, 2)
+    XCTAssertEqual(c.statusBar.popupStyle.cornerRadius, 9)
+    XCTAssertEqual(c.statusBar.popupStyle.padding, 10)
+    XCTAssertEqual(c.statusBar.popupStyle.maxWidth, 420)
+    XCTAssertEqual(c.statusBar.popupStyle.offset, 7)
+    let popup = c.statusBar.popups["quota"]
+    XCTAssertEqual(
+      popup?.template,
+      "#[fg=colour178,bold]Claude#[default]\n#{script:/tmp/quota.sh --details=claude}")
+    XCTAssertEqual(popup?.variables.count, 1)
+    XCTAssertEqual(popup?.variables.first?.token, "script:/tmp/quota.sh --details=claude")
+  }
+
+  func testInvalidPopupStyleIsDiagnosedAndKeepsDefaults() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      popup_fg = "colour178"
+      popup_border_size = -1
+      popup_max_width = 20
+      """)
+
+    XCTAssertEqual(c.statusBar.popupStyle, Config.StatusBar.PopupStyle())
+    XCTAssertEqual(c.loadingDiagnostics.count, 3)
+    XCTAssertTrue(c.loadingDiagnostics.allSatisfy { $0.message.contains("statusbar.popup_") })
+  }
+
+  func testPopupTemplateRenderingPreservesNewlinesAndDynamicValues() {
+    let variable = FlashStatusBarTemplateVariable(
+      id: "statusbar.popup.quota.script:/tmp/quota.sh --details=claude",
+      token: "script:/tmp/quota.sh --details=claude",
+      source: .command(.scriptWithArgs("/tmp/quota.sh", args: ["--details=claude"])))
+    let model = FlashStatusBarTemplateEngine.render(
+      template: Config.StatusBar.defaultTemplate,
+      popupTemplates: [
+        "quota": FlashStatusBarTemplate(
+          template: "#[fg=colour178]Claude#[default]\n#{script:/tmp/quota.sh --details=claude}",
+          variables: [variable])
+      ],
+      context: FlashStatusBarContext(),
+      dynamicValues: [variable.id: "5-hour 75% remaining\n7-day 70% remaining"])
+
+    XCTAssertEqual(
+      model.popupTexts["quota"],
+      "#[fg=colour178]Claude#[default]\n5-hour 75% remaining\n7-day 70% remaining")
+  }
+
+  func testPopupTemplateRenderingTrimsOnlyBoundaryNewlines() {
+    let model = FlashStatusBarTemplateEngine.render(
+      template: Config.StatusBar.defaultTemplate,
+      popupTemplates: [
+        "details": FlashStatusBarTemplate(
+          template: "\n\nFirst line\n\nLast line\n",
+          variables: [])
+      ],
+      context: FlashStatusBarContext())
+
+    XCTAssertEqual(model.popupTexts["details"], "First line\n\nLast line")
   }
 
   func testParsesCycleToken() {

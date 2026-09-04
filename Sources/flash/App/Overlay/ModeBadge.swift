@@ -135,6 +135,8 @@ extension OverlayPanel {
     defer { CATransaction.commit() }
 
     statusAppText = model.appText
+    statusBarPopupTexts = model.popupTexts
+    statusModePopupName = FlashStatusBarRenderer.popupNameForPill(in: model.modeText)
     if !commandPromptVisible {
       let (pill, trailing) = Self.splitLeftRegion(model.modeText)
       modeBadgeText = pill
@@ -161,7 +163,8 @@ extension OverlayPanel {
       FlashStatusBarModel(
         appText: statusAppText,
         modeText: modeBadgeText + statusLeftTrailingText,
-        rightText: text))
+        rightText: text,
+        popupTexts: statusBarPopupTexts))
   }
 
   func renderModeBadgeOnlyOrHide() {
@@ -220,6 +223,7 @@ extension OverlayPanel {
   /// screens (pruning bars for removed displays and adding them for new ones),
   /// and re-orders the panel back into view.
   func statusBarDidChangeScreenParameters() {
+    hideStatusBarPopup()
     updateModeBadge(
       text: modeBadgeText,
       visible: modeBadgeVisible,
@@ -283,7 +287,8 @@ extension OverlayPanel {
     // two can never drift again — and secondaries gain the cycle layer and
     // clickable links the old copy silently lacked.
     var linksByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
-    let primaryLinks = configureStatusBarSurface(
+    var popupRegions: [StatusBarPopupRegion] = []
+    let primaryInteractions = configureStatusBarSurface(
       PrimaryStatusBarSurface(panel: self),
       screenFrame: mainScreenFrame,
       visibleFrame: visible,
@@ -300,7 +305,8 @@ extension OverlayPanel {
       leftTrailingRaw: leftTrailingRaw,
       centreRaw: centreRaw,
       rightRaw: rightRaw)
-    linksByScreen.append((screenFrame: mainScreenFrame, links: primaryLinks))
+    linksByScreen.append((screenFrame: mainScreenFrame, links: primaryInteractions.links))
+    popupRegions += primaryInteractions.popups
 
     // Same bar on every other screen, sized to that screen's own native
     // top-band height so a 14"-MBP-with-notch + a square external monitor
@@ -319,7 +325,7 @@ extension OverlayPanel {
       secondaryStatusBars.append(SecondaryStatusBar())
     }
     for (bar, screen) in zip(secondaryStatusBars, extras) {
-      let links = configureStatusBarSurface(
+      let interactions = configureStatusBarSurface(
         bar,
         screenFrame: screen.frame,
         visibleFrame: screen.visibleFrame,
@@ -336,7 +342,8 @@ extension OverlayPanel {
         leftTrailingRaw: leftTrailingRaw,
         centreRaw: centreRaw,
         rightRaw: rightRaw)
-      linksByScreen.append((screenFrame: screen.frame, links: links))
+      linksByScreen.append((screenFrame: screen.frame, links: interactions.links))
+      popupRegions += interactions.popups
     }
 
     if modeBadgeVisible {
@@ -346,7 +353,8 @@ extension OverlayPanel {
       // now (they used to be hint-only).
       syncStatusBarClickWindows(
         bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),
-        links: linksByScreen.flatMap(\.links))
+        links: linksByScreen.flatMap(\.links),
+        popups: popupRegions)
     } else {
       statusBarLinkRectsByScreen = []
       hideStatusBarClickWindows()
@@ -379,7 +387,7 @@ extension OverlayPanel {
     leftTrailingRaw: String,
     centreRaw: String,
     rightRaw: String
-  ) -> [(rect: CGRect, url: URL)] {
+  ) -> (links: [(rect: CGRect, url: URL)], popups: [StatusBarPopupRegion]) {
     let barFrame = Self.statusBarFrame(
       screenFrame: screenFrame,
       visibleFrame: visibleFrame,
@@ -662,12 +670,35 @@ extension OverlayPanel {
     // Measured from the same fitted strings the layers render, so the rects
     // land exactly on the glyphs the user sees (the rotating cycle line's
     // rect tracks whichever line is showing).
-    guard modeBadgeVisible else { return [] }
+    guard modeBadgeVisible else { return ([], []) }
     let linkBarFrame = surface.backgroundLayer.frame
     var links: [(rect: CGRect, url: URL)] = []
+    var popups: [StatusBarPopupRegion] = []
+    if let name = statusModePopupName,
+      let content = statusBarPopupTexts[name],
+      !content.isEmpty
+    {
+      popups.append(
+        StatusBarPopupRegion(
+          rect: CGRect(
+            x: panelFrame.minX + linkBarFrame.minX + surface.modeButtonLayer.frame.minX,
+            y: panelFrame.minY + linkBarFrame.minY,
+            width: surface.modeButtonLayer.frame.width,
+            height: linkBarFrame.height),
+          name: name,
+          content: content))
+    }
     if !surface.leftTrailingLabel.isHidden || !surface.cycleLayer.isHidden {
       links += statusLinkRects(
         raw: leftTrailingDisplay, font: rightFont,
+        labelFrame: CGRect(
+          x: leftTrailingX, y: surface.leftTrailingLabel.frame.minY,
+          width: leftTrailingMaxX - leftTrailingX,
+          height: surface.leftTrailingLabel.frame.height),
+        alignment: .left,
+        barFrame: linkBarFrame, panelFrame: panelFrame)
+      popups += statusPopupRects(
+        raw: leftTrailingDisplay, popupTexts: statusBarPopupTexts, font: rightFont,
         labelFrame: CGRect(
           x: leftTrailingX, y: surface.leftTrailingLabel.frame.minY,
           width: leftTrailingMaxX - leftTrailingX,
@@ -680,14 +711,22 @@ extension OverlayPanel {
         raw: centreDisplay, font: rightFont,
         labelFrame: surface.appLabel.frame, alignment: .center,
         barFrame: linkBarFrame, panelFrame: panelFrame)
+      popups += statusPopupRects(
+        raw: centreDisplay, popupTexts: statusBarPopupTexts, font: rightFont,
+        labelFrame: surface.appLabel.frame, alignment: .center,
+        barFrame: linkBarFrame, panelFrame: panelFrame)
     }
     if !surface.rightLabel.isHidden {
       links += statusLinkRects(
         raw: rightDisplay, font: rightFont,
         labelFrame: surface.rightLabel.frame, alignment: .right,
         barFrame: linkBarFrame, panelFrame: panelFrame)
+      popups += statusPopupRects(
+        raw: rightDisplay, popupTexts: statusBarPopupTexts, font: rightFont,
+        labelFrame: surface.rightLabel.frame, alignment: .right,
+        barFrame: linkBarFrame, panelFrame: panelFrame)
     }
-    return links
+    return (links, popups)
   }
 
   static let effectAnimationKey = "flashEffect"

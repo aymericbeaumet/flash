@@ -228,7 +228,7 @@ targets: `ActionDispatcher` owns the real host mouse event for every commit.
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. TOML syntax is parsed with the Swift package `TOMLKit`; `Sources/flash/Config/ConfigLoader.swift` owns only Flash's typed schema, validation, source-location indexing for known values, and command-path resolution.
 
-The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[statusbar.popup]`, `[statusbar.click]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -368,8 +368,9 @@ through the script's stdout lines). Any other bare `#{token}` is a config
 error — there is no silently-empty tmux dialect. tmux session/window/pane
 state comes from the bundled tmux plugin's status segments
 (`#{plugin:tmux.session}`, `#{plugin:tmux.window}`, `#{plugin:tmux.pane}`),
-and the bundled system plugin exposes the battery segment as
-`#{plugin:system.battery}`.
+and the bundled system plugin exposes `#{plugin:system.battery}` plus
+`#{plugin:system.battery_details}`. The bundled aiproviders plugin owns the
+Claude, Fable, and Codex compact/detail usage segments declared in its manifest.
 The format grammar is a strict tmux superset: modifiers `#{?cond,a,b}`,
 `#{==:}`/`#{!=:}`/`#{<:}`/`#{>:}`/`#{<=:}`/`#{>=:}`/`#{&&:}`/`#{||:}`,
 `#{s/re/repl/[i]:var}`, `#{pN:}`/`#{p-N:}`, `#{=N:}`/`#{=-N:}` (Flash `…`
@@ -380,6 +381,11 @@ escapes); colours are the full xterm-256 palette + `#RRGGBB` + ANSI names
 (colour0/178/196/245 keep Nord-theme shades). One tokenizer
 (`StatusBarMarkup.swift`) is the only scanner of the marker grammar —
 extend it, never hand-roll another `#[`-walk.
+Named `#[popup=<name>]…#[nopopup]` spans resolve rich multiline bodies from
+`[statusbar.popup]`. Dynamic values can instead carry a percent-encoded body in
+`#[popup=inline:<encoded>]`; the body remains zero-width and rotates atomically
+with a cycle row. Popup work is scheduled with normal status refreshes—hovering
+only shows or repositions already-rendered content.
 Template newlines are ignored before rendering. Mode, focused-app, plugin
 status, and date changes re-render from their own change sources. Command/script
 sections are stale-while-refresh and are polled only when present: the previous
@@ -661,7 +667,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|middle=
 
 **Flashlight source narrowing.** `:flashlight @<source> <query>` restricts the pool to one source — `@<source>` is the only structured filter, no `@<field>:<pattern>` form. `NormalModeDispatcher.candidateFinderSourceFilter` parses the first `@<token>` in the query; `CandidateFinder.candidateMatchesSourceFilter` matches it against `candidate.source` by exact name or prefix on dotted labels (`@firefox` matches `firefox.tabs`). A confirmed `@<source> ` with no residual text lists every candidate from that source — `:flashlight @emojis.glyphs ` enumerates the whole emoji set, otherwise excluded from the default pool. The flag is ignored in `:emojis` mode.
 
-App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=... [duration=seconds style=standard|error]`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, `about`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
+App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=... [duration=seconds style=standard|error]`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, `about`, and `quit`. `window_move` accepts either a named `position` or all four of `x`, `y`, `width`, and `height` as `%`-suffixed values relative to the Flash-usable screen; `x`/`y` are top-left offsets, and the usable frame reserves Flash's bar only on displays selected by `statusbar.monitor`. Named and proportional layouts are semantic intent retained across explicit screen moves, usable-frame changes, resolution changes, and display attachment/removal. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
 **Plugin commands can raise a window.** A plugin's `perform` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` route `switch-client` to the discovered local or remote backend, then return the exact terminal pid/window metadata hosting that backend. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 

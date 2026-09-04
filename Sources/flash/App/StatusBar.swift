@@ -39,6 +39,12 @@ struct FlashStatusTextSegment: Equatable {
   /// status-line mouse model. The name resolves through the
   /// `[statusbar.click]` action map at click time.
   var range: String?
+  /// Named hover popup from `#[popup=<name>]…#[nopopup]`.
+  var popup: String?
+  /// Popup body carried directly by a dynamic value through
+  /// `#[popup=inline:<percent-encoded-markup>]`. Keeping this beside the
+  /// visible segment makes carousel text and its details rotate atomically.
+  var popupContent: String?
 
   init(
     text: String,
@@ -52,7 +58,9 @@ struct FlashStatusTextSegment: Equatable {
     blink: Bool = false,
     breathing: Bool = false,
     link: String? = nil,
-    range: String? = nil
+    range: String? = nil,
+    popup: String? = nil,
+    popupContent: String? = nil
   ) {
     self.text = text
     self.foreground = foreground
@@ -66,7 +74,16 @@ struct FlashStatusTextSegment: Equatable {
     self.breathing = breathing
     self.link = link
     self.range = range
+    self.popup = popup
+    self.popupContent = popupContent
   }
+}
+
+struct FlashStatusPopupRun: Equatable {
+  var xOffset: CGFloat
+  var width: CGFloat
+  var name: String
+  var content: String
 }
 
 private struct FlashStatusTextStyle {
@@ -263,6 +280,19 @@ struct FlashStatusBarModel: Equatable {
   var appText: String
   var modeText: String
   var rightText: String
+  var popupTexts: [String: String]
+
+  init(
+    appText: String,
+    modeText: String,
+    rightText: String,
+    popupTexts: [String: String] = [:]
+  ) {
+    self.appText = appText
+    self.modeText = modeText
+    self.rightText = rightText
+    self.popupTexts = popupTexts
+  }
 }
 
 enum FlashStatusBarTemplateEngine {
@@ -274,6 +304,7 @@ enum FlashStatusBarTemplateEngine {
 
   static func render(
     template: FlashStatusBarTemplate,
+    popupTemplates: [String: FlashStatusBarTemplate] = [:],
     context: FlashStatusBarContext,
     dynamicValues: [String: String] = [:]
   ) -> FlashStatusBarModel {
@@ -287,10 +318,27 @@ enum FlashStatusBarTemplateEngine {
       variableByToken: variableByToken,
       context: context,
       dynamicValues: dynamicValues)
+    var popupTexts: [String: String] = [:]
+    for name in popupTemplates.keys.sorted() {
+      guard let popup = popupTemplates[name] else { continue }
+      var popupVariableByToken: [String: FlashStatusBarTemplateVariable] = [:]
+      for variable in popup.variables where popupVariableByToken[variable.token] == nil {
+        popupVariableByToken[variable.token] = variable
+      }
+      let rendered = renderAligned(
+        popup.template,
+        variableByToken: popupVariableByToken,
+        context: context,
+        dynamicValues: dynamicValues,
+        preserveNewlines: true)
+      popupTexts[name] = (rendered.left + rendered.centre + rendered.right)
+        .trimmingCharacters(in: .newlines)
+    }
     return FlashStatusBarModel(
       appText: split.centre,
       modeText: split.left,
-      rightText: split.right)
+      rightText: split.right,
+      popupTexts: popupTexts)
   }
 
   /// Parse `template` and split it into left/centre/right buckets driven
@@ -312,9 +360,14 @@ enum FlashStatusBarTemplateEngine {
     _ raw: String,
     variableByToken: [String: FlashStatusBarTemplateVariable],
     context: FlashStatusBarContext,
-    dynamicValues: [String: String]
+    dynamicValues: [String: String],
+    preserveNewlines: Bool = false
   ) -> (left: String, centre: String, right: String) {
-    var raw = normalizedTemplate(raw)
+    var raw =
+      preserveNewlines
+      ? raw.replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+      : normalizedTemplate(raw)
     // tmux passes status strings through strftime(3) BEFORE format
     // expansion, so literal `%H:%M` in the template works and `%` in
     // resolved values survives untouched. `%%` escapes a literal percent.
@@ -878,15 +931,22 @@ enum FlashStatusBarRenderer {
     return formatter.string(from: now)
   }
 
-  static func segments(from raw: String) -> [FlashStatusTextSegment] {
-    var style = FlashStatusTextStyle()
+  static func segments(
+    from raw: String,
+    defaultForeground: FlashStatusTextColor = .colour245
+  ) -> [FlashStatusTextSegment] {
+    let rootStyle = FlashStatusTextStyle(foreground: defaultForeground)
+    var style = rootStyle
     // tmux style scoping: `#[default]` resets to the current default style,
     // `#[push-default]` makes the current style the default (saving the old
     // one), `#[pop-default]` restores it — the native answer to fg-bleed.
-    var baseStyle = FlashStatusTextStyle()
+    var baseStyle = rootStyle
     var defaultsStack: [FlashStatusTextStyle] = []
     var link: String?
     var range: String?
+    var popup: String?
+    var popupContent: String?
+    var inlinePopupIndex = 0
     var segments: [FlashStatusTextSegment] = []
     var buffer = ""
 
@@ -905,7 +965,9 @@ enum FlashStatusBarRenderer {
           blink: style.blink,
           breathing: style.breathing,
           link: link,
-          range: range))
+          range: range,
+          popup: popup,
+          popupContent: popupContent))
       buffer = ""
     }
 
@@ -925,8 +987,33 @@ enum FlashStatusBarRenderer {
             defaultsStack.append(baseStyle)
             baseStyle = style
           case "pop-default":
-            baseStyle = defaultsStack.popLast() ?? FlashStatusTextStyle()
+            baseStyle = defaultsStack.popLast() ?? rootStyle
           case "norange": range = nil
+          case "nopopup":
+            popup = nil
+            popupContent = nil
+          case let part where part.hasPrefix("popup="):
+            let value = String(part.dropFirst("popup=".count))
+            if value.hasPrefix("inline:") {
+              let encoded = String(value.dropFirst("inline:".count))
+              // Dynamic status output is trusted config data, but cap inline
+              // bodies so malformed command output cannot allocate an
+              // unbounded popup or leak its full stdout into the overlay.
+              if !encoded.isEmpty, encoded.utf8.count <= 16_384,
+                let decoded = encoded.removingPercentEncoding,
+                !decoded.isEmpty
+              {
+                popup = "inline-\(inlinePopupIndex)"
+                popupContent = decoded
+                inlinePopupIndex += 1
+              } else {
+                popup = nil
+                popupContent = nil
+              }
+            } else {
+              popup = value.isEmpty ? nil : value
+              popupContent = nil
+            }
           case let part where part.hasPrefix("range="):
             // Only `range=user|<name>` spans are actionable (tmux's
             // window/session ranges have no Flash analogue).
@@ -961,6 +1048,36 @@ enum FlashStatusBarRenderer {
         link = url.isEmpty ? nil : url
       }
     }
+  }
+
+  /// The mode pill renders in its own layer, so its popup state cannot travel
+  /// through ordinary text-run geometry. Recover the popup active over visible
+  /// text between the engine's `#[pill]` sentinels.
+  static func popupNameForPill(in raw: String) -> String? {
+    var popup: String?
+    var insidePill = false
+    for token in FlashStatusBarMarkup.tokenizeValue(raw) {
+      switch token {
+      case .text(let text):
+        if insidePill, !text.isEmpty, let popup { return popup }
+      case .marker(let parts):
+        for part in parts {
+          if part == "pill" {
+            insidePill = true
+          } else if part == "nopill" {
+            insidePill = false
+          } else if part == "nopopup" {
+            popup = nil
+          } else if part.hasPrefix("popup=") {
+            let name = String(part.dropFirst("popup=".count))
+            popup = name.isEmpty ? nil : name
+          }
+        }
+      case .variable, .alias:
+        break
+      }
+    }
+    return nil
   }
 
   /// Elastic fit: shrink ONLY the `#[shrink]…#[noshrink]` span until `raw`
@@ -1057,13 +1174,44 @@ enum FlashStatusBarRenderer {
     return (runs, x)
   }
 
+  /// Measure named hover-popup spans using the same attributed runs and
+  /// alignment geometry as links. Undefined/empty popup names are passive.
+  static func popupRuns(
+    from raw: String,
+    font: NSFont,
+    popupTexts: [String: String]
+  ) -> (runs: [FlashStatusPopupRun], totalWidth: CGFloat) {
+    var runs: [FlashStatusPopupRun] = []
+    var x: CGFloat = 0
+    for segment in segments(from: raw) {
+      let width = attributedSegment(segment, font: font).size().width
+      if let name = segment.popup,
+        let content = segment.popupContent ?? popupTexts[name],
+        !content.isEmpty
+      {
+        if var last = runs.last, last.name == name, last.content == content,
+          abs(last.xOffset + last.width - x) < 0.5
+        {
+          last.width += width
+          runs[runs.count - 1] = last
+        } else {
+          runs.append(
+            FlashStatusPopupRun(xOffset: x, width: width, name: name, content: content))
+        }
+      }
+      x += width
+    }
+    return (runs, x)
+  }
+
   static func attributedStatusString(
     from raw: String,
     font: NSFont,
-    currentTime: TimeInterval = 0
+    currentTime: TimeInterval = 0,
+    defaultForeground: FlashStatusTextColor = .colour245
   ) -> NSAttributedString {
     let attributed = NSMutableAttributedString()
-    for segment in segments(from: raw) {
+    for segment in segments(from: raw, defaultForeground: defaultForeground) {
       attributed.append(attributedSegment(segment, font: font, currentTime: currentTime))
     }
     return attributed
@@ -1320,6 +1468,7 @@ final class FlashStatusBarController {
   private let commandQueue = DispatchQueue(
     label: "flash.status_bar.commands", qos: .utility, attributes: .concurrent)
   private var template: FlashStatusBarTemplate
+  private var popupTemplates: [String: FlashStatusBarTemplate]
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
   private var refreshTimer: DispatchSourceTimer?
   private var cycleTimer: DispatchSourceTimer?
@@ -1354,11 +1503,13 @@ final class FlashStatusBarController {
   init(
     overlay: OverlayPanel,
     template: FlashStatusBarTemplate,
+    popupTemplates: [String: FlashStatusBarTemplate] = [:],
     refreshIntervalSeconds: TimeInterval = 5,
     pluginStatusesProvider: @escaping () -> [PluginStatusBarInfo] = { [] }
   ) {
     self.overlay = overlay
     self.template = template
+    self.popupTemplates = popupTemplates
     self.pluginStatusesProvider = pluginStatusesProvider
     self.refreshIntervalSeconds = refreshIntervalSeconds
   }
@@ -1407,15 +1558,17 @@ final class FlashStatusBarController {
 
   func updateTemplate(
     _ template: FlashStatusBarTemplate,
+    popupTemplates: [String: FlashStatusBarTemplate]? = nil,
     refreshIntervalSeconds: TimeInterval? = nil
   ) {
     queue.async { [weak self] in
       guard let self else { return }
       self.template = template
+      if let popupTemplates { self.popupTemplates = popupTemplates }
       if let refreshIntervalSeconds {
         self.refreshIntervalSeconds = refreshIntervalSeconds
       }
-      let commandIDs = Set(template.commandSections.map(\.id))
+      let commandIDs = Set(self.allCommandSections.map(\.id))
       self.dynamicValues = self.dynamicValues.filter { commandIDs.contains($0.key) }
       self.refreshSourcesForCurrentTemplate()
     }
@@ -1451,12 +1604,26 @@ final class FlashStatusBarController {
     }
   }
 
+  private var allTemplates: [FlashStatusBarTemplate] {
+    [template] + popupTemplates.keys.sorted().compactMap { popupTemplates[$0] }
+  }
+
+  private var allCommandSections: [FlashStatusBarTemplateVariable] {
+    var seen: Set<String> = []
+    return allTemplates.flatMap(\.commandSections).filter { seen.insert($0.id).inserted }
+  }
+
+  private var allCycleSections: [FlashStatusBarTemplateVariable] {
+    var seen: Set<String> = []
+    return allTemplates.flatMap(\.cycleSections).filter { seen.insert($0.id).inserted }
+  }
+
   /// Kick off every command/cycle section whose deadline has passed and
   /// that isn't already running. Each section runs as its own job on the
   /// concurrent command queue, so cadences are independent.
   private func runDueCommandSections(now: Date) {
     let generation = commandRefreshGeneration
-    for section in template.commandSections {
+    for section in allCommandSections {
       if let schedule = commandSchedules[section.id],
         schedule.inFlight || schedule.nextDueAt > now
       {
@@ -1571,7 +1738,8 @@ final class FlashStatusBarController {
     refreshTimer = nil
     cycleTimer?.cancel()
     cycleTimer = nil
-    cycles = cycles.filter { id, _ in template.cycleSections.contains { $0.id == id } }
+    let cycleIDs = Set(allCycleSections.map(\.id))
+    cycles = cycles.filter { id, _ in cycleIDs.contains(id) }
     commandSchedules = [:]
     nextClockRefreshAt = nil
     commandRefreshGeneration &+= 1
@@ -1583,7 +1751,7 @@ final class FlashStatusBarController {
   }
 
   private func scheduleNextClockRefresh(from now: Date) {
-    guard template.needsClockRefresh else {
+    guard allTemplates.contains(where: \.needsClockRefresh) else {
       nextClockRefreshAt = nil
       return
     }
@@ -1641,6 +1809,7 @@ final class FlashStatusBarController {
       pluginStatuses: pluginStatusesProvider())
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
+      popupTemplates: popupTemplates,
       context: context,
       dynamicValues: dynamicValues)
     let modelChanged = model != lastPublishedModel

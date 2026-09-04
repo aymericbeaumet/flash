@@ -23,6 +23,7 @@ name = "flash-plugin-aiproviders"
 version = "0.1.0"
 dependencies = [
  "flash_plugin",
+ "serde",
  "serde_json",
  "tokio",
 ]

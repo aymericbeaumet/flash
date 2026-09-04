@@ -166,6 +166,17 @@ command_timeout = 6.0
 # Points kept clear on each side of a notch (camera housing). The centre
 # region hides entirely on notched screens.
 notch_margin = 0
+# Hover-popup chrome. Popup bodies use the same inline text styles as the bar;
+# these values control their default foreground and surrounding surface.
+popup_fg = "#D8DEE9"
+popup_bg = "#2E3440F2"
+popup_border = "#4C566A"
+popup_border_size = 1
+popup_corner_radius = 8
+popup_padding = 8
+popup_max_width = 480
+# Gap in points between the pointer and the popup's top edge.
+popup_offset = 8
 # Single template string for the status bar. Use tmux-style alignment
 # markers to switch which region subsequent content lands in:
 #
@@ -192,6 +203,10 @@ notch_margin = 0
 #                                     chip never signals, just sits alive.
 #                                     Used by the system plugin to mark
 #                                     a battery that's plugged in.
+#   #[popup=<name>] / #[nopopup]     — show the named `[statusbar.popup]`
+#                                     body while this text is hovered.
+#   #[popup=inline:<encoded>]         — show percent-encoded rich text carried
+#                                     by a dynamic value (useful for cycles).
 #
 # `##` emits a literal `#`. Wrap a token in `#{=N:…}` (or `#{=-N:…}` for
 # trailing window) to cap its rendered length at N characters — useful
@@ -264,6 +279,18 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 #   #[align=center]#{active_app_name}
 #   #[align=right]#{plugin:system.battery}
 #   #[fg=colour245] · #{date}
+#   """
+
+# Named textual hover overlays referenced by `#[popup=<name>]` spans. Bodies
+# preserve newlines and are full status templates: variables and
+# script/command/cycle sources refresh on their normal schedules, while the
+# popup follows the pointer without running work on hover. Inline fg/bg/bold,
+# italics, underline, dim, and reverse markers render exactly as in the bar.
+[statusbar.popup]
+# quota = """
+#   #[fg=colour178,bold]Claude#[default]
+#   5-hour: 53% remaining
+#   7-day: 14% remaining
 #   """
 
 # tmux status-line mouse model: a `#[range=user|<name>]…#[norange]` span in
@@ -350,6 +377,10 @@ send_key_interval_ms = 35
 # "ctrl+alt+n" = ["flash", "enter_normal_mode"] # enables advanced mode
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
+# Percentage frames require x/y/width/height together. x and y are offsets
+# from the Flash-usable frame's top-left; every value must include `%`.
+# Flash retains the layout and reapplies it after screen moves or display changes.
+# "alt+z" = ["flash", "window_move", "--x=10%", "--y=10%", "--width=80%", "--height=80%"]
 # "alt+n" = ["flash", "window_move", "--screen=+1"]
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
 # The `enter_command_mode` verb opens the command-line panel pre-seeded with

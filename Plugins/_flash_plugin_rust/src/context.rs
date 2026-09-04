@@ -319,6 +319,18 @@ impl Context {
         self.call_host("host.process_table", params).await
     }
 
+    /// Sample one process through `host.process_table`. Exact-PID mode also
+    /// includes resident bytes, lifetime disk I/O, uptime, thread count, and
+    /// the current IPv4/IPv6 socket count. The host performs the libproc work
+    /// off its main thread. Requires the `process_control` capability.
+    pub async fn process_metrics(&self, pid: i64, sample_window_ms: Option<u64>) -> Value {
+        let mut params = json!({ "pid": pid });
+        if let Some(window) = sample_window_ms {
+            params["sample_window_ms"] = json!(window);
+        }
+        self.call_host("host.process_table", params).await
+    }
+
     /// SIGTERM `pid` host-side (`host.signal`). Requires the
     /// `process_control` capability.
     pub async fn signal(&self, pid: i64) -> Result<(), String> {

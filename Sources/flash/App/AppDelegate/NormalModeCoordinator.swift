@@ -165,7 +165,8 @@ extension AppDelegate {
         window: observedWindow,
         frame: context.frontWindowFrame,
         notification: notification,
-        statusBarReservesSpace: statusBarVisible)
+        statusBarReservesSpace: statusBarVisible,
+        statusBarMonitor: config.statusBar.monitor)
     }
     if pluginManager.hasListener(for: "core:ax.changed") {
       pluginManager.emit(

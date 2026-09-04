@@ -2,7 +2,7 @@
   "id": "processes",
   "name": "Processes",
   "version": "0.1.0",
-  "description": "List running processes in flashlight; SIGTERM them with !kill <pid|name>.",
+  "description": "List and terminate running processes, and publish live focused-app resource details for the status bar.",
   "exec": [
     "./flash-plugin-processes"
   ],
@@ -16,7 +16,11 @@
   ],
   "listen": [
     "core:apps.launched",
-    "core:apps.terminated"
+    "core:apps.terminated",
+    "core:focus.changed"
+  ],
+  "status": [
+    "focused_app_details"
   ],
   "sources": [
     {
@@ -25,6 +29,7 @@
     }
   ],
   "capabilities": [
+    "app_control",
     "process_control"
   ],
   "bangs": {

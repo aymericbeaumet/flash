@@ -86,7 +86,8 @@
     }
   ],
   "status": [
-    "battery"
+    "battery",
+    "battery_details"
   ],
   "listen": [
     "core:power.changed"

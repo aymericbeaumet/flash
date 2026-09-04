@@ -477,25 +477,79 @@ final class PluginHostRPC {
     reply: @escaping ([String: Any]) -> Void
   ) {
     let windowMs = min(max((params["sample_window_ms"] as? Int) ?? 150, 10), 2_000)
+    let requestedPID: pid_t?
+    if let rawPID = params["pid"] {
+      guard let pid = rawPID as? Int, pid > 0 else {
+        reply(["ok": false, "error": "host.process_table pid must be positive"])
+        return
+      }
+      requestedPID = pid_t(pid)
+    } else {
+      requestedPID = nil
+    }
     DispatchQueue.global(qos: .utility).async {
-      let first = Self.cpuTimeByPid()
+      let pids = requestedPID.map(Self.processTree(root:)) ?? Self.allPids()
+      let first = Self.cpuTimeByPid(pids)
       Thread.sleep(forTimeInterval: Double(windowMs) / 1_000)
       let windowNs = Double(windowMs) * 1_000_000
       let totalMemory = Double(max(ProcessInfo.processInfo.physicalMemory, 1))
       var rows: [[String: Any]] = []
-      for pid in Self.allPids() {
-        guard let usage = Self.pidUsage(pid), let comm = Self.executableBasename(pid) else {
-          continue
+      if let rootPID = requestedPID {
+        guard let comm = Self.executableBasename(rootPID) else {
+          reply(["ok": true, "processes": rows])
+          return
         }
-        let cpuPercent = first[pid].map {
-          Double(usage.cpuNs &- min($0, usage.cpuNs)) / windowNs * 100
+        var cpuPercent = 0.0
+        var residentBytes: UInt64 = 0
+        var diskReadBytes: UInt64 = 0
+        var diskWriteBytes: UInt64 = 0
+        var processCount = 0
+        var threadCount = 0
+        var networkSocketCount = 0
+        for pid in pids {
+          guard let usage = Self.pidUsage(pid) else { continue }
+          processCount += 1
+          if let prior = first[pid] {
+            cpuPercent += Double(usage.cpuNs &- min(prior, usage.cpuNs)) / windowNs * 100
+          }
+          residentBytes = Self.saturatingAdd(residentBytes, usage.residentBytes)
+          diskReadBytes = Self.saturatingAdd(diskReadBytes, usage.diskReadBytes)
+          diskWriteBytes = Self.saturatingAdd(diskWriteBytes, usage.diskWriteBytes)
+          threadCount += Self.processThreadCount(pid)
+          networkSocketCount += Self.networkSocketCount(pid)
+        }
+        guard processCount > 0 else {
+          reply(["ok": true, "processes": rows])
+          return
         }
         rows.append([
-          "pid": Int(pid),
+          "pid": Int(rootPID),
           "comm": comm,
-          "cpu_percent": cpuPercent ?? 0,
-          "mem_percent": Double(usage.residentBytes) / totalMemory * 100,
+          "cpu_percent": cpuPercent,
+          "mem_percent": Double(residentBytes) / totalMemory * 100,
+          "memory_bytes": Self.jsonInt(residentBytes),
+          "disk_read_bytes": Self.jsonInt(diskReadBytes),
+          "disk_write_bytes": Self.jsonInt(diskWriteBytes),
+          "uptime_seconds": Self.processUptimeSeconds(rootPID),
+          "process_count": processCount,
+          "thread_count": threadCount,
+          "network_socket_count": networkSocketCount,
         ])
+      } else {
+        for pid in pids {
+          guard let usage = Self.pidUsage(pid), let comm = Self.executableBasename(pid) else {
+            continue
+          }
+          let cpuPercent = first[pid].map {
+            Double(usage.cpuNs &- min($0, usage.cpuNs)) / windowNs * 100
+          }
+          rows.append([
+            "pid": Int(pid),
+            "comm": comm,
+            "cpu_percent": cpuPercent ?? 0,
+            "mem_percent": Double(usage.residentBytes) / totalMemory * 100,
+          ])
+        }
       }
       reply(["ok": true, "processes": rows])
     }
@@ -528,9 +582,33 @@ final class PluginHostRPC {
     return Array(pids.prefix(Int(filled))).filter { $0 > 0 }
   }
 
-  private static func cpuTimeByPid() -> [pid_t: UInt64] {
+  /// Snapshot the root process and every currently reachable descendant.
+  /// Browser and Electron resource use lives primarily in helpers, so an
+  /// exact root-only sample would materially under-report the focused app.
+  private static func processTree(root: pid_t) -> [pid_t] {
+    var ordered = [root]
+    var seen: Set<pid_t> = [root]
+    var index = 0
+    while index < ordered.count {
+      let parent = ordered[index]
+      index += 1
+      let count = proc_listchildpids(parent, nil, 0)
+      guard count > 0 else { continue }
+      let capacity = Int(count) + 16
+      var children = [pid_t](repeating: 0, count: capacity)
+      let filled = proc_listchildpids(
+        parent, &children, Int32(capacity * MemoryLayout<pid_t>.size))
+      guard filled > 0 else { continue }
+      for child in children.prefix(Int(filled)) where child > 0 && seen.insert(child).inserted {
+        ordered.append(child)
+      }
+    }
+    return ordered
+  }
+
+  private static func cpuTimeByPid(_ pids: [pid_t]) -> [pid_t: UInt64] {
     var out: [pid_t: UInt64] = [:]
-    for pid in allPids() {
+    for pid in pids {
       if let usage = pidUsage(pid) {
         out[pid] = usage.cpuNs
       }
@@ -538,7 +616,14 @@ final class PluginHostRPC {
     return out
   }
 
-  private static func pidUsage(_ pid: pid_t) -> (cpuNs: UInt64, residentBytes: UInt64)? {
+  private struct PIDUsage {
+    var cpuNs: UInt64
+    var residentBytes: UInt64
+    var diskReadBytes: UInt64
+    var diskWriteBytes: UInt64
+  }
+
+  private static func pidUsage(_ pid: pid_t) -> PIDUsage? {
     var info = rusage_info_current()
     let ok = withUnsafeMutablePointer(to: &info) { pointer in
       pointer.withMemoryRebound(to: (rusage_info_t?).self, capacity: 1) {
@@ -546,7 +631,69 @@ final class PluginHostRPC {
       }
     }
     guard ok else { return nil }
-    return (info.ri_user_time &+ info.ri_system_time, info.ri_resident_size)
+    return PIDUsage(
+      cpuNs: info.ri_user_time &+ info.ri_system_time,
+      residentBytes: info.ri_resident_size,
+      diskReadBytes: info.ri_diskio_bytesread,
+      diskWriteBytes: info.ri_diskio_byteswritten)
+  }
+
+  private static func jsonInt(_ value: UInt64) -> Int {
+    Int(min(value, UInt64(Int.max)))
+  }
+
+  private static func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+    let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+    return overflow ? UInt64.max : sum
+  }
+
+  private static func processUptimeSeconds(_ pid: pid_t) -> Int {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    let read = withUnsafeMutablePointer(to: &info) {
+      proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, $0, size)
+    }
+    guard read == size else { return 0 }
+    return max(0, Int(Date().timeIntervalSince1970) - jsonInt(info.pbi_start_tvsec))
+  }
+
+  private static func processThreadCount(_ pid: pid_t) -> Int {
+    var info = proc_taskinfo()
+    let size = Int32(MemoryLayout<proc_taskinfo>.size)
+    let read = withUnsafeMutablePointer(to: &info) {
+      proc_pidinfo(pid, PROC_PIDTASKINFO, 0, $0, size)
+    }
+    guard read == size else { return 0 }
+    return max(0, Int(info.pti_threadnum))
+  }
+
+  /// Count live internet sockets without launching `nettop` (which takes a
+  /// multi-second sample and would be inappropriate for a resident status
+  /// provider). Unix-domain IPC sockets are deliberately excluded.
+  private static func networkSocketCount(_ pid: pid_t) -> Int {
+    let required = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+    guard required > 0 else { return 0 }
+    let stride = MemoryLayout<proc_fdinfo>.stride
+    let capacity = Int(required) / stride + 16
+    var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: capacity)
+    let filled = descriptors.withUnsafeMutableBytes { buffer in
+      proc_pidinfo(
+        pid, PROC_PIDLISTFDS, 0, buffer.baseAddress,
+        Int32(buffer.count))
+    }
+    guard filled > 0 else { return 0 }
+    let count = min(Int(filled) / stride, descriptors.count)
+    return descriptors.prefix(count).reduce(into: 0) { total, descriptor in
+      guard descriptor.proc_fdtype == PROX_FDTYPE_SOCKET else { return }
+      var socket = socket_fdinfo()
+      let size = Int32(MemoryLayout<socket_fdinfo>.size)
+      let read = withUnsafeMutablePointer(to: &socket) {
+        proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDSOCKETINFO, $0, size)
+      }
+      guard read == size else { return }
+      let family = socket.psi.soi_family
+      if family == AF_INET || family == AF_INET6 { total += 1 }
+    }
   }
 
   private static func executableBasename(_ pid: pid_t) -> String? {

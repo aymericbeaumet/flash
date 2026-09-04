@@ -1840,4 +1840,30 @@ final class ConfigLoaderTests: XCTestCase {
       c.statusBar.templateSourceURL,
       URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
   }
+
+  func testLayeredPopupTemplatesKeepIndependentSourcesAndCommandIDs() {
+    let base = ConfigLoader.Layer(
+      text: """
+        [statusbar.popup]
+        base = "#{script:./details.sh}"
+        """,
+      sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
+    let user = ConfigLoader.Layer(
+      text: """
+        [statusbar.popup]
+        user = "#{script:./details.sh}"
+        """,
+      sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml"))
+    let c = ConfigLoader.parseLayers([base, user])
+
+    let baseVariable = c.statusBar.popups["base"]?.variables.first
+    let userVariable = c.statusBar.popups["user"]?.variables.first
+    XCTAssertNotEqual(baseVariable?.id, userVariable?.id)
+    XCTAssertEqual(
+      baseVariable?.source,
+      .command(.script("/tmp/flash-defaults/details.sh")))
+    XCTAssertEqual(
+      userVariable?.source,
+      .command(.script("/tmp/user/details.sh")))
+  }
 }

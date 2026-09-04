@@ -53,6 +53,7 @@ enum FlashCLI {
       flash enter_locked_insert_mode
       flash app_open --name=Firefox
       flash window_move --position=lefthalf
+      flash window_move --x=10% --y=10% --width=80% --height=80%
       flash help_show
     """
 

@@ -223,14 +223,33 @@ enum MouseCommand: Hashable {
   }
 }
 
-/// Named positions for `flash window_move position=…`. Each value maps the
-/// focused window to a fixed slot of the target screen's Flash-usable
-/// frame: `visibleFrame` plus Flash's own top status-bar reservation
-/// folded in so a slot's height is the height the user actually sees.
+/// A proportional frame for `flash window_move`. Percentages are relative to
+/// the target screen's Flash-usable frame. `x` grows from the left and `y`
+/// grows from the top so the CLI stays independent of AppKit's Y-up space.
+struct ProportionalWindowFrame: Hashable {
+  let xPercent: Double
+  let yPercent: Double
+  let widthPercent: Double
+  let heightPercent: Double
+}
+
+/// Semantic window geometry retained across explicit screen moves and display
+/// topology changes. Named positions are shortcuts; proportional frames carry
+/// the user's exact size and placement intent.
+enum WindowLayout: Hashable {
+  case position(WindowPosition)
+  case proportional(ProportionalWindowFrame)
+}
+
+/// Geometry for `flash window_move`. Named positions map the focused window to
+/// a fixed slot of the target screen's Flash-usable frame: `visibleFrame` plus
+/// Flash's own top status-bar reservation folded in so a slot's height is the
+/// height the user actually sees. A proportional layout supplies all of
+/// `x`, `y`, `width`, and `height` as percentages of that same usable frame.
 ///
-/// Two sub-namespaces of moves are encoded as one enum:
+/// Layout and monitor selection are orthogonal controls:
 ///
-/// - `position` (optional): named slot of the target screen's
+/// - `layout` (optional): named slot or complete proportional frame of the target screen's
 ///   Flash-usable frame. When omitted, the window keeps its shape and
 ///   is only translated (proportionally remapped) onto the target
 ///   screen.
@@ -242,7 +261,7 @@ enum MouseCommand: Hashable {
 /// that forgot both keys fails at config load instead of firing a silent
 /// no-op on every press.
 struct MoveWindowParams: Hashable {
-  let position: WindowPosition?
+  let layout: WindowLayout?
   let screen: Int
 }
 
@@ -517,7 +536,7 @@ final class URLEventHandler: NSObject {
     flash about
     flash hints_dismiss
     flash app_open --name=<app>
-    flash window_move --position=<slot> --screen=<n>
+    flash window_move [--position=<slot> | --x=<percent> --y=<percent> --width=<percent> --height=<percent>] [--screen=<n>]
     flash send_key --keys=<hotkey>
     flash send_keys --keys=<hotkey,hotkey,...>
     flash quit
@@ -543,6 +562,12 @@ extension URLEventHandler {
       `mouse_target` selects an app-discovered target. `mouse_grid` selects
       a precise screen position by repeatedly narrowing a deterministic
       grid.
+
+      `window_move` accepts either a named `position` or a complete
+      percentage frame (`x`, `y`, `width`, and `height`, each suffixed with
+      `%`). Percentage origins are measured from the usable screen's top-left.
+      Flash retains either form as layout intent and reapplies it across
+      explicit screen moves and display topology or usable-frame changes.
 
       ```text
       \(URLEventHandler.usageText)
@@ -687,17 +712,43 @@ private func cgEventFlags(carbon: UInt32) -> CGEventFlags {
 private func windowMoveCommand(_ a: VerbArgs) -> URLCommand? {
   let rawPosition = a.value("position")
   let rawScreen = a.value("screen")
+  let rawX = a.value("x")
+  let rawY = a.value("y")
+  let rawWidth = a.value("width")
+  let rawHeight = a.value("height")
+  let rawFrame = [rawX, rawY, rawWidth, rawHeight]
+  let hasProportionalFrame = rawFrame.contains(where: { $0 != nil })
   // Empty form `flash window_move` is a no-op mapping — flag it at
   // config load so the user can't mis-write a hotkey.
-  if rawPosition == nil && rawScreen == nil { return nil }
+  if rawPosition == nil && rawScreen == nil && !hasProportionalFrame { return nil }
+  // Named slots and explicit percentage frames are two complete layout forms;
+  // mixing them would make the source of each dimension ambiguous.
+  if rawPosition != nil && hasProportionalFrame { return nil }
   // A *typo'd* position (e.g. `position=foo`) is rejected too; we
   // don't want to silently degrade to "just move screen".
-  var position: WindowPosition? = nil
+  var layout: WindowLayout? = nil
   if let raw = rawPosition {
     guard let p = WindowPosition(rawValue: raw.lowercased()) else {
       return nil
     }
-    position = p
+    layout = .position(p)
+  } else if hasProportionalFrame {
+    guard
+      let x = parseWindowPercentage(rawX),
+      let y = parseWindowPercentage(rawY),
+      let width = parseWindowPercentage(rawWidth),
+      let height = parseWindowPercentage(rawHeight),
+      width > 0,
+      height > 0,
+      x + width <= 100,
+      y + height <= 100
+    else { return nil }
+    layout = .proportional(
+      ProportionalWindowFrame(
+        xPercent: x,
+        yPercent: y,
+        widthPercent: width,
+        heightPercent: height))
   }
   // Swift's Int(_:) already accepts a leading "+" or "-", so
   // `screen=+1` and `screen=-1` round-trip without a custom sign
@@ -709,7 +760,16 @@ private func windowMoveCommand(_ a: VerbArgs) -> URLCommand? {
   } else {
     screen = 0
   }
-  return .moveWindow(MoveWindowParams(position: position, screen: screen))
+  return .moveWindow(MoveWindowParams(layout: layout, screen: screen))
+}
+
+private func parseWindowPercentage(_ raw: String?) -> Double? {
+  guard let raw, raw.hasSuffix("%"), raw.count > 1 else { return nil }
+  let number = String(raw.dropLast())
+  guard let percentage = Double(number), percentage.isFinite,
+    percentage >= 0, percentage <= 100
+  else { return nil }
+  return percentage
 }
 
 /// `WindowPosition` is also referenced by `WindowMover`. Keep its

@@ -583,27 +583,50 @@ final class HotkeySyntaxTests: XCTestCase {
     guard case .flashCommand(.moveWindow(let params)) = action else {
       return XCTFail("expected .moveWindow")
     }
-    XCTAssertEqual(params.position, .leftHalf)
+    XCTAssertEqual(params.layout, .position(.leftHalf))
     XCTAssertEqual(params.screen, 0)
+  }
+
+  func testParseFlashMoveWindowProportionalFrame() {
+    let action = parseMappingCommand(argv: [
+      "flash", "window_move",
+      "--x=10.6925%", "--y=10.6925%",
+      "--width=78.615%", "--height=78.615%",
+    ])
+    guard case .flashCommand(.moveWindow(let params)) = action else {
+      return XCTFail("expected .moveWindow")
+    }
+    XCTAssertEqual(
+      params.layout,
+      .proportional(
+        ProportionalWindowFrame(
+          xPercent: 10.6925,
+          yPercent: 10.6925,
+          widthPercent: 78.615,
+          heightPercent: 78.615)))
+    XCTAssertEqual(params.screen, 0)
+    XCTAssertEqual(
+      action?.diagnosticDescription,
+      "flash window_move --x=10.6925% --y=10.6925% --width=78.615% --height=78.615% --screen=0")
   }
 
   func testParseFlashMoveWindowScreenOnly() {
     // `--screen=+1` with no `--position` is the multi-monitor "move this
-    // window to the next display" form. Position must remain nil so
+    // window to the next display" form. Layout must remain nil so
     // WindowMover does a proportional remap instead of snapping to a
     // fixed slot.
     let next = parseMappingCommand(argv: ["flash", "window_move", "--screen=+1"])
     guard case .flashCommand(.moveWindow(let nextP)) = next else {
       return XCTFail("expected .moveWindow for --screen=+1")
     }
-    XCTAssertNil(nextP.position)
+    XCTAssertNil(nextP.layout)
     XCTAssertEqual(nextP.screen, 1)
 
     let prev = parseMappingCommand(argv: ["flash", "window_move", "--screen=-1"])
     guard case .flashCommand(.moveWindow(let prevP)) = prev else {
       return XCTFail("expected .moveWindow for --screen=-1")
     }
-    XCTAssertNil(prevP.position)
+    XCTAssertNil(prevP.layout)
     XCTAssertEqual(prevP.screen, -1)
   }
 
@@ -614,7 +637,7 @@ final class HotkeySyntaxTests: XCTestCase {
     guard case .flashCommand(.moveWindow(let params)) = action else {
       return XCTFail("expected .moveWindow")
     }
-    XCTAssertEqual(params.position, .maximized)
+    XCTAssertEqual(params.layout, .position(.maximized))
     XCTAssertEqual(params.screen, 1)
   }
 
@@ -629,6 +652,34 @@ final class HotkeySyntaxTests: XCTestCase {
     // Non-numeric `screen=` is also a parse failure.
     XCTAssertNil(
       parseMappingCommand(argv: ["flash", "window_move", "--screen=next"]))
+    // Percentage frames are atomic and cannot be mixed with named slots.
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "window_move", "--x=10%", "--width=80%", "--height=80%",
+      ]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "window_move", "--position=centered",
+        "--x=10%", "--y=10%", "--width=80%", "--height=80%",
+      ]))
+    // Percent signs are required, dimensions must be positive, and the
+    // resulting frame must stay inside the usable screen.
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "window_move", "--x=10", "--y=10%", "--width=80%", "--height=80%",
+      ]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "window_move", "--x=10%", "--y=10%", "--width=0%", "--height=80%",
+      ]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "window_move", "--x=30%", "--y=10%", "--width=80%", "--height=80%",
+      ]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "window_move", "--x=10%", "--y=10%", "--width=nan%", "--height=80%",
+      ]))
   }
 
 }

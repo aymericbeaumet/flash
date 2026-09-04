@@ -75,6 +75,39 @@ enabled = true
 
 Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). Vim's `a`, `A`, `i`, `I`, `o`, and `O` all enter insert mode; `I` keeps Flash's locked-insert behavior.
 
+### Status-bar hover popups
+
+Wrap any status text in `#[popup=<name>]…#[nopopup]` to attach a textual hover overlay. The popup follows the pointer, stays centered beneath it when screen edges allow, and can coexist with `#[link=…]` or named click ranges:
+
+```toml
+[statusbar]
+enabled = true
+popup_fg = "#ECEFF4"
+popup_bg = "#2E3440F2"
+popup_border = "#4C566A"
+popup_border_size = 1
+popup_corner_radius = 8
+popup_padding = 8
+popup_max_width = 480
+popup_offset = 8
+template = "#[align=right]#[popup=quota]Quota 53%#[nopopup]"
+
+[statusbar.popup]
+quota = """
+#[fg=colour178,bold]Claude#[default]
+5-hour 53% remaining
+7-day 14% remaining
+"""
+```
+
+Popup bodies preserve newlines and accept the status renderer’s regular variables and inline `fg`, `bg`, bold, italics, underline, dim, and reverse styles. Script, command, and cycle sources are evaluated by the ordinary status refresh scheduler; pointer movement only repositions already-rendered content.
+
+Dynamic values such as carousel rows can carry their own body with
+`#[popup=inline:<percent-encoded-body>]…#[nopopup]`. Flash decodes the body as
+the same rich text used by named popups, while keeping it out of the bar's
+layout. Because the body travels in the same value as the visible row, an open
+popup updates atomically when the value changes.
+
 ### flashlight
 
 `:flashlight` is a fast, typo-tolerant command bar for locations and plugin data. Its default results include apps, browser tabs, tmux windows, and other destinations. Select an explicit source for richer searches:
@@ -133,6 +166,7 @@ flash scroll_target                      # pick which scroll area the scroll key
 flash mouse_grid                         # target any screen position
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
+flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
 flash enter_command_mode                 # open the command line
 flash help_show                          # show built-in help
 flash plugins                            # inspect plugins
@@ -141,6 +175,16 @@ flash quit                               # stop the resident app
 ```
 
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
+
+`window_move` accepts named positions (`topleft`, `topright`, `bottomleft`,
+`bottomright`, `lefthalf`, `righthalf`, `tophalf`, `bottomhalf`, `maximized`,
+or `centered`) or a complete proportional frame. Proportional frames require
+`--x`, `--y`, `--width`, and `--height` together, each with a `%` suffix. `x`
+and `y` are offsets from the top-left of Flash's usable screen area, including
+its status-bar reservation on each display where the bar is configured to
+render. Flash retains that geometry as window intent: an explicit
+`--screen=+1` move, a resolution or usable-area change, and display
+attachment/removal all reapply it against the destination screen.
 
 ## Configuration
 

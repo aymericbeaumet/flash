@@ -2,6 +2,12 @@ import AppKit
 import CoreGraphics
 import FlashCore
 
+struct StatusBarPopupRegion: Equatable {
+  var rect: CGRect
+  var name: String
+  var content: String
+}
+
 /// The status bar's click surface: one window per screen spanning the menu-bar
 /// band, routed by normal Cocoa hit-testing — no CGEvent tap. Two jobs:
 ///
@@ -23,6 +29,7 @@ final class StatusBarClickView: NSView {
   var links: [(rect: CGRect, url: URL)] = [] {
     didSet { window?.invalidateCursorRects(for: self) }
   }
+  var popups: [StatusBarPopupRegion] = []
 
   /// Fired on `mouseEntered`. The overlay uses it to arm the menu-bar
   /// reveal probe only while the pointer is actually in the band, so the
@@ -32,6 +39,9 @@ final class StatusBarClickView: NSView {
   /// Dispatches a named `#[range=user|<name>]` click (the `[statusbar.click]`
   /// action map). Set by the overlay from the AppDelegate's handler.
   var onStatusBarAction: ((String) -> Void)?
+  /// Reports the popup under the pointer (or nil) and the pointer in screen
+  /// coordinates. The overlay moves its popup layer on every event.
+  var onPopupHover: ((StatusBarPopupRegion?, NSPoint) -> Void)?
 
   /// Window-space location of the in-flight `mouseDown`, used to tell a click
   /// from a drag: a link opens only if the pointer comes back up within
@@ -88,21 +98,28 @@ final class StatusBarClickView: NSView {
         userInfo: nil))
   }
 
-  override func mouseMoved(with event: NSEvent) { updateCursor(at: event) }
+  override func mouseMoved(with event: NSEvent) { updatePointer(at: event) }
   override func mouseEntered(with event: NSEvent) {
     onPointerEntered?()
-    updateCursor(at: event)
+    updatePointer(at: event)
   }
-  override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
+  override func mouseExited(with event: NSEvent) {
+    NSCursor.arrow.set()
+    let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
+    onPopupHover?(nil, point)
+  }
 
   /// Pointing hand over a link run, the default arrow over the rest of the bar.
-  private func updateCursor(at event: NSEvent) {
+  private func updatePointer(at event: NSEvent) {
     let local = convert(event.locationInWindow, from: nil)
     if links.contains(where: { $0.rect.contains(local) }) {
       NSCursor.pointingHand.set()
     } else {
       NSCursor.arrow.set()
     }
+    let popup = popups.first(where: { $0.rect.contains(local) })
+    let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
+    onPopupHover?(popup, point)
   }
 }
 
@@ -170,6 +187,167 @@ extension OverlayPanel {
     return result
   }
 
+  /// Screen-space hit regions for `#[popup=<name>]` spans. Content is already
+  /// resolved by the status controller; measurement uses the exact fitted
+  /// string rendered by the label, keeping hover geometry pixel-aligned.
+  func statusPopupRects(
+    raw: String,
+    popupTexts: [String: String],
+    font: NSFont,
+    labelFrame: CGRect,
+    alignment: CATextLayerAlignmentMode,
+    barFrame: CGRect,
+    panelFrame: CGRect
+  ) -> [StatusBarPopupRegion] {
+    let (runs, totalWidth) = FlashStatusBarRenderer.popupRuns(
+      from: raw, font: font, popupTexts: popupTexts)
+    guard !runs.isEmpty else { return [] }
+    let pad: CGFloat
+    switch alignment {
+    case .right:
+      pad = max(0, labelFrame.width - totalWidth)
+    case .center, .justified:
+      pad = max(0, (labelFrame.width - totalWidth) / 2)
+    default:
+      pad = 0
+    }
+    return runs.map { run in
+      StatusBarPopupRegion(
+        rect: CGRect(
+          x: panelFrame.minX + barFrame.minX + labelFrame.minX + pad + run.xOffset,
+          y: panelFrame.minY + barFrame.minY,
+          width: run.width,
+          height: barFrame.height),
+        name: run.name,
+        content: run.content)
+    }
+  }
+
+  /// Popup placement oracle: horizontally centered under the pointer, then
+  /// clamped to the hovered display's visible frame (including negative-origin
+  /// secondary displays). Oversized content is clipped to that frame.
+  static func statusBarPopupFrame(
+    pointer: CGPoint,
+    popupSize: CGSize,
+    visibleFrame: CGRect,
+    offset: CGFloat
+  ) -> CGRect {
+    let width = min(max(1, popupSize.width), visibleFrame.width)
+    let height = min(max(1, popupSize.height), visibleFrame.height)
+    let x = min(
+      max(pointer.x - width / 2, visibleFrame.minX),
+      visibleFrame.maxX - width)
+    let top = min(pointer.y - max(0, offset), visibleFrame.maxY)
+    let y = max(visibleFrame.minY, top - height)
+    return CGRect(x: x, y: y, width: width, height: height)
+  }
+
+  /// Natural popup geometry. Keep the measured text rect intact instead of
+  /// rounding it independently: independent rounding leaves the spare fraction
+  /// on the trailing edge, making nominally uniform padding visibly uneven.
+  static func statusBarPopupLayout(
+    textSize: CGSize,
+    padding: CGFloat,
+    borderWidth: CGFloat
+  ) -> (popupSize: CGSize, labelFrame: CGRect) {
+    let border = max(0, borderWidth)
+    let inset = max(0, padding) + border
+    let labelSize = CGSize(width: max(1, textSize.width), height: max(1, textSize.height))
+    return (
+      popupSize: CGSize(
+        width: labelSize.width + inset * 2,
+        height: labelSize.height + inset * 2),
+      labelFrame: CGRect(origin: CGPoint(x: inset, y: inset), size: labelSize)
+    )
+  }
+
+  func showStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {
+    let nameChanged = activeStatusBarPopupName != popup.name
+    let snapshot = Self.currentScreenSnapshot()
+    guard
+      let screen = snapshot.screens.first(where: { $0.frame.contains(pointer) })
+        ?? snapshot.screens.first(where: { $0.frame.intersects(popup.rect) })
+    else {
+      hideStatusBarPopup()
+      return
+    }
+
+    let style = statusBarPopupStyle
+    let font = NSFont.monospacedSystemFont(
+      ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
+      weight: .medium)
+    let padding = CGFloat(style.padding)
+    let border = CGFloat(style.borderWidth)
+    let needsLayout =
+      statusPopupLayer.isHidden
+      || activeStatusBarPopupName != popup.name
+      || activeStatusBarPopupContent != popup.content
+      || activeStatusBarPopupVisibleFrame != screen.visibleFrame
+    let popupSize: CGSize
+    if needsLayout {
+      let inset = padding + border
+      let maxTextWidth = max(
+        1,
+        min(
+          CGFloat(style.maxWidth) - inset * 2,
+          screen.visibleFrame.width - inset * 2))
+      let maxTextHeight = max(1, screen.visibleFrame.height - inset * 2)
+      let attributed = FlashStatusBarRenderer.attributedStatusString(
+        from: popup.content,
+        font: font,
+        defaultForeground: FlashStatusTextColor.parse(style.foreground))
+      let measured = attributed.boundingRect(
+        with: CGSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading])
+      let textSize = CGSize(
+        width: min(maxTextWidth, measured.width),
+        height: min(maxTextHeight, measured.height))
+      let layout = Self.statusBarPopupLayout(
+        textSize: textSize,
+        padding: padding,
+        borderWidth: border)
+      popupSize = layout.popupSize
+      statusPopupLayer.backgroundColor = nsColor(fromHex: style.background)?.cgColor
+      statusPopupLayer.borderColor = nsColor(fromHex: style.borderColor)?.cgColor
+      statusPopupLayer.borderWidth = border
+      statusPopupLayer.cornerRadius = CGFloat(style.cornerRadius)
+      statusPopupLayer.contentsScale = screen.scale
+      statusPopupLabel.font = font
+      statusPopupLabel.fontSize = font.pointSize
+      statusPopupLabel.contentsScale = screen.scale
+      statusPopupLabel.string = attributed
+      statusPopupLabel.frame = layout.labelFrame
+      statusPopupLabel.isHidden = false
+      activeStatusBarPopupContent = popup.content
+      activeStatusBarPopupVisibleFrame = screen.visibleFrame
+    } else {
+      popupSize = statusPopupLayer.frame.size
+    }
+    let screenFrame = Self.statusBarPopupFrame(
+      pointer: pointer,
+      popupSize: popupSize,
+      visibleFrame: screen.visibleFrame,
+      offset: CGFloat(style.offset))
+    let localFrame = screenFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
+
+    statusPopupLayer.frame = localFrame
+    statusPopupLayer.zPosition = 10_000
+    statusPopupLayer.isHidden = false
+    activeStatusBarPopupName = popup.name
+    if nameChanged { FlashLog.trace("[statusbar] popup show name=\(popup.name)") }
+    if statusPopupLayer.superlayer !== contentLayer {
+      contentLayer.addSublayer(statusPopupLayer)
+    }
+  }
+
+  func hideStatusBarPopup() {
+    if let name = activeStatusBarPopupName {
+      FlashLog.trace("[statusbar] popup hide name=\(name)")
+    }
+    activeStatusBarPopupName = nil
+    statusPopupLayer.isHidden = true
+  }
+
   /// Per-screen status-bar band rects in screen coordinates, matching the bar
   /// layout `configureModeBadge` / `configureSecondaryStatusBars` render into.
   /// Honors `[statusbar] monitor`: with `primary`, only the main display gets
@@ -200,12 +378,16 @@ extension OverlayPanel {
   /// coordinates). Skips all work when nothing moved.
   func syncStatusBarClickWindows(
     bandRects: [CGRect],
-    links: [(rect: CGRect, url: URL)]
+    links: [(rect: CGRect, url: URL)],
+    popups: [StatusBarPopupRegion] = []
   ) {
     let signature =
       (bandRects.map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
       + links.map {
         "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)"
+      }
+      + popups.map {
+        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.name)|\($0.content)"
       })
       .joined(separator: ";")
     if signature == lastStatusBarClickSignature { return }
@@ -231,9 +413,34 @@ extension OverlayPanel {
           height: link.rect.height)
         return (rect: local, url: link.url)
       }
+      view.popups = popups.compactMap { popup in
+        guard band.intersects(popup.rect) else { return nil }
+        return StatusBarPopupRegion(
+          rect: popup.rect.offsetBy(dx: -band.minX, dy: -band.minY),
+          name: popup.name,
+          content: popup.content)
+      }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
       view.onStatusBarAction = statusBarActionHandler
+      view.onPopupHover = { [weak self] popup, point in
+        guard let self else { return }
+        if let popup {
+          self.showStatusBarPopup(popup, at: point)
+        } else {
+          self.hideStatusBarPopup()
+        }
+      }
       window.orderFrontRegardless()
+    }
+    // A content/config refresh does not generate mouseMoved for a stationary
+    // pointer. Re-hit-test now so an open popup updates immediately.
+    let pointer = NSEvent.mouseLocation
+    if !statusBarClickWindows.contains(where: \.ignoresMouseEvents),
+      let popup = popups.first(where: { $0.rect.contains(pointer) })
+    {
+      showStatusBarPopup(popup, at: pointer)
+    } else {
+      hideStatusBarPopup()
     }
     // The probe normally arms on hover, but if the pointer is already parked
     // in the band when the windows (re)appear no `mouseEntered` will fire —
@@ -244,6 +451,7 @@ extension OverlayPanel {
   /// Tear down every click window (bar hidden).
   func hideStatusBarClickWindows() {
     stopMenuBarRevealTracking()
+    hideStatusBarPopup()
     guard !statusBarClickWindows.isEmpty || lastStatusBarClickSignature != nil else { return }
     for window in statusBarClickWindows { window.orderOut(nil) }
     statusBarClickWindows.removeAll()
@@ -304,6 +512,7 @@ extension OverlayPanel {
         for window in self.statusBarClickWindows where window.ignoresMouseEvents != revealed {
           window.ignoresMouseEvents = revealed
         }
+        if revealed { self.hideStatusBarPopup() }
       }
     }
     if !pointerNearBand && !revealed {

@@ -149,7 +149,7 @@ enum ConfigLoader {
     }
 
     applyPendingModeMappings(pendingModeMappings, into: &config)
-    applyStatusBarTemplate(sourceURL: config.statusBar.templateSourceURL, into: &config)
+    applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
     return config
   }
@@ -439,7 +439,9 @@ enum ConfigLoader {
       ],
       "statusbar": [
         "enabled", "template", "monitor", "interval", "click", "font_size",
-        "command_timeout", "notch_margin",
+        "command_timeout", "notch_margin", "popup", "popup_fg", "popup_bg",
+        "popup_border", "popup_border_size", "popup_corner_radius", "popup_padding",
+        "popup_max_width", "popup_offset",
       ],
       "flashlight": [
         "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
@@ -839,6 +841,65 @@ enum ConfigLoader {
       assign: { value, config in
         config.statusBar.notchMargin = value
       })
+    applyString(
+      table["popup_fg"], path: ["statusbar", "popup_fg"],
+      message: "statusbar.popup_fg must be a hex color like #RRGGBB",
+      locations: locations, into: &config,
+      validate: { $0.count == 7 && isValidHexColor($0) },
+      assign: { value, config in config.statusBar.popupStyle.foreground = value })
+    applyString(
+      table["popup_bg"], path: ["statusbar", "popup_bg"],
+      message: "statusbar.popup_bg must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in config.statusBar.popupStyle.background = value })
+    applyString(
+      table["popup_border"], path: ["statusbar", "popup_border"],
+      message: "statusbar.popup_border must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in config.statusBar.popupStyle.borderColor = value })
+    applyDouble(
+      table["popup_border_size"], path: ["statusbar", "popup_border_size"],
+      message: "statusbar.popup_border_size must be a number between 0 and 12 (points)",
+      locations: locations, into: &config, validate: { (0...12).contains($0) },
+      assign: { value, config in config.statusBar.popupStyle.borderWidth = value })
+    applyDouble(
+      table["popup_corner_radius"], path: ["statusbar", "popup_corner_radius"],
+      message: "statusbar.popup_corner_radius must be a number between 0 and 64 (points)",
+      locations: locations, into: &config, validate: { (0...64).contains($0) },
+      assign: { value, config in config.statusBar.popupStyle.cornerRadius = value })
+    applyDouble(
+      table["popup_padding"], path: ["statusbar", "popup_padding"],
+      message: "statusbar.popup_padding must be a number between 0 and 64 (points)",
+      locations: locations, into: &config, validate: { (0...64).contains($0) },
+      assign: { value, config in config.statusBar.popupStyle.padding = value })
+    applyDouble(
+      table["popup_max_width"], path: ["statusbar", "popup_max_width"],
+      message: "statusbar.popup_max_width must be a number between 80 and 2000 (points)",
+      locations: locations, into: &config, validate: { (80...2_000).contains($0) },
+      assign: { value, config in config.statusBar.popupStyle.maxWidth = value })
+    applyDouble(
+      table["popup_offset"], path: ["statusbar", "popup_offset"],
+      message: "statusbar.popup_offset must be a number between 0 and 64 (points)",
+      locations: locations, into: &config, validate: { (0...64).contains($0) },
+      assign: { value, config in config.statusBar.popupStyle.offset = value })
+    if let popups = sectionTable(
+      table["popup"], name: "statusbar.popup", locations: locations, into: &config)
+    {
+      for (name, value) in popups {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let location = locations.location(for: ["statusbar", "popup", name])
+        guard !trimmedName.isEmpty else { continue }
+        guard let template = value.string else {
+          config.addDiagnostic(
+            "statusbar.popup.\(name) must be a quoted template string", location: location)
+          continue
+        }
+        config.statusBar.popups[trimmedName] = FlashStatusBarTemplate(
+          template: template, variables: [])
+        if let sourceURL { config.statusBar.popupSourceURLs[trimmedName] = sourceURL }
+        config.recordLocation(path: "statusbar.popup.\(trimmedName)", location: location)
+      }
+    }
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)
     {
@@ -1544,18 +1605,37 @@ enum ConfigLoader {
     }
   }
 
-  private static func applyStatusBarTemplate(sourceURL: URL?, into config: inout Config) {
+  private static func applyStatusBarTemplates(into config: inout Config) {
     let normalizedTemplate = FlashStatusBarTemplateEngine.normalizedTemplate(
       config.statusBar.template.template)
     let variables = parseStatusBarTemplateVariables(
       normalizedTemplate,
       path: "template",
-      sourceURL: sourceURL,
+      sourceURL: config.statusBar.templateSourceURL,
       commandTimeout: config.statusBar.commandTimeoutSeconds,
       into: &config)
     config.statusBar.template = FlashStatusBarTemplate(
       template: normalizedTemplate,
       variables: variables)
+
+    for name in config.statusBar.popups.keys.sorted() {
+      guard let popup = config.statusBar.popups[name] else { continue }
+      // The one-line status template intentionally removes source newlines;
+      // popup bodies are multiline documents, so only normalize line endings.
+      let normalizedPopup = popup.template
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+      let path = "popup.\(name)"
+      let variables = parseStatusBarTemplateVariables(
+        normalizedPopup,
+        path: path,
+        sourceURL: config.statusBar.popupSourceURLs[name],
+        commandTimeout: config.statusBar.commandTimeoutSeconds,
+        into: &config)
+      config.statusBar.popups[name] = FlashStatusBarTemplate(
+        template: normalizedPopup,
+        variables: variables)
+    }
   }
 
   private static func parseStatusBarTemplateVariables(
@@ -1574,7 +1654,7 @@ enum ConfigLoader {
       }
       variables.append(
         FlashStatusBarTemplateVariable(
-          id: statusBarVariableID(token),
+          id: statusBarVariableID(token, path: path),
           token: token,
           source: source))
     }
@@ -1719,8 +1799,8 @@ enum ConfigLoader {
     return variables
   }
 
-  private static func statusBarVariableID(_ token: String) -> String {
-    "statusbar.template.\(token)"
+  private static func statusBarVariableID(_ token: String, path: String = "template") -> String {
+    "statusbar.\(path).\(token)"
   }
 
   private static func parseStatusBarTemplateSource(

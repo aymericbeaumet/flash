@@ -498,7 +498,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.windowLayoutManager.observedFocusedWindow(
         pid: pid,
         window: window,
-        statusBarReservesSpace: self.statusBarVisible)
+        statusBarReservesSpace: self.statusBarVisible,
+        statusBarMonitor: self.config.statusBar.monitor)
     }
     monitor.start()
     pluginManager.onStateChanged = { [weak self] in
@@ -540,6 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.coordinator = self
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
+    overlay.statusBarPopupStyle = config.statusBar.popupStyle
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
@@ -552,6 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
+      popupTemplates: config.statusBar.popups,
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
@@ -683,7 +686,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // panel instead of the user's actual window.
       if let target = currentNonFlashContext() {
         windowLayoutManager.move(
-          params, statusBarReservesSpace: statusBarVisible, targetPID: target.processID)
+          params,
+          statusBarReservesSpace: statusBarVisible,
+          statusBarMonitor: config.statusBar.monitor,
+          targetPID: target.processID)
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
       }
@@ -888,8 +894,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] _ in
       guard let self else { return }
       self.windowLayoutManager.screenParametersDidChange(
-        statusBarReservesSpace: self.statusBarVisible
-      ) { [weak self] in
+        statusBarReservesSpace: self.statusBarVisible,
+        statusBarMonitor: self.config.statusBar.monitor
+      ) { [weak self] _ in
         // The semantic window restore runs off-main. Repaint only after each
         // recovery pass has applied its AX frame so the border cannot sample
         // the pre-handoff geometry and remain on the disconnected display.

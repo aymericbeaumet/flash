@@ -2,7 +2,7 @@
   "id": "aiproviders",
   "name": "AI Providers",
   "version": "0.1.0",
-  "description": "Open AI chat providers from the flashlight: !chatgpt, !claude, !gemini, !perplexity, !copilot, !grok — optional query is pre-filled into the new chat.",
+  "description": "Open AI chat providers from the flashlight with optional pre-filled queries, and publish Claude, Fable, and Codex usage status.",
   "exec": [
     "./flash-plugin-aiproviders"
   ],
@@ -35,13 +35,17 @@
       }
     ]
   },
-  "sandbox": {
-    "exec": [
-      "/usr/bin/osascript"
-    ],
-    "appleevents": true
-  },
+  "status": [
+    "claude_usage",
+    "claude_usage_details",
+    "fable_usage",
+    "fable_usage_details",
+    "codex_usage",
+    "codex_usage_details"
+  ],
   "capabilities": [
-    "open"
+    "open",
+    "network",
+    "subprocess"
   ]
 }

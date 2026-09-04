@@ -141,6 +141,7 @@ extension AppDelegate {
     AutoLaunch.reconcile(enabled: cfg.app.autostart)
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
+    overlay.statusBarPopupStyle = cfg.statusBar.popupStyle
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
@@ -148,6 +149,7 @@ extension AppDelegate {
     overlay.normalModePassthroughModifiers = cfg.mode.normalPassthroughModifiers
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
+      popupTemplates: cfg.statusBar.popups,
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
@@ -168,7 +170,9 @@ extension AppDelegate {
     overlay.statusBarMonitor = cfg.statusBar.monitor
     applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
     windowLayoutManager.screenParametersDidChange(
-      statusBarReservesSpace: statusBarVisible)
+      statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: cfg.statusBar.monitor,
+      forceRecovery: false)
     if statusBarVisible {
       statusBarController?.start()
     } else {

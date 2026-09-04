@@ -113,6 +113,21 @@ final class OverlayPanel: NSPanel {
   /// path can place link hints only on the bar of the active window's screen
   /// (not on every mirrored bar). Empty while the bar is hidden.
   var statusBarLinkRectsByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
+  /// Named hover-popup hit regions use the click windows' existing tracking
+  /// areas but render into this panel so no extra event surface or event tap
+  /// is needed.
+  let statusPopupLayer = CALayer()
+  let statusPopupLabel = CATextLayer()
+  var statusBarPopupStyle = Config.StatusBar.PopupStyle() {
+    didSet {
+      if oldValue != statusBarPopupStyle { hideStatusBarPopup() }
+    }
+  }
+  var statusBarPopupTexts: [String: String] = [:]
+  var statusModePopupName: String?
+  var activeStatusBarPopupName: String?
+  var activeStatusBarPopupContent: String?
+  var activeStatusBarPopupVisibleFrame: CGRect?
   /// Repeating probe that flips the click windows to click-through while the
   /// native (auto-hidden) menu bar is revealed, so native wins those clicks.
   /// Runs on a utility queue (never the main run loop, which owns the
@@ -435,6 +450,13 @@ final class OverlayPanel: NSPanel {
     statusLeftTrailingCycleLayer.isHidden = true
     statusRightLabel.alignmentMode = .right
     statusRightLabel.actions = OverlayPanel.noActions
+    statusPopupLayer.actions = OverlayPanel.noActions
+    statusPopupLayer.masksToBounds = true
+    statusPopupLayer.isHidden = true
+    statusPopupLabel.alignmentMode = .left
+    statusPopupLabel.isWrapped = true
+    statusPopupLabel.actions = OverlayPanel.noActions
+    statusPopupLayer.sublayers = [statusPopupLabel]
     modeBadgeLayer.sublayers = [
       statusAppLabel, modeBadgeButtonLayer, statusLeftTrailingLabel,
       statusLeftTrailingCycleLayer, statusRightLabel,
