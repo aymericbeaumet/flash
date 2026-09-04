@@ -553,7 +553,7 @@ fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<Rend
 }
 
 fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> String {
-    let label = "#[fg=colour45,bold]NET#[default]";
+    let label = "#[fg=colour178]NET#[default]";
     if summary_mode == SummaryMode::Compact {
         return label.to_string();
     }
@@ -892,11 +892,11 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
         assert!(!rendered.summary.contains("↓1.5MiB"));
         assert_eq!(
             visible_summary(&state, SummaryMode::Compact),
-            "#[fg=colour45,bold]NET#[default]"
+            "#[fg=colour178]NET#[default]"
         );
         assert_eq!(
             visible_summary(&state, SummaryMode::Full),
-            "#[fg=colour45,bold]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
+            "#[fg=colour178]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
         assert!(render_details(&state)
             .unwrap()

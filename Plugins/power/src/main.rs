@@ -323,9 +323,9 @@ fn render_status(
 }
 
 fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
-    let (mut text, color, breathing) = match snapshot.battery {
+    let (mut value, color, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("BAT {}%", battery.percent),
+            format!("{}%", battery.percent),
             if snapshot.source == PowerSource::Adapter || battery.percent > 25 {
                 "colour178"
             } else {
@@ -333,7 +333,7 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
             },
             snapshot.source == PowerSource::Adapter,
         ),
-        None => ("BAT —".to_string(), "colour245", false),
+        None => ("—".to_string(), "colour245", false),
     };
     if summary_mode == SummaryMode::Full {
         let secondary = snapshot
@@ -341,13 +341,13 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
             .as_ref()
             .and_then(|battery| battery.estimate_minutes.map(natural_duration))
             .unwrap_or_else(|| snapshot.source.label().to_string());
-        text.push_str(" · ");
-        text.push_str(&secondary);
+        value.push_str(" · ");
+        value.push_str(&secondary);
     }
     let breathing_open = if breathing { "#[breathing]" } else { "" };
     let breathing_close = if breathing { "#[nobreathing]" } else { "" };
     format!(
-        "#[push-default]#[range=user|bat-prefs fg={color}]{breathing_open}{text}{breathing_close}#[norange]#[default]#[pop-default]"
+        "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg={color}]{breathing_open}{value}{breathing_close}#[norange]#[default]#[pop-default]"
     )
 }
 
@@ -478,7 +478,7 @@ mod tests {
             assert_eq!(
                 visible_summary(&snapshot, SummaryMode::Compact),
                 format!(
-                    "#[push-default]#[range=user|bat-prefs fg={color}]BAT {percent}%#[norange]#[default]#[pop-default]"
+                    "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg={color}]{percent}%#[norange]#[default]#[pop-default]"
                 )
             );
         }
@@ -486,7 +486,9 @@ mod tests {
             source: PowerSource::Adapter,
             battery: None,
         };
-        assert!(visible_summary(&no_battery, SummaryMode::Compact).contains("BAT —"));
+        assert!(visible_summary(&no_battery, SummaryMode::Compact).contains(
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
+        ));
     }
 
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";
@@ -572,17 +574,17 @@ mod tests {
 
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT 73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Full),
-            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT 73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert!(status.summary.starts_with("#[popup=inline:"));
         assert!(status.summary.ends_with("#[nopopup]"));
         assert!(status
             .summary
-            .contains("]#[push-default]#[range=user|bat-prefs"));
+            .contains("]#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs"));
         assert_eq!(
             status.details,
             "Charge: 73%\nState: Charging\nSource: AC adapter\nEstimate: Full in 1h 24m\nHealth: 91% of design (Good ##1)\nCycles: 187\nTemperature: 30.3°C\nAdapter: 67 W"
@@ -600,7 +602,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[push-default]#[range=user|bat-prefs fg=red]BAT 25%#[norange]#[default]#[pop-default]"
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=red]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             render_status(&snapshot, None, SummaryMode::Compact).details,

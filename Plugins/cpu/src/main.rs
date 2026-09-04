@@ -547,13 +547,13 @@ fn visible_summary(
     history: &VecDeque<f64>,
     summary_mode: SummaryMode,
 ) -> String {
-    let mut visible = format!("#[fg=colour178,bold]CPU#[default] {:.0}%", cpu.total());
+    let mut visible = format!("#[fg=colour178]CPU#[default] {:.0}%", cpu.total());
     if summary_mode == SummaryMode::Compact {
         return visible;
     }
     if let Some(gpu) = gpu {
         visible.push_str(&format!(
-            " #[fg=colour245]· #[fg=colour178,bold]GPU#[default] {:.0}%",
+            " #[fg=colour245]· #[fg=colour178]GPU#[default] {:.0}%",
             gpu.utilization
         ));
     }
@@ -585,8 +585,8 @@ mod tests {
     #[test]
     fn compact_cpu_summary_uses_natural_percentage_width() {
         for (user, expected) in [
-            (0.0, "#[fg=colour178,bold]CPU#[default] 0%"),
-            (100.0, "#[fg=colour178,bold]CPU#[default] 100%"),
+            (0.0, "#[fg=colour178]CPU#[default] 0%"),
+            (100.0, "#[fg=colour178]CPU#[default] 100%"),
         ] {
             let cpu = CpuSnapshot {
                 user,
@@ -697,11 +697,11 @@ mod tests {
         assert!(!rendered.summary.contains("▂"));
         assert_eq!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Compact),
-            "#[fg=colour178,bold]CPU#[default] 20%"
+            "#[fg=colour178]CPU#[default] 20%"
         );
         assert!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
-                .contains("GPU#[default] 59% ▂▂")
+                .contains("#[fg=colour178]GPU#[default] 59% ▂▂")
         );
         assert!(rendered
             .details

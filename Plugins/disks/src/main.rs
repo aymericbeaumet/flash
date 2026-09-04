@@ -487,7 +487,7 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
         Some(75..) => "colour178",
         _ => "colour45",
     };
-    let mut visible = format!("#[fg={color},bold]DSK#[default] {percent}");
+    let mut visible = format!("#[fg=colour178]DSK#[default] #[fg={color}]{percent}#[default]");
     if summary_mode == SummaryMode::Full {
         let (read, written) = state
             .rates
@@ -615,8 +615,11 @@ mod tests {
     #[test]
     fn compact_disk_summary_uses_natural_percentage_width() {
         for (percent, expected) in [
-            (0, "#[fg=colour45,bold]DSK#[default] 0%"),
-            (100, "#[fg=colour196,bold]DSK#[default] 100%"),
+            (0, "#[fg=colour178]DSK#[default] #[fg=colour45]0%#[default]"),
+            (
+                100,
+                "#[fg=colour178]DSK#[default] #[fg=colour196]100%#[default]",
+            ),
         ] {
             let state = DiskState {
                 capacity: Some(CapacitySnapshot {
@@ -845,13 +848,13 @@ mod tests {
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered
             .summary
-            .ends_with("]#[fg=colour196,bold]DSK#[default] 90%#[nopopup]"));
+            .ends_with("]#[fg=colour178]DSK#[default] #[fg=colour196]90%#[default]#[nopopup]"));
         assert!(!rendered.summary.contains("R1.5MiB"));
         assert!(!rendered.summary.contains("W2.0KiB"));
         assert_eq!(
             render_status(&state, SummaryMode::Full).unwrap().summary,
             inline_status_popup(
-                "#[fg=colour196,bold]DSK#[default] 90% #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █",
+                "#[fg=colour178]DSK#[default] #[fg=colour196]90%#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █",
                 &rendered.details
             )
         );

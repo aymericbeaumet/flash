@@ -400,7 +400,7 @@ fn visible_summary(
     summary_mode: SummaryMode,
 ) -> String {
     let mut visible = format!(
-        "#[fg=colour75,bold]MEM#[default] {:.0}%",
+        "#[fg=colour178]MEM#[default] {:.0}%",
         snapshot.occupied_percent()
     );
     if summary_mode == SummaryMode::Full && !history.is_empty() {
@@ -442,13 +442,13 @@ mod tests {
         };
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour75,bold]MEM#[default] 0%"
+            "#[fg=colour178]MEM#[default] 0%"
         );
         snapshot.occupied = 100;
         snapshot.free = 0;
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour75,bold]MEM#[default] 100%"
+            "#[fg=colour178]MEM#[default] 100%"
         );
     }
 
@@ -541,11 +541,11 @@ mod tests {
         assert!(!rendered.summary.contains("▅▆"));
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Compact),
-            "#[fg=colour75,bold]MEM#[default] 75%"
+            "#[fg=colour178]MEM#[default] 75%"
         );
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Full),
-            "#[fg=colour75,bold]MEM#[default] 75% ▅▆"
+            "#[fg=colour178]MEM#[default] 75% ▅▆"
         );
         assert!(rendered
             .details
