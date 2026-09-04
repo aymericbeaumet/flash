@@ -41,6 +41,33 @@ struct StatusSegments {
     plain_details: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryMode {
+    Compact,
+    Full,
+}
+
+fn parse_summary_mode(configured: &str) -> (SummaryMode, bool) {
+    match configured {
+        "" | "compact" => (SummaryMode::Compact, true),
+        "full" => (SummaryMode::Full, true),
+        _ => (SummaryMode::Compact, false),
+    }
+}
+
+fn configured_summary_mode(ctx: &Context) -> SummaryMode {
+    parse_summary_mode(&ctx.config_str("summary_mode")).0
+}
+
+fn warn_invalid_summary_mode(ctx: &Context) {
+    if !parse_summary_mode(&ctx.config_str("summary_mode")).1 {
+        ctx.log(
+            "warn",
+            "[memory] summary_mode must be compact or full; using compact",
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum GatePolicy {
     Wait,
@@ -73,6 +100,7 @@ flash_plugin::plugin!(Memory);
 
 impl FlashPlugin for Memory {
     async fn on_start(&self, ctx: Context) {
+        warn_invalid_summary_mode(&ctx);
         refresh_and_publish(&ctx, &self.state, &self.refresh_gate, GatePolicy::Wait).await;
 
         let state = Arc::clone(&self.state);
@@ -88,7 +116,7 @@ impl FlashPlugin for Memory {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "" => details_response(current_status(&self.state)),
+            "" => details_response(current_status(&ctx, &self.state)),
             "refresh" => {
                 refresh_and_publish(
                     &ctx,
@@ -97,7 +125,7 @@ impl FlashPlugin for Memory {
                     GatePolicy::SkipIfBusy,
                 )
                 .await;
-                details_response(current_status(&self.state))
+                details_response(current_status(&ctx, &self.state))
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
@@ -174,7 +202,7 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
             Some(snapshot) => snapshot,
             None => return,
         };
-        let rendered = render_status(snapshot, &state.history);
+        let rendered = render_status(snapshot, &state.history, configured_summary_mode(ctx));
         if state.published.as_ref() == Some(&rendered) {
             return;
         }
@@ -187,9 +215,13 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     ]);
 }
 
-fn current_status(state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
+fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
     let state = lock_state(state);
-    Some(render_status(state.snapshot.as_ref()?, &state.history))
+    Some(render_status(
+        state.snapshot.as_ref()?,
+        &state.history,
+        configured_summary_mode(ctx),
+    ))
 }
 
 fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, MonitorState> {
@@ -327,9 +359,13 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn render_status(snapshot: &MemorySnapshot, history: &VecDeque<f64>) -> StatusSegments {
+fn render_status(
+    snapshot: &MemorySnapshot,
+    history: &VecDeque<f64>,
+    summary_mode: SummaryMode,
+) -> StatusSegments {
     let percent = snapshot.occupied_percent();
-    let visible = format!("#[fg=colour75,bold]MEM#[default] {percent:.0}%");
+    let visible = visible_summary(snapshot, history, summary_mode);
     let mut body = format!(
         "Occupied: {} / {} ({percent:.0}%)\n\
 Free: {}\n\
@@ -358,6 +394,22 @@ Page size: {}",
     }
 }
 
+fn visible_summary(
+    snapshot: &MemorySnapshot,
+    history: &VecDeque<f64>,
+    summary_mode: SummaryMode,
+) -> String {
+    let mut visible = format!(
+        "#[fg=colour75,bold]MEM#[default] {:>3.0}%",
+        snapshot.occupied_percent()
+    );
+    if summary_mode == SummaryMode::Full && !history.is_empty() {
+        visible.push(' ');
+        visible.push_str(&sparkline(history));
+    }
+    visible
+}
+
 fn main() {
     run(Memory::default());
 }
@@ -367,6 +419,38 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+
+    #[test]
+    fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
+        assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("full"), (SummaryMode::Full, true));
+        assert_eq!(parse_summary_mode("dense"), (SummaryMode::Compact, false));
+    }
+
+    #[test]
+    fn compact_memory_summary_reserves_three_percentage_columns() {
+        let mut snapshot = MemorySnapshot {
+            total: 100,
+            occupied: 0,
+            free: 100,
+            wired: 0,
+            compressed: 0,
+            swap_total: 0,
+            swap_used: 0,
+            page_size: 4096,
+        };
+        assert_eq!(
+            visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
+            "#[fg=colour75,bold]MEM#[default]   0%"
+        );
+        snapshot.occupied = 100;
+        snapshot.free = 0;
+        assert_eq!(
+            visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
+            "#[fg=colour75,bold]MEM#[default] 100%"
+        );
+    }
 
     #[test]
     fn parses_vm_stat_and_sysctl_with_runtime_page_size() {
@@ -449,10 +533,20 @@ mod tests {
             swap_used: GIB,
             page_size: 16_384,
         };
-        let rendered = render_status(&snapshot, &VecDeque::from([50.0, 75.0]));
+        let history = VecDeque::from([50.0, 75.0]);
+        let rendered = render_status(&snapshot, &history, SummaryMode::Compact);
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered.summary.contains("MEM#[default] 75%"));
+        assert!(rendered.summary.contains("MEM#[default]  75%"));
+        assert!(!rendered.summary.contains("▅▆"));
+        assert_eq!(
+            visible_summary(&snapshot, &history, SummaryMode::Compact),
+            "#[fg=colour75,bold]MEM#[default]  75%"
+        );
+        assert_eq!(
+            visible_summary(&snapshot, &history, SummaryMode::Full),
+            "#[fg=colour75,bold]MEM#[default]  75% ▅▆"
+        );
         assert!(rendered
             .details
             .contains("Occupied: 12.0 GB / 16.0 GB (75%)"));

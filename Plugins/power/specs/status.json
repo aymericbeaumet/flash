@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The event-driven power collector publishes both declared status segments, and an explicit refresh returns its cached detail surface within the perform deadline.",
+  "description": "The event-driven power collector publishes the compact popup-backed power summary by default, and an explicit refresh returns its cached detail surface within the perform deadline.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }

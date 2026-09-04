@@ -2,7 +2,7 @@
   "id": "network",
   "name": "Network",
   "version": "0.1.0",
-  "description": "Live default-interface traffic plus copyable local network addresses in `@network.addresses`.",
+  "description": "Publish a fixed-width network label with traffic history on hover; summary_mode=full restores rates and charts inline, alongside copyable @network.addresses.",
   "sandbox": {
     "exec": [
       "/usr/sbin/netstat"

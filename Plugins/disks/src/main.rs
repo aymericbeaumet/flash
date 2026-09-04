@@ -69,6 +69,33 @@ struct RenderedStatus {
     details: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryMode {
+    Compact,
+    Full,
+}
+
+fn parse_summary_mode(configured: &str) -> (SummaryMode, bool) {
+    match configured {
+        "" | "compact" => (SummaryMode::Compact, true),
+        "full" => (SummaryMode::Full, true),
+        _ => (SummaryMode::Compact, false),
+    }
+}
+
+fn configured_summary_mode(ctx: &Context) -> SummaryMode {
+    parse_summary_mode(&ctx.config_str("summary_mode")).0
+}
+
+fn warn_invalid_summary_mode(ctx: &Context) {
+    if !parse_summary_mode(&ctx.config_str("summary_mode")).1 {
+        ctx.log(
+            "warn",
+            "[disks] summary_mode must be compact or full; using compact",
+        );
+    }
+}
+
 #[derive(Default)]
 struct DiskState {
     previous_io: Option<TimedIoSnapshot>,
@@ -134,6 +161,7 @@ flash_plugin::plugin!(Disks);
 
 impl FlashPlugin for Disks {
     async fn on_start(&self, ctx: Context) {
+        warn_invalid_summary_mode(&ctx);
         refresh_disks(&ctx, true).await;
         drop(ctx.interval(ACTIVITY_POLL, |ctx| async move {
             refresh_disks(&ctx, false).await;
@@ -256,7 +284,7 @@ fn current_response() -> PerformResponse {
 fn emit_status_if_changed(ctx: &Context) {
     let rendered = {
         let mut state = state();
-        let Some(rendered) = render_status(&state) else {
+        let Some(rendered) = render_status(&state, configured_summary_mode(ctx)) else {
             return;
         };
         let Some(rendered) = status_update(&mut state.last_status, rendered) else {
@@ -447,19 +475,39 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
     history.push_back(value);
 }
 
-fn render_status(state: &DiskState) -> Option<RenderedStatus> {
+fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
     let plain_details = render_details(state)?;
     let details = escape_status_text(&plain_details);
     let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
     let percent = primary
-        .map(|volume| format!("{}%", volume.percent))
-        .unwrap_or_else(|| "—".to_string());
+        .map(|volume| format!("{:>3}%", volume.percent))
+        .unwrap_or_else(|| "  — ".to_string());
     let color = match primary.map(|volume| volume.percent) {
         Some(90..) => "colour196",
         Some(75..) => "colour178",
         _ => "colour45",
     };
-    let visible = format!("#[fg={color},bold]DSK#[default] {percent}");
+    let mut visible = format!("#[fg={color},bold]DSK#[default] {percent}");
+    if summary_mode == SummaryMode::Full {
+        let (read, written) = state
+            .rates
+            .map(|rates| (compact_rate(rates.read), compact_rate(rates.written)))
+            .unwrap_or_else(|| ("—".to_string(), "—".to_string()));
+        visible.push_str(&format!(
+            " #[fg=colour39]↓{read}#[default] #[fg=colour214]↑{written}#[default]"
+        ));
+        let combined: Vec<f64> = state
+            .read_history
+            .iter()
+            .zip(&state.write_history)
+            .map(|(read, written)| read.max(*written))
+            .collect();
+        let chart = sparkline(&combined);
+        if !chart.is_empty() {
+            visible.push(' ');
+            visible.push_str(&chart);
+        }
+    }
     Some(RenderedStatus {
         summary: inline_status_popup(&visible, &details),
         details,
@@ -507,6 +555,10 @@ fn format_rate(bytes_per_second: f64) -> String {
     format!("{}/s", scaled_bytes(bytes_per_second, true))
 }
 
+fn compact_rate(bytes_per_second: f64) -> String {
+    scaled_bytes(bytes_per_second, false)
+}
+
 fn format_bytes(bytes: u64) -> String {
     scaled_bytes(bytes as f64, true)
 }
@@ -551,6 +603,39 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
+        assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("full"), (SummaryMode::Full, true));
+        assert_eq!(parse_summary_mode("dense"), (SummaryMode::Compact, false));
+    }
+
+    #[test]
+    fn compact_disk_summary_reserves_three_percentage_columns() {
+        for (percent, expected) in [
+            (0, "#[fg=colour45,bold]DSK#[default]   0%"),
+            (100, "#[fg=colour196,bold]DSK#[default] 100%"),
+        ] {
+            let state = DiskState {
+                capacity: Some(CapacitySnapshot {
+                    volumes: vec![Volume {
+                        name: "Startup".to_string(),
+                        mount: "/".to_string(),
+                        total: 100,
+                        used: u64::from(percent),
+                        percent,
+                    }],
+                }),
+                ..DiskState::default()
+            };
+            let summary = render_status(&state, SummaryMode::Compact)
+                .expect("rendered disk status")
+                .summary;
+            assert!(summary.ends_with(&format!("]{expected}#[nopopup]")));
+        }
+    }
 
     fn io_snapshot(devices: &[(&str, u64, u64)], sampled_at: Instant) -> TimedIoSnapshot {
         TimedIoSnapshot {
@@ -756,13 +841,20 @@ mod tests {
         };
         push_history(&mut state.read_history, 1.0);
         push_history(&mut state.write_history, 0.5);
-        let rendered = render_status(&state).unwrap();
+        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered
             .summary
-            .ends_with("]#[fg=colour196,bold]DSK#[default] 90%#[nopopup]"));
+            .ends_with("]#[fg=colour196,bold]DSK#[default]  90%#[nopopup]"));
         assert!(!rendered.summary.contains("R1.5MiB"));
         assert!(!rendered.summary.contains("W2.0KiB"));
+        assert_eq!(
+            render_status(&state, SummaryMode::Full).unwrap().summary,
+            inline_status_popup(
+                "#[fg=colour196,bold]DSK#[default]  90% #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █",
+                &rendered.details
+            )
+        );
         assert!(rendered.details.contains("Read: 1.5 MiB/s"));
         assert!(rendered.details.contains("Write: 2.0 KiB/s"));
         assert!(rendered.details.contains("Read history: █"));
@@ -800,7 +892,7 @@ mod tests {
         };
 
         let plain = render_details(&state).unwrap();
-        let rendered = render_status(&state).unwrap();
+        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
 
         assert!(plain.contains("Backup #[fg=colour196] (/Volumes/#1)"));
         assert!(rendered

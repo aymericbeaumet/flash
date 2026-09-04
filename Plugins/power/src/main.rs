@@ -59,12 +59,40 @@ struct StatusSegments {
     plain_details: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryMode {
+    Compact,
+    Full,
+}
+
+fn parse_summary_mode(configured: &str) -> (SummaryMode, bool) {
+    match configured {
+        "" | "compact" => (SummaryMode::Compact, true),
+        "full" => (SummaryMode::Full, true),
+        _ => (SummaryMode::Compact, false),
+    }
+}
+
+fn configured_summary_mode(ctx: &Context) -> SummaryMode {
+    parse_summary_mode(&ctx.config_str("summary_mode")).0
+}
+
+fn warn_invalid_summary_mode(ctx: &Context) {
+    if !parse_summary_mode(&ctx.config_str("summary_mode")).1 {
+        ctx.log(
+            "warn",
+            "[power] summary_mode must be compact or full; using compact",
+        );
+    }
+}
+
 struct Power;
 
 flash_plugin::plugin!(Power);
 
 impl FlashPlugin for Power {
     async fn on_start(&self, ctx: Context) {
+        warn_invalid_summary_mode(&ctx);
         let _ = refresh_and_publish(&ctx).await;
     }
 
@@ -130,7 +158,7 @@ async fn collect_and_publish(ctx: Context) -> Option<StatusSegments> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = health.clone();
 
-    let status = render_status(&snapshot, health.as_ref());
+    let status = render_status(&snapshot, health.as_ref(), configured_summary_mode(&ctx));
     let should_publish = {
         let mut last = LAST_GOOD
             .lock()
@@ -231,7 +259,11 @@ fn merge_health(
     Some(fresh)
 }
 
-fn render_status(snapshot: &PowerSnapshot, health: Option<&BatteryHealth>) -> StatusSegments {
+fn render_status(
+    snapshot: &PowerSnapshot,
+    health: Option<&BatteryHealth>,
+    summary_mode: SummaryMode,
+) -> StatusSegments {
     let mut rows = match snapshot.battery {
         Some(ref battery) => vec![
             format!("Charge: {}%", battery.percent),
@@ -282,7 +314,7 @@ fn render_status(snapshot: &PowerSnapshot, health: Option<&BatteryHealth>) -> St
     }
     let plain_details = rows.join("\n");
     let details = escape_status_text(&plain_details);
-    let visible = visible_summary(snapshot);
+    let visible = visible_summary(snapshot, summary_mode);
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
         details,
@@ -290,10 +322,10 @@ fn render_status(snapshot: &PowerSnapshot, health: Option<&BatteryHealth>) -> St
     }
 }
 
-fn visible_summary(snapshot: &PowerSnapshot) -> String {
-    let (text, color, breathing) = match snapshot.battery {
+fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
+    let (mut text, color, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("BAT {}%", battery.percent),
+            format!("BAT {:>3}%", battery.percent),
             if snapshot.source == PowerSource::Adapter || battery.percent > 25 {
                 "colour178"
             } else {
@@ -301,8 +333,17 @@ fn visible_summary(snapshot: &PowerSnapshot) -> String {
             },
             snapshot.source == PowerSource::Adapter,
         ),
-        None => ("BAT —".to_string(), "colour245", false),
+        None => ("BAT   — ".to_string(), "colour245", false),
     };
+    if summary_mode == SummaryMode::Full {
+        let secondary = snapshot
+            .battery
+            .as_ref()
+            .and_then(|battery| battery.estimate_minutes.map(natural_duration))
+            .unwrap_or_else(|| snapshot.source.label().to_string());
+        text.push_str(" · ");
+        text.push_str(&secondary);
+    }
     let breathing_open = if breathing { "#[breathing]" } else { "" };
     let breathing_close = if breathing { "#[nobreathing]" } else { "" };
     format!(
@@ -415,6 +456,39 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
+        assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("full"), (SummaryMode::Full, true));
+        assert_eq!(parse_summary_mode("dense"), (SummaryMode::Compact, false));
+    }
+
+    #[test]
+    fn compact_power_summary_reserves_three_percentage_columns() {
+        for (percent, color, padded) in [(0, "red", "  0"), (100, "colour178", "100")] {
+            let snapshot = PowerSnapshot {
+                source: PowerSource::Battery,
+                battery: Some(BatterySnapshot {
+                    percent,
+                    state: BatteryState::Discharging,
+                    estimate_minutes: None,
+                }),
+            };
+            assert_eq!(
+                visible_summary(&snapshot, SummaryMode::Compact),
+                format!(
+                    "#[push-default]#[range=user|bat-prefs fg={color}]BAT {padded}%#[norange]#[default]#[pop-default]"
+                )
+            );
+        }
+        let no_battery = PowerSnapshot {
+            source: PowerSource::Adapter,
+            battery: None,
+        };
+        assert!(visible_summary(&no_battery, SummaryMode::Compact).contains("BAT   — "));
+    }
+
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";
     const CHARGING: &str = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35127395) 73%; charging; 1:24 remaining present: true";
 
@@ -478,7 +552,7 @@ mod tests {
         assert_eq!(health.condition.as_deref(), Some("Good"));
 
         let snapshot = parse_pmset_snapshot(CHARGING).unwrap();
-        let details = render_status(&snapshot, Some(&health)).details;
+        let details = render_status(&snapshot, Some(&health), SummaryMode::Compact).details;
         assert!(!details.contains("SECRET"));
         assert!(!details.to_ascii_lowercase().contains("serial"));
     }
@@ -494,11 +568,15 @@ mod tests {
             adapter_watts: Some(67),
             condition: Some("Good #1".to_string()),
         };
-        let status = render_status(&snapshot, Some(&health));
+        let status = render_status(&snapshot, Some(&health), SummaryMode::Compact);
 
         assert_eq!(
-            visible_summary(&snapshot),
-            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT 73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            visible_summary(&snapshot, SummaryMode::Compact),
+            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT  73%#[nobreathing]#[norange]#[default]#[pop-default]"
+        );
+        assert_eq!(
+            visible_summary(&snapshot, SummaryMode::Full),
+            "#[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]BAT  73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert!(status.summary.starts_with("#[popup=inline:"));
         assert!(status.summary.ends_with("#[nopopup]"));
@@ -521,11 +599,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            visible_summary(&snapshot),
-            "#[push-default]#[range=user|bat-prefs fg=red]BAT 25%#[norange]#[default]#[pop-default]"
+            visible_summary(&snapshot, SummaryMode::Compact),
+            "#[push-default]#[range=user|bat-prefs fg=red]BAT  25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
-            render_status(&snapshot, None).details,
+            render_status(&snapshot, None, SummaryMode::Compact).details,
             "Charge: 25%\nState: Discharging\nSource: Battery\nEstimate: Unavailable"
         );
     }

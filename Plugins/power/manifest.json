@@ -2,7 +2,7 @@
   "id": "power",
   "name": "Power",
   "version": "0.1.0",
-  "description": "Battery, charging, health, temperature, cycle, and adapter telemetry for the status bar.",
+  "description": "Publish fixed-width battery charge with power, health, and estimate details on hover; summary_mode=full restores the estimate inline.",
   "sandbox": {
     "exec": [
       "/usr/bin/pmset",

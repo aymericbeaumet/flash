@@ -454,8 +454,48 @@ extension OverlayPanel {
       surface.lastPillStyle = modeBadgeStyle
     }
 
+    // Reserve and place the centre lane before either side is fitted. On a
+    // non-notched display it stays geometrically centred and side content is
+    // clipped around its frame, so a busy left or right bucket can never
+    // squeeze a configured centre bucket out of existence. A notched display
+    // deliberately hides the centre because its honest position is under the
+    // camera housing.
+    let rightEdge = barFrame.width - Self.statusBarEdgePadding
+    let centreMidX = barFrame.width / 2
+    let centreHalfAvailable = max(
+      0,
+      min(
+        centreMidX - surface.modeButtonLayer.frame.maxX - Self.statusBarMinimumGap,
+        rightEdge - centreMidX - Self.statusBarMinimumGap))
+    let centreAvailable = notchBar == nil ? centreHalfAvailable * 2 : 0
+    let centreDisplay = Self.fitStatusBarText(
+      notchBar == nil ? centreRaw : "",
+      font: rightFont,
+      available: centreAvailable)
+    let centreAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
+      from: centreDisplay, font: rightFont)
+    let centreWidth =
+      centreDisplay.isEmpty ? 0 : min(centreAvailable, ceil(centreAttributed.size().width))
+    surface.appLabel.frame = CGRect(
+      x: centreMidX - centreWidth / 2,
+      y: textY,
+      width: centreWidth,
+      height: textHeight)
+    surface.appLabel.font = rightFont
+    surface.appLabel.fontSize = fontSize
+    surface.appLabel.foregroundColor = Self.tmuxGrey245CG
+    surface.appLabel.contentsScale = scale
+    surface.appLabel.alignmentMode = .center
+    surface.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
+    surface.lastCentre = applyStatusText(
+      to: surface.appLabel,
+      display: centreDisplay,
+      attributed: centreAttributed,
+      previous: surface.lastCentre)
+
     // The right reserve backs the right region off before anything else is
-    // placed; the notch (when present) additionally walls off the middle.
+    // placed when there is no visible centre lane; the notch (when present)
+    // additionally walls off the middle.
     let rightReservedWidth =
       rightRaw.isEmpty
       ? 0
@@ -479,7 +519,10 @@ extension OverlayPanel {
     // The limit stops at the right section, and never crosses a notch.
     let leftLimit = min(
       rightSectionStart,
-      notchBar.map { $0.minX - Self.statusBarNotchMargin } ?? .greatestFiniteMagnitude)
+      notchBar.map { $0.minX - Self.statusBarNotchMargin }
+        ?? (surface.appLabel.isHidden
+          ? .greatestFiniteMagnitude
+          : surface.appLabel.frame.minX))
     let leftTrailingDisplay = Self.fitStatusBarText(
       leftTrailingRaw, font: rightFont,
       available: leftLimit - Self.statusBarMinimumGap - leftTrailingX)
@@ -551,54 +594,14 @@ extension OverlayPanel {
       surface.lastCycle = nil
     }
     let hasLeftTrailing = !baseDisplay.isEmpty || !(cycleContent ?? "").isEmpty
-
-    // Geometric centring for the `#[align=centre]` bucket. Position around
-    // `barFrame.width / 2`, clamped so the centre label never collides with
-    // the left run or the reserved right section. If it doesn't fit, trim it
-    // inside that lane rather than letting an overlap mangle the bar. A
-    // NOTCHED screen hides the centre outright: its honest position is under
-    // the camera housing, and shoving it off-centre beside the notch reads
-    // worse than not showing it.
     let modeMaxX =
       hasLeftTrailing ? leftTrailingMaxX : surface.modeButtonLayer.frame.maxX
-    let centreLimitMaxX = rightSectionStart
-    let centreAvailable = max(0, centreLimitMaxX - modeMaxX - Self.statusBarMinimumGap * 2)
-    let centreDisplay =
-      notchBar == nil
-      ? Self.fitStatusBarText(
-        centreRaw, font: rightFont, available: centreAvailable)
-      : ""
-    let centreAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
-      from: centreDisplay, font: rightFont)
-    let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
-    let centreWidth = min(measuredCentreWidth, centreAvailable)
-    let centreIdealX = (barFrame.width - centreWidth) / 2
-    let centreMinX = modeMaxX + Self.statusBarMinimumGap
-    let centreMaxX = centreLimitMaxX - Self.statusBarMinimumGap - centreWidth
-    let centreX = max(centreMinX, min(centreIdealX, centreMaxX))
-    surface.appLabel.frame = CGRect(
-      x: centreX,
-      y: textY,
-      width: centreWidth,
-      height: textHeight)
-    surface.appLabel.font = rightFont
-    surface.appLabel.fontSize = fontSize
-    surface.appLabel.foregroundColor = Self.tmuxGrey245CG
-    surface.appLabel.contentsScale = scale
-    surface.appLabel.alignmentMode = .center
-    surface.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
-    surface.lastCentre = applyStatusText(
-      to: surface.appLabel,
-      display: centreDisplay,
-      attributed: centreAttributed,
-      previous: surface.lastCentre)
 
     // Right section is right-aligned: pin its `maxX` to the bar edge, but
     // derive its left boundary from the ACTUAL centre frame. Subtracting the
     // centre width from the whole bar is insufficient when the centre run is
     // geometrically centred; it lets a long right run start underneath it.
     // On a notched screen the camera housing is another hard left boundary.
-    let rightEdge = barFrame.width - Self.statusBarEdgePadding
     let centreBoundary =
       centreWidth > 0 ? surface.appLabel.frame.maxX : modeMaxX
     let notchBoundary =
@@ -808,11 +811,10 @@ extension OverlayPanel {
 
   static func modeBadgeWidth(
     labels: Config.Mode.Labels,
-    currentText: String,
+    currentText _: String,
     fontSize: CGFloat
   ) -> CGFloat {
-    let count = max(labels.longestCount, currentText.count)
-    return max(fontSize + 18, CGFloat(count) * fontSize * 0.66 + 16)
+    max(fontSize + 18, CGFloat(labels.longestCount) * fontSize * 0.66 + 16)
   }
 
   static func statusBarFontSize(overlayFontSize _: CGFloat) -> CGFloat {

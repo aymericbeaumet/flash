@@ -141,6 +141,15 @@ startup_timeout = 5
 # Example:
 # [plugin.tmux]
 # ssh_hosts = ["dev.example.com"]
+#
+# The cpu, memory, disks, network, and power status plugins share one display
+# setting. `compact` is the default: the bar keeps only a fixed-width primary
+# reading (or the NET label), while charts and secondary metrics stay in the
+# hover popup. `full` opts that plugin's charts/secondary metrics back into the
+# bar. Unknown string values log a warning and fall back to `compact`.
+#
+# [plugin.network]
+# summary_mode = "full" # "compact" | "full"
 
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's

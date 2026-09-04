@@ -2,7 +2,7 @@
   "id": "disks",
   "name": "Disks",
   "version": "0.1.0",
-  "description": "Visible-volume capacity and aggregate disk read/write activity for the status bar.",
+  "description": "Publish fixed-width disk capacity with transfer rates and activity history on hover; summary_mode=full restores them inline.",
   "sandbox": {
     "exec": [
       "/bin/df",

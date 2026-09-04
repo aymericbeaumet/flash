@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The initial bounded iostat/ioreg collection publishes both CPU status segments, and concurrent explicit refreshes coalesce instead of exceeding the perform deadline.",
+  "description": "The initial bounded iostat/ioreg collection publishes the compact popup-backed CPU summary by default, and concurrent explicit refreshes coalesce instead of exceeding the perform deadline.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }

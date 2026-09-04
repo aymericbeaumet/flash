@@ -99,6 +99,33 @@ struct RenderedStatus {
     details: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryMode {
+    Compact,
+    Full,
+}
+
+fn parse_summary_mode(configured: &str) -> (SummaryMode, bool) {
+    match configured {
+        "" | "compact" => (SummaryMode::Compact, true),
+        "full" => (SummaryMode::Full, true),
+        _ => (SummaryMode::Compact, false),
+    }
+}
+
+fn configured_summary_mode(ctx: &Context) -> SummaryMode {
+    parse_summary_mode(&ctx.config_str("summary_mode")).0
+}
+
+fn warn_invalid_summary_mode(ctx: &Context) {
+    if !parse_summary_mode(&ctx.config_str("summary_mode")).1 {
+        ctx.log(
+            "warn",
+            "[network] summary_mode must be compact or full; using compact",
+        );
+    }
+}
+
 #[derive(Default)]
 struct NetworkState {
     default_interface: Option<String>,
@@ -180,6 +207,7 @@ flash_plugin::plugin!(Network);
 
 impl FlashPlugin for Network {
     async fn on_start(&self, ctx: Context) {
+        warn_invalid_summary_mode(&ctx);
         refresh_network(&ctx, true).await;
         drop(ctx.interval(TRAFFIC_POLL, |ctx| async move {
             refresh_network(&ctx, false).await;
@@ -318,7 +346,7 @@ fn current_response() -> PerformResponse {
 fn emit_status_if_changed(ctx: &Context) {
     let rendered = {
         let mut state = state();
-        let Some(rendered) = render_status(&state) else {
+        let Some(rendered) = render_status(&state, configured_summary_mode(ctx)) else {
             return;
         };
         let Some(rendered) = status_update(&mut state.last_status, rendered) else {
@@ -514,9 +542,21 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
     history.push_back(value);
 }
 
-fn render_status(state: &NetworkState) -> Option<RenderedStatus> {
+fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
     let plain_details = render_details(state)?;
     let details = escape_status_text(&plain_details);
+    let visible = visible_summary(state, summary_mode);
+    Some(RenderedStatus {
+        summary: inline_status_popup(&visible, &details),
+        details,
+    })
+}
+
+fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> String {
+    let label = "#[fg=colour45,bold]NET#[default]";
+    if summary_mode == SummaryMode::Compact {
+        return label.to_string();
+    }
     let (received, sent) = state
         .rates
         .map(|rates| (compact_rate(rates.received), compact_rate(rates.sent)))
@@ -533,13 +573,9 @@ fn render_status(state: &NetworkState) -> Option<RenderedStatus> {
     } else {
         format!(" {chart}")
     };
-    let visible = format!(
-        "#[fg=colour45,bold]NET#[default] #[fg=colour39]↓{received}#[default] #[fg=colour214]↑{sent}#[default]{chart_suffix}"
-    );
-    Some(RenderedStatus {
-        summary: inline_status_popup(&visible, &details),
-        details,
-    })
+    format!(
+        "{label} #[fg=colour39]↓{received}#[default] #[fg=colour214]↑{sent}#[default]{chart_suffix}"
+    )
 }
 
 fn render_details(state: &NetworkState) -> Option<String> {
@@ -651,6 +687,14 @@ mod tests {
     use flash_plugin::CandidateEffect;
 
     use super::*;
+
+    #[test]
+    fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
+        assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("full"), (SummaryMode::Full, true));
+        assert_eq!(parse_summary_mode("dense"), (SummaryMode::Compact, false));
+    }
 
     fn address(interface_name: &str, ip: IpAddr) -> NetworkAddress {
         NetworkAddress {
@@ -842,10 +886,18 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
         };
         push_history(&mut state.received_history, 1.0);
         push_history(&mut state.sent_history, 0.5);
-        let rendered = render_status(&state).unwrap();
+        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered.summary.contains("NET#[default]"));
-        assert!(rendered.summary.contains("↓1.5MiB"));
+        assert!(!rendered.summary.contains("↓1.5MiB"));
+        assert_eq!(
+            visible_summary(&state, SummaryMode::Compact),
+            "#[fg=colour45,bold]NET#[default]"
+        );
+        assert_eq!(
+            visible_summary(&state, SummaryMode::Full),
+            "#[fg=colour45,bold]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
+        );
         assert!(render_details(&state)
             .unwrap()
             .contains("Hostname: moria #[fg=colour196]"));

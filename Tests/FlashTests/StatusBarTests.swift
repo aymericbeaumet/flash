@@ -554,6 +554,63 @@ final class StatusBarTests: XCTestCase {
       FlashStatusBarController.effectiveRefreshSeconds(source: .sdk(.date), globalSeconds: 5))
   }
 
+  func testCycleRefreshKeepsVisibleLineAcrossReorderingUntilItsDeadline() {
+    var cycle = FlashStatusBarCycleState(
+      lines: ["one", "two", "three"], periodSeconds: 10, now: 100)
+
+    cycle.refresh(lines: ["new", "one", "two", "three"], periodSeconds: 10, now: 104)
+    XCTAssertEqual(cycle.visibleLine, "one")
+    XCTAssertEqual(cycle.nextRotationAt, 110)
+    XCTAssertFalse(cycle.advanceIfDue(now: 109.999))
+
+    XCTAssertTrue(cycle.advanceIfDue(now: 110))
+    XCTAssertEqual(cycle.visibleLine, "two")
+    XCTAssertEqual(cycle.nextRotationAt, 120)
+  }
+
+  func testCycleRefreshKeepsRemovedLineStaleUntilScheduledRotation() {
+    var cycle = FlashStatusBarCycleState(
+      lines: ["one", "two"], periodSeconds: 10, now: 100)
+
+    cycle.refresh(lines: ["new", "other"], periodSeconds: 10, now: 105)
+    XCTAssertEqual(cycle.visibleLine, "one")
+    XCTAssertTrue(cycle.needsRotationTimer)
+
+    XCTAssertTrue(cycle.advanceIfDue(now: 110))
+    XCTAssertEqual(cycle.visibleLine, "new")
+  }
+
+  func testOverdueCycleTickPreservesOriginalCadenceWithoutDrift() {
+    var cycle = FlashStatusBarCycleState(
+      lines: ["one", "two", "three"], periodSeconds: 10, now: 100)
+
+    XCTAssertTrue(cycle.advanceIfDue(now: 112))
+    XCTAssertEqual(cycle.visibleLine, "two")
+    XCTAssertEqual(cycle.nextRotationAt, 120)
+
+    XCTAssertTrue(cycle.advanceIfDue(now: 121))
+    XCTAssertEqual(cycle.visibleLine, "three")
+    XCTAssertEqual(cycle.nextRotationAt, 130)
+
+    XCTAssertFalse(cycle.advanceIfDue(now: 151))
+    XCTAssertEqual(cycle.visibleLine, "three")
+    XCTAssertEqual(cycle.nextRotationAt, 160)
+  }
+
+  func testCyclesAdvanceIndependentlyFromTheirOwnDeadlines() {
+    var fast = FlashStatusBarCycleState(
+      lines: ["fast 1", "fast 2"], periodSeconds: 5, now: 100)
+    var slow = FlashStatusBarCycleState(
+      lines: ["slow 1", "slow 2"], periodSeconds: 30, now: 100)
+
+    XCTAssertTrue(fast.advanceIfDue(now: 105))
+    XCTAssertFalse(slow.advanceIfDue(now: 105))
+    XCTAssertEqual(fast.visibleLine, "fast 2")
+    XCTAssertEqual(slow.visibleLine, "slow 1")
+    XCTAssertEqual(fast.nextRotationAt, 110)
+    XCTAssertEqual(slow.nextRotationAt, 130)
+  }
+
   func testDefaultTemplateRendersModeAndRightSections() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -1253,6 +1310,46 @@ final class StatusBarTests: XCTestCase {
       OverlayPanel.statusBarFontSize(overlayFontSize: 12))
   }
 
+  func testModePillAndCentreLaneStayFixedAcrossConfiguredModeLabels() {
+    let panel = OverlayPanel()
+    let labels = Config.Mode.Labels(normal: "N", insert: "INSERT", command: "COMMAND MODE")
+    panel.modeLabels = labels
+    panel.setStatusBarModel(
+      FlashStatusBarModel(
+        appText: "ACTIVE APP",
+        modeText: labels.normal,
+        rightText: "BAT 100% · Fri 15:09"))
+
+    var pillFrames: [CGRect] = []
+    var centreFrames: [CGRect] = []
+    for (label, style) in [
+      (labels.normal, OverlayModeBadgeStyle.normal),
+      (labels.insert, .insert),
+      (labels.command, .command),
+    ] {
+      panel.updateModeBadge(text: label, visible: true, captureInput: false, style: style)
+      pillFrames.append(panel.modeBadgeButtonLayer.frame)
+      centreFrames.append(panel.statusAppLabel.frame)
+    }
+
+    XCTAssertTrue(pillFrames.dropFirst().allSatisfy { $0 == pillFrames[0] })
+    XCTAssertTrue(centreFrames.dropFirst().allSatisfy { $0 == centreFrames[0] })
+  }
+
+  func testModePillWidthIsOwnedOnlyByConfiguredLabels() {
+    let labels = Config.Mode.Labels(normal: "N", insert: "INSERT", command: "COMMAND")
+    let configuredWidth = OverlayPanel.modeBadgeWidth(
+      labels: labels,
+      currentText: labels.normal,
+      fontSize: 13)
+    let transientWidth = OverlayPanel.modeBadgeWidth(
+      labels: labels,
+      currentText: "UNCONFIGURED TRANSIENT MODE TEXT",
+      fontSize: 13)
+
+    XCTAssertEqual(transientWidth, configuredWidth)
+  }
+
   func testOverflowingRightRegionNeverPaintsAcrossVisibleCentreRegion() {
     let panel = OverlayPanel()
     panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
@@ -1273,6 +1370,49 @@ final class StatusBarTests: XCTestCase {
       return XCTFail("expected attributed right-region content")
     }
     XCTAssertLessThanOrEqual(ceil(rendered.size().width), panel.statusRightLabel.frame.width)
+  }
+
+  func testNonNotchedStatusBarReservesStableCentreLaneBeforeSideContent() throws {
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let mainScreen = try XCTUnwrap(
+      snapshot.screens.first(where: { $0.frame == snapshot.mainFrame }))
+    if mainScreen.notch != nil {
+      throw XCTSkip("centre status is intentionally hidden on the notched display")
+    }
+
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    let centre = "ACTIVE APP"
+    panel.setStatusBarModel(
+      FlashStatusBarModel(
+        appText: centre,
+        modeText: "#[pill]NORMAL#[nopill] " + String(repeating: "left segment ", count: 80),
+        rightText: String(repeating: "right segment ", count: 80) + "BAT 100% · Fri 15:09"))
+    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+
+    XCTAssertFalse(panel.statusAppLabel.isHidden)
+    XCTAssertEqual(
+      (panel.statusAppLabel.string as? NSAttributedString)?.string,
+      centre)
+    XCTAssertEqual(
+      panel.statusAppLabel.frame.midX,
+      panel.modeBadgeLayer.frame.width / 2,
+      accuracy: 0.5)
+    XCTAssertLessThanOrEqual(
+      panel.statusLeftTrailingLabel.frame.maxX + OverlayPanel.statusBarMinimumGap,
+      panel.statusAppLabel.frame.minX)
+    XCTAssertGreaterThanOrEqual(
+      panel.statusRightLabel.frame.minX,
+      panel.statusAppLabel.frame.maxX + OverlayPanel.statusBarMinimumGap)
+
+    let reservedCentreFrame = panel.statusAppLabel.frame
+    panel.setStatusBarModel(
+      FlashStatusBarModel(
+        appText: centre,
+        modeText: "#[pill]NORMAL#[nopill] left",
+        rightText: "BAT 100% · Fri 15:09"))
+
+    XCTAssertEqual(panel.statusAppLabel.frame, reservedCentreFrame)
   }
 
   func testStatusBarUsesCurvedScreenEdgePadding() {

@@ -57,6 +57,33 @@ struct StatusSegments {
     plain_details: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryMode {
+    Compact,
+    Full,
+}
+
+fn parse_summary_mode(configured: &str) -> (SummaryMode, bool) {
+    match configured {
+        "" | "compact" => (SummaryMode::Compact, true),
+        "full" => (SummaryMode::Full, true),
+        _ => (SummaryMode::Compact, false),
+    }
+}
+
+fn configured_summary_mode(ctx: &Context) -> SummaryMode {
+    parse_summary_mode(&ctx.config_str("summary_mode")).0
+}
+
+fn warn_invalid_summary_mode(ctx: &Context) {
+    if !parse_summary_mode(&ctx.config_str("summary_mode")).1 {
+        ctx.log(
+            "warn",
+            "[cpu] summary_mode must be compact or full; using compact",
+        );
+    }
+}
+
 #[derive(Default)]
 struct MonitorState {
     cpu: Option<CpuSnapshot>,
@@ -87,6 +114,7 @@ flash_plugin::plugin!(Cpu);
 
 impl FlashPlugin for Cpu {
     async fn on_start(&self, ctx: Context) {
+        warn_invalid_summary_mode(&ctx);
         refresh_all(
             &ctx,
             &self.state,
@@ -119,7 +147,7 @@ impl FlashPlugin for Cpu {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "" => details_response(current_status(&self.state)),
+            "" => details_response(current_status(&ctx, &self.state)),
             "refresh" => {
                 refresh_all(
                     &ctx,
@@ -129,7 +157,7 @@ impl FlashPlugin for Cpu {
                     GatePolicy::SkipIfBusy,
                 )
                 .await;
-                details_response(current_status(&self.state))
+                details_response(current_status(&ctx, &self.state))
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
@@ -301,7 +329,12 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
             Some(cpu) => cpu,
             None => return,
         };
-        let rendered = render_status(cpu, state.gpu.as_ref(), &state.history);
+        let rendered = render_status(
+            cpu,
+            state.gpu.as_ref(),
+            &state.history,
+            configured_summary_mode(ctx),
+        );
         if state.published.as_ref() == Some(&rendered) {
             return;
         }
@@ -314,10 +347,15 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     ]);
 }
 
-fn current_status(state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
+fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
     let state = lock_state(state);
     let cpu = state.cpu.as_ref()?;
-    Some(render_status(cpu, state.gpu.as_ref(), &state.history))
+    Some(render_status(
+        cpu,
+        state.gpu.as_ref(),
+        &state.history,
+        configured_summary_mode(ctx),
+    ))
 }
 
 fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, MonitorState> {
@@ -469,15 +507,10 @@ fn render_status(
     cpu: &CpuSnapshot,
     gpu: Option<&GpuSnapshot>,
     history: &VecDeque<f64>,
+    summary_mode: SummaryMode,
 ) -> StatusSegments {
     let total = cpu.total();
-    let mut visible = format!("#[fg=colour178,bold]CPU#[default] {total:.0}%");
-    if let Some(gpu) = gpu {
-        visible.push_str(&format!(
-            " #[fg=colour245]· #[fg=colour178,bold]GPU#[default] {:.0}%",
-            gpu.utilization
-        ));
-    }
+    let visible = visible_summary(cpu, gpu, history, summary_mode);
 
     let body = format!(
         "User: {:.1}% · System: {:.1}% · Idle: {:.1}%\n\
@@ -508,6 +541,29 @@ Load: {:.2} · {:.2} · {:.2}",
     }
 }
 
+fn visible_summary(
+    cpu: &CpuSnapshot,
+    gpu: Option<&GpuSnapshot>,
+    history: &VecDeque<f64>,
+    summary_mode: SummaryMode,
+) -> String {
+    let mut visible = format!("#[fg=colour178,bold]CPU#[default] {:>3.0}%", cpu.total());
+    if summary_mode == SummaryMode::Compact {
+        return visible;
+    }
+    if let Some(gpu) = gpu {
+        visible.push_str(&format!(
+            " #[fg=colour245]· #[fg=colour178,bold]GPU#[default] {:>3.0}%",
+            gpu.utilization
+        ));
+    }
+    if !history.is_empty() {
+        visible.push(' ');
+        visible.push_str(&sparkline(history));
+    }
+    visible
+}
+
 fn main() {
     run(Cpu::default());
 }
@@ -517,6 +573,33 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+
+    #[test]
+    fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
+        assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
+        assert_eq!(parse_summary_mode("full"), (SummaryMode::Full, true));
+        assert_eq!(parse_summary_mode("dense"), (SummaryMode::Compact, false));
+    }
+
+    #[test]
+    fn compact_cpu_summary_reserves_three_percentage_columns() {
+        for (user, expected) in [
+            (0.0, "#[fg=colour178,bold]CPU#[default]   0%"),
+            (100.0, "#[fg=colour178,bold]CPU#[default] 100%"),
+        ] {
+            let cpu = CpuSnapshot {
+                user,
+                system: 0.0,
+                idle: 100.0 - user,
+                load: [0.0; 3],
+            };
+            assert_eq!(
+                visible_summary(&cpu, None, &VecDeque::new(), SummaryMode::Compact),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn parses_second_iostat_cpu_and_load_fixture() {
@@ -605,11 +688,21 @@ mod tests {
             utilization: 59.0,
             model: Some("Apple M4 Pro".into()),
         };
-        let rendered = render_status(&cpu, Some(&gpu), &VecDeque::from([10.0, 20.0]));
+        let history = VecDeque::from([10.0, 20.0]);
+        let rendered = render_status(&cpu, Some(&gpu), &history, SummaryMode::Compact);
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered.summary.contains("CPU#[default] 20%"));
-        assert!(rendered.summary.contains("GPU#[default] 59%"));
+        assert!(rendered.summary.contains("CPU#[default]  20%"));
+        assert!(!rendered.summary.contains("GPU#[default]"));
+        assert!(!rendered.summary.contains("▂"));
+        assert_eq!(
+            visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Compact),
+            "#[fg=colour178,bold]CPU#[default]  20%"
+        );
+        assert!(
+            visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
+                .contains("GPU#[default]  59% ▂▂")
+        );
         assert!(rendered
             .details
             .contains("User: 12.5% · System: 7.2% · Idle: 80.2%"));

@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The initial bounded df/ioreg collection publishes both declared disk status segments.",
+  "description": "The initial bounded df/ioreg collection publishes the compact popup-backed disk summary by default.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }

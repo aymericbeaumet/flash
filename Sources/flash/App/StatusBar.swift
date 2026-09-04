@@ -186,6 +186,76 @@ enum FlashStatusBarSource: Equatable {
   case cycle(command: FlashStatusBarCommand, periodSeconds: Int)
 }
 
+/// Deadline-stable state for one rotating status value. Time is expressed as
+/// monotonic uptime so wall-clock corrections cannot speed up or stall a cycle.
+struct FlashStatusBarCycleState: Equatable {
+  private(set) var lines: [String]
+  private(set) var visibleLine: String
+  private(set) var periodSeconds: Int
+  private(set) var nextRotationAt: TimeInterval
+  private var currentIndex: Int?
+
+  init(lines: [String], periodSeconds: Int, now: TimeInterval) {
+    self.lines = lines
+    self.visibleLine = lines.first ?? ""
+    self.periodSeconds = max(1, periodSeconds)
+    self.nextRotationAt = now + TimeInterval(max(1, periodSeconds))
+    self.currentIndex = lines.isEmpty ? nil : 0
+  }
+
+  /// A refresh replaces the future playlist, never the currently visible
+  /// line. This prevents a reordered feed from changing once at refresh time
+  /// and again at the nearby rotation deadline.
+  mutating func refresh(
+    lines newLines: [String],
+    periodSeconds newPeriodSeconds: Int,
+    now: TimeInterval
+  ) {
+    let wasWaitingForRotation = needsRotationTimer
+    let normalizedPeriod = max(1, newPeriodSeconds)
+    let periodChanged = normalizedPeriod != periodSeconds
+
+    lines = newLines
+    currentIndex = newLines.firstIndex(of: visibleLine)
+    periodSeconds = normalizedPeriod
+
+    // A period edit starts a fresh cadence. Likewise, a cycle which had
+    // nothing to rotate starts at the refresh that gives it a new future
+    // value instead of immediately catching up through dormant deadlines.
+    if periodChanged || (!wasWaitingForRotation && needsRotationTimer) {
+      nextRotationAt = now + TimeInterval(normalizedPeriod)
+    }
+  }
+
+  /// True while there is either another line to rotate to or a refreshed
+  /// single-line value waiting for its scheduled reveal.
+  var needsRotationTimer: Bool {
+    guard !lines.isEmpty else { return false }
+    return lines.count > 1 || currentIndex == nil
+  }
+
+  /// Advance by every elapsed scheduled interval. The next deadline is moved
+  /// from the previous deadline, not from `now`, so delayed timer delivery
+  /// does not accumulate drift.
+  @discardableResult
+  mutating func advanceIfDue(now: TimeInterval) -> Bool {
+    guard needsRotationTimer, now >= nextRotationAt else { return false }
+
+    let period = TimeInterval(periodSeconds)
+    let elapsedPeriods = Int(floor((now - nextRotationAt) / period)) + 1
+    nextRotationAt += TimeInterval(elapsedPeriods) * period
+
+    let baseIndex = currentIndex ?? -1
+    let step = elapsedPeriods % lines.count
+    let nextIndex = (baseIndex + step + lines.count) % lines.count
+    let nextLine = lines[nextIndex]
+    let changed = nextLine != visibleLine
+    currentIndex = nextIndex
+    visibleLine = nextLine
+    return changed
+  }
+}
+
 struct FlashStatusBarTemplateVariable: Equatable {
   var id: String
   var token: String
@@ -1472,16 +1542,9 @@ final class FlashStatusBarController {
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
   private var refreshTimer: DispatchSourceTimer?
   private var cycleTimer: DispatchSourceTimer?
-  /// Per-`#{cycle:…}` variable: its output lines, which one is showing, its
-  /// rotation period, and when it last rotated. Refreshed (re-run) on its
-  /// own poll cadence; rotated by `cycleTimer`.
-  private struct CycleState {
-    var lines: [String]
-    var index: Int
-    var periodSeconds: Int
-    var lastRotate: Date
-  }
-  private var cycles: [String: CycleState] = [:]
+  /// Per-`#{cycle:…}` variable, refreshed on its own poll cadence and rotated
+  /// from a monotonic deadline by `cycleTimer`.
+  private var cycles: [String: FlashStatusBarCycleState] = [:]
   /// Per command/cycle section: when it next runs and whether a run is in
   /// flight. A section whose deadline passes while it's still in flight is
   /// skipped (tick dropped, not queued) — but only that section's.
@@ -1678,59 +1741,54 @@ final class FlashStatusBarController {
   }
 
   /// Fold a fresh run's lines into a cycle's state, keeping the currently shown
-  /// index where possible so a re-fetch doesn't jump the visible line.
+  /// line stable so a re-fetch cannot create an extra visible rotation.
   private func applyCycleRefresh(id: String, lines: [String], period: Int) {
-    var state =
-      cycles[id]
-      ?? CycleState(lines: [], index: 0, periodSeconds: period, lastRotate: Date())
-    state.lines = lines
-    state.periodSeconds = period
-    if state.index >= lines.count { state.index = 0 }
+    let now = Self.monotonicUptime()
+    var state: FlashStatusBarCycleState
+    if var existing = cycles[id] {
+      existing.refresh(lines: lines, periodSeconds: period, now: now)
+      state = existing
+    } else {
+      state = FlashStatusBarCycleState(lines: lines, periodSeconds: period, now: now)
+    }
     cycles[id] = state
-    dynamicValues[id] = lines.isEmpty ? "" : lines[state.index]
-    FlashLog.debug("[statusbar] cycle refresh id=\(id) lines=\(lines.count) index=\(state.index)")
+    dynamicValues[id] = state.visibleLine
+    FlashLog.debug("[statusbar] cycle refresh id=\(id) lines=\(lines.count)")
   }
 
-  /// Rotate cycles on their period. A single 1s timer drives it; `tickCycles`
-  /// advances only cycles whose period has actually elapsed (time-based, off
-  /// `lastRotate`). Armed once and left running — re-creating it on every
-  /// command refresh would reset its deadline and it would never fire.
+  /// Arm one timer for the soonest cycle deadline. Refreshes may re-arm the
+  /// timer, but the deadline lives in the cycle state and therefore never
+  /// moves merely because its backing script completed.
   private func armCycleTimer() {
-    guard cycleTimer == nil else { return }
-    guard cycles.values.contains(where: { $0.lines.count > 1 }) else { return }
+    cycleTimer?.cancel()
+    cycleTimer = nil
+    guard let next = cycles.values.filter(\.needsRotationTimer).map(\.nextRotationAt).min()
+    else { return }
+
+    let deadline = DispatchTime(uptimeNanoseconds: UInt64(next * 1_000_000_000))
     let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(
-      deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(200))
+    timer.schedule(deadline: deadline, leeway: .milliseconds(50))
     timer.setEventHandler { [weak self] in self?.tickCycles() }
     cycleTimer = timer
     timer.resume()
   }
 
   private func tickCycles() {
-    // Park the 1 s ticker whenever no cycle actually has anything to rotate
-    // (single-line output, empty template, …) — otherwise it wakes 86,400×
-    // a day for nothing. `armCycleTimer` re-arms it after the next refresh
-    // that produces a rotatable cycle.
-    guard cycles.values.contains(where: { $0.lines.count > 1 }) else {
-      cycleTimer?.cancel()
-      cycleTimer = nil
-      return
-    }
-    let now = Date()
+    cycleTimer?.cancel()
+    cycleTimer = nil
+    let now = Self.monotonicUptime()
     var changed = false
     for id in Array(cycles.keys) {
-      guard var state = cycles[id], state.lines.count > 1 else { continue }
-      guard now.timeIntervalSince(state.lastRotate) >= Double(state.periodSeconds) - 0.5 else {
-        continue
-      }
-      state.index = (state.index + 1) % state.lines.count
-      state.lastRotate = now
+      guard var state = cycles[id] else { continue }
+      let visibleLineChanged = state.advanceIfDue(now: now)
       cycles[id] = state
-      dynamicValues[id] = state.lines[state.index]
+      guard visibleLineChanged else { continue }
+      dynamicValues[id] = state.visibleLine
       changed = true
-      FlashLog.debug("[statusbar] cycle rotate id=\(id) index=\(state.index)/\(state.lines.count)")
+      FlashLog.debug("[statusbar] cycle rotate id=\(id) lines=\(state.lines.count)")
     }
     if changed { publishCurrentModel() }
+    armCycleTimer()
   }
 
   private func refreshSourcesForCurrentTemplate() {
@@ -1748,6 +1806,11 @@ final class FlashStatusBarController {
     runDueCommandSections(now: Date())
     scheduleNextClockRefresh(from: Date())
     armRefreshTimer()
+    armCycleTimer()
+  }
+
+  private static func monotonicUptime() -> TimeInterval {
+    TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
   }
 
   private func scheduleNextClockRefresh(from now: Date) {
