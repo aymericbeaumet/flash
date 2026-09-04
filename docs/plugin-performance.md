@@ -30,7 +30,10 @@ The five system-monitor plugins added on 2026-09-04 (`cpu`, `memory`, `disks`,
 `network`, and `power`) measured 15,336 KiB aggregate median RSS across 20
 samples each. Their cold-initialize p95 values were 2.09–2.30 ms and settled
 ping p95 values were 0.19–0.22 ms. The same build's 36 direct plugin binaries
-measured 121,504 KiB aggregate median RSS across five samples.
+measured 121,504 KiB aggregate median RSS across five samples. The installed
+dev app settled at a 126.54 MiB median physical footprint for Flash plus its
+33 resident children across five measurements (127.01 MiB maximum), remaining
+inside the existing 130 MiB budget.
 
 Use these regression budgets when changing the runtime or an official plugin:
 

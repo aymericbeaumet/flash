@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The initial bounded route/netstat collection publishes both declared network status segments.",
+  "description": "The initial bounded routing-table/counter collection publishes both declared network status segments.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }

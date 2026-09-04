@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#host--plugin",
-  "description": "The bare network command returns the last-good snapshot and refresh performs bounded route, address, and traffic collection.",
+  "description": "The bare network command returns the last-good snapshot and refresh performs bounded routing-table, address, and traffic collection.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }

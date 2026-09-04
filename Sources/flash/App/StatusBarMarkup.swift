@@ -161,13 +161,14 @@ enum FlashStatusBarMarkup {
   }
 
   /// Re-serialize tokens to the marker-bearing string form (the transitional
-  /// region-bucket representation). Text is emitted verbatim — matching the
-  /// historical single-unescape behaviour of the string pipeline.
+  /// region-bucket representation). Text hashes are re-escaped because every
+  /// caller feeds this representation through the lexer again; marker,
+  /// variable, and alias tokens retain their intentional syntax.
   static func serialize(_ tokens: [Token]) -> String {
     var out = ""
     for token in tokens {
       switch token {
-      case .text(let text): out += text
+      case .text(let text): out += text.replacingOccurrences(of: "#", with: "##")
       case .marker(let parts): out += "#[\(parts.joined(separator: " "))]"
       case .variable(let body): out += "#{\(body)}"
       case .alias(let ch): out += "#\(ch)"

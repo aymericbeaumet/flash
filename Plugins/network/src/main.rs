@@ -17,6 +17,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(10);
 const HISTORY_LEN: usize = 16;
+const NETSTAT: &str = "/usr/sbin/netstat";
 
 static STATE: LazyLock<Mutex<NetworkState>> = LazyLock::new(|| Mutex::new(NetworkState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -263,13 +264,16 @@ async fn refresh_network_locked(ctx: &Context, force_discovery: bool) {
         ctx.publish(rows);
     }
     if log_discovery_failure {
-        ctx.log("warn", "[network] route or address discovery failed");
+        ctx.log(
+            "warn",
+            "[network] routing table or address discovery failed",
+        );
     }
 
     let mut traffic_failed = None;
     if let Some(interface) = interface {
         let argv = [
-            "/usr/sbin/netstat".to_string(),
+            NETSTAT.to_string(),
             "-bI".to_string(),
             interface.clone(),
             "-n".to_string(),
@@ -394,10 +398,10 @@ fn collect_catalog() -> Result<CatalogSnapshot, ()> {
 
 async fn collect_default_interface(ctx: &Context) -> Option<String> {
     let ipv4_argv = [
-        "/sbin/route".to_string(),
-        "-n".to_string(),
-        "get".to_string(),
-        "default".to_string(),
+        NETSTAT.to_string(),
+        "-rn".to_string(),
+        "-f".to_string(),
+        "inet".to_string(),
     ];
     let ipv4 = run_command(ctx, &ipv4_argv, COMMAND_TIMEOUT).await;
     if ipv4.ok {
@@ -407,11 +411,10 @@ async fn collect_default_interface(ctx: &Context) -> Option<String> {
     }
 
     let ipv6_argv = [
-        "/sbin/route".to_string(),
-        "-n".to_string(),
-        "get".to_string(),
-        "-inet6".to_string(),
-        "default".to_string(),
+        NETSTAT.to_string(),
+        "-rn".to_string(),
+        "-f".to_string(),
+        "inet6".to_string(),
     ];
     let ipv6 = run_command(ctx, &ipv6_argv, COMMAND_TIMEOUT).await;
     ipv6.ok
@@ -420,18 +423,32 @@ async fn collect_default_interface(ctx: &Context) -> Option<String> {
 }
 
 fn parse_default_interface(output: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        if key.trim() != "interface" {
-            return None;
+    let mut columns = None;
+    for line in output.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.first() == Some(&"Destination") {
+            columns = Some((
+                fields.iter().position(|field| *field == "Destination")?,
+                fields.iter().position(|field| *field == "Netif")?,
+            ));
+            continue;
         }
-        let interface = value.trim();
-        (!interface.is_empty()
+        let Some((destination_index, interface_index)) = columns else {
+            continue;
+        };
+        if fields.get(destination_index) != Some(&"default") {
+            continue;
+        }
+        let interface = *fields.get(interface_index)?;
+        if !interface.is_empty()
             && interface
                 .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-        .then(|| interface.to_string())
-    })
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Some(interface.to_string());
+        }
+    }
+    None
 }
 
 fn parse_netstat_counters(output: &str, interface: &str) -> Option<NetCounters> {
@@ -651,11 +668,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_default_interface_without_accepting_shell_syntax() {
-        let output = "route to: default\n interface: en0\n flags: <UP>\n";
+    fn parses_default_interface_from_routing_table_without_accepting_shell_syntax() {
+        let output = "Routing tables\n\nInternet:\nDestination Gateway Flags Netif Expire\n\
+default 10.10.0.1 UGScg en0\n\
+10.10/16 link#14 UCS en0 !\n";
         assert_eq!(parse_default_interface(output).as_deref(), Some("en0"));
-        assert_eq!(parse_default_interface("interface: en0;open /\n"), None);
-        let ipv6 = "route to: default\ninterface: utun6\nflags: <UP,DONE>\n";
+        let invalid = "Destination Gateway Flags Netif\ndefault gateway UGScg en0;open\n";
+        assert_eq!(parse_default_interface(invalid), None);
+        let ipv6 = "Internet6:\nDestination Gateway Flags Netif Expire\n\
+default fe80::%utun6 UGcIg utun6\n";
         assert_eq!(parse_default_interface(ipv6).as_deref(), Some("utun6"));
     }
 

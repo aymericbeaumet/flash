@@ -1069,10 +1069,44 @@ final class StatusBarTests: XCTestCase {
       FlashStatusBarTemplateEngine.applyTruncation(styled, truncation: .head(6, ellipsis: true)),
       "#[fg=colour178]HN#[fg=colour245] #[italics]he…#[noitalics]")
     // A bare `#` (not `#[`) is an ordinary visible character.
+    let literalHash = FlashStatusBarTemplateEngine.applyTruncation(
+      "C# rocks", truncation: .head(2, ellipsis: false))
+    XCTAssertEqual(literalHash, "C##")
     XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(
-        "C# rocks", truncation: .head(2, ellipsis: false)),
+      FlashStatusBarRenderer.attributedStatusString(
+        from: literalHash,
+        font: .monospacedSystemFont(ofSize: 13, weight: .medium)
+      ).string,
       "C#")
+  }
+
+  func testTruncatedPluginTextKeepsEscapedMarkupLiteralOnRender() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{=30…:plugin:disks.details}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "disks-details",
+          token: "plugin:disks.details",
+          source: .plugin(.statusSegment(pluginID: "disks", name: "details")))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(
+        pluginStatuses: [
+          pluginStatus(
+            id: "disks",
+            state: "running",
+            lastError: nil,
+            statusSegments: [
+              "details": "Backup ##[fg=colour196] volume name that overflows"
+            ])
+        ]))
+
+    let segments = FlashStatusBarRenderer.segments(from: model.modeText)
+    let rendered = segments.map(\.text).joined()
+    XCTAssertTrue(rendered.contains("#[fg=colour196]"), rendered)
+    XCTAssertTrue(rendered.hasSuffix("…"), rendered)
+    XCTAssertTrue(segments.allSatisfy { $0.foreground == .colour245 })
   }
 
   func testTokenTruncationTailKeepsTrailingVisibleWindowWithLeadingEllipsis() {

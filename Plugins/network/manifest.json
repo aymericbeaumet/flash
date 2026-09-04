@@ -5,15 +5,11 @@
   "description": "Live default-interface traffic plus copyable local network addresses in `@network.addresses`.",
   "sandbox": {
     "exec": [
-      "/sbin/route",
       "/usr/sbin/netstat"
     ]
   },
   "exec": [
     "./flash-plugin-network"
-  ],
-  "capabilities": [
-    "network"
   ],
   "commands": [
     {
@@ -24,7 +20,7 @@
     {
       "command": "network",
       "subcommand": "refresh",
-      "description": "Refresh network traffic, route, and addresses"
+      "description": "Refresh network traffic, routing table, and addresses"
     }
   ],
   "status": [
