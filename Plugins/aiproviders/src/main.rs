@@ -3,9 +3,9 @@
 //! Quota refreshes run after the protocol handshake and never on status-bar
 //! rendering or popup hover. The plugin immediately republishes its sanitized
 //! last-good cache, republishes changed rendered status at minute boundaries,
-//! then refreshes Anthropic every ten minutes and Codex every two minutes. Only
-//! percentages, reset epochs, window lengths, and fetch time are persisted in
-//! the plugin cache; credential rotations write back only to their owning
+//! then refreshes Anthropic every ten minutes and OpenAI every two minutes.
+//! Only percentages, reset epochs, window lengths, and fetch time are persisted
+//! in the plugin cache; credential rotations write back only to their owning
 //! stores, and raw responses stay in memory.
 //!
 //! Claude Code keeps OAuth credentials in the login keychain, while Codex owns
@@ -37,12 +37,13 @@ const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const ANTHROPIC_USAGE_TTL: u64 = 600;
 const ANTHROPIC_RETRY_SECONDS: u64 = 300;
-const CODEX_USAGE_TTL: u64 = 120;
+const OPENAI_USAGE_TTL: u64 = 120;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(6);
 const COMMAND_STDOUT_LIMIT: usize = 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 64 * 1024;
 const ANTHROPIC_CACHE: &str = "anthropic-usage-v1.json";
-const CODEX_CACHE: &str = "codex-usage-v1.json";
+const OPENAI_CACHE: &str = "openai-usage-v1.json";
+const ASTRA_RATE_LIMIT_ID: &str = "codex_bengalfox";
 const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -103,24 +104,42 @@ impl AnthropicUsage {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-struct CodexUsage {
-    updated_at: u64,
+struct UsageWindows {
     session: Option<WindowUsage>,
     weekly: Option<WindowUsage>,
 }
 
-impl CodexUsage {
-    fn sanitize(mut self) -> Option<Self> {
+impl UsageWindows {
+    fn sanitize(mut self) -> Self {
         self.session = self.session.filter(WindowUsage::valid);
         self.weekly = self.weekly.filter(WindowUsage::valid);
-        (self.session.is_some() || self.weekly.is_some()).then_some(self)
+        self
+    }
+
+    fn is_empty(&self) -> bool {
+        self.session.is_none() && self.weekly.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+struct OpenAIUsage {
+    updated_at: u64,
+    openai: UsageWindows,
+    astra: UsageWindows,
+}
+
+impl OpenAIUsage {
+    fn sanitize(mut self) -> Option<Self> {
+        self.openai = self.openai.sanitize();
+        self.astra = self.astra.sanitize();
+        (!self.openai.is_empty() || !self.astra.is_empty()).then_some(self)
     }
 }
 
 #[derive(Clone, Debug, Default)]
 struct UsageState {
     anthropic: Option<AnthropicUsage>,
-    codex: Option<CodexUsage>,
+    openai: Option<OpenAIUsage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,10 +187,10 @@ async fn load_usage_state(ctx: &Context) -> UsageState {
     let anthropic = load_json::<AnthropicUsage>(&ctx.data_dir().join(ANTHROPIC_CACHE))
         .await
         .and_then(AnthropicUsage::sanitize);
-    let codex = load_json::<CodexUsage>(&ctx.data_dir().join(CODEX_CACHE))
+    let openai = load_json::<OpenAIUsage>(&ctx.data_dir().join(OPENAI_CACHE))
         .await
-        .and_then(CodexUsage::sanitize);
-    UsageState { anthropic, codex }
+        .and_then(OpenAIUsage::sanitize);
+    UsageState { anthropic, openai }
 }
 
 async fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
@@ -225,10 +244,10 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
                 .as_ref()
                 .is_none_or(|usage| !fresh(usage.updated_at, ANTHROPIC_USAGE_TTL, now))
                 && now >= ANTHROPIC_RETRY_AT.load(Ordering::Relaxed);
-            let refresh_codex = state
-                .codex
+            let refresh_openai = state
+                .openai
                 .as_ref()
-                .is_none_or(|usage| !fresh(usage.updated_at, CODEX_USAGE_TTL, now));
+                .is_none_or(|usage| !fresh(usage.updated_at, OPENAI_USAGE_TTL, now));
 
             let anthropic = async {
                 if refresh_anthropic {
@@ -237,14 +256,14 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
                     None
                 }
             };
-            let codex = async {
-                if refresh_codex {
-                    fetch_codex_usage(now).await
+            let openai = async {
+                if refresh_openai {
+                    fetch_openai_usage(now).await
                 } else {
                     None
                 }
             };
-            let (anthropic, codex) = tokio::join!(anthropic, codex);
+            let (anthropic, openai) = tokio::join!(anthropic, openai);
 
             if let Some(usage) = anthropic {
                 ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
@@ -256,9 +275,9 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
                     Ordering::Relaxed,
                 );
             }
-            if let Some(usage) = codex {
-                let _ = write_json(&ctx.data_dir().join(CODEX_CACHE), &usage).await;
-                state.codex = Some(usage);
+            if let Some(usage) = openai {
+                let _ = write_json(&ctx.data_dir().join(OPENAI_CACHE), &usage).await;
+                state.openai = Some(usage);
             }
             shared.write().await.state = state;
             publish_current_status(&ctx, &shared).await;
@@ -313,16 +332,31 @@ fn anthropic_window(value: &Value, window_minutes: u64) -> Option<WindowUsage> {
     Some(WindowUsage::new(used, resets_at, window_minutes))
 }
 
-fn parse_codex_rate_limits(raw: &str, now: u64) -> Option<CodexUsage> {
+fn parse_openai_rate_limits(raw: &str, now: u64) -> Option<OpenAIUsage> {
     let result = raw.lines().find_map(|line| {
         let value: Value = serde_json::from_str(line).ok()?;
         (value.get("id").and_then(Value::as_u64) == Some(2))
             .then(|| value.get("result").cloned())
             .flatten()
     })?;
-    let limits = result
+    let openai = result
         .pointer("/rateLimitsByLimitId/codex")
-        .or_else(|| result.get("rateLimits"))?;
+        .or_else(|| result.get("rateLimits"))
+        .map(rate_limit_windows)
+        .unwrap_or_default();
+    let astra = result
+        .pointer(&format!("/rateLimitsByLimitId/{ASTRA_RATE_LIMIT_ID}"))
+        .map(rate_limit_windows)
+        .unwrap_or_default();
+    OpenAIUsage {
+        updated_at: now,
+        openai,
+        astra,
+    }
+    .sanitize()
+}
+
+fn rate_limit_windows(limits: &Value) -> UsageWindows {
     let mut windows = [limits.get("primary"), limits.get("secondary")]
         .into_iter()
         .flatten()
@@ -331,12 +365,7 @@ fn parse_codex_rate_limits(raw: &str, now: u64) -> Option<CodexUsage> {
         .clone()
         .find(|window| window.window_minutes >= 1_440);
     let session = windows.find(|window| window.window_minutes < 1_440);
-    CodexUsage {
-        updated_at: now,
-        session,
-        weekly,
-    }
-    .sanitize()
+    UsageWindows { session, weekly }.sanitize()
 }
 
 fn codex_window(value: &Value) -> Option<WindowUsage> {
@@ -363,34 +392,46 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
             )
         })
         .unwrap_or((None, None, None));
-    let (codex_session, codex_week) = state
-        .codex
+    let (openai_session, openai_week, astra_session, astra_week) = state
+        .openai
         .as_ref()
-        .map(|usage| (usage.session.as_ref(), usage.weekly.as_ref()))
-        .unwrap_or((None, None));
+        .map(|usage| {
+            (
+                usage.openai.session.as_ref(),
+                usage.openai.weekly.as_ref(),
+                usage.astra.session.as_ref(),
+                usage.astra.weekly.as_ref(),
+            )
+        })
+        .unwrap_or((None, None, None, None));
     let visible = "#[fg=colour178]AI#[default]";
 
-    let codex_session_label = codex_session
-        .map(|window| window_label(window.window_minutes))
-        .unwrap_or_else(|| "5-hour".to_string());
-    let codex_week_label = codex_week
-        .map(|window| window_label(window.window_minutes))
-        .unwrap_or_else(|| "7-day".to_string());
+    let openai_session_label = usage_window_label(openai_session, "5-hour");
+    let openai_week_label = usage_window_label(openai_week, "7-day");
+    let astra_session_label = usage_window_label(astra_session, "5-hour");
+    let astra_week_label = usage_window_label(astra_week, "7-day");
     let lines = [
         "#[fg=colour178]AI#[default]".to_string(),
         "#[fg=colour245]Provider  Window         Left  Reset#[default]".to_string(),
         popup_row("Claude", "5-hour", shared_session, None, now),
         popup_row("", "7-day", claude_week, shared_session, now),
-        popup_row("Fable", "shared 5-hour", shared_session, None, now),
-        popup_row("", "7-day", fable_week, shared_session, now),
-        popup_row("OpenAI", &codex_session_label, codex_session, None, now),
-        popup_row("", &codex_week_label, codex_week, codex_session, now),
+        popup_row("  Fable", "7-day", fable_week, shared_session, now),
+        popup_row("OpenAI", &openai_session_label, openai_session, None, now),
+        popup_row("", &openai_week_label, openai_week, openai_session, now),
+        popup_row("  Astra", &astra_session_label, astra_session, None, now),
+        popup_row("", &astra_week_label, astra_week, astra_session, now),
     ];
     let details = lines.join("\n");
     StatusSegments {
         summary: inline_status_popup(visible, &details),
         details,
     }
+}
+
+fn usage_window_label(usage: Option<&WindowUsage>, fallback: &str) -> String {
+    usage
+        .map(|window| window_label(window.window_minutes))
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn styled_remaining(
@@ -827,7 +868,7 @@ fn safe_keychain_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-async fn fetch_codex_usage(now: u64) -> Option<CodexUsage> {
+async fn fetch_openai_usage(now: u64) -> Option<OpenAIUsage> {
     let codex = resolved_codex_path().await?;
     let input = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{",
@@ -837,7 +878,7 @@ async fn fetch_codex_usage(now: u64) -> Option<CodexUsage> {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\"}\n"
     );
     let response = capture_codex_rate_limits(&codex, input).await?;
-    parse_codex_rate_limits(&response, now)
+    parse_openai_rate_limits(&response, now)
 }
 
 async fn capture_codex_rate_limits(codex: &Path, input: &str) -> Option<String> {
@@ -1113,21 +1154,25 @@ mod tests {
     }
 
     #[test]
-    fn codex_usage_classifies_windows_by_duration_not_slot() {
-        let usage = parse_codex_rate_limits(
+    fn openai_usage_classifies_base_and_astra_windows_by_duration() {
+        let usage = parse_openai_rate_limits(
             concat!(
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"rateLimits\":{",
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"rateLimitsByLimitId\":{",
+                "\"codex\":{\"primary\":{\"usedPercent\":46.1,\"resetsAt\":432000,\"windowDurationMins\":10080}},",
+                "\"codex_bengalfox\":{",
                 "\"primary\":{\"usedPercent\":35.9,\"resetsAt\":18000,\"windowDurationMins\":300},",
-                "\"secondary\":{\"usedPercent\":46.1,\"resetsAt\":432000,\"windowDurationMins\":10080}",
-                "}}}\n"
+                "\"secondary\":{\"usedPercent\":12.5,\"resetsAt\":604800,\"windowDurationMins\":10080}",
+                "}}}}\n"
             ),
             0,
         )
-        .expect("valid Codex rate limits");
+        .expect("valid OpenAI rate limits");
 
-        assert_eq!(usage.session.unwrap().window_minutes, 300);
-        assert_eq!(usage.weekly.unwrap().used_percent, 46.1);
+        assert!(usage.openai.session.is_none());
+        assert_eq!(usage.openai.weekly.unwrap().used_percent, 46.1);
+        assert_eq!(usage.astra.session.unwrap().window_minutes, 300);
+        assert_eq!(usage.astra.weekly.unwrap().used_percent, 12.5);
     }
 
     #[test]
@@ -1139,17 +1184,23 @@ mod tests {
                 claude_week: Some(WindowUsage::new(47.2, Some(432_000), 10_080)),
                 fable_week: Some(WindowUsage::new(90.1, Some(345_600), 10_080)),
             }),
-            codex: Some(CodexUsage {
+            openai: Some(OpenAIUsage {
                 updated_at: 0,
-                session: Some(WindowUsage::new(35.9, Some(18_000), 300)),
-                weekly: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
+                openai: UsageWindows {
+                    session: Some(WindowUsage::new(35.9, Some(18_000), 300)),
+                    weekly: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
+                },
+                astra: UsageWindows {
+                    session: Some(WindowUsage::new(12.0, Some(10_800), 300)),
+                    weekly: Some(WindowUsage::new(10.0, Some(604_800), 10_080)),
+                },
             }),
         };
 
         let segments = render_status_segments(&state, 0);
         assert_eq!(
             segments.details,
-            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]Fable     shared 5-hour#[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d"
+            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]  Fable   7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]  Astra   5-hour       #[default]   88%  3h\n#[fg=colour245]          7-day        #[default]   90%  7d"
         );
         assert_eq!(
             segments.summary,
@@ -1177,10 +1228,13 @@ mod tests {
     fn runtime_publishes_only_changed_rendered_status() {
         let mut runtime = UsageRuntime {
             state: UsageState {
-                codex: Some(CodexUsage {
+                openai: Some(OpenAIUsage {
                     updated_at: 0,
-                    session: None,
-                    weekly: Some(WindowUsage::new(25.0, Some(3_600), 10_080)),
+                    openai: UsageWindows {
+                        session: None,
+                        weekly: Some(WindowUsage::new(25.0, Some(3_600), 10_080)),
+                    },
+                    astra: UsageWindows::default(),
                 }),
                 ..UsageState::default()
             },
@@ -1198,7 +1252,7 @@ mod tests {
         assert_eq!(STATUS_PUBLISH_INTERVAL, Duration::from_secs(60));
         assert_eq!(USAGE_REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(ANTHROPIC_USAGE_TTL, 600);
-        assert_eq!(CODEX_USAGE_TTL, 120);
+        assert_eq!(OPENAI_USAGE_TTL, 120);
     }
 
     #[test]
