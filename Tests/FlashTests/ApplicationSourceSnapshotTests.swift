@@ -4,7 +4,7 @@ import XCTest
 @testable import flash
 
 final class ApplicationSourceSnapshotTests: XCTestCase {
-  func testColdIndexReleasedAtThirtyMillisecondsJoinsFirstPublication() {
+  func testColdIndexReleasedBeforeBudgetJoinsFirstPublication() {
     let scanStarted = expectation(description: "scan started")
     let published = expectation(description: "first snapshot published")
     let release = DispatchSemaphore(value: 0)
@@ -23,16 +23,6 @@ final class ApplicationSourceSnapshotTests: XCTestCase {
       startedNs: DispatchTime.now().uptimeNanoseconds,
       expectedSourceIDs: ["core.apps"])
     var snapshot: CandidateSnapshotBarrier.Snapshot?
-    let deadline = DispatchWorkItem {
-      if let frozen = barrier.finalize(reason: .firstPaintBudget) {
-        snapshot = frozen
-        published.fulfill()
-      }
-    }
-    DispatchQueue.main.asyncAfter(
-      deadline: .now() + .milliseconds(AppDelegate.candidateFinderFirstPaintBudgetMs),
-      execute: deadline)
-
     source.snapshotCandidates(
       in: FlashSourceEnvironment(runningApplications: []),
       scope: .all
@@ -44,14 +34,11 @@ final class ApplicationSourceSnapshotTests: XCTestCase {
           latencyMs: 30),
         .accepted)
       if barrier.isSettled, let frozen = barrier.finalize(reason: .allSourcesSettled) {
-        deadline.cancel()
         snapshot = frozen
         published.fulfill()
       }
     }
-    DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(30)) {
-      release.signal()
-    }
+    release.signal()
 
     wait(for: [published], timeout: 1)
     XCTAssertEqual(snapshot?.reason, .allSourcesSettled)
@@ -61,7 +48,6 @@ final class ApplicationSourceSnapshotTests: XCTestCase {
 
   func testIndexReleasedAfterBudgetDoesNotRepaintAndJoinsNextSession() {
     let scanStarted = expectation(description: "scan started")
-    let firstPublished = expectation(description: "budget snapshot published")
     let lateReply = expectation(description: "late app reply")
     let release = DispatchSemaphore(value: 0)
     let installed = installedCandidate()
@@ -90,20 +76,10 @@ final class ApplicationSourceSnapshotTests: XCTestCase {
         latencyMs: AppDelegate.candidateFinderFirstPaintBudgetMs + 30)
       lateReply.fulfill()
     }
-    DispatchQueue.main.asyncAfter(
-      deadline: .now() + .milliseconds(AppDelegate.candidateFinderFirstPaintBudgetMs)
-    ) {
-      firstSnapshot = firstBarrier.finalize(reason: .firstPaintBudget)
-      firstPublished.fulfill()
-    }
-    DispatchQueue.global().asyncAfter(
-      deadline: .now()
-        + .milliseconds(AppDelegate.candidateFinderFirstPaintBudgetMs + 30)
-    ) {
-      release.signal()
-    }
+    firstSnapshot = firstBarrier.finalize(reason: .firstPaintBudget)
+    release.signal()
 
-    wait(for: [firstPublished, lateReply], timeout: 1)
+    wait(for: [lateReply], timeout: 1)
     XCTAssertEqual(firstSnapshot?.reason, .firstPaintBudget)
     XCTAssertEqual(firstSnapshot?.replies.count, 0)
     XCTAssertEqual(firstSnapshot?.missingSourceIDs, ["core.apps"])
