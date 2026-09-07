@@ -138,4 +138,4 @@ echo "==> Running $ORACLE_APP_NAME"
   --expected-file "$EXPECTED_FILE" \
   --state-file "$STATE_FILE" \
   --timings "$TIMINGS_FILE" \
-  "${RUN_ARGS[@]}"
+  ${RUN_ARGS[@]+"${RUN_ARGS[@]}"}

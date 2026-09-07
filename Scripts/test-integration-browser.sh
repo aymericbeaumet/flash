@@ -254,7 +254,7 @@ set +e
 "$INSTALL_BIN" \
   --fixtures-dir "$FIXTURES_DIR" \
   --browser-app "$FIREFOX_APP" \
-  "${RUN_ARGS[@]}"
+  ${RUN_ARGS[@]+"${RUN_ARGS[@]}"}
 RC=$?
 set -e
 

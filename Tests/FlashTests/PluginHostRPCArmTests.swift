@@ -116,12 +116,17 @@ final class PluginHostRPCArmTests: XCTestCase {
   func testWiFiInfoReturnsPresentAndAbsentShapes() {
     final class Stub: WiFiInfoProviding {
       var ssid: String?
+      var authorizationRequests: [Bool] = []
 
       init(ssid: String?) {
         self.ssid = ssid
       }
 
-      func fetchSSID(_ completion: @escaping (String?) -> Void) {
+      func fetchSSID(
+        requestAuthorization: Bool,
+        completion: @escaping (String?) -> Void
+      ) {
+        authorizationRequests.append(requestAuthorization)
         completion(ssid)
       }
     }
@@ -130,18 +135,34 @@ final class PluginHostRPCArmTests: XCTestCase {
     let provider = Stub(ssid: "Studio")
     rpc.wifiInfoProvider = provider
 
-    let present = hostReply(rpc, "host.wifi_info", [:], capabilities: [.wifiInfo])
+    let present = hostReply(
+      rpc, "host.wifi_info", ["request_authorization": false], capabilities: [.wifiInfo])
     XCTAssertEqual(present["ok"] as? Bool, true)
     XCTAssertEqual(present["present"] as? Bool, true)
     XCTAssertEqual(present["ssid"] as? String, "Studio")
     XCTAssertEqual(Set(present.keys), ["ok", "present", "ssid"])
 
     provider.ssid = nil
-    let absent = hostReply(rpc, "host.wifi_info", [:], capabilities: [.wifiInfo])
+    let absent = hostReply(
+      rpc, "host.wifi_info", ["request_authorization": true], capabilities: [.wifiInfo])
     XCTAssertEqual(absent["ok"] as? Bool, true)
     XCTAssertEqual(absent["present"] as? Bool, false)
     XCTAssertNil(absent["ssid"])
     XCTAssertEqual(Set(absent.keys), ["ok", "present"])
+    XCTAssertEqual(provider.authorizationRequests, [false, true])
+  }
+
+  func testWiFiInfoRequiresExplicitAuthorizationIntent() {
+    for invalid in [nil, 0, 1, 1.0, "true", NSNull()] as [Any?] {
+      let params = invalid.map { ["request_authorization": $0] } ?? [:]
+      let reply = hostReply(PluginHostRPC(), "host.wifi_info", params, capabilities: [.wifiInfo])
+
+      XCTAssertEqual(reply["ok"] as? Bool, false, "\(String(describing: invalid))")
+      XCTAssertEqual(
+        reply["error"] as? String,
+        "host.wifi_info requires a boolean request_authorization param",
+        "\(String(describing: invalid))")
+    }
   }
 
   // MARK: - host.open (urlOpener / appOpener seams)

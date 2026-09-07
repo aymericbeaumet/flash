@@ -10,7 +10,10 @@
       "within_ms": 5000
     },
     {
-      "expect_host_rpc": { "method": "host.wifi_info", "params": {} },
+      "expect_host_rpc": {
+        "method": "host.wifi_info",
+        "params": { "request_authorization": false }
+      },
       "within_ms": 5000,
       "reply": { "ok": true, "present": true, "ssid": "Atelier" }
     },
@@ -52,7 +55,10 @@
       }
     },
     {
-      "expect_host_rpc": { "method": "host.wifi_info", "params": {} },
+      "expect_host_rpc": {
+        "method": "host.wifi_info",
+        "params": { "request_authorization": true }
+      },
       "within_ms": 5000,
       "reply": { "ok": true, "present": true, "ssid": "Office" }
     },

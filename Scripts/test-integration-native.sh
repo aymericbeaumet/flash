@@ -142,4 +142,4 @@ echo "==> Running $ORACLE_APP_NAME"
   --fixture-bundle-id "$FIXTURE_BUNDLE_ID" \
   --state-file "$STATE_FILE" \
   --timings "$TIMINGS_FILE" \
-  "${RUN_ARGS[@]}"
+  ${RUN_ARGS[@]+"${RUN_ARGS[@]}"}

@@ -5,7 +5,7 @@ import XCTest
 @testable import flash
 
 final class WiFiInfoProviderTests: XCTestCase {
-  func testNotDeterminedCoalescesRequestsAndResolvesTheBatchAfterAuthorization() {
+  func testPassiveNotDeterminedReadResolvesAbsentWithoutPromptingOrRetention() {
     var status = CLAuthorizationStatus.notDetermined
     var authorizationRequests = 0
     var ssidReads = 0
@@ -18,23 +18,47 @@ final class WiFiInfoProviderTests: XCTestCase {
       })
     var replies: [String?] = []
 
-    provider.fetchSSID { replies.append($0) }
-    provider.fetchSSID { replies.append($0) }
-    provider.authorizationDidChange()
-    provider.fetchSSID { replies.append($0) }
+    provider.fetchSSID(requestAuthorization: false) { replies.append($0) }
 
-    XCTAssertEqual(authorizationRequests, 1, "one system prompt can serve every pending caller")
-    XCTAssertTrue(replies.isEmpty)
+    XCTAssertEqual(replies.count, 1)
+    XCTAssertNil(replies[0])
+    XCTAssertEqual(authorizationRequests, 0)
+    XCTAssertEqual(ssidReads, 0)
+
+    status = .authorizedAlways
+
+    XCTAssertEqual(replies.count, 1, "a passive read must not leave a pending callback")
+    XCTAssertEqual(ssidReads, 0)
+  }
+
+  func testExplicitNotDeterminedReadsCanRetryAndReplyWithoutRetention() {
+    var status = CLAuthorizationStatus.notDetermined
+    var authorizationRequests = 0
+    var ssidReads = 0
+    let provider = WiFiInfoProvider(
+      authorizationStatus: { status },
+      requestAuthorization: { authorizationRequests += 1 },
+      readSSID: {
+        ssidReads += 1
+        return "Studio"
+      })
+    var replies: [String?] = []
+
+    provider.fetchSSID(requestAuthorization: true) { replies.append($0) }
+    provider.fetchSSID(requestAuthorization: true) { replies.append($0) }
+    provider.fetchSSID(requestAuthorization: true) { replies.append($0) }
+
+    XCTAssertEqual(authorizationRequests, 3, "each explicit action can retry an ignored request")
+    XCTAssertEqual(replies.count, 3)
+    XCTAssertTrue(replies.allSatisfy { $0 == nil })
     XCTAssertEqual(ssidReads, 0, "SSID must not be read before authorization")
 
     status = .authorizedAlways
-    provider.authorizationDidChange()
+    provider.fetchSSID(requestAuthorization: false) { replies.append($0) }
 
-    XCTAssertEqual(replies.count, 3)
-    XCTAssertEqual(replies[0], "Studio")
-    XCTAssertEqual(replies[1], "Studio")
-    XCTAssertEqual(replies[2], "Studio")
-    XCTAssertEqual(ssidReads, 1, "one authorized read resolves the complete pending batch")
+    XCTAssertEqual(replies.count, 4)
+    XCTAssertEqual(replies[3], "Studio")
+    XCTAssertEqual(ssidReads, 1)
   }
 
   func testDeniedAndRestrictedResolveAbsentWithoutReadingSSID() {
@@ -51,7 +75,7 @@ final class WiFiInfoProviderTests: XCTestCase {
         })
       var reply: String?
 
-      provider.fetchSSID {
+      provider.fetchSSID(requestAuthorization: false) {
         replyCount += 1
         reply = $0
       }
@@ -72,7 +96,7 @@ final class WiFiInfoProviderTests: XCTestCase {
         readSSID: { rawSSID })
       var reply: String?
 
-      provider.fetchSSID {
+      provider.fetchSSID(requestAuthorization: false) {
         replyCount += 1
         reply = $0
       }
@@ -89,7 +113,7 @@ final class WiFiInfoProviderTests: XCTestCase {
       readSSID: { " Studio " })
     var reply: String?
 
-    provider.fetchSSID { reply = $0 }
+    provider.fetchSSID(requestAuthorization: false) { reply = $0 }
 
     XCTAssertEqual(reply, " Studio ")
   }
@@ -108,7 +132,7 @@ final class WiFiInfoProviderTests: XCTestCase {
       })
 
     DispatchQueue.global(qos: .userInitiated).async {
-      provider.fetchSSID { ssid in
+      provider.fetchSSID(requestAuthorization: false) { ssid in
         XCTAssertTrue(Thread.isMainThread)
         XCTAssertEqual(ssid, "Studio")
         replyExpectation.fulfill()

@@ -20,7 +20,7 @@
     {
       "command": "network",
       "subcommand": "refresh",
-      "description": "Refresh network traffic, routing table, and addresses"
+      "description": "Refresh network traffic, Wi-Fi, routing table, and addresses"
     }
   ],
   "status": [

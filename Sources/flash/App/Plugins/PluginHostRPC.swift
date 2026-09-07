@@ -131,11 +131,22 @@ final class PluginHostRPC {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("wifi_info")])
         return
       }
+      guard
+        let requestAuthorizationValue = params["request_authorization"] as? NSNumber,
+        CFGetTypeID(requestAuthorizationValue) == CFBooleanGetTypeID()
+      else {
+        reply([
+          "ok": false,
+          "error": "host.wifi_info requires a boolean request_authorization param",
+        ])
+        return
+      }
+      let requestAuthorization = requestAuthorizationValue.boolValue
       guard let wifiInfoProvider else {
         reply(["ok": true, "present": false])
         return
       }
-      wifiInfoProvider.fetchSSID { ssid in
+      wifiInfoProvider.fetchSSID(requestAuthorization: requestAuthorization) { ssid in
         guard let ssid else {
           reply(["ok": true, "present": false])
           return

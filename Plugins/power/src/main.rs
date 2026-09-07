@@ -197,7 +197,13 @@ fn parse_pmset_snapshot(raw: &str) -> Option<PowerSnapshot> {
     } else {
         PowerSource::Unknown
     };
-    if raw.contains("No batteries are currently installed") {
+    let mut nonempty_lines = raw.lines().map(str::trim).filter(|line| !line.is_empty());
+    let source_only = nonempty_lines
+        .next()
+        .is_some_and(|line| line.contains("drawing from 'AC Power'"))
+        && nonempty_lines.next().is_none()
+        && source == PowerSource::Adapter;
+    if raw.contains("No batteries are currently installed") || source_only {
         return Some(PowerSnapshot {
             source,
             battery: None,
@@ -524,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_missing_battery_is_a_valid_snapshot() {
+    fn missing_battery_outputs_are_valid_snapshots() {
         assert_eq!(
             parse_pmset_snapshot(
                 "Now drawing from 'AC Power'\nNo batteries are currently installed."
@@ -533,6 +539,24 @@ mod tests {
                 source: PowerSource::Adapter,
                 battery: None,
             })
+        );
+        assert_eq!(
+            parse_pmset_snapshot("Now drawing from 'AC Power'\n"),
+            Some(PowerSnapshot {
+                source: PowerSource::Adapter,
+                battery: None,
+            })
+        );
+        assert_eq!(
+            parse_pmset_snapshot("Currently drawing from 'AC Power'\n"),
+            Some(PowerSnapshot {
+                source: PowerSource::Adapter,
+                battery: None,
+            })
+        );
+        assert_eq!(
+            parse_pmset_snapshot("Now drawing from 'Battery Power'\n"),
+            None
         );
         assert_eq!(parse_pmset_snapshot("pmset failed"), None);
     }

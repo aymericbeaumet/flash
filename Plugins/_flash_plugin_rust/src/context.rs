@@ -248,11 +248,21 @@ impl Context {
     }
 
     /// Read the currently associated Wi-Fi network name from the host
-    /// (`host.wifi_info`). Requires the `wifi_info` capability. `None` covers
-    /// denied authorization, no association, malformed replies, and host-RPC
-    /// failure without exposing those transport details to callers.
-    pub async fn wifi_ssid(&self) -> Option<String> {
-        let response = self.call_host("host.wifi_info", json!({})).await;
+    /// (`host.wifi_info`). Pass `true` only from an explicit user action that
+    /// may show the Location authorization prompt; passive refreshes pass
+    /// `false` and resolve absent immediately while authorization is
+    /// undetermined. An explicit request also replies absent immediately after
+    /// asking, so callers retry after the user grants access rather than
+    /// retaining an RPC behind an open-ended system prompt. Requires the
+    /// `wifi_info` capability. `None` also covers denied authorization, no
+    /// association, malformed replies, and host-RPC failure.
+    pub async fn wifi_ssid(&self, request_authorization: bool) -> Option<String> {
+        let response = self
+            .call_host(
+                "host.wifi_info",
+                json!({ "request_authorization": request_authorization }),
+            )
+            .await;
         wifi_ssid_from_response(&response)
     }
 
@@ -911,28 +921,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wifi_ssid_requests_wifi_info_with_empty_params() {
-        let (ctx, mut rx) = test_context_with_rx();
-        let pending = ctx.host_pending.clone();
-        let request = tokio::spawn(async move { ctx.wifi_ssid().await });
+    async fn wifi_ssid_sends_explicit_authorization_intent() {
+        for request_authorization in [false, true] {
+            let (ctx, mut rx) = test_context_with_rx();
+            let pending = ctx.host_pending.clone();
+            let request = tokio::spawn(async move { ctx.wifi_ssid(request_authorization).await });
 
-        let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap()).unwrap();
-        assert_eq!(frame["method"], json!("host.wifi_info"));
-        assert_eq!(frame["params"], json!({}));
-        let id = frame["id"].as_u64().unwrap();
-        pending
-            .lock()
-            .unwrap()
-            .remove(&id)
-            .unwrap()
-            .send(json!({
-                "ok": true,
-                "present": true,
-                "ssid": "Atelier"
-            }))
-            .unwrap();
+            let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap()).unwrap();
+            assert_eq!(frame["method"], json!("host.wifi_info"));
+            assert_eq!(
+                frame["params"],
+                json!({ "request_authorization": request_authorization })
+            );
+            let id = frame["id"].as_u64().unwrap();
+            pending
+                .lock()
+                .unwrap()
+                .remove(&id)
+                .unwrap()
+                .send(json!({
+                    "ok": true,
+                    "present": true,
+                    "ssid": "Atelier"
+                }))
+                .unwrap();
 
-        assert_eq!(request.await.unwrap().as_deref(), Some("Atelier"));
+            assert_eq!(request.await.unwrap().as_deref(), Some("Atelier"));
+        }
     }
 
     #[test]

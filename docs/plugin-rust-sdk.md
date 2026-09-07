@@ -90,11 +90,14 @@ Handed to every handler; cheap to clone. Key surface:
   the result object carries `{"ok": false, "error": ...}` sentinels for
   capability NAKs, timeouts, and host death. Typed wrappers exist for the
   full `host.*` surface (`fetch`, `open_url`, `open_app`, `activate_app`,
-  `normal_mode_target`, `wifi_ssid`, `clipboard_write`, `notify`,
+  `normal_mode_target`, `wifi_ssid(request_authorization)`, `clipboard_write`, `notify`,
   `storage_get`/`set`, `post_media_key`, `process_table` / `process_metrics`,
   `signal`, `post_keys`,
   `post_global_key`, `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`,
   `ping`).
+  `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
+  an explicit user action. A newly started permission prompt replies `None`
+  immediately, so retry after the user grants access.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
   (content-free); `status(segments)` feeds `#{plugin:<id>.<segment>}`.
   `inline_status_popup(visible, body)` wraps a visible value with a correctly

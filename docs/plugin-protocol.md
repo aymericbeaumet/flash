@@ -230,7 +230,11 @@ scoped), `host.post_keys` + `host.post_global_key` + `host.ax_snapshot` /
 <capability> capability"}`.
 
 `host.clipboard_write` replaces the clipboard with `{"text"}` (≤ 1 MiB).
-`host.wifi_info` accepts `{}` and returns
+`host.wifi_info` requires `{"request_authorization": false}` for passive reads
+or `true` only for an explicit user action allowed to show the host-owned
+Location prompt. An undetermined request replies absent immediately after
+starting the prompt; callers retry after authorization instead of holding an
+RPC open. The method returns
 `{"ok": true, "present": true, "ssid": "…"}` for an associated network or
 `{"ok": true, "present": false}` when Wi-Fi information is unavailable.
 `host.notify` shows a transient banner from `{"message", "duration_ms"?}`

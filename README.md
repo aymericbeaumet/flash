@@ -142,6 +142,9 @@ addresses, and battery/power health. Use `:cpu`, `:memory`, `:disks`,
 `:flashlight @network.addresses` to copy an interface address. Date/time stays
 in the core status renderer (with the `timezones` plugin for lookup), and the
 dedicated `caffeinate` plugin remains the sole owner of sleep assertions.
+Passive network polling never requests Location access. Run `:network refresh`
+to request it explicitly when you want the current Wi-Fi name; refresh again
+after granting permission.
 
 The suite deliberately stays unprivileged: temperature sensors, fan control,
 CPU/GPU frequency, and S.M.A.R.T. details that require a helper are not

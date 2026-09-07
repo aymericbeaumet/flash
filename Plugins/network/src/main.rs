@@ -203,6 +203,11 @@ enum RateDecision {
     Rates(TransferRates),
 }
 
+enum WiFiSSIDRead {
+    Passive,
+    Prefetched(Option<String>),
+}
+
 struct Network;
 
 flash_plugin::plugin!(Network);
@@ -220,7 +225,8 @@ impl FlashPlugin for Network {
         match command.subcommand.as_str() {
             "" => current_response(),
             "refresh" => {
-                try_refresh_network(&ctx, true).await;
+                let wifi_ssid = ctx.wifi_ssid(true).await;
+                try_refresh_network(&ctx, true, wifi_ssid).await;
                 current_response()
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
@@ -231,20 +237,25 @@ impl FlashPlugin for Network {
 async fn refresh_network(ctx: &Context, force_discovery: bool) {
     REFRESH_GATE
         .run(ctx, move |ctx, _applications| async move {
-            refresh_network_locked(&ctx, force_discovery).await;
+            refresh_network_locked(&ctx, force_discovery, WiFiSSIDRead::Passive).await;
         })
         .await;
 }
 
-async fn try_refresh_network(ctx: &Context, force_discovery: bool) {
+async fn try_refresh_network(ctx: &Context, force_discovery: bool, wifi_ssid: Option<String>) {
     let _ = REFRESH_GATE
         .try_run(ctx, move |ctx, _applications| async move {
-            refresh_network_locked(&ctx, force_discovery).await;
+            refresh_network_locked(&ctx, force_discovery, WiFiSSIDRead::Prefetched(wifi_ssid))
+                .await;
         })
         .await;
 }
 
-async fn refresh_network_locked(ctx: &Context, force_discovery: bool) {
+async fn refresh_network_locked(
+    ctx: &Context,
+    force_discovery: bool,
+    wifi_ssid_read: WiFiSSIDRead,
+) {
     let discovery_due = {
         let state = state();
         force_discovery
@@ -254,9 +265,15 @@ async fn refresh_network_locked(ctx: &Context, force_discovery: bool) {
     };
 
     let discovery = if discovery_due {
+        let wifi_ssid = async move {
+            match wifi_ssid_read {
+                WiFiSSIDRead::Passive => ctx.wifi_ssid(false).await,
+                WiFiSSIDRead::Prefetched(wifi_ssid) => wifi_ssid,
+            }
+        };
         let (interface, wifi_ssid, catalog) = tokio::join!(
             collect_default_interface(ctx),
-            ctx.wifi_ssid(),
+            wifi_ssid,
             tokio::task::spawn_blocking(collect_catalog)
         );
         Some((interface, wifi_ssid, catalog))
