@@ -438,10 +438,9 @@ fn visible_summary(
     history: &VecDeque<f64>,
     summary_mode: SummaryMode,
 ) -> String {
-    let mut visible = format!(
-        "#[fg=colour178]MEM#[default] {:.0}%",
-        snapshot.occupied_percent()
-    );
+    let percent = snapshot.occupied_percent();
+    let mut visible =
+        format!("#[fg=colour178]MEM#[default] #[fg=colour245]{percent:>2.0}%#[default]");
     if summary_mode == SummaryMode::Full && !history.is_empty() {
         visible.push(' ');
         visible.push_str(&sparkline(history));
@@ -468,11 +467,11 @@ mod tests {
     }
 
     #[test]
-    fn compact_memory_summary_uses_natural_percentage_width() {
+    fn compact_memory_summary_greys_and_reserves_two_percentage_digits() {
         let mut snapshot = MemorySnapshot {
             total: 100,
-            occupied: 0,
-            free: 100,
+            occupied: 9,
+            free: 91,
             wired: 0,
             compressed: 0,
             swap_total: 0,
@@ -481,13 +480,19 @@ mod tests {
         };
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] 0%"
+            "#[fg=colour178]MEM#[default] #[fg=colour245] 9%#[default]"
+        );
+        snapshot.occupied = 10;
+        snapshot.free = 90;
+        assert_eq!(
+            visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
+            "#[fg=colour178]MEM#[default] #[fg=colour245]10%#[default]"
         );
         snapshot.occupied = 100;
         snapshot.free = 0;
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] 100%"
+            "#[fg=colour178]MEM#[default] #[fg=colour245]100%#[default]"
         );
     }
 
@@ -576,15 +581,17 @@ mod tests {
         let rendered = render_status(&snapshot, &history, SummaryMode::Compact);
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered.summary.contains("MEM#[default] 75%"));
+        assert!(rendered
+            .summary
+            .contains("MEM#[default] #[fg=colour245]75%#[default]"));
         assert!(!rendered.summary.contains("▅▆"));
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] 75%"
+            "#[fg=colour178]MEM#[default] #[fg=colour245]75%#[default]"
         );
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Full),
-            "#[fg=colour178]MEM#[default] 75% ▅▆"
+            "#[fg=colour178]MEM#[default] #[fg=colour245]75%#[default] ▅▆"
         );
         assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
         assert_eq!(

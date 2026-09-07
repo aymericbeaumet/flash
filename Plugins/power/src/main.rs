@@ -522,17 +522,12 @@ fn padded_history(history: &VecDeque<f64>) -> String {
 }
 
 fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
-    let (mut value, color, breathing) = match snapshot.battery {
+    let (mut value, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("{}%", battery.percent),
-            if snapshot.source == PowerSource::Adapter || battery.percent > 25 {
-                "colour178"
-            } else {
-                "red"
-            },
+            format!("{:>2}%", battery.percent),
             snapshot.source == PowerSource::Adapter,
         ),
-        None => ("—".to_string(), "colour245", false),
+        None => ("—".to_string(), false),
     };
     if summary_mode == SummaryMode::Full {
         let secondary = snapshot
@@ -546,7 +541,7 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
     let breathing_open = if breathing { "#[breathing]" } else { "" };
     let breathing_close = if breathing { "#[nobreathing]" } else { "" };
     format!(
-        "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg={color}]{breathing_open}{value}{breathing_close}#[norange]#[default]#[pop-default]"
+        "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{breathing_open}{value}{breathing_close}#[norange]#[default]#[pop-default]"
     )
 }
 
@@ -664,8 +659,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_power_summary_uses_natural_percentage_width() {
-        for (percent, color) in [(0, "red"), (100, "colour178")] {
+    fn compact_power_summary_uses_grey_two_column_percentage() {
+        for (percent, expected) in [(9, " 9%"), (10, "10%"), (100, "100%")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
                 battery: Some(BatterySnapshot {
@@ -677,7 +672,7 @@ mod tests {
             assert_eq!(
                 visible_summary(&snapshot, SummaryMode::Compact),
                 format!(
-                    "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg={color}]{percent}%#[norange]#[default]#[pop-default]"
+                    "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{expected}#[norange]#[default]#[pop-default]"
                 )
             );
         }
@@ -802,11 +797,11 @@ mod tests {
 
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Full),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour178]#[breathing]73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert!(status.summary.starts_with("#[popup=inline:"));
         assert!(status.summary.ends_with("#[nopopup]"));
@@ -836,14 +831,14 @@ mod tests {
     }
 
     #[test]
-    fn low_battery_is_red_and_does_not_breathe() {
+    fn low_battery_is_grey_and_does_not_breathe() {
         let snapshot = parse_pmset_snapshot(
             "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 25%; discharging; (no estimate) present: true",
         )
         .unwrap();
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=red]25%#[norange]#[default]#[pop-default]"
+            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new()).details,

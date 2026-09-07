@@ -585,14 +585,16 @@ fn visible_summary(
     history: &VecDeque<f64>,
     summary_mode: SummaryMode,
 ) -> String {
-    let mut visible = format!("#[fg=colour178]CPU#[default] {:.0}%", cpu.total());
+    let total = cpu.total();
+    let mut visible =
+        format!("#[fg=colour178]CPU#[default] #[fg=colour245]{total:>2.0}%#[default]");
     if summary_mode == SummaryMode::Compact {
         return visible;
     }
     if let Some(gpu) = gpu {
         visible.push_str(&format!(
-            " #[fg=colour245]· #[fg=colour178]GPU#[default] {:.0}%",
-            gpu.utilization
+            " #[fg=colour245]· #[fg=colour178]GPU#[default] #[fg=colour245]{:>2.0}%#[default]",
+            gpu.utilization,
         ));
     }
     if !history.is_empty() {
@@ -621,10 +623,20 @@ mod tests {
     }
 
     #[test]
-    fn compact_cpu_summary_uses_natural_percentage_width() {
+    fn compact_cpu_summary_greys_and_reserves_two_percentage_digits() {
         for (user, expected) in [
-            (0.0, "#[fg=colour178]CPU#[default] 0%"),
-            (100.0, "#[fg=colour178]CPU#[default] 100%"),
+            (
+                9.0,
+                "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default]",
+            ),
+            (
+                10.0,
+                "#[fg=colour178]CPU#[default] #[fg=colour245]10%#[default]",
+            ),
+            (
+                100.0,
+                "#[fg=colour178]CPU#[default] #[fg=colour245]100%#[default]",
+            ),
         ] {
             let cpu = CpuSnapshot {
                 user,
@@ -637,6 +649,26 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn full_cpu_summary_greys_and_reserves_two_gpu_percentage_digits() {
+        let cpu = CpuSnapshot {
+            user: 9.0,
+            system: 0.0,
+            idle: 91.0,
+            load: [0.0; 3],
+        };
+        let gpu = GpuSnapshot {
+            utilization: 9.0,
+            model: None,
+        };
+
+        assert_eq!(
+            visible_summary(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Full),
+            "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
+· #[fg=colour178]GPU#[default] #[fg=colour245] 9%#[default]"
+        );
     }
 
     #[test]
@@ -730,16 +762,18 @@ mod tests {
         let rendered = render_status(&cpu, Some(&gpu), &history, SummaryMode::Compact);
         assert!(rendered.summary.starts_with("#[popup=inline:"));
         assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered.summary.contains("CPU#[default] 20%"));
+        assert!(rendered
+            .summary
+            .contains("CPU#[default] #[fg=colour245]20%#[default]"));
         assert!(!rendered.summary.contains("GPU#[default]"));
         assert!(!rendered.summary.contains("▂"));
         assert_eq!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Compact),
-            "#[fg=colour178]CPU#[default] 20%"
+            "#[fg=colour178]CPU#[default] #[fg=colour245]20%#[default]"
         );
         assert!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
-                .contains("#[fg=colour178]GPU#[default] 59% ▂▂")
+                .contains("#[fg=colour178]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
         );
         assert_eq!(CPU_SAMPLE_PERIOD, Duration::from_secs(1));
         assert_eq!(GPU_INTERVAL, Duration::from_secs(15));
