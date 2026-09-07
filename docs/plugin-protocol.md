@@ -391,6 +391,46 @@ entry selectors compound. The numeric manifest `priority` (default 25) is
 scheduling/collision arbitration — do not confuse it with the semantic
 `sources[].priority` salience enum.
 
+## Conformance workflow
+
+Shared protocol scenarios live under `Plugins/_flash_plugin_specs/` and are
+selected by the capabilities declared in each manifest. Put behavior that is
+specific to one plugin process in `Plugins/<id>/specs/*.json`; put a host/Rust
+SDK wire-contract regression in `Plugins/_flash_plugin_specs/regressions/`.
+For a protocol defect, land the smallest shared reproduction before changing
+the implementation.
+
+`Plugins/_flash_plugin_specs/overrides.json` is the only skip/xfail escape
+hatch. Every entry needs a concrete reason. An expected failure that starts
+passing is reported as XPASS and fails the run, so remove the override as soon
+as the implementation catches up.
+
+The complete gate is:
+
+```bash
+./Scripts/test-plugins.sh --lane all
+```
+
+It validates the scenario schema, formats and lints every Rust crate, runs unit
+tests, builds all plugins and the generic Rust probe, and exercises the full
+wire matrix. Its sandbox lane separately runs the lifecycle/handshake and
+sources/publish scenarios under the real generated Seatbelt profiles.
+
+### Seatbelt profile invariants
+
+Seatbelt denies are not reopened by a later allow rule. When a denied parent
+contains an allowed child, carve the child out inside the deny filter with
+`require-all` and `require-not`; `PluginSandbox.secretsReadDeny` is the
+canonical pattern for allowing a plugin's own data directory while denying its
+siblings.
+
+Seatbelt matches canonical vnode paths. Resolve symlinked executables before
+putting them in a profile, and canonicalize temporary fixture roots
+(`/var/folders/...` commonly resolves beneath `/private/var/folders/...`). A
+path that looks equivalent in the shell may otherwise fail silently in the
+profile. For diagnostics, `sandbox-exec` exit 65 means the profile did not
+compile, while exit 71 means the target could not be executed under it.
+
 ## Frozen decisions
 
 Locked while breaking is still free (the MV3 lesson); changing any of these

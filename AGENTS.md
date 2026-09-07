@@ -92,15 +92,15 @@ AGENTS.md                            # This file
 ## Activation flow (read this before editing the hot path)
 
 1. The `flash` CLI runs (`flash mouse_target [secondary=1|double=1|middle=1|triple=1|move=1|drag=1|select=1] [multi=1] [modifiers=cmd+…]`, `flash mouse_grid [secondary=1|double=1|middle=1|triple=1|move=1|drag=1|select=1] [multi=1] [modifiers=cmd+…]`), or a configured `[mode.*]` mapping fires a pre-resolved `MappingAction`. The CLI sends a custom AppleEvent (class `Flsh`, ID `Cmd `); mappings dispatch the same `URLCommand` value directly.
-2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native mappings dispatch a pre-resolved action inside the resident process.
-3. `URLEventHandler` parses URL host/query for AppleEvents and provides the shared parser used by mapping config loading.
+2. The resident half receives the custom AppleEvent through `NSAppleEventManager`; native mappings dispatch a pre-resolved action inside the resident process without external IPC.
+3. `URLEventHandler` parses the AppleEvent verb/arguments and provides the shared parser used by mapping config loading.
 4. `AppDelegate.activate(action:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
 5. `AppMonitor.discoverAsync` first probes activation-only providers such as tmux, whose output is volatile. If a dynamically scoped provider explicitly declines the context with an empty result, discovery falls through to the AX-event-driven prepared model (see *Prepared model contract* below), which delivers native AX-backed `[AssignedHint]` values without an activation-time AX walk.
 6. On the AX queue, `AppMonitor` runs the selected provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, serial tree descent uses an explicit depth-first worklist (never recursive Swift calls), the focused window's direct children are fanned out across concurrent walkers, and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
 7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`.
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
-9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
-10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
+9. With the session tap active, the overlay stays non-key and the focused app remains active; only command/modal surfaces and the no-tap fallback take key-window ownership.
+10. `KeyboardCaptureTap` swallows a hint key and routes it through `OverlayPanel.handleTapCapturedKey`; the no-tap fallback reaches the same interpreter through `NSPanel.keyDown`. On a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
 11. `ActionDispatcher` always synthesizes the committed mouse event into the owning app; providers and plugins never activate a target themselves. Every target preserves the requested click modifiers. `f` requests none and is therefore a plain current-context click, including in Firefox; `F` requests Command-Shift as the uniform new-context gesture. `FlashTerminalLink` targets additionally require Shift so the terminal handles the link instead of forwarding it to tmux (`f` is Shift-click; `F` remains Command-Shift). The cursor lands on the committed chip. The dispatcher is the only place hint mouse synthesis lives.
 12. Overlay hides; process stays resident.
 
@@ -194,6 +194,30 @@ CALayer mutates implicitly animate by default — including `frame`, `bounds`, `
 2. Each pooled chip/label has `layer.actions = OverlayPanel.noActions`, a dict that maps every relevant key to `NSNull()`, so even out-of-transaction mutations don't animate.
 
 If you add a new visible property (gradient, shadow path, …), add its key to `OverlayPanel.noActions` too.
+
+## Input latency budget
+
+The keyboard tap, Carbon callbacks, AX observer sources, and mode coordinator
+share the main run loop. Treat it as the NORMAL/hints input budget:
+
+- Keep the event-tap swallow decision synchronous and minimal. Never put AX
+  IPC, `CGWindowListCopyWindowInfo`, sleeps, full overlay layout, subprocesses,
+  filesystem I/O, or Carbon registration churn on a keypress or recapture path.
+- Recapture-only events call `recaptureNormalModeKeyboardInput()`. With a live
+  tap, restore `.normal` routing and stop; reserve key-window retries for the
+  no-tap fallback, and never rebuild the status bar or border merely to
+  recapture.
+- Once the command surface is presented, edits update only the prompt/results
+  layers. Build the plugin/help completion inventory once per command session
+  and discard it in `resetCommandLineState()`.
+- Route tab traversal and selection through `normalModeDispatchContext()`;
+  identity-only actions must not acquire exact AX or WindowServer geometry.
+- On scope-only mode changes, call `MappingsCoordinator.apply(scope:)` so
+  all-scope Carbon registrations remain installed. Rebuild the full registry
+  only when effective mappings change.
+
+See `docs/normal-mode.md#input-capture-and-latency` for the maintained paths and
+diagnostics.
 
 ## Adding a new source
 
@@ -371,8 +395,9 @@ state comes from the bundled tmux plugin's status segments
 bundled `cpu`, `memory`, `disks`, `network`, and `power` monitor plugins each
 expose `#{plugin:<id>.summary}` plus `#{plugin:<id>.details}`; every summary
 atomically carries its own inline hover popup. `processes.focused_app_details`
-owns focused-app telemetry, and the bundled aiproviders plugin owns the Claude,
-Fable, and Codex compact/detail usage segments declared in its manifest.
+owns focused-app telemetry. The bundled `aiproviders` plugin exposes one
+unified `summary`/`details` pair, grouping Fable beneath Claude and Astra
+beneath OpenAI.
 The format grammar is a strict tmux superset: modifiers `#{?cond,a,b}`,
 `#{==:}`/`#{!=:}`/`#{<:}`/`#{>:}`/`#{<=:}`/`#{>=:}`/`#{&&:}`/`#{||:}`,
 `#{s/re/repl/[i]:var}`, `#{pN:}`/`#{p-N:}`, `#{=N:}`/`#{=-N:}` (Flash `…`
@@ -407,7 +432,32 @@ through ONE function (`configureStatusBarSurface` + `StatusBarSurface`);
 never fork a per-screen layout copy. Overflow first contracts the elastic
 `#[shrink]…#[noshrink]` span, then marker-safely truncates the whole lane to
 its hard pixel budget (the right lane preserves its suffix); lane frames never
-overlap, and layout keeps a 16 pt margin around a notch.
+overlap, and layout keeps the configured `statusbar.notch_margin` around a
+notch (default `0`).
+
+### Status plugin contracts
+
+- Keep local telemetry split across `cpu`, `memory`, `disks`, `network`, and
+  `power`; each owns only `summary` and `details`, and every summary embeds its
+  details with `inline_status_popup`. Keep system actions in `system`, sleep
+  assertions in `caffeinate`, and AI usage in `aiproviders`.
+- Separate nominal one-second sampling from slower discovery/health work.
+  Explicit refresh commands must skip occupied collectors and return last-good
+  state instead of queueing behind background work.
+- Preserve last-good state across transient failures, while retaining the
+  bounded expiry for stale disk/network rates and history. Publish only changed
+  rendered values, latch repeated collection failures until recovery, and
+  distinguish valid hardware absence from failure.
+- Keep monitor collection helperless and default-denied. In particular,
+  `network` must not gain broad `network` capability or `/sbin/route`; SSID
+  access stays behind `wifi_info`, with authorization requested only by an
+  explicit user action.
+- Escape every externally sourced rich-status string and publish monitor
+  summaries with `inline_status_popup`; popup hover must remain a pure read of
+  already-rendered state.
+
+See `docs/status-plugins.md` for ownership, cadence, sandbox, markup, and
+validation details.
 
 **Every executable bundled plugin is Rust and macOS-only.** The wire protocol
 remains language-neutral for third-party executables, but the repository
@@ -554,7 +604,7 @@ to USD; configure up to eight codes with
 **Plugin latency telemetry is binding and content-free.** The host warns when
 its end-to-end `evaluate` RPC reaches 40 ms, before the 50-ms hard deadline —
 treat a slow evaluator body as a bug. Warn when a publish validation takes at
-least 100 ms. The flashlight first paint is a synchronous store read and must
+least 50 ms. The flashlight first paint is a synchronous store read and must
 stay effectively instant. Every host RPC timeout
 and every successful generic RPC over 1 s logs the plugin id, method, and
 elapsed milliseconds; plugin-to-host RPC timeouts log the method and
@@ -831,10 +881,13 @@ swift test                                           # unit (incl. plugin engine
 ```
 
 A plugin/protocol change is not done until `Scripts/test-plugins.sh --lane
-all` is green, and a protocol bug found in any SDK lands its repro spec in
-`Plugins/_flash_plugin_specs/regressions/` BEFORE the fix (see the README
-there): the shared suite is the cross-stack ISO-behavior guarantee, and it
-only grows. `:plugins doctor` is the in-app checkhealth.
+all` is green. A host/Rust SDK wire-contract bug lands its minimal shared repro
+in `Plugins/_flash_plugin_specs/regressions/` BEFORE the fix; plugin-domain
+process scenarios belong in `Plugins/<id>/specs/`. `overrides.json` is the sole
+skip/xfail escape hatch: every entry needs a concrete reason, and an XPASS fails
+the run so the stale override is removed immediately. The shared suite is the
+cross-stack ISO-behavior guarantee, and it only grows. `:plugins doctor` is the
+in-app checkhealth.
 
 Anything that requires the full overlay / commit pipeline (chip rendering, key handling, host clicks against a live focused app) is still **manually verified**: run `./Scripts/install.sh --dev`, grant permissions if needed, then exercise the app in real target apps.
 
@@ -880,11 +933,12 @@ stays in the normal-mode map for users who've opted in.
 
 - **AX `AXUIElementPerformAction` requires Accessibility permission.** Without it, the call returns `.notImplemented` or `.cannotComplete` silently; the user sees nothing happen. `--doctor`-equivalent diagnostics live in `Permissions/PermissionCheck.swift` (currently only AX check; extend if adding more required perms).
 - **`AXObserver` callbacks run on the main run loop.** Don't do AX work inside them — schedule onto `refreshQueue`.
-- **`NSPanel(.nonactivatingPanel)` can become key without activating the app.** That is intentional: the overlay needs to receive keys without stealing the target app's frontmost status. `commit` reactivates the owning app before dispatching its host mouse event.
+- **The normal/hints overlay is non-key when the session tap is live.** Command/modal surfaces and the no-tap fallback may take key-window ownership; `commit` still reactivates the target owner before dispatching its host mouse event.
 - **`CGEventSource` `.combinedSessionState`** is the right choice for synthesizing input; it sees the current modifier state, so e.g. shift held during commit doesn't poison the click.
 - **New keyboard-owned interaction surfaces are hints sub-states, not `OverlayInputMode` cases.** Follow the `--adjust` / `--search` / pointer-mode pattern: a panel flag routes `.hints` keys to a pure, unit-tested interpreter and one coordinator callback, with sub-state fields living in `HintSession` so the single-assignment reset covers them. Adding an `OverlayInputMode` case instead ripples through the mode projection, `shouldSwallow`, and capture policy for no benefit.
 - **The deny-default seatbelt profile cannot host networked CLIs.** TLS needs trustd mach allowances and credential reads hit the hard-coded secrets deny list (verified empirically with `gh`, whose token lives in the keychain). Wrappers around such tools use the unsandboxed `subprocess` shape like tmux; do not try to widen the profile instead.
 - **Seatbelt counts unix-domain-socket connects as `network-outbound`.** A sandboxed plugin that talks to a local socket (kitty remote control) must declare the `network` capability or every connect is silently denied.
+- **Seatbelt denies cannot be reopened by later allows.** Carve an allowed child out inside the deny with `require-all`/`require-not`, as `PluginSandbox.secretsReadDeny` does; never rely on rule order. Resolve symlinked executables and canonicalize temporary fixture roots before embedding them because Seatbelt matches canonical vnode paths (`/var/folders` commonly resolves beneath `/private/var/folders`). For diagnostics, `sandbox-exec` exit 65 is profile compilation failure and 71 is target-exec denial.
 - **Stage commits with explicit paths, never `git add -A`.** The maintainer edits this checkout concurrently; a blanket add sweeps their in-flight work into your commit.
 
 ## When in doubt

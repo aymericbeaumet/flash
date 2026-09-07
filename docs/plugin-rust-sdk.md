@@ -150,6 +150,16 @@ returns every emitted frame decoded to JSON (publishes, status, logs);
 `set_running_applications` seeds the app snapshot. Add tokio to
 `[dev-dependencies]` for async tests.
 
+Use the harness for handler-level behavior, a plugin-local
+`Plugins/<id>/specs/*.json` scenario for full subprocess/wire behavior, and a
+shared `Plugins/_flash_plugin_specs/regressions/*.json` scenario only when the
+host/Rust SDK protocol contract itself is involved.
+
+If a plugin will not load, run `:plugins doctor`. It checks manifest loading,
+runtime state, executable resolution, and whether the generated Seatbelt
+profile compiles. Use `:plugins reload` after correcting the problem or to
+restart a process parked by its restart budget.
+
 ## Iteration loop
 
 ```bash
