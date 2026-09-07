@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "AI Providers immediately publishes one popup-backed compact summary and one aligned detail surface before cached provider refreshes complete.",
+  "description": "AI Providers immediately publishes one popup-backed compact summary and one aligned Claude/Fable/OpenAI/Grok detail surface before cached provider refreshes complete.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
@@ -18,7 +18,7 @@
               "$contains": "]#[fg=colour178]AI#[default]#[nopopup]"
             },
             "details": {
-              "$contains": "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude"
+              "$contains": "#[fg=colour245]Grok      7-day"
             }
           }
         }
