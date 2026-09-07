@@ -281,6 +281,15 @@ extension AppDelegate {
     case .click, .copyURL, .moveMouse, .drag, .select, .multiClick, .adjustClick, .searchClick:
       break
     }
+    if hint.target.role == AppDelegate.statusBarHoverHintRole {
+      let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
+      overlay.hide()
+      clearHintSessionState()
+      activationLifecycle.supersede()
+      applyModeOverlay()
+      _ = ActionDispatcher.moveCursor(to: point)
+      return
+    }
     if pendingHintCommitBehavior == .copyURL {
       if let url = hint.target.url {
         NormalModeDispatcher.copy(url)

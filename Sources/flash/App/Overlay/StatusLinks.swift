@@ -8,6 +8,22 @@ struct StatusBarPopupRegion: Equatable {
   var content: String
 }
 
+enum StatusBarHintAction: Equatable {
+  case click(URL)
+  case hover(String)
+}
+
+struct StatusBarHintRegion: Equatable {
+  var rect: CGRect
+  var action: StatusBarHintAction
+}
+
+struct StatusBarScreenInteractions {
+  var screenFrame: CGRect
+  var links: [(rect: CGRect, url: URL)]
+  var popups: [StatusBarPopupRegion]
+}
+
 /// The status bar's click surface: one window per screen spanning the menu-bar
 /// band, routed by normal Cocoa hit-testing — no CGEvent tap. Two jobs:
 ///
@@ -147,6 +163,31 @@ final class StatusBarClickPanel: NSPanel {
 }
 
 extension OverlayPanel {
+  /// Hintable status spans ordered from left to right. Popup-only spans move
+  /// the pointer so their hover surface opens; a popup covering the same glyph
+  /// span as a link reuses the link's click hint instead of drawing a duplicate.
+  static func statusBarHintRegions(
+    links: [(rect: CGRect, url: URL)],
+    popups: [StatusBarPopupRegion]
+  ) -> [StatusBarHintRegion] {
+    func sameSpan(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+      abs(lhs.minX - rhs.minX) < 0.5
+        && abs(lhs.maxX - rhs.maxX) < 0.5
+        && abs(lhs.minY - rhs.minY) < 0.5
+        && abs(lhs.maxY - rhs.maxY) < 0.5
+    }
+
+    let clickRegions = links.map { StatusBarHintRegion(rect: $0.rect, action: .click($0.url)) }
+    let hoverRegions = popups.compactMap { popup -> StatusBarHintRegion? in
+      guard !links.contains(where: { sameSpan($0.rect, popup.rect) }) else { return nil }
+      return StatusBarHintRegion(rect: popup.rect, action: .hover(popup.name))
+    }
+    return (clickRegions + hoverRegions).sorted {
+      if abs($0.rect.minX - $1.rect.minX) >= 0.5 { return $0.rect.minX < $1.rect.minX }
+      return $0.rect.minY < $1.rect.minY
+    }
+  }
+
   /// Screen-space rects + targets for the `#[link=…]` runs in one rendered
   /// region. `labelFrame` is the text layer's frame relative to the bar
   /// layer; `barFrame` is the bar layer's frame relative to the panel;

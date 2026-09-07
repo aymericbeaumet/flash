@@ -294,7 +294,7 @@ extension OverlayPanel {
     // the same code path as the secondaries (via `StatusBarSurface`), so the
     // two can never drift again — and secondaries gain the cycle layer and
     // clickable links the old copy silently lacked.
-    var linksByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
+    var interactionsByScreen: [StatusBarScreenInteractions] = []
     var popupRegions: [StatusBarPopupRegion] = []
     let primaryInteractions = configureStatusBarSurface(
       PrimaryStatusBarSurface(panel: self),
@@ -313,7 +313,11 @@ extension OverlayPanel {
       leftTrailingRaw: leftTrailingRaw,
       centreRaw: centreRaw,
       rightRaw: rightRaw)
-    linksByScreen.append((screenFrame: mainScreenFrame, links: primaryInteractions.links))
+    interactionsByScreen.append(
+      StatusBarScreenInteractions(
+        screenFrame: mainScreenFrame,
+        links: primaryInteractions.links,
+        popups: primaryInteractions.popups))
     popupRegions += primaryInteractions.popups
 
     // Same bar on every other screen, sized to that screen's own native
@@ -350,21 +354,25 @@ extension OverlayPanel {
         leftTrailingRaw: leftTrailingRaw,
         centreRaw: centreRaw,
         rightRaw: rightRaw)
-      linksByScreen.append((screenFrame: screen.frame, links: interactions.links))
+      interactionsByScreen.append(
+        StatusBarScreenInteractions(
+          screenFrame: screen.frame,
+          links: interactions.links,
+          popups: interactions.popups))
       popupRegions += interactions.popups
     }
 
     if modeBadgeVisible {
-      statusBarLinkRectsByScreen = linksByScreen
+      statusBarInteractionsByScreen = interactionsByScreen
       // ONE sync carrying every screen's links: the click windows intersect
       // the flat list per band, so secondary-bar links are mouse-clickable
       // now (they used to be hint-only).
       syncStatusBarClickWindows(
         bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),
-        links: linksByScreen.flatMap(\.links),
+        links: interactionsByScreen.flatMap(\.links),
         popups: popupRegions)
     } else {
-      statusBarLinkRectsByScreen = []
+      statusBarInteractionsByScreen = []
       hideStatusBarClickWindows()
     }
   }
@@ -376,8 +384,8 @@ extension OverlayPanel {
   /// Lay out ONE screen's bar onto `surface`. This is the single source of
   /// the bar's geometry — the primary bar (via `PrimaryStatusBarSurface`)
   /// and every `SecondaryStatusBar` run through it with their own screen
-  /// frame, scale, and notch. Returns the screen-coordinate link rects for
-  /// the click windows and the `f`-hint path.
+  /// frame, scale, and notch. Returns screen-coordinate interaction rects for
+  /// the click windows, hover popups, and the `f`-hint path.
   private func configureStatusBarSurface(
     _ surface: StatusBarSurface,
     screenFrame: CGRect,

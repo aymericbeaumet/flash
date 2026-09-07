@@ -8,6 +8,8 @@ import FlashCore
 /// activation generation token, the prepared-model lookup, and the
 /// no-targets / accessibility-revoked exit paths.
 extension AppDelegate {
+  static let statusBarHoverHintRole = "FlashStatusBarHover"
+
   // MARK: Activation
 
   func activateMouseTarget(_ command: MouseCommand, contextOverride: AppContext?) {
@@ -171,13 +173,12 @@ extension AppDelegate {
         )
         return
       }
-      // Left-click hints (`f`) also label the Flash status bar's `#[link=…]`
-      // runs, but only on the bar sitting on the active window's screen — so
-      // the visible links get a hint without duplicating them across every
-      // mirrored bar.
+      // Left-click hints (`f`) also label clickable and hover-popup status
+      // spans, but only on the active window's screen. Popup-only commits move
+      // the pointer into the span; clickable spans retain their click action.
       let statusBarTargets: [JumpTarget] =
         commitBehavior == .click && action == .leftClick
-        ? self.statusBarLinkTargets(forActiveWindowFrame: context.frontWindowFrame)
+        ? self.statusBarHintTargets(forActiveWindowFrame: context.frontWindowFrame)
         : []
 
       if hints.isEmpty {
@@ -207,7 +208,7 @@ extension AppDelegate {
         }
       }
       // Re-assign labels over the combined set so the app targets and the
-      // status-bar links share one prefix-free alphabet (app targets keep the
+      // status-bar segments share one prefix-free alphabet (app targets keep the
       // shorter labels — they come first).
       let displayHints =
         statusBarTargets.isEmpty
@@ -227,7 +228,7 @@ extension AppDelegate {
       FlashLog.debug(
         "[activation] displayed pid=\(context.processID) "
           + "bundle=\(context.bundleIdentifier) hints=\(displayHints.count) "
-          + "status_links=\(statusBarTargets.count)"
+          + "status_segments=\(statusBarTargets.count)"
       )
     }
   }
@@ -245,16 +246,14 @@ extension AppDelegate {
       minLength: config.hints.minLength)
   }
 
-  /// Hint targets for the Flash status bar's `#[link=…]` runs on the bar that
-  /// sits on the active window's screen. The rects are captured each render
-  /// (`configureModeBadge`) in screen coordinates; here we pick the screen the
-  /// focused window predominantly occupies and turn each link run into a
-  /// `JumpTarget`. Commit posts the same host click as every other hint, and
-  /// `StatusBarClickView` handles it through normal Cocoa hit-testing.
+  /// Hint targets for clickable and hover-popup spans on the Flash status bar
+  /// sitting on the active window's screen. The rects are captured each render
+  /// (`configureModeBadge`) in screen coordinates; clickable commits use Cocoa
+  /// hit-testing, while popup-only commits move the pointer into the span.
   /// Returns `[]` when the bar is hidden or the active window is on a screen
   /// without a bar.
-  private func statusBarLinkTargets(forActiveWindowFrame windowFrame: CGRect) -> [JumpTarget] {
-    let byScreen = overlay.statusBarLinkRectsByScreen
+  private func statusBarHintTargets(forActiveWindowFrame windowFrame: CGRect) -> [JumpTarget] {
+    let byScreen = overlay.statusBarInteractionsByScreen
     guard !byScreen.isEmpty, !windowFrame.isNull else { return [] }
     func overlapArea(_ a: CGRect, _ b: CGRect) -> CGFloat {
       let r = a.intersection(b)
@@ -266,22 +265,34 @@ extension AppDelegate {
       }),
       overlapArea(best.screenFrame, windowFrame) > 0
     else { return [] }
-    return best.links.enumerated().map { idx, link in
+    let regions = OverlayPanel.statusBarHintRegions(links: best.links, popups: best.popups)
+    return regions.enumerated().map { idx, region in
       // A short, leading-edge chip: the 2pt-high frame makes `chipFrame` centre
       // the chip on the bar band's midline and anchor it to the run's leading
       // edge (the run is wider than a chip), so the label lands over the link.
       let frame = CGRect(
-        x: link.rect.minX,
-        y: link.rect.midY - 1,
-        width: max(link.rect.width, 1),
+        x: region.rect.minX,
+        y: region.rect.midY - 1,
+        width: max(region.rect.width, 1),
         height: 2)
-      return JumpTarget(
-        id: "statusbar_link_\(idx)_\(link.url.absoluteString)",
-        frame: frame,
-        role: "AXLink",
-        url: link.url.absoluteString,
-        entersInsertMode: false,
-        providerID: "statusbar")
+      switch region.action {
+      case .click(let url):
+        return JumpTarget(
+          id: "statusbar_click_\(idx)_\(url.absoluteString)",
+          frame: frame,
+          role: "AXLink",
+          url: url.absoluteString,
+          entersInsertMode: false,
+          providerID: "statusbar")
+      case .hover(let name):
+        return JumpTarget(
+          id: "statusbar_hover_\(idx)_\(name)",
+          frame: frame,
+          role: Self.statusBarHoverHintRole,
+          url: nil,
+          entersInsertMode: false,
+          providerID: "statusbar")
+      }
     }
   }
 

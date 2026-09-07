@@ -275,6 +275,23 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(regions[0].rect.height, 40, accuracy: 0.001)
   }
 
+  func testStatusBarHintRegionsIncludePopupOnlySegmentsAndPreferClicksOnOverlap() {
+    let hoverRect = CGRect(x: 10, y: 760, width: 30, height: 24)
+    let clickRect = CGRect(x: 60, y: 760, width: 40, height: 24)
+    let url = URL(string: "https://example.com")!
+
+    let regions = OverlayPanel.statusBarHintRegions(
+      links: [(rect: clickRect, url: url)],
+      popups: [
+        StatusBarPopupRegion(rect: hoverRect, name: "memory", content: "Memory details"),
+        StatusBarPopupRegion(rect: clickRect, name: "article", content: "Article preview"),
+      ])
+
+    XCTAssertEqual(regions.count, 2)
+    XCTAssertEqual(regions[0], StatusBarHintRegion(rect: hoverRect, action: .hover("memory")))
+    XCTAssertEqual(regions[1], StatusBarHintRegion(rect: clickRect, action: .click(url)))
+  }
+
   func testAnimatedSpansRenderHiddenInBaseAndFullInEffectRuns() {
     let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
     let raw = "ac #[breathing]82%#[nobreathing] rest"

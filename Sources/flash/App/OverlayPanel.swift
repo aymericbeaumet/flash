@@ -108,11 +108,11 @@ final class OverlayPanel: NSPanel {
   /// Signature of the currently-installed band + link rects, so an unchanged
   /// render skips reordering the click windows.
   var lastStatusBarClickSignature: String?
-  /// Per-screen status-bar `#[link=…]` rects in screen coordinates, rebuilt on
-  /// every `configureModeBadge`. Keyed by each screen's frame so the `f` hint
-  /// path can place link hints only on the bar of the active window's screen
-  /// (not on every mirrored bar). Empty while the bar is hidden.
-  var statusBarLinkRectsByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
+  /// Per-screen clickable and hover-popup rects in screen coordinates, rebuilt
+  /// on every `configureModeBadge`. The `f` hint path uses the active window's
+  /// screen so every meaningful status segment is hintable without duplicating
+  /// mirrored bars. Empty while the bar is hidden.
+  var statusBarInteractionsByScreen: [StatusBarScreenInteractions] = []
   /// Named hover-popup hit regions use the click windows' existing tracking
   /// areas but render into this panel so no extra event surface or event tap
   /// is needed.
