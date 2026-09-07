@@ -3,16 +3,16 @@
 //! Quota refreshes run after the protocol handshake and never on status-bar
 //! rendering or popup hover. The plugin immediately republishes its sanitized
 //! last-good cache, republishes changed rendered status at minute boundaries,
-//! then refreshes Anthropic every ten minutes and Codex/Grok every two minutes.
-//! Only percentages, reset epochs, window lengths, and fetch time are persisted
-//! in the plugin cache; credential rotations write back only to their owning
+//! then refreshes Anthropic every ten minutes and Codex every two minutes. Only
+//! percentages, reset epochs, window lengths, and fetch time are persisted in
+//! the plugin cache; credential rotations write back only to their owning
 //! stores, and raw responses stay in memory.
 //!
-//! Claude Code keeps OAuth credentials in the login keychain, Codex owns its
-//! auth behind `codex app-server`, and Grok reuses OpenCode's xAI OAuth entry.
-//! Those interfaces require subprocesses that a deny-default plugin profile
-//! cannot access, so the manifest follows the bundled GitHub plugin's
-//! `subprocess` posture. Tokens are passed through stdin, never argv or logs.
+//! Claude Code keeps OAuth credentials in the login keychain, while Codex owns
+//! its auth behind `codex app-server`. Those interfaces require subprocesses
+//! that a deny-default plugin profile cannot access, so the manifest follows
+//! the bundled GitHub plugin's `subprocess` posture. Tokens are passed through
+//! stdin, never argv or logs.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,25 +38,18 @@ const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const ANTHROPIC_USAGE_TTL: u64 = 600;
 const ANTHROPIC_RETRY_SECONDS: u64 = 300;
 const CODEX_USAGE_TTL: u64 = 120;
-const GROK_USAGE_TTL: u64 = 120;
-const GROK_RETRY_SECONDS: u64 = 60;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(6);
 const COMMAND_STDOUT_LIMIT: usize = 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 64 * 1024;
 const ANTHROPIC_CACHE: &str = "anthropic-usage-v1.json";
 const CODEX_CACHE: &str = "codex-usage-v1.json";
-const GROK_CACHE: &str = "grok-usage-v1.json";
 const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const GROK_USAGE_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
-const XAI_TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
-const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 static USAGE_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static CODEX_PATH: LazyLock<OnceCell<Option<PathBuf>>> = LazyLock::new(OnceCell::new);
 static ANTHROPIC_RETRY_AT: AtomicU64 = AtomicU64::new(0);
-static GROK_RETRY_AT: AtomicU64 = AtomicU64::new(0);
 
 /// Sorted by bang token so lookup stays allocation-free.
 const PROVIDERS: &[(&str, &str, &str)] = &[
@@ -116,19 +109,6 @@ struct CodexUsage {
     weekly: Option<WindowUsage>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-struct GrokUsage {
-    updated_at: u64,
-    weekly: Option<WindowUsage>,
-}
-
-impl GrokUsage {
-    fn sanitize(mut self) -> Option<Self> {
-        self.weekly = self.weekly.filter(WindowUsage::valid);
-        self.weekly.is_some().then_some(self)
-    }
-}
-
 impl CodexUsage {
     fn sanitize(mut self) -> Option<Self> {
         self.session = self.session.filter(WindowUsage::valid);
@@ -141,7 +121,6 @@ impl CodexUsage {
 struct UsageState {
     anthropic: Option<AnthropicUsage>,
     codex: Option<CodexUsage>,
-    grok: Option<GrokUsage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,14 +171,7 @@ async fn load_usage_state(ctx: &Context) -> UsageState {
     let codex = load_json::<CodexUsage>(&ctx.data_dir().join(CODEX_CACHE))
         .await
         .and_then(CodexUsage::sanitize);
-    let grok = load_json::<GrokUsage>(&ctx.data_dir().join(GROK_CACHE))
-        .await
-        .and_then(GrokUsage::sanitize);
-    UsageState {
-        anthropic,
-        codex,
-        grok,
-    }
+    UsageState { anthropic, codex }
 }
 
 async fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
@@ -257,11 +229,6 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
                 .codex
                 .as_ref()
                 .is_none_or(|usage| !fresh(usage.updated_at, CODEX_USAGE_TTL, now));
-            let refresh_grok = state
-                .grok
-                .as_ref()
-                .is_none_or(|usage| !fresh(usage.updated_at, GROK_USAGE_TTL, now))
-                && now >= GROK_RETRY_AT.load(Ordering::Relaxed);
 
             let anthropic = async {
                 if refresh_anthropic {
@@ -277,14 +244,7 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
                     None
                 }
             };
-            let grok = async {
-                if refresh_grok {
-                    fetch_grok_usage(now).await
-                } else {
-                    None
-                }
-            };
-            let (anthropic, codex, grok) = tokio::join!(anthropic, codex, grok);
+            let (anthropic, codex) = tokio::join!(anthropic, codex);
 
             if let Some(usage) = anthropic {
                 ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
@@ -299,13 +259,6 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
             if let Some(usage) = codex {
                 let _ = write_json(&ctx.data_dir().join(CODEX_CACHE), &usage).await;
                 state.codex = Some(usage);
-            }
-            if let Some(usage) = grok {
-                GROK_RETRY_AT.store(0, Ordering::Relaxed);
-                let _ = write_json(&ctx.data_dir().join(GROK_CACHE), &usage).await;
-                state.grok = Some(usage);
-            } else if refresh_grok {
-                GROK_RETRY_AT.store(now.saturating_add(GROK_RETRY_SECONDS), Ordering::Relaxed);
             }
             shared.write().await.state = state;
             publish_current_status(&ctx, &shared).await;
@@ -386,41 +339,6 @@ fn parse_codex_rate_limits(raw: &str, now: u64) -> Option<CodexUsage> {
     .sanitize()
 }
 
-fn parse_grok_usage(raw: &str, now: u64) -> Option<GrokUsage> {
-    let root: Value = serde_json::from_str(raw).ok()?;
-    let config = root.get("config")?;
-    let period = config.get("currentPeriod")?;
-    if period.get("type").and_then(Value::as_str) != Some("USAGE_PERIOD_TYPE_WEEKLY") {
-        return None;
-    }
-    let resets_at = period
-        .get("end")
-        .or_else(|| config.get("billingPeriodEnd"))
-        .and_then(epoch_value);
-    let used_percent = config
-        .get("productUsage")
-        .and_then(Value::as_array)
-        .and_then(|usage| {
-            usage
-                .iter()
-                .find(|entry| entry.get("product").and_then(Value::as_str) == Some("GrokBuild"))
-        })
-        .and_then(|entry| entry.get("usagePercent"))
-        .and_then(usage_percent)
-        .unwrap_or(0.0);
-    GrokUsage {
-        updated_at: now,
-        weekly: Some(WindowUsage::new(used_percent, resets_at, 10_080)),
-    }
-    .sanitize()
-}
-
-fn epoch_value(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(parse_rfc3339_epoch))
-}
-
 fn codex_window(value: &Value) -> Option<WindowUsage> {
     let used = usage_percent(value.get("usedPercent")?)?;
     let window_minutes = value.get("windowDurationMins")?.as_u64()?;
@@ -450,7 +368,6 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
         .as_ref()
         .map(|usage| (usage.session.as_ref(), usage.weekly.as_ref()))
         .unwrap_or((None, None));
-    let grok_week = state.grok.as_ref().and_then(|usage| usage.weekly.as_ref());
     let visible = "#[fg=colour178]AI#[default]";
 
     let codex_session_label = codex_session
@@ -468,7 +385,6 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
         popup_row("", "7-day", fable_week, shared_session, now),
         popup_row("OpenAI", &codex_session_label, codex_session, None, now),
         popup_row("", &codex_week_label, codex_week, codex_session, now),
-        popup_row("Grok", "7-day", grok_week, None, now),
     ];
     let details = lines.join("\n");
     StatusSegments {
@@ -911,132 +827,6 @@ fn safe_keychain_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-async fn fetch_grok_usage(now: u64) -> Option<GrokUsage> {
-    let token = xai_access_token(now).await?;
-    let curl_config = format!(
-        "header = \"Authorization: Bearer {token}\"\n\
-         header = \"Accept: application/json\"\n\
-         header = \"x-grok-client-identifier: grok-shell\"\n\
-         header = \"x-grok-client-version: 1.0.5\"\n\
-         header = \"X-XAI-Token-Auth: xai-grok-cli\"\n"
-    );
-    let response = capture(
-        Path::new("/usr/bin/curl"),
-        &["-fsS", "--max-time", "5", "-K", "-", GROK_USAGE_URL],
-        Some(curl_config.into_bytes()),
-        COMMAND_TIMEOUT,
-    )
-    .await?;
-    parse_grok_usage(&response.stdout, now)
-}
-
-async fn xai_access_token(now: u64) -> Option<String> {
-    let path = opencode_auth_path()?;
-    let mut credentials: Value = load_json(&path).await?;
-    let oauth = credentials.get("xai")?;
-    if oauth.get("type").and_then(Value::as_str) != Some("oauth") {
-        return None;
-    }
-    let expires_at = oauth
-        .get("expires")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    if expires_at <= now.saturating_add(120).saturating_mul(1_000) {
-        refresh_xai_credentials(&path, &mut credentials, now).await?;
-    }
-    credentials
-        .pointer("/xai/access")
-        .and_then(Value::as_str)
-        .filter(|token| safe_header_value(token))
-        .map(str::to_string)
-}
-
-fn opencode_auth_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_DATA_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| user_home().map(|home| home.join(".local/share")))
-        .map(|directory| directory.join("opencode/auth.json"))
-}
-
-async fn refresh_xai_credentials(path: &Path, credentials: &mut Value, now: u64) -> Option<()> {
-    let refresh_token = credentials
-        .pointer("/xai/refresh")
-        .and_then(Value::as_str)?;
-    if refresh_token.is_empty() {
-        return None;
-    }
-    let body = format!(
-        "grant_type=refresh_token&refresh_token={}&client_id={XAI_OAUTH_CLIENT_ID}",
-        form_encode(refresh_token),
-    );
-    let response = capture(
-        Path::new("/usr/bin/curl"),
-        &[
-            "-fsS",
-            "--max-time",
-            "5",
-            "-H",
-            "Accept: application/json",
-            "-H",
-            "Content-Type: application/x-www-form-urlencoded",
-            "-H",
-            "User-Agent: opencode/flash-status",
-            "--data-binary",
-            "@-",
-            XAI_TOKEN_URL,
-        ],
-        Some(body.into_bytes()),
-        COMMAND_TIMEOUT,
-    )
-    .await?;
-    let refreshed: Value = serde_json::from_str(&response.stdout).ok()?;
-    apply_xai_refresh(credentials, &refreshed, now)?;
-    let body = serde_json::to_vec(credentials).ok()?;
-    write_secret(path, &body).await.then_some(())
-}
-
-fn apply_xai_refresh(credentials: &mut Value, refreshed: &Value, now: u64) -> Option<()> {
-    let access_token = refreshed.get("access_token")?.as_str()?;
-    if !safe_header_value(access_token) {
-        return None;
-    }
-    let expires_in = refreshed
-        .get("expires_in")
-        .and_then(Value::as_u64)
-        .unwrap_or(3_600);
-    let oauth = credentials.get_mut("xai")?.as_object_mut()?;
-    if oauth.get("type").and_then(Value::as_str) != Some("oauth") {
-        return None;
-    }
-    oauth.insert("access".to_string(), json!(access_token));
-    if let Some(refresh_token) = refreshed
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty())
-    {
-        oauth.insert("refresh".to_string(), json!(refresh_token));
-    }
-    oauth.insert(
-        "expires".to_string(),
-        json!(now.saturating_add(expires_in).saturating_mul(1_000)),
-    );
-    Some(())
-}
-
-fn form_encode(input: &str) -> String {
-    let mut encoded = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char)
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
-}
-
 async fn fetch_codex_usage(now: u64) -> Option<CodexUsage> {
     let codex = resolved_codex_path().await?;
     let input = concat!(
@@ -1354,16 +1144,12 @@ mod tests {
                 session: Some(WindowUsage::new(35.9, Some(18_000), 300)),
                 weekly: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
             }),
-            grok: Some(GrokUsage {
-                updated_at: 0,
-                weekly: Some(WindowUsage::new(35.0, Some(604_800), 10_080)),
-            }),
         };
 
         let segments = render_status_segments(&state, 0);
         assert_eq!(
             segments.details,
-            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]Fable     shared 5-hour#[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]Grok      7-day        #[default]  #[fg=#D08770] 65%#[default]  7d"
+            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]Fable     shared 5-hour#[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d"
         );
         assert_eq!(
             segments.summary,
@@ -1384,41 +1170,7 @@ mod tests {
         assert!(segments
             .details
             .contains("#[fg=colour245]Claude    5-hour       #[default]     —  —"));
-        assert!(segments.details.contains("#[fg=colour245]Grok      7-day"));
         assert!(!segments.all().iter().any(|value| value.contains("?%")));
-    }
-
-    #[test]
-    fn grok_usage_parses_the_weekly_period_and_zero_usage_when_omitted() {
-        let usage = parse_grok_usage(
-            r#"{
-              "config": {
-                "currentPeriod": {
-                  "type": "USAGE_PERIOD_TYPE_WEEKLY",
-                  "end": "1970-01-08T00:00:00Z"
-                },
-                "productUsage": [
-                  {"product": "Other", "usagePercent": 99},
-                  {"product": "GrokBuild", "usagePercent": 35.2}
-                ]
-              }
-            }"#,
-            0,
-        )
-        .expect("valid Grok usage");
-        assert_eq!(usage.weekly.unwrap().used_percent, 35.2);
-
-        let unused = parse_grok_usage(
-            r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"1970-01-08T00:00:00Z"}}}"#,
-            0,
-        )
-        .expect("valid unused Grok period");
-        assert_eq!(unused.weekly.unwrap().used_percent, 0.0);
-        assert!(parse_grok_usage(
-            r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_DAILY"}}}"#,
-            0,
-        )
-        .is_none());
     }
 
     #[test]
@@ -1439,13 +1191,6 @@ mod tests {
         assert!(runtime.status_update(0).is_none());
         assert!(runtime.status_update(60).is_some());
         assert!(runtime.status_update(60).is_none());
-
-        runtime.state.grok = Some(GrokUsage {
-            updated_at: 60,
-            weekly: Some(WindowUsage::new(30.0, Some(604_800), 10_080)),
-        });
-        assert!(runtime.status_update(60).is_some());
-        assert!(runtime.status_update(60).is_none());
     }
 
     #[test]
@@ -1454,33 +1199,6 @@ mod tests {
         assert_eq!(USAGE_REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(ANTHROPIC_USAGE_TTL, 600);
         assert_eq!(CODEX_USAGE_TTL, 120);
-        assert_eq!(GROK_USAGE_TTL, 120);
-    }
-
-    #[test]
-    fn xai_refresh_rotates_credentials_without_losing_opencode_state() {
-        let mut credentials = json!({
-            "xai": {
-                "type": "oauth",
-                "access": "old-access",
-                "refresh": "old-refresh",
-                "expires": 1
-            },
-            "preserved": true
-        });
-        let refreshed = json!({
-            "access_token": "new-access",
-            "refresh_token": "new-refresh",
-            "expires_in": 3_600
-        });
-
-        apply_xai_refresh(&mut credentials, &refreshed, 100).expect("valid refresh");
-
-        assert_eq!(credentials["xai"]["access"], "new-access");
-        assert_eq!(credentials["xai"]["refresh"], "new-refresh");
-        assert_eq!(credentials["xai"]["expires"], 3_700_000);
-        assert_eq!(credentials["preserved"], true);
-        assert_eq!(form_encode("refresh/+ token"), "refresh%2F%2B%20token");
     }
 
     #[test]
