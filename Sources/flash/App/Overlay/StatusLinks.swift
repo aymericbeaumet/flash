@@ -261,9 +261,12 @@ extension OverlayPanel {
     )
   }
 
-  func showStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {
+  func showStatusBarPopup(
+    _ popup: StatusBarPopupRegion,
+    at pointer: CGPoint,
+    screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
+  ) {
     let nameChanged = activeStatusBarPopupName != popup.name
-    let snapshot = Self.currentScreenSnapshot()
     guard
       let screen = snapshot.screens.first(where: { $0.frame.contains(pointer) })
         ?? snapshot.screens.first(where: { $0.frame.intersects(popup.rect) })
@@ -434,18 +437,28 @@ extension OverlayPanel {
     }
     // A content/config refresh does not generate mouseMoved for a stationary
     // pointer. Re-hit-test now so an open popup updates immediately.
-    let pointer = NSEvent.mouseLocation
-    if !statusBarClickWindows.contains(where: \.ignoresMouseEvents),
-      let popup = popups.first(where: { $0.rect.contains(pointer) })
-    {
-      showStatusBarPopup(popup, at: pointer)
-    } else {
-      hideStatusBarPopup()
-    }
+    refreshStatusBarPopup(popups: popups, at: NSEvent.mouseLocation)
     // The probe normally arms on hover, but if the pointer is already parked
     // in the band when the windows (re)appear no `mouseEntered` will fire —
     // catch that case here.
     if Self.pointerIsInMenuBarBand() { startMenuBarRevealTracking() }
+  }
+
+  /// Re-hit-test the current popup regions after live status content changes.
+  /// The existing popup layer is updated and moved directly, so a stationary
+  /// hover never flashes closed and a moving pointer keeps its latest anchor.
+  func refreshStatusBarPopup(
+    popups: [StatusBarPopupRegion],
+    at pointer: CGPoint,
+    screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
+  ) {
+    if !statusBarClickWindows.contains(where: \.ignoresMouseEvents),
+      let popup = popups.first(where: { $0.rect.contains(pointer) })
+    {
+      showStatusBarPopup(popup, at: pointer, screenSnapshot: screenSnapshot)
+    } else {
+      hideStatusBarPopup()
+    }
   }
 
   /// Tear down every click window (bar hidden).

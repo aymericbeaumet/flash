@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The event-driven power collector publishes the compact popup-backed power summary by default, and an explicit refresh returns its cached detail surface within the perform deadline.",
+  "description": "The one-second charge collector and periodic/event-driven health refresh publish the compact popup-backed power summary, while an explicit refresh returns cached details within the perform deadline.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
@@ -15,7 +15,7 @@
         "params": {
           "segments": {
             "summary": { "$contains": "#[popup=inline:" },
-            "details": { "$contains": "Charge:" }
+            "details": { "$contains": "#[fg=colour245]Charge        #[default]" }
           }
         }
       },

@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flash_plugin::{
     escape_status_text, inline_status_popup, run, run_command, CommandRequest, Context, Event,
@@ -7,12 +8,20 @@ use flash_plugin::{
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const HISTORY_LEN: usize = 20;
+const DETAIL_LABEL_WIDTH: usize = 14;
 const PMSET: &str = "/usr/bin/pmset";
 const IOREG: &str = "/usr/sbin/ioreg";
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static LAST_GOOD: LazyLock<Mutex<Option<StatusSegments>>> = LazyLock::new(|| Mutex::new(None));
 static LAST_HEALTH: LazyLock<Mutex<Option<BatteryHealth>>> = LazyLock::new(|| Mutex::new(None));
+static LAST_HEALTH_ATTEMPT: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
+static REFRESH_FAILURE_LOGGED: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+static CHARGE_HISTORY: LazyLock<Mutex<VecDeque<f64>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BatteryState {
@@ -93,12 +102,15 @@ flash_plugin::plugin!(Power);
 impl FlashPlugin for Power {
     async fn on_start(&self, ctx: Context) {
         warn_invalid_summary_mode(&ctx);
-        let _ = refresh_and_publish(&ctx).await;
+        let _ = refresh_and_publish(&ctx, true).await;
+        drop(ctx.interval(REFRESH_INTERVAL, |ctx| async move {
+            let _ = refresh_and_publish(&ctx, false).await;
+        }));
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
         if event.name == "core:power.changed" {
-            let _ = refresh_and_publish(&ctx).await;
+            let _ = refresh_and_publish(&ctx, true).await;
         }
     }
 
@@ -106,7 +118,7 @@ impl FlashPlugin for Power {
         match command.subcommand.as_str() {
             "" => details_response(last_good()),
             "refresh" => {
-                let refreshed = try_refresh_and_publish(&ctx).await.flatten();
+                let refreshed = try_refresh_and_publish(&ctx, true).await.flatten();
                 details_response(refreshed.or_else(last_good))
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
@@ -114,19 +126,32 @@ impl FlashPlugin for Power {
     }
 }
 
-async fn refresh_and_publish(ctx: &Context) -> Option<StatusSegments> {
+async fn refresh_and_publish(ctx: &Context, force_health: bool) -> Option<StatusSegments> {
     REFRESH_GATE
-        .run(ctx, |ctx, _applications| collect_and_publish(ctx))
+        .run(ctx, move |ctx, _applications| {
+            collect_and_publish(ctx, force_health)
+        })
         .await
 }
 
-async fn try_refresh_and_publish(ctx: &Context) -> Option<Option<StatusSegments>> {
+async fn try_refresh_and_publish(
+    ctx: &Context,
+    force_health: bool,
+) -> Option<Option<StatusSegments>> {
     REFRESH_GATE
-        .try_run(ctx, |ctx, _applications| collect_and_publish(ctx))
+        .try_run(ctx, move |ctx, _applications| {
+            collect_and_publish(ctx, force_health)
+        })
         .await
 }
 
-async fn collect_and_publish(ctx: Context) -> Option<StatusSegments> {
+async fn collect_and_publish(ctx: Context, force_health: bool) -> Option<StatusSegments> {
+    let health_due = {
+        let last_attempt = LAST_HEALTH_ATTEMPT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        health_refresh_due(*last_attempt, force_health, Instant::now())
+    };
     let pmset_argv = vec![PMSET.to_string(), "-g".to_string(), "batt".to_string()];
     let ioreg_argv = vec![
         IOREG.to_string(),
@@ -135,22 +160,48 @@ async fn collect_and_publish(ctx: Context) -> Option<StatusSegments> {
         "AppleSmartBattery".to_string(),
         "-l".to_string(),
     ];
-    let (pmset, ioreg) = tokio::join!(
-        run_command(&ctx, &pmset_argv, COMMAND_TIMEOUT),
-        run_command(&ctx, &ioreg_argv, COMMAND_TIMEOUT),
-    );
+    let ioreg = async {
+        if !health_due {
+            return None;
+        }
+        Some(run_command(&ctx, &ioreg_argv, COMMAND_TIMEOUT).await)
+    };
+    let (pmset, ioreg) = tokio::join!(run_command(&ctx, &pmset_argv, COMMAND_TIMEOUT), ioreg,);
+    if health_due {
+        *LAST_HEALTH_ATTEMPT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Instant::now());
+    }
 
     let Some(snapshot) = parse_pmset_snapshot(&pmset.stdout) else {
-        ctx.log("warn", "[power] refresh failed");
+        let should_log = {
+            let mut logged = REFRESH_FAILURE_LOGGED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            first_failure(&mut logged, true)
+        };
+        if should_log {
+            ctx.log("warn", "[power] refresh failed");
+        }
         return None;
     };
+    {
+        let mut logged = REFRESH_FAILURE_LOGGED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        first_failure(&mut logged, false);
+    }
 
     let health = if snapshot.battery.is_some() {
         let previous = LAST_HEALTH
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        merge_health(parse_ioreg_health(&ioreg.stdout), previous)
+        let fresh = ioreg
+            .as_ref()
+            .filter(|output| output.ok)
+            .and_then(|output| parse_ioreg_health(&output.stdout));
+        merge_health(fresh, previous)
     } else {
         None
     };
@@ -158,7 +209,23 @@ async fn collect_and_publish(ctx: Context) -> Option<StatusSegments> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = health.clone();
 
-    let status = render_status(&snapshot, health.as_ref(), configured_summary_mode(&ctx));
+    let history = {
+        let mut history = CHARGE_HISTORY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(battery) = snapshot.battery.as_ref() {
+            push_history(&mut history, f64::from(battery.percent));
+        } else {
+            history.clear();
+        }
+        history.clone()
+    };
+    let status = render_status(
+        &snapshot,
+        health.as_ref(),
+        configured_summary_mode(&ctx),
+        &history,
+    );
     let should_publish = {
         let mut last = LAST_GOOD
             .lock()
@@ -174,6 +241,24 @@ async fn collect_and_publish(ctx: Context) -> Option<StatusSegments> {
         ]);
     }
     Some(status)
+}
+
+fn health_refresh_due(last_attempt: Option<Instant>, force: bool, now: Instant) -> bool {
+    force
+        || last_attempt.is_none_or(|last_attempt| {
+            now.saturating_duration_since(last_attempt) >= HEALTH_REFRESH_INTERVAL
+        })
+}
+
+fn first_failure(already_logged: &mut bool, failed: bool) -> bool {
+    if failed {
+        let first = !*already_logged;
+        *already_logged = true;
+        first
+    } else {
+        *already_logged = false;
+        false
+    }
 }
 
 fn details_response(status: Option<StatusSegments>) -> PerformResponse {
@@ -269,6 +354,7 @@ fn render_status(
     snapshot: &PowerSnapshot,
     health: Option<&BatteryHealth>,
     summary_mode: SummaryMode,
+    history: &VecDeque<f64>,
 ) -> StatusSegments {
     let mut rows = match snapshot.battery {
         Some(ref battery) => vec![
@@ -319,16 +405,120 @@ fn render_status(
         }
     }
     let plain_details = rows.join("\n");
-    let details = format!(
-        "#[fg=colour178]Battery#[default]\n{}",
-        escape_status_text(&plain_details)
-    );
+    let details = render_popup_details(snapshot, health, history);
     let visible = visible_summary(snapshot, summary_mode);
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
         details,
         plain_details,
     }
+}
+
+fn render_popup_details(
+    snapshot: &PowerSnapshot,
+    health: Option<&BatteryHealth>,
+    history: &VecDeque<f64>,
+) -> String {
+    let battery = snapshot.battery.as_ref();
+    let health_percent =
+        health.and_then(
+            |health| match (health.maximum_capacity, health.design_capacity) {
+                (Some(maximum), Some(design)) if design > 0 => Some(
+                    ((u128::from(maximum) * 100) + u128::from(design / 2)) / u128::from(design),
+                ),
+                _ => None,
+            },
+        );
+    let rows = [
+        "#[fg=colour178]Battery#[default]".to_string(),
+        detail_row(
+            "Charge",
+            &battery
+                .map(|battery| format!("{:>3} %", battery.percent))
+                .unwrap_or_else(|| "    —".to_string()),
+        ),
+        detail_row(
+            "State",
+            battery
+                .map(|battery| battery.state.label())
+                .unwrap_or("Not installed"),
+        ),
+        detail_row("Source", snapshot.source.label()),
+        detail_row(
+            "Estimate",
+            &battery
+                .map(estimate_label)
+                .unwrap_or_else(|| "Unavailable".to_string()),
+        ),
+        detail_row(
+            "Health",
+            &health_percent
+                .map(|percent| format!("{percent:>3} %"))
+                .unwrap_or_else(|| "    —".to_string()),
+        ),
+        detail_row(
+            "Condition",
+            &health
+                .and_then(|health| health.condition.as_deref())
+                .map(escape_status_text)
+                .unwrap_or_else(|| "—".to_string()),
+        ),
+        detail_row(
+            "Cycles",
+            &health
+                .and_then(|health| health.cycle_count)
+                .map(|cycles| format!("{cycles:>10}"))
+                .unwrap_or_else(|| "         —".to_string()),
+        ),
+        detail_row(
+            "Temperature",
+            &health
+                .and_then(|health| health.temperature_centi_celsius)
+                .map(|temperature| format!("{:>5.1} °C", temperature as f64 / 100.0))
+                .unwrap_or_else(|| "    — °C".to_string()),
+        ),
+        detail_row(
+            "Adapter",
+            &health
+                .and_then(|health| health.adapter_watts)
+                .filter(|_| snapshot.source == PowerSource::Adapter)
+                .map(|watts| format!("{watts:>3} W"))
+                .unwrap_or_else(|| "  — W".to_string()),
+        ),
+        detail_row("History", &padded_history(history)),
+    ];
+    rows.join("\n")
+}
+
+fn detail_row(label: &str, value: &str) -> String {
+    format!(
+        "#[fg=colour245]{label:<width$}#[default]{value}",
+        width = DETAIL_LABEL_WIDTH
+    )
+}
+
+fn push_history(history: &mut VecDeque<f64>, value: f64) {
+    if history.len() == HISTORY_LEN {
+        history.pop_front();
+    }
+    history.push_back(value.clamp(0.0, 100.0));
+}
+
+fn sparkline(history: &VecDeque<f64>) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    history
+        .iter()
+        .map(|value| {
+            let index = (value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize;
+            BARS[index]
+        })
+        .collect()
+}
+
+fn padded_history(history: &VecDeque<f64>) -> String {
+    let chart = sparkline(history);
+    let padding = HISTORY_LEN.saturating_sub(chart.chars().count());
+    format!("{}{chart}", "·".repeat(padding))
 }
 
 fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
@@ -581,7 +771,13 @@ mod tests {
         assert_eq!(health.condition.as_deref(), Some("Good"));
 
         let snapshot = parse_pmset_snapshot(CHARGING).unwrap();
-        let details = render_status(&snapshot, Some(&health), SummaryMode::Compact).details;
+        let details = render_status(
+            &snapshot,
+            Some(&health),
+            SummaryMode::Compact,
+            &VecDeque::new(),
+        )
+        .details;
         assert!(!details.contains("SECRET"));
         assert!(!details.to_ascii_lowercase().contains("serial"));
     }
@@ -595,9 +791,14 @@ mod tests {
             maximum_capacity: Some(5528),
             temperature_centi_celsius: Some(3031),
             adapter_watts: Some(67),
-            condition: Some("Good #1".to_string()),
+            condition: Some("Good #[fg=colour196] #1".to_string()),
         };
-        let status = render_status(&snapshot, Some(&health), SummaryMode::Compact);
+        let status = render_status(
+            &snapshot,
+            Some(&health),
+            SummaryMode::Compact,
+            &VecDeque::new(),
+        );
 
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
@@ -614,11 +815,24 @@ mod tests {
             .contains("]#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs"));
         assert_eq!(
             status.details,
-            "#[fg=colour178]Battery#[default]\nCharge: 73%\nState: Charging\nSource: AC adapter\nEstimate: Full in 1h 24m\nHealth: 91% of design (Good ##1)\nCycles: 187\nTemperature: 30.3°C\nAdapter: 67 W"
+            "#[fg=colour178]Battery#[default]\n\
+#[fg=colour245]Charge        #[default] 73 %\n\
+#[fg=colour245]State         #[default]Charging\n\
+#[fg=colour245]Source        #[default]AC adapter\n\
+#[fg=colour245]Estimate      #[default]Full in 1h 24m\n\
+#[fg=colour245]Health        #[default] 91 %\n\
+#[fg=colour245]Condition     #[default]Good ##[fg=colour196] ##1\n\
+#[fg=colour245]Cycles        #[default]       187\n\
+#[fg=colour245]Temperature   #[default] 30.3 °C\n\
+#[fg=colour245]Adapter       #[default] 67 W\n\
+#[fg=colour245]History       #[default]····················"
         );
+        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
+        assert_eq!(HEALTH_REFRESH_INTERVAL, Duration::from_secs(30));
+        assert!(!status.details.ends_with('\n'));
         assert!(status
             .plain_details
-            .contains("Health: 91% of design (Good #1)"));
+            .contains("Health: 91% of design (Good #[fg=colour196] #1)"));
     }
 
     #[test]
@@ -632,8 +846,18 @@ mod tests {
             "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=red]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
-            render_status(&snapshot, None, SummaryMode::Compact).details,
-            "#[fg=colour178]Battery#[default]\nCharge: 25%\nState: Discharging\nSource: Battery\nEstimate: Unavailable"
+            render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new()).details,
+            "#[fg=colour178]Battery#[default]\n\
+#[fg=colour245]Charge        #[default] 25 %\n\
+#[fg=colour245]State         #[default]Discharging\n\
+#[fg=colour245]Source        #[default]Battery\n\
+#[fg=colour245]Estimate      #[default]Unavailable\n\
+#[fg=colour245]Health        #[default]    —\n\
+#[fg=colour245]Condition     #[default]—\n\
+#[fg=colour245]Cycles        #[default]         —\n\
+#[fg=colour245]Temperature   #[default]    — °C\n\
+#[fg=colour245]Adapter       #[default]  — W\n\
+#[fg=colour245]History       #[default]····················"
         );
     }
 
@@ -651,5 +875,41 @@ mod tests {
         assert_eq!(natural_duration(24), "24m");
         assert_eq!(natural_duration(60), "1h");
         assert_eq!(natural_duration(84), "1h 24m");
+    }
+
+    #[test]
+    fn charge_history_is_bounded_and_left_padded_to_stable_width() {
+        let mut history = VecDeque::new();
+        for value in 0..25 {
+            push_history(&mut history, f64::from(value) * 4.0);
+        }
+        assert_eq!(history.len(), HISTORY_LEN);
+        assert_eq!(history.front(), Some(&20.0));
+        assert_eq!(
+            padded_history(&VecDeque::from([0.0, 100.0])),
+            "··················▁█"
+        );
+    }
+
+    #[test]
+    fn battery_health_refresh_is_forced_or_periodically_due() {
+        let now = Instant::now();
+        assert!(health_refresh_due(None, false, now));
+        assert!(!health_refresh_due(Some(now), false, now));
+        assert!(health_refresh_due(
+            Some(now - HEALTH_REFRESH_INTERVAL),
+            false,
+            now
+        ));
+        assert!(health_refresh_due(Some(now), true, now));
+    }
+
+    #[test]
+    fn refresh_failures_log_once_until_success() {
+        let mut logged = false;
+        assert!(first_failure(&mut logged, true));
+        assert!(!first_failure(&mut logged, true));
+        assert!(!first_failure(&mut logged, false));
+        assert!(first_failure(&mut logged, true));
     }
 }

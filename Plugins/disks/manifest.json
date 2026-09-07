@@ -2,7 +2,7 @@
   "id": "disks",
   "name": "Disks",
   "version": "0.1.0",
-  "description": "Publish compact disk capacity with transfer rates and activity history on hover; summary_mode=full restores them inline.",
+  "description": "Publish one-second disk activity with periodically refreshed capacity and structured hover details; summary_mode=full restores telemetry inline.",
   "sandbox": {
     "exec": [
       "/bin/df",

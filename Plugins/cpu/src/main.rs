@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flash_plugin::{
     escape_status_text, inline_status_popup, run, run_command, run_command_with_slow_threshold,
@@ -9,12 +9,13 @@ use flash_plugin::{
 
 // iostat blocks for the one-second differential sample but consumes
 // negligible CPU, unlike repeatedly launching top on a busy machine.
-const CPU_INTERVAL: Duration = Duration::from_secs(5);
+const CPU_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 const GPU_INTERVAL: Duration = Duration::from_secs(15);
 const CPU_TIMEOUT: Duration = Duration::from_secs(3);
 const CPU_SLOW_THRESHOLD: Duration = Duration::from_millis(1_500);
 const GPU_TIMEOUT: Duration = Duration::from_secs(4);
 const HISTORY_SAMPLES: usize = 20;
+const DETAIL_LABEL_WIDTH: usize = 14;
 const IOSTAT: &str = "/usr/sbin/iostat";
 const IOREG: &str = "/usr/sbin/ioreg";
 
@@ -124,13 +125,14 @@ impl FlashPlugin for Cpu {
         )
         .await;
 
+        let cpu_ctx = ctx.clone();
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.cpu_gate);
-        drop(ctx.interval(CPU_INTERVAL, move |ctx| {
-            let state = Arc::clone(&state);
-            let gate = Arc::clone(&gate);
-            async move {
-                refresh_cpu(&ctx, &state, &gate).await;
+        drop(tokio::spawn(async move {
+            loop {
+                let started = Instant::now();
+                refresh_cpu(&cpu_ctx, &state, &gate).await;
+                tokio::time::sleep(cpu_sample_delay(started.elapsed())).await;
             }
         }));
 
@@ -263,6 +265,10 @@ async fn collect_gpu(
 
 fn begin_collection(gate: &tokio::sync::Mutex<()>) -> Option<tokio::sync::MutexGuard<'_, ()>> {
     gate.try_lock().ok()
+}
+
+fn cpu_sample_delay(elapsed: Duration) -> Duration {
+    CPU_SAMPLE_PERIOD.saturating_sub(elapsed)
 }
 
 async fn acquire_collection<'a>(
@@ -517,20 +523,39 @@ fn render_status(
 Load: {:.2} · {:.2} · {:.2}",
         cpu.user, cpu.system, cpu.idle, cpu.load[0], cpu.load[1], cpu.load[2]
     );
-    let mut details = format!("#[fg=colour178]CPU#[default]\nTotal: {total:.1}%\n{body}");
+    let (gpu_value, model) = gpu
+        .map(|gpu| {
+            (
+                format!("{:>5.1} %", gpu.utilization),
+                escape_status_text(gpu.model.as_deref().unwrap_or("GPU")),
+            )
+        })
+        .unwrap_or_else(|| ("      —".to_string(), "—".to_string()));
+    let details = [
+        "#[fg=colour178]CPU#[default]".to_string(),
+        detail_row("Total", &format!("{total:>5.1} %")),
+        detail_row("User", &format!("{:>5.1} %", cpu.user)),
+        detail_row("System", &format!("{:>5.1} %", cpu.system)),
+        detail_row("Idle", &format!("{:>5.1} %", cpu.idle)),
+        detail_row(
+            "Load",
+            &format!(
+                "{:>5.2}  {:>5.2}  {:>5.2}",
+                cpu.load[0], cpu.load[1], cpu.load[2]
+            ),
+        ),
+        detail_row("History", &padded_history(history)),
+        detail_row("GPU", &gpu_value),
+        detail_row("Model", &model),
+    ]
+    .join("\n");
     let mut plain_details = format!("CPU {total:.1}%\n{body}");
     if !history.is_empty() {
         let history = format!("\nHistory: {}", sparkline(history));
-        details.push_str(&history);
         plain_details.push_str(&history);
     }
     if let Some(gpu) = gpu {
         let label = gpu.model.as_deref().unwrap_or("GPU");
-        details.push_str(&format!(
-            "\n\n#[fg=colour178,bold]GPU#[default]\n{}: {:.0}%",
-            escape_status_text(label),
-            gpu.utilization
-        ));
         plain_details.push_str(&format!("\n\nGPU\n{label}: {:.0}%", gpu.utilization));
     }
 
@@ -539,6 +564,19 @@ Load: {:.2} · {:.2} · {:.2}",
         details,
         plain_details,
     }
+}
+
+fn detail_row(label: &str, value: &str) -> String {
+    format!(
+        "#[fg=colour245]{label:<width$}#[default]{value}",
+        width = DETAIL_LABEL_WIDTH
+    )
+}
+
+fn padded_history(history: &VecDeque<f64>) -> String {
+    let chart = sparkline(history);
+    let padding = HISTORY_SAMPLES.saturating_sub(chart.chars().count());
+    format!("{}{chart}", "·".repeat(padding))
 }
 
 fn visible_summary(
@@ -703,13 +741,56 @@ mod tests {
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
                 .contains("#[fg=colour178]GPU#[default] 59% ▂▂")
         );
-        assert!(rendered.details.starts_with(
-            "#[fg=colour178]CPU#[default]\nTotal: 19.8%\nUser: 12.5% · System: 7.2% · Idle: 80.2%"
-        ));
-        assert!(rendered.details.contains("Load: 1.25 · 2.50 · 3.75"));
-        assert!(rendered.details.contains("Apple M4 Pro: 59%"));
+        assert_eq!(CPU_SAMPLE_PERIOD, Duration::from_secs(1));
+        assert_eq!(GPU_INTERVAL, Duration::from_secs(15));
+        assert_eq!(
+            rendered.details,
+            "#[fg=colour178]CPU#[default]\n\
+#[fg=colour245]Total         #[default] 19.8 %\n\
+#[fg=colour245]User          #[default] 12.5 %\n\
+#[fg=colour245]System        #[default]  7.2 %\n\
+#[fg=colour245]Idle          #[default] 80.2 %\n\
+#[fg=colour245]Load          #[default] 1.25   2.50   3.75\n\
+#[fg=colour245]History       #[default]··················▂▂\n\
+#[fg=colour245]GPU           #[default] 59.0 %\n\
+#[fg=colour245]Model         #[default]Apple M4 Pro"
+        );
+        assert!(!rendered.details.ends_with('\n'));
         assert!(!rendered.plain_details.contains("#["));
         assert!(rendered.plain_details.starts_with("CPU 19.8%\n"));
         assert!(rendered.plain_details.contains("GPU\nApple M4 Pro: 59%"));
+
+        let without_gpu = render_status(&cpu, None, &VecDeque::new(), SummaryMode::Compact);
+        assert!(without_gpu.details.ends_with(
+            "#[fg=colour245]History       #[default]····················\n#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
+        ));
+    }
+
+    #[test]
+    fn popup_details_escape_marker_looking_gpu_models() {
+        let cpu = CpuSnapshot {
+            user: 10.0,
+            system: 5.0,
+            idle: 85.0,
+            load: [1.0, 2.0, 3.0],
+        };
+        let gpu = GpuSnapshot {
+            utilization: 20.0,
+            model: Some("GPU #[fg=colour196] #1".into()),
+        };
+
+        let details =
+            render_status(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Compact).details;
+        assert!(details.contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1"));
+    }
+
+    #[test]
+    fn cpu_sampler_accounts_for_the_blocking_iostat_window() {
+        assert_eq!(
+            cpu_sample_delay(Duration::from_millis(250)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(cpu_sample_delay(Duration::from_secs(1)), Duration::ZERO);
+        assert_eq!(cpu_sample_delay(Duration::from_secs(2)), Duration::ZERO);
     }
 }

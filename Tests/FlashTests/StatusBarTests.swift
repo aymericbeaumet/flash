@@ -450,6 +450,102 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(model.popupTexts["details"], "First line\n\nLast line")
   }
 
+  func testDynamicPopupValueChangesTheModelWhileVisibleTextStaysFixed() {
+    let variable = FlashStatusBarTemplateVariable(
+      id: "statusbar.popup.metrics.script:/tmp/metrics.sh",
+      token: "script:/tmp/metrics.sh",
+      source: .command(.script("/tmp/metrics.sh")))
+    let template = FlashStatusBarTemplate(
+      template: "#[align=right]#[popup=metrics]SYS#[nopopup]",
+      variables: [])
+    let popups = [
+      "metrics": FlashStatusBarTemplate(
+        template: "#{script:/tmp/metrics.sh}",
+        variables: [variable])
+    ]
+
+    let first = FlashStatusBarTemplateEngine.render(
+      template: template,
+      popupTemplates: popups,
+      context: FlashStatusBarContext(),
+      dynamicValues: [variable.id: "CPU 12%\nMEM 34%"])
+    let second = FlashStatusBarTemplateEngine.render(
+      template: template,
+      popupTemplates: popups,
+      context: FlashStatusBarContext(),
+      dynamicValues: [variable.id: "CPU 56%\nMEM 78%"])
+
+    XCTAssertEqual(first.rightText, second.rightText)
+    XCTAssertNotEqual(first, second)
+    XCTAssertEqual(second.popupTexts["metrics"], "CPU 56%\nMEM 78%")
+  }
+
+  func testVisiblePopupRefreshesContentInPlaceAtTheLatestPointer() {
+    let screenFrame = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+    let visibleFrame = CGRect(x: 0, y: 0, width: 1_440, height: 875)
+    let snapshot = OverlayPanel.ScreenSnapshot(
+      screens: [(scale: 2, frame: screenFrame, visibleFrame: visibleFrame, notch: nil)],
+      unionFrame: screenFrame,
+      mainFrame: screenFrame,
+      mainScale: 2,
+      mainVisibleFrame: visibleFrame,
+      nativeStatusBarFallbackHeight: 25)
+    let panel = OverlayPanel()
+    let firstPointer = CGPoint(
+      x: visibleFrame.midX - 80,
+      y: visibleFrame.midY - 20)
+    let secondPointer = CGPoint(
+      x: visibleFrame.midX + 80,
+      y: visibleFrame.midY + 20)
+    let layer = panel.statusPopupLayer
+
+    panel.refreshStatusBarPopup(
+      popups: [
+        StatusBarPopupRegion(
+          rect: screenFrame,
+          name: "metrics",
+          content: "CPU 12%\nMEM 34%")
+      ],
+      at: firstPointer,
+      screenSnapshot: snapshot)
+    let firstFrame = layer.frame
+
+    panel.refreshStatusBarPopup(
+      popups: [
+        StatusBarPopupRegion(
+          rect: screenFrame,
+          name: "metrics",
+          content: "CPU 56%\nMEM 78%")
+      ],
+      at: secondPointer,
+      screenSnapshot: snapshot)
+
+    XCTAssertTrue(panel.statusPopupLayer === layer, "a refresh must reuse the visible surface")
+    XCTAssertFalse(layer.isHidden)
+    XCTAssertEqual(panel.activeStatusBarPopupName, "metrics")
+    XCTAssertEqual(panel.activeStatusBarPopupContent, "CPU 56%\nMEM 78%")
+    XCTAssertEqual(
+      (panel.statusPopupLabel.string as? NSAttributedString)?.string,
+      "CPU 56%\nMEM 78%")
+    XCTAssertEqual(layer.frame.size, firstFrame.size)
+    XCTAssertEqual(
+      layer.frame.midX - firstFrame.midX,
+      secondPointer.x - firstPointer.x,
+      accuracy: 0.001)
+    XCTAssertEqual(
+      layer.frame.midY - firstFrame.midY,
+      secondPointer.y - firstPointer.y,
+      accuracy: 0.001)
+
+    let padding = CGFloat(panel.statusBarPopupStyle.padding)
+    let border = CGFloat(panel.statusBarPopupStyle.borderWidth)
+    let label = panel.statusPopupLabel.frame
+    XCTAssertEqual(label.minX - border, padding, accuracy: 0.001)
+    XCTAssertEqual(label.minY - border, padding, accuracy: 0.001)
+    XCTAssertEqual(layer.frame.width - label.maxX - border, padding, accuracy: 0.001)
+    XCTAssertEqual(layer.frame.height - label.maxY - border, padding, accuracy: 0.001)
+  }
+
   func testParsesCycleToken() {
     let c = ConfigLoader.parse(
       """

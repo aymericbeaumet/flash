@@ -2,7 +2,7 @@
   "id": "aiproviders",
   "name": "AI Providers",
   "version": "0.1.0",
-  "description": "Open AI chat providers from the flashlight with optional pre-filled queries, and publish Claude, Fable, and Codex usage status.",
+  "description": "Open AI chat providers from the flashlight with optional pre-filled queries, and publish unified Claude, Fable, Codex, and Grok usage status.",
   "exec": [
     "./flash-plugin-aiproviders"
   ],
@@ -36,12 +36,8 @@
     ]
   },
   "status": [
-    "claude_usage",
-    "claude_usage_details",
-    "fable_usage",
-    "fable_usage_details",
-    "codex_usage",
-    "codex_usage_details"
+    "summary",
+    "details"
   ],
   "capabilities": [
     "open",

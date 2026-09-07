@@ -2,7 +2,7 @@
   "id": "cpu",
   "name": "CPU & GPU",
   "version": "0.1.0",
-  "description": "Publish compact CPU activity with GPU and history details on hover; summary_mode=full restores them inline.",
+  "description": "Publish one-second CPU snapshots with periodically refreshed GPU telemetry and structured hover details; summary_mode=full restores secondary telemetry inline.",
   "exec": [
     "./flash-plugin-cpu"
   ],

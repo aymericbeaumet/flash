@@ -2,9 +2,11 @@
 //!
 //! Quota refreshes run after the protocol handshake and never on status-bar
 //! rendering or popup hover. The plugin immediately republishes its sanitized
-//! last-good cache, then refreshes Anthropic every ten minutes and Codex every
-//! two minutes. Only percentages, reset epochs, window lengths, and fetch time
-//! are persisted; OAuth credentials and raw responses stay in memory.
+//! last-good cache, republishes changed rendered status at minute boundaries,
+//! then refreshes Anthropic every ten minutes and Codex every two minutes. Only
+//! percentages, reset epochs, window lengths, and fetch time are persisted in
+//! the plugin cache; credential rotations write back only to their owning
+//! stores, and raw responses stay in memory.
 //!
 //! Claude Code keeps OAuth credentials in the login keychain, while Codex owns
 //! its auth behind `codex app-server`. Those interfaces require subprocesses
@@ -14,22 +16,25 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flash_plugin::process;
-use flash_plugin::{run, run_osascript, CommandRequest, Context, PerformResponse, RefreshGate};
+use flash_plugin::{
+    inline_status_popup, run, run_osascript, CommandRequest, Context, PerformResponse, RefreshGate,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock};
 
 const AUTOSEND_DELAY: Duration = Duration::from_millis(2_500);
 const AUTOSEND_SCRIPT: &str = r#"tell application "System Events" to key code 36"#;
 
-const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
+const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const ANTHROPIC_USAGE_TTL: u64 = 600;
 const ANTHROPIC_RETRY_SECONDS: u64 = 300;
 const CODEX_USAGE_TTL: u64 = 120;
@@ -118,27 +123,33 @@ struct UsageState {
     codex: Option<CodexUsage>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
-    claude_usage: String,
-    claude_usage_details: String,
-    fable_usage: String,
-    fable_usage_details: String,
-    codex_usage: String,
-    codex_usage_details: String,
+    summary: String,
+    details: String,
+}
+
+#[derive(Debug, Default)]
+struct UsageRuntime {
+    state: UsageState,
+    published: Option<StatusSegments>,
+}
+
+impl UsageRuntime {
+    fn status_update(&mut self, now: u64) -> Option<StatusSegments> {
+        let segments = render_status_segments(&self.state, now);
+        if self.published.as_ref() == Some(&segments) {
+            return None;
+        }
+        self.published = Some(segments.clone());
+        Some(segments)
+    }
 }
 
 impl StatusSegments {
     #[cfg(test)]
-    fn all(&self) -> [&str; 6] {
-        [
-            &self.claude_usage,
-            &self.claude_usage_details,
-            &self.fable_usage,
-            &self.fable_usage_details,
-            &self.codex_usage,
-            &self.codex_usage_details,
-        ]
+    fn all(&self) -> [&str; 2] {
+        [&self.summary, &self.details]
     }
 }
 
@@ -189,26 +200,26 @@ async fn write_json<T: Serialize>(path: &Path, value: &T) -> bool {
     true
 }
 
-fn publish_status(ctx: &Context, state: &UsageState, now: u64) {
-    let segments = render_status_segments(state, now);
+fn publish_status(ctx: &Context, segments: &StatusSegments) {
     ctx.status([
-        ("claude_usage", segments.claude_usage.as_str()),
-        (
-            "claude_usage_details",
-            segments.claude_usage_details.as_str(),
-        ),
-        ("fable_usage", segments.fable_usage.as_str()),
-        ("fable_usage_details", segments.fable_usage_details.as_str()),
-        ("codex_usage", segments.codex_usage.as_str()),
-        ("codex_usage_details", segments.codex_usage_details.as_str()),
+        ("summary", segments.summary.as_str()),
+        ("details", segments.details.as_str()),
     ]);
 }
 
-async fn refresh_usage(ctx: &Context) {
+async fn publish_current_status(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
+    let segments = shared.write().await.status_update(unix_now());
+    if let Some(segments) = segments {
+        publish_status(ctx, &segments);
+    }
+}
+
+async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
+    let shared = Arc::clone(shared);
     USAGE_REFRESH_GATE
-        .run(ctx, |ctx, _applications| async move {
+        .run(ctx, move |ctx, _applications| async move {
             let now = unix_now();
-            let mut state = load_usage_state(&ctx).await;
+            let mut state = shared.read().await.state.clone();
             let refresh_anthropic = state
                 .anthropic
                 .as_ref()
@@ -249,7 +260,8 @@ async fn refresh_usage(ctx: &Context) {
                 let _ = write_json(&ctx.data_dir().join(CODEX_CACHE), &usage).await;
                 state.codex = Some(usage);
             }
-            publish_status(&ctx, &state, now);
+            shared.write().await.state = state;
+            publish_current_status(&ctx, &shared).await;
         })
         .await;
 }
@@ -340,7 +352,7 @@ fn usage_percent(value: &Value) -> Option<f64> {
 }
 
 fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
-    let (shared_session, claude_week, fable_week, anthropic_updated) = state
+    let (shared_session, claude_week, fable_week) = state
         .anthropic
         .as_ref()
         .map(|usage| {
@@ -348,57 +360,49 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
                 usage.shared_session.as_ref(),
                 usage.claude_week.as_ref(),
                 usage.fable_week.as_ref(),
-                Some(usage.updated_at),
-            )
-        })
-        .unwrap_or((None, None, None, None));
-    let (codex_session, codex_week, codex_updated) = state
-        .codex
-        .as_ref()
-        .map(|usage| {
-            (
-                usage.session.as_ref(),
-                usage.weekly.as_ref(),
-                Some(usage.updated_at),
             )
         })
         .unwrap_or((None, None, None));
+    let (codex_session, codex_week) = state
+        .codex
+        .as_ref()
+        .map(|usage| (usage.session.as_ref(), usage.weekly.as_ref()))
+        .unwrap_or((None, None));
+    let visible = "#[fg=colour178]AI#[default]";
 
+    let codex_session_label = codex_session
+        .map(|window| window_label(window.window_minutes))
+        .unwrap_or_else(|| "5-hour".to_string());
+    let codex_week_label = codex_week
+        .map(|window| window_label(window.window_minutes))
+        .unwrap_or_else(|| "7-day".to_string());
+    let lines = [
+        "#[fg=colour178]AI#[default]".to_string(),
+        "#[fg=colour245]Provider  Window         Left  Reset#[default]".to_string(),
+        popup_row("Claude", "5-hour", shared_session, None, now),
+        popup_row("", "7-day", claude_week, shared_session, now),
+        popup_row("Fable", "shared 5-hour", shared_session, None, now),
+        popup_row("", "7-day", fable_week, shared_session, now),
+        popup_row("OpenAI", &codex_session_label, codex_session, None, now),
+        popup_row("", &codex_week_label, codex_week, codex_session, now),
+    ];
+    let details = lines.join("\n");
     StatusSegments {
-        claude_usage: compact_window(claude_week, shared_session, now),
-        claude_usage_details: usage_details(
-            shared_session.map(|window| ("5-hour".to_string(), window)),
-            claude_week.map(|window| ("7-day".to_string(), window)),
-            anthropic_updated,
-            now,
-        ),
-        fable_usage: compact_window(fable_week, shared_session, now),
-        fable_usage_details: usage_details(
-            shared_session.map(|window| ("Shared 5-hour".to_string(), window)),
-            fable_week.map(|window| ("7-day".to_string(), window)),
-            anthropic_updated,
-            now,
-        ),
-        codex_usage: compact_window(codex_week, codex_session, now),
-        codex_usage_details: usage_details(
-            codex_session.map(|window| (window_label(window.window_minutes), window)),
-            codex_week.map(|window| (window_label(window.window_minutes), window)),
-            codex_updated,
-            now,
-        ),
+        summary: inline_status_popup(visible, &details),
+        details,
     }
 }
 
-fn compact_window(weekly: Option<&WindowUsage>, session: Option<&WindowUsage>, now: u64) -> String {
+fn styled_remaining(
+    weekly: Option<&WindowUsage>,
+    session: Option<&WindowUsage>,
+    now: u64,
+) -> String {
     let Some(weekly) = weekly else {
-        return "—".to_string();
+        return "   —".to_string();
     };
     let remaining = remaining_percent(weekly.used_percent);
-    let mut value = format!("{remaining}%");
-    if let Some(reset) = weekly.resets_at {
-        value.push('↻');
-        value.push_str(&relative_duration(reset.saturating_sub(now)));
-    }
+    let value = format!("{remaining:>3}%");
     if remaining < 20 || session.is_some_and(|window| remaining_percent(window.used_percent) == 0) {
         format!("#[fg=colour196]{value}#[default]")
     } else if ahead_of_weekly_pace(weekly, now) {
@@ -406,6 +410,21 @@ fn compact_window(weekly: Option<&WindowUsage>, session: Option<&WindowUsage>, n
     } else {
         value
     }
+}
+
+fn popup_row(
+    provider: &str,
+    window_label: &str,
+    usage: Option<&WindowUsage>,
+    pace_session: Option<&WindowUsage>,
+    now: u64,
+) -> String {
+    let remaining = styled_remaining(usage, pace_session, now);
+    let reset = usage
+        .and_then(|window| window.resets_at)
+        .map(|reset| relative_duration(reset.saturating_sub(now)))
+        .unwrap_or_else(|| "—".to_string());
+    format!("#[fg=colour245]{provider:<8}  {window_label:<13}#[default]  {remaining}  {reset}")
 }
 
 fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
@@ -425,40 +444,6 @@ fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
     window.used_percent * 7.0 > allowed_days as f64 * 100.0
 }
 
-fn usage_details(
-    session: Option<(String, &WindowUsage)>,
-    weekly: Option<(String, &WindowUsage)>,
-    updated_at: Option<u64>,
-    now: u64,
-) -> String {
-    let mut lines = Vec::with_capacity(3);
-    if let Some((label, window)) = session {
-        lines.push(detail_line(&label, window, now));
-    }
-    if let Some((label, window)) = weekly {
-        lines.push(detail_line(&label, window, now));
-    }
-    if lines.is_empty() {
-        return "Usage unavailable".to_string();
-    }
-    if let Some(updated_at) = updated_at {
-        lines.push(format!("Updated {}", cache_age(updated_at, now)));
-    }
-    lines.join("\n")
-}
-
-fn detail_line(label: &str, window: &WindowUsage, now: u64) -> String {
-    let mut line = format!(
-        "{label} {}% remaining",
-        remaining_percent(window.used_percent)
-    );
-    if let Some(reset) = window.resets_at {
-        line.push_str(" · resets in ");
-        line.push_str(&relative_duration(reset.saturating_sub(now)));
-    }
-    line
-}
-
 fn remaining_percent(used: f64) -> u8 {
     (100_i64 - used.floor() as i64).clamp(0, 100) as u8
 }
@@ -470,19 +455,6 @@ fn relative_duration(seconds: u64) -> String {
         format!("{}h", seconds / 3_600)
     } else {
         format!("{}d", seconds / 86_400)
-    }
-}
-
-fn cache_age(updated_at: u64, now: u64) -> String {
-    let seconds = now.saturating_sub(updated_at);
-    if seconds < 60 {
-        "now".to_string()
-    } else if seconds < 3_600 {
-        format!("{}m ago", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h ago", seconds / 3_600)
-    } else {
-        format!("{}d ago", seconds / 86_400)
     }
 }
 
@@ -855,6 +827,132 @@ fn safe_keychain_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+async fn fetch_grok_usage(now: u64) -> Option<GrokUsage> {
+    let token = xai_access_token(now).await?;
+    let curl_config = format!(
+        "header = \"Authorization: Bearer {token}\"\n\
+         header = \"Accept: application/json\"\n\
+         header = \"x-grok-client-identifier: grok-shell\"\n\
+         header = \"x-grok-client-version: 1.0.5\"\n\
+         header = \"X-XAI-Token-Auth: xai-grok-cli\"\n"
+    );
+    let response = capture(
+        Path::new("/usr/bin/curl"),
+        &["-fsS", "--max-time", "5", "-K", "-", GROK_USAGE_URL],
+        Some(curl_config.into_bytes()),
+        COMMAND_TIMEOUT,
+    )
+    .await?;
+    parse_grok_usage(&response.stdout, now)
+}
+
+async fn xai_access_token(now: u64) -> Option<String> {
+    let path = opencode_auth_path()?;
+    let mut credentials: Value = load_json(&path).await?;
+    let oauth = credentials.get("xai")?;
+    if oauth.get("type").and_then(Value::as_str) != Some("oauth") {
+        return None;
+    }
+    let expires_at = oauth
+        .get("expires")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if expires_at <= now.saturating_add(120).saturating_mul(1_000) {
+        refresh_xai_credentials(&path, &mut credentials, now).await?;
+    }
+    credentials
+        .pointer("/xai/access")
+        .and_then(Value::as_str)
+        .filter(|token| safe_header_value(token))
+        .map(str::to_string)
+}
+
+fn opencode_auth_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| user_home().map(|home| home.join(".local/share")))
+        .map(|directory| directory.join("opencode/auth.json"))
+}
+
+async fn refresh_xai_credentials(path: &Path, credentials: &mut Value, now: u64) -> Option<()> {
+    let refresh_token = credentials
+        .pointer("/xai/refresh")
+        .and_then(Value::as_str)?;
+    if refresh_token.is_empty() {
+        return None;
+    }
+    let body = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={XAI_OAUTH_CLIENT_ID}",
+        form_encode(refresh_token),
+    );
+    let response = capture(
+        Path::new("/usr/bin/curl"),
+        &[
+            "-fsS",
+            "--max-time",
+            "5",
+            "-H",
+            "Accept: application/json",
+            "-H",
+            "Content-Type: application/x-www-form-urlencoded",
+            "-H",
+            "User-Agent: opencode/flash-status",
+            "--data-binary",
+            "@-",
+            XAI_TOKEN_URL,
+        ],
+        Some(body.into_bytes()),
+        COMMAND_TIMEOUT,
+    )
+    .await?;
+    let refreshed: Value = serde_json::from_str(&response.stdout).ok()?;
+    apply_xai_refresh(credentials, &refreshed, now)?;
+    let body = serde_json::to_vec(credentials).ok()?;
+    write_secret(path, &body).await.then_some(())
+}
+
+fn apply_xai_refresh(credentials: &mut Value, refreshed: &Value, now: u64) -> Option<()> {
+    let access_token = refreshed.get("access_token")?.as_str()?;
+    if !safe_header_value(access_token) {
+        return None;
+    }
+    let expires_in = refreshed
+        .get("expires_in")
+        .and_then(Value::as_u64)
+        .unwrap_or(3_600);
+    let oauth = credentials.get_mut("xai")?.as_object_mut()?;
+    if oauth.get("type").and_then(Value::as_str) != Some("oauth") {
+        return None;
+    }
+    oauth.insert("access".to_string(), json!(access_token));
+    if let Some(refresh_token) = refreshed
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+    {
+        oauth.insert("refresh".to_string(), json!(refresh_token));
+    }
+    oauth.insert(
+        "expires".to_string(),
+        json!(now.saturating_add(expires_in).saturating_mul(1_000)),
+    );
+    Some(())
+}
+
+fn form_encode(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 async fn fetch_codex_usage(now: u64) -> Option<CodexUsage> {
     let codex = resolved_codex_path().await?;
     let input = concat!(
@@ -975,7 +1073,17 @@ async fn executable_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-struct AiProviders;
+struct AiProviders {
+    usage: Arc<RwLock<UsageState>>,
+}
+
+impl Default for AiProviders {
+    fn default() -> Self {
+        Self {
+            usage: Arc::new(RwLock::new(UsageState::default())),
+        }
+    }
+}
 
 flash_plugin::plugin!(AiProviders);
 
@@ -983,13 +1091,26 @@ impl FlashPlugin for AiProviders {
     async fn on_start(&self, ctx: Context) {
         let cached = load_usage_state(&ctx).await;
         publish_status(&ctx, &cached, unix_now());
+        *self.usage.write().await = cached;
 
         let refresh_ctx = ctx.clone();
+        let refresh_usage_state = Arc::clone(&self.usage);
         tokio::spawn(async move {
-            refresh_usage(&refresh_ctx).await;
+            refresh_usage(&refresh_ctx, &refresh_usage_state).await;
         });
-        drop(ctx.interval(STATUS_REFRESH_INTERVAL, |ctx| async move {
-            refresh_usage(&ctx).await;
+        let publish_usage_state = Arc::clone(&self.usage);
+        drop(ctx.interval(STATUS_PUBLISH_INTERVAL, move |ctx| {
+            let usage = Arc::clone(&publish_usage_state);
+            async move {
+                publish_current_status(&ctx, &usage).await;
+            }
+        }));
+        let refresh_usage_state = Arc::clone(&self.usage);
+        drop(ctx.interval(USAGE_REFRESH_INTERVAL, move |ctx| {
+            let usage = Arc::clone(&refresh_usage_state);
+            async move {
+                refresh_usage(&ctx, &usage).await;
+            }
         }));
     }
 
@@ -1048,7 +1169,7 @@ fn percent_encode(input: &str) -> String {
 }
 
 fn main() {
-    run(AiProviders);
+    run(AiProviders::default());
 }
 
 #[cfg(test)]
@@ -1133,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    fn status_segments_are_compact_rich_and_never_use_question_marks() {
+    fn status_segments_consolidate_every_provider_into_one_aligned_popup() {
         let state = UsageState {
             anthropic: Some(AnthropicUsage {
                 updated_at: 0,
@@ -1146,35 +1267,106 @@ mod tests {
                 session: Some(WindowUsage::new(35.9, Some(18_000), 300)),
                 weekly: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
             }),
+            grok: Some(GrokUsage {
+                updated_at: 0,
+                weekly: Some(WindowUsage::new(35.0, Some(604_800), 10_080)),
+            }),
         };
 
         let segments = render_status_segments(&state, 0);
-        assert_eq!(segments.claude_usage, "#[fg=#D08770]53%↻5d#[default]");
-        assert_eq!(segments.codex_usage, "#[fg=#D08770]54%↻5d#[default]");
-        assert!(segments.fable_usage.contains("10%↻4d"));
         assert_eq!(
-            segments.claude_usage_details,
-            "5-hour 80% remaining · resets in 3h\n7-day 53% remaining · resets in 5d\nUpdated now"
+            segments.details,
+            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]Fable     shared 5-hour#[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]Grok      7-day        #[default]  #[fg=#D08770] 65%#[default]  7d"
         );
         assert_eq!(
-            segments.fable_usage_details,
-            "Shared 5-hour 80% remaining · resets in 3h\n7-day 10% remaining · resets in 4d\nUpdated now"
+            segments.summary,
+            inline_status_popup("#[fg=colour178]AI#[default]", &segments.details)
         );
-        assert_eq!(
-            segments.codex_usage_details,
-            "5-hour 65% remaining · resets in 5h\n7-day 54% remaining · resets in 5d\nUpdated now"
-        );
-        assert!(!segments.all().iter().any(|value| value.contains('?')));
+        assert!(!segments.summary.contains("#[link="));
+        assert!(!segments.details.ends_with('\n'));
+        assert!(!segments.all().iter().any(|value| value.contains("?%")));
     }
 
     #[test]
     fn unavailable_segments_are_explicit_and_never_ambiguous() {
         let segments = render_status_segments(&UsageState::default(), 0);
-        assert_eq!(segments.claude_usage, "—");
-        assert_eq!(segments.fable_usage, "—");
-        assert_eq!(segments.codex_usage, "—");
-        assert_eq!(segments.claude_usage_details, "Usage unavailable");
-        assert!(!segments.all().iter().any(|value| value.contains('?')));
+        assert_eq!(
+            segments.summary,
+            inline_status_popup("#[fg=colour178]AI#[default]", &segments.details)
+        );
+        assert!(segments
+            .details
+            .contains("#[fg=colour245]Claude    5-hour       #[default]     —  —"));
+        assert!(segments.details.contains("#[fg=colour245]Grok      7-day"));
+        assert!(!segments.all().iter().any(|value| value.contains("?%")));
+    }
+
+    #[test]
+    fn grok_usage_parses_the_weekly_period_and_zero_usage_when_omitted() {
+        let usage = parse_grok_usage(
+            r#"{
+              "config": {
+                "currentPeriod": {
+                  "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                  "end": "1970-01-08T00:00:00Z"
+                },
+                "productUsage": [
+                  {"product": "Other", "usagePercent": 99},
+                  {"product": "GrokBuild", "usagePercent": 35.2}
+                ]
+              }
+            }"#,
+            0,
+        )
+        .expect("valid Grok usage");
+        assert_eq!(usage.weekly.unwrap().used_percent, 35.2);
+
+        let unused = parse_grok_usage(
+            r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"1970-01-08T00:00:00Z"}}}"#,
+            0,
+        )
+        .expect("valid unused Grok period");
+        assert_eq!(unused.weekly.unwrap().used_percent, 0.0);
+        assert!(parse_grok_usage(
+            r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_DAILY"}}}"#,
+            0,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn publishing_and_provider_fetching_have_independent_cadences() {
+        assert_eq!(STATUS_PUBLISH_INTERVAL, Duration::from_secs(1));
+        assert_eq!(USAGE_REFRESH_INTERVAL, Duration::from_secs(60));
+        assert_eq!(ANTHROPIC_USAGE_TTL, 600);
+        assert_eq!(CODEX_USAGE_TTL, 120);
+        assert_eq!(GROK_USAGE_TTL, 120);
+    }
+
+    #[test]
+    fn xai_refresh_rotates_credentials_without_losing_opencode_state() {
+        let mut credentials = json!({
+            "xai": {
+                "type": "oauth",
+                "access": "old-access",
+                "refresh": "old-refresh",
+                "expires": 1
+            },
+            "preserved": true
+        });
+        let refreshed = json!({
+            "access_token": "new-access",
+            "refresh_token": "new-refresh",
+            "expires_in": 3_600
+        });
+
+        apply_xai_refresh(&mut credentials, &refreshed, 100).expect("valid refresh");
+
+        assert_eq!(credentials["xai"]["access"], "new-access");
+        assert_eq!(credentials["xai"]["refresh"], "new-refresh");
+        assert_eq!(credentials["xai"]["expires"], 3_700_000);
+        assert_eq!(credentials["preserved"], true);
+        assert_eq!(form_encode("refresh/+ token"), "refresh%2F%2B%20token");
     }
 
     #[test]

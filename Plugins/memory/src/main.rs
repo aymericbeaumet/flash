@@ -6,9 +6,10 @@ use flash_plugin::{
     inline_status_popup, run, run_command, CommandRequest, Context, PerformResponse,
 };
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const HISTORY_SAMPLES: usize = 20;
+const DETAIL_LABEL_WIDTH: usize = 14;
 const VM_STAT: &str = "/usr/bin/vm_stat";
 const SYSCTL: &str = "/usr/sbin/sysctl";
 const KIB: u64 = 1024;
@@ -384,7 +385,32 @@ Page size: {}",
     if !history.is_empty() {
         body.push_str(&format!("\nHistory: {}", sparkline(history)));
     }
-    let details = format!("#[fg=colour178]Memory#[default]\n{body}");
+    let details = [
+        "#[fg=colour178]Memory#[default]".to_string(),
+        detail_row("Usage", &format!("{percent:>5.1} %")),
+        detail_row("Used", &format!("{:>10}", format_bytes(snapshot.occupied))),
+        detail_row("Total", &format!("{:>10}", format_bytes(snapshot.total))),
+        detail_row("Free", &format!("{:>10}", format_bytes(snapshot.free))),
+        detail_row("Wired", &format!("{:>10}", format_bytes(snapshot.wired))),
+        detail_row(
+            "Compressed",
+            &format!("{:>10}", format_bytes(snapshot.compressed)),
+        ),
+        detail_row(
+            "Swap used",
+            &format!("{:>10}", format_bytes(snapshot.swap_used)),
+        ),
+        detail_row(
+            "Swap total",
+            &format!("{:>10}", format_bytes(snapshot.swap_total)),
+        ),
+        detail_row(
+            "Page size",
+            &format!("{:>10}", format_bytes(snapshot.page_size)),
+        ),
+        detail_row("History", &padded_history(history)),
+    ]
+    .join("\n");
     let plain_details = format!("Memory\n{body}");
 
     StatusSegments {
@@ -392,6 +418,19 @@ Page size: {}",
         details,
         plain_details,
     }
+}
+
+fn detail_row(label: &str, value: &str) -> String {
+    format!(
+        "#[fg=colour245]{label:<width$}#[default]{value}",
+        width = DETAIL_LABEL_WIDTH
+    )
+}
+
+fn padded_history(history: &VecDeque<f64>) -> String {
+    let chart = sparkline(history);
+    let padding = HISTORY_SAMPLES.saturating_sub(chart.chars().count());
+    format!("{}{chart}", "·".repeat(padding))
 }
 
 fn visible_summary(
@@ -547,15 +586,22 @@ mod tests {
             visible_summary(&snapshot, &history, SummaryMode::Full),
             "#[fg=colour178]MEM#[default] 75% ▅▆"
         );
-        assert!(rendered
-            .details
-            .starts_with("#[fg=colour178]Memory#[default]\nOccupied: 12.0 GB / 16.0 GB (75%)"));
-        assert!(rendered.details.contains("Free: 4.0 GB"));
-        assert!(rendered
-            .details
-            .contains("Wired: 2.0 GB · Compressed: 512 MB"));
-        assert!(rendered.details.contains("Swap: 1.0 GB / 4.0 GB"));
-        assert!(rendered.details.contains("Page size: 16 KB"));
+        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
+        assert_eq!(
+            rendered.details,
+            "#[fg=colour178]Memory#[default]\n\
+#[fg=colour245]Usage         #[default] 75.0 %\n\
+#[fg=colour245]Used          #[default]   12.0 GB\n\
+#[fg=colour245]Total         #[default]   16.0 GB\n\
+#[fg=colour245]Free          #[default]    4.0 GB\n\
+#[fg=colour245]Wired         #[default]    2.0 GB\n\
+#[fg=colour245]Compressed    #[default]    512 MB\n\
+#[fg=colour245]Swap used     #[default]    1.0 GB\n\
+#[fg=colour245]Swap total    #[default]    4.0 GB\n\
+#[fg=colour245]Page size     #[default]     16 KB\n\
+#[fg=colour245]History       #[default]··················▅▆"
+        );
+        assert!(!rendered.details.ends_with('\n'));
         assert!(!rendered.plain_details.contains("#["));
         assert!(rendered.plain_details.starts_with("Memory\nOccupied:"));
     }

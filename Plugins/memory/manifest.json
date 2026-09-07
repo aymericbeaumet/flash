@@ -2,7 +2,7 @@
   "id": "memory",
   "name": "Memory",
   "version": "0.1.0",
-  "description": "Publish compact memory usage with allocation, swap, and history details on hover; summary_mode=full restores history inline.",
+  "description": "Publish one-second memory snapshots with structured hover details; summary_mode=full restores history inline.",
   "exec": [
     "./flash-plugin-memory"
   ],

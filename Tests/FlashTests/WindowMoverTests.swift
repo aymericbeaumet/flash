@@ -4,6 +4,13 @@ import XCTest
 @testable import flash
 
 final class WindowMoverTests: XCTestCase {
+  func testDefaultRecoveryIncludesLateSettlingPass() {
+    XCTAssertGreaterThanOrEqual(
+      WindowLayoutManager.defaultScreenRecoveryDelaysMs.last ?? 0,
+      1_500,
+      "macOS and target apps may relocate windows after the early display-change passes")
+  }
+
   func testUsableFrameReturnsVisibleFrameWhenStatusBarIsHidden() {
     let visibleFrame = CGRect(x: 0, y: 24, width: 1440, height: 876)
 
@@ -304,6 +311,54 @@ final class WindowMoverTests: XCTestCase {
 
     XCTAssertEqual(plan?.screen, primary)
     XCTAssertEqual(plan?.frame, WindowMover.rectFor(layout: layout, in: primary.usableFrame))
+  }
+
+  func testEveryManagedShortcutLayoutKeepsItsSizeAcrossUnplugAndReplug() throws {
+    let primary = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+      usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 870))
+    let external = WindowScreenLayout(
+      id: 2,
+      frame: CGRect(x: 1200, y: -180, width: 2560, height: 1440),
+      usableFrame: CGRect(x: 1200, y: -180, width: 2560, height: 1408))
+    let layouts: [WindowLayout] = [
+      .position(.maximized),
+      .position(.leftHalf),
+      .position(.bottomHalf),
+      .position(.topHalf),
+      .position(.rightHalf),
+      .proportional(
+        ProportionalWindowFrame(
+          xPercent: 10.6925,
+          yPercent: 10.6925,
+          widthPercent: 78.615,
+          heightPercent: 78.615)),
+    ]
+
+    for layout in layouts {
+      let unplugged = try XCTUnwrap(
+        WindowMover.recoveryPlan(
+          layout: layout,
+          screenID: external.id,
+          currentFrame: CGRect(x: 100, y: 100, width: 800, height: 600),
+          screens: [primary]))
+      XCTAssertEqual(
+        unplugged.frame,
+        WindowMover.rectFor(layout: layout, in: primary.usableFrame),
+        "unplug changed \(WindowMover.description(of: layout))")
+
+      let replugged = try XCTUnwrap(
+        WindowMover.recoveryPlan(
+          layout: layout,
+          screenID: unplugged.screen.id,
+          currentFrame: unplugged.frame,
+          screens: [primary, external]))
+      XCTAssertEqual(
+        replugged.frame,
+        WindowMover.rectFor(layout: layout, in: primary.usableFrame),
+        "replug changed \(WindowMover.description(of: layout))")
+    }
   }
 
   func testRelativeLayoutMatchingToleratesAXRoundingButRejectsFreeformFrames() {

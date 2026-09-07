@@ -24,7 +24,7 @@
           "segments": {
             "summary": { "$type": "string", "$min_len": 1 },
             "details": {
-              "$contains": "#[fg=colour178]Network#[default]\nWi-Fi: Atelier\n"
+              "$contains": "#[fg=colour178]Network#[default]\n#[fg=colour245]Wi-Fi         #[default]Atelier\n"
             }
           }
         }

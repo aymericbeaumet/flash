@@ -7,12 +7,14 @@ use flash_plugin::{
     PerformResponse, RefreshGate,
 };
 
-const ACTIVITY_POLL: Duration = Duration::from_secs(10);
+const ACTIVITY_POLL: Duration = Duration::from_secs(1);
 const CAPACITY_POLL: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MIN_RATE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(45);
-const HISTORY_LEN: usize = 16;
+const HISTORY_LEN: usize = 20;
+const PLAIN_HISTORY_LEN: usize = 16;
+const DETAIL_LABEL_WIDTH: usize = 14;
 
 static STATE: LazyLock<Mutex<DiskState>> = LazyLock::new(|| Mutex::new(DiskState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -476,8 +478,7 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
 }
 
 fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
-    let plain_details = render_details(state)?;
-    let details = popup_details(&plain_details);
+    let details = render_popup_details(state)?;
     let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
     let percent = primary
         .map(|volume| format!("{}%", volume.percent))
@@ -514,14 +515,68 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
     })
 }
 
-fn popup_details(plain_details: &str) -> String {
-    let body = plain_details
-        .strip_prefix("Disks\n")
-        .unwrap_or(plain_details);
+fn render_popup_details(state: &DiskState) -> Option<String> {
+    if state.capacity.is_none() && state.previous_io.is_none() {
+        return None;
+    }
+    let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
+    let mut rows = vec![
+        "#[fg=colour178]Disks#[default]".to_string(),
+        detail_row(
+            "Capacity",
+            &primary
+                .map(|volume| format!("{:>3} %", volume.percent))
+                .unwrap_or_else(|| "    —".to_string()),
+        ),
+        detail_row(
+            "Read",
+            &state
+                .rates
+                .map(|rates| format!("{:>12}", format_rate(rates.read)))
+                .unwrap_or_else(|| "           —".to_string()),
+        ),
+        detail_row(
+            "Write",
+            &state
+                .rates
+                .map(|rates| format!("{:>12}", format_rate(rates.written)))
+                .unwrap_or_else(|| "           —".to_string()),
+        ),
+        detail_row("Read history", &padded_history(&state.read_history)),
+        detail_row("Write history", &padded_history(&state.write_history)),
+    ];
+    if let Some(capacity) = &state.capacity {
+        for volume in &capacity.volumes {
+            rows.push(detail_row(
+                "Volume",
+                &escape_status_text(&format!("{} ({})", volume.name, volume.mount)),
+            ));
+            rows.push(detail_row(
+                "Space",
+                &format!(
+                    "{:>3} % · {:>10} / {:>10}",
+                    volume.percent,
+                    format_bytes(volume.used),
+                    format_bytes(volume.total)
+                ),
+            ));
+        }
+    }
+    Some(rows.join("\n"))
+}
+
+fn detail_row(label: &str, value: &str) -> String {
     format!(
-        "#[fg=colour178]Disks#[default]\n{}",
-        escape_status_text(body)
+        "#[fg=colour245]{label:<width$}#[default]{value}",
+        width = DETAIL_LABEL_WIDTH
     )
+}
+
+fn padded_history(history: &VecDeque<f64>) -> String {
+    let values: Vec<f64> = history.iter().copied().collect();
+    let chart = sparkline(&values);
+    let padding = HISTORY_LEN.saturating_sub(chart.chars().count());
+    format!("{}{chart}", "·".repeat(padding))
 }
 
 fn render_details(state: &DiskState) -> Option<String> {
@@ -535,8 +590,18 @@ fn render_details(state: &DiskState) -> Option<String> {
     } else {
         lines.push("Activity: sampling…".to_string());
     }
-    let read_history: Vec<f64> = state.read_history.iter().copied().collect();
-    let write_history: Vec<f64> = state.write_history.iter().copied().collect();
+    let read_history: Vec<f64> = state
+        .read_history
+        .iter()
+        .skip(state.read_history.len().saturating_sub(PLAIN_HISTORY_LEN))
+        .copied()
+        .collect();
+    let write_history: Vec<f64> = state
+        .write_history
+        .iter()
+        .skip(state.write_history.len().saturating_sub(PLAIN_HISTORY_LEN))
+        .copied()
+        .collect();
     let read_chart = sparkline(&read_history);
     let write_chart = sparkline(&write_history);
     if !read_chart.is_empty() {
@@ -830,8 +895,29 @@ mod tests {
             push_history(&mut history, f64::from(value));
         }
         assert_eq!(history.len(), HISTORY_LEN);
-        assert_eq!(history.front(), Some(&4.0));
+        assert_eq!(history.front(), Some(&0.0));
         assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0]), "▁▃▅█");
+    }
+
+    #[test]
+    fn plain_details_keep_the_legacy_history_width() {
+        let mut state = DiskState {
+            previous_io: Some(TimedIoSnapshot {
+                snapshot: IoSnapshot::default(),
+                sampled_at: Instant::now(),
+            }),
+            ..DiskState::default()
+        };
+        for value in 0..HISTORY_LEN {
+            push_history(&mut state.read_history, value as f64);
+        }
+
+        let details = render_details(&state).unwrap();
+        let history = details
+            .lines()
+            .find_map(|line| line.strip_prefix("Read history: "))
+            .unwrap();
+        assert_eq!(history.chars().count(), 16);
     }
 
     #[test]
@@ -868,14 +954,21 @@ mod tests {
                 &rendered.details
             )
         );
-        assert!(rendered
-            .details
-            .starts_with("#[fg=colour178]Disks#[default]\nRead: 1.5 MiB/s\nWrite: 2.0 KiB/s"));
-        assert!(rendered.details.contains("Read: 1.5 MiB/s"));
-        assert!(rendered.details.contains("Write: 2.0 KiB/s"));
-        assert!(rendered.details.contains("Read history: █"));
-        assert!(rendered.details.contains("Write history: █"));
-        assert!(rendered.details.contains("Startup (/): 90%"));
+        assert_eq!(ACTIVITY_POLL, Duration::from_secs(1));
+        assert_eq!(CAPACITY_POLL, Duration::from_secs(30));
+        assert_eq!(HISTORY_LEN, 20);
+        assert_eq!(
+            rendered.details,
+            "#[fg=colour178]Disks#[default]\n\
+#[fg=colour245]Capacity      #[default] 90 %\n\
+#[fg=colour245]Read          #[default]   1.5 MiB/s\n\
+#[fg=colour245]Write         #[default]   2.0 KiB/s\n\
+#[fg=colour245]Read history  #[default]···················█\n\
+#[fg=colour245]Write history #[default]···················█\n\
+#[fg=colour245]Volume        #[default]Startup (/)\n\
+#[fg=colour245]Space         #[default] 90 % ·    900 KiB /   1000 KiB"
+        );
+        assert!(!rendered.details.ends_with('\n'));
     }
 
     #[test]
@@ -911,8 +1004,8 @@ mod tests {
         let rendered = render_status(&state, SummaryMode::Compact).unwrap();
 
         assert!(plain.contains("Backup #[fg=colour196] (/Volumes/#1)"));
-        assert!(rendered.details.starts_with(
-            "#[fg=colour178]Disks#[default]\nActivity: sampling…\nVolumes\nBackup ##[fg=colour196] (/Volumes/##1)"
+        assert!(rendered.details.contains(
+            "#[fg=colour245]Volume        #[default]Backup ##[fg=colour196] (/Volumes/##1)"
         ));
     }
 

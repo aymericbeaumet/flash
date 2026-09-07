@@ -16,6 +16,8 @@ final class WindowLayoutManager {
   typealias ScreenLayoutsProvider =
     (Bool, Config.StatusBar.Monitor) -> [WindowScreenLayout]
 
+  static let defaultScreenRecoveryDelaysMs = [80, 250, 750, 1_500]
+
   private struct WindowKey: Hashable {
     let pid: pid_t
     let element: AnyHashable
@@ -46,7 +48,7 @@ final class WindowLayoutManager {
   private static let authoredChangeGraceMs = 300
 
   init(
-    screenRecoveryDelaysMs: [Int] = [80, 250, 750],
+    screenRecoveryDelaysMs: [Int] = WindowLayoutManager.defaultScreenRecoveryDelaysMs,
     screenLayouts: @escaping ScreenLayoutsProvider = { statusBarVisible, monitor in
       WindowMover.screenLayouts(
         statusBarReservesSpace: statusBarVisible,

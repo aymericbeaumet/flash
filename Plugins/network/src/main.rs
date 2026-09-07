@@ -11,12 +11,14 @@ use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
 
 const SOURCE_ADDRESSES: &str = "network.addresses";
-const TRAFFIC_POLL: Duration = Duration::from_secs(2);
+const TRAFFIC_POLL: Duration = Duration::from_secs(1);
 const DISCOVERY_POLL: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(10);
-const HISTORY_LEN: usize = 16;
+const HISTORY_LEN: usize = 20;
+const PLAIN_HISTORY_LEN: usize = 16;
+const DETAIL_LABEL_WIDTH: usize = 14;
 const NETSTAT: &str = "/usr/sbin/netstat";
 const POPUP_TITLE: &str = "#[fg=colour178]Network#[default]";
 
@@ -564,15 +566,91 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
 }
 
 fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
-    let details = format!(
-        "{POPUP_TITLE}\n{}",
-        escape_status_text(&render_details_body(state)?)
-    );
+    let details = render_popup_details(state)?;
     let visible = visible_summary(state, summary_mode);
     Some(RenderedStatus {
         summary: inline_status_popup(&visible, &details),
         details,
     })
+}
+
+fn render_popup_details(state: &NetworkState) -> Option<String> {
+    if state.default_interface.is_none() && state.wifi_ssid.is_none() && state.catalog.is_none() {
+        return None;
+    }
+    let mut rows = vec![
+        POPUP_TITLE.to_string(),
+        detail_row(
+            "Wi-Fi",
+            &state
+                .wifi_ssid
+                .as_deref()
+                .map(escape_status_text)
+                .unwrap_or_else(|| "—".to_string()),
+        ),
+        detail_row(
+            "Interface",
+            &state
+                .default_interface
+                .as_deref()
+                .map(escape_status_text)
+                .unwrap_or_else(|| "—".to_string()),
+        ),
+        detail_row(
+            "Download",
+            &state
+                .rates
+                .map(|rates| format!("{:>12}", format_rate(rates.received)))
+                .unwrap_or_else(|| "           —".to_string()),
+        ),
+        detail_row(
+            "Upload",
+            &state
+                .rates
+                .map(|rates| format!("{:>12}", format_rate(rates.sent)))
+                .unwrap_or_else(|| "           —".to_string()),
+        ),
+        detail_row("Down history", &padded_history(&state.received_history)),
+        detail_row("Up history", &padded_history(&state.sent_history)),
+        detail_row(
+            "Hostname",
+            &state
+                .catalog
+                .as_ref()
+                .and_then(|catalog| catalog.hostname.as_deref())
+                .map(escape_status_text)
+                .unwrap_or_else(|| "—".to_string()),
+        ),
+    ];
+    if let Some(catalog) = &state.catalog {
+        for (index, address) in catalog.addresses.iter().take(8).enumerate() {
+            rows.push(detail_row(
+                &format!("Address {}", index + 1),
+                &escape_status_text(&format!("{}  {}", address.interface_name, address.ip)),
+            ));
+        }
+        if catalog.addresses.len() > 8 {
+            rows.push(detail_row(
+                "More",
+                &format!("{} addresses", catalog.addresses.len() - 8),
+            ));
+        }
+    }
+    Some(rows.join("\n"))
+}
+
+fn detail_row(label: &str, value: &str) -> String {
+    format!(
+        "#[fg=colour245]{label:<width$}#[default]{value}",
+        width = DETAIL_LABEL_WIDTH
+    )
+}
+
+fn padded_history(history: &VecDeque<f64>) -> String {
+    let values: Vec<f64> = history.iter().copied().collect();
+    let chart = sparkline(&values);
+    let padding = HISTORY_LEN.saturating_sub(chart.chars().count());
+    format!("{}{chart}", "·".repeat(padding))
 }
 
 fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> String {
@@ -623,8 +701,23 @@ fn render_details_body(state: &NetworkState) -> Option<String> {
     } else {
         lines.push("Traffic: sampling…".to_string());
     }
-    let received_history: Vec<f64> = state.received_history.iter().copied().collect();
-    let sent_history: Vec<f64> = state.sent_history.iter().copied().collect();
+    let received_history: Vec<f64> = state
+        .received_history
+        .iter()
+        .skip(
+            state
+                .received_history
+                .len()
+                .saturating_sub(PLAIN_HISTORY_LEN),
+        )
+        .copied()
+        .collect();
+    let sent_history: Vec<f64> = state
+        .sent_history
+        .iter()
+        .skip(state.sent_history.len().saturating_sub(PLAIN_HISTORY_LEN))
+        .copied()
+        .collect();
     let received_chart = sparkline(&received_history);
     let sent_chart = sparkline(&sent_history);
     if !received_chart.is_empty() {
@@ -896,8 +989,26 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
             push_history(&mut history, f64::from(value));
         }
         assert_eq!(history.len(), HISTORY_LEN);
-        assert_eq!(history.front(), Some(&4.0));
+        assert_eq!(history.front(), Some(&0.0));
         assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0]), "▁▃▅█");
+    }
+
+    #[test]
+    fn plain_details_keep_the_legacy_history_width() {
+        let mut state = NetworkState {
+            default_interface: Some("en0".to_string()),
+            ..NetworkState::default()
+        };
+        for value in 0..HISTORY_LEN {
+            push_history(&mut state.received_history, value as f64);
+        }
+
+        let details = render_details(&state).unwrap();
+        let history = details
+            .lines()
+            .find_map(|line| line.strip_prefix("Download history: "))
+            .unwrap();
+        assert_eq!(history.chars().count(), 16);
     }
 
     #[test]
@@ -933,13 +1044,19 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
         assert!(render_details(&state)
             .unwrap()
             .contains("Hostname: moria #[fg=colour196]"));
-        assert!(rendered.details.contains("Interface: en##0"));
-        assert!(rendered
-            .details
-            .starts_with("#[fg=colour178]Network#[default]\nWi-Fi: Studio ##[fg=colour196]\n"));
-        assert!(rendered
-            .details
-            .contains("Hostname: moria ##[fg=colour196]"));
+        assert_eq!(
+            rendered.details,
+            "#[fg=colour178]Network#[default]\n\
+#[fg=colour245]Wi-Fi         #[default]Studio ##[fg=colour196]\n\
+#[fg=colour245]Interface     #[default]en##0\n\
+#[fg=colour245]Download      #[default]   1.5 MiB/s\n\
+#[fg=colour245]Upload        #[default]   2.0 KiB/s\n\
+#[fg=colour245]Down history  #[default]···················█\n\
+#[fg=colour245]Up history    #[default]···················█\n\
+#[fg=colour245]Hostname      #[default]moria ##[fg=colour196]\n\
+#[fg=colour245]Address 1     #[default]en##0  10.0.0.2"
+        );
+        assert!(!rendered.details.ends_with('\n'));
     }
 
     #[test]
@@ -952,8 +1069,18 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
 
         assert_eq!(
             render_status(&state, SummaryMode::Compact).unwrap().details,
-            "#[fg=colour178]Network#[default]\nWi-Fi: Atelier\nInterface: en0\nTraffic: sampling…"
+            "#[fg=colour178]Network#[default]\n\
+#[fg=colour245]Wi-Fi         #[default]Atelier\n\
+#[fg=colour245]Interface     #[default]en0\n\
+#[fg=colour245]Download      #[default]           —\n\
+#[fg=colour245]Upload        #[default]           —\n\
+#[fg=colour245]Down history  #[default]····················\n\
+#[fg=colour245]Up history    #[default]····················\n\
+#[fg=colour245]Hostname      #[default]—"
         );
+        assert_eq!(TRAFFIC_POLL, Duration::from_secs(1));
+        assert_eq!(DISCOVERY_POLL, Duration::from_secs(30));
+        assert_eq!(HISTORY_LEN, 20);
     }
 
     #[test]
