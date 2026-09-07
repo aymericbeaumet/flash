@@ -17,8 +17,8 @@ set -euo pipefail
 #   units        per-crate `cargo test --locked` for the SDK + all Rust
 #                plugins (same loop CI runs)
 #   build        all compiled plugins (dev profile) + the conformance probes
-#   conformance  runner --all, --probes, and --sandbox (builds the flash
-#                binary for profile generation if missing)
+#   conformance  runner --all, --probes, and --sandbox (refreshes the flash
+#                binary used for profile generation)
 
 MODE_ARGS=()
 LANES=()
@@ -88,7 +88,7 @@ if want conformance; then
   "${RUNNER[@]}" --probes ${MODE_ARGS[@]+"${MODE_ARGS[@]}"}
   echo "==> conformance: sandbox lane"
   FLASH_BIN=".build/debug/flash"
-  [[ -x "$FLASH_BIN" ]] || swift build --product flash
+  swift build --product flash
   "${RUNNER[@]}" --sandbox --flash-bin "$FLASH_BIN" ${MODE_ARGS[@]+"${MODE_ARGS[@]}"}
 fi
 
