@@ -438,7 +438,7 @@ fn visible_summary(
     history: &VecDeque<f64>,
     summary_mode: SummaryMode,
 ) -> String {
-    let percent = snapshot.occupied_percent();
+    let percent = snapshot.occupied_percent().min(99.0);
     let mut visible =
         format!("#[fg=colour178]MEM#[default] #[fg=colour245]{percent:>2.0}%#[default]");
     if summary_mode == SummaryMode::Full && !history.is_empty() {
@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_memory_summary_greys_and_reserves_two_percentage_digits() {
+    fn compact_memory_summary_caps_values_that_would_render_as_three_digits() {
         let mut snapshot = MemorySnapshot {
             total: 100,
             occupied: 9,
@@ -488,11 +488,12 @@ mod tests {
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
             "#[fg=colour178]MEM#[default] #[fg=colour245]10%#[default]"
         );
-        snapshot.occupied = 100;
-        snapshot.free = 0;
+        snapshot.total = 1_000;
+        snapshot.occupied = 999;
+        snapshot.free = 1;
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]100%#[default]"
+            "#[fg=colour178]MEM#[default] #[fg=colour245]99%#[default]"
         );
     }
 

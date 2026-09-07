@@ -481,7 +481,7 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
     let details = render_popup_details(state)?;
     let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
     let percent = primary
-        .map(|volume| format!("{:>2}%", volume.percent))
+        .map(|volume| format!("{:>2}%", volume.percent.min(99)))
         .unwrap_or_else(|| "—".to_string());
     let mut visible = format!("#[fg=colour178]DSK#[default] #[fg=colour245]{percent}#[default]");
     if summary_mode == SummaryMode::Full {
@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_disk_summary_uses_grey_two_column_percentage() {
+    fn compact_disk_summary_caps_at_two_percentage_digits() {
         for (percent, expected) in [
             (
                 9,
@@ -695,7 +695,7 @@ mod tests {
             ),
             (
                 100,
-                "#[fg=colour178]DSK#[default] #[fg=colour245]100%#[default]",
+                "#[fg=colour178]DSK#[default] #[fg=colour245]99%#[default]",
             ),
         ] {
             let state = DiskState {

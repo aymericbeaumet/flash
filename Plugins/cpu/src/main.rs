@@ -585,16 +585,17 @@ fn visible_summary(
     history: &VecDeque<f64>,
     summary_mode: SummaryMode,
 ) -> String {
-    let total = cpu.total();
+    let total = cpu.total().min(99.0);
     let mut visible =
         format!("#[fg=colour178]CPU#[default] #[fg=colour245]{total:>2.0}%#[default]");
     if summary_mode == SummaryMode::Compact {
         return visible;
     }
     if let Some(gpu) = gpu {
+        let utilization = gpu.utilization.min(99.0);
         visible.push_str(&format!(
             " #[fg=colour245]· #[fg=colour178]GPU#[default] #[fg=colour245]{:>2.0}%#[default]",
-            gpu.utilization,
+            utilization,
         ));
     }
     if !history.is_empty() {
@@ -623,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_cpu_summary_greys_and_reserves_two_percentage_digits() {
+    fn compact_cpu_summary_caps_values_that_would_render_as_three_digits() {
         for (user, expected) in [
             (
                 9.0,
@@ -634,8 +635,12 @@ mod tests {
                 "#[fg=colour178]CPU#[default] #[fg=colour245]10%#[default]",
             ),
             (
+                99.6,
+                "#[fg=colour178]CPU#[default] #[fg=colour245]99%#[default]",
+            ),
+            (
                 100.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]100%#[default]",
+                "#[fg=colour178]CPU#[default] #[fg=colour245]99%#[default]",
             ),
         ] {
             let cpu = CpuSnapshot {
@@ -652,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn full_cpu_summary_greys_and_reserves_two_gpu_percentage_digits() {
+    fn full_cpu_summary_caps_gpu_at_two_percentage_digits() {
         let cpu = CpuSnapshot {
             user: 9.0,
             system: 0.0,
@@ -660,14 +665,14 @@ mod tests {
             load: [0.0; 3],
         };
         let gpu = GpuSnapshot {
-            utilization: 9.0,
+            utilization: 100.0,
             model: None,
         };
 
         assert_eq!(
             visible_summary(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Full),
             "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
-· #[fg=colour178]GPU#[default] #[fg=colour245] 9%#[default]"
+· #[fg=colour178]GPU#[default] #[fg=colour245]99%#[default]"
         );
     }
 
