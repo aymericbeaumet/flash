@@ -332,6 +332,10 @@ Logs are newline-delimited JSON written to stderr and
 `core:<file>.<function>` for Flash code, or `plugin:<id>` for plugin logs.
 `debug.log_level = "trace"` includes AX tree dumps. Accepted levels are
 `trace`, `debug`, `info`, `warn`, `error`, and `fatal`.
+XCTest disables default disk logging; keep file-writer tests on temporary
+destinations so they cannot overwrite or rotate the resident app's diagnostics.
+File opening, appending, and rotation belong to the writer's serial queue;
+never capture a file handle in a queued write before rotation can replace it.
 
 `plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` scripts run sandboxed (writes confined to the plugin root/data dir/temp, secrets read-denied, output persisted for forensics) and `exec` argvs run under the plugin's launch profile, but a pinned ref is still the primary trust boundary; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests declare sensitive runtime surfaces through `capabilities`: `"clipboard"` gates `core:clipboard.changed`, `"accessibility"` gates the AX broker and host-posted keyboard chords, `"network"` opts out of the default network-denying seatbelt profile, `"subprocess"` permits privileged helpers that cannot run under that profile, and `"app_control"` gates the `host.normal_mode_target` and `app.activate` host RPCs. Running-app and focus events are currently delivered according to `listen` independently of `"app_control"`; the capability does not gate observation. Omitted capabilities are default-denied.
 Official bundled plugins under `Contents/Resources/Plugins` are enabled unless

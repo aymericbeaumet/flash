@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Single sink for the app's diagnostics. Every emitted line is one
@@ -74,19 +75,13 @@ enum FlashLog {
 
   private static let lock = NSLock()
   private static var minLevel: Level = .info
-  private static var handle: FileHandle?
   private static var sinks: [UUID: Sink] = [:]
-  private static let writeQueue =
-    DispatchQueue(label: "flash.log.write", qos: .utility)
-
-  /// Rotate `flash.log` when it exceeds this size. Trace-level logs (which can
-  /// include AX tree dumps) can balloon quickly; without rotation the file
-  /// grows unbounded across a long-running resident session.
-  private static let rotationByteLimit: UInt64 = 10 * 1024 * 1024
-  /// Number of rotated segments kept beside `flash.log` (`flash.log.1` …
-  /// `flash.log.N`). Anything older is deleted on rotation.
-  private static let rotationKeep = 3
-  private static var bytesWrittenSinceRotation: UInt64 = 0
+  static let defaultLogFileURL: URL? = {
+    guard NSClassFromString("XCTestCase") == nil else { return nil }
+    return FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Logs/Flash/flash.log")
+  }()
+  private static let fileWriter = defaultLogFileURL.map { FlashLogFileWriter(url: $0) }
 
   static func setLevel(_ level: Level) {
     lock.lock()
@@ -164,10 +159,6 @@ enum FlashLog {
   ) {
     lock.lock()
     let pass = level >= minLevel
-    if pass, handle == nil {
-      handle = openLogFile()
-    }
-    let h = handle
     let sinkSnapshot = Array(sinks.values)
     lock.unlock()
     guard pass || !sinkSnapshot.isEmpty else { return }
@@ -184,54 +175,7 @@ enum FlashLog {
     }
     guard pass else { return }
     fputs(line, stderr)
-    guard let h, let data = line.data(using: .utf8) else { return }
-    writeQueue.async {
-      try? h.write(contentsOf: data)
-      bytesWrittenSinceRotation &+= UInt64(data.count)
-      if bytesWrittenSinceRotation >= rotationByteLimit {
-        rotateIfNeeded()
-      }
-    }
-  }
-
-  /// Off the write queue: if `flash.log` has grown past `rotationByteLimit`,
-  /// shift `flash.log.(N-1) → flash.log.N` through `flash.log → flash.log.1`
-  /// and reopen a fresh handle. Failures are best-effort; if rotation can't
-  /// happen we keep writing to the existing handle rather than losing entries.
-  private static func rotateIfNeeded() {
-    guard let url = logFileURL() else {
-      bytesWrittenSinceRotation = 0
-      return
-    }
-    let fm = FileManager.default
-    let attrs = try? fm.attributesOfItem(atPath: url.path)
-    let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
-    guard size >= rotationByteLimit else {
-      bytesWrittenSinceRotation = 0
-      return
-    }
-    let base = url.deletingLastPathComponent()
-    let name = url.lastPathComponent
-    // Drop the oldest, then shift each rotated segment up by one.
-    let oldest = base.appendingPathComponent("\(name).\(rotationKeep)")
-    try? fm.removeItem(at: oldest)
-    for index in stride(from: rotationKeep - 1, through: 1, by: -1) {
-      let from = base.appendingPathComponent("\(name).\(index)")
-      let to = base.appendingPathComponent("\(name).\(index + 1)")
-      _ = try? fm.moveItem(at: from, to: to)
-    }
-    let firstRotated = base.appendingPathComponent("\(name).1")
-    _ = try? fm.moveItem(at: url, to: firstRotated)
-    lock.lock()
-    try? handle?.close()
-    handle = openLogFile()
-    lock.unlock()
-    bytesWrittenSinceRotation = 0
-  }
-
-  private static func logFileURL() -> URL? {
-    FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Logs/Flash/flash.log")
+    if let data = line.data(using: .utf8) { fileWriter?.append(data) }
   }
 
   static func jsonLine(_ record: Record) -> String {
@@ -247,17 +191,65 @@ enum FlashLog {
     return line
   }
 
-  private static func openLogFile() -> FileHandle? {
-    guard let url = logFileURL() else { return nil }
-    let fm = FileManager.default
-    try? fm.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    if !fm.fileExists(atPath: url.path) {
-      fm.createFile(atPath: url.path, contents: nil)
+}
+
+final class FlashLogFileWriter {
+  private let url: URL
+  private let rotationByteLimit: UInt64
+  private let rotationKeep: Int
+  private let queue = DispatchQueue(label: "flash.log.write", qos: .utility)
+  private var handle: FileHandle?
+  private var bytesWritten: UInt64 = 0
+
+  init(url: URL, rotationByteLimit: UInt64 = 10 * 1024 * 1024, rotationKeep: Int = 3) {
+    precondition(rotationByteLimit > 0 && rotationKeep > 0)
+    self.url = url
+    self.rotationByteLimit = rotationByteLimit
+    self.rotationKeep = rotationKeep
+  }
+
+  func append(_ data: Data) {
+    queue.async { [self] in
+      openIfNeeded()
+      guard let handle else { return }
+      do { try handle.write(contentsOf: data) } catch { return }
+      bytesWritten &+= UInt64(data.count)
+      if bytesWritten >= rotationByteLimit { rotate() }
     }
-    guard let h = try? FileHandle(forWritingTo: url) else { return nil }
-    _ = try? h.seekToEnd()
-    return h
+  }
+
+  func flush() { queue.sync {} }
+
+  private func openIfNeeded() {
+    guard handle == nil else { return }
+    let fm = FileManager.default
+    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let descriptor = Darwin.open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { return }
+    handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    let attributes = try? fm.attributesOfItem(atPath: url.path)
+    bytesWritten = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+  }
+
+  private func rotate() {
+    let fm = FileManager.default
+    let base = url.deletingLastPathComponent()
+    let name = url.lastPathComponent
+    let oldest = base.appendingPathComponent("\(name).\(rotationKeep)")
+    try? fm.removeItem(at: oldest)
+    for index in stride(from: rotationKeep - 1, through: 1, by: -1) {
+      let from = base.appendingPathComponent("\(name).\(index)")
+      let to = base.appendingPathComponent("\(name).\(index + 1)")
+      try? fm.moveItem(at: from, to: to)
+    }
+    do {
+      try fm.moveItem(at: url, to: base.appendingPathComponent("\(name).1"))
+    } catch {
+      bytesWritten = 0
+      return
+    }
+    try? handle?.close()
+    handle = nil
+    openIfNeeded()
   }
 }

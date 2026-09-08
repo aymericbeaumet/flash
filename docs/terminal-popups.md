@@ -93,7 +93,9 @@ terminal, including a fresh shell.
 
 Set `[debug] log_level = "debug"` (or `"trace"`) to record hover diagnostics in
 `~/Library/Logs/Flash/flash.log`. The existing log rotation retains three older
-10 MiB segments. Diagnostics include:
+10 MiB segments. Test runs leave the resident log alone: their default disk
+logging is disabled, while stderr and in-memory test sinks remain available.
+File-writer tests use temporary destinations. Diagnostics include:
 
 - `Status hover regions changed`: per-window region indices, hashed popup IDs,
   local rectangles, and content byte counts.
@@ -151,6 +153,10 @@ The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap
 The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label widens the pill only while active. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
 
 Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects and cycle transitions use Core Animation.
+
+`monitor = "primary"` selects the display at desktop origin `(0, 0)`. Moving
+keyboard focus to another display does not move the bar or reserve status-bar
+space there. `monitor = "all"` draws a bar on every display.
 
 Use `#[align=absolute-centre]` for a label at the physical center of the screen. Native tmux `#[align=centre]` instead centers the space remaining between the left and right content, so unequal side widths shift that label.
 
