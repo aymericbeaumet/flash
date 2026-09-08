@@ -472,10 +472,16 @@ final class StatusPopupControllerTests: XCTestCase {
       environment: ["BIN": "$HOME/bin", "TOKEN": "value", "PATH": "$HOME/bin:$PATH"])
     let config = StatusTerminalRegistry.configuration(
       for: definition,
-      environment: ["HOME": "/tmp/home", "PROJECT": "/tmp/project", "PATH": "/usr/bin"])
+      environment: [
+        "HOME": "/tmp/home", "PROJECT": "/tmp/project", "PATH": "/usr/bin", "NO_COLOR": "1",
+      ])
     XCTAssertEqual(config.command, ["/tmp/home/bin/tool", "value"])
     XCTAssertEqual(config.workingDirectory, "/tmp/project")
     XCTAssertEqual(config.environment["PATH"], "/tmp/home/bin:/usr/bin")
+    XCTAssertNil(config.environment["NO_COLOR"])
+    let explicitlyPlain = StatusTerminalRegistry.configuration(
+      for: .init(command: ["/bin/sh"], environment: ["NO_COLOR": "1"]), environment: [:])
+    XCTAssertEqual(explicitlyPlain.environment["NO_COLOR"], "1")
     XCTAssertEqual(
       StatusTerminalRegistry.expand("$MISSING/${BAD", environment: [:]), "$MISSING/${BAD")
   }

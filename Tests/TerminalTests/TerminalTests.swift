@@ -5,6 +5,25 @@ import XCTest
 @testable import FlashTerminal
 
 final class TerminalTests: XCTestCase {
+  func testANSIIndexedAndTruecolorForegroundsAndBackgroundsReachFrames() throws {
+    let buffer = TerminalBuffer(columns: 8, rows: 1, scrollback: false)
+    buffer.write(
+      Data(
+        ("\u{1B}[31;44mR\u{1B}[32mG"
+          + "\u{1B}[38;5;196;48;5;21mI"
+          + "\u{1B}[38;2;7;8;9;48;2;1;2;3mT").utf8))
+    let cells = try XCTUnwrap(buffer.snapshot()).cells
+    XCTAssertGreaterThan(cells[0].foreground.red, cells[0].foreground.green)
+    XCTAssertGreaterThan(cells[0].background.blue, cells[0].background.red)
+    XCTAssertGreaterThan(cells[1].foreground.green, cells[1].foreground.red)
+    XCTAssertEqual(cells[0].background, cells[1].background)
+    func rgb(_ color: TerminalColor) -> [UInt8] { [color.red, color.green, color.blue] }
+    XCTAssertEqual(rgb(cells[2].foreground), [255, 0, 0])
+    XCTAssertEqual(rgb(cells[2].background), [0, 0, 255])
+    XCTAssertEqual(rgb(cells[3].foreground), [7, 8, 9])
+    XCTAssertEqual(rgb(cells[3].background), [1, 2, 3])
+  }
+
   func testTerminalResponsesInputModesAndBracketedPaste() {
     let buffer = TerminalBuffer(columns: 20, rows: 3, scrollback: true)
     buffer.connectOutput()

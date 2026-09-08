@@ -336,6 +336,8 @@ final class StatusTerminalRegistry {
     for definition: Config.Terminal, environment base: [String: String]
   ) -> TerminalConfiguration {
     var environment = base
+    // The child has a real color terminal even when Flash's launcher does not.
+    environment.removeValue(forKey: "NO_COLOR")
     for (name, value) in definition.environment {
       environment[name] = expand(value, environment: base)
     }
