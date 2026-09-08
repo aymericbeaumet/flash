@@ -286,6 +286,7 @@ extension NormalModeDispatcher {
 
   private static var commandLineHelpLines: [String] {
     var lines = commandLineSpecs.map { $0.helpLine }
+    lines.append(contentsOf: terminalCommandSyntax.values.sorted())
     lines.append(":help [topic]")
     lines.append(":open <args>")
     lines.append(":flashlight <query>")

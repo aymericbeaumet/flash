@@ -1,0 +1,36 @@
+# Plugins run on a small (2-worker) tokio runtime shared by every async task —
+# events, catalog refreshes, hint discovery. A single blocking syscall pins one
+# of those worker threads and stalls every other in-flight operation, which is
+# exactly how a flashlight open ends up waiting hundreds of ms on one plugin.
+#
+# Blocking I/O is therefore BANNED outright in plugin code — no exceptions, no
+# `#[allow(clippy::disallowed_methods)]`. Use the async equivalent everywhere:
+# `tokio::fs::*` instead of `std::fs::*`, `tokio::process::Command` instead of
+# `std::process::Command`. (`tokio::fs` offloads to its own blocking pool
+# internally, so plugin code stays fully async and never names `std::fs`.)
+#
+# This file is the CANONICAL copy; every Rust plugin crate carries a
+# byte-identical `clippy.toml` (clippy discovers config by walking up from the
+# invocation cwd, so hermetic per-crate runs need a local copy) and
+# `Scripts/check-guardrails.sh` fails if any copy drifts. Enforced per crate
+# with `(cd Plugins/<id> && cargo clippy --all-targets -- -D warnings)` — see
+# AGENTS.md "Plugins must never block the async runtime". The proc-macro crate
+# `flash_plugin_macros` reads `manifest.json` at *compile* time, which is
+# inherently synchronous and not on any async runtime — its single read site
+# carries a scoped `#[allow(clippy::disallowed_methods)]`.
+disallowed-methods = [
+  { path = "std::fs::read", reason = "blocking I/O on the async runtime — use tokio::fs::read" },
+  { path = "std::fs::read_to_string", reason = "blocking I/O on the async runtime — use tokio::fs::read_to_string" },
+  { path = "std::fs::read_dir", reason = "blocking I/O on the async runtime — use tokio::fs::read_dir" },
+  { path = "std::fs::write", reason = "blocking I/O on the async runtime — use tokio::fs::write" },
+  { path = "std::fs::metadata", reason = "blocking I/O on the async runtime — use tokio::fs::metadata" },
+  { path = "std::fs::create_dir_all", reason = "blocking I/O on the async runtime — use tokio::fs::create_dir_all" },
+  { path = "std::fs::File::open", reason = "blocking I/O on the async runtime — use tokio::fs::File::open" },
+  { path = "std::fs::File::create", reason = "blocking I/O on the async runtime — use tokio::fs::File::create" },
+]
+
+# `std::process::Command` is a type, so it is banned via disallowed-types (which
+# also catches `Command::new`, `Command::output`, etc.). Use `tokio::process::Command`.
+disallowed-types = [
+  { path = "std::process::Command", reason = "blocking subprocess on the async runtime — use tokio::process::Command" },
+]

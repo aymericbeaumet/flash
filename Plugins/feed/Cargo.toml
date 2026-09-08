@@ -1,0 +1,30 @@
+[package]
+name = "flash-plugin-feed"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-feed"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+flash_plugin = { path = "../_flash_plugin_rust" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+roxmltree = "0.21"
+scraper = { version = "0.24", default-features = false }
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "sync", "net", "io-util"] }
+
+[profile.plugin-dev]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

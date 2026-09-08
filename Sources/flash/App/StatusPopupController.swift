@@ -41,6 +41,10 @@ final class StatusPopupController {
     var rows: Int
   }
   private var documentRevisions: [String: DocumentRevision] = [:]
+  private var lastLifecycleName: String?
+  private var lastLifecycleFields: [String: String] = [:]
+  private var lastLayoutName: String?
+  private var lastLayoutFields: [String: String] = [:]
   private let exitLabel = NSTextField(labelWithString: "")
   private var region: StatusBarPopupRegion?
   private var visibleFrame = CGRect.zero
@@ -49,6 +53,7 @@ final class StatusPopupController {
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
   var didDismissFocus: (() -> Void)?
+  var didDismiss: ((String) -> Void)?
   var inputInterceptor: ((NSEvent) -> Bool)?
 
   var frame: CGRect { panel.frame }
@@ -66,14 +71,14 @@ final class StatusPopupController {
     panel.contentView = container
     panel.focusLost = { [weak self] in
       guard let self, self.presentation.isFocused else { return }
-      self.dismiss()
+      self.dismiss(reason: "focus_lost")
     }
     terminalView.onFocusRequested = { [weak self] in self?.focus() }
     terminalView.inputInterceptor = { [weak self] event in self?.inputInterceptor?(event) ?? false }
     terminals.willChange = { [weak self] changes in
       guard let self, let name = self.presentation.identity?.name else { return }
       if changes.contains(.remove(name)) {
-        self.dismiss()
+        self.dismiss(reason: "terminal_removed")
       } else if changes.contains(.replace(name)), self.presentation.isFocused {
         self.willDismissFocus?()
       }
@@ -88,6 +93,7 @@ final class StatusPopupController {
     _ region: StatusBarPopupRegion, pointer: CGPoint,
     visibleFrame: CGRect, style: Config.StatusBar.PopupStyle, font: NSFont
   ) {
+    guard !presentation.isStandalone else { return }
     if presentation.isFocused {
       if presentation.identity?.name == region.name {
         self.region = region
@@ -97,7 +103,7 @@ final class StatusPopupController {
         layout(region: region)
         return
       }
-      dismiss()
+      return
     }
     self.region = region
     self.visibleFrame = visibleFrame
@@ -107,12 +113,39 @@ final class StatusPopupController {
     layout(region: region)
     terminalView.isRenderingEnabled = true
     if windowActionsEnabled { panel.orderFrontRegardless() }
+    logLifecycle(reason: "preview")
+  }
+
+  func showTerminal(
+    name: String, visibleFrame: CGRect, style: Config.StatusBar.PopupStyle, font: NSFont
+  ) {
+    guard terminals.sessions[name] != nil, terminals.definitions[name] != nil else { return }
+    let alreadyFocused = presentation == .terminal(name: name)
+    if isVisible && !alreadyFocused { dismiss(reason: "terminal_replaced") }
+    let terminalRegion = StatusBarPopupRegion(rect: .zero, name: name, content: "")
+    region = terminalRegion
+    self.visibleFrame = visibleFrame
+    self.style = style
+    self.font = font
+    transition(.terminal(name: name))
+    layout(region: terminalRegion)
+    terminalView.isRenderingEnabled = true
+    if !alreadyFocused { willFocus?() }
+    activateTerminalInput()
+    logLifecycle(reason: "terminal_opened")
+  }
+
+  func repositionTerminal(visibleFrame: CGRect) {
+    guard presentation.isStandalone, let region else { return }
+    self.visibleFrame = visibleFrame
+    layout(region: region)
   }
 
   func refresh(_ regions: [StatusBarPopupRegion]) {
+    guard !presentation.isStandalone else { return }
     guard let name = presentation.identity?.name else { return }
     guard let updated = regions.first(where: { $0.name == name }) else {
-      dismiss()
+      dismiss(reason: "region_removed")
       return
     }
     region = updated
@@ -124,25 +157,69 @@ final class StatusPopupController {
     if isVisible, let region { layout(region: region) }
   }
 
-  func leaveAnchor() { dismiss() }
+  func leaveAnchor() {
+    guard presentation.applying(.leaveAnchor) != presentation else { return }
+    dismiss(reason: "anchor_left")
+  }
 
-  func dismiss() {
+  func dismiss(reason: String = "dismiss") {
+    let previousName = presentation.identity?.name
     let wasFocused = presentation.isFocused
     if wasFocused { willDismissFocus?() }
     transition(.dismiss)
     terminalView.isRenderingEnabled = false
     if windowActionsEnabled { panel.orderOut(nil) }
+    logLifecycle(reason: reason)
+    region = nil
     if wasFocused { didDismissFocus?() }
+    if let previousName { didDismiss?(previousName) }
   }
 
   func focus() {
     guard isVisible, !presentation.isFocused else { return }
     transition(.focus)
     willFocus?()
-    if windowActionsEnabled {
-      NSApp.activate()
-      panel.makeKeyAndOrderFront(nil)
-      panel.makeFirstResponder(terminalView)
+    activateTerminalInput()
+    logLifecycle(reason: "focus")
+  }
+
+  private func activateTerminalInput() {
+    guard windowActionsEnabled else { return }
+    NSApp.activate()
+    panel.makeKeyAndOrderFront(nil)
+    panel.makeFirstResponder(terminalView)
+  }
+
+  private func diagnosticState() -> [String: String] {
+    [
+      "state":
+        !isVisible
+        ? "hidden"
+        : presentation.isStandalone ? "terminal" : presentation.isFocused ? "focused" : "preview",
+      "rendering_enabled": String(terminalView.isRenderingEnabled),
+      "frame_ready": String(terminalView.terminalFrame != nil),
+      "panel_visible": String(panel.isVisible),
+      "window_actions_enabled": String(windowActionsEnabled),
+    ]
+  }
+
+  private func logLifecycle(reason: String) {
+    let fields = diagnosticState()
+    let name = presentation.identity?.name
+    guard lastLifecycleName != name || lastLifecycleFields != fields else { return }
+    let popupName = name ?? lastLifecycleName
+    lastLifecycleName = name
+    lastLifecycleFields = fields
+    var details = fields
+    details["reason"] = reason
+    details["popup_id"] = popupName.map(StatusFormatDocument.stableID) ?? "none"
+    details["content_bytes"] = String(content.utf8.count)
+    FlashLog.debug(
+      "Status popup presentation changed", fields: details,
+      source: "core:StatusPopupController.presentation")
+    if !isVisible {
+      lastLayoutName = nil
+      lastLayoutFields = [:]
     }
   }
 
@@ -172,11 +249,17 @@ final class StatusPopupController {
     let rows: Int
     var exitText = ""
     var footerHeight: CGFloat = 0
+    var sourceKind = "terminal"
+    var documentCache = "none"
     if let session = terminals.sessions[region.name],
       let definition = terminals.definitions[region.name]
     {
       switch session.state {
-      case .exited(let code): exitText = "Exited (\(code)) · terminal_restart to restart"
+      case .exited(let code):
+        exitText = "Exited (\(code))"
+        if terminals.automaticallyRestarts(name: region.name) {
+          exitText += " · restarting automatically"
+        }
       case .failed(let message): exitText = message
       default: break
       }
@@ -190,6 +273,7 @@ final class StatusPopupController {
       terminalView.bind(session: session)
       session.resize(columns: columns, rows: rows)
     } else {
+      sourceKind = "document"
       let segments = region.document ?? FlashStatusBarRenderer.segments(from: region.content)
       let text = segments.filter { !$0.ignore }.map(\.text).joined()
       let available = min(
@@ -202,6 +286,7 @@ final class StatusPopupController {
       let document = documents[region.name] ?? TerminalDocument(columns: columns, rows: rows)
       documents[region.name] = document
       let revision = DocumentRevision(segments: segments, columns: columns, rows: rows)
+      documentCache = documentRevisions[region.name] == revision ? "reused" : "replaced"
       if documentRevisions[region.name] != revision {
         document.replace(data: Self.documentVT(segments), columns: columns, rows: rows)
         documentRevisions[region.name] = revision
@@ -219,9 +304,17 @@ final class StatusPopupController {
       textSize: CGSize(
         width: CGFloat(columns) * cell.width, height: CGFloat(rows) * cell.height + footerHeight),
       padding: CGFloat(style.padding), borderWidth: CGFloat(style.borderWidth))
-    let target = OverlayPanel.statusBarPopupFrame(
-      pointer: identity.anchor,
-      popupSize: layout.popupSize, visibleFrame: visibleFrame, offset: CGFloat(style.offset))
+    let target: CGRect
+    if let anchor = identity.anchor {
+      target = OverlayPanel.statusBarPopupFrame(
+        pointer: anchor,
+        popupSize: layout.popupSize, visibleFrame: visibleFrame, offset: CGFloat(style.offset))
+    } else {
+      target = CGRect(
+        x: visibleFrame.midX - layout.popupSize.width / 2,
+        y: visibleFrame.midY - layout.popupSize.height / 2,
+        width: layout.popupSize.width, height: layout.popupSize.height)
+    }
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     container.layer?.backgroundColor = terminalView.background.cgColor
@@ -240,6 +333,26 @@ final class StatusPopupController {
       x: layout.labelFrame.minX, y: layout.labelFrame.minY,
       width: layout.labelFrame.width, height: footerHeight)
     CATransaction.commit()
+    let fields = [
+      "source_kind": sourceKind,
+      "columns": String(columns),
+      "rows": String(rows),
+      "content_bytes": String(region.content.utf8.count),
+      "document_cache": documentCache,
+      "width": String(Double(target.width)),
+      "height": String(Double(target.height)),
+      "footer_visible": String(!exitText.isEmpty),
+    ]
+    if lastLayoutName != region.name || lastLayoutFields != fields {
+      lastLayoutName = region.name
+      lastLayoutFields = fields
+      var details = fields.merging(diagnosticState()) { _, state in state }
+      details["reason"] = "layout"
+      details["popup_id"] = StatusFormatDocument.stableID(region.name)
+      FlashLog.debug(
+        "Status popup layout changed", fields: details,
+        source: "core:StatusPopupController.layout")
+    }
   }
 
   static func documentVT(_ segments: [FlashStatusTextSegment]) -> Data {

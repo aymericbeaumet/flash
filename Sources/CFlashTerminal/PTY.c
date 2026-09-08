@@ -79,19 +79,19 @@ int flash_pty_resize(int fd, uint16_t columns, uint16_t rows) {
   struct winsize size = {.ws_col = columns, .ws_row = rows};
   return ioctl(fd, TIOCSWINSZ, &size);
 }
-void flash_pty_signal(int fd, pid_t pid, int signal) {
+void flash_pty_signal(int fd, pid_t pid, int signal, bool include_leader) {
+  if (pid <= 0)
+    return;
   pid_t foreground = tcgetpgrp(fd);
   if (foreground > 0 && foreground != pid)
     kill(-foreground, signal);
-  if (pid > 0)
-    kill(-pid, signal);
+  kill(-pid, signal);
+  if (include_leader)
+    kill(pid, signal);
 }
-int flash_pty_wait(pid_t pid, bool block, int *status) {
+int flash_pty_wait(pid_t pid, int *status) {
   int raw;
-  pid_t result;
-  do {
-    result = waitpid(pid, &raw, block ? 0 : WNOHANG);
-  } while (result < 0 && errno == EINTR);
+  pid_t result = waitpid(pid, &raw, WNOHANG);
   if (result > 0)
     *status = WIFEXITED(raw) ? WEXITSTATUS(raw) : 128 + WTERMSIG(raw);
   return (int)result;

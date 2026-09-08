@@ -229,6 +229,48 @@ final class TerminalTests: XCTestCase {
     wait(for: [stopped], timeout: 3)
   }
 
+  func testReapWaitHasDeadlineWhenKernelDoesNotFinishExit() {
+    let before = Date()
+    var polls = 0
+    let reaped = TerminalChildReaping.wait(pid: 42, timeoutMilliseconds: 20) { _ in
+      polls += 1
+      return false
+    }
+    XCTAssertFalse(reaped)
+    XCTAssertGreaterThan(polls, 1)
+    XCTAssertLessThan(Date().timeIntervalSince(before), 0.2)
+  }
+
+  func testDeferredReaperRetriesUntilChildIsReaped() {
+    let completed = expectation(description: "deferred child reaped")
+    var polls = 0
+    TerminalChildReaping.reapLater(
+      pid: 42,
+      poll: { _ in
+        polls += 1
+        return polls == 3
+      },
+      completion: {
+        XCTAssertEqual(polls, 3)
+        completed.fulfill()
+      })
+    wait(for: [completed], timeout: 2)
+  }
+
+  func testImmediateStopAndRestartOfShortLivedChildrenCompletes() {
+    let session = TerminalSession(configuration: .init(command: ["/bin/sh", "-c", "exit 9"]))
+    let completed = expectation(description: "queued starts and stops completed")
+    for _ in 0..<12 {
+      session.restart()
+      session.stop()
+    }
+    session.stop { completed.fulfill() }
+    wait(for: [completed], timeout: 8)
+    let before = Date()
+    session.shutdown()
+    XCTAssertLessThan(Date().timeIntervalSince(before), 1)
+  }
+
   func testMissingExecutableReportsFailureWithoutChild() {
     let session = TerminalSession(
       configuration: TerminalConfiguration(command: ["/missing-flash-terminal-test"]))

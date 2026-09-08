@@ -11,9 +11,10 @@ in place.
 ## System-monitor ownership
 
 The local system-monitor suite is deliberately split by resource. Each plugin
-owns exactly `summary` and `details`; the summary embeds the details with
+owns `summary` and `details`; the summary embeds the details with
 `inline_status_popup`, while the standalone details segment supports custom
-templates. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
+templates. `power` also publishes `label`, the styled battery summary without
+an inline popup, for attaching a named battery terminal. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
 
 | Plugin | Nominal fast path | Slower path | Additional surface |
@@ -95,6 +96,39 @@ The plugin republishes a sanitized last-good cache at startup, refreshes
 Anthropic usage at a ten-minute TTL and OpenAI usage at a two-minute TTL, and
 rerenders relative reset labels once per minute. Popup hover and status layout
 must remain pure reads of that state.
+
+## Feed headlines
+
+`feed` owns the `summary` segment, selected with
+`#{flash.plugin.feed.summary}`. Set `[plugin.feed] url` to an RSS feed URL;
+without one, the plugin makes no network requests. `refresh_interval` defaults
+to 300 seconds and `cycle_interval` to 60 seconds.
+
+Only items with a valid publication date within the rolling last 24 hours
+participate, newest first. Missing dates and future dates are excluded.
+Rotation also expires old items during a failed refresh; a transient network
+or parse failure retains the remaining last-good items, while a successful
+empty feed clears the segment.
+
+The linked title shrinks before the domain and outbound arrow. RSS item links
+open the feed's article page; an Atom `link rel="via"` extension supplies the
+original article link when present. For AGGR, this means the title opens the
+archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`
+for this feed; the default label is `FEED`. The summary owns its label so the
+whole row shares one popup region, including short titles after rotation.
+
+Hovering the label, article title, domain, or arrow opens a terminal-rendered preview of its opening
+lines from `content:encoded`, falling back to `description`. Paragraph breaks,
+headings, lists, quotations, emphasis, and code retain their structure. The
+excerpt is bounded to 12 logical lines and 900 visible characters; longer
+articles end with an ellipsis. Click the label to pin the preview, or
+Option-click any of its links; normal clicks preserve each link destination.
+
+For AGGR, the feed's article body is also the content of its Markdown export.
+The plugin prepares the excerpt during the background feed refresh; hovering
+only presents the existing terminal document and starts no fetch or child
+process. External text is escaped before adding styles, and truncation
+preserves complete style markers. URL marker values are escaped separately.
 
 ## Validation
 

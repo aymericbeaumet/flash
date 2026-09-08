@@ -18,15 +18,38 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testFocusLossRestoresBaseWithoutActivatingAnotherApp() {
-    let (mode, effects) = ModeReducer.reduce(
-      .terminal(restoreTo: .insert(locked: true)), .closeTerminal)
-    XCTAssertEqual(mode, .insert(locked: true))
-    XCTAssertTrue(effects.contains(.hideTerminalPopup))
-    XCTAssertFalse(
-      effects.contains {
-        if case .activateFocusedApp = $0 { return true }
-        return false
-      })
+    for base in [Mode.disabled, .normal, .insert(locked: false), .insert(locked: true)] {
+      let (mode, effects) = ModeReducer.reduce(
+        .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: nil))
+      XCTAssertEqual(mode, base)
+      XCTAssertTrue(effects.contains(.hideTerminalPopup))
+      XCTAssertFalse(
+        effects.contains {
+          if case .activateFocusedApp = $0 { return true }
+          return false
+        })
+    }
+  }
+
+  func testExplicitPopupCloseRestoresPriorAppBeforeBaseModeRendering() {
+    for base in [Mode.disabled, .normal, .insert(locked: false), .insert(locked: true)] {
+      let (mode, effects) = ModeReducer.reduce(
+        .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: 42))
+      XCTAssertEqual(mode, base)
+      XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
+      XCTAssertEqual(effects.filter { $0 == .activateFocusedApp(pid: 42) }.count, 1)
+      XCTAssertLessThan(
+        effects.firstIndex(of: .activateFocusedApp(pid: 42)) ?? Int.max,
+        effects.firstIndex(of: .renderSurface) ?? -1)
+    }
+  }
+
+  func testPopupCloseOutsideTerminalDoesNotActivateApp() {
+    for base in [Mode.disabled, .normal, .insert(locked: true)] {
+      let (mode, effects) = ModeReducer.reduce(base, .closeTerminal(targetPID: 42))
+      XCTAssertEqual(mode, base)
+      XCTAssertTrue(effects.isEmpty)
+    }
   }
 
   func testTerminalExitActivatesPriorAppBeforeNormalCapture() {
@@ -105,7 +128,7 @@ final class TerminalModeTests: XCTestCase {
     let (disabled, effects) = ModeReducer.reduce(initial, .advancedModeChanged(enabled: false))
     XCTAssertEqual(disabled, .terminal(restoreTo: .disabled))
     XCTAssertEqual(effects, [.renderSurface])
-    XCTAssertEqual(ModeReducer.reduce(disabled, .closeTerminal).0, .disabled)
+    XCTAssertEqual(ModeReducer.reduce(disabled, .closeTerminal(targetPID: nil)).0, .disabled)
   }
 
   func testResolvedConfigIncludesTerminalDefaultsAndLabel() throws {

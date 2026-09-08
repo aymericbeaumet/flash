@@ -29,8 +29,8 @@ enum ModeEvent: Equatable {
   /// A popup body was clicked and its local view became the input owner.
   case openTerminal
 
-  /// Restore the base mode when the popup loses focus or is dismissed.
-  case closeTerminal
+  /// Restore the base mode; an explicit dismissal can reactivate its prior app.
+  case closeTerminal(targetPID: pid_t?)
 
   /// A primary click resolved by its source: physical and mouse-grid clicks
   /// enter INSERT, while semantic hints honor `JumpTarget.entersInsertMode`.

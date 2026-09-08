@@ -1,0 +1,10 @@
+{
+  "id": "feed",
+  "name": "Feed",
+  "version": "0.1.0",
+  "description": "Cycle recent RSS articles in the status bar with article previews. Configure url to enable fetching.",
+  "exec": ["./flash-plugin-feed"],
+  "capabilities": ["network"],
+  "sandbox": {},
+  "status": ["summary"]
+}

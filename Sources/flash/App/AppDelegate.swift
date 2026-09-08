@@ -473,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.statusTerminalEnvironmentReady = true
-        self.overlay.statusTerminals.apply(self.config.statusBar)
+        self.reloadTerminalPopupConfiguration()
       }
     }
     config = ConfigLoader.load()
@@ -567,7 +567,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       popupTemplates: config.statusBar.popups,
       options: config.statusBar.options,
       sources: config.statusBar.sources,
-      terminalPopupNames: Set(config.statusBar.terminalPopups.keys),
+      terminalPopupNames: Set(config.terminals.keys),
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
@@ -640,6 +640,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateStatusItemHints()
     case .normalMode:
       enterNormalMode()
+    case .terminalShow(let name):
+      showTerminal(named: name)
+    case .terminalDismiss:
+      dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
     case .insertMode:

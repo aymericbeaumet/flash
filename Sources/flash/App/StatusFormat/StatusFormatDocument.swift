@@ -269,7 +269,12 @@ struct StatusFormatStyleState {
           let encoded = String(value.dropFirst(7))
           guard !encoded.isEmpty, encoded.utf8.count <= 16_384,
             let content = encoded.removingPercentEncoding, !content.isEmpty
-          else { return false }
+          else {
+            FlashLog.debug(
+              "Status inline popup rejected", fields: ["encoded_bytes": String(encoded.utf8.count)],
+              source: "core:StatusFormatDocument.popup")
+            return false
+          }
           candidate.popup = "inline"
           candidate.popupContent = content
         } else {

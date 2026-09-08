@@ -4,16 +4,16 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `flash mouse_target` from the CLI or a configured mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, terminal mode for focused persistent status popups, a separately enabled top status bar, managed stdio plugins, `mouse_grid` screen-position targeting, `alert_show message=...` / `alert_dismiss` for a temporary centered toast, and `help_show` / `plugins` modal views. No Dock icon or preferences window; the optional menu-bar bolt is described below.
+A headless, resident macOS app that, when triggered by `flash mouse_target` from the CLI or a configured mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, terminal mode for status popups and shortcut terminal windows, a separately enabled top status bar, managed stdio plugins, `mouse_grid` screen-position targeting, `alert_show message=...` / `alert_dismiss` for a temporary centered toast, and `help_show` / `plugins` modal views. No Dock icon or preferences window; the optional menu-bar bolt is described below.
 
 Activation comes either through the `flash` CLI (which AppleEvents the verb to the resident over a custom event class) or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry. Mapping actions are argv arrays, either used directly as the mapping value or under `action` in an inline table with optional metadata such as `repeat = true`. Arrays whose head is `"flash"` resolve through the in-process verb table (the same one the AppleEvent handler consults); any other head is launched as argv with `~` and env expansion on each element. There is no `flash://` URL scheme and no separate `flashctl` binary — the `flash` Mach-O does both jobs.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay, the status bar and its document/terminal popup panels / command-line cell, the help and open-app overlays, explicit `alert_show` toast, and exactly ONE sanctioned `NSStatusItem`: the menu-bar bolt in `StatusItemController.swift`, gated by `[app] menu_bar_icon` (default true), carrying exactly About / Open Configuration / Quit — it must never grow into a preferences surface (configuration stays in the TOML file the middle entry opens). Beyond that: no other menu bar items, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+1. **No UI surface** beyond the transparent hint overlay, the status bar and its document/terminal popup panels, shortcut terminal panels / command-line cell, the help and open-app overlays, explicit `alert_show` toast, and exactly ONE sanctioned `NSStatusItem`: the menu-bar bolt in `StatusItemController.swift`, gated by `[app] menu_bar_icon` (default true), carrying exactly About / Open Configuration / Quit — it must never grow into a preferences surface (configuration stays in the TOML file the middle entry opens). Beyond that: no other menu bar items, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
 2. **Keyboard capture is confined to the sanctioned session tap + Carbon.** Global keystroke handling lives in exactly two places: (a) `Sources/flash/App/KeyboardCaptureTap.swift`, a session-level `CGEventTap` (`.cgSessionEventTap`, `keyDown` only, never mouse) that swallows NORMAL / hint keys and recognized modified mappings, passes INSERT, command-line, candidate-finder, configured unmapped key/modifier passthrough, and Flash's own synthetic keys straight through; and (b) `RegisterEventHotKey` for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do **not** add any *other* event tap, global key monitor, or keylogger, and the tap must never persist, log, or exfiltrate keystrokes — its only job is the swallow-vs-passthrough decision (`KeyboardCaptureTap.shouldSwallow`, a pure unit-tested function). `Scripts/check-guardrails.sh` enforces that `CGEventTap` appears only in `KeyboardCaptureTap.swift`. The tap runs under the Accessibility grant; if the OS refuses it, capture falls back to the overlay `NSPanel.keyDown` key-window path. Focused terminal popup input is local to TerminalView and the terminal mapping matcher; the existing tap passes every terminal key through and all Carbon registrations are suspended. Command-line, help, and open-app typing (the key-window surfaces) are handled through `NSPanel.keyDown` and are never swallowed by the tap.
 3. **Autolaunch is config-owned through SMAppService.** `AutoLaunch.reconcile` registers/unregisters the login item from `[app] autostart` (default true) on every config load — the entry shows in System Settings → General → Login Items. `Scripts/install.sh` only cleans up the legacy LaunchAgent. Do not add login-item UI, LaunchAgents, background helpers, or additional autostart mechanisms elsewhere.
-4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through NDJSON over stdin/stdout (protocol v1: one JSON object per newline-terminated line) with stderr as diagnostics only; Flash owns their lifecycle, liveness, reload, and shutdown (stdin EOF). Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The status controller may own configured short-lived jobs; `StatusTerminalRegistry` may own declared PTY children through `FlashTerminal`, with bounded shutdown and reaping. Neither is an external activation interface. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
+4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through NDJSON over stdin/stdout (protocol v1: one JSON object per newline-terminated line) with stderr as diagnostics only; Flash owns their lifecycle, liveness, reload, and shutdown (stdin EOF). Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The status controller may own configured short-lived jobs; `StatusTerminalRegistry` may own declared persistent and explicitly opened ephemeral PTY children through `FlashTerminal`, with bounded shutdown and reaping. Neither is an external activation interface. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **Hand-rolled infrastructure inventory — do not "fix" by adding a dependency.** Several pieces of plumbing in this repo are intentionally hand-rolled to keep the dep graph minimal and the wire formats / parsers under our own version control. Before reaching for a library, check this list first; if your change needs to touch one of these surfaces, extend the hand-roll rather than swap it out. The list (file → what it is → why the hand-roll stays):
    - `Sources/flash/App/NormalMode/FuzzyMatcher.swift` + `Sources/flash/App/CandidateFinder.swift` — flashlight fuzzy scorer + LCS-style highlighting + the Algolia-style typeahead path. Don't add `swift-algorithms` or a Fuse-style package; the scoring is tuned to specific ranking invariants (alias tier > title tier, frecency boost contained inside the smallest match-quality tier, the per-candidate `wordStartMask` UInt64 hard-gate on 1–2-char queries, and the top-K partial sort via `sortedMatches(_:limit:)` / `topRecords`). A generic scorer changes ranking silently and the typeahead gate's correctness depends on `prepare()` populating the mask from the same token list the live scorer reads.
@@ -252,7 +252,7 @@ targets: `ActionDispatcher` owns the real host mouse event for every commit.
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. TOML syntax is parsed with the Swift package `TOMLKit`; `Sources/flash/Config/ConfigLoader.swift` owns only Flash's typed schema, validation, source-location indexing for known values, and command-path resolution.
 
-The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[statusbar.popup]`, `[statusbar.click]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[statusbar.popup]`, `[statusbar.click]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, `[mode.terminal.mappings]`, `[terminal.<name>]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -389,25 +389,42 @@ belong in explicit hex styles. Validate language changes against the pinned
 isolated tmux oracle; never run conformance commands on a user's tmux socket.
 
 Named document popups and plugin inline bodies use the same libghostty-vt
-renderer as command popups. Documents run no child. `StatusTerminalRegistry`
-starts configured PTYs after the initial login environment resolves, independent
-of bar visibility or hover; one session per name spans displays. Changes to
+renderer as command popups. Documents run no child. `StatusTerminalRegistry` owns every command via `[terminal.<name>]`; status
+markers and shortcut windows reference the same canonical session name.
+Persistent PTYs start after the login environment resolves, independent of
+visibility; nonpersistent ones start on explicit open/first hover and stop on
+dismissal. `[statusbar.popup]` accepts document strings only. Changes to
 grid/style keep the child, execution-definition changes replace only that child,
 and invalid definitions preserve the last good session. Hover/placement are
-pure presentation; never spawn on hover or destroy a PTY on dismissal.
+pure presentation for persistent sessions; continuous hover must reuse a
+nonpersistent session until dismissal. Persistent exits restart with bounded
+backoff; removal, replacement, and shutdown cancel retries. Standalone
+`[terminal.<name>]` definitions share this registry and set `persistent = true`
+for eager startup/reuse. Fresh terminals spawn on explicit `terminal_show` or first status hover
+and stop on dismissal; release them after the presentation becomes hidden to
+avoid recursive registry dismissal. Standalone windows survive statusbar hiding
+and status-region refreshes.
 See [terminal popups](docs/terminal-popups.md) and
 [status plugins](docs/status-plugins.md).
 
-Popup presentation has explicit hidden/preview/focused states. A popup is
-visible only while hovering its originating status segment; leaving it hides
-immediately, even toward the popup body. Never add a grace timer or let popup
-entry retain visibility. Preserve screen clamping and existing span click
-actions. Use `absolute-centre` for screen-centered labels; native `centre`
+Popup presentation has explicit hidden/preview/focused states. Leaving the
+originating segment hides an ordinary preview immediately. Clicking a popup
+label pins/focuses it; focused popups survive pointer departure and ignore other
+hover targets. Clicking the same label closes it; another label switches it.
+Existing links keep their action, with Option-click focusing their popup.
+Preserve screen clamping and restore the previous app only on explicit close,
+never after focus loss. Use `absolute-centre` for screen-centered labels; native `centre`
 centers the space between the sides. Terminal focus is a real transient Mode,
 with local mappings and lossless pending-prefix replay before reload/dismissal.
 Inherited exit mappings come only from winning INSERT-active
 `enter_normal_mode` bindings; other global mappings are suspended. Returning
 to NORMAL restores the captured external application before keyboard recapture.
+
+Mouse-hover coordinate conversion must preserve the compiled popup document;
+re-entry and stationary refresh must render identical typed content. Diagnose
+hover failures through the content-free, hashed-ID logs documented in
+`docs/terminal-popups.md#hover-diagnostics`; never log inline popup payloads or
+emit one record per pointer movement within the same target.
 
 Status changes publish from their producers; named sources retain their last
 successful output while refreshing. Native `#(...)` jobs use tmux semantics,

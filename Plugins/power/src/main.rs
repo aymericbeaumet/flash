@@ -64,6 +64,7 @@ struct BatteryHealth {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
     summary: String,
+    label: String,
     details: String,
     plain_details: String,
 }
@@ -237,6 +238,7 @@ async fn collect_and_publish(ctx: Context, force_health: bool) -> Option<StatusS
     if should_publish {
         ctx.status([
             ("summary", status.summary.as_str()),
+            ("label", status.label.as_str()),
             ("details", status.details.as_str()),
         ]);
     }
@@ -409,6 +411,7 @@ fn render_status(
     let visible = visible_summary(snapshot, summary_mode);
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
+        label: visible,
         details,
         plain_details,
     }
@@ -683,6 +686,19 @@ mod tests {
         assert!(visible_summary(&no_battery, SummaryMode::Compact).contains(
             "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
         ));
+    }
+
+    #[test]
+    fn label_preserves_charge_without_embedding_a_document_popup() {
+        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
+        let status = render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new());
+        assert_eq!(
+            status.label,
+            visible_summary(&snapshot, SummaryMode::Compact)
+        );
+        assert!(status.label.contains("26%"));
+        assert!(!status.label.contains("popup="));
+        assert!(status.summary.contains("popup="));
     }
 
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";

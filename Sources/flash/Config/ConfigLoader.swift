@@ -148,6 +148,16 @@ enum ConfigLoader {
       }
     }
 
+    let terminalNames = Set(config.terminals.keys).union(config.invalidTerminalNames)
+    for name in config.statusBar.popups.keys.sorted() where terminalNames.contains(name) {
+      let path = "statusbar.popup.\(name)"
+      config.addDiagnostic(
+        "\(path) is already a terminal name; rename the popup document",
+        location: config.valueLocations[path])
+      config.statusBar.popups.removeValue(forKey: name)
+      config.statusBar.popupSourceURLs.removeValue(forKey: name)
+      config.clearLocation(path: path)
+    }
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
@@ -387,6 +397,7 @@ enum ConfigLoader {
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
     applyStatusBar(
       section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyTerminals(section("terminal"), locations: locations, sourceURL: sourceURL, into: &config)
     applyFlashlight(section("flashlight"), locations: locations, into: &config)
     applyMode(
       section("mode"),
@@ -449,7 +460,7 @@ enum ConfigLoader {
         "live_query_timeout_ms",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "scroll_step",
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "terminal", "scroll_step",
         "scroll_page_fraction", "click_hold_ms", "send_key_interval_ms",
       ],
       "overlay": [
@@ -463,9 +474,8 @@ enum ConfigLoader {
         "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
       ],
     ]
-    // `plugin` is a known top-level section but carries user-defined
-    // `[plugin.<id>]` tables, so its keys are not enumerated.
-    let knownSections = Set(sectionKeys.keys).union(["plugin"])
+    // Plugin settings and terminal declarations use user-defined table names.
+    let knownSections = Set(sectionKeys.keys).union(["plugin", "terminal"])
     warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
     for (section, known) in sectionKeys {
       guard let table = root[section]?.table else { continue }
@@ -887,39 +897,12 @@ enum ConfigLoader {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let location = locations.location(for: ["statusbar", "popup", name])
         guard !trimmedName.isEmpty else { continue }
-        if let definition = value.table {
-          if let parsed = parseStatusProcess(
-            definition, path: "statusbar.popup.\(trimmedName)", sourceURL: sourceURL,
-            allowedKeys: ["command", "working_directory", "env", "columns", "rows"],
-            location: location, into: &config),
-            let columns = statusProcessInteger(
-              definition, key: "columns", fallback: 80,
-              range: 1...1000, path: "statusbar.popup.\(trimmedName)", location: location,
-              into: &config),
-            let rows = statusProcessInteger(
-              definition, key: "rows", fallback: 24,
-              range: 1...1000, path: "statusbar.popup.\(trimmedName)", location: location,
-              into: &config)
-          {
-            config.statusBar.terminalPopups[trimmedName] = .init(
-              command: parsed.command, workingDirectory: parsed.workingDirectory,
-              environment: parsed.environment, columns: columns, rows: rows)
-            config.statusBar.popups.removeValue(forKey: trimmedName)
-            config.statusBar.invalidTerminalPopupNames.remove(trimmedName)
-          } else {
-            config.statusBar.invalidTerminalPopupNames.insert(trimmedName)
-          }
-          continue
-        }
         guard let template = value.string else {
           config.addDiagnostic(
-            "statusbar.popup.\(name) must be a template string or a table with command argv",
+            "statusbar.popup.\(name) must be a template string; declare commands in [terminal.\(name)]",
             location: location)
-          config.statusBar.invalidTerminalPopupNames.insert(trimmedName)
           continue
         }
-        config.statusBar.terminalPopups.removeValue(forKey: trimmedName)
-        config.statusBar.invalidTerminalPopupNames.remove(trimmedName)
         config.statusBar.popups[trimmedName] = FlashStatusBarTemplate(
           template: template, variables: [])
         if let sourceURL { config.statusBar.popupSourceURLs[trimmedName] = sourceURL }
@@ -1007,7 +990,8 @@ enum ConfigLoader {
         raw.hasPrefix("$")
         ? raw
         : resolveCommandArgument(
-          raw.hasPrefix(".") || raw.contains("/") ? raw : "./" + raw, sourceURL: sourceURL)
+          raw.hasPrefix(".") || raw.hasPrefix("~") || raw.contains("/") ? raw : "./" + raw,
+          sourceURL: sourceURL)
     }
     var environment: [String: String] = [:]
     if let value = table["env"] {
@@ -1084,6 +1068,55 @@ enum ConfigLoader {
       } else {
         config.statusBar.sourcesUsingDefaultInterval.remove(name)
       }
+    }
+  }
+
+  private static func applyTerminals(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, sourceURL: URL?,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    for (name, value) in table {
+      let path = "terminal.\(name)"
+      let location = locations.location(for: ["terminal", name])
+      guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+      else {
+        config.addDiagnostic(
+          "terminal names must be nonempty and contain no control characters", location: location)
+        continue
+      }
+      guard let definition = value.table else {
+        config.addDiagnostic("\(path) must be a table with command argv", location: location)
+        config.invalidTerminalNames.insert(name)
+        continue
+      }
+      guard definition["persistent"] == nil || definition["persistent"]?.bool != nil else {
+        config.addDiagnostic("\(path).persistent must be a boolean", location: location)
+        config.invalidTerminalNames.insert(name)
+        continue
+      }
+      guard
+        let parsed = parseStatusProcess(
+          definition, path: path, sourceURL: sourceURL,
+          allowedKeys: ["command", "working_directory", "env", "columns", "rows", "persistent"],
+          location: location, into: &config),
+        let columns = statusProcessInteger(
+          definition, key: "columns", fallback: 100, range: 1...1000,
+          path: path, location: location, into: &config),
+        let rows = statusProcessInteger(
+          definition, key: "rows", fallback: 28, range: 1...1000,
+          path: path, location: location, into: &config)
+      else {
+        config.invalidTerminalNames.insert(name)
+        continue
+      }
+      config.terminals[name] = .init(
+        command: parsed.command, workingDirectory: parsed.workingDirectory,
+        environment: parsed.environment, columns: columns, rows: rows,
+        persistent: definition["persistent"]?.bool ?? false)
+      config.invalidTerminalNames.remove(name)
+      config.recordLocation(path: path, location: location)
     }
   }
 

@@ -124,8 +124,9 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 "@left" = "#[popup=system]System#[nopopup]"
 "@right" = "%H:%M"
 
-[statusbar.popup.system]
-command = ["ytop"]
+[terminal.system]
+persistent = true
+command = ["btm", "--read_only", "--rate", "2s"]
 columns = 80
 rows = 24
 
@@ -133,9 +134,11 @@ rows = 24
 "cmd+r" = ["flash", "terminal_restart"]
 ```
 
-The popup appears only while hovering its status segment and disappears
-immediately when the pointer leaves, including toward the popup itself.
-Hiding the popup keeps its child alive.
+Hover previews disappear when the pointer leaves their status segment. Click
+a popup label to keep it open and use the terminal; click again to close it.
+Links still open normally; Option-click focuses their popup. Hiding a popup
+keeps its child alive. See the [SYS, battery, and calendar setup](docs/examples/statusbar/README.md)
+for a combined system dashboard and persistent calendar.
 See [terminal lifecycle and configuration](docs/terminal-popups.md).
 
 The template follows tmux 3.7b formats and styles. `@left`/`@right` above are
@@ -144,6 +147,53 @@ supplies its own `flash.*` values; absent tmux session/window/pane context
 expands empty. Native `#(...)` shell jobs are asynchronous. Use
 `[statusbar.sources.<name>]` plus `#{flash.source.<name>}` for explicit argv,
 cadence, or rotating output.
+
+### Shortcut terminal windows
+
+`flash terminal_show` opens a fresh login shell. Named terminals can persist
+across openings and start with Flash:
+
+```toml
+[terminal.bonsai]
+command = ["bonsai", "hq", "--no-open", "--port", "0"]
+persistent = true
+working_directory = "~"
+columns = 120
+rows = 36
+
+[mode.normal.mappings]
+"'b" = ["flash", "terminal_show", "--name=bonsai"]
+
+[mode.terminal.mappings]
+"cmd+w" = ["flash", "terminal_dismiss"]
+```
+
+Omit `persistent` for a new process each time. Persistent windows and status
+popup processes automatically restart after exiting, with a bounded retry delay.
+See [terminal sessions and shortcuts](docs/terminal-popups.md#shortcut-terminals).
+
+### Feed headlines
+
+The bundled `feed` plugin cycles through RSS items published in the last 24
+hours. It shows a label, linked title, original domain, and outbound arrow.
+Hovering anywhere in that row opens the article's first lines in a terminal
+preview, preserving paragraphs, headings, lists, and code. For AGGR:
+
+```toml
+[plugin.feed]
+label = "AGGR"
+url = "https://aggr.aymericbeaumet.com/rss.xml"
+refresh_interval = 300
+cycle_interval = 60
+
+[statusbar.options]
+"@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
+```
+
+Use this fragment with the `#{E:@left}` template above. The title opens the
+AGGR archive; the arrow opens the original article. Feed refreshes and rotation
+run independently of hover. No feed is requested until `url` is configured.
+See [feed status behavior](docs/status-plugins.md#feed-headlines).
 
 ### System monitors
 

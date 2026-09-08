@@ -1005,6 +1005,10 @@ extension AppDelegate {
       enterInsertMode(reason: .lockedNormalModeInput)
     case .normalMode:
       enterNormalMode()
+    case .terminalShow(let name):
+      showTerminal(named: name)
+    case .terminalDismiss:
+      dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
     case .commandMode:
@@ -2626,6 +2630,11 @@ extension AppDelegate {
     if let helpTopic = NormalModeDispatcher.commandLineHelpTopic(raw) {
       finishCommandLineInteraction(reason: "help_submit")
       showHelp(topic: helpTopic)
+      return
+    }
+    if let command = NormalModeDispatcher.commandLineTerminalCommand(raw) {
+      finishCommandLineInteraction(reason: "terminal_submit")
+      handleURLCommand(command)
       return
     }
     if let command = NormalModeDispatcher.commandLineCommand(raw) {

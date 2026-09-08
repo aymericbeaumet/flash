@@ -31,7 +31,7 @@ final class ModeReducerTests: XCTestCase {
     .openCommand(scope: .finder(all: true), restoreMode: true),
     .closeCommand(reason: "submit"),
     .openTerminal,
-    .closeTerminal,
+    .closeTerminal(targetPID: nil),
     .clickResolved(entersInsert: true, targetPID: 7),
     .clickResolved(entersInsert: false, targetPID: 7),
     .advancedModeChanged(enabled: true),

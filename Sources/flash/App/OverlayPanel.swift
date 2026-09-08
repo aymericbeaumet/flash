@@ -121,6 +121,10 @@ final class OverlayPanel: NSPanel {
   /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
   /// consumed by the click windows and the `f`-hint activation path.
   var statusBarActionHandler: ((String) -> Void)?
+  /// The argument requests restoring the previous app; false switches popups in place.
+  var statusBarPopupDismissHandler: ((Bool) -> Void)?
+  var statusBarTerminalPrepareHandler: ((String) -> Bool)?
+  var statusBarHoverGate = StatusBarHoverGate.ready
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()
@@ -245,6 +249,7 @@ final class OverlayPanel: NSPanel {
     /// status bar keeps a safety margin around it.
     var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)]
     var unionFrame: CGRect
+    /// The fixed primary display at origin (0, 0), independent of keyboard focus.
     var mainFrame: CGRect?
     var mainScale: CGFloat
     var mainVisibleFrame: CGRect
@@ -275,10 +280,8 @@ final class OverlayPanel: NSPanel {
   }
 
   private static func buildScreenSnapshot() -> ScreenSnapshot {
-    var union: NSRect = .null
     var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)] = []
     for s in NSScreen.screens {
-      union = union.union(s.frame)
       // A notched display exposes the areas LEFT and RIGHT of the camera
       // housing; the gap between them is the notch itself.
       var notch: CGRect?
@@ -293,15 +296,24 @@ final class OverlayPanel: NSPanel {
       }
       screens.append((s.backingScaleFactor, s.frame, s.visibleFrame, notch))
     }
-    if union.isNull, let main = NSScreen.main { union = main.frame }
-    let main = NSScreen.main ?? NSScreen.screens.first
+    return makeScreenSnapshot(
+      screens: screens, nativeStatusBarFallbackHeight: measureNativeStatusBarFallbackHeight())
+  }
+
+  static func makeScreenSnapshot(
+    screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)],
+    nativeStatusBarFallbackHeight: CGFloat
+  ) -> ScreenSnapshot {
+    let union = screens.reduce(CGRect.null) { $0.union($1.frame) }
+    // NSScreen.main follows the key window and can be a secondary display.
+    let primary = screens.first { $0.frame.origin == .zero } ?? screens.first
     return ScreenSnapshot(
       screens: screens,
-      unionFrame: union,
-      mainFrame: main?.frame,
-      mainScale: main?.backingScaleFactor ?? 2,
-      mainVisibleFrame: main?.visibleFrame ?? union,
-      nativeStatusBarFallbackHeight: measureNativeStatusBarFallbackHeight())
+      unionFrame: union.isNull ? .zero : union,
+      mainFrame: primary?.frame,
+      mainScale: primary?.scale ?? 2,
+      mainVisibleFrame: primary?.visibleFrame ?? .zero,
+      nativeStatusBarFallbackHeight: nativeStatusBarFallbackHeight)
   }
 
   private static func measureNativeStatusBarFallbackHeight() -> CGFloat {

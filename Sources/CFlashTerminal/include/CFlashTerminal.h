@@ -46,8 +46,8 @@ int flash_pty_spawn(const char *executable, char *const argv[],
 int flash_pty_resize(int fd, uint16_t columns, uint16_t rows);
 int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
                             uint32_t cell_width, uint32_t cell_height);
-void flash_pty_signal(int fd, pid_t pid, int signal);
-int flash_pty_wait(pid_t pid, bool block, int *status);
+void flash_pty_signal(int fd, pid_t pid, int signal, bool include_leader);
+int flash_pty_wait(pid_t pid, int *status);
 int flash_spawn_file_actions_addchdir(posix_spawn_file_actions_t *actions,
                                       const char *path);
 

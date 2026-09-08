@@ -1,0 +1,44 @@
+# Merge these sections into flash.toml; place the companion files in status/.
+[statusbar]
+enabled = true
+template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=right]#{T:@right}"
+
+[statusbar.options]
+"@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
+"@centre" = "#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]"
+"@right" = """
+#{flash.plugin.aiproviders.summary}
+#[fg=colour245] · #[popup=system]#[fg=#EBCB8B]SYS#[default]#[nopopup]
+#[fg=colour245] · #[popup=battery]#{flash.plugin.power.label}#[nopopup]
+#[fg=colour245] · #[popup=date]#{flash.date}#[nopopup]
+"""
+
+[statusbar.popup]
+active-app = """
+#[fg=#EBCB8B]#{flash.active_app_name}#[default]
+#{flash.plugin.processes.focused_app_details}
+"""
+
+[terminal.system]
+persistent = true
+command = ["btm", "--config_location", "status/bottom-system.toml"]
+columns = 100
+rows = 28
+
+[terminal.battery]
+persistent = true
+command = ["btm", "--config_location", "status/bottom-battery.toml"]
+columns = 52
+rows = 12
+
+[terminal.date]
+persistent = true
+command = ["calcurse", "--read-only", "--quiet", "-D", "status/calcurse", "-C", "status/calcurse"]
+columns = 74
+rows = 22
+
+[plugin.feed]
+label = "AGGR"
+url = "https://aggr.aymericbeaumet.com/rss.xml"
+refresh_interval = 300
+cycle_interval = 60

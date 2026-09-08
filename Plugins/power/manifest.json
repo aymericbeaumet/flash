@@ -29,6 +29,7 @@
   ],
   "status": [
     "summary",
+    "label",
     "details"
   ],
   "listen": [

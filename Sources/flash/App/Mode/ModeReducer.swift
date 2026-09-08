@@ -24,7 +24,7 @@ enum ModeReducer {
     case .enterNormal(let targetPID):
       // The advanced gate: cannot enter NORMAL when the feature is off.
       if state == .disabled || (state.isTerminal && state.asReturnMode == .disabled) {
-        if state.isTerminal { return reduce(state, .closeTerminal) }
+        if state.isTerminal { return reduce(state, .closeTerminal(targetPID: targetPID)) }
         return (state, [])
       }
       let departure: [ModeEffect] =
@@ -42,13 +42,14 @@ enum ModeReducer {
       let next = Mode.terminal(restoreTo: state.asReturnMode)
       return (next, enterEffects(for: next, targetPID: nil))
 
-    case .closeTerminal:
+    case .closeTerminal(let targetPID):
       guard case .terminal(let restoreTo) = state else { return (state, []) }
       let effects = enterEffects(for: restoreTo.mode, targetPID: nil).filter {
         if case .activateFocusedApp = $0 { return false }
         return true
       }
-      return (restoreTo.mode, [.hideTerminalPopup] + effects)
+      let activation: [ModeEffect] = targetPID.map { [.activateFocusedApp(pid: $0)] } ?? []
+      return (restoreTo.mode, [.hideTerminalPopup] + activation + effects)
 
     case .closeCommand:
       guard case .command(_, let restoreTo) = state else { return (state, []) }

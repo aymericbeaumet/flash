@@ -30,6 +30,45 @@ public enum TerminalSessionState: Equatable, Sendable {
   case stopped
 }
 
+public enum TerminalSessionDiagnostic: Equatable, Sendable {
+  case reapDeferred(pid: Int32)
+  case reaped(pid: Int32)
+}
+
+enum TerminalChildReaping {
+  private static let queue = DispatchQueue(label: "com.flash.terminal.reaper", qos: .utility)
+
+  static func poll(_ pid: pid_t) -> Bool {
+    var status: Int32 = 0
+    let result = flash_pty_wait(pid, &status)
+    return result > 0 || (result < 0 && errno == ECHILD)
+  }
+
+  static func wait(
+    pid: pid_t, timeoutMilliseconds: UInt64, poll: (pid_t) -> Bool = Self.poll
+  ) -> Bool {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutMilliseconds * 1_000_000
+    repeat {
+      if poll(pid) { return true }
+      if DispatchTime.now().uptimeNanoseconds >= deadline { return false }
+      usleep(5_000)
+    } while true
+  }
+
+  static func reapLater(
+    pid: pid_t, poll: @escaping (pid_t) -> Bool = Self.poll,
+    completion: @escaping () -> Void
+  ) {
+    queue.asyncAfter(deadline: .now() + .milliseconds(100)) {
+      if poll(pid) {
+        completion()
+      } else {
+        reapLater(pid: pid, poll: poll, completion: completion)
+      }
+    }
+  }
+}
+
 public final class TerminalSession {
   public let configuration: TerminalConfiguration
   public private(set) var state: TerminalSessionState = .idle
@@ -37,6 +76,7 @@ public final class TerminalSession {
   public var onFrame: ((TerminalFrame) -> Void)?
   public var onInputRejected: ((Int) -> Void)?
   public var onStateChange: ((TerminalSessionState) -> Void)?
+  public var onDiagnostic: ((TerminalSessionDiagnostic) -> Void)?
   private let queue = DispatchQueue(label: "com.flash.terminal.pty", qos: .userInitiated)
   private let queueKey = DispatchSpecificKey<Bool>()
   private let buffer: TerminalBuffer
@@ -79,7 +119,7 @@ public final class TerminalSession {
       if let completion { DispatchQueue.main.async(execute: completion) }
     }
   }
-  /// Shutdown is bounded and completes child reaping before application termination returns.
+  /// Reaping uses two 200 ms deadlines; delayed kernel exits are reaped asynchronously.
   public func shutdown() {
     if DispatchQueue.getSpecific(key: queueKey) == true {
       stopOnQueue()
@@ -207,7 +247,8 @@ public final class TerminalSession {
     self.reader = reader
     let process = DispatchSource.makeProcessSource(
       identifier: child, eventMask: .exit, queue: queue)
-    process.setEventHandler { [weak self] in self?.childExited() }
+    let pid = child
+    process.setEventHandler { [weak self] in self?.childExited(expectedPID: pid) }
     self.process = process
     reader.resume()
     process.resume()
@@ -267,11 +308,25 @@ public final class TerminalSession {
       source.resume()
     }
   }
-  private func childExited() {
+  private func childExited(expectedPID: pid_t) {
+    guard child == expectedPID, child > 0 else { return }
     readAvailable()
     var status: Int32 = 0
-    guard child > 0, flash_pty_wait(child, false, &status) > 0 else { return }
-    flash_pty_signal(descriptor, child, SIGKILL)
+    let result = flash_pty_wait(child, &status)
+    if result < 0 && errno != EINTR {
+      child = 0
+      closeSources()
+      publishFrame()
+      publishState(.failed("Terminal child exit status is unavailable"))
+      return
+    }
+    guard result > 0 else {
+      queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+        self?.childExited(expectedPID: expectedPID)
+      }
+      return
+    }
+    flash_pty_signal(descriptor, child, SIGKILL, false)
     child = 0
     closeSources()
     publishFrame()
@@ -291,22 +346,26 @@ public final class TerminalSession {
     pending.removeAll(keepingCapacity: false)
   }
   private func stopOnQueue() {
-    if child > 0 {
-      flash_pty_signal(descriptor, child, SIGHUP)
-      flash_pty_signal(descriptor, child, SIGTERM)
-      var status: Int32 = 0
-      let deadline = DispatchTime.now().uptimeNanoseconds + 200_000_000
-      while flash_pty_wait(child, false, &status) == 0
-        && DispatchTime.now().uptimeNanoseconds < deadline
-      {
-        usleep(5_000)
-      }
-      // Signal the owned process group even if its leader exited first.
-      flash_pty_signal(descriptor, child, SIGKILL)
-      _ = flash_pty_wait(child, true, &status)
+    let pid = child
+    if pid > 0 {
+      flash_pty_signal(descriptor, pid, SIGHUP, true)
+      flash_pty_signal(descriptor, pid, SIGTERM, true)
+      let reaped = TerminalChildReaping.wait(pid: pid, timeoutMilliseconds: 200)
+      // Group members can outlive their leader. Never signal its PID after reaping it.
+      flash_pty_signal(descriptor, pid, SIGKILL, !reaped)
       child = 0
+      // Closing the master and cancelling the process source must precede final reaping.
+      closeSources()
+      if !reaped && !TerminalChildReaping.wait(pid: pid, timeoutMilliseconds: 200) {
+        let diagnostic = onDiagnostic
+        DispatchQueue.main.async { diagnostic?(.reapDeferred(pid: pid)) }
+        TerminalChildReaping.reapLater(pid: pid) {
+          DispatchQueue.main.async { diagnostic?(.reaped(pid: pid)) }
+        }
+      }
+    } else {
+      closeSources()
     }
-    closeSources()
     publishState(.stopped)
   }
   private func publishState(_ state: TerminalSessionState) {

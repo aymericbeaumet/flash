@@ -151,6 +151,15 @@ startup_timeout = 5
 # [plugin.network]
 # summary_mode = "full" # "compact" | "full"
 
+# RSS headlines from the last 24 hours. No requests run until a URL is set.
+# Add #{flash.plugin.feed.summary} to a status format for the rotating title,
+# segment label, original domain/link, and whole-row article preview popup.
+# [plugin.feed]
+# label = "AGGR" # defaults to FEED
+# url = "https://aggr.aymericbeaumet.com/rss.xml"
+# refresh_interval = 300 # seconds between feed requests
+# cycle_interval = 60    # seconds per headline
+
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
 # visibility — it is independent of advanced mode (the enter_normal_mode
@@ -211,13 +220,15 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # quota = "#[fg=#EBCB8B,bold]Quota#[default]\n5-hour: 53% remaining"
 
 # A command popup owns one PTY from Flash startup until exit/removal/shutdown,
-# even with the status bar hidden. It appears only while hovering its status
-# segment and hides immediately on leaving it, even toward the popup body.
+# even with the status bar hidden. Hover previews hide on leaving the segment;
+# click its label to pin/focus, or Option-click when the segment is also a link.
 # Terminal bindings live in [mode.terminal.mappings].
-# An exited process keeps its final screen; terminal_restart restarts it.
-# Shell syntax requires explicit argv, e.g. ["/bin/sh", "-lc", "exec ytop"].
-# [statusbar.popup.system]
-# command = ["ytop"]
+# Exited processes restart automatically with a 1–30s backoff.
+# terminal_restart restarts immediately; hiding preserves the process.
+# Shell syntax requires explicit argv, e.g. ["/bin/sh", "-lc", "exec btm"].
+# [terminal.system]
+# persistent = true
+# command = ["btm", "--read_only", "--rate", "2s"]
 # columns = 80
 # rows = 24
 # working_directory = "~"
@@ -501,9 +512,27 @@ leader = "\\"
 "?" = ["flash", "help_show"]
 ":" = ["flash", "enter_command_mode"]
 
+# Named terminal command templates. persistent defaults to false: a new process
+# each time. Persistent sessions start with Flash and restart automatically.
+# [terminal.bonsai]
+# command = ["bonsai", "hq", "--no-open", "--port", "0"]
+# persistent = true
+# working_directory = "~"
+# columns = 120 # standalone default: 100
+# rows = 36 # standalone default: 28
+# env = { LANG = "en_US.UTF-8" }
+# In [mode.normal.mappings]:
+# "'b" = ["flash", "terminal_show", "--name=bonsai"]
+# "'t" = ["flash", "terminal_show"] # fresh login shell in the home directory
+
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
 # Advanced mode is enabled only by binding ["flash", "enter_normal_mode"] in [mode.all.mappings].
+
+[mode.terminal.mappings]
+# Terminal input stays local to the focused window. Plain Escape goes to the TUI.
+# "cmd+w" = ["flash", "terminal_dismiss"]
+# "cmd+r" = ["flash", "terminal_restart"]
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

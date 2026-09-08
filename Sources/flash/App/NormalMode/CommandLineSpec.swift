@@ -76,6 +76,28 @@ extension NormalModeDispatcher {
     }
   }
 
+  static func commandLineTerminalCommand(_ raw: String) -> URLCommand? {
+    var body = raw.trimmed
+    if body.hasPrefix(":") { body.removeFirst() }
+    let parts = body.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    guard let verb = parts.first,
+      terminalCommandSyntax[verb] != nil,
+      parts.count <= 2
+    else { return nil }
+    var arguments: [String: String] = [:]
+    if parts.count == 2 {
+      guard parts[1].hasPrefix("--name=") else { return nil }
+      arguments["name"] = String(parts[1].dropFirst("--name=".count))
+    }
+    return URLEventHandler.parse(verb: verb, args: arguments)
+  }
+
+  static let terminalCommandSyntax = [
+    "terminal_show": ":terminal_show [--name=<terminal>]",
+    "terminal_dismiss": ":terminal_dismiss",
+    "terminal_restart": ":terminal_restart [--name=<terminal-or-popup>]",
+  ]
+
   /// argv for `:open <args>` — the rest of the line split on whitespace,
   /// forwarded verbatim to `/usr/bin/open`. Returns nil when the line is
   /// not an `:open` invocation. Bare `:open` (no args) returns `[]`.
@@ -358,6 +380,9 @@ extension NormalModeDispatcher {
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
+    "terminal_show": "Open a fresh shell or a configured terminal",
+    "terminal_dismiss": "Close the terminal window; persistent sessions keep running",
+    "terminal_restart": "Restart the focused or named terminal session",
   ]
 
   /// Flat catalog of every built-in command-line command, tagged
@@ -383,6 +408,16 @@ extension NormalModeDispatcher {
         "syntax": ":\(extra) <args>",
         "aliases": [":\(extra)"],
         "description": coreCommandDescriptions[extra] ?? "",
+        "source": "core",
+        "source_kind": "core",
+      ])
+    }
+    for name in terminalCommandSyntax.keys.sorted() {
+      result.append([
+        "name": ":\(name)",
+        "syntax": terminalCommandSyntax[name]!,
+        "aliases": [":\(name)"],
+        "description": coreCommandDescriptions[name]!,
         "source": "core",
         "source_kind": "core",
       ])
@@ -545,6 +580,12 @@ extension NormalModeDispatcher {
     for extra in ["open", "help", "flashlight"] where seen.insert(extra).inserted {
       items.append(
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
+    }
+    for name in terminalCommandSyntax.keys.sorted() where seen.insert(name).inserted {
+      let kind: CommandLineCompletion.Kind = name == "terminal_dismiss" ? .terminal : .acceptsArgs
+      items.append(
+        CommandLineCompletion(
+          label: name, insertion: kind == .acceptsArgs ? "\(name) " : name, kind: kind))
     }
     let dedupedPlugins = Array(Set(pluginCommands.map { $0.lowercased() })).sorted()
     for command in dedupedPlugins where seen.insert(command).inserted {

@@ -195,7 +195,7 @@ extension OverlayPanel {
   }
 
   /// Re-lay-out the status bar after a display reconfiguration (a monitor
-  /// plugged or unplugged). The primary bar anchors to `NSScreen.main` and the
+  /// plugged or unplugged). The primary bar anchors to the screen at origin (0, 0), and the
   /// panel window spans the union of all screens; when a display disappears
   /// both of those move, leaving the bar stranded on coordinates that no longer
   /// exist — which reads as the status bar vanishing from the Mac. The caller
@@ -204,7 +204,15 @@ extension OverlayPanel {
   /// screens (pruning bars for removed displays and adding them for new ones),
   /// and re-orders the panel back into view.
   func statusBarDidChangeScreenParameters() {
-    hideStatusBarPopup()
+    if statusPopupController.presentation.isStandalone {
+      let snapshot = Self.currentScreenSnapshot()
+      let screen =
+        snapshot.screens.first { $0.frame.intersects(statusPopupController.frame) }
+        ?? snapshot.screens.first { $0.frame == snapshot.mainFrame } ?? snapshot.screens.first
+      if let screen { statusPopupController.repositionTerminal(visibleFrame: screen.visibleFrame) }
+    } else {
+      hideStatusBarPopup()
+    }
     updateModeBadge(
       text: modeBadgeText,
       visible: modeBadgeVisible,

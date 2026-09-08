@@ -15,6 +15,7 @@
         "params": {
           "segments": {
             "summary": { "$contains": "#[popup=inline:" },
+            "label": { "$contains": "#[fg=#EBCB8B]BAT#[default]" },
             "details": { "$contains": "#[fg=colour245]Charge        #[default]" }
           }
         }

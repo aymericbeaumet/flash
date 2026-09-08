@@ -391,7 +391,7 @@ enum WindowMover {
   ) -> [WindowScreenLayout] {
     let fontSize = OverlayPanel.statusBarFontSize(overlayFontSize: 0)
     let screens = NSScreen.screens
-    let mainFrame = (NSScreen.main ?? screens.first)?.frame
+    let mainFrame = (screens.first { $0.frame.origin == .zero } ?? screens.first)?.frame
     return screens.enumerated().map { index, screen in
       let number =
         screen.deviceDescription[

@@ -152,8 +152,8 @@ extension AppDelegate {
       popupTemplates: cfg.statusBar.popups,
       options: cfg.statusBar.options,
       sources: cfg.statusBar.sources,
-      terminalPopupNames: Set(cfg.statusBar.terminalPopups.keys).union(
-        cfg.statusBar.invalidTerminalPopupNames.intersection(
+      terminalPopupNames: Set(cfg.terminals.keys).union(
+        cfg.invalidTerminalNames.intersection(
           overlay.statusTerminals.definitions.keys)),
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     registry.updateOpenConfig(cfg.open)

@@ -308,14 +308,16 @@ struct Config {
     /// plugin id, then by setting name.
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
+  struct Terminal: Equatable {
+    var command: [String]
+    var workingDirectory: String?
+    var environment: [String: String] = [:]
+    var columns: Int = 100
+    var rows: Int = 28
+    var persistent: Bool = false
+  }
+
   struct StatusBar {
-    struct TerminalPopup: Equatable {
-      var command: [String]
-      var workingDirectory: String?
-      var environment: [String: String] = [:]
-      var columns: Int = 80
-      var rows: Int = 24
-    }
     struct PopupStyle: Equatable {
       /// Default text colour for popup content. Inline `#[fg=…]` markers
       /// override it exactly as they do in the status bar.
@@ -367,9 +369,6 @@ struct Config {
     /// Each body is compiled as a status template and refreshed by the same
     /// source scheduler, so hovering never starts a subprocess.
     var popups: [String: FlashStatusBarTemplate] = [:]
-    var terminalPopups: [String: TerminalPopup] = [:]
-    /// Invalid replacements preserve an existing resident session on reload.
-    var invalidTerminalPopupNames: Set<String> = []
     var options: [String: String] = Self.defaultOptions
     var sources: [String: FlashStatusBarSourceDefinition] = [:]
     var sourcesUsingDefaultInterval: Set<String> = []
@@ -734,6 +733,9 @@ struct Config {
   var open = Open()
   var plugins = Plugins()
   var statusBar = StatusBar()
+  var terminals: [String: Terminal] = [:]
+  /// Invalid replacements preserve existing sessions during configuration reload.
+  var invalidTerminalNames: Set<String> = []
   var mode = Mode()
   var debug = Debug()
   var flashlight = Flashlight()
@@ -868,12 +870,17 @@ struct Config {
         // plugin through FLASH_PLUGIN_CONFIG.
         "configured": plugins.settings.keys.sorted(),
       ],
+      "terminal": terminals.mapValues { terminal in
+        [
+          "persistent": terminal.persistent, "columns": terminal.columns,
+          "rows": terminal.rows,
+        ] as [String: Any]
+      },
       "statusbar": [
         "enabled": statusBar.enabled,
         "template": statusBar.template.template,
         "options": statusBar.options.keys.sorted(),
         "sources": statusBar.sources.keys.sorted(),
-        "terminal_popups": statusBar.terminalPopups.keys.sorted(),
       ],
       "warnings": warnings,
     ])
@@ -973,6 +980,10 @@ extension URLCommand {
     case .mouseDock: return verb("mouse_dock")
     case .mouseStatusBar: return verb("mouse_statusbar")
     case .normalMode: return verb("enter_normal_mode")
+    case .terminalShow(let name):
+      return verb("terminal_show", name.map { ["--name=\($0)"] } ?? [])
+    case .terminalDismiss:
+      return verb("terminal_dismiss")
     case .terminalRestart(let name):
       return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")

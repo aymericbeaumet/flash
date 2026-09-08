@@ -3,6 +3,27 @@ import XCTest
 @testable import flash
 
 final class StatusPopupConfigTests: XCTestCase {
+  func testPopupCommandTablesAreRejectedWithCanonicalTerminalGuidance() {
+    let config = ConfigLoader.parse("[statusbar.popup.system]\ncommand = [\"btm\"]")
+    XCTAssertTrue(
+      config.diagnostics.contains { $0.message.contains("declare commands in [terminal.system]") })
+    XCTAssertTrue(config.terminals.isEmpty)
+    XCTAssertNil(config.statusBar.popups["system"])
+  }
+
+  func testTerminalNamesTakePrecedenceOverDocumentsAcrossLayers() {
+    let document = ConfigLoader.Layer(text: "[statusbar.popup]\nsystem = \"A document\"")
+    for definition in ["command = [\"btm\"]\npersistent = true", "command = []"] {
+      let terminal = ConfigLoader.Layer(text: "[terminal.system]\n" + definition)
+      for layers in [[document, terminal], [terminal, document]] {
+        let config = ConfigLoader.parseLayers(layers)
+        XCTAssertNil(config.statusBar.popups["system"])
+        XCTAssertTrue(
+          config.diagnostics.contains { $0.message.contains("already a terminal name") })
+      }
+    }
+  }
+
   func testLaterGlobalDefaultsApplyToInheritedSources() {
     let config = ConfigLoader.parseLayers([
       .init(text: "[statusbar.sources.clock]\ncommand = [\"date\"]"),
@@ -12,56 +33,26 @@ final class StatusPopupConfigTests: XCTestCase {
     XCTAssertEqual(config.statusBar.sources["clock"]?.timeoutSeconds, 12)
   }
 
-  func testTerminalDeclarationsAreIndependentOfStatusBarVisibility() {
+  func testNamedPopupDocumentsRemainTemplateStrings() {
     let config = ConfigLoader.parse(
       """
-      [statusbar]
-      enabled = false
-      [statusbar.popup.system]
-      command = ["ytop"]
+      [statusbar.popup]
+      article = "#[bold]Opening#[nobold]\\nFirst lines"
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
-    XCTAssertEqual(config.statusBar.terminalPopups["system"]?.command, ["ytop"])
-    XCTAssertEqual(config.statusBar.terminalPopups["system"]?.columns, 80)
-    XCTAssertEqual(config.statusBar.terminalPopups["system"]?.rows, 24)
-    XCTAssertNil(config.statusBar.popups["system"])
+    XCTAssertEqual(
+      config.statusBar.popups["article"]?.template, "#[bold]Opening#[nobold]\nFirst lines")
+    XCTAssertTrue(config.terminals.isEmpty)
   }
 
-  func testTerminalPathsFollowTheirDefiningLayer() {
+  func testInvalidDocumentReplacementRetainsPreviousLayer() {
     let config = ConfigLoader.parseLayers([
-      .init(
-        text: """
-          [statusbar.popup.system]
-          command = ["./monitor", "--label", "CPU"]
-          working_directory = "./work"
-          columns = 100
-          rows = 30
-          env = { LANG = "en_US.UTF-8" }
-          """, sourceURL: URL(fileURLWithPath: "/tmp/base/flash.toml")),
-      .init(
-        text: "[statusbar]\nenabled = true",
-        sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml")),
+      .init(text: "[statusbar.popup]\narticle = \"Opening\""),
+      .init(text: "[statusbar.popup]\narticle = 42"),
     ])
-    let popup = config.statusBar.terminalPopups["system"]
-    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
-    XCTAssertEqual(popup?.command, ["/tmp/base/monitor", "--label", "CPU"])
-    XCTAssertEqual(popup?.workingDirectory, "/tmp/base/work")
-    XCTAssertEqual(popup?.environment, ["LANG": "en_US.UTF-8"])
-    XCTAssertEqual(popup?.columns, 100)
-    XCTAssertEqual(popup?.rows, 30)
-  }
-
-  func testInvalidTerminalReplacementIsMarkedForLastGoodRetention() {
-    for body in [
-      "command = []", "command = [\"ytop\"]\nrows = 0",
-      "command = [\"ytop\"]\nenv = { PATH = 1 }",
-      "command = [\"ytop\"]\nunknown = true",
-    ] {
-      let config = ConfigLoader.parse("[statusbar.popup.system]\n" + body)
-      XCTAssertFalse(config.diagnostics.isEmpty, body)
-      XCTAssertNil(config.statusBar.terminalPopups["system"], body)
-      XCTAssertTrue(config.statusBar.invalidTerminalPopupNames.contains("system"), body)
-    }
+    XCTAssertFalse(config.diagnostics.isEmpty)
+    XCTAssertEqual(config.statusBar.popups["article"]?.template, "Opening")
+    XCTAssertTrue(config.terminals.isEmpty)
   }
 
   func testNativeOptionsAndExplicitSourceCadence() {
