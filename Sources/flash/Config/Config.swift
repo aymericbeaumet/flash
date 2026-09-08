@@ -309,11 +309,18 @@ struct Config {
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct StatusBar {
+    struct TerminalPopup: Equatable {
+      var command: [String]
+      var workingDirectory: String?
+      var environment: [String: String] = [:]
+      var columns: Int = 80
+      var rows: Int = 24
+    }
     struct PopupStyle: Equatable {
       /// Default text colour for popup content. Inline `#[fg=…]` markers
       /// override it exactly as they do in the status bar.
       var foreground: String = "#D8DEE9"
-      var background: String = "#2E3440"
+      var background: String = "#2E3440F2"
       var borderColor: String = "#4C566A"
       var borderWidth: Double = 1
       var cornerRadius: Double = 8
@@ -340,47 +347,33 @@ struct Config {
     var monitor: Monitor = .all
     /// Bar text size in points (the mode pill uses the same size).
     var fontSize: Double = 13
-    /// Timeout in seconds for one command/script/cycle subprocess run;
+    /// Timeout for one named Flash source run;
     /// SIGTERM then SIGKILL past it, keeping the previous value.
     var commandTimeoutSeconds: Double = 6
     /// Points kept clear on each side of a notch (camera housing).
     var notchMargin: Double = 0
-    /// Poll cadence in seconds for command/script/cycle template sections —
-    /// tmux's `status-interval` analog (`[statusbar] interval`). A source
-    /// can override it inline (`#{script=30:…}`, `#{cycle=60/300:…}`);
-    /// cycles default to `max(rotation, interval)`. `0` disables periodic
-    /// re-runs entirely (sections run once when the template loads).
+    /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
-    /// Single-string status-bar template using tmux-style format markers:
-    ///   #[align=left|centre|right]  — switches which alignment region
-    ///                                 subsequent text/variables accumulate
-    ///                                 into (default: `left`).
-    ///   #[fg=…,bold=true]          — inline text styling (passed through
-    ///                                 to the renderer).
-    ///   #[link=URL]…#[nolink]      — makes the wrapped run clickable; a
-    ///                                 click opens URL. URL must be
-    ///                                 whitespace/comma-free.
-    ///   #[popup=name]…#[nopopup]   — shows the named `[statusbar.popup]`
-    ///                                 rich-text body while hovered.
-    ///   #[popup=inline:<encoded>]  — shows a percent-encoded rich-text body
-    ///                                 carried atomically by a dynamic value.
-    ///   #{token}                    — template variable (mode, date,
-    ///                                 tmux-compatible vars,
-    ///                                 plugin:<count>,
-    ///                                 plugin:<plugin>.<segment>,
-    ///                                 script:<path>, command:<shell>).
-    static let defaultTemplateString = "#[align=left]#{mode}#[align=right]#{date}"
+    /// One native tmux format, with Flash presentation styles and values.
+    static let defaultTemplateString = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
+    static let defaultOptions = [
+      "@left": "#[pill]#{flash.mode}#[nopill]",
+      "@right": "#[fg=#EBCB8B]#{flash.date}",
+    ]
     var template: FlashStatusBarTemplate = Self.defaultTemplate
-    /// The config file that defined `template`, for resolving relative
-    /// `#{script:…}` paths. With layered configs the defining layer may not
-    /// be the last file parsed. Not user-facing.
+    /// The defining layer, retained for diagnostics and source identity.
     var templateSourceURL: URL?
     /// Rich-text bodies referenced by `#[popup=<name>]…#[nopopup]` spans.
     /// Each body is compiled as a status template and refreshed by the same
     /// source scheduler, so hovering never starts a subprocess.
     var popups: [String: FlashStatusBarTemplate] = [:]
-    /// Defining config layer for each popup, used to resolve relative script
-    /// paths after all layers have merged. Not user-facing.
+    var terminalPopups: [String: TerminalPopup] = [:]
+    /// Invalid replacements preserve an existing resident session on reload.
+    var invalidTerminalPopupNames: Set<String> = []
+    var options: [String: String] = Self.defaultOptions
+    var sources: [String: FlashStatusBarSourceDefinition] = [:]
+    var sourcesUsingDefaultInterval: Set<String> = []
+    /// Defining layer for each named document.
     var popupSourceURLs: [String: URL] = [:]
     var popupStyle = PopupStyle()
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
@@ -403,28 +396,30 @@ struct Config {
       variables: [
         FlashStatusBarTemplateVariable(
           id: "statusbar.template.mode",
-          token: "mode",
+          token: "flash.mode",
           source: .sdk(.modeLabel)),
         FlashStatusBarTemplateVariable(
           id: "statusbar.template.date",
-          token: "date",
+          token: "flash.date",
           source: .sdk(.date)),
-      ])
+      ], options: Self.defaultOptions)
   }
   struct Mode {
     struct Labels: Equatable {
       var normal: String = "NORMAL"
       var insert: String = "INSERT"
       var command: String = "COMMAND"
+      var terminal: String = "TERMINAL"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count)
+        max(normal.count, insert.count, command.count, terminal.count)
       }
     }
 
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
+    var terminal: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
     /// Keys and modifiers that make an unmapped keypress in NORMAL switch to
     /// INSERT and continue to the focused app or macOS unchanged. Explicit
@@ -685,10 +680,26 @@ struct Config {
     /// `prepareDerivedValues()` after every config load / reload.
     private(set) var compiledNormal = CompiledMappings()
     private(set) var compiledInsert = CompiledMappings()
+    private(set) var compiledTerminal = CompiledMappings()
+
+    var effectiveTerminalMappings: [ModeMapping] {
+      var claimed = Set<String>()
+      let explicit = terminal.filter {
+        claimed.insert(CompiledMappings.physicalIdentity(for: $0.key)).inserted
+      }
+      var insertClaimed = Set<String>()
+      let inherited = mappings(for: .insert).filter {
+        let identity = CompiledMappings.physicalIdentity(for: $0.key)
+        return insertClaimed.insert(identity).inserted
+          && $0.action.command == .normalMode && claimed.insert(identity).inserted
+      }
+      return explicit + inherited
+    }
 
     mutating func recompileMappings() {
       compiledNormal = CompiledMappings(mappings(for: .normal))
       compiledInsert = CompiledMappings(mappings(for: .insert))
+      compiledTerminal = CompiledMappings(effectiveTerminalMappings)
     }
 
     mutating func refreshLeaderDerivedDefaults() {
@@ -802,10 +813,12 @@ struct Config {
     let modeJSON: [String: Any] = [
       "all": mode.all.map(Self.mappingJSONValue),
       "insert": mode.insert.map(Self.mappingJSONValue),
+      "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
       "labels": [
         "command": mode.labels.command,
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
+        "terminal": mode.labels.terminal,
       ],
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
@@ -858,6 +871,9 @@ struct Config {
       "statusbar": [
         "enabled": statusBar.enabled,
         "template": statusBar.template.template,
+        "options": statusBar.options.keys.sorted(),
+        "sources": statusBar.sources.keys.sorted(),
+        "terminal_popups": statusBar.terminalPopups.keys.sorted(),
       ],
       "warnings": warnings,
     ])
@@ -957,6 +973,8 @@ extension URLCommand {
     case .mouseDock: return verb("mouse_dock")
     case .mouseStatusBar: return verb("mouse_statusbar")
     case .normalMode: return verb("enter_normal_mode")
+    case .terminalRestart(let name):
+      return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")
     case .lockedInsertMode: return verb("enter_locked_insert_mode")
     case .commandMode: return verb("enter_command_mode")
@@ -1143,6 +1161,7 @@ extension Config {
       - `[mode.normal]`
       - `[mode.normal.mappings]`
       - `[mode.insert.mappings]`
+      - `[mode.terminal.mappings]`
       - `[debug]`
 
       Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`,

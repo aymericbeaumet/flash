@@ -62,6 +62,14 @@ struct CompiledMappings: Equatable {
     ] ?? []
   }
 
+  /// Aliases for the same physical chord share precedence during terminal
+  /// default inheritance, just as they share a native hotkey registration.
+  static func physicalIdentity(for key: String) -> String {
+    NormalModeInterpreter.keyAtoms(from: key).map { atom in
+      physicalSignature(for: atom).map { "key:\($0)" } ?? "text:\(atom)"
+    }.joined(separator: String(NormalModeInterpreter.keyAtomSeparator))
+  }
+
   private static func physicalSignature(for atom: String) -> UInt64? {
     let hotkey: String
     if atom.hasPrefix("ctrl-"), !atom.contains("+") {

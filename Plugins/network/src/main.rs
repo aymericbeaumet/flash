@@ -20,7 +20,7 @@ const HISTORY_LEN: usize = 20;
 const PLAIN_HISTORY_LEN: usize = 16;
 const DETAIL_LABEL_WIDTH: usize = 14;
 const NETSTAT: &str = "/usr/sbin/netstat";
-const POPUP_TITLE: &str = "#[fg=colour178]Network#[default]";
+const POPUP_TITLE: &str = "#[fg=#EBCB8B]Network#[default]";
 
 static STATE: LazyLock<Mutex<NetworkState>> = LazyLock::new(|| Mutex::new(NetworkState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -654,7 +654,7 @@ fn padded_history(history: &VecDeque<f64>) -> String {
 }
 
 fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> String {
-    let label = "#[fg=colour178]NET#[default]";
+    let label = "#[fg=#EBCB8B]NET#[default]";
     if summary_mode == SummaryMode::Compact {
         return label.to_string();
     }
@@ -1034,19 +1034,19 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
         assert!(!rendered.summary.contains("↓1.5MiB"));
         assert_eq!(
             visible_summary(&state, SummaryMode::Compact),
-            "#[fg=colour178]NET#[default]"
+            "#[fg=#EBCB8B]NET#[default]"
         );
         assert!(!visible_summary(&state, SummaryMode::Full).contains("Studio"));
         assert_eq!(
             visible_summary(&state, SummaryMode::Full),
-            "#[fg=colour178]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
+            "#[fg=#EBCB8B]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
         assert!(render_details(&state)
             .unwrap()
             .contains("Hostname: moria #[fg=colour196]"));
         assert_eq!(
             rendered.details,
-            "#[fg=colour178]Network#[default]\n\
+            "#[fg=#EBCB8B]Network#[default]\n\
 #[fg=colour245]Wi-Fi         #[default]Studio ##[fg=colour196]\n\
 #[fg=colour245]Interface     #[default]en##0\n\
 #[fg=colour245]Download      #[default]   1.5 MiB/s\n\
@@ -1069,7 +1069,7 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
 
         assert_eq!(
             render_status(&state, SummaryMode::Compact).unwrap().details,
-            "#[fg=colour178]Network#[default]\n\
+            "#[fg=#EBCB8B]Network#[default]\n\
 #[fg=colour245]Wi-Fi         #[default]Atelier\n\
 #[fg=colour245]Interface     #[default]en0\n\
 #[fg=colour245]Download      #[default]           —\n\

@@ -88,6 +88,7 @@ if want conformance; then
   "${RUNNER[@]}" --probes ${MODE_ARGS[@]+"${MODE_ARGS[@]}"}
   echo "==> conformance: sandbox lane"
   FLASH_BIN=".build/debug/flash"
+  ./Scripts/build-ghostty.sh --dev
   swift build --product flash
   "${RUNNER[@]}" --sandbox --flash-bin "$FLASH_BIN" ${MODE_ARGS[@]+"${MODE_ARGS[@]}"}
 fi

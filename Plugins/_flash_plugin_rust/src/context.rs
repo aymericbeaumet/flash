@@ -154,7 +154,7 @@ impl Context {
 
     /// Publish status-bar segment values declared by this plugin's
     /// `status` manifest section (the `status` notification). The host
-    /// exposes each value as `#{plugin:<plugin-id>.<segment>}` in
+    /// exposes each value as `#{flash.plugin.<plugin-id>.<segment>}` in
     /// `[statusbar].template`. An EMPTY value clears the segment host-side.
     pub fn status<I, K, V>(&self, segments: I)
     where
@@ -1049,9 +1049,9 @@ mod tests {
         assert_eq!(
             inline_status_popup(
                 "CPU 18%",
-                "#[fg=colour178,bold]CPU#[default]\nCafé: 18% / 82%"
+                "#[fg=#EBCB8B,bold]CPU#[default]\nCafé: 18% / 82%"
             ),
-            "#[popup=inline:%23%5Bfg%3Dcolour178%2Cbold%5DCPU%23%5Bdefault%5D%0ACaf%C3%A9%3A%2018%25%20%2F%2082%25]CPU 18%#[nopopup]"
+            "#[popup=inline:%23%5Bfg%3D%23EBCB8B%2Cbold%5DCPU%23%5Bdefault%5D%0ACaf%C3%A9%3A%2018%25%20%2F%2082%25]CPU 18%#[nopopup]"
         );
     }
 

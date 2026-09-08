@@ -39,10 +39,16 @@ let package = Package(
     .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0")
   ],
   targets: [
+    .binaryTarget(name: "GhosttyVt", path: "build/ghostty/ghostty-vt.xcframework"),
+    .target(
+      name: "CFlashTerminal", dependencies: ["GhosttyVt"], path: "Sources/CFlashTerminal",
+      publicHeadersPath: "include"),
+    .target(
+      name: "FlashTerminal", dependencies: ["CFlashTerminal"], swiftSettings: strictSwiftSettings),
     .executableTarget(
       name: "flash",
       dependencies: [
-        "FlashCore", "FlashProviders",
+        "FlashCore", "FlashProviders", "FlashTerminal",
         .product(name: "TOMLKit", package: "TOMLKit"),
       ],
       path: "Sources/flash",
@@ -100,9 +106,12 @@ let package = Package(
       swiftSettings: strictSwiftSettings
     ),
     .testTarget(
+      name: "TerminalTests", dependencies: ["FlashTerminal", "CFlashTerminal"],
+      swiftSettings: strictSwiftSettings),
+    .testTarget(
       name: "FlashTests",
       dependencies: [
-        "flash", "FlashCore", "FlashProviders",
+        "flash", "FlashCore", "FlashProviders", "FlashTerminal",
         "FlashIntegrationTestSupport", "FlashBrowserTestSupport",
       ],
       path: "Tests/FlashTests",

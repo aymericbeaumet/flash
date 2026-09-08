@@ -6,6 +6,7 @@ struct StatusBarPopupRegion: Equatable {
   var rect: CGRect
   var name: String
   var content: String
+  var document: [FlashStatusTextSegment]? = nil
 }
 
 enum StatusBarHintAction: Equatable {
@@ -163,6 +164,25 @@ final class StatusBarClickPanel: NSPanel {
 }
 
 extension OverlayPanel {
+  func statusLinkRects(
+    raw: String, font: NSFont, labelFrame: CGRect, alignment: CATextLayerAlignmentMode,
+    barFrame: CGRect, panelFrame: CGRect
+  ) -> [(rect: CGRect, url: URL)] {
+    statusLinkRects(
+      raw: FlashStatusBarRenderer.segments(from: raw), font: font,
+      labelFrame: labelFrame, alignment: alignment, barFrame: barFrame, panelFrame: panelFrame)
+  }
+
+  func statusPopupRects(
+    raw: String, popupTexts: [String: String], font: NSFont, labelFrame: CGRect,
+    alignment: CATextLayerAlignmentMode, barFrame: CGRect, panelFrame: CGRect
+  ) -> [StatusBarPopupRegion] {
+    statusPopupRects(
+      raw: FlashStatusBarRenderer.segments(from: raw), popupTexts: popupTexts,
+      font: font, labelFrame: labelFrame, alignment: alignment, barFrame: barFrame,
+      panelFrame: panelFrame)
+  }
+
   /// Hintable status spans ordered from left to right. Popup-only spans move
   /// the pointer so their hover surface opens; a popup covering the same glyph
   /// span as a link reuses the link's click hint instead of drawing a duplicate.
@@ -193,7 +213,7 @@ extension OverlayPanel {
   /// layer; `barFrame` is the bar layer's frame relative to the panel;
   /// `panelFrame` is the panel's frame in screen coordinates.
   func statusLinkRects(
-    raw: String,
+    raw: [FlashStatusTextSegment],
     font: NSFont,
     labelFrame: CGRect,
     alignment: CATextLayerAlignmentMode,
@@ -232,7 +252,7 @@ extension OverlayPanel {
   /// resolved by the status controller; measurement uses the exact fitted
   /// string rendered by the label, keeping hover geometry pixel-aligned.
   func statusPopupRects(
-    raw: String,
+    raw: [FlashStatusTextSegment],
     popupTexts: [String: String],
     font: NSFont,
     labelFrame: CGRect,
@@ -260,7 +280,8 @@ extension OverlayPanel {
           width: run.width,
           height: barFrame.height),
         name: run.name,
-        content: run.content)
+        content: run.content,
+        document: run.document ?? statusBarPopupDocuments[run.name])
     }
   }
 
@@ -307,7 +328,6 @@ extension OverlayPanel {
     at pointer: CGPoint,
     screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
-    let nameChanged = activeStatusBarPopupName != popup.name
     guard
       let screen = snapshot.screens.first(where: { $0.frame.contains(pointer) })
         ?? snapshot.screens.first(where: { $0.frame.intersects(popup.rect) })
@@ -315,81 +335,20 @@ extension OverlayPanel {
       hideStatusBarPopup()
       return
     }
-
-    let style = statusBarPopupStyle
-    let font = NSFont.monospacedSystemFont(
-      ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
-      weight: .medium)
-    let padding = CGFloat(style.padding)
-    let border = CGFloat(style.borderWidth)
-    let needsLayout =
-      statusPopupLayer.isHidden
-      || activeStatusBarPopupName != popup.name
-      || activeStatusBarPopupContent != popup.content
-      || activeStatusBarPopupVisibleFrame != screen.visibleFrame
-    let popupSize: CGSize
-    if needsLayout {
-      let inset = padding + border
-      let maxTextWidth = max(
-        1,
-        min(
-          CGFloat(style.maxWidth) - inset * 2,
-          screen.visibleFrame.width - inset * 2))
-      let maxTextHeight = max(1, screen.visibleFrame.height - inset * 2)
-      let attributed = FlashStatusBarRenderer.attributedStatusString(
-        from: popup.content,
-        font: font,
-        defaultForeground: FlashStatusTextColor.parse(style.foreground))
-      let measured = attributed.boundingRect(
-        with: CGSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
-        options: [.usesLineFragmentOrigin, .usesFontLeading])
-      let textSize = CGSize(
-        width: min(maxTextWidth, measured.width),
-        height: min(maxTextHeight, measured.height))
-      let layout = Self.statusBarPopupLayout(
-        textSize: textSize,
-        padding: padding,
-        borderWidth: border)
-      popupSize = layout.popupSize
-      statusPopupLayer.backgroundColor = nsColor(fromHex: style.background)?.cgColor
-      statusPopupLayer.borderColor = nsColor(fromHex: style.borderColor)?.cgColor
-      statusPopupLayer.borderWidth = border
-      statusPopupLayer.cornerRadius = CGFloat(style.cornerRadius)
-      statusPopupLayer.contentsScale = screen.scale
-      statusPopupLabel.font = font
-      statusPopupLabel.fontSize = font.pointSize
-      statusPopupLabel.contentsScale = screen.scale
-      statusPopupLabel.string = attributed
-      statusPopupLabel.frame = layout.labelFrame
-      statusPopupLabel.isHidden = false
-      activeStatusBarPopupContent = popup.content
-      activeStatusBarPopupVisibleFrame = screen.visibleFrame
-    } else {
-      popupSize = statusPopupLayer.frame.size
-    }
-    let screenFrame = Self.statusBarPopupFrame(
-      pointer: pointer,
-      popupSize: popupSize,
-      visibleFrame: screen.visibleFrame,
-      offset: CGFloat(style.offset))
-    let localFrame = screenFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
-
-    statusPopupLayer.frame = localFrame
-    statusPopupLayer.zPosition = 10_000
-    statusPopupLayer.isHidden = false
-    activeStatusBarPopupName = popup.name
-    if nameChanged { FlashLog.trace("[statusbar] popup show name=\(popup.name)") }
-    if statusPopupLayer.superlayer !== contentLayer {
-      contentLayer.addSublayer(statusPopupLayer)
-    }
+    statusPopupController.preview(
+      popup, pointer: pointer,
+      visibleFrame: screen.visibleFrame, style: statusBarPopupStyle,
+      font: NSFont.monospacedSystemFont(
+        ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
+        weight: .medium))
+    activeStatusBarPopupName = statusPopupController.presentation.identity?.name
+    activeStatusBarPopupContent = statusPopupController.content
+    activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
 
   func hideStatusBarPopup() {
-    if let name = activeStatusBarPopupName {
-      FlashLog.trace("[statusbar] popup hide name=\(name)")
-    }
+    statusPopupController.dismiss()
     activeStatusBarPopupName = nil
-    statusPopupLayer.isHidden = true
   }
 
   /// Per-screen status-bar band rects in screen coordinates, matching the bar
@@ -471,7 +430,8 @@ extension OverlayPanel {
         if let popup {
           self.showStatusBarPopup(popup, at: point)
         } else {
-          self.hideStatusBarPopup()
+          self.statusPopupController.leaveAnchor()
+          self.activeStatusBarPopupName = nil
         }
       }
       window.orderFrontRegardless()
@@ -493,12 +453,14 @@ extension OverlayPanel {
     at pointer: CGPoint,
     screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
+    statusPopupController.refresh(popups)
     if !statusBarClickWindows.contains(where: \.ignoresMouseEvents),
       let popup = popups.first(where: { $0.rect.contains(pointer) })
     {
       showStatusBarPopup(popup, at: pointer, screenSnapshot: screenSnapshot)
     } else {
-      hideStatusBarPopup()
+      statusPopupController.leaveAnchor()
+      activeStatusBarPopupName = nil
     }
   }
 

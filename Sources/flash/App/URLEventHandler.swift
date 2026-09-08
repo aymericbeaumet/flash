@@ -40,6 +40,7 @@ enum URLCommand: Hashable {
   /// Hint-label the menu-bar status items (WindowServer geometry only).
   case mouseStatusBar
   case normalMode
+  case terminalRestart(name: String?)
   case insertMode
   case lockedInsertMode
   case commandMode
@@ -394,6 +395,12 @@ final class URLEventHandler: NSObject {
     "mouse_dock": { a in a.args.isEmpty ? .mouseDock : nil },
     "mouse_statusbar": { a in a.args.isEmpty ? .mouseStatusBar : nil },
     "enter_normal_mode": { _ in .normalMode },
+    "terminal_restart": { args in
+      guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+        return nil
+      }
+      return .terminalRestart(name: args.value("name"))
+    },
     "enter_insert_mode": { _ in .insertMode },
     "enter_locked_insert_mode": { _ in .lockedInsertMode },
     "enter_command_mode": { a in
@@ -484,6 +491,7 @@ final class URLEventHandler: NSObject {
     flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi|--adjust] [--modifiers=cmd+ctrl+alt+shift]
     flash mouse_grid [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi] [--modifiers=cmd+ctrl+alt+shift]
     flash enter_normal_mode
+    flash terminal_restart [--name=<popup>]
     flash enter_insert_mode
     flash enter_locked_insert_mode
     flash enter_command_mode

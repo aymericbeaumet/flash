@@ -128,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var debugServer: DebugServer?
   var overlay: OverlayPanel!
   var statusBarController: FlashStatusBarController?
+  var statusTerminalEnvironmentReady = false
+  var terminalReturnApplicationPID: pid_t?
+  var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
   let mappings = MappingsCoordinator()
@@ -465,8 +468,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // launchd would otherwise hand children a bare environment. Until this
     // lands the seeded cache (process env + PATH fallback) keeps commands
     // usable, so the spawn need not block startup.
-    DispatchQueue.global(qos: .userInitiated).async {
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       FlashProcessEnvironment.shared.refresh()
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.statusTerminalEnvironmentReady = true
+        self.overlay.statusTerminals.apply(self.config.statusBar)
+      }
     }
     config = ConfigLoader.load()
     FlashTunables.apply(config)
@@ -557,6 +565,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       overlay: overlay,
       template: config.statusBar.template,
       popupTemplates: config.statusBar.popups,
+      options: config.statusBar.options,
+      sources: config.statusBar.sources,
+      terminalPopupNames: Set(config.statusBar.terminalPopups.keys),
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
@@ -565,6 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
+    configureTerminalPopupInput()
     statusItemController.aboutVisibilityDidChange = { [weak self] visible in
       self?.aboutWindowVisibilityDidChange(visible)
     }
@@ -628,6 +640,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateStatusItemHints()
     case .normalMode:
       enterNormalMode()
+    case .terminalRestart(let name):
+      restartStatusTerminal(named: name)
     case .insertMode:
       enterInsertMode()
     case .lockedInsertMode:
@@ -741,6 +755,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         return
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.terminalInputMappings?.flush()
+        self.overlay.hideStatusBarPopup()
         let secureUI = Self.activeWindowBorderSecureUISuspendsSession(
           bundleIdentifier: app.bundleIdentifier)
         self.setActiveWindowBorderSessionSuspended(
@@ -1052,6 +1068,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// modal / candidate-finder own the key window and type into their own fields,
   /// so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
+    if case .terminal = modeStore.mode { return false }
     // A focused secure text field (password) turns on secure event input.
     // Never intercept keystrokes bound for it — they must reach the field, and
     // a keyboard tap swallowing secure input is exactly what that mechanism
@@ -1245,6 +1262,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     powerSourceMonitor = nil
     statusBarController?.stop()
     statusBarController = nil
+    terminalInputMappings?.flush()
+    overlay.statusPopupController.dismiss()
+    overlay.statusTerminals.shutdown()
     monitor?.stop()
     pluginManager.stop()
     debugServer?.stop()

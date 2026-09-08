@@ -64,10 +64,9 @@ and power/health—run concurrently so their timeouts do not stack.
 ## Markup and sandbox boundary
 
 Externally sourced labels must pass through `escape_status_text` before they
-enter a rich status value. Do not escape intentional `#[...]` markup. When the
-host tokenizes and truncates a value, `FlashStatusBarMarkup.serialize` must
-re-escape literal hashes while preserving marker tokens; its output is lexed
-again. Variable and alias syntax inside a plugin-published value is literal
+enter a rich status value. Do not escape intentional `#[...]` markup. The shared format/style compiler preserves escaped literal hashes across
+expansion. Rendering, fitting, interactions, and terminal serialization consume
+typed styled runs; do not reinterpret literal text as markup in a later pass. Variable and alias syntax inside a plugin-published value is literal
 text, not template syntax.
 
 The monitor suite stays helperless and deny-default. It may use unprivileged

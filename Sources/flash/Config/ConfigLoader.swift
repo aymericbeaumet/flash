@@ -439,7 +439,7 @@ enum ConfigLoader {
       ],
       "statusbar": [
         "enabled", "template", "monitor", "interval", "click", "font_size",
-        "command_timeout", "notch_margin", "popup", "popup_fg", "popup_bg",
+        "command_timeout", "notch_margin", "popup", "options", "sources", "popup_fg", "popup_bg",
         "popup_border", "popup_border_size", "popup_corner_radius", "popup_padding",
         "popup_max_width", "popup_offset",
       ],
@@ -800,9 +800,7 @@ enum ConfigLoader {
       into: &config
     ) { value, config in
       config.statusBar.template.template = value
-      // Relative `#{script:…}` paths resolve against the file that DEFINED
-      // the template — with layered configs that may be an earlier layer
-      // than the last one parsed, so remember it here.
+      // Retain the defining layer rather than the last layer parsed.
       config.statusBar.templateSourceURL = sourceURL
     }
     applyString(
@@ -889,17 +887,47 @@ enum ConfigLoader {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let location = locations.location(for: ["statusbar", "popup", name])
         guard !trimmedName.isEmpty else { continue }
-        guard let template = value.string else {
-          config.addDiagnostic(
-            "statusbar.popup.\(name) must be a quoted template string", location: location)
+        if let definition = value.table {
+          if let parsed = parseStatusProcess(
+            definition, path: "statusbar.popup.\(trimmedName)", sourceURL: sourceURL,
+            allowedKeys: ["command", "working_directory", "env", "columns", "rows"],
+            location: location, into: &config),
+            let columns = statusProcessInteger(
+              definition, key: "columns", fallback: 80,
+              range: 1...1000, path: "statusbar.popup.\(trimmedName)", location: location,
+              into: &config),
+            let rows = statusProcessInteger(
+              definition, key: "rows", fallback: 24,
+              range: 1...1000, path: "statusbar.popup.\(trimmedName)", location: location,
+              into: &config)
+          {
+            config.statusBar.terminalPopups[trimmedName] = .init(
+              command: parsed.command, workingDirectory: parsed.workingDirectory,
+              environment: parsed.environment, columns: columns, rows: rows)
+            config.statusBar.popups.removeValue(forKey: trimmedName)
+            config.statusBar.invalidTerminalPopupNames.remove(trimmedName)
+          } else {
+            config.statusBar.invalidTerminalPopupNames.insert(trimmedName)
+          }
           continue
         }
+        guard let template = value.string else {
+          config.addDiagnostic(
+            "statusbar.popup.\(name) must be a template string or a table with command argv",
+            location: location)
+          config.statusBar.invalidTerminalPopupNames.insert(trimmedName)
+          continue
+        }
+        config.statusBar.terminalPopups.removeValue(forKey: trimmedName)
+        config.statusBar.invalidTerminalPopupNames.remove(trimmedName)
         config.statusBar.popups[trimmedName] = FlashStatusBarTemplate(
           template: template, variables: [])
         if let sourceURL { config.statusBar.popupSourceURLs[trimmedName] = sourceURL }
         config.recordLocation(path: "statusbar.popup.\(trimmedName)", location: location)
       }
     }
+    applyStatusBarOptionsAndSources(
+      table, locations: locations, sourceURL: sourceURL, into: &config)
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)
     {
@@ -924,6 +952,137 @@ enum ConfigLoader {
             "statusbar.click.\(name) must be a URL string or a [\"flash\", \"<verb>\", …] action array",
             location: location)
         }
+      }
+    }
+  }
+
+  private static func statusProcessInteger(
+    _ table: TOMLTable, key: String, fallback: Int, range: ClosedRange<Int>,
+    path: String, location: ConfigLocation?, into config: inout Config
+  ) -> Int? {
+    guard let value = table[key] else { return fallback }
+    guard let integer = value.int ?? value.double.flatMap({ Int(exactly: $0) }),
+      range.contains(integer)
+    else {
+      config.addDiagnostic(
+        "\(path).\(key) must be an integer between \(range.lowerBound) and \(range.upperBound)",
+        location: location)
+      return nil
+    }
+    return integer
+  }
+
+  private static func parseStatusProcess(
+    _ table: TOMLTable, path: String, sourceURL: URL?, allowedKeys: Set<String>,
+    location: ConfigLocation?, into config: inout Config
+  ) -> (command: [String], workingDirectory: String?, environment: [String: String])? {
+    func invalid(_ message: String) {
+      config.addDiagnostic("\(path) \(message)", location: location)
+    }
+    if let key = table.keys.sorted().first(where: { !allowedKeys.contains($0) }) {
+      invalid("contains unknown key \"\(key)\"")
+      return nil
+    }
+    guard let values = table["command"]?.array, !values.isEmpty,
+      values.allSatisfy({ $0.string != nil }),
+      let head = values.first?.string, !head.isEmpty
+    else {
+      invalid("command must be a nonempty array of strings")
+      return nil
+    }
+    let command = values.compactMap(\.string).map {
+      $0.hasPrefix("$") ? $0 : resolveCommandArgument($0, sourceURL: sourceURL)
+    }
+    guard command.allSatisfy({ !$0.utf8.contains(0) }) else {
+      invalid("command must not contain NUL bytes")
+      return nil
+    }
+    var directory: String?
+    if let value = table["working_directory"] {
+      guard let raw = value.string, !raw.isEmpty, !raw.utf8.contains(0) else {
+        invalid("working_directory must be a nonempty path string")
+        return nil
+      }
+      directory =
+        raw.hasPrefix("$")
+        ? raw
+        : resolveCommandArgument(
+          raw.hasPrefix(".") || raw.contains("/") ? raw : "./" + raw, sourceURL: sourceURL)
+    }
+    var environment: [String: String] = [:]
+    if let value = table["env"] {
+      guard let entries = value.table else {
+        invalid("env must be a table of strings")
+        return nil
+      }
+      for (key, entry) in entries {
+        guard !key.isEmpty, !key.contains("="), !key.utf8.contains(0),
+          let string = entry.string, !string.utf8.contains(0)
+        else {
+          invalid("env must have valid environment names and string values")
+          return nil
+        }
+        environment[key] = string
+      }
+    }
+    return (command, directory, environment)
+  }
+
+  private static func applyStatusBarOptionsAndSources(
+    _ table: TOMLTable, locations: ConfigSourceLocationIndex, sourceURL: URL?,
+    into config: inout Config
+  ) {
+    if let options = sectionTable(
+      table["options"], name: "statusbar.options", locations: locations, into: &config)
+    {
+      for (key, value) in options {
+        guard let string = value.string else {
+          config.addDiagnostic(
+            "statusbar.options.\(key) must be a string",
+            location: locations.location(for: ["statusbar", "options", key]))
+          continue
+        }
+        config.statusBar.options[key] = string
+      }
+    }
+    guard
+      let sources = sectionTable(
+        table["sources"], name: "statusbar.sources", locations: locations, into: &config)
+    else { return }
+    for (name, value) in sources {
+      let path = "statusbar.sources.\(name)"
+      let location = locations.location(for: ["statusbar", "sources", name])
+      guard let definition = value.table else {
+        config.addDiagnostic("\(path) must be a table with command argv", location: location)
+        continue
+      }
+      guard
+        let parsed = parseStatusProcess(
+          definition, path: path, sourceURL: sourceURL,
+          allowedKeys: ["command", "working_directory", "env", "interval", "cycle_interval"],
+          location: location, into: &config),
+        let interval = statusProcessInteger(
+          definition, key: "interval",
+          fallback: Int(config.statusBar.refreshIntervalSeconds), range: 0...86400,
+          path: path, location: location, into: &config)
+      else { continue }
+      var cycle: Double?
+      if definition["cycle_interval"] != nil {
+        guard
+          let seconds = statusProcessInteger(
+            definition, key: "cycle_interval", fallback: 60,
+            range: 1...86400, path: path, location: location, into: &config)
+        else { continue }
+        cycle = Double(seconds)
+      }
+      config.statusBar.sources[name] = FlashStatusBarSourceDefinition(
+        command: parsed.command, workingDirectory: parsed.workingDirectory,
+        environment: parsed.environment, intervalSeconds: Double(interval),
+        cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds)
+      if definition["interval"] == nil {
+        config.statusBar.sourcesUsingDefaultInterval.insert(name)
+      } else {
+        config.statusBar.sourcesUsingDefaultInterval.remove(name)
       }
     }
   }
@@ -1037,21 +1196,23 @@ enum ConfigLoader {
         let command = parsed["command"],
         (1...32).contains(normal.count),
         (1...32).contains(insert.count),
-        (1...32).contains(command.count)
+        (1...32).contains(command.count),
+        (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count)
       {
-        for key in parsed.keys where !["normal", "insert", "command"].contains(key) {
+        for key in parsed.keys where !["normal", "insert", "command", "terminal"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
           normal: normal,
           insert: insert,
-          command: command)
+          command: command,
+          terminal: parsed["terminal"] ?? config.mode.labels.terminal)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
-          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\" } "
+          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\" } "
             + "with each label 1-32 characters",
           location: location)
       }
@@ -1181,23 +1342,26 @@ enum ConfigLoader {
       }
     }
 
-    if let insert = sectionTable(
-      table["insert"], name: "mode.insert", locations: locations, into: &config)
-    {
+    for scope in [ModeScope.insert, .terminal] {
+      let name = scope.rawValue
+      guard
+        let scoped = sectionTable(
+          table[name], name: "mode.\(name)", locations: locations, into: &config)
+      else { continue }
       applyModeMappingTable(
         sectionTable(
-          insert["mappings"], name: "mode.insert.mappings", locations: locations, into: &config),
-        scope: .insert,
-        path: ["mode", "insert", "mappings"],
+          scoped["mappings"], name: "mode.\(name).mappings", locations: locations, into: &config),
+        scope: scope,
+        path: ["mode", name, "mappings"],
         locations: locations,
         sourceURL: sourceURL,
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in insert where key != "mappings" {
+      for (key, _) in scoped where key != "mappings" {
         config.addDiagnostic(
-          "mode.insert: unknown key '\(key)' — mappings belong under [mode.insert.mappings]",
-          location: locations.location(for: ["mode", "insert", key]))
+          "mode.\(name): unknown key '\(key)' — mappings belong under [mode.\(name).mappings]",
+          location: locations.location(for: ["mode", name, key]))
       }
     }
   }
@@ -1576,6 +1740,9 @@ enum ConfigLoader {
     case .insert:
       config.mode.insert.removeAll { $0.key == key }
       config.mode.insert.append(mapping)
+    case .terminal:
+      config.mode.terminal.removeAll { $0.key == key }
+      config.mode.terminal.append(mapping)
     }
   }
 
@@ -1606,308 +1773,96 @@ enum ConfigLoader {
   }
 
   private static func applyStatusBarTemplates(into config: inout Config) {
-    let normalizedTemplate = FlashStatusBarTemplateEngine.normalizedTemplate(
+    for name in config.statusBar.sources.keys {
+      if config.statusBar.sourcesUsingDefaultInterval.contains(name) {
+        config.statusBar.sources[name]?.intervalSeconds = config.statusBar.refreshIntervalSeconds
+      }
+      config.statusBar.sources[name]?.timeoutSeconds = config.statusBar.commandTimeoutSeconds
+    }
+    var optionDependencies = StatusFormatDependencies()
+    for name in config.statusBar.options.keys.sorted() {
+      let program = StatusFormatProgram.compile(
+        source: config.statusBar.options[name] ?? "",
+        origin: StatusFormatOrigin("statusbar.options.\(name)"))
+      recordStatusFormatDiagnostics(program, path: "options.\(name)", into: &config)
+      optionDependencies.formUnion(program.dependencies)
+    }
+    func compiled(_ text: String, path: String, into config: inout Config) -> FlashStatusBarTemplate
+    {
+      let program = StatusFormatProgram.compile(
+        source: text, origin: StatusFormatOrigin("statusbar.\(path)"))
+      recordStatusFormatDiagnostics(program, path: path, into: &config)
+      var dependencies = program.dependencies
+      dependencies.formUnion(optionDependencies)
+      var variables: [FlashStatusBarTemplateVariable] = []
+      for token in dependencies.values.sorted() {
+        let source: FlashStatusBarSource?
+        if let sdk = FlashStatusBarTemplateEngine.sdkValue(for: token) {
+          source = .sdk(sdk)
+        } else if token.hasPrefix("flash.plugin.") {
+          let field = String(token.dropFirst("flash.plugin.".count))
+          switch field {
+          case "loaded_count": source = .plugin(.loadedCount)
+          case "ready_count": source = .plugin(.readyCount)
+          case "error_count": source = .plugin(.errorCount)
+          default:
+            if let dot = field.lastIndex(of: "."), dot != field.startIndex,
+              field.index(after: dot) < field.endIndex
+            {
+              source = .plugin(
+                .statusSegment(
+                  pluginID: String(field[..<dot]),
+                  name: String(field[field.index(after: dot)...])))
+            } else {
+              source = nil
+              config.addDiagnostic(
+                "statusbar.\(path) has invalid plugin value \(token)",
+                location: config.valueLocations["statusbar.\(path)"])
+            }
+          }
+        } else if token.hasPrefix("flash.source.") {
+          source = nil
+          let name = String(token.dropFirst("flash.source.".count))
+          if config.statusBar.sources[name] == nil {
+            config.addDiagnostic(
+              "statusbar.\(path) references undefined source \(name)",
+              location: config.valueLocations["statusbar.\(path)"])
+          }
+        } else {
+          source = nil
+          if token.hasPrefix("flash.") {
+            config.addDiagnostic(
+              "statusbar.\(path) has unknown Flash value \(token)",
+              location: config.valueLocations["statusbar.\(path)"])
+          }
+        }
+        if let source {
+          variables.append(.init(id: "statusbar.\(path).\(token)", token: token, source: source))
+        }
+      }
+      return FlashStatusBarTemplate(
+        template: text, variables: variables,
+        options: config.statusBar.options, sourceNames: Set(config.statusBar.sources.keys),
+        origin: StatusFormatOrigin("statusbar.\(path)"))
+    }
+    let normalized = FlashStatusBarTemplateEngine.normalizedTemplate(
       config.statusBar.template.template)
-    let variables = parseStatusBarTemplateVariables(
-      normalizedTemplate,
-      path: "template",
-      sourceURL: config.statusBar.templateSourceURL,
-      commandTimeout: config.statusBar.commandTimeoutSeconds,
-      into: &config)
-    config.statusBar.template = FlashStatusBarTemplate(
-      template: normalizedTemplate,
-      variables: variables)
-
+    config.statusBar.template = compiled(normalized, path: "template", into: &config)
     for name in config.statusBar.popups.keys.sorted() {
       guard let popup = config.statusBar.popups[name] else { continue }
-      // The one-line status template intentionally removes source newlines;
-      // popup bodies are multiline documents, so only normalize line endings.
-      let normalizedPopup = popup.template
-        .replacingOccurrences(of: "\r\n", with: "\n")
+      let text = popup.template.replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
-      let path = "popup.\(name)"
-      let variables = parseStatusBarTemplateVariables(
-        normalizedPopup,
-        path: path,
-        sourceURL: config.statusBar.popupSourceURLs[name],
-        commandTimeout: config.statusBar.commandTimeoutSeconds,
-        into: &config)
-      config.statusBar.popups[name] = FlashStatusBarTemplate(
-        template: normalizedPopup,
-        variables: variables)
+      config.statusBar.popups[name] = compiled(text, path: "popup.\(name)", into: &config)
     }
   }
 
-  private static func parseStatusBarTemplateVariables(
-    _ raw: String,
-    path: String,
-    sourceURL: URL?,
-    commandTimeout: TimeInterval = 6,
-    into config: inout Config
-  ) -> [FlashStatusBarTemplateVariable] {
-    var variables: [FlashStatusBarTemplateVariable] = []
-    var index = raw.startIndex
-
-    func appendToken(_ token: String, source: FlashStatusBarSource) {
-      if variables.contains(where: { $0.token == token }) {
-        return
-      }
-      variables.append(
-        FlashStatusBarTemplateVariable(
-          id: statusBarVariableID(token, path: path),
-          token: token,
-          source: source))
-    }
-
-    // Recursive registration: a `#{…}` body may be a plain variable, a
-    // modifier wrapping one (`=N:`, `s///:`, `pN:`), or a conditional /
-    // comparator whose arguments are themselves format strings. Command and
-    // cycle sources must be discovered wherever they sit so their sections
-    // get scheduled.
-    func registerLeaf(_ token: String, rawBody: String) {
-      if let source = parseStatusBarTemplateSource(
-        token, sourceURL: sourceURL, commandTimeout: commandTimeout)
-      {
-        appendToken(token, source: source)
-      } else {
-        config.addDiagnostic(
-          "statusbar.\(path) template variable \"\(rawBody)\" must be mode, active_app_name, active_bundle_identifier, date, host, host_short, user, uid, pid, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in a tmux modifier: #{=N:…}, #{?cond,a,b}, #{s/re/repl/:…}, #{pN:…}); tmux session/window/pane state renders through #{plugin:tmux.<segment>}",
-          location: config.valueLocations["statusbar.\(path)"])
-      }
-    }
-
-    func registerOperand(_ operand: String, rawBody: String) {
-      let trimmed = operand.trimmed
-      guard !trimmed.isEmpty else { return }
-      if trimmed.contains("#{") {
-        registerFormatString(trimmed)
-      } else {
-        registerLeaf(trimmed, rawBody: rawBody)
-      }
-    }
-
-    func registerBody(_ body: String) {
-      if body.hasPrefix("?") {
-        let args = FlashStatusBarMarkup.splitFormatArguments(body.dropFirst())
-        guard args.count >= 2 else {
-          config.addDiagnostic(
-            "statusbar.\(path) conditional \"#{\(body)}\" must be #{?condition,true,false}",
-            location: config.valueLocations["statusbar.\(path)"])
-          return
-        }
-        registerOperand(args[0], rawBody: body)
-        for branch in args.dropFirst() { registerFormatString(branch) }
-        return
-      }
-      for op in FlashStatusBarTemplateEngine.FormatExpansion.comparators
-      where body.hasPrefix(op + ":") {
-        // Comparator arguments are FORMAT strings at render time — literal
-        // text compares as itself (`#{==:#{mode},NORMAL}`). Only nested
-        // `#{…}` bodies name variables, so a bare literal like NORMAL must
-        // not be validated (and rejected) as a variable name.
-        for arg in FlashStatusBarMarkup.splitFormatArguments(body.dropFirst(op.count + 1)) {
-          registerFormatString(arg)
-        }
-        return
-      }
-      if body.hasPrefix("s/") {
-        if let substitution =
-          FlashStatusBarTemplateEngine.FormatExpansion.parseSubstitution(body)
-        {
-          registerOperand(substitution.operand, rawBody: body)
-        } else {
-          config.addDiagnostic(
-            "statusbar.\(path) substitution \"#{\(body)}\" must be #{s/pattern/replacement/:variable}",
-            location: config.valueLocations["statusbar.\(path)"])
-        }
-        return
-      }
-      if let padding = FlashStatusBarTemplateEngine.FormatExpansion.parsePadding(body) {
-        registerOperand(padding.operand, rawBody: body)
-        return
-      }
-      let (token, _) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
-      registerOperand(token, rawBody: body)
-    }
-
-    func registerFormatString(_ format: String) {
-      var i = format.startIndex
-      while i < format.endIndex {
-        guard format[i] == "#",
-          let next = format.index(i, offsetBy: 1, limitedBy: format.endIndex),
-          next < format.endIndex
-        else {
-          i = format.index(after: i)
-          continue
-        }
-        if format[next] == "#" {
-          i = format.index(after: next)
-          continue
-        }
-        if format[next] == "{",
-          let close = FlashStatusBarMarkup.matchingBrace(in: format, openingAt: next)
-        {
-          registerBody(String(format[format.index(after: next)..<close]).trimmed)
-          i = format.index(after: close)
-          continue
-        }
-        i = format.index(after: i)
-      }
-    }
-
-    while index < raw.endIndex {
-      // `##` is a literal `#` per tmux's escape convention — skip both so
-      // we don't trip on the second `#` looking like the start of a token.
-      if raw[index] == "#",
-        let next = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        next < raw.endIndex,
-        raw[next] == "#"
-      {
-        index = raw.index(after: next)
-        continue
-      }
-      if raw[index] == "#",
-        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        open < raw.endIndex,
-        raw[open] == "{"
-      {
-        guard let close = FlashStatusBarMarkup.matchingBrace(in: raw, openingAt: open) else {
-          config.addDiagnostic(
-            "statusbar.\(path) contains an unterminated template variable",
-            location: config.valueLocations["statusbar.\(path)"])
-          return variables
-        }
-        let bodyStart = raw.index(after: open)
-        registerBody(String(raw[bodyStart..<close]).trimmed)
-        index = raw.index(after: close)
-        continue
-      }
-      if raw[index] == "#",
-        let aliasIndex = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        aliasIndex < raw.endIndex,
-        let token = FlashStatusBarTemplateEngine.tmuxShortFormatToken(for: raw[aliasIndex]),
-        let source = parseStatusBarTemplateSource(
-          token, sourceURL: sourceURL, commandTimeout: commandTimeout)
-      {
-        appendToken(token, source: source)
-        index = raw.index(after: aliasIndex)
-        continue
-      }
-      index = raw.index(after: index)
-    }
-
-    return variables
-  }
-
-  private static func statusBarVariableID(_ token: String, path: String = "template") -> String {
-    "statusbar.\(path).\(token)"
-  }
-
-  private static func parseStatusBarTemplateSource(
-    _ token: String,
-    sourceURL: URL?,
-    commandTimeout: TimeInterval = 6
-  ) -> FlashStatusBarSource? {
-    let trimmed = token.trimmed
-    guard !trimmed.isEmpty else { return nil }
-    if let sdkValue = FlashStatusBarTemplateEngine.sdkValue(for: trimmed) {
-      return .sdk(sdkValue)
-    }
-
-    // Any other bare identifier is a config error (the caller emits the
-    // diagnostic). The old dialect accepted every tmux-looking name and
-    // rendered it as "", which silently swallowed typos and the tmux-state
-    // names (`session_name`, `window_name`, …) that now render through
-    // `#{plugin:tmux.<segment>}`.
-    guard let colon = trimmed.firstIndex(of: ":") else { return nil }
-    let kind = String(trimmed[..<colon]).lowercased()
-    let body = String(trimmed[trimmed.index(after: colon)...])
-      .trimmed
-    guard !body.isEmpty else { return nil }
-
-    // Split an optional `=arg` off the kind: `script=30` → ("script", "30").
-    // The arg is a per-source poll cadence in seconds (`#{script=30:…}`,
-    // `#{command=30:…}`), except for cycle where it is `R` (rotation) or
-    // `R/N` (rotation / poll).
-    let kindName: String
-    let kindArg: String?
-    if let eq = kind.firstIndex(of: "=") {
-      kindName = String(kind[..<eq])
-      kindArg = String(kind[kind.index(after: eq)...])
-    } else {
-      kindName = kind
-      kindArg = nil
-    }
-
-    func parsedRefreshSeconds(_ raw: String?) -> TimeInterval?? {
-      // Returns .some(nil) for "no arg", .some(value) for a valid arg, and
-      // nil (outer) for an invalid arg so callers can reject the token.
-      guard let raw else { return .some(nil) }
-      guard let value = Int(raw), value > 0 else { return nil }
-      return .some(TimeInterval(value))
-    }
-
-    func scriptCommand(_ body: String, refreshSeconds: TimeInterval?) -> FlashStatusBarCommand? {
-      // `#{script:path}` runs the script with no args; `#{script:path --foo
-      // --bar}` passes the trailing whitespace-separated tokens through as
-      // positional argv. Splitting on whitespace is intentionally crude —
-      // the templates only pass simple option flags and the user wrote the
-      // string by hand.
-      let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-      guard let scriptPath = parts.first else { return nil }
-      let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
-      let args = Array(parts.dropFirst())
-      if args.isEmpty {
-        return .script(
-          resolved, timeoutSeconds: commandTimeout, refreshSeconds: refreshSeconds)
-      }
-      return .scriptWithArgs(
-        resolved, args: args, timeoutSeconds: commandTimeout, refreshSeconds: refreshSeconds)
-    }
-
-    switch kindName {
-    case "plugin":
-      guard kindArg == nil else { return nil }
-      switch body {
-      case "loaded_count": return .plugin(.loadedCount)
-      case "ready_count": return .plugin(.readyCount)
-      case "error_count": return .plugin(.errorCount)
-      default:
-        guard let dot = body.lastIndex(of: ".") else { return nil }
-        let pluginID = String(body[..<dot]).trimmed
-        let segmentName = String(body[body.index(after: dot)...]).trimmed
-        guard !pluginID.isEmpty, !segmentName.isEmpty else { return nil }
-        return .plugin(.statusSegment(pluginID: pluginID, name: segmentName))
-      }
-    case "script":
-      guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
-      guard let command = scriptCommand(body, refreshSeconds: refresh) else { return nil }
-      return .command(command)
-    case "command":
-      guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
-      return .command(.shell(body, timeoutSeconds: commandTimeout, refreshSeconds: refresh))
-    case "cycle":
-      // `#{cycle:path}` rotates its output lines every 60 s; `#{cycle=R:path}`
-      // every R seconds. `#{cycle=R/N:path}` additionally re-runs the script
-      // every N seconds (default: max(R, [statusbar] interval) — a cycle can't
-      // show lines faster than it rotates, so polling faster is waste).
-      var period = 60
-      var refresh: TimeInterval?
-      if let kindArg {
-        let pieces = kindArg.split(separator: "/", omittingEmptySubsequences: false)
-        guard pieces.count <= 2, let parsedPeriod = Int(pieces[0]), parsedPeriod > 0 else {
-          return nil
-        }
-        period = parsedPeriod
-        if pieces.count == 2 {
-          guard let parsedRefresh = Int(pieces[1]), parsedRefresh > 0 else { return nil }
-          refresh = TimeInterval(parsedRefresh)
-        }
-      }
-      guard let command = scriptCommand(body, refreshSeconds: refresh) else { return nil }
-      return .cycle(command: command, periodSeconds: period)
-    default:
-      return nil
+  private static func recordStatusFormatDiagnostics(
+    _ program: StatusFormatProgram, path: String, into config: inout Config
+  ) {
+    for diagnostic in program.diagnostics {
+      config.addDiagnostic(
+        "statusbar.\(path): \(diagnostic.message) (format byte \(diagnostic.span.bytes.lowerBound))",
+        location: config.valueLocations["statusbar.\(path)"])
     }
   }
 

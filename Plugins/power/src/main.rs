@@ -430,7 +430,7 @@ fn render_popup_details(
             },
         );
     let rows = [
-        "#[fg=colour178]Battery#[default]".to_string(),
+        "#[fg=#EBCB8B]Battery#[default]".to_string(),
         detail_row(
             "Charge",
             &battery
@@ -541,7 +541,7 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
     let breathing_open = if breathing { "#[breathing]" } else { "" };
     let breathing_close = if breathing { "#[nobreathing]" } else { "" };
     format!(
-        "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{breathing_open}{value}{breathing_close}#[norange]#[default]#[pop-default]"
+        "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{breathing_open}{value}{breathing_close}#[norange]#[default]#[pop-default]"
     )
 }
 
@@ -672,7 +672,7 @@ mod tests {
             assert_eq!(
                 visible_summary(&snapshot, SummaryMode::Compact),
                 format!(
-                    "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{expected}#[norange]#[default]#[pop-default]"
+                    "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{expected}#[norange]#[default]#[pop-default]"
                 )
             );
         }
@@ -681,7 +681,7 @@ mod tests {
             battery: None,
         };
         assert!(visible_summary(&no_battery, SummaryMode::Compact).contains(
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
         ));
     }
 
@@ -797,20 +797,20 @@ mod tests {
 
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Full),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert!(status.summary.starts_with("#[popup=inline:"));
         assert!(status.summary.ends_with("#[nopopup]"));
         assert!(status
             .summary
-            .contains("]#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs"));
+            .contains("]#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs"));
         assert_eq!(
             status.details,
-            "#[fg=colour178]Battery#[default]\n\
+            "#[fg=#EBCB8B]Battery#[default]\n\
 #[fg=colour245]Charge        #[default] 73 %\n\
 #[fg=colour245]State         #[default]Charging\n\
 #[fg=colour245]Source        #[default]AC adapter\n\
@@ -838,11 +838,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new()).details,
-            "#[fg=colour178]Battery#[default]\n\
+            "#[fg=#EBCB8B]Battery#[default]\n\
 #[fg=colour245]Charge        #[default] 25 %\n\
 #[fg=colour245]State         #[default]Discharging\n\
 #[fg=colour245]Source        #[default]Battery\n\

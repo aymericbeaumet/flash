@@ -15,7 +15,7 @@
         "params": {
           "segments": {
             "summary": {
-              "$contains": "]#[fg=colour178]AI#[default]#[nopopup]"
+              "$contains": "]#[fg=#EBCB8B]AI#[default]#[nopopup]"
             },
             "details": {
               "$contains": "#[fg=colour245]  Astra   5-hour"

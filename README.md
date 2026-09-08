@@ -27,12 +27,13 @@ This installs `/Applications/Flash.app`, the `flash` CLI, and a login LaunchAgen
 
 ### Build from source
 
-You will need macOS 14+, Xcode command-line tools, Rust, and either pnpm or npm.
+You will need macOS 14+, Xcode command-line tools, mise, Rust, and either pnpm or npm.
 
 ```bash
 git clone https://github.com/aymericbeaumet/flash.git
 cd flash
-./Scripts/install.sh --dev
+mise install
+mise exec -- ./Scripts/install.sh --dev
 ```
 
 The installer builds and signs the app, installs it in `/Applications`, starts the resident process, and walks through the one-time Accessibility grant. Use `./Scripts/install.sh --release` for a clean universal build.
@@ -94,13 +95,13 @@ template = "#[align=right]#[popup=quota]Quota 53%#[nopopup]"
 
 [statusbar.popup]
 quota = """
-#[fg=colour178,bold]Claude#[default]
+#[fg=#EBCB8B,bold]Claude#[default]
 5-hour 53% remaining
 7-day 14% remaining
 """
 ```
 
-Popup bodies preserve newlines and accept the status renderer’s regular variables and inline `fg`, `bg`, bold, italics, underline, dim, and reverse styles. Script, command, and cycle sources are evaluated by the ordinary status refresh scheduler; pointer movement only repositions already-rendered content.
+Popup bodies preserve newlines and accept the status renderer’s regular variables and inline `fg`, `bg`, bold, italics, underline, dim, and reverse styles. Named argv sources and native shell jobs are evaluated by the status scheduler; pointer movement only repositions already-rendered content.
 
 Dynamic values such as carousel rows can carry their own body with
 `#[popup=inline:<percent-encoded-body>]…#[nopopup]`. Flash decodes the body as
@@ -108,9 +109,41 @@ the same rich text used by named popups, while keeping it out of the bar's
 layout. Because the body travels in the same value as the visible row, an open
 popup updates atomically when the value changes.
 
-Left, centre, and right status lanes never overlap. Flash first contracts an
-explicit `#[shrink]…#[noshrink]` span, then applies a marker-safe ellipsis to
-the whole lane when needed; right-aligned lanes preserve their trailing values.
+Flash first shortens explicitly marked `#[shrink]…#[noshrink]` spans,
+preserving surrounding text. It then uses tmux's cell layout for alignment,
+lists, collision trimming, and absolute-centre overlays.
+
+Command popups are persistent libghostty-vt terminals. They start with Flash,
+keep running when hidden, and share one session across displays:
+
+```toml
+[statusbar]
+template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
+
+[statusbar.options]
+"@left" = "#[popup=system]System#[nopopup]"
+"@right" = "%H:%M"
+
+[statusbar.popup.system]
+command = ["ytop"]
+columns = 80
+rows = 24
+
+[mode.terminal.mappings]
+"cmd+r" = ["flash", "terminal_restart"]
+```
+
+The popup appears only while hovering its status segment and disappears
+immediately when the pointer leaves, including toward the popup itself.
+Hiding the popup keeps its child alive.
+See [terminal lifecycle and configuration](docs/terminal-popups.md).
+
+The template follows tmux 3.7b formats and styles. `@left`/`@right` above are
+native tmux user options, expanded with native `E:`/`T:` modifiers. Flash
+supplies its own `flash.*` values; absent tmux session/window/pane context
+expands empty. Native `#(...)` shell jobs are asynchronous. Use
+`[statusbar.sources.<name>]` plus `#{flash.source.<name>}` for explicit argv,
+cadence, or rotating output.
 
 ### System monitors
 
@@ -124,14 +157,14 @@ iStat-style strip:
 [statusbar]
 enabled = true
 template = """
-#[align=left]#{mode}
-#[align=center]#{active_app_name}
-#[align=right]#{plugin:cpu.summary}
-#[fg=colour245] · #{plugin:memory.summary}
-#[fg=colour245] · #{plugin:disks.summary}
-#[fg=colour245] · #{plugin:network.summary}
-#[fg=colour245] · #{plugin:power.summary}
-#[fg=colour245] · #{date}
+#[align=left]#[pill]#{flash.mode}#[nopill]
+#[align=absolute-centre]#{flash.active_app_name}
+#[align=right]#{flash.plugin.cpu.summary}
+#[fg=colour245] · #{flash.plugin.memory.summary}
+#[fg=colour245] · #{flash.plugin.disks.summary}
+#[fg=colour245] · #{flash.plugin.network.summary}
+#[fg=colour245] · #{flash.plugin.power.summary}
+#[fg=colour245] · #{flash.date}
 """
 ```
 
@@ -297,6 +330,9 @@ Karabiner-Elements users can call `flash mouse_target` from a `shell_command` ma
 Run the unit and guardrail suites, then install the real app before manual UI verification:
 
 ```bash
+mise install
+./Scripts/build-ghostty.sh --dev
+export TMUX_ORACLE="$(./Scripts/build-tmux-oracle.sh)"
 swift test
 ./Scripts/test-plugins.sh --lane all   # plugin lint + units + builds + conformance matrix
 ./Scripts/benchmark-plugins.py --build # report plugin startup, ping, RSS, and threads

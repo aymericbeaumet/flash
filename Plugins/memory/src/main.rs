@@ -386,7 +386,7 @@ Page size: {}",
         body.push_str(&format!("\nHistory: {}", sparkline(history)));
     }
     let details = [
-        "#[fg=colour178]Memory#[default]".to_string(),
+        "#[fg=#EBCB8B]Memory#[default]".to_string(),
         detail_row("Usage", &format!("{percent:>5.1} %")),
         detail_row("Used", &format!("{:>10}", format_bytes(snapshot.occupied))),
         detail_row("Total", &format!("{:>10}", format_bytes(snapshot.total))),
@@ -440,7 +440,7 @@ fn visible_summary(
 ) -> String {
     let percent = snapshot.occupied_percent().min(99.0);
     let mut visible =
-        format!("#[fg=colour178]MEM#[default] #[fg=colour245]{percent:>2.0}%#[default]");
+        format!("#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{percent:>2.0}%#[default]");
     if summary_mode == SummaryMode::Full && !history.is_empty() {
         visible.push(' ');
         visible.push_str(&sparkline(history));
@@ -480,20 +480,20 @@ mod tests {
         };
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245] 9%#[default]"
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245] 9%#[default]"
         );
         snapshot.occupied = 10;
         snapshot.free = 90;
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]10%#[default]"
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]10%#[default]"
         );
         snapshot.total = 1_000;
         snapshot.occupied = 999;
         snapshot.free = 1;
         assert_eq!(
             visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]99%#[default]"
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]99%#[default]"
         );
     }
 
@@ -588,16 +588,16 @@ mod tests {
         assert!(!rendered.summary.contains("▅▆"));
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]75%#[default]"
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default]"
         );
         assert_eq!(
             visible_summary(&snapshot, &history, SummaryMode::Full),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]75%#[default] ▅▆"
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default] ▅▆"
         );
         assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
         assert_eq!(
             rendered.details,
-            "#[fg=colour178]Memory#[default]\n\
+            "#[fg=#EBCB8B]Memory#[default]\n\
 #[fg=colour245]Usage         #[default] 75.0 %\n\
 #[fg=colour245]Used          #[default]   12.0 GB\n\
 #[fg=colour245]Total         #[default]   16.0 GB\n\

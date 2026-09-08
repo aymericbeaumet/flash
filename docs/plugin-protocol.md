@@ -209,7 +209,7 @@ Notifications:
   catalog is retained. An open flashlight refreshes from the store on a
   coalesced ≤1/s tick — lossless, since the store is already current.
 - `status` — `{"segments": {"name": "value"}}` for manifest-declared status
-  segments, rendered as `#{plugin:<id>.<segment>}`; `""` clears a segment;
+  segments, rendered as `#{flash.plugin.<id>.<segment>}`; `""` clears a segment;
   undeclared names are ignored. Segments are live state: cleared on any
   teardown (unlike catalogs).
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
@@ -382,9 +382,14 @@ Section semantics:
 - **`status`** — status-bar segment names fed by the `status` notification.
 - **`verbs`** — CLI/mapping verbs; `keystrokes` lets the host handle fixed
   keystroke verbs without any plugin RPC.
-- **`mappings`** — key bindings scoped `all | normal | insert` (default
+- **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
-  may scope with `only_bundle_ids`.
+  may scope with `only_bundle_ids`. Terminal mappings are local to a focused
+  status popup. Every global mapping registration is suspended while that view
+  owns input; only winning INSERT-active `enter_normal_mode` bindings are
+  inherited as terminal defaults, and explicit terminal bindings override them.
+  Terminal sequences use the shared key syntax without `<leader>`, implicit
+  counts, or register prefixes. See [terminal popup input](normal-mode.md#terminal-popup-input).
 
 `only_bundle_ids` may appear at the root and on mapping entries; root and
 entry selectors compound. The numeric manifest `priority` (default 25) is

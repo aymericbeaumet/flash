@@ -1,12 +1,12 @@
 import Foundation
 
-/// Which native mapping set Carbon should own. All-scope mappings stay active
-/// everywhere; command-line and candidate-finder surfaces exclude the normal-
-/// and insert-only scopes while their field editor owns the keyboard.
+/// Which native mapping set Carbon should own. Terminal input suspends every
+/// global registration so only the popup's local mappings can intercept keys.
 enum MappingScope: Equatable {
   case normal
   case insert
   case command
+  case terminal
 }
 
 // What the reducer asks the AppKit edge (`ModeExecutor`) to do after a
@@ -17,8 +17,8 @@ enum MappingScope: Equatable {
 // AppDelegate routine — so the executor is a dumb `switch` with no decisions of
 // its own.
 enum ModeEffect: Equatable {
-  /// Reconcile the scope-bound Carbon hotkeys for the active surface. All-scope
-  /// registrations remain installed; the executor dedupes no-op re-applies.
+  /// Reconcile Carbon hotkeys for the active surface. Terminal focus suspends
+  /// every registration; the executor dedupes no-op re-applies.
   case setMappingScope(MappingScope)
 
   /// Recompute and push everything derived from `Mode`: `overlay.inputMode`,
@@ -40,4 +40,7 @@ enum ModeEffect: Equatable {
 
   /// Hide the overlay on INSERT entry when no hints are showing.
   case hideOverlayIfIdle
+
+  /// Flush pending local input and dismiss the popup before restoring capture.
+  case hideTerminalPopup
 }

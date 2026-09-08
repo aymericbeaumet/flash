@@ -99,7 +99,7 @@ Handed to every handler; cheap to clone. Key surface:
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
-  (content-free); `status(segments)` feeds `#{plugin:<id>.<segment>}`.
+  (content-free); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
   `inline_status_popup(visible, body)` wraps a visible value with a correctly
   percent-encoded rich hover body for publishing both atomically.
 - Timers: `interval(period, cb)` — non-overlapping ticks; plugins may also

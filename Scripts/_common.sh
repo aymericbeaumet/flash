@@ -222,6 +222,9 @@ assemble_app() {
   # the base layer under the user's flash.toml (ConfigLoader.load), which
   # also revalidates it on every launch.
   cp "$PROJECT_DIR/config.default.toml" "$STAGING_PATH/Contents/Resources/config.default.toml"
+  cp "$PROJECT_DIR/Resources/Ghostty-LICENSE" "$STAGING_PATH/Contents/Resources/Ghostty-LICENSE"
+  cp "$PROJECT_DIR/Resources/tmux-LICENSE" "$STAGING_PATH/Contents/Resources/tmux-LICENSE"
+  cp "$PROJECT_DIR/Resources/utf8proc-LICENSE" "$STAGING_PATH/Contents/Resources/utf8proc-LICENSE"
   # Stamp the exact commit this bundle was assembled from (the About panel
   # reads FlashGitCommit).
   local git_commit

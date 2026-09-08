@@ -26,6 +26,12 @@ enum ModeEvent: Equatable {
   /// Command-line submit or cancel — both close the surface to its `restoreTo`.
   case closeCommand(reason: String)
 
+  /// A popup body was clicked and its local view became the input owner.
+  case openTerminal
+
+  /// Restore the base mode when the popup loses focus or is dismissed.
+  case closeTerminal
+
   /// A primary click resolved by its source: physical and mouse-grid clicks
   /// enter INSERT, while semantic hints honor `JumpTarget.entersInsertMode`.
   /// From INSERT this never leaves insert.

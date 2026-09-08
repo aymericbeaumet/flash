@@ -856,7 +856,7 @@ final class OverlayInputTests: XCTestCase {
 
   func testModeBadgeWidthUsesLongestConfiguredLabel() {
     let compact = OverlayPanel.modeBadgeWidth(
-      labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C"),
+      labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C", terminal: "T"),
       currentText: "N",
       fontSize: 12)
     let full = OverlayPanel.modeBadgeWidth(

@@ -561,7 +561,7 @@ struct PluginManifest: Decodable, Equatable {
   var commands: [PluginCommandRegistration]
   var mappings: [PluginMappingRegistration]
   /// Status-bar segment names fed by the `status` notification, rendered as
-  /// `#{plugin:<id>.<segment>}`.
+  /// `#{flash.plugin.<id>.<segment>}`.
   var status: [String]
   var bangsBlock: PluginBangs?
   /// Durable route schemes restorable from movement history, dispatched as
@@ -984,7 +984,7 @@ struct PluginManifest: Decodable, Equatable {
     for mapping in mappings {
       guard ModeScope(rawValue: mapping.mode) != nil else {
         throw PluginError.failure(
-          "plugin mapping mode \(mapping.mode) must be all, normal, or insert")
+          "plugin mapping mode \(mapping.mode) must be all, normal, insert, or terminal")
       }
     }
     for prefix in query?.prefixes ?? [] {

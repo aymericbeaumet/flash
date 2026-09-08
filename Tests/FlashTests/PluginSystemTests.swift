@@ -829,6 +829,11 @@ final class PluginSystemTests: XCTestCase {
               "command": ["flash", "hints_dismiss"],
               "only_bundle_ids": ["com.tinyspeck.slackmacgap"],
               "priority": 40
+            },
+            {
+              "key": "cmd+r",
+              "mode": "terminal",
+              "command": ["flash", "enter_normal_mode"]
             }
           ]
         }
@@ -836,7 +841,7 @@ final class PluginSystemTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
 
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.mappings.count, 2)
+    XCTAssertEqual(manifest.mappings.count, 3)
 
     let first = try XCTUnwrap(manifest.mappings.first)
     XCTAssertEqual(first.key, "q")
@@ -850,6 +855,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(second.scope, .insert)
     XCTAssertEqual(second.selector.onlyBundleIDs, ["com.tinyspeck.slackmacgap"])
     XCTAssertEqual(second.priority, 40)
+    XCTAssertEqual(manifest.mappings[2].scope, .terminal)
   }
 
   func testManifestRejectsInvalidMappingMode() throws {
@@ -872,7 +878,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode command must be all, normal, or insert"))
+          "plugin mapping mode command must be all, normal, insert, or terminal"))
     }
   }
 

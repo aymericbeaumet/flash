@@ -924,7 +924,7 @@ extension PluginManager {
       Catalogs are push-based: the plugin sends a `publish` notification
       whenever its rows change and the host serves the flashlight from its
       own store. Status segments arrive via the `status` notification and
-      render as `#{plugin:<id>.<segment>}` in `[statusbar].template`.
+      render as `#{flash.plugin.<id>.<segment>}` in `[statusbar].template`.
       Structured logs go through the `log` notification and are recorded
       with `source = "plugin:<id>"`. Sensitive host surfaces (clipboard,
       accessibility, network, notifications, …) are default-deny and must be

@@ -19,17 +19,36 @@ enum ModeReducer {
       // enter insert *from*; stay put.
       if case .disabled = state { return (state, []) }
       let next = Mode.insert(locked: reason.locksInsertMode)
-      return (next, enterEffects(for: next, targetPID: targetPID))
+      return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
     case .enterNormal(let targetPID):
       // The advanced gate: cannot enter NORMAL when the feature is off.
-      if case .disabled = state { return (state, []) }
-      return (.normal, enterEffects(for: .normal, targetPID: targetPID))
+      if state == .disabled || (state.isTerminal && state.asReturnMode == .disabled) {
+        if state.isTerminal { return reduce(state, .closeTerminal) }
+        return (state, [])
+      }
+      let departure: [ModeEffect] =
+        state.isTerminal
+        ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
+      return (.normal, departure + enterEffects(for: .normal, targetPID: targetPID))
 
     case .openCommand(let scope, let restoreMode):
       let restoreTo = restoreMode ? state.asReturnMode : defaultSurfaceReturn(from: state)
       let next = Mode.command(scope: scope, restoreTo: restoreTo)
+      return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: nil))
+
+    case .openTerminal:
+      guard !state.isTerminal else { return (state, []) }
+      let next = Mode.terminal(restoreTo: state.asReturnMode)
       return (next, enterEffects(for: next, targetPID: nil))
+
+    case .closeTerminal:
+      guard case .terminal(let restoreTo) = state else { return (state, []) }
+      let effects = enterEffects(for: restoreTo.mode, targetPID: nil).filter {
+        if case .activateFocusedApp = $0 { return false }
+        return true
+      }
+      return (restoreTo.mode, [.hideTerminalPopup] + effects)
 
     case .closeCommand:
       guard case .command(_, let restoreTo) = state else { return (state, []) }
@@ -48,6 +67,12 @@ enum ModeReducer {
       return (state, [.scheduleRecapture])
 
     case .advancedModeChanged(let enabled):
+      if case .terminal(let restoreTo) = state {
+        let base: ReturnMode =
+          enabled
+          ? (restoreTo == .disabled ? .insert(locked: false) : restoreTo) : .disabled
+        return (.terminal(restoreTo: base), [.renderSurface])
+      }
       if enabled {
         // Hot-enabling advanced mode lands in INSERT; the user opts into NORMAL
         // with their hotkey. If it was already on, just refresh the badge/label
@@ -70,7 +95,7 @@ enum ModeReducer {
       switch state {
       case .normal, .command:
         return (state, [.scheduleRecapture])
-      case .insert, .disabled:
+      case .insert, .disabled, .terminal:
         return (state, [])
       }
     }
@@ -100,6 +125,10 @@ enum ModeReducer {
       // Command surfaces own every key. Hint cleanup is owned by the
       // surface's content setup (`enterCommandLineMode`).
       return [.setMappingScope(.command), .renderSurface, .scheduleRecapture]
+    case .terminal:
+      return [
+        .setMappingScope(.terminal), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
+      ]
     }
   }
 
@@ -107,7 +136,11 @@ enum ModeReducer {
   /// or disabled when advanced mode is off (so flashlight works without a
   /// normal-mode binding and never strands the user in a phantom NORMAL).
   private static func defaultSurfaceReturn(from state: Mode) -> ReturnMode {
-    if case .disabled = state { return .disabled }
+    if state.asReturnMode == .disabled { return .disabled }
     return .normal
+  }
+
+  private static func terminalDeparture(_ state: Mode) -> [ModeEffect] {
+    state.isTerminal ? [.hideTerminalPopup] : []
   }
 }

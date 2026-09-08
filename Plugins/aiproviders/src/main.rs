@@ -404,14 +404,14 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
             )
         })
         .unwrap_or((None, None, None, None));
-    let visible = "#[fg=colour178]AI#[default]";
+    let visible = "#[fg=#EBCB8B]AI#[default]";
 
     let openai_session_label = usage_window_label(openai_session, "5-hour");
     let openai_week_label = usage_window_label(openai_week, "7-day");
     let astra_session_label = usage_window_label(astra_session, "5-hour");
     let astra_week_label = usage_window_label(astra_week, "7-day");
     let lines = [
-        "#[fg=colour178]AI#[default]".to_string(),
+        "#[fg=#EBCB8B]AI#[default]".to_string(),
         "#[fg=colour245]Provider  Window         Left  Reset#[default]".to_string(),
         popup_row("Claude", "5-hour", shared_session, None, now),
         popup_row("", "7-day", claude_week, shared_session, now),
@@ -1200,11 +1200,11 @@ mod tests {
         let segments = render_status_segments(&state, 0);
         assert_eq!(
             segments.details,
-            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]  Fable   7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]  Astra   5-hour       #[default]   88%  3h\n#[fg=colour245]          7-day        #[default]   90%  7d"
+            "#[fg=#EBCB8B]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]  Fable   7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]  Astra   5-hour       #[default]   88%  3h\n#[fg=colour245]          7-day        #[default]   90%  7d"
         );
         assert_eq!(
             segments.summary,
-            inline_status_popup("#[fg=colour178]AI#[default]", &segments.details)
+            inline_status_popup("#[fg=#EBCB8B]AI#[default]", &segments.details)
         );
         assert!(!segments.summary.contains("#[link="));
         assert!(!segments.details.ends_with('\n'));
@@ -1216,7 +1216,7 @@ mod tests {
         let segments = render_status_segments(&UsageState::default(), 0);
         assert_eq!(
             segments.summary,
-            inline_status_popup("#[fg=colour178]AI#[default]", &segments.details)
+            inline_status_popup("#[fg=#EBCB8B]AI#[default]", &segments.details)
         );
         assert!(segments
             .details

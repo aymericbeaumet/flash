@@ -9,7 +9,7 @@ import Foundation
 /// entries are stable-sorted by priority descending, so `CompiledMappings`'
 /// first-writer-wins hands each key to the highest-priority claimant.
 ///
-/// The merge is per scope (`all`/`normal`/`insert`): config's own order — and
+/// The merge is per scope (`all`/`normal`/`insert`/`terminal`): config's own order — and
 /// the `all`-before-`normal` precedence baked into `Config.Mode.mappings(for:)`
 /// — is preserved among the priority-0 entries. Cross-scope override of a
 /// user's `all`-scope binding by a plugin's `normal` mapping is intentionally
@@ -24,6 +24,7 @@ enum EffectiveMappings {
     effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)
     effective.normal = mergeScope(base: base.normal, plugin: plugin, scope: .normal)
     effective.insert = mergeScope(base: base.insert, plugin: plugin, scope: .insert)
+    effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
     effective.recompileMappings()
     return effective
   }

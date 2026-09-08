@@ -14,6 +14,9 @@ extension AppDelegate {
       for: pluginSelectorContext(fallbackBundleID: bundleID))
     overlay?.normalModeMappings = effective.compiledNormal
     if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
+      terminalInputMappings?.replaceMappings(
+        effective.compiledTerminal,
+        timeoutMs: config.mode.sequenceTimeoutMs)
       mappings.apply(mode: effective)
       lastAppliedMappingMode = effective
     }
@@ -46,5 +49,6 @@ extension AppDelegate {
   private func mappingModeChanged(from old: Config.Mode?, to new: Config.Mode) -> Bool {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
+      || old.terminal != new.terminal
   }
 }

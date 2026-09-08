@@ -150,6 +150,11 @@ extension AppDelegate {
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
       popupTemplates: cfg.statusBar.popups,
+      options: cfg.statusBar.options,
+      sources: cfg.statusBar.sources,
+      terminalPopupNames: Set(cfg.statusBar.terminalPopups.keys).union(
+        cfg.statusBar.invalidTerminalPopupNames.intersection(
+          overlay.statusTerminals.definitions.keys)),
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
@@ -177,7 +182,6 @@ extension AppDelegate {
       statusBarController?.start()
     } else {
       statusBarController?.stop()
-      overlay.setStatusRightText("")
     }
     // Advanced mode is on iff an `enter_normal_mode` binding exists. Turning it
     // off drops to a non-capturing insert; the reducer re-renders either way.
@@ -190,6 +194,7 @@ extension AppDelegate {
     invalidateEffectiveMappings()
     refreshEffectiveMappings(
       for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    reloadTerminalPopupConfiguration()
   }
 
   /// Plugins emit a state notification on every log line, lifecycle
@@ -285,7 +290,8 @@ extension AppDelegate {
         "localized_name": app?.localizedName ?? NSNull(),
         "pid": focusedPID,
       ],
-      "mode": "\(flashMode)",
+      "mode": String(describing: modeStore.mode.label),
+      "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),
       "plugins": statuses.map(\.jsonObject),
     ]

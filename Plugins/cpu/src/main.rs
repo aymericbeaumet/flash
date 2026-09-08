@@ -532,7 +532,7 @@ Load: {:.2} · {:.2} · {:.2}",
         })
         .unwrap_or_else(|| ("      —".to_string(), "—".to_string()));
     let details = [
-        "#[fg=colour178]CPU#[default]".to_string(),
+        "#[fg=#EBCB8B]CPU#[default]".to_string(),
         detail_row("Total", &format!("{total:>5.1} %")),
         detail_row("User", &format!("{:>5.1} %", cpu.user)),
         detail_row("System", &format!("{:>5.1} %", cpu.system)),
@@ -586,15 +586,14 @@ fn visible_summary(
     summary_mode: SummaryMode,
 ) -> String {
     let total = cpu.total().min(99.0);
-    let mut visible =
-        format!("#[fg=colour178]CPU#[default] #[fg=colour245]{total:>2.0}%#[default]");
+    let mut visible = format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{total:>2.0}%#[default]");
     if summary_mode == SummaryMode::Compact {
         return visible;
     }
     if let Some(gpu) = gpu {
         let utilization = gpu.utilization.min(99.0);
         visible.push_str(&format!(
-            " #[fg=colour245]· #[fg=colour178]GPU#[default] #[fg=colour245]{:>2.0}%#[default]",
+            " #[fg=colour245]· #[fg=#EBCB8B]GPU#[default] #[fg=colour245]{:>2.0}%#[default]",
             utilization,
         ));
     }
@@ -628,19 +627,19 @@ mod tests {
         for (user, expected) in [
             (
                 9.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245] 9%#[default]",
             ),
             (
                 10.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]10%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]10%#[default]",
             ),
             (
                 99.6,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]99%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]99%#[default]",
             ),
             (
                 100.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]99%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]99%#[default]",
             ),
         ] {
             let cpu = CpuSnapshot {
@@ -671,8 +670,8 @@ mod tests {
 
         assert_eq!(
             visible_summary(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Full),
-            "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
-· #[fg=colour178]GPU#[default] #[fg=colour245]99%#[default]"
+            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
+· #[fg=#EBCB8B]GPU#[default] #[fg=colour245]99%#[default]"
         );
     }
 
@@ -774,17 +773,17 @@ mod tests {
         assert!(!rendered.summary.contains("▂"));
         assert_eq!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Compact),
-            "#[fg=colour178]CPU#[default] #[fg=colour245]20%#[default]"
+            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]20%#[default]"
         );
         assert!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
-                .contains("#[fg=colour178]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
+                .contains("#[fg=#EBCB8B]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
         );
         assert_eq!(CPU_SAMPLE_PERIOD, Duration::from_secs(1));
         assert_eq!(GPU_INTERVAL, Duration::from_secs(15));
         assert_eq!(
             rendered.details,
-            "#[fg=colour178]CPU#[default]\n\
+            "#[fg=#EBCB8B]CPU#[default]\n\
 #[fg=colour245]Total         #[default] 19.8 %\n\
 #[fg=colour245]User          #[default] 12.5 %\n\
 #[fg=colour245]System        #[default]  7.2 %\n\

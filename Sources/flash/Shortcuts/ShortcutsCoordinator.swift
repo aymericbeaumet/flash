@@ -4,8 +4,8 @@ import Foundation
 
 /// Owns the native modified-key mapping lifecycle.
 ///
-/// All-scope Carbon registrations stay installed across mode transitions;
-/// only the small mode-specific set is replaced. AOT: parsing of the mapping
+/// All-scope Carbon registrations stay installed across base mode transitions;
+/// terminal focus suspends both registration sets. AOT: parsing of the mapping
 /// lhs and URL value happens at config load, before any keypress arrives. The
 /// hot path on a Carbon callback is one switch over the pre-resolved
 /// `MappingCommand`.
@@ -60,17 +60,20 @@ final class MappingsCoordinator {
   }
 
   /// Re-register Carbon hotkeys for the current input surface. Carbon
-  /// registrations are global. All-scope mappings stay active on every surface;
-  /// normal- and insert-scoped mappings are removed while the command field owns
-  /// the keyboard.
+  /// registrations are global. Command input retains only all-scope mappings;
+  /// terminal input suspends every registration in favor of its local matcher.
   func apply(scope: MappingScope) {
     guard scope != lastAppliedScope else { return }
+    let wasTerminal = lastAppliedScope == .terminal
+    lastAppliedScope = scope
+    if wasTerminal || scope == .terminal { rebuildAllMappings() }
     rebuildScopedMappings(for: scope)
   }
 
   private func rebuildAllMappings() {
     allHotkeys.unregisterAll()
     rebuildActiveMappings()
+    guard lastAppliedScope != .terminal else { return }
     registerMappings(
       Self.nativeMappings(in: configuredMode).filter { $0.0 == .all },
       with: allHotkeys)
@@ -129,17 +132,19 @@ final class MappingsCoordinator {
 
   static func scopeIsActive(_ scope: ModeScope, for mappingScope: MappingScope) -> Bool {
     switch mappingScope {
+    case .terminal:
+      return false
     case .command:
       return scope == .all
     case .normal:
       switch scope {
       case .all, .normal: return true
-      case .insert: return false
+      case .insert, .terminal: return false
       }
     case .insert:
       switch scope {
       case .all, .insert: return true
-      case .normal: return false
+      case .normal, .terminal: return false
       }
     }
   }
@@ -172,6 +177,7 @@ final class MappingsCoordinator {
   }
 
   private func fire(_ mapping: ModeMapping, scope: ModeScope, parsed: ParsedHotkey) {
+    guard Self.scopeIsActive(scope, for: lastAppliedScope) else { return }
     guard mappingApplies(scope: scope, parsed: parsed) else { return }
     let diagnostic = mapping.action.diagnosticDescription
     let now = Date()

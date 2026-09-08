@@ -17,6 +17,9 @@ final class ModeReducerTests: XCTestCase {
     .command(scope: .commandLine, restoreTo: .normal),
     .command(scope: .finder(all: true), restoreTo: .insert(locked: false)),
     .command(scope: .finder(all: false), restoreTo: .disabled),
+    .terminal(restoreTo: .normal),
+    .terminal(restoreTo: .insert(locked: true)),
+    .terminal(restoreTo: .disabled),
   ]
 
   // Representative events covering every case.
@@ -27,6 +30,8 @@ final class ModeReducerTests: XCTestCase {
     .openCommand(scope: .commandLine, restoreMode: false),
     .openCommand(scope: .finder(all: true), restoreMode: true),
     .closeCommand(reason: "submit"),
+    .openTerminal,
+    .closeTerminal,
     .clickResolved(entersInsert: true, targetPID: 7),
     .clickResolved(entersInsert: false, targetPID: 7),
     .advancedModeChanged(enabled: true),
@@ -75,7 +80,7 @@ final class ModeReducerTests: XCTestCase {
       switch state {
       case .normal, .command:
         XCTAssertEqual(effects, [.scheduleRecapture])
-      case .insert, .disabled:
+      case .insert, .disabled, .terminal:
         XCTAssertTrue(effects.isEmpty)
       }
     }

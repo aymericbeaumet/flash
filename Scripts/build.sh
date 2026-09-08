@@ -23,6 +23,7 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 parse_mode "$@"
 
 SCRIPTS="$PROJECT_DIR/Scripts"
+"$SCRIPTS/build-ghostty.sh" "--$MODE"
 
 if [[ "$MODE" == "release" ]]; then
   # Release is always a from-scratch build: drop the swift release products

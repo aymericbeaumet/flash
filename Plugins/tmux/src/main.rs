@@ -21,7 +21,7 @@
 //!      cached client's live session, so `[t` / `]t` avoid a host-wide `ps`
 //!      and all-socket rediscovery before changing windows.
 //!   5. Each successful local refresh also derives the attached-client
-//!      session/window/pane statusbar segments (`#{plugin:tmux.session}` /
+//!      session/window/pane statusbar segments (`#{flash.plugin.tmux.session}` /
 //!      `.window` / `.pane`) from the same inventory and emits the `status`
 //!      notification only when the values change.
 //!
@@ -2685,7 +2685,7 @@ struct CandidateBuild {
 }
 
 /// Values for the manifest-declared statusbar segments
-/// (`#{plugin:tmux.session}` / `.window` / `.pane`). Empty strings clear
+/// (`#{flash.plugin.tmux.session}` / `.window` / `.pane`). Empty strings clear
 /// the segments host-side.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TmuxStatusSegments {
@@ -2783,7 +2783,7 @@ async fn build_candidates(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
     // The trailing `pane_index` (the window's active pane, per tmux
-    // list-windows semantics) feeds the `#{plugin:tmux.pane}` status
+    // list-windows semantics) feeds the `#{flash.plugin.tmux.pane}` status
     // segment; candidates themselves ignore it.
     let window_format = format!(
         "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"

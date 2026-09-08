@@ -33,6 +33,9 @@ enum Mode: Equatable {
   /// Command line / flashlight surface. `restoreTo` records where to land when
   /// the surface closes.
   case command(scope: CommandScope, restoreTo: ReturnMode)
+
+  /// A popup's local terminal view owns keyboard input; global mappings are suspended.
+  case terminal(restoreTo: ReturnMode)
 }
 
 /// Which command surface is active. `finder` is the flashlight candidate picker
@@ -67,7 +70,7 @@ extension Mode {
     case .insert(let locked): return .insert(locked: locked)
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(_, let restoreTo): return restoreTo
+    case .command(_, let restoreTo), .terminal(let restoreTo): return restoreTo
     }
   }
 
@@ -77,4 +80,9 @@ extension Mode {
   }
 
   var isNormal: Bool { self == .normal }
+
+  var isTerminal: Bool {
+    if case .terminal = self { return true }
+    return false
+  }
 }

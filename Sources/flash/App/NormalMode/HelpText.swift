@@ -79,21 +79,24 @@ extension NormalModeDispatcher {
   static func helpText(config: Config, showModes: Bool) -> String {
     let normal = groupedKeys(config.mode.mappings(for: .normal))
     let insert = groupedKeys(config.mode.mappings(for: .insert))
-    let commands = Array(Set(normal.keys).union(insert.keys))
+    let terminal = groupedKeys(config.mode.effectiveTerminalMappings)
+    let commands = Array(Set(normal.keys).union(insert.keys).union(terminal.keys))
       .sorted { lhs, rhs in
         lhs.diagnosticDescription.localizedCaseInsensitiveCompare(rhs.diagnosticDescription)
           == .orderedAscending
       }
-    let rows = commands.map { command -> (String, String, String) in
+    let rows = commands.map { command -> (String, String, String, String) in
       (
         command.diagnosticDescription,
         joined(normal[command] ?? []),
-        joined(insert[command] ?? [])
+        joined(insert[command] ?? []),
+        joined(terminal[command] ?? [])
       )
     }
 
     let actionWidth = max("ACTION".count, rows.map(\.0.count).max() ?? 0)
     let normalWidth = max("NORMAL".count, rows.map(\.1.count).max() ?? 0)
+    let insertWidth = max("INSERT".count, rows.map(\.2.count).max() ?? 0)
     let commandLineVisible =
       !(normal[.flashCommand(.commandMode)] ?? []).isEmpty
       || !(insert[.flashCommand(.commandMode)] ?? []).isEmpty
@@ -121,12 +124,12 @@ extension NormalModeDispatcher {
     lines.append(
       padded("ACTION", width: actionWidth)
         + "  " + padded("NORMAL", width: normalWidth)
-        + "  INSERT")
+        + "  " + padded("INSERT", width: insertWidth) + "  TERMINAL")
     for row in rows where !row.1.isEmpty || !row.2.isEmpty || showModes {
       lines.append(
         padded(row.0, width: actionWidth)
           + "  " + padded(row.1, width: normalWidth)
-          + "  " + row.2)
+          + "  " + padded(row.2, width: insertWidth) + "  " + row.3)
     }
     lines.append("")
     lines.append("Counts: N{mapping}, e.g. 10u or 3]t")
@@ -139,6 +142,7 @@ extension NormalModeDispatcher {
       mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
+      + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
     let scopeWidth = max("SCOPE".count, rows.map(\.scope.count).max() ?? 0)
     let keyWidth = max("KEY".count, rows.map(\.key.count).max() ?? 0)
     var lines = [
@@ -172,7 +176,8 @@ extension NormalModeDispatcher {
   static func mappingsJSON(config: Config) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
-      + mappingRows(scope: "insert", mappings: config.mode.insert))
+      + mappingRows(scope: "insert", mappings: config.mode.insert)
+      + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings))
       .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
   }
 

@@ -4,16 +4,16 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `flash mouse_target` from the CLI or a configured mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, a persistent top status bar when advanced mode is enabled, managed stdio plugins, `mouse_grid` screen-position targeting, `alert_show message=...` / `alert_dismiss` for a temporary centered toast, and `help_show` / `plugins` modal views. No menu bar, no Dock icon, no preferences window.
+A headless, resident macOS app that, when triggered by `flash mouse_target` from the CLI or a configured mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, terminal mode for focused persistent status popups, a separately enabled top status bar, managed stdio plugins, `mouse_grid` screen-position targeting, `alert_show message=...` / `alert_dismiss` for a temporary centered toast, and `help_show` / `plugins` modal views. No Dock icon or preferences window; the optional menu-bar bolt is described below.
 
 Activation comes either through the `flash` CLI (which AppleEvents the verb to the resident over a custom event class) or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry. Mapping actions are argv arrays, either used directly as the mapping value or under `action` in an inline table with optional metadata such as `repeat = true`. Arrays whose head is `"flash"` resolve through the in-process verb table (the same one the AppleEvent handler consults); any other head is launched as argv with `~` and env expansion on each element. There is no `flash://` URL scheme and no separate `flashctl` binary — the `flash` Mach-O does both jobs.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay, the advanced-mode status bar / command-line cell, the help and open-app overlays, explicit `alert_show` toast, and exactly ONE sanctioned `NSStatusItem`: the menu-bar bolt in `StatusItemController.swift`, gated by `[app] menu_bar_icon` (default true), carrying exactly About / Open Configuration / Quit — it must never grow into a preferences surface (configuration stays in the TOML file the middle entry opens). Beyond that: no other menu bar items, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
-2. **Keyboard capture is confined to the sanctioned session tap + Carbon.** Global keystroke handling lives in exactly two places: (a) `Sources/flash/App/KeyboardCaptureTap.swift`, a session-level `CGEventTap` (`.cgSessionEventTap`, `keyDown` only, never mouse) that swallows NORMAL / hint keys and recognized modified mappings, passes INSERT, command-line, candidate-finder, configured unmapped key/modifier passthrough, and Flash's own synthetic keys straight through; and (b) `RegisterEventHotKey` for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do **not** add any *other* event tap, global key monitor, or keylogger, and the tap must never persist, log, or exfiltrate keystrokes — its only job is the swallow-vs-passthrough decision (`KeyboardCaptureTap.shouldSwallow`, a pure unit-tested function). `Scripts/check-guardrails.sh` enforces that `CGEventTap` appears only in `KeyboardCaptureTap.swift`. The tap runs under the Accessibility grant; if the OS refuses it, capture falls back to the overlay `NSPanel.keyDown` key-window path. Command-line, help, and open-app typing (the key-window surfaces) are handled through `NSPanel.keyDown` and are never swallowed by the tap.
+1. **No UI surface** beyond the transparent hint overlay, the status bar and its document/terminal popup panels / command-line cell, the help and open-app overlays, explicit `alert_show` toast, and exactly ONE sanctioned `NSStatusItem`: the menu-bar bolt in `StatusItemController.swift`, gated by `[app] menu_bar_icon` (default true), carrying exactly About / Open Configuration / Quit — it must never grow into a preferences surface (configuration stays in the TOML file the middle entry opens). Beyond that: no other menu bar items, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+2. **Keyboard capture is confined to the sanctioned session tap + Carbon.** Global keystroke handling lives in exactly two places: (a) `Sources/flash/App/KeyboardCaptureTap.swift`, a session-level `CGEventTap` (`.cgSessionEventTap`, `keyDown` only, never mouse) that swallows NORMAL / hint keys and recognized modified mappings, passes INSERT, command-line, candidate-finder, configured unmapped key/modifier passthrough, and Flash's own synthetic keys straight through; and (b) `RegisterEventHotKey` for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do **not** add any *other* event tap, global key monitor, or keylogger, and the tap must never persist, log, or exfiltrate keystrokes — its only job is the swallow-vs-passthrough decision (`KeyboardCaptureTap.shouldSwallow`, a pure unit-tested function). `Scripts/check-guardrails.sh` enforces that `CGEventTap` appears only in `KeyboardCaptureTap.swift`. The tap runs under the Accessibility grant; if the OS refuses it, capture falls back to the overlay `NSPanel.keyDown` key-window path. Focused terminal popup input is local to TerminalView and the terminal mapping matcher; the existing tap passes every terminal key through and all Carbon registrations are suspended. Command-line, help, and open-app typing (the key-window surfaces) are handled through `NSPanel.keyDown` and are never swallowed by the tap.
 3. **Autolaunch is config-owned through SMAppService.** `AutoLaunch.reconcile` registers/unregisters the login item from `[app] autostart` (default true) on every config load — the entry shows in System Settings → General → Login Items. `Scripts/install.sh` only cleans up the legacy LaunchAgent. Do not add login-item UI, LaunchAgents, background helpers, or additional autostart mechanisms elsewhere.
-4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through NDJSON over stdin/stdout (protocol v1: one JSON object per newline-terminated line) with stderr as diagnostics only; Flash owns their lifecycle, liveness, reload, and shutdown (stdin EOF). Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
+4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through NDJSON over stdin/stdout (protocol v1: one JSON object per newline-terminated line) with stderr as diagnostics only; Flash owns their lifecycle, liveness, reload, and shutdown (stdin EOF). Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The status controller may own configured short-lived jobs; `StatusTerminalRegistry` may own declared PTY children through `FlashTerminal`, with bounded shutdown and reaping. Neither is an external activation interface. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **Hand-rolled infrastructure inventory — do not "fix" by adding a dependency.** Several pieces of plumbing in this repo are intentionally hand-rolled to keep the dep graph minimal and the wire formats / parsers under our own version control. Before reaching for a library, check this list first; if your change needs to touch one of these surfaces, extend the hand-roll rather than swap it out. The list (file → what it is → why the hand-roll stays):
    - `Sources/flash/App/NormalMode/FuzzyMatcher.swift` + `Sources/flash/App/CandidateFinder.swift` — flashlight fuzzy scorer + LCS-style highlighting + the Algolia-style typeahead path. Don't add `swift-algorithms` or a Fuse-style package; the scoring is tuned to specific ranking invariants (alias tier > title tier, frecency boost contained inside the smallest match-quality tier, the per-candidate `wordStartMask` UInt64 hard-gate on 1–2-char queries, and the top-K partial sort via `sortedMatches(_:limit:)` / `topRecords`). A generic scorer changes ranking silently and the typeahead gate's correctness depends on `prepare()` populating the mask from the same token list the live scorer reads.
@@ -279,7 +279,7 @@ Keys:
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
 | `statusbar.enabled`                | bool           | `false`              |
-| `statusbar.template`               | string         | `"#[align=left]#{mode}#[align=right]#{date}"` |
+| `statusbar.template`               | string         | `"#[align=left]#{E:@left}#[align=right]#{T:@right}"` |
 | `statusbar.monitor`                | string (`"all"` \| `"primary"`) | `"all"`  |
 | `statusbar.interval`               | int (seconds, `0` = poll off) | `5`     |
 | `statusbar.font_size`              | float (8..32)  | `13`                 |
@@ -301,7 +301,7 @@ Keys:
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
 | `[flashlight.precedence]` entries  | int            | source-kind override |
-| `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
+| `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND", terminal = "TERMINAL" }` |
 | `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
 | `[mode.all.mappings]` entries      | argv array or `{ action = [...], repeat = bool }` | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
@@ -378,56 +378,42 @@ aliases or new methods outside `Plugins/_flash_plugin_specs/protocol.json`.
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
-`[statusbar]` configures the persistent top status bar format. `template`
-is one tmux-style string; `#[align=left]`, `#[align=centre]` / `#[align=center]`,
-and `#[align=right]` route following text into the left, centre, and right
-regions. Separators are literal inline text inside the template. Supported
-template variables are `#{mode}`, `#{active_app_name}`,
-`#{active_bundle_identifier}`, `#{date}`, `#{plugin:loaded_count}`,
-`#{plugin:ready_count}`, `#{plugin:error_count}`,
-the OS primitives `#{host}` (`#H`), `#{host_short}` (`#h`), `#{user}`,
-`#{uid}`, `#{pid}`, `#{plugin:<plugin>.<segment>}`,
-`#{script:<path>}`, `#{command:<shell command>}`, and `#{cycle:<path>}` (rotate
-through the script's stdout lines). Any other bare `#{token}` is a config
-error — there is no silently-empty tmux dialect. tmux session/window/pane
-state comes from the bundled tmux plugin's status segments
-(`#{plugin:tmux.session}`, `#{plugin:tmux.window}`, `#{plugin:tmux.pane}`). The
-bundled `cpu`, `memory`, `disks`, `network`, and `power` monitor plugins each
-expose `#{plugin:<id>.summary}` plus `#{plugin:<id>.details}`; every summary
-atomically carries its own inline hover popup. `processes.focused_app_details`
-owns focused-app telemetry. The bundled `aiproviders` plugin exposes one
-unified `summary`/`details` pair, grouping Fable beneath Claude and Astra
-beneath OpenAI.
-The format grammar is a strict tmux superset: modifiers `#{?cond,a,b}`,
-`#{==:}`/`#{!=:}`/`#{<:}`/`#{>:}`/`#{<=:}`/`#{>=:}`/`#{&&:}`/`#{||:}`,
-`#{s/re/repl/[i]:var}`, `#{pN:}`/`#{p-N:}`, `#{=N:}`/`#{=-N:}` (Flash `…`
-ellipsis extension) and `#{=/N/marker:}`, nesting for chaining, `#,` comma
-escape; style scoping via `#[default]`/`#[push-default]`/`#[pop-default]`;
-strftime `%`-literals expand before formats (tmux semantics — `%%`
-escapes); colours are the full xterm-256 palette + `#RRGGBB` + ANSI names
-(colour0/178/196/245 keep Nord-theme shades). One tokenizer
-(`StatusBarMarkup.swift`) is the only scanner of the marker grammar —
-extend it, never hand-roll another `#[`-walk.
-Named `#[popup=<name>]…#[nopopup]` spans resolve rich multiline bodies from
-`[statusbar.popup]`. Dynamic values can instead carry a percent-encoded body in
-`#[popup=inline:<encoded>]`; the body remains zero-width and rotates atomically
-with a cycle row. Popup work is scheduled with normal status refreshes—hovering
-only shows or repositions already-rendered content.
-Template newlines are ignored before rendering. Mode, focused-app, plugin
-status, and date changes re-render from their own change sources. Command/script
-sections are stale-while-refresh and are polled only when present: the previous
-successful value stays visible until a replacement is ready. Poll cadence is
-`[statusbar] interval` (default 5 s, `0` = run once), overridable per source
-inline — `#{script=N:…}` / `#{command=N:…}` re-run every N seconds, and
-`#{cycle=R/N:…}` rotates every R while re-running every N (default
-`max(R, interval)`). Each section schedules and drops overrun ticks
-independently, so one slow script never starves the others. The menu-bar
-reveal probe behind the bar's click windows runs on a utility queue, armed
-only while the pointer is in the band. `#[breathing]`/`#[blink]` spans
-animate via render-server CAKeyframeAnimations on pooled overlay layers
-(the base layer draws them at foreground alpha 0; `effectAlphaMultiplier`
-is the curve oracle) — the status bar does ZERO periodic work, main-thread
-or otherwise, beyond rendering actual model changes. All screens lay out
+`[statusbar]` has one tmux 3.7b format string, optional native option fragments
+under `[statusbar.options]`, and explicit argv sources under
+`[statusbar.sources.<name>]`. Flash values use `flash.*` names; native missing
+context expands empty. The shared `StatusFormatProgram` compiler owns grammar,
+source spans, and dependencies; configuration must not maintain another format
+scanner. Preserve literal hash/style escaping across expansion phases and use
+typed runs downstream. Native colours use the standard palette; theme colours
+belong in explicit hex styles. Validate language changes against the pinned
+isolated tmux oracle; never run conformance commands on a user's tmux socket.
+
+Named document popups and plugin inline bodies use the same libghostty-vt
+renderer as command popups. Documents run no child. `StatusTerminalRegistry`
+starts configured PTYs after the initial login environment resolves, independent
+of bar visibility or hover; one session per name spans displays. Changes to
+grid/style keep the child, execution-definition changes replace only that child,
+and invalid definitions preserve the last good session. Hover/placement are
+pure presentation; never spawn on hover or destroy a PTY on dismissal.
+See [terminal popups](docs/terminal-popups.md) and
+[status plugins](docs/status-plugins.md).
+
+Popup presentation has explicit hidden/preview/focused states. A popup is
+visible only while hovering its originating status segment; leaving it hides
+immediately, even toward the popup body. Never add a grace timer or let popup
+entry retain visibility. Preserve screen clamping and existing span click
+actions. Use `absolute-centre` for screen-centered labels; native `centre`
+centers the space between the sides. Terminal focus is a real transient Mode,
+with local mappings and lossless pending-prefix replay before reload/dismissal.
+Inherited exit mappings come only from winning INSERT-active
+`enter_normal_mode` bindings; other global mappings are suspended. Returning
+to NORMAL restores the captured external application before keyboard recapture.
+
+Status changes publish from their producers; named sources retain their last
+successful output while refreshing. Native `#(...)` jobs use tmux semantics,
+separate from Flash source timeouts/cadences. Hidden terminals parse output but
+run no display timer. The menu-bar reveal probe stays off the main input path.
+All screens lay out
 through ONE function (`configureStatusBarSurface` + `StatusBarSurface`);
 never fork a per-screen layout copy. Overflow first contracts the elastic
 `#[shrink]…#[noshrink]` span, then marker-safely truncates the whole lane to
@@ -696,7 +682,7 @@ activations own its MRU order; when a fresh resident has no usable history, the
 ring is seeded deterministically from regular running apps. A failed macOS
 activation must leave the ring at its prior position so the next key can retry.
 
-The status bar is rendered from `FlashStatusBarTemplate`: one template string can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), tmux-compatible variables, plugin state (`PluginStatusSnapshot` counts and plugin `status` segment values), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The controller is source-driven where possible: mode, focused-app, plugin, and clock changes publish directly; command/script sections get their own poll only when the template contains them. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create additional persistent `NSStatusItem`s (the single sanctioned one lives in `StatusItemController.swift`; see hard rule 1), menu extras, app menus, or any other native menu/status UI.
+The status bar is rendered from `FlashStatusBarTemplate`: one template string can read Flash SDK state (`flash.mode`, `flash.active_app_name`, `flash.active_bundle_identifier`, `flash.date`), tmux-compatible variables, plugin state (`PluginStatusSnapshot` counts and plugin `status` segment values), or named source output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The controller is source-driven where possible: mode, focused-app, plugin, and clock changes publish directly; command/script sections get their own poll only when the template contains them. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create additional persistent `NSStatusItem`s (the single sanctioned one lives in `StatusItemController.swift`; see hard rule 1), menu extras, app menus, or any other native menu/status UI.
 
 `["flash", "enter_normal_mode"]` is the only accepted normal-mode entry. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
 
@@ -782,6 +768,12 @@ Not required:
 
 ## Build / install / verify
 
+Fresh checkouts must run `mise install` and `./Scripts/build-ghostty.sh --dev`
+before direct SwiftPM commands. The package links the pinned libghostty-vt
+XCFramework under `build/ghostty`; app build/install and integration scripts
+bootstrap it automatically. See `docs/terminal-popups.md` for the pin, resource
+bounds, and PTY ownership contract.
+
 **Every app-code change requires reinstalling** to see it in action. Flash is a resident background process launched out of the installed bundle (dev: `/Applications/Flash 🧪.app`); there is no app-code live-reload, dev server, or attached debugger flow. Plugin files can live-reload through `PluginManager` when bundled plugins are symlinked by `Scripts/install.sh --dev`. `swift build` produces a binary in `.build/` that the resident process is *not* using — only the installed copy matters. So the developer loop is:
 
 ```bash
@@ -864,7 +856,7 @@ The plugins are binary crates, so rustc's `dead_code` lint flags unused items (i
 Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `SourceCandidateTests`, …). Deterministic, run in milliseconds, no external state. Run on every `swift test`.
-- **tmux logic** (link extraction, cell geometry, status-bar parsing, client/process-tree resolution) lives in the Rust `Plugins/tmux` crate — cover changes there with crate tests, not Swift tests.
+- **tmux plugin logic** (link extraction, cell geometry, client/process-tree resolution) lives in the Rust `Plugins/tmux` crate and has crate tests. Flash's native tmux format/style evaluator and status drawing live in Swift; their corpus and isolated tmux 3.7b oracle belong in `FormatConformanceTests` and `StatusFormatLayoutTests`.
 - **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs every `Tests/BrowserSnapshots/snapshots/*.html` fixture through a parallel worker pool. `manifest.json`, when present, is only optional metadata/order; unlisted snapshots still run by default. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/install.sh --dev` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
 - **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies a host mouse click mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
 - **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies a host mouse click mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.

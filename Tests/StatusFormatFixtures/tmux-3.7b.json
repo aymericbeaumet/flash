@@ -1,0 +1,5523 @@
+[
+  {
+    "format": "plain ## #, #} #z",
+    "expected": "plain # , } #z"
+  },
+  {
+    "format": "trailing#",
+    "expected": "trailing"
+  },
+  {
+    "format": "prefix#{unclosed",
+    "expected": "prefix"
+  },
+  {
+    "format": "#{missing}",
+    "expected": ""
+  },
+  {
+    "format": "#{@value}",
+    "options": {
+      "@value": "#{missing} #[bold]x"
+    },
+    "expected": "#{missing} #[bold]x"
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "a#{@second}b",
+      "@second": "ok"
+    },
+    "expected": "aokb"
+  },
+  {
+    "format": "#{T:@value}",
+    "options": {
+      "@value": "%% #{l:time}"
+    },
+    "expected": "% time"
+  },
+  {
+    "format": "#{?@a,yes,no}",
+    "options": {
+      "@a": "0"
+    },
+    "expected": "no"
+  },
+  {
+    "format": "#{?@a,yes,no}",
+    "options": {
+      "@a": "00"
+    },
+    "expected": "yes"
+  },
+  {
+    "format": "#{?1,yes,no}",
+    "expected": "no"
+  },
+  {
+    "format": "#{?#{l:1},yes,no}",
+    "expected": "yes"
+  },
+  {
+    "format": "#{?@a,a,@b,b,default}",
+    "options": {
+      "@a": "0",
+      "@b": "1"
+    },
+    "expected": "b"
+  },
+  {
+    "format": "#{?@a,a,@b,b}",
+    "options": {
+      "@a": "0",
+      "@b": "0"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{?#{==:x,x},a#,b,other}",
+    "expected": "a,b"
+  },
+  {
+    "format": "#{?#{==:#{l:a#,b},a#,b},yes,no}",
+    "expected": "yes"
+  },
+  {
+    "format": "#{==:01,1} #{!=:01,1} #{<:10,2} #{>=:10,2}",
+    "expected": "0 1 1 0"
+  },
+  {
+    "format": "#{!:0} #{!!:00} #{&&:1,1,0,1} #{||:0,,1,0}",
+    "expected": "1 1 0 1"
+  },
+  {
+    "format": "#{l:a#,b#}c##d#:e}",
+    "expected": "a,b}c#d:e"
+  },
+  {
+    "format": "#{l:#{@value}}",
+    "options": {
+      "@value": "x"
+    },
+    "expected": "#{@value}"
+  },
+  {
+    "format": "#{a:65}#{a:31}#{a:126}#{a:127}",
+    "expected": "A~"
+  },
+  {
+    "format": "#{c:red} #{c:colour1} #{c:colour178} #{c:#aabbcc} #{c:default}",
+    "expected": "800000 800000 d7af00 aabbcc "
+  },
+  {
+    "format": "#{b:@path} #{d:@path} #{b;d:@path}",
+    "options": {
+      "@path": "/one/two/file"
+    },
+    "expected": "file /one/two ."
+  },
+  {
+    "format": "#{b:@path} #{d:@path}",
+    "options": {
+      "@path": "/"
+    },
+    "expected": "/ /"
+  },
+  {
+    "format": "#{b:@path} #{d:@path}",
+    "options": {
+      "@path": ""
+    },
+    "expected": ". ."
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "a b'$#[]=%\\\""
+    },
+    "expected": "a\\ b\\'\\$\\#\\[]\\=\\%\\\\\\\""
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "#[red] #word"
+    },
+    "expected": "##[red] ##word"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "a b'$#[]=%\\\""
+    },
+    "expected": "\"a b'$#[]=%\\\\\\\"\""
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "foo:bar"
+    },
+    "expected": "foo:bar"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": "''"
+  },
+  {
+    "format": "#{m:*.swift,hello.swift} #{m:*.swift,hello.c}",
+    "expected": "1 0"
+  },
+  {
+    "format": "#{m/i:*.SWIFT,hello.swift} #{m/r:^[[:alpha:]]+$,Hello}",
+    "expected": "1 1"
+  },
+  {
+    "format": "#{m/r:^a|b$,axb} #{m/r:[,bad}",
+    "expected": "1 0"
+  },
+  {
+    "format": "#{s/foo/bar/:@value}",
+    "options": {
+      "@value": "foo food Foo"
+    },
+    "expected": "bar bard Foo"
+  },
+  {
+    "format": "#{s|foo|bar|i:@value}",
+    "options": {
+      "@value": "foo food Foo"
+    },
+    "expected": "bar bard bar"
+  },
+  {
+    "format": "#{s/([[:alpha:]]+)-([0-9]+)/\\2:\\1/:@value}",
+    "options": {
+      "@value": "a-12 b-34"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{s/a/x/;s/x/y/:@value}",
+    "options": {
+      "@value": "aaa"
+    },
+    "expected": "yyy"
+  },
+  {
+    "format": "#{s//x/:@value}",
+    "options": {
+      "@value": "ab"
+    },
+    "expected": "ab"
+  },
+  {
+    "format": "#{s/^/x/:@value}",
+    "options": {
+      "@value": "ab"
+    },
+    "expected": "b"
+  },
+  {
+    "format": "#{s/$/x/:@value}",
+    "options": {
+      "@value": "ab"
+    },
+    "expected": "abx"
+  },
+  {
+    "format": "#{s/z*/x/:@value}",
+    "options": {
+      "@value": "ab"
+    },
+    "expected": "axbx"
+  },
+  {
+    "format": "#{p5:@value}|#{p-5:@value}",
+    "options": {
+      "@value": "ab"
+    },
+    "expected": "ab   |   ab"
+  },
+  {
+    "format": "#{p4:@value}|#{p-4:@value}",
+    "options": {
+      "@value": "界"
+    },
+    "expected": "界  |  界"
+  },
+  {
+    "format": "#{p5:@value}",
+    "options": {
+      "@value": "#[bold]x"
+    },
+    "expected": "#[bold]x"
+  },
+  {
+    "format": "#{=3:@value}|#{=-3:@value}",
+    "options": {
+      "@value": "abcdef"
+    },
+    "expected": "abc|def"
+  },
+  {
+    "format": "#{=/3/...:@value}|#{=/-3/...:@value}",
+    "options": {
+      "@value": "abcdef"
+    },
+    "expected": "abc...|...def"
+  },
+  {
+    "format": "#{=0:@value}|#{p0:@value}",
+    "options": {
+      "@value": "abcdef"
+    },
+    "expected": "abcdef|abcdef"
+  },
+  {
+    "format": "#{=1:@value}|#{=-1:@value}|#{=3:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "|b|界a"
+  },
+  {
+    "format": "#{=2:@value}|#{=-2:@value}",
+    "options": {
+      "@value": "#[bold]abcd#[nobold]"
+    },
+    "expected": "#[bold]ab|#[bold]cd#[nobold]"
+  },
+  {
+    "format": "#{p5;=2:@value}|#{=2;p5:@value}",
+    "options": {
+      "@value": "abcdef"
+    },
+    "expected": "ab   |ab   "
+  },
+  {
+    "format": "#{n:@value}|#{w:@value}",
+    "options": {
+      "@value": "é界é"
+    },
+    "expected": "8|4"
+  },
+  {
+    "format": "#{n:@value}|#{w:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "22|3"
+  },
+  {
+    "format": "#{n;w:@value}",
+    "options": {
+      "@value": "longer"
+    },
+    "expected": "1"
+  },
+  {
+    "format": "#{R:abc,3}|#{R:abc,0}|#{R:abc,-1}",
+    "expected": "abcabcabc||"
+  },
+  {
+    "format": "#{e|+:2,3} #{e|-:2,3} #{e|*:2,3} #{e|/:7,2} #{e|m:7,2}",
+    "expected": "5 -1 6 3 1"
+  },
+  {
+    "format": "#{e|+|f|3:2.5,3.75} #{e|/|f:7,2} #{e|*:2.9,3.9}",
+    "expected": "6.250 3.50 6"
+  },
+  {
+    "format": "#{e|==:2,2} #{e|!=:2,2} #{e|>=:10,2}",
+    "expected": "1 0 1"
+  },
+  {
+    "format": "#{e|+:bad,3}|#{e|+:,3}|#{e|+: 2,3}",
+    "expected": "|3|5"
+  },
+  {
+    "format": "#{t/f/#{@format}:@timestamp}",
+    "options": {
+      "@timestamp": "1704067200",
+      "@format": "%Y-%m-%d"
+    },
+    "expected": "2024-01-01"
+  },
+  {
+    "format": "#{t/f/#{@format}:@timestamp}",
+    "options": {
+      "@timestamp": "1704067200",
+      "@format": "%H#:%M"
+    },
+    "expected": "00:00"
+  },
+  {
+    "format": "#{t:@timestamp}",
+    "options": {
+      "@timestamp": "0"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#[fg=#{?@active,red,blue},align=right]x",
+    "options": {
+      "@active": "1"
+    },
+    "expected": "#[fg=red,align=right]x"
+  },
+  {
+    "format": "##[fg=red]x ###[]y ####[bold]z",
+    "expected": "##[fg=red]x ###[]y ####[bold]z"
+  },
+  {
+    "format": "#{w:#{l:##[bold]x}}",
+    "expected": "1"
+  },
+  {
+    "format": "#{w:#{l:###[]x}}",
+    "expected": "4"
+  },
+  {
+    "format": "#{c:colour0}",
+    "expected": "000000"
+  },
+  {
+    "format": "#{c:colour1}",
+    "expected": "800000"
+  },
+  {
+    "format": "#{c:colour2}",
+    "expected": "008000"
+  },
+  {
+    "format": "#{c:colour3}",
+    "expected": "808000"
+  },
+  {
+    "format": "#{c:colour4}",
+    "expected": "000080"
+  },
+  {
+    "format": "#{c:colour5}",
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:colour6}",
+    "expected": "008080"
+  },
+  {
+    "format": "#{c:colour7}",
+    "expected": "c0c0c0"
+  },
+  {
+    "format": "#{c:colour8}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:colour9}",
+    "expected": "ff0000"
+  },
+  {
+    "format": "#{c:colour10}",
+    "expected": "00ff00"
+  },
+  {
+    "format": "#{c:colour11}",
+    "expected": "ffff00"
+  },
+  {
+    "format": "#{c:colour12}",
+    "expected": "0000ff"
+  },
+  {
+    "format": "#{c:colour13}",
+    "expected": "ff00ff"
+  },
+  {
+    "format": "#{c:colour14}",
+    "expected": "00ffff"
+  },
+  {
+    "format": "#{c:colour15}",
+    "expected": "ffffff"
+  },
+  {
+    "format": "#{c:colour16}",
+    "expected": "000000"
+  },
+  {
+    "format": "#{c:colour17}",
+    "expected": "00005f"
+  },
+  {
+    "format": "#{c:colour18}",
+    "expected": "000087"
+  },
+  {
+    "format": "#{c:colour19}",
+    "expected": "0000af"
+  },
+  {
+    "format": "#{c:colour20}",
+    "expected": "0000d7"
+  },
+  {
+    "format": "#{c:colour21}",
+    "expected": "0000ff"
+  },
+  {
+    "format": "#{c:colour22}",
+    "expected": "005f00"
+  },
+  {
+    "format": "#{c:colour23}",
+    "expected": "005f5f"
+  },
+  {
+    "format": "#{c:colour24}",
+    "expected": "005f87"
+  },
+  {
+    "format": "#{c:colour25}",
+    "expected": "005faf"
+  },
+  {
+    "format": "#{c:colour26}",
+    "expected": "005fd7"
+  },
+  {
+    "format": "#{c:colour27}",
+    "expected": "005fff"
+  },
+  {
+    "format": "#{c:colour28}",
+    "expected": "008700"
+  },
+  {
+    "format": "#{c:colour29}",
+    "expected": "00875f"
+  },
+  {
+    "format": "#{c:colour30}",
+    "expected": "008787"
+  },
+  {
+    "format": "#{c:colour31}",
+    "expected": "0087af"
+  },
+  {
+    "format": "#{c:colour32}",
+    "expected": "0087d7"
+  },
+  {
+    "format": "#{c:colour33}",
+    "expected": "0087ff"
+  },
+  {
+    "format": "#{c:colour34}",
+    "expected": "00af00"
+  },
+  {
+    "format": "#{c:colour35}",
+    "expected": "00af5f"
+  },
+  {
+    "format": "#{c:colour36}",
+    "expected": "00af87"
+  },
+  {
+    "format": "#{c:colour37}",
+    "expected": "00afaf"
+  },
+  {
+    "format": "#{c:colour38}",
+    "expected": "00afd7"
+  },
+  {
+    "format": "#{c:colour39}",
+    "expected": "00afff"
+  },
+  {
+    "format": "#{c:colour40}",
+    "expected": "00d700"
+  },
+  {
+    "format": "#{c:colour41}",
+    "expected": "00d75f"
+  },
+  {
+    "format": "#{c:colour42}",
+    "expected": "00d787"
+  },
+  {
+    "format": "#{c:colour43}",
+    "expected": "00d7af"
+  },
+  {
+    "format": "#{c:colour44}",
+    "expected": "00d7d7"
+  },
+  {
+    "format": "#{c:colour45}",
+    "expected": "00d7ff"
+  },
+  {
+    "format": "#{c:colour46}",
+    "expected": "00ff00"
+  },
+  {
+    "format": "#{c:colour47}",
+    "expected": "00ff5f"
+  },
+  {
+    "format": "#{c:colour48}",
+    "expected": "00ff87"
+  },
+  {
+    "format": "#{c:colour49}",
+    "expected": "00ffaf"
+  },
+  {
+    "format": "#{c:colour50}",
+    "expected": "00ffd7"
+  },
+  {
+    "format": "#{c:colour51}",
+    "expected": "00ffff"
+  },
+  {
+    "format": "#{c:colour52}",
+    "expected": "5f0000"
+  },
+  {
+    "format": "#{c:colour53}",
+    "expected": "5f005f"
+  },
+  {
+    "format": "#{c:colour54}",
+    "expected": "5f0087"
+  },
+  {
+    "format": "#{c:colour55}",
+    "expected": "5f00af"
+  },
+  {
+    "format": "#{c:colour56}",
+    "expected": "5f00d7"
+  },
+  {
+    "format": "#{c:colour57}",
+    "expected": "5f00ff"
+  },
+  {
+    "format": "#{c:colour58}",
+    "expected": "5f5f00"
+  },
+  {
+    "format": "#{c:colour59}",
+    "expected": "5f5f5f"
+  },
+  {
+    "format": "#{c:colour60}",
+    "expected": "5f5f87"
+  },
+  {
+    "format": "#{c:colour61}",
+    "expected": "5f5faf"
+  },
+  {
+    "format": "#{c:colour62}",
+    "expected": "5f5fd7"
+  },
+  {
+    "format": "#{c:colour63}",
+    "expected": "5f5fff"
+  },
+  {
+    "format": "#{c:colour64}",
+    "expected": "5f8700"
+  },
+  {
+    "format": "#{c:colour65}",
+    "expected": "5f875f"
+  },
+  {
+    "format": "#{c:colour66}",
+    "expected": "5f8787"
+  },
+  {
+    "format": "#{c:colour67}",
+    "expected": "5f87af"
+  },
+  {
+    "format": "#{c:colour68}",
+    "expected": "5f87d7"
+  },
+  {
+    "format": "#{c:colour69}",
+    "expected": "5f87ff"
+  },
+  {
+    "format": "#{c:colour70}",
+    "expected": "5faf00"
+  },
+  {
+    "format": "#{c:colour71}",
+    "expected": "5faf5f"
+  },
+  {
+    "format": "#{c:colour72}",
+    "expected": "5faf87"
+  },
+  {
+    "format": "#{c:colour73}",
+    "expected": "5fafaf"
+  },
+  {
+    "format": "#{c:colour74}",
+    "expected": "5fafd7"
+  },
+  {
+    "format": "#{c:colour75}",
+    "expected": "5fafff"
+  },
+  {
+    "format": "#{c:colour76}",
+    "expected": "5fd700"
+  },
+  {
+    "format": "#{c:colour77}",
+    "expected": "5fd75f"
+  },
+  {
+    "format": "#{c:colour78}",
+    "expected": "5fd787"
+  },
+  {
+    "format": "#{c:colour79}",
+    "expected": "5fd7af"
+  },
+  {
+    "format": "#{c:colour80}",
+    "expected": "5fd7d7"
+  },
+  {
+    "format": "#{c:colour81}",
+    "expected": "5fd7ff"
+  },
+  {
+    "format": "#{c:colour82}",
+    "expected": "5fff00"
+  },
+  {
+    "format": "#{c:colour83}",
+    "expected": "5fff5f"
+  },
+  {
+    "format": "#{c:colour84}",
+    "expected": "5fff87"
+  },
+  {
+    "format": "#{c:colour85}",
+    "expected": "5fffaf"
+  },
+  {
+    "format": "#{c:colour86}",
+    "expected": "5fffd7"
+  },
+  {
+    "format": "#{c:colour87}",
+    "expected": "5fffff"
+  },
+  {
+    "format": "#{c:colour88}",
+    "expected": "870000"
+  },
+  {
+    "format": "#{c:colour89}",
+    "expected": "87005f"
+  },
+  {
+    "format": "#{c:colour90}",
+    "expected": "870087"
+  },
+  {
+    "format": "#{c:colour91}",
+    "expected": "8700af"
+  },
+  {
+    "format": "#{c:colour92}",
+    "expected": "8700d7"
+  },
+  {
+    "format": "#{c:colour93}",
+    "expected": "8700ff"
+  },
+  {
+    "format": "#{c:colour94}",
+    "expected": "875f00"
+  },
+  {
+    "format": "#{c:colour95}",
+    "expected": "875f5f"
+  },
+  {
+    "format": "#{c:colour96}",
+    "expected": "875f87"
+  },
+  {
+    "format": "#{c:colour97}",
+    "expected": "875faf"
+  },
+  {
+    "format": "#{c:colour98}",
+    "expected": "875fd7"
+  },
+  {
+    "format": "#{c:colour99}",
+    "expected": "875fff"
+  },
+  {
+    "format": "#{c:colour100}",
+    "expected": "878700"
+  },
+  {
+    "format": "#{c:colour101}",
+    "expected": "87875f"
+  },
+  {
+    "format": "#{c:colour102}",
+    "expected": "878787"
+  },
+  {
+    "format": "#{c:colour103}",
+    "expected": "8787af"
+  },
+  {
+    "format": "#{c:colour104}",
+    "expected": "8787d7"
+  },
+  {
+    "format": "#{c:colour105}",
+    "expected": "8787ff"
+  },
+  {
+    "format": "#{c:colour106}",
+    "expected": "87af00"
+  },
+  {
+    "format": "#{c:colour107}",
+    "expected": "87af5f"
+  },
+  {
+    "format": "#{c:colour108}",
+    "expected": "87af87"
+  },
+  {
+    "format": "#{c:colour109}",
+    "expected": "87afaf"
+  },
+  {
+    "format": "#{c:colour110}",
+    "expected": "87afd7"
+  },
+  {
+    "format": "#{c:colour111}",
+    "expected": "87afff"
+  },
+  {
+    "format": "#{c:colour112}",
+    "expected": "87d700"
+  },
+  {
+    "format": "#{c:colour113}",
+    "expected": "87d75f"
+  },
+  {
+    "format": "#{c:colour114}",
+    "expected": "87d787"
+  },
+  {
+    "format": "#{c:colour115}",
+    "expected": "87d7af"
+  },
+  {
+    "format": "#{c:colour116}",
+    "expected": "87d7d7"
+  },
+  {
+    "format": "#{c:colour117}",
+    "expected": "87d7ff"
+  },
+  {
+    "format": "#{c:colour118}",
+    "expected": "87ff00"
+  },
+  {
+    "format": "#{c:colour119}",
+    "expected": "87ff5f"
+  },
+  {
+    "format": "#{c:colour120}",
+    "expected": "87ff87"
+  },
+  {
+    "format": "#{c:colour121}",
+    "expected": "87ffaf"
+  },
+  {
+    "format": "#{c:colour122}",
+    "expected": "87ffd7"
+  },
+  {
+    "format": "#{c:colour123}",
+    "expected": "87ffff"
+  },
+  {
+    "format": "#{c:colour124}",
+    "expected": "af0000"
+  },
+  {
+    "format": "#{c:colour125}",
+    "expected": "af005f"
+  },
+  {
+    "format": "#{c:colour126}",
+    "expected": "af0087"
+  },
+  {
+    "format": "#{c:colour127}",
+    "expected": "af00af"
+  },
+  {
+    "format": "#{c:colour128}",
+    "expected": "af00d7"
+  },
+  {
+    "format": "#{c:colour129}",
+    "expected": "af00ff"
+  },
+  {
+    "format": "#{c:colour130}",
+    "expected": "af5f00"
+  },
+  {
+    "format": "#{c:colour131}",
+    "expected": "af5f5f"
+  },
+  {
+    "format": "#{c:colour132}",
+    "expected": "af5f87"
+  },
+  {
+    "format": "#{c:colour133}",
+    "expected": "af5faf"
+  },
+  {
+    "format": "#{c:colour134}",
+    "expected": "af5fd7"
+  },
+  {
+    "format": "#{c:colour135}",
+    "expected": "af5fff"
+  },
+  {
+    "format": "#{c:colour136}",
+    "expected": "af8700"
+  },
+  {
+    "format": "#{c:colour137}",
+    "expected": "af875f"
+  },
+  {
+    "format": "#{c:colour138}",
+    "expected": "af8787"
+  },
+  {
+    "format": "#{c:colour139}",
+    "expected": "af87af"
+  },
+  {
+    "format": "#{c:colour140}",
+    "expected": "af87d7"
+  },
+  {
+    "format": "#{c:colour141}",
+    "expected": "af87ff"
+  },
+  {
+    "format": "#{c:colour142}",
+    "expected": "afaf00"
+  },
+  {
+    "format": "#{c:colour143}",
+    "expected": "afaf5f"
+  },
+  {
+    "format": "#{c:colour144}",
+    "expected": "afaf87"
+  },
+  {
+    "format": "#{c:colour145}",
+    "expected": "afafaf"
+  },
+  {
+    "format": "#{c:colour146}",
+    "expected": "afafd7"
+  },
+  {
+    "format": "#{c:colour147}",
+    "expected": "afafff"
+  },
+  {
+    "format": "#{c:colour148}",
+    "expected": "afd700"
+  },
+  {
+    "format": "#{c:colour149}",
+    "expected": "afd75f"
+  },
+  {
+    "format": "#{c:colour150}",
+    "expected": "afd787"
+  },
+  {
+    "format": "#{c:colour151}",
+    "expected": "afd7af"
+  },
+  {
+    "format": "#{c:colour152}",
+    "expected": "afd7d7"
+  },
+  {
+    "format": "#{c:colour153}",
+    "expected": "afd7ff"
+  },
+  {
+    "format": "#{c:colour154}",
+    "expected": "afff00"
+  },
+  {
+    "format": "#{c:colour155}",
+    "expected": "afff5f"
+  },
+  {
+    "format": "#{c:colour156}",
+    "expected": "afff87"
+  },
+  {
+    "format": "#{c:colour157}",
+    "expected": "afffaf"
+  },
+  {
+    "format": "#{c:colour158}",
+    "expected": "afffd7"
+  },
+  {
+    "format": "#{c:colour159}",
+    "expected": "afffff"
+  },
+  {
+    "format": "#{c:colour160}",
+    "expected": "d70000"
+  },
+  {
+    "format": "#{c:colour161}",
+    "expected": "d7005f"
+  },
+  {
+    "format": "#{c:colour162}",
+    "expected": "d70087"
+  },
+  {
+    "format": "#{c:colour163}",
+    "expected": "d700af"
+  },
+  {
+    "format": "#{c:colour164}",
+    "expected": "d700d7"
+  },
+  {
+    "format": "#{c:colour165}",
+    "expected": "d700ff"
+  },
+  {
+    "format": "#{c:colour166}",
+    "expected": "d75f00"
+  },
+  {
+    "format": "#{c:colour167}",
+    "expected": "d75f5f"
+  },
+  {
+    "format": "#{c:colour168}",
+    "expected": "d75f87"
+  },
+  {
+    "format": "#{c:colour169}",
+    "expected": "d75faf"
+  },
+  {
+    "format": "#{c:colour170}",
+    "expected": "d75fd7"
+  },
+  {
+    "format": "#{c:colour171}",
+    "expected": "d75fff"
+  },
+  {
+    "format": "#{c:colour172}",
+    "expected": "d78700"
+  },
+  {
+    "format": "#{c:colour173}",
+    "expected": "d7875f"
+  },
+  {
+    "format": "#{c:colour174}",
+    "expected": "d78787"
+  },
+  {
+    "format": "#{c:colour175}",
+    "expected": "d787af"
+  },
+  {
+    "format": "#{c:colour176}",
+    "expected": "d787d7"
+  },
+  {
+    "format": "#{c:colour177}",
+    "expected": "d787ff"
+  },
+  {
+    "format": "#{c:colour178}",
+    "expected": "d7af00"
+  },
+  {
+    "format": "#{c:colour179}",
+    "expected": "d7af5f"
+  },
+  {
+    "format": "#{c:colour180}",
+    "expected": "d7af87"
+  },
+  {
+    "format": "#{c:colour181}",
+    "expected": "d7afaf"
+  },
+  {
+    "format": "#{c:colour182}",
+    "expected": "d7afd7"
+  },
+  {
+    "format": "#{c:colour183}",
+    "expected": "d7afff"
+  },
+  {
+    "format": "#{c:colour184}",
+    "expected": "d7d700"
+  },
+  {
+    "format": "#{c:colour185}",
+    "expected": "d7d75f"
+  },
+  {
+    "format": "#{c:colour186}",
+    "expected": "d7d787"
+  },
+  {
+    "format": "#{c:colour187}",
+    "expected": "d7d7af"
+  },
+  {
+    "format": "#{c:colour188}",
+    "expected": "d7d7d7"
+  },
+  {
+    "format": "#{c:colour189}",
+    "expected": "d7d7ff"
+  },
+  {
+    "format": "#{c:colour190}",
+    "expected": "d7ff00"
+  },
+  {
+    "format": "#{c:colour191}",
+    "expected": "d7ff5f"
+  },
+  {
+    "format": "#{c:colour192}",
+    "expected": "d7ff87"
+  },
+  {
+    "format": "#{c:colour193}",
+    "expected": "d7ffaf"
+  },
+  {
+    "format": "#{c:colour194}",
+    "expected": "d7ffd7"
+  },
+  {
+    "format": "#{c:colour195}",
+    "expected": "d7ffff"
+  },
+  {
+    "format": "#{c:colour196}",
+    "expected": "ff0000"
+  },
+  {
+    "format": "#{c:colour197}",
+    "expected": "ff005f"
+  },
+  {
+    "format": "#{c:colour198}",
+    "expected": "ff0087"
+  },
+  {
+    "format": "#{c:colour199}",
+    "expected": "ff00af"
+  },
+  {
+    "format": "#{c:colour200}",
+    "expected": "ff00d7"
+  },
+  {
+    "format": "#{c:colour201}",
+    "expected": "ff00ff"
+  },
+  {
+    "format": "#{c:colour202}",
+    "expected": "ff5f00"
+  },
+  {
+    "format": "#{c:colour203}",
+    "expected": "ff5f5f"
+  },
+  {
+    "format": "#{c:colour204}",
+    "expected": "ff5f87"
+  },
+  {
+    "format": "#{c:colour205}",
+    "expected": "ff5faf"
+  },
+  {
+    "format": "#{c:colour206}",
+    "expected": "ff5fd7"
+  },
+  {
+    "format": "#{c:colour207}",
+    "expected": "ff5fff"
+  },
+  {
+    "format": "#{c:colour208}",
+    "expected": "ff8700"
+  },
+  {
+    "format": "#{c:colour209}",
+    "expected": "ff875f"
+  },
+  {
+    "format": "#{c:colour210}",
+    "expected": "ff8787"
+  },
+  {
+    "format": "#{c:colour211}",
+    "expected": "ff87af"
+  },
+  {
+    "format": "#{c:colour212}",
+    "expected": "ff87d7"
+  },
+  {
+    "format": "#{c:colour213}",
+    "expected": "ff87ff"
+  },
+  {
+    "format": "#{c:colour214}",
+    "expected": "ffaf00"
+  },
+  {
+    "format": "#{c:colour215}",
+    "expected": "ffaf5f"
+  },
+  {
+    "format": "#{c:colour216}",
+    "expected": "ffaf87"
+  },
+  {
+    "format": "#{c:colour217}",
+    "expected": "ffafaf"
+  },
+  {
+    "format": "#{c:colour218}",
+    "expected": "ffafd7"
+  },
+  {
+    "format": "#{c:colour219}",
+    "expected": "ffafff"
+  },
+  {
+    "format": "#{c:colour220}",
+    "expected": "ffd700"
+  },
+  {
+    "format": "#{c:colour221}",
+    "expected": "ffd75f"
+  },
+  {
+    "format": "#{c:colour222}",
+    "expected": "ffd787"
+  },
+  {
+    "format": "#{c:colour223}",
+    "expected": "ffd7af"
+  },
+  {
+    "format": "#{c:colour224}",
+    "expected": "ffd7d7"
+  },
+  {
+    "format": "#{c:colour225}",
+    "expected": "ffd7ff"
+  },
+  {
+    "format": "#{c:colour226}",
+    "expected": "ffff00"
+  },
+  {
+    "format": "#{c:colour227}",
+    "expected": "ffff5f"
+  },
+  {
+    "format": "#{c:colour228}",
+    "expected": "ffff87"
+  },
+  {
+    "format": "#{c:colour229}",
+    "expected": "ffffaf"
+  },
+  {
+    "format": "#{c:colour230}",
+    "expected": "ffffd7"
+  },
+  {
+    "format": "#{c:colour231}",
+    "expected": "ffffff"
+  },
+  {
+    "format": "#{c:colour232}",
+    "expected": "080808"
+  },
+  {
+    "format": "#{c:colour233}",
+    "expected": "121212"
+  },
+  {
+    "format": "#{c:colour234}",
+    "expected": "1c1c1c"
+  },
+  {
+    "format": "#{c:colour235}",
+    "expected": "262626"
+  },
+  {
+    "format": "#{c:colour236}",
+    "expected": "303030"
+  },
+  {
+    "format": "#{c:colour237}",
+    "expected": "3a3a3a"
+  },
+  {
+    "format": "#{c:colour238}",
+    "expected": "444444"
+  },
+  {
+    "format": "#{c:colour239}",
+    "expected": "4e4e4e"
+  },
+  {
+    "format": "#{c:colour240}",
+    "expected": "585858"
+  },
+  {
+    "format": "#{c:colour241}",
+    "expected": "626262"
+  },
+  {
+    "format": "#{c:colour242}",
+    "expected": "6c6c6c"
+  },
+  {
+    "format": "#{c:colour243}",
+    "expected": "767676"
+  },
+  {
+    "format": "#{c:colour244}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:colour245}",
+    "expected": "8a8a8a"
+  },
+  {
+    "format": "#{c:colour246}",
+    "expected": "949494"
+  },
+  {
+    "format": "#{c:colour247}",
+    "expected": "9e9e9e"
+  },
+  {
+    "format": "#{c:colour248}",
+    "expected": "a8a8a8"
+  },
+  {
+    "format": "#{c:colour249}",
+    "expected": "b2b2b2"
+  },
+  {
+    "format": "#{c:colour250}",
+    "expected": "bcbcbc"
+  },
+  {
+    "format": "#{c:colour251}",
+    "expected": "c6c6c6"
+  },
+  {
+    "format": "#{c:colour252}",
+    "expected": "d0d0d0"
+  },
+  {
+    "format": "#{c:colour253}",
+    "expected": "dadada"
+  },
+  {
+    "format": "#{c:colour254}",
+    "expected": "e4e4e4"
+  },
+  {
+    "format": "#{c:colour255}",
+    "expected": "eeeeee"
+  },
+  {
+    "format": "#{c:red}",
+    "expected": "800000"
+  },
+  {
+    "format": "#{c:terminal}",
+    "expected": ""
+  },
+  {
+    "format": "#{c:default}",
+    "expected": ""
+  },
+  {
+    "format": "#{c:0}",
+    "expected": "000000"
+  },
+  {
+    "format": "#{c:7}",
+    "expected": "c0c0c0"
+  },
+  {
+    "format": "#{c:90}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:97}",
+    "expected": "ffffff"
+  },
+  {
+    "format": "#{c:99}",
+    "expected": ""
+  },
+  {
+    "format": "#{c:grey}",
+    "expected": "bebebe"
+  },
+  {
+    "format": "#{c:gray0}",
+    "expected": "000000"
+  },
+  {
+    "format": "#{c:grey25}",
+    "expected": "404040"
+  },
+  {
+    "format": "#{c:gray50}",
+    "expected": "7f7f7f"
+  },
+  {
+    "format": "#{c:grey99}",
+    "expected": "fcfcfc"
+  },
+  {
+    "format": "#{c:grey100}",
+    "expected": "ffffff"
+  },
+  {
+    "format": "#{c:AliceBlue}",
+    "expected": "f0f8ff"
+  },
+  {
+    "format": "#{c:AntiqueWhite}",
+    "expected": "faebd7"
+  },
+  {
+    "format": "#{c:AntiqueWhite1}",
+    "expected": "ffefdb"
+  },
+  {
+    "format": "#{c:AntiqueWhite2}",
+    "expected": "eedfcc"
+  },
+  {
+    "format": "#{c:AntiqueWhite3}",
+    "expected": "cdc0b0"
+  },
+  {
+    "format": "#{c:AntiqueWhite4}",
+    "expected": "8b8378"
+  },
+  {
+    "format": "#{c:BlanchedAlmond}",
+    "expected": "ffebcd"
+  },
+  {
+    "format": "#{c:BlueViolet}",
+    "expected": "8a2be2"
+  },
+  {
+    "format": "#{c:CadetBlue}",
+    "expected": "5f9ea0"
+  },
+  {
+    "format": "#{c:CadetBlue1}",
+    "expected": "98f5ff"
+  },
+  {
+    "format": "#{c:CadetBlue2}",
+    "expected": "8ee5ee"
+  },
+  {
+    "format": "#{c:CadetBlue3}",
+    "expected": "7ac5cd"
+  },
+  {
+    "format": "#{c:CadetBlue4}",
+    "expected": "53868b"
+  },
+  {
+    "format": "#{c:CornflowerBlue}",
+    "expected": "6495ed"
+  },
+  {
+    "format": "#{c:DarkBlue}",
+    "expected": "00008b"
+  },
+  {
+    "format": "#{c:DarkCyan}",
+    "expected": "008b8b"
+  },
+  {
+    "format": "#{c:DarkGoldenrod}",
+    "expected": "b8860b"
+  },
+  {
+    "format": "#{c:DarkGoldenrod1}",
+    "expected": "ffb90f"
+  },
+  {
+    "format": "#{c:DarkGoldenrod2}",
+    "expected": "eead0e"
+  },
+  {
+    "format": "#{c:DarkGoldenrod3}",
+    "expected": "cd950c"
+  },
+  {
+    "format": "#{c:DarkGoldenrod4}",
+    "expected": "8b6508"
+  },
+  {
+    "format": "#{c:DarkGray}",
+    "expected": "a9a9a9"
+  },
+  {
+    "format": "#{c:DarkGreen}",
+    "expected": "006400"
+  },
+  {
+    "format": "#{c:DarkGrey}",
+    "expected": "a9a9a9"
+  },
+  {
+    "format": "#{c:DarkKhaki}",
+    "expected": "bdb76b"
+  },
+  {
+    "format": "#{c:DarkMagenta}",
+    "expected": "8b008b"
+  },
+  {
+    "format": "#{c:DarkOliveGreen}",
+    "expected": "556b2f"
+  },
+  {
+    "format": "#{c:DarkOliveGreen1}",
+    "expected": "caff70"
+  },
+  {
+    "format": "#{c:DarkOliveGreen2}",
+    "expected": "bcee68"
+  },
+  {
+    "format": "#{c:DarkOliveGreen3}",
+    "expected": "a2cd5a"
+  },
+  {
+    "format": "#{c:DarkOliveGreen4}",
+    "expected": "6e8b3d"
+  },
+  {
+    "format": "#{c:DarkOrange}",
+    "expected": "ff8c00"
+  },
+  {
+    "format": "#{c:DarkOrange1}",
+    "expected": "ff7f00"
+  },
+  {
+    "format": "#{c:DarkOrange2}",
+    "expected": "ee7600"
+  },
+  {
+    "format": "#{c:DarkOrange3}",
+    "expected": "cd6600"
+  },
+  {
+    "format": "#{c:DarkOrange4}",
+    "expected": "8b4500"
+  },
+  {
+    "format": "#{c:DarkOrchid}",
+    "expected": "9932cc"
+  },
+  {
+    "format": "#{c:DarkOrchid1}",
+    "expected": "bf3eff"
+  },
+  {
+    "format": "#{c:DarkOrchid2}",
+    "expected": "b23aee"
+  },
+  {
+    "format": "#{c:DarkOrchid3}",
+    "expected": "9a32cd"
+  },
+  {
+    "format": "#{c:DarkOrchid4}",
+    "expected": "68228b"
+  },
+  {
+    "format": "#{c:DarkRed}",
+    "expected": "8b0000"
+  },
+  {
+    "format": "#{c:DarkSalmon}",
+    "expected": "e9967a"
+  },
+  {
+    "format": "#{c:DarkSeaGreen}",
+    "expected": "8fbc8f"
+  },
+  {
+    "format": "#{c:DarkSeaGreen1}",
+    "expected": "c1ffc1"
+  },
+  {
+    "format": "#{c:DarkSeaGreen2}",
+    "expected": "b4eeb4"
+  },
+  {
+    "format": "#{c:DarkSeaGreen3}",
+    "expected": "9bcd9b"
+  },
+  {
+    "format": "#{c:DarkSeaGreen4}",
+    "expected": "698b69"
+  },
+  {
+    "format": "#{c:DarkSlateBlue}",
+    "expected": "483d8b"
+  },
+  {
+    "format": "#{c:DarkSlateGray}",
+    "expected": "2f4f4f"
+  },
+  {
+    "format": "#{c:DarkSlateGray1}",
+    "expected": "97ffff"
+  },
+  {
+    "format": "#{c:DarkSlateGray2}",
+    "expected": "8deeee"
+  },
+  {
+    "format": "#{c:DarkSlateGray3}",
+    "expected": "79cdcd"
+  },
+  {
+    "format": "#{c:DarkSlateGray4}",
+    "expected": "528b8b"
+  },
+  {
+    "format": "#{c:DarkSlateGrey}",
+    "expected": "2f4f4f"
+  },
+  {
+    "format": "#{c:DarkTurquoise}",
+    "expected": "00ced1"
+  },
+  {
+    "format": "#{c:DarkViolet}",
+    "expected": "9400d3"
+  },
+  {
+    "format": "#{c:DeepPink}",
+    "expected": "ff1493"
+  },
+  {
+    "format": "#{c:DeepPink1}",
+    "expected": "ff1493"
+  },
+  {
+    "format": "#{c:DeepPink2}",
+    "expected": "ee1289"
+  },
+  {
+    "format": "#{c:DeepPink3}",
+    "expected": "cd1076"
+  },
+  {
+    "format": "#{c:DeepPink4}",
+    "expected": "8b0a50"
+  },
+  {
+    "format": "#{c:DeepSkyBlue}",
+    "expected": "00bfff"
+  },
+  {
+    "format": "#{c:DeepSkyBlue1}",
+    "expected": "00bfff"
+  },
+  {
+    "format": "#{c:DeepSkyBlue2}",
+    "expected": "00b2ee"
+  },
+  {
+    "format": "#{c:DeepSkyBlue3}",
+    "expected": "009acd"
+  },
+  {
+    "format": "#{c:DeepSkyBlue4}",
+    "expected": "00688b"
+  },
+  {
+    "format": "#{c:DimGray}",
+    "expected": "696969"
+  },
+  {
+    "format": "#{c:DimGrey}",
+    "expected": "696969"
+  },
+  {
+    "format": "#{c:DodgerBlue}",
+    "expected": "1e90ff"
+  },
+  {
+    "format": "#{c:DodgerBlue1}",
+    "expected": "1e90ff"
+  },
+  {
+    "format": "#{c:DodgerBlue2}",
+    "expected": "1c86ee"
+  },
+  {
+    "format": "#{c:DodgerBlue3}",
+    "expected": "1874cd"
+  },
+  {
+    "format": "#{c:DodgerBlue4}",
+    "expected": "104e8b"
+  },
+  {
+    "format": "#{c:FloralWhite}",
+    "expected": "fffaf0"
+  },
+  {
+    "format": "#{c:ForestGreen}",
+    "expected": "228b22"
+  },
+  {
+    "format": "#{c:GhostWhite}",
+    "expected": "f8f8ff"
+  },
+  {
+    "format": "#{c:GreenYellow}",
+    "expected": "adff2f"
+  },
+  {
+    "format": "#{c:HotPink}",
+    "expected": "ff69b4"
+  },
+  {
+    "format": "#{c:HotPink1}",
+    "expected": "ff6eb4"
+  },
+  {
+    "format": "#{c:HotPink2}",
+    "expected": "ee6aa7"
+  },
+  {
+    "format": "#{c:HotPink3}",
+    "expected": "cd6090"
+  },
+  {
+    "format": "#{c:HotPink4}",
+    "expected": "8b3a62"
+  },
+  {
+    "format": "#{c:IndianRed}",
+    "expected": "cd5c5c"
+  },
+  {
+    "format": "#{c:IndianRed1}",
+    "expected": "ff6a6a"
+  },
+  {
+    "format": "#{c:IndianRed2}",
+    "expected": "ee6363"
+  },
+  {
+    "format": "#{c:IndianRed3}",
+    "expected": "cd5555"
+  },
+  {
+    "format": "#{c:IndianRed4}",
+    "expected": "8b3a3a"
+  },
+  {
+    "format": "#{c:LavenderBlush}",
+    "expected": "fff0f5"
+  },
+  {
+    "format": "#{c:LavenderBlush1}",
+    "expected": "fff0f5"
+  },
+  {
+    "format": "#{c:LavenderBlush2}",
+    "expected": "eee0e5"
+  },
+  {
+    "format": "#{c:LavenderBlush3}",
+    "expected": "cdc1c5"
+  },
+  {
+    "format": "#{c:LavenderBlush4}",
+    "expected": "8b8386"
+  },
+  {
+    "format": "#{c:LawnGreen}",
+    "expected": "7cfc00"
+  },
+  {
+    "format": "#{c:LemonChiffon}",
+    "expected": "fffacd"
+  },
+  {
+    "format": "#{c:LemonChiffon1}",
+    "expected": "fffacd"
+  },
+  {
+    "format": "#{c:LemonChiffon2}",
+    "expected": "eee9bf"
+  },
+  {
+    "format": "#{c:LemonChiffon3}",
+    "expected": "cdc9a5"
+  },
+  {
+    "format": "#{c:LemonChiffon4}",
+    "expected": "8b8970"
+  },
+  {
+    "format": "#{c:LightBlue}",
+    "expected": "add8e6"
+  },
+  {
+    "format": "#{c:LightBlue1}",
+    "expected": "bfefff"
+  },
+  {
+    "format": "#{c:LightBlue2}",
+    "expected": "b2dfee"
+  },
+  {
+    "format": "#{c:LightBlue3}",
+    "expected": "9ac0cd"
+  },
+  {
+    "format": "#{c:LightBlue4}",
+    "expected": "68838b"
+  },
+  {
+    "format": "#{c:LightCoral}",
+    "expected": "f08080"
+  },
+  {
+    "format": "#{c:LightCyan}",
+    "expected": "e0ffff"
+  },
+  {
+    "format": "#{c:LightCyan1}",
+    "expected": "e0ffff"
+  },
+  {
+    "format": "#{c:LightCyan2}",
+    "expected": "d1eeee"
+  },
+  {
+    "format": "#{c:LightCyan3}",
+    "expected": "b4cdcd"
+  },
+  {
+    "format": "#{c:LightCyan4}",
+    "expected": "7a8b8b"
+  },
+  {
+    "format": "#{c:LightGoldenrod}",
+    "expected": "eedd82"
+  },
+  {
+    "format": "#{c:LightGoldenrod1}",
+    "expected": "ffec8b"
+  },
+  {
+    "format": "#{c:LightGoldenrod2}",
+    "expected": "eedc82"
+  },
+  {
+    "format": "#{c:LightGoldenrod3}",
+    "expected": "cdbe70"
+  },
+  {
+    "format": "#{c:LightGoldenrod4}",
+    "expected": "8b814c"
+  },
+  {
+    "format": "#{c:LightGoldenrodYellow}",
+    "expected": "fafad2"
+  },
+  {
+    "format": "#{c:LightGray}",
+    "expected": "d3d3d3"
+  },
+  {
+    "format": "#{c:LightGreen}",
+    "expected": "90ee90"
+  },
+  {
+    "format": "#{c:LightGrey}",
+    "expected": "d3d3d3"
+  },
+  {
+    "format": "#{c:LightPink}",
+    "expected": "ffb6c1"
+  },
+  {
+    "format": "#{c:LightPink1}",
+    "expected": "ffaeb9"
+  },
+  {
+    "format": "#{c:LightPink2}",
+    "expected": "eea2ad"
+  },
+  {
+    "format": "#{c:LightPink3}",
+    "expected": "cd8c95"
+  },
+  {
+    "format": "#{c:LightPink4}",
+    "expected": "8b5f65"
+  },
+  {
+    "format": "#{c:LightSalmon}",
+    "expected": "ffa07a"
+  },
+  {
+    "format": "#{c:LightSalmon1}",
+    "expected": "ffa07a"
+  },
+  {
+    "format": "#{c:LightSalmon2}",
+    "expected": "ee9572"
+  },
+  {
+    "format": "#{c:LightSalmon3}",
+    "expected": "cd8162"
+  },
+  {
+    "format": "#{c:LightSalmon4}",
+    "expected": "8b5742"
+  },
+  {
+    "format": "#{c:LightSeaGreen}",
+    "expected": "20b2aa"
+  },
+  {
+    "format": "#{c:LightSkyBlue}",
+    "expected": "87cefa"
+  },
+  {
+    "format": "#{c:LightSkyBlue1}",
+    "expected": "b0e2ff"
+  },
+  {
+    "format": "#{c:LightSkyBlue2}",
+    "expected": "a4d3ee"
+  },
+  {
+    "format": "#{c:LightSkyBlue3}",
+    "expected": "8db6cd"
+  },
+  {
+    "format": "#{c:LightSkyBlue4}",
+    "expected": "607b8b"
+  },
+  {
+    "format": "#{c:LightSlateBlue}",
+    "expected": "8470ff"
+  },
+  {
+    "format": "#{c:LightSlateGray}",
+    "expected": "778899"
+  },
+  {
+    "format": "#{c:LightSlateGrey}",
+    "expected": "778899"
+  },
+  {
+    "format": "#{c:LightSteelBlue}",
+    "expected": "b0c4de"
+  },
+  {
+    "format": "#{c:LightSteelBlue1}",
+    "expected": "cae1ff"
+  },
+  {
+    "format": "#{c:LightSteelBlue2}",
+    "expected": "bcd2ee"
+  },
+  {
+    "format": "#{c:LightSteelBlue3}",
+    "expected": "a2b5cd"
+  },
+  {
+    "format": "#{c:LightSteelBlue4}",
+    "expected": "6e7b8b"
+  },
+  {
+    "format": "#{c:LightYellow}",
+    "expected": "ffffe0"
+  },
+  {
+    "format": "#{c:LightYellow1}",
+    "expected": "ffffe0"
+  },
+  {
+    "format": "#{c:LightYellow2}",
+    "expected": "eeeed1"
+  },
+  {
+    "format": "#{c:LightYellow3}",
+    "expected": "cdcdb4"
+  },
+  {
+    "format": "#{c:LightYellow4}",
+    "expected": "8b8b7a"
+  },
+  {
+    "format": "#{c:LimeGreen}",
+    "expected": "32cd32"
+  },
+  {
+    "format": "#{c:MediumAquamarine}",
+    "expected": "66cdaa"
+  },
+  {
+    "format": "#{c:MediumBlue}",
+    "expected": "0000cd"
+  },
+  {
+    "format": "#{c:MediumOrchid}",
+    "expected": "ba55d3"
+  },
+  {
+    "format": "#{c:MediumOrchid1}",
+    "expected": "e066ff"
+  },
+  {
+    "format": "#{c:MediumOrchid2}",
+    "expected": "d15fee"
+  },
+  {
+    "format": "#{c:MediumOrchid3}",
+    "expected": "b452cd"
+  },
+  {
+    "format": "#{c:MediumOrchid4}",
+    "expected": "7a378b"
+  },
+  {
+    "format": "#{c:MediumPurple}",
+    "expected": "9370db"
+  },
+  {
+    "format": "#{c:MediumPurple1}",
+    "expected": "ab82ff"
+  },
+  {
+    "format": "#{c:MediumPurple2}",
+    "expected": "9f79ee"
+  },
+  {
+    "format": "#{c:MediumPurple3}",
+    "expected": "8968cd"
+  },
+  {
+    "format": "#{c:MediumPurple4}",
+    "expected": "5d478b"
+  },
+  {
+    "format": "#{c:MediumSeaGreen}",
+    "expected": "3cb371"
+  },
+  {
+    "format": "#{c:MediumSlateBlue}",
+    "expected": "7b68ee"
+  },
+  {
+    "format": "#{c:MediumSpringGreen}",
+    "expected": "00fa9a"
+  },
+  {
+    "format": "#{c:MediumTurquoise}",
+    "expected": "48d1cc"
+  },
+  {
+    "format": "#{c:MediumVioletRed}",
+    "expected": "c71585"
+  },
+  {
+    "format": "#{c:MidnightBlue}",
+    "expected": "191970"
+  },
+  {
+    "format": "#{c:MintCream}",
+    "expected": "f5fffa"
+  },
+  {
+    "format": "#{c:MistyRose}",
+    "expected": "ffe4e1"
+  },
+  {
+    "format": "#{c:MistyRose1}",
+    "expected": "ffe4e1"
+  },
+  {
+    "format": "#{c:MistyRose2}",
+    "expected": "eed5d2"
+  },
+  {
+    "format": "#{c:MistyRose3}",
+    "expected": "cdb7b5"
+  },
+  {
+    "format": "#{c:MistyRose4}",
+    "expected": "8b7d7b"
+  },
+  {
+    "format": "#{c:NavajoWhite}",
+    "expected": "ffdead"
+  },
+  {
+    "format": "#{c:NavajoWhite1}",
+    "expected": "ffdead"
+  },
+  {
+    "format": "#{c:NavajoWhite2}",
+    "expected": "eecfa1"
+  },
+  {
+    "format": "#{c:NavajoWhite3}",
+    "expected": "cdb38b"
+  },
+  {
+    "format": "#{c:NavajoWhite4}",
+    "expected": "8b795e"
+  },
+  {
+    "format": "#{c:NavyBlue}",
+    "expected": "000080"
+  },
+  {
+    "format": "#{c:OldLace}",
+    "expected": "fdf5e6"
+  },
+  {
+    "format": "#{c:OliveDrab}",
+    "expected": "6b8e23"
+  },
+  {
+    "format": "#{c:OliveDrab1}",
+    "expected": "c0ff3e"
+  },
+  {
+    "format": "#{c:OliveDrab2}",
+    "expected": "b3ee3a"
+  },
+  {
+    "format": "#{c:OliveDrab3}",
+    "expected": "9acd32"
+  },
+  {
+    "format": "#{c:OliveDrab4}",
+    "expected": "698b22"
+  },
+  {
+    "format": "#{c:OrangeRed}",
+    "expected": "ff4500"
+  },
+  {
+    "format": "#{c:OrangeRed1}",
+    "expected": "ff4500"
+  },
+  {
+    "format": "#{c:OrangeRed2}",
+    "expected": "ee4000"
+  },
+  {
+    "format": "#{c:OrangeRed3}",
+    "expected": "cd3700"
+  },
+  {
+    "format": "#{c:OrangeRed4}",
+    "expected": "8b2500"
+  },
+  {
+    "format": "#{c:PaleGoldenrod}",
+    "expected": "eee8aa"
+  },
+  {
+    "format": "#{c:PaleGreen}",
+    "expected": "98fb98"
+  },
+  {
+    "format": "#{c:PaleGreen1}",
+    "expected": "9aff9a"
+  },
+  {
+    "format": "#{c:PaleGreen2}",
+    "expected": "90ee90"
+  },
+  {
+    "format": "#{c:PaleGreen3}",
+    "expected": "7ccd7c"
+  },
+  {
+    "format": "#{c:PaleGreen4}",
+    "expected": "548b54"
+  },
+  {
+    "format": "#{c:PaleTurquoise}",
+    "expected": "afeeee"
+  },
+  {
+    "format": "#{c:PaleTurquoise1}",
+    "expected": "bbffff"
+  },
+  {
+    "format": "#{c:PaleTurquoise2}",
+    "expected": "aeeeee"
+  },
+  {
+    "format": "#{c:PaleTurquoise3}",
+    "expected": "96cdcd"
+  },
+  {
+    "format": "#{c:PaleTurquoise4}",
+    "expected": "668b8b"
+  },
+  {
+    "format": "#{c:PaleVioletRed}",
+    "expected": "db7093"
+  },
+  {
+    "format": "#{c:PaleVioletRed1}",
+    "expected": "ff82ab"
+  },
+  {
+    "format": "#{c:PaleVioletRed2}",
+    "expected": "ee799f"
+  },
+  {
+    "format": "#{c:PaleVioletRed3}",
+    "expected": "cd6889"
+  },
+  {
+    "format": "#{c:PaleVioletRed4}",
+    "expected": "8b475d"
+  },
+  {
+    "format": "#{c:PapayaWhip}",
+    "expected": "ffefd5"
+  },
+  {
+    "format": "#{c:PeachPuff}",
+    "expected": "ffdab9"
+  },
+  {
+    "format": "#{c:PeachPuff1}",
+    "expected": "ffdab9"
+  },
+  {
+    "format": "#{c:PeachPuff2}",
+    "expected": "eecbad"
+  },
+  {
+    "format": "#{c:PeachPuff3}",
+    "expected": "cdaf95"
+  },
+  {
+    "format": "#{c:PeachPuff4}",
+    "expected": "8b7765"
+  },
+  {
+    "format": "#{c:PowderBlue}",
+    "expected": "b0e0e6"
+  },
+  {
+    "format": "#{c:RebeccaPurple}",
+    "expected": "663399"
+  },
+  {
+    "format": "#{c:RosyBrown}",
+    "expected": "bc8f8f"
+  },
+  {
+    "format": "#{c:RosyBrown1}",
+    "expected": "ffc1c1"
+  },
+  {
+    "format": "#{c:RosyBrown2}",
+    "expected": "eeb4b4"
+  },
+  {
+    "format": "#{c:RosyBrown3}",
+    "expected": "cd9b9b"
+  },
+  {
+    "format": "#{c:RosyBrown4}",
+    "expected": "8b6969"
+  },
+  {
+    "format": "#{c:RoyalBlue}",
+    "expected": "4169e1"
+  },
+  {
+    "format": "#{c:RoyalBlue1}",
+    "expected": "4876ff"
+  },
+  {
+    "format": "#{c:RoyalBlue2}",
+    "expected": "436eee"
+  },
+  {
+    "format": "#{c:RoyalBlue3}",
+    "expected": "3a5fcd"
+  },
+  {
+    "format": "#{c:RoyalBlue4}",
+    "expected": "27408b"
+  },
+  {
+    "format": "#{c:SaddleBrown}",
+    "expected": "8b4513"
+  },
+  {
+    "format": "#{c:SandyBrown}",
+    "expected": "f4a460"
+  },
+  {
+    "format": "#{c:SeaGreen}",
+    "expected": "2e8b57"
+  },
+  {
+    "format": "#{c:SeaGreen1}",
+    "expected": "54ff9f"
+  },
+  {
+    "format": "#{c:SeaGreen2}",
+    "expected": "4eee94"
+  },
+  {
+    "format": "#{c:SeaGreen3}",
+    "expected": "43cd80"
+  },
+  {
+    "format": "#{c:SeaGreen4}",
+    "expected": "2e8b57"
+  },
+  {
+    "format": "#{c:SkyBlue}",
+    "expected": "87ceeb"
+  },
+  {
+    "format": "#{c:SkyBlue1}",
+    "expected": "87ceff"
+  },
+  {
+    "format": "#{c:SkyBlue2}",
+    "expected": "7ec0ee"
+  },
+  {
+    "format": "#{c:SkyBlue3}",
+    "expected": "6ca6cd"
+  },
+  {
+    "format": "#{c:SkyBlue4}",
+    "expected": "4a708b"
+  },
+  {
+    "format": "#{c:SlateBlue}",
+    "expected": "6a5acd"
+  },
+  {
+    "format": "#{c:SlateBlue1}",
+    "expected": "836fff"
+  },
+  {
+    "format": "#{c:SlateBlue2}",
+    "expected": "7a67ee"
+  },
+  {
+    "format": "#{c:SlateBlue3}",
+    "expected": "6959cd"
+  },
+  {
+    "format": "#{c:SlateBlue4}",
+    "expected": "473c8b"
+  },
+  {
+    "format": "#{c:SlateGray}",
+    "expected": "708090"
+  },
+  {
+    "format": "#{c:SlateGray1}",
+    "expected": "c6e2ff"
+  },
+  {
+    "format": "#{c:SlateGray2}",
+    "expected": "b9d3ee"
+  },
+  {
+    "format": "#{c:SlateGray3}",
+    "expected": "9fb6cd"
+  },
+  {
+    "format": "#{c:SlateGray4}",
+    "expected": "6c7b8b"
+  },
+  {
+    "format": "#{c:SlateGrey}",
+    "expected": "708090"
+  },
+  {
+    "format": "#{c:SpringGreen}",
+    "expected": "00ff7f"
+  },
+  {
+    "format": "#{c:SpringGreen1}",
+    "expected": "00ff7f"
+  },
+  {
+    "format": "#{c:SpringGreen2}",
+    "expected": "00ee76"
+  },
+  {
+    "format": "#{c:SpringGreen3}",
+    "expected": "00cd66"
+  },
+  {
+    "format": "#{c:SpringGreen4}",
+    "expected": "008b45"
+  },
+  {
+    "format": "#{c:SteelBlue}",
+    "expected": "4682b4"
+  },
+  {
+    "format": "#{c:SteelBlue1}",
+    "expected": "63b8ff"
+  },
+  {
+    "format": "#{c:SteelBlue2}",
+    "expected": "5cacee"
+  },
+  {
+    "format": "#{c:SteelBlue3}",
+    "expected": "4f94cd"
+  },
+  {
+    "format": "#{c:SteelBlue4}",
+    "expected": "36648b"
+  },
+  {
+    "format": "#{c:VioletRed}",
+    "expected": "d02090"
+  },
+  {
+    "format": "#{c:VioletRed1}",
+    "expected": "ff3e96"
+  },
+  {
+    "format": "#{c:VioletRed2}",
+    "expected": "ee3a8c"
+  },
+  {
+    "format": "#{c:VioletRed3}",
+    "expected": "cd3278"
+  },
+  {
+    "format": "#{c:VioletRed4}",
+    "expected": "8b2252"
+  },
+  {
+    "format": "#{c:WebGray}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:WebGreen}",
+    "expected": "008000"
+  },
+  {
+    "format": "#{c:WebGrey}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:WebMaroon}",
+    "expected": "800000"
+  },
+  {
+    "format": "#{c:WebPurple}",
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:WhiteSmoke}",
+    "expected": "f5f5f5"
+  },
+  {
+    "format": "#{c:X11Gray}",
+    "expected": "bebebe"
+  },
+  {
+    "format": "#{c:X11Green}",
+    "expected": "00ff00"
+  },
+  {
+    "format": "#{c:X11Grey}",
+    "expected": "bebebe"
+  },
+  {
+    "format": "#{c:X11Maroon}",
+    "expected": "b03060"
+  },
+  {
+    "format": "#{c:X11Purple}",
+    "expected": "a020f0"
+  },
+  {
+    "format": "#{c:YellowGreen}",
+    "expected": "9acd32"
+  },
+  {
+    "format": "#{c:alice blue}",
+    "expected": "f0f8ff"
+  },
+  {
+    "format": "#{c:antique white}",
+    "expected": "faebd7"
+  },
+  {
+    "format": "#{c:aqua}",
+    "expected": "00ffff"
+  },
+  {
+    "format": "#{c:aquamarine}",
+    "expected": "7fffd4"
+  },
+  {
+    "format": "#{c:aquamarine1}",
+    "expected": "7fffd4"
+  },
+  {
+    "format": "#{c:aquamarine2}",
+    "expected": "76eec6"
+  },
+  {
+    "format": "#{c:aquamarine3}",
+    "expected": "66cdaa"
+  },
+  {
+    "format": "#{c:aquamarine4}",
+    "expected": "458b74"
+  },
+  {
+    "format": "#{c:azure}",
+    "expected": "f0ffff"
+  },
+  {
+    "format": "#{c:azure1}",
+    "expected": "f0ffff"
+  },
+  {
+    "format": "#{c:azure2}",
+    "expected": "e0eeee"
+  },
+  {
+    "format": "#{c:azure3}",
+    "expected": "c1cdcd"
+  },
+  {
+    "format": "#{c:azure4}",
+    "expected": "838b8b"
+  },
+  {
+    "format": "#{c:beige}",
+    "expected": "f5f5dc"
+  },
+  {
+    "format": "#{c:bisque}",
+    "expected": "ffe4c4"
+  },
+  {
+    "format": "#{c:bisque1}",
+    "expected": "ffe4c4"
+  },
+  {
+    "format": "#{c:bisque2}",
+    "expected": "eed5b7"
+  },
+  {
+    "format": "#{c:bisque3}",
+    "expected": "cdb79e"
+  },
+  {
+    "format": "#{c:bisque4}",
+    "expected": "8b7d6b"
+  },
+  {
+    "format": "#{c:black}",
+    "expected": "000000"
+  },
+  {
+    "format": "#{c:blanched almond}",
+    "expected": "ffebcd"
+  },
+  {
+    "format": "#{c:blue violet}",
+    "expected": "8a2be2"
+  },
+  {
+    "format": "#{c:blue}",
+    "expected": "000080"
+  },
+  {
+    "format": "#{c:blue1}",
+    "expected": "0000ff"
+  },
+  {
+    "format": "#{c:blue2}",
+    "expected": "0000ee"
+  },
+  {
+    "format": "#{c:blue3}",
+    "expected": "0000cd"
+  },
+  {
+    "format": "#{c:blue4}",
+    "expected": "00008b"
+  },
+  {
+    "format": "#{c:brown}",
+    "expected": "a52a2a"
+  },
+  {
+    "format": "#{c:brown1}",
+    "expected": "ff4040"
+  },
+  {
+    "format": "#{c:brown2}",
+    "expected": "ee3b3b"
+  },
+  {
+    "format": "#{c:brown3}",
+    "expected": "cd3333"
+  },
+  {
+    "format": "#{c:brown4}",
+    "expected": "8b2323"
+  },
+  {
+    "format": "#{c:burlywood}",
+    "expected": "deb887"
+  },
+  {
+    "format": "#{c:burlywood1}",
+    "expected": "ffd39b"
+  },
+  {
+    "format": "#{c:burlywood2}",
+    "expected": "eec591"
+  },
+  {
+    "format": "#{c:burlywood3}",
+    "expected": "cdaa7d"
+  },
+  {
+    "format": "#{c:burlywood4}",
+    "expected": "8b7355"
+  },
+  {
+    "format": "#{c:cadet blue}",
+    "expected": "5f9ea0"
+  },
+  {
+    "format": "#{c:chartreuse}",
+    "expected": "7fff00"
+  },
+  {
+    "format": "#{c:chartreuse1}",
+    "expected": "7fff00"
+  },
+  {
+    "format": "#{c:chartreuse2}",
+    "expected": "76ee00"
+  },
+  {
+    "format": "#{c:chartreuse3}",
+    "expected": "66cd00"
+  },
+  {
+    "format": "#{c:chartreuse4}",
+    "expected": "458b00"
+  },
+  {
+    "format": "#{c:chocolate}",
+    "expected": "d2691e"
+  },
+  {
+    "format": "#{c:chocolate1}",
+    "expected": "ff7f24"
+  },
+  {
+    "format": "#{c:chocolate2}",
+    "expected": "ee7621"
+  },
+  {
+    "format": "#{c:chocolate3}",
+    "expected": "cd661d"
+  },
+  {
+    "format": "#{c:chocolate4}",
+    "expected": "8b4513"
+  },
+  {
+    "format": "#{c:coral}",
+    "expected": "ff7f50"
+  },
+  {
+    "format": "#{c:coral1}",
+    "expected": "ff7256"
+  },
+  {
+    "format": "#{c:coral2}",
+    "expected": "ee6a50"
+  },
+  {
+    "format": "#{c:coral3}",
+    "expected": "cd5b45"
+  },
+  {
+    "format": "#{c:coral4}",
+    "expected": "8b3e2f"
+  },
+  {
+    "format": "#{c:cornflower blue}",
+    "expected": "6495ed"
+  },
+  {
+    "format": "#{c:cornsilk}",
+    "expected": "fff8dc"
+  },
+  {
+    "format": "#{c:cornsilk1}",
+    "expected": "fff8dc"
+  },
+  {
+    "format": "#{c:cornsilk2}",
+    "expected": "eee8cd"
+  },
+  {
+    "format": "#{c:cornsilk3}",
+    "expected": "cdc8b1"
+  },
+  {
+    "format": "#{c:cornsilk4}",
+    "expected": "8b8878"
+  },
+  {
+    "format": "#{c:crimson}",
+    "expected": "dc143c"
+  },
+  {
+    "format": "#{c:cyan}",
+    "expected": "008080"
+  },
+  {
+    "format": "#{c:cyan1}",
+    "expected": "00ffff"
+  },
+  {
+    "format": "#{c:cyan2}",
+    "expected": "00eeee"
+  },
+  {
+    "format": "#{c:cyan3}",
+    "expected": "00cdcd"
+  },
+  {
+    "format": "#{c:cyan4}",
+    "expected": "008b8b"
+  },
+  {
+    "format": "#{c:dark blue}",
+    "expected": "00008b"
+  },
+  {
+    "format": "#{c:dark cyan}",
+    "expected": "008b8b"
+  },
+  {
+    "format": "#{c:dark goldenrod}",
+    "expected": "b8860b"
+  },
+  {
+    "format": "#{c:dark gray}",
+    "expected": "a9a9a9"
+  },
+  {
+    "format": "#{c:dark green}",
+    "expected": "006400"
+  },
+  {
+    "format": "#{c:dark grey}",
+    "expected": "a9a9a9"
+  },
+  {
+    "format": "#{c:dark khaki}",
+    "expected": "bdb76b"
+  },
+  {
+    "format": "#{c:dark magenta}",
+    "expected": "8b008b"
+  },
+  {
+    "format": "#{c:dark olive green}",
+    "expected": "556b2f"
+  },
+  {
+    "format": "#{c:dark orange}",
+    "expected": "ff8c00"
+  },
+  {
+    "format": "#{c:dark orchid}",
+    "expected": "9932cc"
+  },
+  {
+    "format": "#{c:dark red}",
+    "expected": "8b0000"
+  },
+  {
+    "format": "#{c:dark salmon}",
+    "expected": "e9967a"
+  },
+  {
+    "format": "#{c:dark sea green}",
+    "expected": "8fbc8f"
+  },
+  {
+    "format": "#{c:dark slate blue}",
+    "expected": "483d8b"
+  },
+  {
+    "format": "#{c:dark slate gray}",
+    "expected": "2f4f4f"
+  },
+  {
+    "format": "#{c:dark slate grey}",
+    "expected": "2f4f4f"
+  },
+  {
+    "format": "#{c:dark turquoise}",
+    "expected": "00ced1"
+  },
+  {
+    "format": "#{c:dark violet}",
+    "expected": "9400d3"
+  },
+  {
+    "format": "#{c:deep pink}",
+    "expected": "ff1493"
+  },
+  {
+    "format": "#{c:deep sky blue}",
+    "expected": "00bfff"
+  },
+  {
+    "format": "#{c:dim gray}",
+    "expected": "696969"
+  },
+  {
+    "format": "#{c:dim grey}",
+    "expected": "696969"
+  },
+  {
+    "format": "#{c:dodger blue}",
+    "expected": "1e90ff"
+  },
+  {
+    "format": "#{c:firebrick}",
+    "expected": "b22222"
+  },
+  {
+    "format": "#{c:firebrick1}",
+    "expected": "ff3030"
+  },
+  {
+    "format": "#{c:firebrick2}",
+    "expected": "ee2c2c"
+  },
+  {
+    "format": "#{c:firebrick3}",
+    "expected": "cd2626"
+  },
+  {
+    "format": "#{c:firebrick4}",
+    "expected": "8b1a1a"
+  },
+  {
+    "format": "#{c:floral white}",
+    "expected": "fffaf0"
+  },
+  {
+    "format": "#{c:forest green}",
+    "expected": "228b22"
+  },
+  {
+    "format": "#{c:fuchsia}",
+    "expected": "ff00ff"
+  },
+  {
+    "format": "#{c:gainsboro}",
+    "expected": "dcdcdc"
+  },
+  {
+    "format": "#{c:ghost white}",
+    "expected": "f8f8ff"
+  },
+  {
+    "format": "#{c:gold}",
+    "expected": "ffd700"
+  },
+  {
+    "format": "#{c:gold1}",
+    "expected": "ffd700"
+  },
+  {
+    "format": "#{c:gold2}",
+    "expected": "eec900"
+  },
+  {
+    "format": "#{c:gold3}",
+    "expected": "cdad00"
+  },
+  {
+    "format": "#{c:gold4}",
+    "expected": "8b7500"
+  },
+  {
+    "format": "#{c:goldenrod}",
+    "expected": "daa520"
+  },
+  {
+    "format": "#{c:goldenrod1}",
+    "expected": "ffc125"
+  },
+  {
+    "format": "#{c:goldenrod2}",
+    "expected": "eeb422"
+  },
+  {
+    "format": "#{c:goldenrod3}",
+    "expected": "cd9b1d"
+  },
+  {
+    "format": "#{c:goldenrod4}",
+    "expected": "8b6914"
+  },
+  {
+    "format": "#{c:green yellow}",
+    "expected": "adff2f"
+  },
+  {
+    "format": "#{c:green}",
+    "expected": "008000"
+  },
+  {
+    "format": "#{c:green1}",
+    "expected": "00ff00"
+  },
+  {
+    "format": "#{c:green2}",
+    "expected": "00ee00"
+  },
+  {
+    "format": "#{c:green3}",
+    "expected": "00cd00"
+  },
+  {
+    "format": "#{c:green4}",
+    "expected": "008b00"
+  },
+  {
+    "format": "#{c:honeydew}",
+    "expected": "f0fff0"
+  },
+  {
+    "format": "#{c:honeydew1}",
+    "expected": "f0fff0"
+  },
+  {
+    "format": "#{c:honeydew2}",
+    "expected": "e0eee0"
+  },
+  {
+    "format": "#{c:honeydew3}",
+    "expected": "c1cdc1"
+  },
+  {
+    "format": "#{c:honeydew4}",
+    "expected": "838b83"
+  },
+  {
+    "format": "#{c:hot pink}",
+    "expected": "ff69b4"
+  },
+  {
+    "format": "#{c:indian red}",
+    "expected": "cd5c5c"
+  },
+  {
+    "format": "#{c:indigo}",
+    "expected": "4b0082"
+  },
+  {
+    "format": "#{c:ivory}",
+    "expected": "fffff0"
+  },
+  {
+    "format": "#{c:ivory1}",
+    "expected": "fffff0"
+  },
+  {
+    "format": "#{c:ivory2}",
+    "expected": "eeeee0"
+  },
+  {
+    "format": "#{c:ivory3}",
+    "expected": "cdcdc1"
+  },
+  {
+    "format": "#{c:ivory4}",
+    "expected": "8b8b83"
+  },
+  {
+    "format": "#{c:khaki}",
+    "expected": "f0e68c"
+  },
+  {
+    "format": "#{c:khaki1}",
+    "expected": "fff68f"
+  },
+  {
+    "format": "#{c:khaki2}",
+    "expected": "eee685"
+  },
+  {
+    "format": "#{c:khaki3}",
+    "expected": "cdc673"
+  },
+  {
+    "format": "#{c:khaki4}",
+    "expected": "8b864e"
+  },
+  {
+    "format": "#{c:lavender blush}",
+    "expected": "fff0f5"
+  },
+  {
+    "format": "#{c:lavender}",
+    "expected": "e6e6fa"
+  },
+  {
+    "format": "#{c:lawn green}",
+    "expected": "7cfc00"
+  },
+  {
+    "format": "#{c:lemon chiffon}",
+    "expected": "fffacd"
+  },
+  {
+    "format": "#{c:light blue}",
+    "expected": "add8e6"
+  },
+  {
+    "format": "#{c:light coral}",
+    "expected": "f08080"
+  },
+  {
+    "format": "#{c:light cyan}",
+    "expected": "e0ffff"
+  },
+  {
+    "format": "#{c:light goldenrod yellow}",
+    "expected": "fafad2"
+  },
+  {
+    "format": "#{c:light goldenrod}",
+    "expected": "eedd82"
+  },
+  {
+    "format": "#{c:light gray}",
+    "expected": "d3d3d3"
+  },
+  {
+    "format": "#{c:light green}",
+    "expected": "90ee90"
+  },
+  {
+    "format": "#{c:light grey}",
+    "expected": "d3d3d3"
+  },
+  {
+    "format": "#{c:light pink}",
+    "expected": "ffb6c1"
+  },
+  {
+    "format": "#{c:light salmon}",
+    "expected": "ffa07a"
+  },
+  {
+    "format": "#{c:light sea green}",
+    "expected": "20b2aa"
+  },
+  {
+    "format": "#{c:light sky blue}",
+    "expected": "87cefa"
+  },
+  {
+    "format": "#{c:light slate blue}",
+    "expected": "8470ff"
+  },
+  {
+    "format": "#{c:light slate gray}",
+    "expected": "778899"
+  },
+  {
+    "format": "#{c:light slate grey}",
+    "expected": "778899"
+  },
+  {
+    "format": "#{c:light steel blue}",
+    "expected": "b0c4de"
+  },
+  {
+    "format": "#{c:light yellow}",
+    "expected": "ffffe0"
+  },
+  {
+    "format": "#{c:lime green}",
+    "expected": "32cd32"
+  },
+  {
+    "format": "#{c:lime}",
+    "expected": "00ff00"
+  },
+  {
+    "format": "#{c:linen}",
+    "expected": "faf0e6"
+  },
+  {
+    "format": "#{c:magenta}",
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:magenta1}",
+    "expected": "ff00ff"
+  },
+  {
+    "format": "#{c:magenta2}",
+    "expected": "ee00ee"
+  },
+  {
+    "format": "#{c:magenta3}",
+    "expected": "cd00cd"
+  },
+  {
+    "format": "#{c:magenta4}",
+    "expected": "8b008b"
+  },
+  {
+    "format": "#{c:maroon}",
+    "expected": "b03060"
+  },
+  {
+    "format": "#{c:maroon1}",
+    "expected": "ff34b3"
+  },
+  {
+    "format": "#{c:maroon2}",
+    "expected": "ee30a7"
+  },
+  {
+    "format": "#{c:maroon3}",
+    "expected": "cd2990"
+  },
+  {
+    "format": "#{c:maroon4}",
+    "expected": "8b1c62"
+  },
+  {
+    "format": "#{c:medium aquamarine}",
+    "expected": "66cdaa"
+  },
+  {
+    "format": "#{c:medium blue}",
+    "expected": "0000cd"
+  },
+  {
+    "format": "#{c:medium orchid}",
+    "expected": "ba55d3"
+  },
+  {
+    "format": "#{c:medium purple}",
+    "expected": "9370db"
+  },
+  {
+    "format": "#{c:medium sea green}",
+    "expected": "3cb371"
+  },
+  {
+    "format": "#{c:medium slate blue}",
+    "expected": "7b68ee"
+  },
+  {
+    "format": "#{c:medium spring green}",
+    "expected": "00fa9a"
+  },
+  {
+    "format": "#{c:medium turquoise}",
+    "expected": "48d1cc"
+  },
+  {
+    "format": "#{c:medium violet red}",
+    "expected": "c71585"
+  },
+  {
+    "format": "#{c:midnight blue}",
+    "expected": "191970"
+  },
+  {
+    "format": "#{c:mint cream}",
+    "expected": "f5fffa"
+  },
+  {
+    "format": "#{c:misty rose}",
+    "expected": "ffe4e1"
+  },
+  {
+    "format": "#{c:moccasin}",
+    "expected": "ffe4b5"
+  },
+  {
+    "format": "#{c:navajo white}",
+    "expected": "ffdead"
+  },
+  {
+    "format": "#{c:navy blue}",
+    "expected": "000080"
+  },
+  {
+    "format": "#{c:navy}",
+    "expected": "000080"
+  },
+  {
+    "format": "#{c:old lace}",
+    "expected": "fdf5e6"
+  },
+  {
+    "format": "#{c:olive drab}",
+    "expected": "6b8e23"
+  },
+  {
+    "format": "#{c:olive}",
+    "expected": "808000"
+  },
+  {
+    "format": "#{c:orange red}",
+    "expected": "ff4500"
+  },
+  {
+    "format": "#{c:orange}",
+    "expected": "ffa500"
+  },
+  {
+    "format": "#{c:orange1}",
+    "expected": "ffa500"
+  },
+  {
+    "format": "#{c:orange2}",
+    "expected": "ee9a00"
+  },
+  {
+    "format": "#{c:orange3}",
+    "expected": "cd8500"
+  },
+  {
+    "format": "#{c:orange4}",
+    "expected": "8b5a00"
+  },
+  {
+    "format": "#{c:orchid}",
+    "expected": "da70d6"
+  },
+  {
+    "format": "#{c:orchid1}",
+    "expected": "ff83fa"
+  },
+  {
+    "format": "#{c:orchid2}",
+    "expected": "ee7ae9"
+  },
+  {
+    "format": "#{c:orchid3}",
+    "expected": "cd69c9"
+  },
+  {
+    "format": "#{c:orchid4}",
+    "expected": "8b4789"
+  },
+  {
+    "format": "#{c:pale goldenrod}",
+    "expected": "eee8aa"
+  },
+  {
+    "format": "#{c:pale green}",
+    "expected": "98fb98"
+  },
+  {
+    "format": "#{c:pale turquoise}",
+    "expected": "afeeee"
+  },
+  {
+    "format": "#{c:pale violet red}",
+    "expected": "db7093"
+  },
+  {
+    "format": "#{c:papaya whip}",
+    "expected": "ffefd5"
+  },
+  {
+    "format": "#{c:peach puff}",
+    "expected": "ffdab9"
+  },
+  {
+    "format": "#{c:peru}",
+    "expected": "cd853f"
+  },
+  {
+    "format": "#{c:pink}",
+    "expected": "ffc0cb"
+  },
+  {
+    "format": "#{c:pink1}",
+    "expected": "ffb5c5"
+  },
+  {
+    "format": "#{c:pink2}",
+    "expected": "eea9b8"
+  },
+  {
+    "format": "#{c:pink3}",
+    "expected": "cd919e"
+  },
+  {
+    "format": "#{c:pink4}",
+    "expected": "8b636c"
+  },
+  {
+    "format": "#{c:plum}",
+    "expected": "dda0dd"
+  },
+  {
+    "format": "#{c:plum1}",
+    "expected": "ffbbff"
+  },
+  {
+    "format": "#{c:plum2}",
+    "expected": "eeaeee"
+  },
+  {
+    "format": "#{c:plum3}",
+    "expected": "cd96cd"
+  },
+  {
+    "format": "#{c:plum4}",
+    "expected": "8b668b"
+  },
+  {
+    "format": "#{c:powder blue}",
+    "expected": "b0e0e6"
+  },
+  {
+    "format": "#{c:purple}",
+    "expected": "a020f0"
+  },
+  {
+    "format": "#{c:purple1}",
+    "expected": "9b30ff"
+  },
+  {
+    "format": "#{c:purple2}",
+    "expected": "912cee"
+  },
+  {
+    "format": "#{c:purple3}",
+    "expected": "7d26cd"
+  },
+  {
+    "format": "#{c:purple4}",
+    "expected": "551a8b"
+  },
+  {
+    "format": "#{c:rebecca purple}",
+    "expected": "663399"
+  },
+  {
+    "format": "#{c:red1}",
+    "expected": "ff0000"
+  },
+  {
+    "format": "#{c:red2}",
+    "expected": "ee0000"
+  },
+  {
+    "format": "#{c:red3}",
+    "expected": "cd0000"
+  },
+  {
+    "format": "#{c:red4}",
+    "expected": "8b0000"
+  },
+  {
+    "format": "#{c:rosy brown}",
+    "expected": "bc8f8f"
+  },
+  {
+    "format": "#{c:royal blue}",
+    "expected": "4169e1"
+  },
+  {
+    "format": "#{c:saddle brown}",
+    "expected": "8b4513"
+  },
+  {
+    "format": "#{c:salmon}",
+    "expected": "fa8072"
+  },
+  {
+    "format": "#{c:salmon1}",
+    "expected": "ff8c69"
+  },
+  {
+    "format": "#{c:salmon2}",
+    "expected": "ee8262"
+  },
+  {
+    "format": "#{c:salmon3}",
+    "expected": "cd7054"
+  },
+  {
+    "format": "#{c:salmon4}",
+    "expected": "8b4c39"
+  },
+  {
+    "format": "#{c:sandy brown}",
+    "expected": "f4a460"
+  },
+  {
+    "format": "#{c:sea green}",
+    "expected": "2e8b57"
+  },
+  {
+    "format": "#{c:seashell}",
+    "expected": "fff5ee"
+  },
+  {
+    "format": "#{c:seashell1}",
+    "expected": "fff5ee"
+  },
+  {
+    "format": "#{c:seashell2}",
+    "expected": "eee5de"
+  },
+  {
+    "format": "#{c:seashell3}",
+    "expected": "cdc5bf"
+  },
+  {
+    "format": "#{c:seashell4}",
+    "expected": "8b8682"
+  },
+  {
+    "format": "#{c:sienna}",
+    "expected": "a0522d"
+  },
+  {
+    "format": "#{c:sienna1}",
+    "expected": "ff8247"
+  },
+  {
+    "format": "#{c:sienna2}",
+    "expected": "ee7942"
+  },
+  {
+    "format": "#{c:sienna3}",
+    "expected": "cd6839"
+  },
+  {
+    "format": "#{c:sienna4}",
+    "expected": "8b4726"
+  },
+  {
+    "format": "#{c:silver}",
+    "expected": "c0c0c0"
+  },
+  {
+    "format": "#{c:sky blue}",
+    "expected": "87ceeb"
+  },
+  {
+    "format": "#{c:slate blue}",
+    "expected": "6a5acd"
+  },
+  {
+    "format": "#{c:slate gray}",
+    "expected": "708090"
+  },
+  {
+    "format": "#{c:slate grey}",
+    "expected": "708090"
+  },
+  {
+    "format": "#{c:snow}",
+    "expected": "fffafa"
+  },
+  {
+    "format": "#{c:snow1}",
+    "expected": "fffafa"
+  },
+  {
+    "format": "#{c:snow2}",
+    "expected": "eee9e9"
+  },
+  {
+    "format": "#{c:snow3}",
+    "expected": "cdc9c9"
+  },
+  {
+    "format": "#{c:snow4}",
+    "expected": "8b8989"
+  },
+  {
+    "format": "#{c:spring green}",
+    "expected": "00ff7f"
+  },
+  {
+    "format": "#{c:steel blue}",
+    "expected": "4682b4"
+  },
+  {
+    "format": "#{c:tan}",
+    "expected": "d2b48c"
+  },
+  {
+    "format": "#{c:tan1}",
+    "expected": "ffa54f"
+  },
+  {
+    "format": "#{c:tan2}",
+    "expected": "ee9a49"
+  },
+  {
+    "format": "#{c:tan3}",
+    "expected": "cd853f"
+  },
+  {
+    "format": "#{c:tan4}",
+    "expected": "8b5a2b"
+  },
+  {
+    "format": "#{c:teal}",
+    "expected": "008080"
+  },
+  {
+    "format": "#{c:thistle}",
+    "expected": "d8bfd8"
+  },
+  {
+    "format": "#{c:thistle1}",
+    "expected": "ffe1ff"
+  },
+  {
+    "format": "#{c:thistle2}",
+    "expected": "eed2ee"
+  },
+  {
+    "format": "#{c:thistle3}",
+    "expected": "cdb5cd"
+  },
+  {
+    "format": "#{c:thistle4}",
+    "expected": "8b7b8b"
+  },
+  {
+    "format": "#{c:tomato}",
+    "expected": "ff6347"
+  },
+  {
+    "format": "#{c:tomato1}",
+    "expected": "ff6347"
+  },
+  {
+    "format": "#{c:tomato2}",
+    "expected": "ee5c42"
+  },
+  {
+    "format": "#{c:tomato3}",
+    "expected": "cd4f39"
+  },
+  {
+    "format": "#{c:tomato4}",
+    "expected": "8b3626"
+  },
+  {
+    "format": "#{c:turquoise}",
+    "expected": "40e0d0"
+  },
+  {
+    "format": "#{c:turquoise1}",
+    "expected": "00f5ff"
+  },
+  {
+    "format": "#{c:turquoise2}",
+    "expected": "00e5ee"
+  },
+  {
+    "format": "#{c:turquoise3}",
+    "expected": "00c5cd"
+  },
+  {
+    "format": "#{c:turquoise4}",
+    "expected": "00868b"
+  },
+  {
+    "format": "#{c:violet red}",
+    "expected": "d02090"
+  },
+  {
+    "format": "#{c:violet}",
+    "expected": "ee82ee"
+  },
+  {
+    "format": "#{c:web gray}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:web green}",
+    "expected": "008000"
+  },
+  {
+    "format": "#{c:web grey}",
+    "expected": "808080"
+  },
+  {
+    "format": "#{c:web maroon}",
+    "expected": "800000"
+  },
+  {
+    "format": "#{c:web purple}",
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:wheat}",
+    "expected": "f5deb3"
+  },
+  {
+    "format": "#{c:wheat1}",
+    "expected": "ffe7ba"
+  },
+  {
+    "format": "#{c:wheat2}",
+    "expected": "eed8ae"
+  },
+  {
+    "format": "#{c:wheat3}",
+    "expected": "cdba96"
+  },
+  {
+    "format": "#{c:wheat4}",
+    "expected": "8b7e66"
+  },
+  {
+    "format": "#{c:white smoke}",
+    "expected": "f5f5f5"
+  },
+  {
+    "format": "#{c:white}",
+    "expected": "c0c0c0"
+  },
+  {
+    "format": "#{c:x11 gray}",
+    "expected": "bebebe"
+  },
+  {
+    "format": "#{c:x11 green}",
+    "expected": "00ff00"
+  },
+  {
+    "format": "#{c:x11 grey}",
+    "expected": "bebebe"
+  },
+  {
+    "format": "#{c:x11 maroon}",
+    "expected": "b03060"
+  },
+  {
+    "format": "#{c:x11 purple}",
+    "expected": "a020f0"
+  },
+  {
+    "format": "#{c:yellow green}",
+    "expected": "9acd32"
+  },
+  {
+    "format": "#{c:yellow}",
+    "expected": "808000"
+  },
+  {
+    "format": "#{c:yellow1}",
+    "expected": "ffff00"
+  },
+  {
+    "format": "#{c:yellow2}",
+    "expected": "eeee00"
+  },
+  {
+    "format": "#{c:yellow3}",
+    "expected": "cdcd00"
+  },
+  {
+    "format": "#{c:yellow4}",
+    "expected": "8b8b00"
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": "0"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": "0"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": "      "
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": "      "
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": "        "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": ""
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "3"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "3"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "a"
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "c"
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "ab..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "...bc"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "abc   "
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "   abc"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "xbc     "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "5"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "4"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "b"
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "...ab"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界ab  "
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "  界ab"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界x     "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界ab"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界ab"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界ab"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "界ab"
+    },
+    "expected": "界ab"
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "29"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "11"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "e"
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "...‍💻"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝🏽🇫🇷👩‍💻"
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝🏽🇫🇷👩‍💻"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝     "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝🏽🇫🇷👩‍💻"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝🏽🇫🇷👩‍💻"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝🏽🇫🇷👩‍💻"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "é☝🏽🇫🇷👩‍💻"
+    },
+    "expected": "é☝🏽🇫🇷👩‍💻"
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "15"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "14"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "##"
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "l"
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "##[..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "...al"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "##[bold]literal"
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "##[bold]literal"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "##[b    "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "##[bold]literal"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "\\#\\#\\[bold]literal"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "####[bold]literal"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "##[bold]literal"
+    },
+    "expected": "\"##[bold]literal\""
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "22"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "3"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]a"
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]c#[default]"
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]ab..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "...#[fg=red]bc#[default]"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]abc#[default]"
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]abc#[default]"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]xbc"
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "#[fg=red]abc#[default]"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "\\#\\[fg\\=red]abc\\#\\[default]"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "##[fg=red]abc##[default]"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "#[fg=red]abc#[default]"
+    },
+    "expected": "\"#[fg=red]abc#[default]\""
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "5"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "3"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "a"
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "c"
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "ab..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "...bc"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "a\nb\tc   "
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "   a\nb\tc"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "xbc     "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "a\nb\tc"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "a\nb\tc"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "a\nb\tc"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "a\nb\tc"
+    },
+    "expected": "a\\nb\\tc"
+  },
+  {
+    "format": "#{n:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "8"
+  },
+  {
+    "format": "#{w:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "6"
+  },
+  {
+    "format": "#{=1:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "##"
+  },
+  {
+    "format": "#{=-1:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "h"
+  },
+  {
+    "format": "#{=/2/...:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "####..."
+  },
+  {
+    "format": "#{=/-2/...:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "...sh"
+  },
+  {
+    "format": "#{p6:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "####hash"
+  },
+  {
+    "format": "#{p-6:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "####hash"
+  },
+  {
+    "format": "#{s/a/x/;=3;p8:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "####h   "
+  },
+  {
+    "format": "#{E:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "##hash"
+  },
+  {
+    "format": "#{q:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "\\#\\#\\#\\#hash"
+  },
+  {
+    "format": "#{q/h:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "########hash"
+  },
+  {
+    "format": "#{q/a:@value}",
+    "options": {
+      "@value": "####hash"
+    },
+    "expected": "\"####hash\""
+  },
+  {
+    "format": "#{==:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{==:é,É}",
+    "expected": "0"
+  },
+  {
+    "format": "#{==:[a-z]+,abc}",
+    "expected": "0"
+  },
+  {
+    "format": "#{==:*x*,aXb}",
+    "expected": "0"
+  },
+  {
+    "format": "#{!=:10,2}",
+    "expected": "1"
+  },
+  {
+    "format": "#{!=:é,É}",
+    "expected": "1"
+  },
+  {
+    "format": "#{!=:[a-z]+,abc}",
+    "expected": "1"
+  },
+  {
+    "format": "#{!=:*x*,aXb}",
+    "expected": "1"
+  },
+  {
+    "format": "#{<:10,2}",
+    "expected": "1"
+  },
+  {
+    "format": "#{<:é,É}",
+    "expected": "0"
+  },
+  {
+    "format": "#{<:[a-z]+,abc}",
+    "expected": "1"
+  },
+  {
+    "format": "#{<:*x*,aXb}",
+    "expected": "1"
+  },
+  {
+    "format": "#{>:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{>:é,É}",
+    "expected": "1"
+  },
+  {
+    "format": "#{>:[a-z]+,abc}",
+    "expected": "0"
+  },
+  {
+    "format": "#{>:*x*,aXb}",
+    "expected": "0"
+  },
+  {
+    "format": "#{<=:10,2}",
+    "expected": "1"
+  },
+  {
+    "format": "#{<=:é,É}",
+    "expected": "0"
+  },
+  {
+    "format": "#{<=:[a-z]+,abc}",
+    "expected": "1"
+  },
+  {
+    "format": "#{<=:*x*,aXb}",
+    "expected": "1"
+  },
+  {
+    "format": "#{>=:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{>=:é,É}",
+    "expected": "1"
+  },
+  {
+    "format": "#{>=:[a-z]+,abc}",
+    "expected": "0"
+  },
+  {
+    "format": "#{>=:*x*,aXb}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m:é,É}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m:[a-z]+,abc}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m:*x*,aXb}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/r:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/r:é,É}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/r:[a-z]+,abc}",
+    "expected": "1"
+  },
+  {
+    "format": "#{m/r:*x*,aXb}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/i:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/i:é,É}",
+    "expected": "1"
+  },
+  {
+    "format": "#{m/i:[a-z]+,abc}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/i:*x*,aXb}",
+    "expected": "1"
+  },
+  {
+    "format": "#{m/ri:10,2}",
+    "expected": "0"
+  },
+  {
+    "format": "#{m/ri:é,É}",
+    "expected": "1"
+  },
+  {
+    "format": "#{m/ri:[a-z]+,abc}",
+    "expected": "1"
+  },
+  {
+    "format": "#{m/ri:*x*,aXb}",
+    "expected": "0"
+  },
+  {
+    "format": "#{=999999999999999999999999:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/#[bold]abcd#[default]"
+  },
+  {
+    "format": "#{=-9223372036854775808:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/#[bold]abcd#[default]"
+  },
+  {
+    "format": "#{p-9223372036854775808:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/#[bold]abcd#[default]"
+  },
+  {
+    "format": "#{=10001:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/#[bold]abcd#[default]"
+  },
+  {
+    "format": "#{R:x,10001}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{R:x,not-number}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{a:99999999999999999999999}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{a:-9223372036854775808}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{=2;=4:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/#[bold]a"
+  },
+  {
+    "format": "#{p8;p6:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/#[bold]abcd#[default]"
+  },
+  {
+    "format": "#{b;q;d:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "."
+  },
+  {
+    "format": "#{q/h;E:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/##[bold]abcd##[default]"
+  },
+  {
+    "format": "#{E;q/h:@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "/a/##[bold]abcd##[default]"
+  },
+  {
+    "format": "#{?#{m:*,x},#{l:a#,b#}c},fallback}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "a,b}c"
+  },
+  {
+    "format": "#{?@a,a,@b,b,fallback}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "b"
+  },
+  {
+    "format": "#{?@a,a,default}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "default"
+  },
+  {
+    "format": "#{&&:1,#{!=:a,b},#{m:*,x}}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "1"
+  },
+  {
+    "format": "#{||:0,#{==:a,b},#{l:0}}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "0"
+  },
+  {
+    "format": "#界",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "#界"
+  },
+  {
+    "format": "#[fg=#abcdef]#{@host}",
+    "options": {
+      "@host": "hostname"
+    },
+    "expected": "#[fg=#abcdef]hostname"
+  },
+  {
+    "format": "###{@v}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "#/a/#[bold]abcd#[default]"
+  },
+  {
+    "format": "#{l:#(never)}",
+    "options": {
+      "@v": "/a/#[bold]abcd#[default]",
+      "@a": "",
+      "@b": "1"
+    },
+    "expected": "#(never)"
+  },
+  {
+    "format": "#{e|+:7.5,2.5}",
+    "expected": "9"
+  },
+  {
+    "format": "#{e|-:7.5,2.5}",
+    "expected": "5"
+  },
+  {
+    "format": "#{e|*:7.5,2.5}",
+    "expected": "14"
+  },
+  {
+    "format": "#{e|/:7.5,2.5}",
+    "expected": "3"
+  },
+  {
+    "format": "#{e|m:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|==:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|!=:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|<:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|<=:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|>:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|>=:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|+|f:7.5,2.5}",
+    "expected": "10.00"
+  },
+  {
+    "format": "#{e|-|f:7.5,2.5}",
+    "expected": "5.00"
+  },
+  {
+    "format": "#{e|*|f:7.5,2.5}",
+    "expected": "18.75"
+  },
+  {
+    "format": "#{e|/|f:7.5,2.5}",
+    "expected": "3.00"
+  },
+  {
+    "format": "#{e|m|f:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|==|f:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|!=|f:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{e|<|f:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|<=|f:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|>|f:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{e|>=|f:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{e|+|f|0:7.5,2.5}",
+    "expected": "10"
+  },
+  {
+    "format": "#{e|-|f|0:7.5,2.5}",
+    "expected": "5"
+  },
+  {
+    "format": "#{e|*|f|0:7.5,2.5}",
+    "expected": "19"
+  },
+  {
+    "format": "#{e|/|f|0:7.5,2.5}",
+    "expected": "3"
+  },
+  {
+    "format": "#{e|m|f|0:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|==|f|0:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|!=|f|0:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|<|f|0:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|<=|f|0:7.5,2.5}",
+    "expected": "0"
+  },
+  {
+    "format": "#{e|>|f|0:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|>=|f|0:7.5,2.5}",
+    "expected": "1"
+  },
+  {
+    "format": "#{e|+|f|3:7.5,2.5}",
+    "expected": "10.000"
+  },
+  {
+    "format": "#{e|-|f|3:7.5,2.5}",
+    "expected": "5.000"
+  },
+  {
+    "format": "#{e|*|f|3:7.5,2.5}",
+    "expected": "18.750"
+  },
+  {
+    "format": "#{e|/|f|3:7.5,2.5}",
+    "expected": "3.000"
+  },
+  {
+    "format": "#{e|m|f|3:7.5,2.5}",
+    "expected": "0.000"
+  },
+  {
+    "format": "#{e|==|f|3:7.5,2.5}",
+    "expected": "0.000"
+  },
+  {
+    "format": "#{e|!=|f|3:7.5,2.5}",
+    "expected": "1.000"
+  },
+  {
+    "format": "#{e|<|f|3:7.5,2.5}",
+    "expected": "0.000"
+  },
+  {
+    "format": "#{e|<=|f|3:7.5,2.5}",
+    "expected": "0.000"
+  },
+  {
+    "format": "#{e|>|f|3:7.5,2.5}",
+    "expected": "1.000"
+  },
+  {
+    "format": "#{e|>=|f|3:7.5,2.5}",
+    "expected": "1.000"
+  },
+  {
+    "format": "#{e|+|0|2:7.5,2.5}",
+    "expected": "9.00"
+  },
+  {
+    "format": "#{e|-|0|2:7.5,2.5}",
+    "expected": "5.00"
+  },
+  {
+    "format": "#{e|*|0|2:7.5,2.5}",
+    "expected": "14.00"
+  },
+  {
+    "format": "#{e|/|0|2:7.5,2.5}",
+    "expected": "3.00"
+  },
+  {
+    "format": "#{e|m|0|2:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{e|==|0|2:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|!=|0|2:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{e|<|0|2:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|<=|0|2:7.5,2.5}",
+    "expected": "0.00"
+  },
+  {
+    "format": "#{e|>|0|2:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{e|>=|0|2:7.5,2.5}",
+    "expected": "1.00"
+  },
+  {
+    "format": "#{p/ 5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc  "
+  },
+  {
+    "format": "#{=/ 5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x, 5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "xxxxx"
+  },
+  {
+    "format": "#{e/+/f/ 5:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "3.30000"
+  },
+  {
+    "format": "#{c:colour 5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:grey 5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "0d0d0d"
+  },
+  {
+    "format": "#{p/\t5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc  "
+  },
+  {
+    "format": "#{=/\t5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,\t5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "xxxxx"
+  },
+  {
+    "format": "#{e/+/f/\t5:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "3.30000"
+  },
+  {
+    "format": "#{c:colour\t5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:grey\t5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "0d0d0d"
+  },
+  {
+    "format": "#{p/ +5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc  "
+  },
+  {
+    "format": "#{=/ +5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x, +5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "xxxxx"
+  },
+  {
+    "format": "#{e/+/f/ +5:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "3.30000"
+  },
+  {
+    "format": "#{c:colour +5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "800080"
+  },
+  {
+    "format": "#{c:grey +5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "0d0d0d"
+  },
+  {
+    "format": "#{p/-0/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{=/-0/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,-0}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{e/+/f/-0:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "3"
+  },
+  {
+    "format": "#{c:colour-0}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "000000"
+  },
+  {
+    "format": "#{c:grey-0}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "000000"
+  },
+  {
+    "format": "#{p/5 /:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{=/5 /:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,5 }",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{e/+/f/5 :1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:colour5 }",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:grey5 }",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{p/5\t/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{=/5\t/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,5\t}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{e/+/f/5\t:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:colour5\t}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:grey5\t}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{p/0x5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{=/0x5/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,0x5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{e/+/f/0x5:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:colour0x5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:grey0x5}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{p/5x/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{=/5x/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,5x}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{e/+/f/5x:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:colour5x}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:grey5x}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{p/9223372036854775808/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{=/9223372036854775808/:@v}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "abc"
+  },
+  {
+    "format": "#{R:x,9223372036854775808}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{e/+/f/9223372036854775808:1.1,2.2}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:colour9223372036854775808}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{c:grey9223372036854775808}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{a: 65}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "A"
+  },
+  {
+    "format": "#{a:\t65}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "A"
+  },
+  {
+    "format": "#{a: +65}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": "A"
+  },
+  {
+    "format": "#{a:65 }",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{a:65x}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{a:0x41}",
+    "options": {
+      "@v": "abc"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{t/f/%Y/:@timestamp}",
+    "options": {
+      "@timestamp": " 1700000000"
+    },
+    "expected": "2026"
+  },
+  {
+    "format": "#{t/f/%Y/:@timestamp}",
+    "options": {
+      "@timestamp": "\t1700000000"
+    },
+    "expected": "2026"
+  },
+  {
+    "format": "#{t/f/%Y/:@timestamp}",
+    "options": {
+      "@timestamp": "+1700000000"
+    },
+    "expected": "2026"
+  },
+  {
+    "format": "#{t/f/%Y/:@timestamp}",
+    "options": {
+      "@timestamp": "1700000000 "
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{t/f/%Y/:@timestamp}",
+    "options": {
+      "@timestamp": "9223372036854775808"
+    },
+    "expected": ""
+  }
+]

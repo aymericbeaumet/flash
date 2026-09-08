@@ -29,7 +29,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[mode] enter_normal from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    dispatchMode(.enterNormal(targetPID: nil))
+    dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
   }
 
   func enterInsertMode(
@@ -58,6 +58,9 @@ extension AppDelegate {
   func applyModeEffects(_ effects: [ModeEffect], previous _: Mode, next: Mode) {
     for effect in effects {
       switch effect {
+      case .hideTerminalPopup:
+        terminalInputMappings?.flush()
+        overlay.statusPopupController.dismiss()
       case .setMappingScope(let scope):
         mappings.apply(scope: scope)
       case .clearTransientHintState:
@@ -92,7 +95,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command:
+    case .command, .terminal:
       break
     }
   }
@@ -114,6 +117,7 @@ extension AppDelegate {
     case .insert: return config.mode.labels.insert
     case .normal: return config.mode.labels.normal
     case .command: return config.mode.labels.command
+    case .terminal: return config.mode.labels.terminal
     }
   }
 
@@ -1001,6 +1005,8 @@ extension AppDelegate {
       enterInsertMode(reason: .lockedNormalModeInput)
     case .normalMode:
       enterNormalMode()
+    case .terminalRestart(let name):
+      restartStatusTerminal(named: name)
     case .commandMode:
       enterCommandLineMode()
     case .scroll(let kind):

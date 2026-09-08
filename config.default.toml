@@ -159,18 +159,13 @@ enabled = false
 # Which displays show the bar: "all" (default, every screen's top band) or
 # "primary" (only the main / menu-bar display).
 monitor = "all"
-# Poll cadence in seconds for command/script/cycle sections — tmux's
-# status-interval analog. A source can override it inline: #{script=30:…}
-# re-runs that script every 30 s regardless of this value; #{cycle=R/N:…}
-# polls every N s. Cycles without an explicit N poll at max(rotation,
-# interval) — a cycle can't show lines faster than it rotates, so polling
-# faster is waste. 0 disables periodic re-runs (sections run once when the
-# template loads).
+# Default poll cadence for named Flash sources. Each source can override it.
+# 0 runs once; cycle_interval controls rotation independently of polling.
 interval = 5
 # Bar text size in points (the mode pill uses the same size).
 font_size = 13
-# Timeout in seconds for one command/script/cycle subprocess run; past it
-# the process gets SIGTERM then SIGKILL and the previous value is kept.
+# Timeout for one named Flash source run; keep its last successful value on
+# timeout. Native #(...) jobs and persistent PTY commands have no such timeout.
 command_timeout = 6.0
 # Points kept clear on each side of a notch (camera housing). The centre
 # region hides entirely on notched screens.
@@ -186,126 +181,57 @@ popup_padding = 8
 popup_max_width = 480
 # Gap in points between the pointer and the popup's top edge.
 popup_offset = 8
-# Single template string for the status bar. Use tmux-style alignment
-# markers to switch which region subsequent content lands in:
+# One tmux 3.7b format string. Alignment and style markers can appear inside
+# conditional/option expansions. Newlines in this outer template are ignored.
+# Native formats, modifiers, #H/#h aliases, #(...) jobs, styles, and strftime
+# use tmux semantics. Missing tmux session/window/pane context is empty.
+# Flash supplies flash.mode, flash.date, flash.active_app_name,
+# flash.active_bundle_identifier, flash.plugin.<id>.<segment>,
+# flash.plugin.loaded_count/ready_count/error_count, and flash.source.<name>.
+# Colours use the standard xterm palette, ANSI names, or explicit #RRGGBB.
 #
-#   #[align=left]    — highlighted left cell (default until a marker fires)
-#   #[align=centre]  — centred section between left and right
-#   #[align=right]   — right-aligned section
-#
-# Inline styling markers stay in whatever region the parser is currently
-# filling and pass through to the renderer:
-#
-#   #[fg=colour245]       — foreground colour (numbered tmux palette)
-#   #[bg=colour0]         — background colour
-#   #[bold] / #[nobold]   — bold weight on/off
-#   #[italics] / #[noitalics]
-#   #[underscore] / #[nounderscore]
-#   #[dim] / #[nodim]
-#   #[reverse] / #[noreverse]
-#   #[blink] / #[noblink]            — pulse the wrapped text once a
-#                                     second (tmux's blink attribute).
-#   #[breathing] / #[nobreathing]    — Flash extension. Subtle opacity
-#                                     sinusoid on a 10-second cycle
-#                                     (80 → 100 % alpha) — well below a
-#                                     baseline meditation breath so the
-#                                     chip never signals, just sits alive.
-#                                     Used by the power plugin to mark
-#                                     a battery that's plugged in.
-#   #[popup=<name>] / #[nopopup]     — show the named `[statusbar.popup]`
-#                                     body while this text is hovered.
-#   #[popup=inline:<encoded>]         — show percent-encoded rich text carried
-#                                     by a dynamic value (useful for cycles).
-#
-# `##` emits a literal `#`. Wrap a token in `#{=N:…}` (or `#{=-N:…}` for
-# trailing window) to cap its rendered length at N characters — useful
-# when an app name or plugin field could overflow the bar.
-#
-# tmux format modifiers (composable by nesting, e.g. #{=10:#{s/a/b/:mode}}):
-#   #{?cond,a,b}            — ternary: cond is a variable (or nested
-#                             #{…} format); truthy = non-empty and not
-#                             "0". Escape a literal comma as #,
-#   #{==:a,b} #{!=:a,b}     — comparisons; both sides are formats.
-#   #{<:a,b} #{>:a,b}         Numeric when both parse as numbers,
-#   #{<=:a,b} #{>=:a,b}       lexicographic otherwise. Yield "1"/"0".
-#   #{&&:a,b} #{||:a,b}     — logic over truthiness. Yield "1"/"0".
-#   #{s/re/repl/:var}       — regex substitution (all matches; \1
-#                             backrefs; trailing i flag for case-
-#                             insensitive: #{s/re/repl/i:var}).
-#   #{pN:var} / #{p-N:var}  — pad right / left to N visible cells.
-#   #{=/N/marker:var}       — tmux marker truncation: keep N visible
-#   #{=-/N/marker:var}        cells, append/prepend marker when trimmed
-#                             (marker doesn't count toward N).
-#   #[default]              — reset style to the current default;
-#   #[push-default]         — make the current style the default
-#   #[pop-default]            (saving the old one) / restore it.
-#
-# strftime literals: `%`-codes in the template (e.g. %H:%M, %a %d) expand
-# with the current time before formats, exactly like tmux status strings;
-# `%%` is a literal percent. `%` inside script/plugin OUTPUT is untouched.
-# Colours: the full numbered palette (colour0–colour255), #RRGGBB hex, and
-# ANSI names now render; colour0/178/196/245 keep their Nord-theme shades.
-#
-# Supported template variables (#{token}):
-#   #{mode}
-#   #{active_app_name}
-#   #{active_bundle_identifier}
-#   #{date}
-#   #{host} / #H
-#   #{host_short} / #h
-#   #{user}
-#   #{uid}
-#   #{pid}
-#   #{plugin:loaded_count}
-#   #{plugin:ready_count}
-#   #{plugin:error_count}
-#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:power.summary};
-#                                    # tmux state comes from the tmux plugin:
-#                                    # #{plugin:tmux.session} / #{plugin:tmux.window}
-#                                    # / #{plugin:tmux.pane}
-#
-# Any other bare #{token} is a config error — tmux-state names like
-# #{session_name} or #S no longer validate-and-render-empty; use the
-# #{plugin:tmux.<segment>} equivalents above.
-#   #{script:<path>}                 # run <path>, show its stdout
-#   #{script=N:<path>}               # …re-running every N seconds
-#   #{command:<shell command>}       # run via /bin/sh -lc
-#   #{command=N:<shell command>}     # …re-running every N seconds
-#   #{cycle:<path>}                  # rotate through stdout lines, 60 s/line
-#   #{cycle=R:<path>}                # …rotating every R seconds
-#   #{cycle=R/N:<path>}              # …and re-running the script every N s
-#
-# A triple-quoted multi-line string lets long templates breathe across
-# rows. Newlines in the template are ignored before rendering.
-# Flash re-renders when mode, focused app, plugin status, or the minute
-# clock changes. Command/script sections are polled only when the
-# template contains them and keep their previous successful value until
-# a replacement is ready.
-template = "#[align=left]#{mode}#[align=right]#{date}"
-# The bundled CPU, memory, disks, network, and power summaries carry their
-# own live hover popups. Compose them here for an iStat-style combined view:
-# template = """
-#   #[align=left]#{mode}
-#   #[align=center]#{active_app_name}
-#   #[align=right]#{plugin:cpu.summary}
-#   #[fg=colour245] · #{plugin:memory.summary}
-#   #[fg=colour245] · #{plugin:disks.summary}
-#   #[fg=colour245] · #{plugin:network.summary}
-#   #[fg=colour245] · #{plugin:power.summary}
-#   #[fg=colour245] · #{date}
-#   """
+# Flash styles: link=URL/nolink, popup=name/nopopup,
+# popup=inline:<percent-encoded-rich-text>, breathing/nobreathing,
+# pill/nopill, and cyc/nocyc. Native range=user|name binds statusbar.click.
+# Values stay plain text unless a plugin intentionally publishes rich status.
+template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
-# Named textual hover overlays referenced by `#[popup=<name>]` spans. Bodies
-# preserve newlines and are full status templates: variables and
-# script/command/cycle sources refresh on their normal schedules, while the
-# popup follows the pointer without running work on hover. Inline fg/bg/bold,
-# italics, underline, dim, and reverse markers render exactly as in the bar.
+# Native tmux options. @names are tmux user options; E expands a value as a
+# format, T additionally expands its strftime codes. Fragments are optional:
+# the same text can be written directly in template.
+[statusbar.options]
+"@left" = "#[pill]#{flash.mode}#[nopill]"
+"@right" = "#[fg=#EBCB8B]#{flash.date}"
+# Example combined metrics:
+# "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
+
+# Named documents preserve newlines. Source/plugin values refresh independently
+# of hover; document popups run no processes and use the same terminal renderer.
 [statusbar.popup]
-# quota = """
-#   #[fg=colour178,bold]Claude#[default]
-#   5-hour: 53% remaining
-#   7-day: 14% remaining
-#   """
+# quota = "#[fg=#EBCB8B,bold]Quota#[default]\n5-hour: 53% remaining"
+
+# A command popup owns one PTY from Flash startup until exit/removal/shutdown,
+# even with the status bar hidden. It appears only while hovering its status
+# segment and hides immediately on leaving it, even toward the popup body.
+# Terminal bindings live in [mode.terminal.mappings].
+# An exited process keeps its final screen; terminal_restart restarts it.
+# Shell syntax requires explicit argv, e.g. ["/bin/sh", "-lc", "exec ytop"].
+# [statusbar.popup.system]
+# command = ["ytop"]
+# columns = 80
+# rows = 24
+# working_directory = "~"
+# env = { LANG = "en_US.UTF-8" }
+# Add #[popup=system]System#[nopopup] to any format fragment.
+
+# Use native #(shell command) for asynchronous tmux shell jobs. For explicit
+# argv, a poll cadence, or rotating output lines, declare a named Flash source
+# and refer to #{flash.source.news}. Relative paths follow the defining file.
+# interval=0 runs once; cycle_interval rotates nonempty output lines.
+# [statusbar.sources.news]
+# command = ["./news.sh"]
+# interval = 300
+# cycle_interval = 60
 
 # tmux status-line mouse model: a `#[range=user|<name>]…#[norange]` span in
 # the template (or in plugin/script output) names an action; this table

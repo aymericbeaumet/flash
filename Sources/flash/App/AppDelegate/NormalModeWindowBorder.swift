@@ -109,6 +109,8 @@ extension AppDelegate {
     reason: String
   ) {
     if suspended {
+      terminalInputMappings?.flush()
+      overlay?.hideStatusBarPopup()
       let inserted = activeWindowBorderSessionSuspensions.insert(source).inserted
       guard inserted else { return }
       FlashLog.trace("[mode] active_border_session_suspend reason=\(reason)")

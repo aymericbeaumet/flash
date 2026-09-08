@@ -11,16 +11,17 @@ enum ModeLabel: Equatable {
   case insert
   case normal
   case command
+  case terminal
 }
 
 extension Mode {
   /// The coarse insert/normal axis used by consumers that only care about that
   /// distinction and the pointer interaction policy. Command surfaces have a
-  /// separate mapping scope effect that unregisters Carbon mappings while the
-  /// field editor owns the keyboard.
+  /// separate mapping scope effect. Terminal input uses the non-capturing axis;
+  /// its label, input owner, and mapping scope remain explicitly terminal.
   var flashMode: FlashMode {
     switch self {
-    case .disabled, .insert: return .insert
+    case .disabled, .insert, .terminal: return .insert
     case .normal, .command: return .normal
     }
   }
@@ -40,7 +41,7 @@ extension Mode {
     // sets a flag and re-renders instead of poking `overlay` fields directly.
     if nativeSurfaceSuspended { return false }
     switch self {
-    case .disabled, .insert:
+    case .disabled, .insert, .terminal:
       return false
     case .normal:
       return !hasHints && !activationInFlight
@@ -65,6 +66,8 @@ extension Mode {
     switch self {
     case .disabled, .insert:
       return .hints
+    case .terminal:
+      return .normal
     case .normal:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
@@ -82,6 +85,7 @@ extension Mode {
     case .disabled, .insert: return .insert
     case .normal: return .normal
     case .command: return .command
+    case .terminal: return .terminal
     }
   }
 
@@ -93,6 +97,7 @@ extension Mode {
     case .disabled, .insert: return .insert
     case .normal: return .normal
     case .command: return .command
+    case .terminal: return .command
     }
   }
 

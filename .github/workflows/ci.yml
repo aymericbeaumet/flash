@@ -103,6 +103,14 @@ jobs:
           key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-build-
+      - uses: jdx/mise-action@v2
+      - name: Cache libghostty-vt
+        uses: actions/cache@v4
+        with:
+          path: build/ghostty
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+      - name: Build libghostty-vt
+        run: ./Scripts/build-ghostty.sh --dev
       - name: Full plugin pipeline
         # Scripts/test-plugins.sh runs everything: spec-schema validation,
         # Rust lint, per-crate cargo unit tests, dev builds of all executable
@@ -130,6 +138,14 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - name: Cache libghostty-vt
+        uses: actions/cache@v4
+        with:
+          path: build/ghostty
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+      - name: Build libghostty-vt
+        run: ./Scripts/build-ghostty.sh --dev
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
@@ -145,8 +161,32 @@ jobs:
   test:
     name: Test
     runs-on: macos-15
+    env:
+      TMUX_ORACLE: ${{ github.workspace }}/build/tmux-oracle/bin/tmux
+      FLASH_REQUIRE_TMUX_ORACLE: '1'
     steps:
       - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - name: Install tmux oracle build dependencies
+        run: brew install libevent ncurses pkg-config
+      - name: Cache pinned tmux oracle
+        uses: actions/cache@v4
+        with:
+          path: build/tmux-oracle
+          key: ${{ runner.os }}-${{ runner.arch }}-tmux-oracle-${{ hashFiles('Scripts/build-tmux-oracle.sh') }}
+      - name: Build pinned tmux oracle
+        run: |
+          ./Scripts/build-tmux-oracle.sh
+          echo "$GITHUB_WORKSPACE/build/tmux-oracle/bin" >> "$GITHUB_PATH"
+      - name: Check native format expansion oracle
+        run: python3 Scripts/test-status-format-oracle.py
+      - name: Cache libghostty-vt
+        uses: actions/cache@v4
+        with:
+          path: build/ghostty
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+      - name: Build libghostty-vt
+        run: ./Scripts/build-ghostty.sh --dev
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
@@ -245,6 +285,7 @@ jobs:
           echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
           echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
 
+      - uses: jdx/mise-action@v2
       - name: Package Flash.app
         id: package
         if: steps.meta.outputs.deploy == 'true'

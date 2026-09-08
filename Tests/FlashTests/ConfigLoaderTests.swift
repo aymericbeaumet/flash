@@ -134,7 +134,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
     XCTAssertEqual(
       c.statusBar.template.template,
-      "#[align=left]#{mode}#[align=right]#{date}")
+      "#[align=left]#{E:@left}#[align=right]#{T:@right}")
     XCTAssertEqual(c.statusBar.template.variables.count, 2)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
@@ -220,44 +220,37 @@ final class ConfigLoaderTests: XCTestCase {
       })
   }
 
-  func testParsesStatusBarTemplate() {
+  func testParsesStatusBarTemplateOptionsAndExplicitSources() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]#{plugin:ready_count} | #{plugin:power.summary} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
+      template = "#[align=left]#{E:@left}#[align=right]#{flash.plugin.ready_count} | #{flash.plugin.power.summary} | #{flash.source.script} | #(date +%H:%M)"
+      [statusbar.options]
+      "@left" = "#{flash.active_bundle_identifier} #{flash.mode}"
+      [statusbar.sources.script]
+      command = ["/bin/sh", "~/bin/right-status.sh"]
+      interval = 30
+      cycle_interval = 5
       """)
 
-    let template = c.statusBar.template
+    XCTAssertEqual(c.statusBar.options["@left"], "#{flash.active_bundle_identifier} #{flash.mode}")
     XCTAssertEqual(
-      template.template,
-      "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]"
-        + "#{plugin:ready_count} | #{plugin:power.summary} | "
-        + "#{script:~/bin/right-status.sh} | "
-        + "#{command:date +%H:%M}")
+      c.statusBar.sources["script"],
+      FlashStatusBarSourceDefinition(
+        command: ["/bin/sh", "~/bin/right-status.sh"],
+        intervalSeconds: 30, cycleIntervalSeconds: 5))
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    let sources = Dictionary(
+      uniqueKeysWithValues: c.statusBar.template.variables.map { ($0.token, $0.source) })
+    XCTAssertEqual(sources["flash.active_bundle_identifier"], .sdk(.activeBundleIdentifier))
+    XCTAssertEqual(sources["flash.mode"], .sdk(.modeLabel))
+    XCTAssertEqual(sources["flash.plugin.ready_count"], .plugin(.readyCount))
     XCTAssertEqual(
-      template.variables.map(\.token),
-      [
-        "active_bundle_identifier",
-        "mode",
-        "plugin:ready_count",
-        "plugin:power.summary",
-        "script:~/bin/right-status.sh",
-        "command:date +%H:%M",
-      ])
-    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
-
-    XCTAssertEqual(template.variables[0].source, .sdk(.activeBundleIdentifier))
-    XCTAssertEqual(template.variables[1].source, .sdk(.modeLabel))
-    XCTAssertEqual(template.variables[2].source, .plugin(.readyCount))
-    XCTAssertEqual(
-      template.variables[3].source,
+      sources["flash.plugin.power.summary"],
       .plugin(.statusSegment(pluginID: "power", name: "summary")))
-    XCTAssertEqual(
-      template.variables[4].source,
-      .command(FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/right-status.sh"])))
-    XCTAssertEqual(
-      template.variables[5].source,
-      .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date +%H:%M"])))
+    XCTAssertEqual(c.statusBar.template.sourceNames, ["script"])
+    XCTAssertTrue(
+      StatusFormatProgram.compile(source: c.statusBar.template.template).dependencies.containsJobs)
   }
 
   func testStatusBarEnabledIsTheSoleVisibilitySwitch() {
@@ -268,7 +261,7 @@ final class ConfigLoaderTests: XCTestCase {
       ConfigLoader.parse(
         """
         [statusbar]
-        template = "#{mode}"
+        template = "#{flash.mode}"
         """
       ).statusBar.enabled)
 
@@ -296,8 +289,8 @@ final class ConfigLoaderTests: XCTestCase {
       """
       [statusbar]
       template = \"\"\"
-        #[align=left]#{mode}\\
-        #[align=right]#{plugin:ready_count} | #{date}
+        #[align=left]#{flash.mode}\\
+        #[align=right]#{flash.plugin.ready_count} | #{flash.date}
         \"\"\"
       """)
 
@@ -306,8 +299,9 @@ final class ConfigLoaderTests: XCTestCase {
     // strings become one continuous template.
     XCTAssertEqual(
       t.template.trimmingCharacters(in: .whitespacesAndNewlines),
-      "#[align=left]#{mode}#[align=right]#{plugin:ready_count} | #{date}")
-    XCTAssertEqual(t.variables.map(\.token), ["mode", "plugin:ready_count", "date"])
+      "#[align=left]#{flash.mode}#[align=right]#{flash.plugin.ready_count} | #{flash.date}")
+    XCTAssertEqual(
+      Set(t.variables.map(\.token)), ["flash.mode", "flash.plugin.ready_count", "flash.date"])
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -316,18 +310,19 @@ final class ConfigLoaderTests: XCTestCase {
       """
       [statusbar]
       template = \"\"\"
-      #[align=left]#{mode}
-      #[align=center]#{active_app_name}
-      #[align=right]#{date}
+      #[align=left]#{flash.mode}
+      #[align=centre]#{flash.active_app_name}
+      #[align=right]#{flash.date}
       \"\"\"
       """)
 
     XCTAssertEqual(
       c.statusBar.template.template,
-      "#[align=left]#{mode}#[align=center]#{active_app_name}#[align=right]#{date}")
+      "#[align=left]#{flash.mode}#[align=centre]#{flash.active_app_name}#[align=right]#{flash.date}"
+    )
     XCTAssertEqual(
-      c.statusBar.template.variables.map(\.token),
-      ["mode", "active_app_name", "date"])
+      Set(c.statusBar.template.variables.map(\.token)),
+      ["flash.mode", "flash.active_app_name", "flash.date"])
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -338,48 +333,40 @@ final class ConfigLoaderTests: XCTestCase {
       template = "#[align=left]#H#h #{host} #{host_short} #{user} #{uid} #{pid}"
       """)
 
-    XCTAssertEqual(
-      c.statusBar.template.variables.map(\.token),
-      ["host", "host_short", "user", "uid", "pid"])
-    XCTAssertEqual(c.statusBar.template.variables[0].source, .sdk(.host))
-    XCTAssertEqual(c.statusBar.template.variables[1].source, .sdk(.hostShort))
-    XCTAssertEqual(c.statusBar.template.variables[2].source, .sdk(.user))
-    XCTAssertEqual(c.statusBar.template.variables[3].source, .sdk(.uid))
-    XCTAssertEqual(c.statusBar.template.variables[4].source, .sdk(.pid))
+    let sources = Dictionary(
+      uniqueKeysWithValues: c.statusBar.template.variables.map { ($0.token, $0.source) })
+    XCTAssertEqual(sources["host"], .sdk(.host))
+    XCTAssertEqual(sources["host_short"], .sdk(.hostShort))
+    XCTAssertEqual(sources["user"], .sdk(.user))
+    XCTAssertEqual(sources["uid"], .sdk(.uid))
+    XCTAssertEqual(sources["pid"], .sdk(.pid))
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
-  func testTmuxStateStatusBarTokensAreConfigErrors() {
-    // The tmux-state dialect is gone: session/window/pane state renders
-    // through #{plugin:tmux.<segment>}, and the old names — like every
-    // other unknown bare identifier — are loud config errors instead of
-    // silently-empty output.
-    for token in ["session_name", "window_name", "window_index", "pane_index", "pane_id"] {
+  func testNativeTmuxValuesWithoutFlashContextAreValidAndEmpty() {
+    for token in [
+      "session_name", "window_name", "window_index", "pane_index", "pane_id", "sesion_name",
+    ] {
       let c = ConfigLoader.parse(
         """
         [statusbar]
         template = "#{\(token)}"
         """)
-      XCTAssertTrue(
-        c.loadingDiagnostics.contains {
-          $0.message.contains("statusbar.template template variable \"\(token)\"")
-        }, "expected a diagnostic for #{\(token)}")
-      XCTAssertTrue(c.statusBar.template.variables.isEmpty)
+      XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+      XCTAssertEqual(
+        StatusFormatProgram.compile(source: c.statusBar.template.template).evaluate().text, "")
     }
   }
 
-  func testUnknownBareStatusBarTokenIsAConfigError() {
-    // A typo like #{sesion_name} used to validate as "some tmux variable"
-    // and render as "" forever.
+  func testUnknownFlashValueIsAConfigError() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#{sesion_name}"
+      template = "#{flash.active_ap_name}"
       """)
-
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
-        $0.message.contains("statusbar.template template variable \"sesion_name\"")
+        $0.message.contains("unknown Flash value flash.active_ap_name")
       })
   }
 
@@ -389,24 +376,35 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#{?#{==:#{mode},NORMAL},N,-}"
+      template = "#{?#{==:#{flash.mode},NORMAL},N,-}"
       """)
 
-    XCTAssertEqual(c.statusBar.template.variables.map(\.token), ["mode"])
+    XCTAssertTrue(c.statusBar.template.variables.contains { $0.token == "flash.mode" })
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
-  func testInvalidStatusBarTemplateReportsDiagnostics() {
+  func testInvalidStatusBarTemplateReportsCompilerDiagnostics() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#{nope}#[align=right]#{plugin:nope}"
+      template = "#{?#{flash.mode},yes,no"
       """)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.hasPrefix("statusbar.template:") && $0.message.contains("format byte")
+      }, "\(c.loadingDiagnostics.map(\.message))")
+  }
 
-    XCTAssertEqual(
-      c.loadingDiagnostics.filter {
-        $0.message.contains("statusbar.template template variable")
-      }.count, 2)
+  func testUndefinedStatusSourceReportsItsName() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{flash.source.missing}"
+      """)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("references undefined source missing")
+      })
   }
 
   func testParsesModeLabelsInlineTable() {
@@ -790,7 +788,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(plugins["disabled"] as? [String], [])
     XCTAssertEqual(plugins["third_party"] as? [String], [])
     XCTAssertEqual(
-      statusBar["template"] as? String, "#[align=left]#{mode}#[align=right]#{date}")
+      statusBar["template"] as? String, "#[align=left]#{E:@left}#[align=right]#{T:@right}")
   }
 
   func testResolvedConfigJSONNeverIncludesPluginSettingValues() throws {
@@ -1754,7 +1752,7 @@ final class ConfigLoaderTests: XCTestCase {
         min_length = 2
         [statusbar]
         interval = 30
-        template = "#{mode}"
+        template = "#{flash.mode}"
         """,
       diagnosticLabel: "config.default.toml")
     let user = ConfigLoader.Layer(
@@ -1767,7 +1765,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.statusBar.refreshIntervalSeconds, 10)
     // Inherited from the earlier layer where the later one is silent:
     XCTAssertEqual(c.hints.minLength, 2)
-    XCTAssertEqual(c.statusBar.template.template, "#{mode}")
+    XCTAssertEqual(c.statusBar.template.template, "#{flash.mode}")
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -1820,12 +1818,12 @@ final class ConfigLoaderTests: XCTestCase {
   }
 
   func testLayeredParseTemplateSourceFollowsDefiningLayer() {
-    // Relative #{script:…} paths must resolve against the file that DEFINED
-    // the template, not the last file parsed.
+    // Diagnostics retain the file that defined the template even when later
+    // layers change unrelated settings.
     let definer = ConfigLoader.Layer(
       text: """
         [statusbar]
-        template = "#{mode}"
+        template = "#{flash.mode}"
         """,
       sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"),
       diagnosticLabel: "config.default.toml")
@@ -1841,29 +1839,37 @@ final class ConfigLoaderTests: XCTestCase {
       URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
   }
 
-  func testLayeredPopupTemplatesKeepIndependentSourcesAndCommandIDs() {
+  func testLayeredPopupSourcesResolveCommandsAgainstTheirDefiningFiles() {
     let base = ConfigLoader.Layer(
       text: """
         [statusbar.popup]
-        base = "#{script:./details.sh}"
+        base = "#{flash.source.base}"
+        [statusbar.sources.base]
+        command = ["/bin/sh", "./details.sh"]
+        working_directory = "./work"
         """,
       sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
     let user = ConfigLoader.Layer(
       text: """
         [statusbar.popup]
-        user = "#{script:./details.sh}"
+        user = "#{flash.source.user}"
+        [statusbar.sources.user]
+        command = ["/bin/sh", "./details.sh"]
+        working_directory = "./work"
         """,
       sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml"))
     let c = ConfigLoader.parseLayers([base, user])
 
-    let baseVariable = c.statusBar.popups["base"]?.variables.first
-    let userVariable = c.statusBar.popups["user"]?.variables.first
-    XCTAssertNotEqual(baseVariable?.id, userVariable?.id)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
     XCTAssertEqual(
-      baseVariable?.source,
-      .command(.script("/tmp/flash-defaults/details.sh")))
+      c.statusBar.sources["base"]?.command,
+      ["/bin/sh", "/tmp/flash-defaults/details.sh"])
     XCTAssertEqual(
-      userVariable?.source,
-      .command(.script("/tmp/user/details.sh")))
+      c.statusBar.sources["user"]?.command,
+      ["/bin/sh", "/tmp/user/details.sh"])
+    XCTAssertEqual(c.statusBar.sources["base"]?.workingDirectory, "/tmp/flash-defaults/work")
+    XCTAssertEqual(c.statusBar.sources["user"]?.workingDirectory, "/tmp/user/work")
+    XCTAssertEqual(c.statusBar.popupSourceURLs["base"], base.sourceURL)
+    XCTAssertEqual(c.statusBar.popupSourceURLs["user"], user.sourceURL)
   }
 }

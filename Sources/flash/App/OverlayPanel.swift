@@ -72,30 +72,8 @@ final class OverlayPanel: NSPanel {
   var hintLayerPool: [CAGradientLayer] = []
   var labelLayerPool: [CATextLayer] = []
   let modeBadgeLayer = CAGradientLayer()
-  let statusAppLabel = CATextLayer()
-  let modeBadgeButtonLayer = CAGradientLayer()
-  let modeBadgeLabel = CATextLayer()
-  /// Styled text that follows `#{mode}` in the `#[align=left]` bucket. The
-  /// mode pill itself only renders the mode label; anything after it (e.g.
-  /// `#{mode}#[fg=colour245] · HN …`) is a normal tmux-styled run rendered
-  /// here so it doesn't inherit the bold mode-pill palette.
-  let statusLeftTrailingLabel = CATextLayer()
-  /// The rotating `#{cycle:…}` run in the left-trailing region, rendered in its
-  /// own layer (clipped to one line) so it can slide vertically while the text
-  /// around it — the mode pill, the "HN" label — stays put.
-  let statusLeftTrailingCycleLayer = CATextLayer()
-  var lastRenderedLeftTrailingCycle: String?
-  /// Pooled overlay layers painting the primary bar's animated spans (see
-  /// `placeEffectOverlays`) — their opacity runs on render-server
-  /// animations, never a process timer.
-  var statusEffectOverlays: [CATextLayer] = []
-  let statusRightLabel = CATextLayer()
-  /// Status bars rendered on every non-main screen. Allocated lazily by
-  /// `configureSecondaryStatusBars` and pruned when displays disconnect.
-  /// Each entry mirrors the primary bar's text but uses its own screen's
-  /// native top-band height so users see the bar at the right vertical
-  /// position regardless of which monitor they look at.
-  var secondaryStatusBars: [SecondaryStatusBar] = []
+  lazy var primaryStatusBarSurface = NativeStatusBarSurface(backgroundLayer: modeBadgeLayer)
+  var secondaryStatusBars: [NativeStatusBarSurface] = []
   /// Which displays render the bar (`[statusbar] monitor`). `primary` skips the
   /// secondary (non-main) screen bars. Set by the AppDelegate on config load.
   var statusBarMonitor: Config.StatusBar.Monitor = .all
@@ -113,18 +91,15 @@ final class OverlayPanel: NSPanel {
   /// screen so every meaningful status segment is hintable without duplicating
   /// mirrored bars. Empty while the bar is hidden.
   var statusBarInteractionsByScreen: [StatusBarScreenInteractions] = []
-  /// Named hover-popup hit regions use the click windows' existing tracking
-  /// areas but render into this panel so no extra event surface or event tap
-  /// is needed.
-  let statusPopupLayer = CALayer()
-  let statusPopupLabel = CATextLayer()
+  let statusTerminals = StatusTerminalRegistry()
+  lazy var statusPopupController = StatusPopupController(terminals: statusTerminals)
   var statusBarPopupStyle = Config.StatusBar.PopupStyle() {
     didSet {
-      if oldValue != statusBarPopupStyle { hideStatusBarPopup() }
+      if oldValue != statusBarPopupStyle { statusPopupController.updateStyle(statusBarPopupStyle) }
     }
   }
   var statusBarPopupTexts: [String: String] = [:]
-  var statusModePopupName: String?
+  var statusBarPopupDocuments: [String: [FlashStatusTextSegment]] = [:]
   var activeStatusBarPopupName: String?
   var activeStatusBarPopupContent: String?
   var activeStatusBarPopupVisibleFrame: CGRect?
@@ -167,23 +142,8 @@ final class OverlayPanel: NSPanel {
   /// hints-mode keys to `HintSearchInterpreter`.
   var searchModeActive = false
   var modeBadgeVisible = false
-  var statusAppText = ""
+  var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
   var modeBadgeText = "INSERT"
-  /// Styled text that follows `#{mode}` in the `#[align=left]` bucket. Held
-  /// separately from `modeBadgeText` so a mode change (which rewrites only
-  /// the pill label) doesn't blow away the trailing run and flash it.
-  var statusLeftTrailingText = ""
-  var statusRightText = ""
-  /// Last content actually pushed to each status-bar text layer. A
-  /// re-render that leaves a segment unchanged skips the `.string`
-  /// reassignment + `setNeedsDisplay()` that would otherwise flash it.
-  /// Animated segments (`#[breathing]` / `#[blink]`) bypass the cache so
-  /// the effects tick keeps advancing.
-  var lastRenderedPill: String?
-  var lastRenderedPillStyle: OverlayModeBadgeStyle?
-  var lastRenderedLeftTrailing: String?
-  var lastRenderedCentre: String?
-  var lastRenderedRight: String?
   var modeBadgeStyle: OverlayModeBadgeStyle = .insert
   var modeBadgeCapturesInput = false
   var commandPromptVisible = false
@@ -434,33 +394,6 @@ final class OverlayPanel: NSPanel {
     modeBadgeLayer.borderWidth = 0
     modeBadgeLayer.opacity = 1
     modeBadgeLayer.actions = OverlayPanel.noActions
-    statusAppLabel.alignmentMode = .left
-    statusAppLabel.actions = OverlayPanel.noActions
-    modeBadgeButtonLayer.cornerRadius = 4
-    modeBadgeButtonLayer.borderWidth = 0
-    modeBadgeButtonLayer.actions = OverlayPanel.noActions
-    modeBadgeLabel.alignmentMode = .center
-    modeBadgeLabel.actions = OverlayPanel.noActions
-    modeBadgeButtonLayer.sublayers = [modeBadgeLabel]
-    statusLeftTrailingLabel.alignmentMode = .left
-    statusLeftTrailingLabel.actions = OverlayPanel.noActions
-    statusLeftTrailingCycleLayer.alignmentMode = .left
-    statusLeftTrailingCycleLayer.actions = OverlayPanel.noActions
-    statusLeftTrailingCycleLayer.masksToBounds = true
-    statusLeftTrailingCycleLayer.isHidden = true
-    statusRightLabel.alignmentMode = .right
-    statusRightLabel.actions = OverlayPanel.noActions
-    statusPopupLayer.actions = OverlayPanel.noActions
-    statusPopupLayer.masksToBounds = true
-    statusPopupLayer.isHidden = true
-    statusPopupLabel.alignmentMode = .left
-    statusPopupLabel.isWrapped = true
-    statusPopupLabel.actions = OverlayPanel.noActions
-    statusPopupLayer.sublayers = [statusPopupLabel]
-    modeBadgeLayer.sublayers = [
-      statusAppLabel, modeBadgeButtonLayer, statusLeftTrailingLabel,
-      statusLeftTrailingCycleLayer, statusRightLabel,
-    ]
     commandPromptLayer.cornerRadius = 6
     commandPromptLayer.borderWidth = 1.5
     commandPromptLayer.masksToBounds = false
