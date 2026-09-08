@@ -4,6 +4,11 @@ import CoreText
 public final class TerminalView: NSView, NSTextInputClient {
   public var inputInterceptor: ((NSEvent) -> Bool)?
   public var onFocusRequested: (() -> Void)?
+  public var openURL: (URL) -> Void = { url in
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    NSWorkspace.shared.open(url, configuration: configuration)
+  }
   public var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular) {
     didSet {
       needsDisplay = true
@@ -27,7 +32,11 @@ public final class TerminalView: NSView, NSTextInputClient {
   private weak var session: TerminalSession?
   private weak var document: TerminalDocument?
   private var selection: ClosedRange<Int>?
-  private var selectionStart: Int?
+  private enum MouseGesture {
+    case reporting
+    case selecting(start: Int, link: URL?, origin: NSPoint, dragged: Bool)
+  }
+  private var mouseGesture: MouseGesture?
   private var marked = NSAttributedString(string: "")
   private var markedSelection = NSRange(location: 0, length: 0)
   private var interpretingEvent: NSEvent?
@@ -70,6 +79,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     self.session = session
     terminalFrame = session?.frame
     selection = nil
+    mouseGesture = nil
     session?.onFrame = { [weak self] in self?.receive($0) }
     if window?.firstResponder === self { session?.setFocused(true) }
     updateCellGeometry()
@@ -83,6 +93,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     self.document = document
     terminalFrame = document.frame
     selection = nil
+    mouseGesture = nil
     document.onFrame = { [weak self] in self?.receive($0) }
     updateColors()
   }
@@ -351,36 +362,69 @@ public final class TerminalView: NSView, NSTextInputClient {
         rect: bounds, options: [.activeAlways, .mouseMoved, .inVisibleRect], owner: self))
   }
   public override func mouseMoved(with event: NSEvent) {
-    guard window?.isKeyWindow == true, terminalFrame?.mouseTracking == true else { return }
+    guard window?.isKeyWindow == true, terminalFrame?.mouseTracking == true,
+      !event.modifierFlags.contains(.shift)
+    else { return }
     forwardTerminalMouse(event, action: 2, button: 0)
   }
+  private func link(at event: NSEvent) -> URL? {
+    let point = convert(event.locationInWindow, from: nil)
+    guard let frame = terminalFrame,
+      point.x >= 0, point.y >= 0,
+      point.x < CGFloat(frame.columns) * cellSize.width,
+      point.y < CGFloat(frame.rows) * cellSize.height
+    else { return nil }
+    return frame.link(atColumn: Int(point.x / cellSize.width), row: Int(point.y / cellSize.height))
+  }
+
   public override func mouseDown(with event: NSEvent) {
     onFocusRequested?()
     window?.makeFirstResponder(self)
     let cell = cell(at: event)
     if terminalFrame?.mouseTracking == true && !event.modifierFlags.contains(.shift) {
+      mouseGesture = .reporting
       forwardTerminalMouse(event, action: 0, button: 1)
     } else {
-      selectionStart = cell.row * (terminalFrame?.columns ?? 1) + cell.column
-      selection = selectionStart.map { $0...$0 }
+      let start = cell.row * (terminalFrame?.columns ?? 1) + cell.column
+      mouseGesture = .selecting(
+        start: start, link: event.modifierFlags.contains(.shift) ? link(at: event) : nil,
+        origin: event.locationInWindow, dragged: false)
+      selection = start...start
       needsDisplay = true
     }
   }
   public override func mouseDragged(with event: NSEvent) {
-    let cell = cell(at: event)
-    if let start = selectionStart {
+    switch mouseGesture {
+    case .selecting(let start, let link, let origin, let dragged):
+      let cell = cell(at: event)
       let index = cell.row * (terminalFrame?.columns ?? 1) + cell.column
+      mouseGesture = .selecting(
+        start: start, link: link, origin: origin,
+        dragged: dragged
+          || hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 4)
       selection = min(start, index)...max(start, index)
       needsDisplay = true
-    } else {
+    case .reporting:
       forwardTerminalMouse(event, action: 2, button: 1)
+    case nil:
+      break
     }
   }
   public override func mouseUp(with event: NSEvent) {
-    if selectionStart == nil {
+    defer { mouseGesture = nil }
+    switch mouseGesture {
+    case .reporting:
       forwardTerminalMouse(event, action: 1, button: 1)
+    case .selecting(_, let destination?, let origin, false):
+      guard hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) <= 4,
+        link(at: event) == destination
+      else { return }
+      selection = nil
+      needsDisplay = true
+      openURL(destination)
+    default:
+      break
     }
-    selectionStart = nil
   }
   public override func rightMouseDown(with event: NSEvent) {
     forwardMouse(event, action: 0, button: 2)

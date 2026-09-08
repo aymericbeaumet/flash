@@ -136,7 +136,9 @@ rows = 24
 
 Hover previews disappear when the pointer leaves their status segment. Click
 a popup label to keep it open and use the terminal; click again to close it.
-Links still open normally; Option-click focuses their popup. Hiding a popup
+Right-click a popup segment to keep it open and enter terminal mode. Links
+still open normally on left-click; Option-click also focuses their popup.
+Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a popup
 keeps its child alive. See the [SYS, battery, and calendar setup](docs/examples/statusbar/README.md)
 for a combined system dashboard and persistent calendar.
 See [terminal lifecycle and configuration](docs/terminal-popups.md).

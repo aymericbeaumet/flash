@@ -70,6 +70,23 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(emoji.rows, 1)
   }
 
+  func testDocumentLinkLabelsReachTerminalFramesWithoutControlInjection() {
+    var linked = FlashStatusTextSegment(text: "Read", foreground: .defaultForeground)
+    linked.link = "https://example.com/article"
+    var invalid = FlashStatusTextSegment(text: " Plain", foreground: .defaultForeground)
+    invalid.link = "https://example.com/\u{1B}[2J"
+    let document = TerminalDocument(columns: 20, rows: 1)
+    let ready = expectation(description: "document hyperlinks")
+    document.onFrame = { frame in
+      XCTAssertTrue(frame.text.hasPrefix("Read Plain"))
+      XCTAssertTrue(frame.cells.prefix(4).allSatisfy { $0.hyperlink == linked.link })
+      XCTAssertTrue(frame.cells.dropFirst(4).allSatisfy { $0.hyperlink == nil })
+      ready.fulfill()
+    }
+    document.replace(data: StatusPopupController.documentVT([linked, invalid]))
+    wait(for: [ready], timeout: 5)
+  }
+
   func testSameDocumentRefreshPreservesScrollAndChangedTextClearsOldTail() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)

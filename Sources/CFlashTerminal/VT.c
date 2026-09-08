@@ -15,6 +15,9 @@ struct FlashVT {
   uint32_t cell_width, cell_height;
   uint8_t *text;
   size_t capacity;
+  uint8_t *hyperlink;
+  size_t hyperlink_capacity;
+  bool row_wrapped;
 };
 static void write_pty(GhosttyTerminal terminal, void *context,
                       const uint8_t *bytes, size_t length) {
@@ -73,6 +76,7 @@ void flash_vt_free(FlashVT *vt) {
   ghostty_render_state_free(vt->render);
   ghostty_terminal_free(vt->terminal);
   free(vt->text);
+  free(vt->hyperlink);
   free(vt);
 }
 void flash_vt_write(FlashVT *vt, const uint8_t *bytes, size_t length) {
@@ -146,10 +150,17 @@ bool flash_vt_cell(FlashVT *vt, uint16_t x, uint16_t y, FlashVTCell *cell) {
     vt->current_row = vt->current_row == UINT16_MAX ? 0 : vt->current_row + 1;
     ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
                                  &vt->cells);
+    GhosttyRow row = 0;
+    vt->row_wrapped = false;
+    if (ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
+                                     &row) != GHOSTTY_SUCCESS)
+      return false;
+    ghostty_row_get(row, GHOSTTY_ROW_DATA_WRAP, &vt->row_wrapped);
   }
   if (ghostty_render_state_row_cells_select(vt->cells, x) != GHOSTTY_SUCCESS)
     return false;
   memset(cell, 0, sizeof(*cell));
+  cell->row_wrapped = vt->row_wrapped;
   GhosttyBuffer text = {.ptr = vt->text, .cap = vt->capacity};
   if (ghostty_render_state_row_cells_get(
           vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
@@ -197,6 +208,31 @@ bool flash_vt_cell(FlashVT *vt, uint16_t x, uint16_t y, FlashVTCell *cell) {
   GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
   ghostty_render_state_row_cells_get(
       vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw);
+  bool has_hyperlink = false;
+  ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_HYPERLINK, &has_hyperlink);
+  if (has_hyperlink) {
+    GhosttyPoint point = {.tag = GHOSTTY_POINT_TAG_VIEWPORT,
+                          .value.coordinate = {.x = x, .y = y}};
+    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+    if (ghostty_terminal_grid_ref(vt->terminal, point, &ref) == GHOSTTY_SUCCESS) {
+      size_t length = 0;
+      GhosttyResult result = ghostty_grid_ref_hyperlink_uri(
+          &ref, vt->hyperlink, vt->hyperlink_capacity, &length);
+      if (result == GHOSTTY_OUT_OF_SPACE && length <= 8192) {
+        uint8_t *grown = realloc(vt->hyperlink, length);
+        if (!grown)
+          return false;
+        vt->hyperlink = grown;
+        vt->hyperlink_capacity = length;
+        result = ghostty_grid_ref_hyperlink_uri(
+            &ref, vt->hyperlink, vt->hyperlink_capacity, &length);
+      }
+      if (result == GHOSTTY_SUCCESS && length <= 8192) {
+        cell->hyperlink = vt->hyperlink;
+        cell->hyperlink_length = length;
+      }
+    }
+  }
   ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide);
   cell->width = wide == GHOSTTY_CELL_WIDE_WIDE     ? 2
                 : wide == GHOSTTY_CELL_WIDE_NARROW ? 1

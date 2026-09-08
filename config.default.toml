@@ -221,7 +221,8 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
 # A persistent command popup owns a PTY from Flash startup until removal/shutdown,
 # even with the status bar hidden. Hover previews hide on leaving the segment;
-# click its label to pin/focus, or Option-click when the segment is also a link.
+# right-click any popup segment to pin/focus, including links. Left-click toggles
+# unlinked labels; Option-click focuses linked segments.
 # Terminal bindings live in [mode.terminal.mappings].
 # Exited processes restart after 100ms; repeated immediate exits back off to 30s.
 # terminal_restart restarts immediately; hiding preserves the process.

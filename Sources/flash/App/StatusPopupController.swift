@@ -382,8 +382,16 @@ final class StatusPopupController {
       codes.append(contentsOf: Self.colorCodes(segment.foreground, foreground: true))
       codes.append(contentsOf: Self.colorCodes(segment.background, foreground: false))
       result += "\u{1B}[" + codes.joined(separator: ";") + "m"
+      let hyperlink = segment.link.flatMap { target -> String? in
+        guard !target.isEmpty, target.utf8.count <= 8192,
+          !target.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return nil }
+        return target
+      }
+      if let hyperlink { result += "\u{1B}]8;;" + hyperlink + "\u{1B}\\" }
       result += TerminalDocument.sanitize(text: segment.text).replacingOccurrences(
         of: "\n", with: "\r\n")
+      if hyperlink != nil { result += "\u{1B}]8;;\u{1B}\\" }
     }
     result += "\u{1B}[0m"
     return Data(result.utf8)

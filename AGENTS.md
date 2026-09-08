@@ -418,7 +418,11 @@ Popup presentation has explicit hidden/preview/focused states. Leaving the
 originating segment hides an ordinary preview immediately. Clicking a popup
 label pins/focuses it; focused popups survive pointer departure and ignore other
 hover targets. Clicking the same label closes it; another label switches it.
-Existing links keep their action, with Option-click focusing their popup.
+Existing links keep their left-click action, with Option-click focusing their
+popup. Right-click pins any popup segment and enters terminal mode; repeating
+right-click must keep it open. Handle this through the existing local click view.
+Terminal Shift-click opens links from immutable frame metadata; Shift-drag
+selects without opening or forwarding the gesture to the child.
 Preserve screen clamping and restore the previous app only on explicit close,
 never after focus loss. Use `absolute-centre` for screen-centered labels; native `centre`
 centers the space between the sides. Terminal focus is a real transient Mode,

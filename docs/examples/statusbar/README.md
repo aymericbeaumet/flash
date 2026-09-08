@@ -31,7 +31,9 @@ not per-process networking. Battery values depend on what macOS supplies.
 Hover to preview; click **SYS**, **BAT**, the date, or **AGGR** to keep its popup
 open and focus the terminal. Existing links retain their click action: the BAT
 percentage opens Battery Settings and article titles open the article. Option-click
-a linked segment to focus its popup instead. Bottom allows navigation, sorting,
+a linked segment to focus its popup instead. Right-click any popup segment to
+keep it open and enter terminal mode; a second right-click keeps it pinned.
+Shift-click opens links inside the popup, while Shift-drag selects text. Bottom allows navigation, sorting,
 and searching while `read_only` prevents process termination. Calcurse can be
 navigated, but changes are discarded because this setup is a read-only preview.
 

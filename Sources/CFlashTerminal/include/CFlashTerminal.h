@@ -12,6 +12,9 @@ typedef struct {
 typedef struct {
   const uint8_t *text;
   size_t length;
+  const uint8_t *hyperlink;
+  size_t hyperlink_length;
+  bool row_wrapped;
   FlashRGB foreground, background, underline_color;
   uint16_t flags;
   uint8_t width, underline;

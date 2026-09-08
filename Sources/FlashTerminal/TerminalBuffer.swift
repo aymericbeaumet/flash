@@ -26,6 +26,7 @@ public struct TerminalCell: Equatable, Sendable {
   public let flags: UInt16
   public let width: Int
   public let underline: Int
+  public let hyperlink: String?
 }
 
 public struct TerminalFrame: Equatable, Sendable {
@@ -40,6 +41,93 @@ public struct TerminalFrame: Equatable, Sendable {
   public let cursorBlinking: Bool
   public let cursorStyle: Int
   public let mouseTracking: Bool
+  public let wrappedRows: Set<Int>
+
+  func link(atColumn column: Int, row: Int) -> URL? {
+    guard (0..<columns).contains(column), (0..<rows).contains(row) else { return nil }
+    var index = row * columns + column
+    while index > row * columns && cells[index].width == 0 { index -= 1 }
+    guard cells[index].flags & 32 == 0 else { return nil }
+    if let hyperlink = cells[index].hyperlink { return Self.webURL(hyperlink) }
+    var firstRow = row
+    var lastRow = row
+    while firstRow > 0 && wrappedRows.contains(firstRow - 1) { firstRow -= 1 }
+    while lastRow + 1 < rows && wrappedRows.contains(lastRow) { lastRow += 1 }
+    let logicalStart = firstRow * columns
+    let logicalEnd = (lastRow + 1) * columns
+    guard !Self.linkBoundary(cells[index]) else { return nil }
+    var lower = index
+    var upper = index + 1
+    var byteCount = cells[index].text.utf8.count
+    guard byteCount <= 8192 else { return nil }
+    while lower > logicalStart && !Self.linkBoundary(cells[lower - 1]) {
+      lower -= 1
+      byteCount += cells[lower].text.utf8.count
+      guard byteCount <= 8192, upper - lower <= 16384 else { return nil }
+    }
+    while upper < logicalEnd && !Self.linkBoundary(cells[upper]) {
+      byteCount += cells[upper].text.utf8.count
+      upper += 1
+      guard byteCount <= 8192, upper - lower <= 16384 else { return nil }
+    }
+    let text = cells[lower..<upper].map(\.text).joined()
+    let hitOffset = cells[lower..<index].reduce(0) { $0 + $1.text.utf16.count }
+    let fullRange = NSRange(location: 0, length: text.utf16.count)
+    for match in Self.webLinkPattern.matches(in: text, range: fullRange) {
+      guard let range = Range(match.range, in: text) else { continue }
+      let candidate = Self.trimLinkPunctuation(String(text[range]))
+      let linkRange = NSRange(location: match.range.location, length: candidate.utf16.count)
+      if NSLocationInRange(hitOffset, linkRange) { return Self.webURL(candidate) }
+    }
+    return nil
+  }
+
+  private static let webLinkPattern = try! NSRegularExpression(
+    pattern: #"(?i)https?://[^\s<>\"'`]+"#)
+
+  private static func linkBoundary(_ cell: TerminalCell) -> Bool {
+    cell.flags & 32 != 0
+      || cell.text.unicodeScalars.contains {
+        CharacterSet.whitespacesAndNewlines.contains($0) || "<>\"'`".unicodeScalars.contains($0)
+      }
+  }
+
+  private static func trimLinkPunctuation(_ text: String) -> String {
+    var characters = Array(text)
+    let pairs: [Character: Character] = [")": "(", "]": "[", "}": "{"]
+    var balance: [Character: Int] = [:]
+    for character in characters {
+      if pairs[character] != nil { balance[character, default: 0] += 1 }
+      if let closing = pairs.first(where: { $0.value == character })?.key {
+        balance[closing, default: 0] -= 1
+      }
+    }
+    while let last = characters.last {
+      if ".,;:!?".contains(last) {
+        characters.removeLast()
+      } else if balance[last, default: 0] > 0 {
+        balance[last, default: 0] -= 1
+        characters.removeLast()
+      } else {
+        break
+      }
+    }
+    return String(characters)
+  }
+
+  private static func webURL(_ text: String) -> URL? {
+    guard text.utf8.count <= 8192,
+      !text.unicodeScalars.contains(where: {
+        CharacterSet.whitespacesAndNewlines.contains($0)
+          || CharacterSet.controlCharacters.contains($0)
+      }),
+      let url = URL(string: text),
+      ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+      let host = url.host, !host.isEmpty, url.user == nil, url.password == nil
+    else { return nil }
+    return url
+  }
+
   public var text: String {
     (0..<rows).map { row in
       cells[(row * columns)..<((row + 1) * columns)].map(\.text).joined()
@@ -83,6 +171,7 @@ final class TerminalBuffer {
     var frame = FlashVTFrame()
     guard flash_vt_frame(handle, &frame) else { return nil }
     var cells: [TerminalCell] = []
+    var wrappedRows = Set<Int>()
     cells.reserveCapacity(Int(frame.columns) * Int(frame.rows))
     for row in 0..<frame.rows {
       for column in 0..<frame.columns {
@@ -92,12 +181,19 @@ final class TerminalBuffer {
           cell.text.map {
             String(decoding: UnsafeBufferPointer(start: $0, count: cell.length), as: UTF8.self)
           } ?? ""
+        if column == 0 && cell.row_wrapped { wrappedRows.insert(Int(row)) }
+        let hyperlink = cell.hyperlink.flatMap { bytes -> String? in
+          guard cell.hyperlink_length > 0 else { return nil }
+          return String(
+            decoding: UnsafeBufferPointer(start: bytes, count: cell.hyperlink_length), as: UTF8.self
+          )
+        }
         cells.append(
           TerminalCell(
             text: text.isEmpty && cell.width > 0 ? " " : text,
             foreground: TerminalColor(cell.foreground), background: TerminalColor(cell.background),
             underlineColor: TerminalColor(cell.underline_color), flags: cell.flags,
-            width: Int(cell.width), underline: Int(cell.underline)))
+            width: Int(cell.width), underline: Int(cell.underline), hyperlink: hyperlink))
       }
     }
     return TerminalFrame(
@@ -106,7 +202,7 @@ final class TerminalBuffer {
       cursorX: Int(frame.cursor_x), cursorY: Int(frame.cursor_y),
       cursorVisible: frame.cursor_visible,
       cursorBlinking: frame.cursor_blinking, cursorStyle: Int(frame.cursor_style),
-      mouseTracking: frame.mouse_tracking)
+      mouseTracking: frame.mouse_tracking, wrappedRows: wrappedRows)
   }
 }
 

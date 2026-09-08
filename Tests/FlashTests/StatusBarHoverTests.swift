@@ -4,11 +4,44 @@ import XCTest
 @testable import flash
 
 final class StatusBarHoverTests: XCTestCase {
+  func testRightClickPinsLinkedPopupAndIgnoresDragsOrEmptySpace() throws {
+    let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
+    view.popups = [.init(rect: view.bounds, name: "article", content: "Preview")]
+    view.links = [(view.bounds, URL(string: "https://example.com/article")!)]
+    var selected: [String] = []
+    view.onPopupClick = { popup, _, action in
+      XCTAssertEqual(action, .focus)
+      selected.append(popup.name)
+    }
+    func click(upX: CGFloat = 30) throws {
+      let down = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: .rightMouseDown, location: CGPoint(x: 30, y: 12), modifierFlags: [],
+          timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+      let up = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: .rightMouseUp, location: CGPoint(x: upX, y: 12), modifierFlags: [],
+          timestamp: 0, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+      view.rightMouseDown(with: down)
+      view.rightMouseUp(with: up)
+    }
+    try click()
+    XCTAssertEqual(selected, ["article"])
+    try click(upX: 50)
+    XCTAssertEqual(selected.count, 1)
+    view.popups = []
+    try click()
+    XCTAssertEqual(selected.count, 1)
+  }
+
   func testPopupClicksPreserveLinksAndAllowOptionToFocus() throws {
     let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
     view.popups = [.init(rect: view.bounds, name: "article", content: "Preview")]
     var selected: [String] = []
-    view.onPopupClick = { popup, _ in selected.append(popup.name) }
+    view.onPopupClick = { popup, _, action in
+      XCTAssertEqual(action, .toggle)
+      selected.append(popup.name)
+    }
     func click(_ modifiers: NSEvent.ModifierFlags, upX: CGFloat = 30) throws {
       let down = try XCTUnwrap(
         NSEvent.mouseEvent(
@@ -41,11 +74,14 @@ final class StatusBarHoverTests: XCTestCase {
     let region = StatusBarPopupRegion(
       rect: CGRect(x: 100, y: 800, width: 200, height: 25), name: "article", content: "Preview")
     let controller = panel.statusPopupController
+    var focusTransitions = 0
+    controller.willFocus = { focusTransitions += 1 }
     controller.preview(
       region, pointer: CGPoint(x: 150, y: 812),
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
-    controller.focus()
+    panel.activateStatusBarPopup(region, at: .zero, action: .focus)
+    XCTAssertEqual(focusTransitions, 1)
     panel.syncStatusBarClickWindows(
       bandRects: [CGRect(x: 0, y: 800, width: 900, height: 25)], links: [], popups: [region])
     panel.statusBarClickWindows.first?.clickView.onPopupHover?(nil, .zero)
@@ -56,7 +92,10 @@ final class StatusBarHoverTests: XCTestCase {
       .init(rect: region.rect, name: "other", content: "Other"), at: .zero)
     XCTAssertEqual(controller.focusedName, "article")
     XCTAssertEqual(controller.frame, frame)
-    panel.toggleStatusBarPopup(region, at: .zero)
+    panel.activateStatusBarPopup(region, at: .zero, action: .focus)
+    XCTAssertTrue(controller.isVisible)
+    XCTAssertEqual(focusTransitions, 1, "Right-click must keep the focused popup open")
+    panel.activateStatusBarPopup(region, at: .zero, action: .toggle)
     XCTAssertFalse(controller.isVisible)
     XCTAssertNil(panel.activeStatusBarPopupName)
   }

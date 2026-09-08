@@ -21,6 +21,11 @@ struct StatusBarPopupRegion: Equatable {
   var document: [FlashStatusTextSegment]? = nil
 }
 
+enum StatusBarPopupActivation {
+  case toggle
+  case focus
+}
+
 enum StatusBarHintAction: Equatable {
   case click(URL)
   case hover(String)
@@ -92,7 +97,7 @@ final class StatusBarClickView: NSView {
   /// Reports the popup under the pointer (or nil) and the pointer in screen
   /// coordinates. The overlay moves its popup layer on every event.
   var onPopupHover: ((StatusBarPopupRegion?, NSPoint) -> Void)?
-  var onPopupClick: ((StatusBarPopupRegion, NSPoint) -> Void)?
+  var onPopupClick: ((StatusBarPopupRegion, NSPoint, StatusBarPopupActivation) -> Void)?
 
   static func focusesPopup(overLink: Bool, modifiers: NSEvent.ModifierFlags) -> Bool {
     !overLink || modifiers.contains(.option)
@@ -103,6 +108,7 @@ final class StatusBarClickView: NSView {
   /// `dragSlop` of where it went down. A drag (window-drag, selection sweep,
   /// a slip toward a menu) opens nothing — but is still swallowed.
   private var mouseDownLocation: NSPoint?
+  private var rightMouseDownLocation: NSPoint?
 
   /// Movement past this (points) counts as a drag, not a click.
   static let dragSlop: CGFloat = 4
@@ -129,7 +135,7 @@ final class StatusBarClickView: NSView {
       Self.focusesPopup(overLink: url != nil, modifiers: event.modifierFlags)
     {
       let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
-      onPopupClick?(popup, point)
+      onPopupClick?(popup, point, .toggle)
       return
     }
     if let url {
@@ -148,6 +154,21 @@ final class StatusBarClickView: NSView {
     // Non-link clicks are intentionally not forwarded (no super call): the band
     // is Flash's while the menu bar is folded, so the click stops here instead
     // of leaking to the wallpaper or the window underneath.
+  }
+
+  override func rightMouseDown(with event: NSEvent) {
+    rightMouseDownLocation = event.locationInWindow
+  }
+
+  override func rightMouseUp(with event: NSEvent) {
+    defer { rightMouseDownLocation = nil }
+    guard let start = rightMouseDownLocation,
+      Self.isClick(from: start, to: event.locationInWindow)
+    else { return }
+    let local = convert(event.locationInWindow, from: nil)
+    guard let popup = popups.first(where: { $0.rect.contains(local) }) else { return }
+    let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
+    onPopupClick?(popup, point, .focus)
   }
 
   override func updateTrackingAreas() {
@@ -433,8 +454,11 @@ extension OverlayPanel {
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
 
-  func toggleStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {
+  func activateStatusBarPopup(
+    _ popup: StatusBarPopupRegion, at pointer: CGPoint, action: StatusBarPopupActivation
+  ) {
     let wasFocused = statusPopupController.focusedName
+    if wasFocused == popup.name, action == .focus { return }
     if wasFocused != nil {
       if let statusBarPopupDismissHandler {
         statusBarPopupDismissHandler(wasFocused == popup.name)
@@ -528,10 +552,10 @@ extension OverlayPanel {
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
       view.onStatusBarAction = statusBarActionHandler
-      view.onPopupClick = { [weak self] popup, point in
+      view.onPopupClick = { [weak self] popup, point, action in
         var screenPopup = popup
         screenPopup.rect = popup.rect.offsetBy(dx: band.minX, dy: band.minY)
-        self?.toggleStatusBarPopup(screenPopup, at: point)
+        self?.activateStatusBarPopup(screenPopup, at: point, action: action)
       }
       view.onPopupHover = { [weak self] popup, point in
         guard let self else { return }
