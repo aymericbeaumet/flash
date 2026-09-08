@@ -168,8 +168,10 @@ rows = 36
 "cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
-Omit `persistent` for a new process each time. Persistent windows and status
-popup processes automatically restart after exiting, with a bounded retry delay.
+Omit `persistent` for a new process each time the window opens. All terminal
+windows and status popup processes restart after exiting. The first retry is
+prompt; repeated immediate failures back off. Closing a nonpersistent window
+stops its process and cancels retries.
 See [terminal sessions and shortcuts](docs/terminal-popups.md#shortcut-terminals).
 
 ### Feed headlines

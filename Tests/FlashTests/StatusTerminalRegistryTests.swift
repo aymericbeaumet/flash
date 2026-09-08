@@ -32,13 +32,15 @@ final class StatusTerminalRegistryTests: XCTestCase {
     }
   }
 
-  func testRestartBackoffIsBoundedAndResetsAfterStableRun() {
+  func testImmediateExitStormBacksOffAndUserQuitsAfterOneSecondRestartPromptly() {
     var backoff = TerminalRestartBackoff()
-    XCTAssertEqual((0..<8).map { _ in backoff.nextDelay(at: 0) }, [1, 2, 4, 8, 16, 30, 30, 30])
+    XCTAssertEqual((0..<8).map { _ in backoff.nextDelay(at: 0) }, [0.1, 1, 2, 4, 8, 16, 30, 30])
     backoff.running(at: 100)
-    XCTAssertEqual(backoff.nextDelay(at: 129), 30)
-    backoff.running(at: 200)
-    XCTAssertEqual(backoff.nextDelay(at: 230), 1)
+    XCTAssertEqual(backoff.nextDelay(at: 100.9), 30)
+    for time in 200...203 {
+      backoff.running(at: TimeInterval(time))
+      XCTAssertEqual(backoff.nextDelay(at: TimeInterval(time + 1)), 0.1)
+    }
   }
 
   func testStandalonePersistentReopensSameChildWhileEphemeralOpensFreshAndReleases() {
@@ -113,7 +115,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNil(registry.terminalKey(named: shell, focusedName: shell))
   }
 
-  func testCleanPersistentExitRestartsButEphemeralExitNotifiesWithoutRestarting() {
+  func testCleanPersistentAndEphemeralExitsBothRestart() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
     var config = Config()
@@ -122,22 +124,47 @@ final class StatusTerminalRegistryTests: XCTestCase {
     persistentProcess.persistent = true
     config.terminals["persistent"] = persistentProcess
     config.terminals["temporary"] = process
-    var exited: [String] = []
-    registry.didExitEphemeral = { name in
-      XCTAssertNotNil(registry.sessions[name])
-      exited.append(name)
-    }
     registry.apply(config.statusBar, terminals: config.terminals)
     let generation = registry.inputGenerations["persistent"]
     let temporary = registry.openTerminal(name: "temporary", configuration: config)!
+    let temporaryGeneration = registry.inputGenerations[temporary]
     waitUntil {
-      registry.inputGenerations["persistent"] != generation && !exited.isEmpty
+      registry.inputGenerations["persistent"] != generation
+        && registry.inputGenerations[temporary] != temporaryGeneration
     }
-    XCTAssertEqual(exited, [temporary])
-    XCTAssertEqual(registry.sessions[temporary]?.state, .exited(code: 0))
-    XCTAssertFalse(registry.automaticallyRestarts(name: temporary))
+    XCTAssertTrue(registry.automaticallyRestarts(name: temporary))
     registry.releaseTerminal(name: temporary)
     XCTAssertNil(registry.sessions[temporary])
+  }
+
+  func testEphemeralRestartPreservesSessionWithNewPIDAndReleaseCancelsNextRetry() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var config = Config()
+    config.terminals["temporary"] = .init(command: ["/bin/sh", "-c", "sleep 0.2; exit 0"])
+    let name = registry.openTerminal(name: "temporary", configuration: config)!
+    let session = registry.sessions[name]
+    let initialGeneration = registry.inputGenerations[name]
+    var pids: Set<Int32> = []
+    let released = expectation(description: "second child exits then presentation releases it")
+    registry.didChange = {
+      switch registry.sessions[name]?.state {
+      case .running(let pid):
+        pids.insert(pid)
+        XCTAssertTrue(registry.sessions[name] === session)
+      case .exited where pids.count >= 2:
+        XCTAssertNotEqual(registry.inputGenerations[name], initialGeneration)
+        registry.didChange = nil
+        registry.releaseTerminal(name: name)
+        released.fulfill()
+      default: break
+      }
+    }
+    wait(for: [released], timeout: 6)
+    XCTAssertEqual(pids.count, 2)
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    XCTAssertNil(registry.sessions[name])
+    for pid in pids { XCTAssertEqual(kill(pid, 0), -1) }
   }
 
   func testKilledPersistentChildRestartsAndRemovalCancelsPendingRestart() {
@@ -165,16 +192,17 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNotEqual(registry.inputGenerations["system"], originalGeneration)
     XCTAssertEqual(kill(originalPID, 0), -1)
     guard case .running(let replacementPID) = registry.sessions["system"]?.state else { return }
-    kill(replacementPID, SIGKILL)
-    waitUntil {
-      if case .exited = registry.sessions["system"]?.state { return true }
-      return false
+    let removed = expectation(description: "remove terminal while restart is pending")
+    registry.didChange = {
+      guard case .exited = registry.sessions["system"]?.state else { return }
+      registry.didChange = nil
+      config.terminals.removeAll()
+      registry.apply(config.statusBar, terminals: config.terminals)
+      removed.fulfill()
     }
-    config.terminals.removeAll()
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    RunLoop.current.run(until: Date().addingTimeInterval(2.2))
+    kill(replacementPID, SIGKILL)
+    wait(for: [removed], timeout: 6)
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
     XCTAssertTrue(registry.sessions.isEmpty)
     XCTAssertEqual(replacements, 1)
   }

@@ -59,12 +59,6 @@ extension AppDelegate {
     popup.didDismiss = { [weak self] name in
       self?.overlay.statusTerminals.releaseTerminal(name: name)
     }
-    overlay.statusTerminals.didExitEphemeral = { [weak self] name in
-      guard let self, self.overlay.statusPopupController.presentation.identity?.name == name else {
-        return
-      }
-      self.dismissTerminal()
-    }
     popup.inputInterceptor = { [weak self] event in
       guard let self, case .terminal = self.modeStore.mode,
         let name = self.overlay.statusPopupController.focusedName

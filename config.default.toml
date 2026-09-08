@@ -219,11 +219,11 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 [statusbar.popup]
 # quota = "#[fg=#EBCB8B,bold]Quota#[default]\n5-hour: 53% remaining"
 
-# A command popup owns one PTY from Flash startup until exit/removal/shutdown,
+# A persistent command popup owns a PTY from Flash startup until removal/shutdown,
 # even with the status bar hidden. Hover previews hide on leaving the segment;
 # click its label to pin/focus, or Option-click when the segment is also a link.
 # Terminal bindings live in [mode.terminal.mappings].
-# Exited processes restart automatically with a 1–30s backoff.
+# Exited processes restart after 100ms; repeated immediate exits back off to 30s.
 # terminal_restart restarts immediately; hiding preserves the process.
 # Shell syntax requires explicit argv, e.g. ["/bin/sh", "-lc", "exec btm"].
 # [terminal.system]
@@ -513,7 +513,8 @@ leader = "\\"
 ":" = ["flash", "enter_command_mode"]
 
 # Named terminal command templates. persistent defaults to false: a new process
-# each time. Persistent sessions start with Flash and restart automatically.
+# each time the window opens. All open terminals restart after process exit.
+# Persistent sessions start with Flash and keep running after the window closes.
 # [terminal.bonsai]
 # command = ["bonsai", "hq", "--no-open", "--port", "0"]
 # persistent = true

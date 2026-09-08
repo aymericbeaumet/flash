@@ -30,7 +30,7 @@ rows = 24
 
 Commands are argv arrays, with the same environment and path resolution as other Flash commands. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
 
-The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Persistent commands restart after any exit, including a normal quit or a killed process. Retries wait 1, 2, 4, 8, 16, then at most 30 seconds; running for 30 seconds resets the delay. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
+The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Every owned terminal restarts after any exit, including a normal quit or a killed process. The first retry waits 100 ms. Repeated exits within one second of startup back off to 1, 2, 4, 8, 16, then at most 30 seconds; running for at least one second resets the delay. Nonpersistent terminals retry only until their window or preview is dismissed. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
 
 Hover placement remains centered below the pointer and clamped to the hovered screen. Leaving the originating status segment hides an ordinary preview immediately. Click a popup label to pin it and focus its terminal; it then stays anchored while the pointer moves into the popup or over other segments. Clicking its label again closes it and restores the previous application. Clicking another popup label switches views. Existing links retain their normal action; Option-click a link to pin its popup. Menu reveal, focus loss, removed anchors, and other Flash surfaces dismiss presentation without ending the child.
 
@@ -42,8 +42,9 @@ Command popups and document popups share the same cell renderer. Documents never
 
 `flash terminal_show` opens a fresh login shell in the home directory. Each
 invocation creates a new process. `flash terminal_dismiss` closes the focused
-terminal and restores the previous application. A fresh shell also closes when
-its process exits; dismissing it stops and reaps the child.
+terminal and restores the previous application. Exiting a fresh shell starts
+a replacement in the same window. Dismissing the window stops and reaps its
+child and cancels pending retries.
 
 Declare a named terminal to launch a particular process:
 
@@ -70,8 +71,8 @@ Named definitions accept `command`, `working_directory`, `env`, `columns`,
 grid: the name then identifies a command template, and each opening gets a
 fresh process. With `persistent = true`, Flash starts the session after its
 login environment resolves, even when hidden or the status bar is disabled.
-Reopening preserves the process, screen, and history. Persistent sessions use
-the same automatic restart policy as status popups.
+Reopening preserves the process, screen, and history. All sessions use
+the same automatic restart policy as status popups while owned by Flash.
 
 Windows appear centered on the focused application's screen and clamp to its
 available area. One terminal window is presented at a time; changing windows

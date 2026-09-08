@@ -431,6 +431,40 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
   }
 
+  func testNonpersistentWindowKeepsFocusAcrossProcessExitAndRestarts() throws {
+    let registry = StatusTerminalRegistry()
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    var config = Config()
+    config.terminals["shell"] = .init(command: ["/bin/cat"])
+    let name = try XCTUnwrap(registry.openTerminal(name: "shell", configuration: config))
+    let session = try XCTUnwrap(registry.sessions[name])
+    defer { registry.shutdown() }
+    controller.didDismiss = { registry.releaseTerminal(name: $0) }
+    var focusCount = 0
+    controller.willFocus = { focusCount += 1 }
+    controller.showTerminal(
+      name: name, visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+      style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    waitUntil("first child running") {
+      if case .running = session.state { return true }
+      return false
+    }
+    guard case .running(let firstPID) = session.state else { return XCTFail("Missing child") }
+    XCTAssertEqual(kill(firstPID, SIGTERM), 0)
+    waitUntil("replacement child running") {
+      if case .running(let pid) = session.state { return pid != firstPID }
+      return false
+    }
+    XCTAssertEqual(controller.presentation, .terminal(name: name))
+    XCTAssertEqual(controller.focusedName, name)
+    XCTAssertEqual(focusCount, 1)
+    XCTAssertTrue(controller.terminalView.isRenderingEnabled)
+    XCTAssertEqual(controller.exitStatusText, "")
+    controller.dismiss()
+    XCTAssertNil(registry.sessions[name])
+    XCTAssertEqual(controller.presentation, .hidden)
+  }
+
   func testTerminalEnvironmentExpandsOverridesAgainstBaseThenArguments() {
     let definition = Config.Terminal(
       command: ["$BIN/tool", "${TOKEN}"],

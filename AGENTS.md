@@ -401,8 +401,11 @@ dismissal. `[statusbar.popup]` accepts document strings only. Changes to
 grid/style keep the child, execution-definition changes replace only that child,
 and invalid definitions preserve the last good session. Hover/placement are
 pure presentation for persistent sessions; continuous hover must reuse a
-nonpersistent session until dismissal. Persistent exits restart with bounded
-backoff; removal, replacement, and shutdown cancel retries. Standalone
+nonpersistent session until dismissal. All owned sessions restart after exit:
+first retry after 100 ms, then bounded backoff for repeated exits within one
+second of startup. Running at least one second resets the delay. Never close
+a nonpersistent window merely because its child exited. Dismissal/release,
+removal, replacement, and shutdown cancel retries. Standalone
 `[terminal.<name>]` definitions share this registry and set `persistent = true`
 for eager startup/reuse. Fresh terminals spawn on explicit `terminal_show` or first status hover
 and stop on dismissal; release them after the presentation becomes hidden to

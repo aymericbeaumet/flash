@@ -42,10 +42,10 @@ struct TerminalRestartBackoff {
   mutating func running(at time: TimeInterval) { runningSince = time }
 
   mutating func nextDelay(at time: TimeInterval) -> TimeInterval {
-    if let runningSince, time - runningSince >= 30 { attempt = 0 }
+    if let runningSince, time - runningSince >= 1 { attempt = 0 }
     runningSince = nil
     attempt += 1
-    return min(30, pow(2, Double(min(5, attempt - 1))))
+    return attempt == 1 ? 0.1 : min(30, pow(2, Double(min(5, attempt - 2))))
   }
 }
 
@@ -68,7 +68,6 @@ final class StatusTerminalRegistry {
   private var restarts: [String: Restart] = [:]
   var willChange: (([StatusTerminalChange]) -> Void)?
   var didChange: (() -> Void)?
-  var didExitEphemeral: ((String) -> Void)?
 
   func apply(
     _ statusBar: Config.StatusBar, terminals: [String: Config.Terminal] = [:],
@@ -116,8 +115,7 @@ final class StatusTerminalRegistry {
   }
 
   func automaticallyRestarts(name: String) -> Bool {
-    if case .persistent = ownership[name] { return true }
-    return false
+    ownership[name] != nil
   }
 
   func openTerminal(name: String?, configuration config: Config) -> String? {
@@ -222,10 +220,7 @@ final class StatusTerminalRegistry {
   }
 
   private func observe(state: TerminalSessionState, name: String, session: TerminalSession) {
-    guard automaticallyRestarts(name: name) else {
-      if case .exited = state, case .ephemeral = ownership[name] { didExitEphemeral?(name) }
-      return
-    }
+    guard automaticallyRestarts(name: name) else { return }
     var restart = restarts[name] ?? Restart()
     switch state {
     case .running:
