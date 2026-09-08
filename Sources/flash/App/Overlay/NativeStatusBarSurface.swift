@@ -54,7 +54,7 @@ final class NativeStatusBarSurface {
     // A transient TERMINAL label must not widen the persistent base-mode pill.
     sizingLabels.terminal = ""
     let longestPill =
-      document.runs.filter { $0.pill && !$0.isStyleBoundary }
+      document.runs.filter { $0.pill && !$0.isStyleBoundary && $0.text != labels.terminal }
       .map { $0.text.count }.max() ?? 0
     let pillWidth = max(
       OverlayPanel.modeBadgeWidth(labels: sizingLabels, currentText: "", fontSize: font.pointSize),

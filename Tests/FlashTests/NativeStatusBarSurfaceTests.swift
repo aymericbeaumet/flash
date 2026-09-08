@@ -46,7 +46,9 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
   func testModePillKeepsLegacyPointWidthCenteredLabelAndRetinaOutline() {
     let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
     let expectedWidth = CGFloat(7) * 13 * 0.66 + 16
-    for (label, style) in [("NORMAL", OverlayModeBadgeStyle.normal), ("INSERT", .insert)] {
+    for (label, style) in [
+      ("NORMAL", OverlayModeBadgeStyle.normal), ("INSERT", .insert), ("TERMINAL", .normal),
+    ] {
       let surface = NativeStatusBarSurface()
       redraw(surface, "#[pill]\(label)#[nopill] tail", columns: 40, labels: labels, style: style)
       let pill = surface.runLayers[0]
