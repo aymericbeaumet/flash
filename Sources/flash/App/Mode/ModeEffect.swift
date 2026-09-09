@@ -17,6 +17,9 @@ enum MappingScope: Equatable {
 // AppDelegate routine — so the executor is a dumb `switch` with no decisions of
 // its own.
 enum ModeEffect: Equatable {
+  /// Resolve tap availability before startup can render a capturing surface.
+  case prepareKeyboardCapture
+
   /// Reset transient capture context once when an explicit transition enters a mode.
   case prepareModeEntry
 

@@ -71,6 +71,9 @@ NORMAL and hint input normally arrives through `KeyboardCaptureTap`, so the
 overlay can remain non-key and the focused application keeps its active window
 appearance. Command-line and modal surfaces still use the panel's key-window
 path, as does the fallback when macOS refuses the Accessibility-backed tap.
+Startup resolves tap availability before entering NORMAL or a capturing surface.
+Starting the tap after NORMAL renders would activate Flash through the fallback
+path and leave the previous app inactive until another app switch.
 
 The tap source, Carbon callbacks, AX observer sources, and mode coordinator all
 share the main run loop. Treat that loop as the input latency budget:

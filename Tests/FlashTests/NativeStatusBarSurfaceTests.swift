@@ -4,6 +4,22 @@ import XCTest
 @testable import flash
 
 final class NativeStatusBarSurfaceTests: XCTestCase {
+  func testFirstModelPopulatesPreviouslyEmptySurfaceWithoutFocusOrModeChange() {
+    let surface = render("", columns: 40)
+    XCTAssertTrue(surface.layout.text.trimmingCharacters(in: .whitespaces).isEmpty)
+    redraw(surface, "#[pill]NORMAL#[nopill] Firefox", columns: 40)
+    XCTAssertFalse(surface.visibleRuns.isEmpty)
+    let pill = surface.runLayers[0]
+    XCTAssertEqual((pill.text.string as? NSAttributedString)?.string, "NORMAL")
+    XCTAssertEqual(
+      pill.pill.colors as? [CGColor],
+      [OverlayPanel.normalPalette.bottomCG, OverlayPanel.normalPalette.topCG])
+    XCTAssertTrue(pill.container.superlayer === surface.backgroundLayer)
+    XCTAssertFalse(pill.container.isHidden)
+    XCTAssertFalse(pill.pill.isHidden)
+    XCTAssertEqual(pill.pill.borderWidth, 1)
+  }
+
   func testPooledLayersDrawNativeListsFillAndAbsoluteCentreAtCellPositions() {
     for source in [
       "#[align=left,list=on]012345#[list=focus]678#[list=on]9ABCDEF"

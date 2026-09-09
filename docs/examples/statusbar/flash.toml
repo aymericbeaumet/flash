@@ -7,10 +7,13 @@ template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=r
 "@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
 "@centre" = "#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]"
 "@right" = """
-#{flash.plugin.aiproviders.summary}
-#[fg=colour245] · #[popup=system]#[fg=#EBCB8B]SYS#[default]#[nopopup]
-#{?flash.plugin.power.label,#[fg=colour245] · #[popup=battery]#{flash.plugin.power.label}#[nopopup],}
-#[fg=colour245] · #[popup=date]#{flash.date}#[nopopup]
+#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+#{?flash.plugin.aiproviders.summary,#{flash.plugin.aiproviders.summary}  ,}
+#[popup=system]#[fg=#EBCB8B]SYS#[default]#[nopopup]
+#{?flash.plugin.cpu.summary, #{flash.plugin.cpu.summary},}
+#{?flash.plugin.memory.summary, #{flash.plugin.memory.summary},}
+#{?flash.plugin.power.label, #[popup=battery]#{flash.plugin.power.label}#[nopopup],}
+#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%d/%m }#[default,bold]%H:%M#[nobold,nopopup]
 """
 
 [statusbar.popup]

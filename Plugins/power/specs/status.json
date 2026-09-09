@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The charge collector publishes string segments (summary and label are empty while charging or at 100%), while an explicit refresh returns cached details within the perform deadline.",
+  "description": "The charge collector always publishes a BAT label, showing only BAT when fully charged on AC power and keeping the numeric charge otherwise. An explicit refresh returns cached details within the perform deadline.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
@@ -14,8 +14,8 @@
         "method": "status",
         "params": {
           "segments": {
-            "summary": { "$type": "string" },
-            "label": { "$type": "string" },
+            "summary": { "$contains": "BAT" },
+            "label": { "$contains": "BAT" },
             "details": { "$contains": "#[fg=colour245]Charge        #[default]" }
           }
         }

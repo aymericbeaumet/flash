@@ -47,6 +47,52 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(ModeReducer.reduce(.normal, .startup(advancedEnabled: false)).0, .disabled)
   }
 
+  func testStartupResolvesCaptureBeforeAnySurfaceEffect() {
+    for advancedEnabled in [true, false] {
+      for tapAvailable in [true, false] {
+        let store = ModeStore()
+        var capturePrepared = false
+        var tapActive = false
+        var fallbackCaptures = 0
+        var renders = 0
+        store.perform = { effects, _, mode in
+          for effect in effects {
+            switch effect {
+            case .prepareKeyboardCapture:
+              XCTAssertFalse(capturePrepared)
+              capturePrepared = true
+              tapActive = tapAvailable
+            case .clearTransientHintState, .hideOverlayIfIdle, .renderSurface, .scheduleRecapture:
+              XCTAssertTrue(capturePrepared, "Startup \(effect) ran before capture was prepared")
+              if effect == .renderSurface {
+                renders += 1
+                if mode.ownsKeyboard(hasHints: false, activationInFlight: false), !tapActive {
+                  fallbackCaptures += 1
+                }
+              }
+            default:
+              break
+            }
+          }
+        }
+        store.dispatch(.startup(advancedEnabled: advancedEnabled))
+        XCTAssertTrue(
+          capturePrepared, "Hint capture also needs a tap when advanced mode is disabled")
+        XCTAssertEqual(renders, 1)
+        XCTAssertEqual(fallbackCaptures, advancedEnabled && !tapAvailable ? 1 : 0)
+      }
+    }
+  }
+
+  func testOrdinaryModeTransitionsDoNotPrepareKeyboardCaptureAgain() {
+    for state in allStates {
+      for event in allEvents {
+        if case .startup = event { continue }
+        XCTAssertFalse(ModeReducer.reduce(state, event).1.contains(.prepareKeyboardCapture))
+      }
+    }
+  }
+
   // MARK: Insert stickiness — the central invariant
 
   func testMouseAndFocusNeverLeaveInsert() {

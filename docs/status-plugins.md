@@ -13,9 +13,11 @@ in place.
 The local system-monitor suite is deliberately split by resource. Each plugin
 owns `summary` and `details`; the summary embeds the details with
 `inline_status_popup`, while the standalone details segment supports custom
-templates. `power` publishes empty `summary` and `label` segments while charging
-or at 100%; details and `:power` remain available. Wrap any separator in the same
-condition as the segment so hidden battery text leaves no dangling separator.
+templates. `power` shows just `BAT` when fully charged on AC power; otherwise it
+keeps the numeric charge, including below 100% while charging and at 100% on
+battery power. Details and `:power` remain available in every state. Wrap any
+separator in the same condition as the segment so an unavailable plugin leaves
+no dangling separator.
 `power` also publishes `label`, the styled battery summary without
 an inline popup, for attaching a named battery terminal. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.

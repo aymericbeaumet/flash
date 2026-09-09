@@ -488,7 +488,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
         prologue:
           #"printf '{"method":"publish","params":{"rows":[{"source":"fix.items","title":"Early"}]}}\n'"#,
         onInitialize: """
-          while [ ! -e "$D/allow-nak" ]; do sleep 0.01; done
+          printf '{"id":1,"method":"host.ping","params":{"phase":"before_nak"}}\\n'
+          IFS= read -r response || exit 9
+          case "$response" in *'"ok":true'*) ;; *) exit 9 ;; esac
           printf '{"id":%s,"result":{"ok":false,"protocol_version":1,"error":"nope"}}\\n' "$id"
           sleep 0.2
           """))
@@ -496,18 +498,26 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let store = PluginCatalogStore()
     store.publish(pluginID: "initnak", rows: [Candidate(title: "Previous")], encodedBytes: 20)
     let process = try makeProcess(fixture, store: store)
+    defer { process.stopAndWait(reason: "test") }
+    let checkedEarlyPublish = expectation(description: "early publish rejected before NAK")
+    // The host processes these frames in wire order. Acknowledge directly on
+    // the process queue so main-runloop load cannot hold initialize hostage.
+    process.onHostRequest = { [weak process] method, params, _, reply in
+      XCTAssertEqual(method, "host.ping")
+      XCTAssertEqual(params["phase"] as? String, "before_nak")
+      XCTAssertEqual(process?.runtimeStateSnapshot(), .launching)
+      XCTAssertEqual(store.rows(for: "initnak").map(\.title), ["Previous"])
+      reply(["ok": true])
+      checkedEarlyPublish.fulfill()
+    }
     process.start()
-    waitUntilTrue("child launched") { process.runtimeStateSnapshot() == .launching }
-    settleRunLoop(0.1)
-    XCTAssertEqual(store.rows(for: "initnak").map(\.title), ["Previous"])
-    try Data().write(to: fixture.dataDir.appendingPathComponent("allow-nak"))
+    wait(for: [checkedEarlyPublish], timeout: 8)
     waitUntilTrue("park in failed") { process.runtimeStateSnapshot() == .failed }
     XCTAssertNil(
       store.entry(for: "initnak"),
       "a failed park drops the published catalog — a parked plugin could never serve its rows")
     settleRunLoop(0.3)
     XCTAssertEqual(fixture.spawnCount(), 1, "an initialize NAK must not auto-restart")
-    process.stopAndWait(reason: "test")
   }
 
   func testWrongProtocolVersionEchoParksFailedWithoutRestart() throws {

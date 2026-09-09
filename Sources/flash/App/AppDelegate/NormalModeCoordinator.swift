@@ -63,6 +63,8 @@ extension AppDelegate {
   func applyModeEffects(_ effects: [ModeEffect], previous _: Mode, next: Mode) {
     for effect in effects {
       switch effect {
+      case .prepareKeyboardCapture:
+        startKeyboardCaptureTap()
       case .prepareModeEntry:
         applyEnterBookkeeping(next)
       case .hideTerminalPopup:

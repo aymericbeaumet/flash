@@ -149,6 +149,12 @@ The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap
 
 `TerminalTests` exercises real PTY startup before any view exists, controlling-terminal dimensions, retained exit screens, input and resize, explicit restart with a new PID, failed spawn, and bounded shutdown/reaping. Unicode grapheme clustering is enabled as the terminal default, including after a reset. Direct VT tests cover Unicode graphemes and wide cells, styling, document replacement and control sanitization, terminal queries, application cursor input, Ctrl-C, Kitty modifier and release events, bracketed paste, alternate screens, and scrollback. Popup placement, immediate preview dismissal, pinned focus, and mapping precedence are covered by the app's separate presentation and mode tests.
 
+Crash recovery tests kill real children in hover previews, pinned popups, and
+standalone windows, for both persistent and temporary sessions; the replacement
+must render in the same presentation without dismissing focus. Registry tests
+cover hidden persistent recovery and cancellation of pending retries on dismissal
+or removal.
+
 ## Native status drawing
 
 The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label uses that same width, so entering terminal mode does not shift adjacent segments. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.

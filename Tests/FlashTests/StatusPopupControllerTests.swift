@@ -345,6 +345,58 @@ final class StatusPopupControllerTests: XCTestCase {
     original.onStateChange = stateChanged
   }
 
+  func testCrashedTerminalsRestartInEveryPresentationWithoutLosingFocusOrSession() {
+    for persistent in [false, true] {
+      for presentation in ["preview", "pinned", "standalone"] {
+        let registry = StatusTerminalRegistry()
+        let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+        defer { registry.shutdown() }
+        var config = Config()
+        config.terminals["crash"] = .init(
+          command: ["/bin/sh", "-c", "printf 'ready-%s' \"$$\"; exec /bin/sleep 30"],
+          persistent: persistent)
+        registry.apply(config.statusBar, terminals: config.terminals)
+        let name = registry.prepareTerminal(name: "crash", configuration: config)!
+        let session = registry.sessions[name]!
+        controller.didDismiss = { registry.releaseTerminal(name: $0) }
+        if presentation == "standalone" {
+          controller.showTerminal(
+            name: name, visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400),
+            style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+        } else {
+          preview(controller, region: region(name, text: ""))
+          if presentation == "pinned" { controller.focus() }
+        }
+        waitUntil("initial terminal frame") {
+          guard case .running(let pid) = session.state else { return false }
+          return controller.terminalView.terminalFrame?.text.contains("ready-\(pid)") == true
+        }
+        guard case .running(let originalPID) = session.state else {
+          return XCTFail("Expected a running child")
+        }
+        let originalPresentation = controller.presentation
+        let originalGeneration = registry.inputGenerations[name]
+        var dismissals = 0
+        controller.didDismissFocus = { dismissals += 1 }
+        XCTAssertEqual(kill(originalPID, SIGKILL), 0)
+        waitUntil("crashed terminal replaced and rendered") {
+          guard case .running(let pid) = session.state, pid != originalPID else { return false }
+          return controller.terminalView.terminalFrame?.text.contains("ready-\(pid)") == true
+        }
+        XCTAssertTrue(registry.sessions[name] === session)
+        XCTAssertNotEqual(registry.inputGenerations[name], originalGeneration)
+        XCTAssertEqual(controller.presentation, originalPresentation)
+        XCTAssertTrue(controller.terminalView.isRenderingEnabled)
+        XCTAssertEqual(controller.exitStatusText, "")
+        XCTAssertEqual(dismissals, 0)
+        XCTAssertEqual(kill(originalPID, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
+        controller.dismiss()
+        XCTAssertEqual(registry.sessions[name] != nil, persistent)
+      }
+    }
+  }
+
   func testStandaloneTerminalCentersClampsAndSurvivesStatusBarChanges() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)

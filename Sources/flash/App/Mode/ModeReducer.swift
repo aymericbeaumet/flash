@@ -102,7 +102,7 @@ enum ModeReducer {
 
     case .startup(let advancedEnabled):
       let next: Mode = advancedEnabled ? .normal : .disabled
-      return (next, enterEffects(for: next, targetPID: nil))
+      return (next, [.prepareKeyboardCapture] + enterEffects(for: next, targetPID: nil))
 
     case .focusedAppChanged:
       // Sticky/global: never flips the mode. Only the command surfaces need to

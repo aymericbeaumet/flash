@@ -410,11 +410,7 @@ fn render_status(
     let details = render_popup_details(snapshot, health, history);
     let visible = visible_summary(snapshot, summary_mode);
     StatusSegments {
-        summary: if visible.is_empty() {
-            String::new()
-        } else {
-            inline_status_popup(&visible, &details)
-        },
+        summary: inline_status_popup(&visible, &details),
         label: visible,
         details,
         plain_details,
@@ -529,12 +525,13 @@ fn padded_history(history: &VecDeque<f64>) -> String {
 }
 
 fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
-    if snapshot
-        .battery
-        .as_ref()
-        .is_some_and(|battery| battery.percent == 100 || battery.state == BatteryState::Charging)
+    if snapshot.source == PowerSource::Adapter
+        && snapshot
+            .battery
+            .as_ref()
+            .is_some_and(|battery| battery.percent == 100)
     {
-        return String::new();
+        return "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]".to_string();
     }
     let (mut value, breathing) = match snapshot.battery {
         Some(ref battery) => (
@@ -822,10 +819,13 @@ mod tests {
             &VecDeque::new(),
         );
 
-        assert!(visible_summary(&snapshot, SummaryMode::Compact).is_empty());
-        assert!(visible_summary(&snapshot, SummaryMode::Full).is_empty());
-        assert!(status.summary.is_empty());
-        assert!(status.label.is_empty());
+        assert_eq!(
+            visible_summary(&snapshot, SummaryMode::Compact),
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
+        );
+        assert!(visible_summary(&snapshot, SummaryMode::Full).contains("73% · 1h 24m"));
+        assert!(status.summary.contains("popup="));
+        assert!(status.label.contains("73%"));
         assert_eq!(
             status.details,
             "#[fg=#EBCB8B]Battery#[default]\n\
@@ -849,16 +849,27 @@ mod tests {
     }
 
     #[test]
-    fn summary_hides_charging_and_full_batteries_but_keeps_details() {
-        for state in [
-            BatteryState::Charging,
-            BatteryState::Charged,
-            BatteryState::Discharging,
-            BatteryState::Unknown,
+    fn summary_keeps_percentage_except_when_full_on_ac_power() {
+        for (source, percent, label_only) in [
+            (PowerSource::Adapter, 0, false),
+            (PowerSource::Adapter, 73, false),
+            (PowerSource::Adapter, 99, false),
+            (PowerSource::Adapter, 100, true),
+            (PowerSource::Battery, 0, false),
+            (PowerSource::Battery, 73, false),
+            (PowerSource::Battery, 99, false),
+            (PowerSource::Battery, 100, false),
+            (PowerSource::Unknown, 73, false),
+            (PowerSource::Unknown, 100, false),
         ] {
-            for percent in [0, 73, 99, 100] {
+            for state in [
+                BatteryState::Charging,
+                BatteryState::Charged,
+                BatteryState::Discharging,
+                BatteryState::Unknown,
+            ] {
                 let snapshot = PowerSnapshot {
-                    source: PowerSource::Battery,
+                    source,
                     battery: Some(BatterySnapshot {
                         percent,
                         state,
@@ -867,14 +878,45 @@ mod tests {
                 };
                 for mode in [SummaryMode::Compact, SummaryMode::Full] {
                     let status = render_status(&snapshot, None, mode, &VecDeque::new());
-                    let hidden = percent == 100 || state == BatteryState::Charging;
-                    assert_eq!(status.label.is_empty(), hidden);
-                    assert_eq!(status.summary.is_empty(), hidden);
+                    assert!(!status.label.is_empty(), "{snapshot:?} {mode:?}");
+                    assert!(status.summary.contains("popup="), "{snapshot:?} {mode:?}");
+                    assert!(!status.label.contains("popup="));
+                    assert!(status.label.contains("range=user|bat-prefs"));
+                    if label_only {
+                        assert_eq!(
+                            status.label,
+                            "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
+                            "{snapshot:?} {mode:?}"
+                        );
+                    } else {
+                        assert!(
+                            status.label.contains(&format!("{percent:>2}%")),
+                            "{snapshot:?} {mode:?}"
+                        );
+                        if mode == SummaryMode::Full {
+                            assert!(status.label.contains(source.label()));
+                        }
+                    }
                     assert!(status
                         .plain_details
                         .contains(&format!("Charge: {percent}%")));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn full_pmset_battery_keeps_bat_label_across_charging_states() {
+        for state in ["charging", "finishing charge", "charged"] {
+            let raw = format!(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; {state}; 0:00 remaining present: true"
+            );
+            let snapshot = parse_pmset_snapshot(&raw).unwrap();
+            assert_eq!(
+                visible_summary(&snapshot, SummaryMode::Compact),
+                "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
+                "{state}"
+            );
         }
     }
 

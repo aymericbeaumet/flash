@@ -233,7 +233,8 @@ addresses, and battery/power health. Use `:cpu`, `:memory`, `:disks`,
 `:flashlight @network.addresses` to copy an interface address. Date/time stays
 in the core status renderer (with the `timezones` plugin for lookup), and the
 dedicated `caffeinate` plugin remains the sole owner of sleep assertions.
-The battery indicator hides while charging or at 100%; `:power` still shows details.
+The battery indicator shows just `BAT` when fully charged on AC power; otherwise
+it keeps the numeric charge. `:power` always shows details.
 Passive network polling never requests Location access. Run `:network refresh`
 to request it explicitly when you want the current Wi-Fi name; refresh again
 after granting permission.

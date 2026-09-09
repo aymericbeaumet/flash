@@ -397,7 +397,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     installDismissObservers()
     startClipboardMonitor()
     startPowerSourceMonitor()
-    startKeyboardCaptureTap()
     pluginManager.emit(
       PluginEvent(
         name: "core:flash.started", payload: [:], bundleID: nil))
@@ -834,7 +833,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// overlay to be the key window. Requires the Accessibility grant (which Flash
   /// already needs); if it's missing the tap won't create and we transparently
   /// fall back to key-window capture.
-  private func startKeyboardCaptureTap() {
+  func startKeyboardCaptureTap() {
+    guard keyboardCaptureTap == nil else { return }
     guard AXIsProcessTrusted() else {
       FlashLog.warn("[tap] no accessibility grant — using key-window capture for normal mode")
       return

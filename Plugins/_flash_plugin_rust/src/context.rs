@@ -1119,33 +1119,53 @@ mod tests {
     #[tokio::test]
     async fn context_interval_waits_for_first_tick_and_never_overlaps_itself() {
         let ctx = test_context();
-        let calls = Arc::new(AtomicU64::new(0));
-        let in_flight = Arc::new(AtomicU64::new(0));
-        let max_in_flight = Arc::new(AtomicU64::new(0));
-        let handle = ctx.interval(Duration::from_millis(5), {
-            let calls = calls.clone();
-            let in_flight = in_flight.clone();
-            let max_in_flight = max_in_flight.clone();
+        let period = Duration::from_millis(5);
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel(4);
+        let (finished_tx, mut finished_rx) = tokio::sync::mpsc::channel(4);
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let interval_started = Instant::now();
+        let handle = ctx.interval(period, {
+            let release = release.clone();
             move |_| {
-                let calls = calls.clone();
-                let in_flight = in_flight.clone();
-                let max_in_flight = max_in_flight.clone();
+                let started_tx = started_tx.clone();
+                let finished_tx = finished_tx.clone();
+                let release = release.clone();
                 async move {
-                    let active = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                    max_in_flight.fetch_max(active, Ordering::SeqCst);
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(8)).await;
-                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    started_tx.send(Instant::now()).await.unwrap();
+                    release.acquire().await.unwrap().forget();
+                    finished_tx.send(Instant::now()).await.unwrap();
                 }
             }
         });
 
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        tokio::time::sleep(Duration::from_millis(32)).await;
-        handle.abort();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let first_tick = started_rx.recv().await.expect("first tick starts");
+            assert!(first_tick.duration_since(interval_started) >= period);
+            assert!(
+                tokio::time::timeout(period * 3, started_rx.recv())
+                    .await
+                    .is_err(),
+                "another tick started while the first callback was blocked"
+            );
 
-        assert!(calls.load(Ordering::SeqCst) >= 2);
-        assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+            release.add_permits(1);
+            let first_finished = finished_rx.recv().await.expect("first callback finishes");
+            let second_tick = started_rx.recv().await.expect("second tick starts");
+            assert!(second_tick.duration_since(first_finished) >= period);
+
+            handle.abort();
+            assert!(handle.await.unwrap_err().is_cancelled());
+            assert!(
+                started_rx.recv().await.is_none(),
+                "ticks continue after abort"
+            );
+            assert!(
+                finished_rx.recv().await.is_none(),
+                "the blocked callback completed after abort"
+            );
+        })
+        .await
+        .expect("interval observations complete within the test deadline");
     }
 
     #[tokio::test]
