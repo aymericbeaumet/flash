@@ -24,7 +24,7 @@ extension AppDelegate {
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
-        hasHints: !currentHints.isEmpty,
+        hasHints: hintSession.isActive,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
     else {
       hideActiveWindowBorder(reason: "hidden_\(reason)")
@@ -55,7 +55,7 @@ extension AppDelegate {
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
-        hasHints: !currentHints.isEmpty,
+        hasHints: hintSession.isActive,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
     else { return }
     activeWindowBorderReconciliationGeneration &+= 1
@@ -75,7 +75,7 @@ extension AppDelegate {
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
-        hasHints: !currentHints.isEmpty,
+        hasHints: hintSession.isActive,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
     else {
       hideActiveWindowBorder(reason: "reconcile_state")

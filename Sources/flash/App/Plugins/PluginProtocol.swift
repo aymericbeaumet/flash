@@ -52,6 +52,15 @@ enum PluginProtocol {
   static let maxFetchResponseBytes = 1_048_576
   static let fetchTimeoutMs = 8_000
 
+  // MARK: - Transport admission (per child)
+
+  static let maxPendingRequests = 64
+  static let maxHostRPCs = 64
+  static let maxOutboundFrames = 256
+  static let maxOutboundBytes = 20 * 1_024 * 1_024
+  static let maxInboundFrames = 256
+  static let maxInboundBytes = 20 * 1_024 * 1_024
+
   // MARK: - Perform
 
   /// The four `perform` kinds, the universal action vocabulary.
@@ -69,6 +78,8 @@ enum PluginProtocol {
   static let hostClosedError = "host closed stdin"
   static let hostCallTimeoutError = "host call timed out"
   static let frameOverflowError = "response exceeded outbound frame limit"
+  static let requestCapacityError = "plugin request capacity exceeded"
+  static let hostCallCapacityError = "host call capacity exceeded"
   static func capabilityDeniedError(_ capability: String) -> String {
     "missing \(capability) capability"
   }

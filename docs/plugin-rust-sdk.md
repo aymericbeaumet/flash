@@ -123,6 +123,36 @@ slow the handshake); resolve lazily with `tokio::sync::OnceCell` when
 needed. A synchronous `evaluate` body over 10 ms is a bug — the host warns
 at 40 ms round-trip against the 50 ms deadline.
 
+The runtime owns finite admission queues, pinned in `protocol.json`:
+
+- Input collects at most 10 MiB before a newline. Oversized records are
+  discarded through the next newline; EOF discards partial JSON and shuts down.
+- At most 16 request handlers retain at most 32 MiB of encoded input between
+  them. Excess requests receive `plugin request capacity exceeded`; ping and
+  host-RPC response intake continue. Cancellation releases pending host calls;
+  at most 64 host calls may await a response.
+- Output holds at most 64 frames and 16 MiB, including the frame currently
+  being written. Async responses wait for capacity before allocating their
+  encoded buffer. Synchronous notifications may be dropped with a content-free
+  diagnostic. Reader-owned control replies never wait for stdout: if their
+  queue is exhausted the transport closes so the host can recover.
+- Ordinary events have a 256-frame/16-MiB backlog. Under overload, each of
+  `apps.changed`, `focus.changed`, `window.focus.changed`, `ax.changed`,
+  `clipboard.changed`, `config.changed`, `power.changed`, and `space.changed`
+  (all prefixed `core:`) retains one latest replacement slot, each bounded by
+  the frame cap. Intermediate replacements can coalesce; the final value,
+  including an empty app list, reaches the serialized event handler. This
+  avoids blocking the stdin reader while a handler awaits a host RPC.
+
+EOF cancels request/event workers and gives shutdown callbacks plus output
+draining one shared 750-ms deadline. Handlers must still avoid blocking the
+executor. Wire PIDs are positive signed 32-bit integers; booleans and floating
+JSON numbers never stand in for integer identifiers. Perform failures emit
+only their failure outcome, even when success-only builder methods were chained.
+Optional wire fields accept null as absent. Hint targets require a nonempty
+`id`, the canonical nested frame, finite frame edges, and declared fields only.
+Perform navigation URLs must be absolute; invalid builder values become errors.
+
 ## Testing
 
 `flash_plugin::testing::Harness` drives handlers with no host process, no
@@ -154,6 +184,15 @@ Use the harness for handler-level behavior, a plugin-local
 `Plugins/<id>/specs/*.json` scenario for full subprocess/wire behavior, and a
 shared `Plugins/_flash_plugin_specs/regressions/*.json` scenario only when the
 host/Rust SDK protocol contract itself is involved.
+
+The SDK, host XCTest suite, and Python runner consume the shared malformed and
+boundary corpus at `Plugins/_flash_plugin_specs/fixtures/wire-values.fixture`.
+Runtime tests also drive real duplex byte streams through framing, worker
+admission, and event/host-RPC interleaving. Run the runner's own malicious-child
+and strict scalar tests with `python3 -m unittest Scripts.flash_spec_runner.test_runner`.
+These checks validate every response law and duplicate reply independently of
+a scenario's subset matcher. Runner intake is bounded; invalid, unterminated,
+oversized, or excessive stdout fails the scenario while its pipes keep draining.
 
 If a plugin will not load, run `:plugins doctor`. It checks manifest loading,
 runtime state, executable resolution, and whether the generated Seatbelt

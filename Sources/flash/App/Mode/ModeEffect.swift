@@ -17,6 +17,9 @@ enum MappingScope: Equatable {
 // AppDelegate routine — so the executor is a dumb `switch` with no decisions of
 // its own.
 enum ModeEffect: Equatable {
+  /// Reset transient capture context once when an explicit transition enters a mode.
+  case prepareModeEntry
+
   /// Reconcile Carbon hotkeys for the active surface. Terminal focus suspends
   /// every registration; the executor dedupes no-op re-applies.
   case setMappingScope(MappingScope)

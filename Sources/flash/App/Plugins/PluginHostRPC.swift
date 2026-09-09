@@ -75,6 +75,16 @@ final class PluginHostRPC {
     dataDir: URL? = nil,
     reply: @escaping ([String: Any]) -> Void
   ) {
+    let integerFields: [String: [String]] = [
+      "host.notify": ["duration_ms"], "host.process_table": ["sample_window_ms"],
+      "host.post_keys": ["interval_ms"],
+    ]
+    if let key = integerFields[method]?.first(where: {
+      params[$0] != nil && PluginJSON.integer(params[$0]) == nil
+    }) {
+      reply(["ok": false, "error": "\(method) requires an integer \(key)"])
+      return
+    }
     switch method {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
@@ -304,7 +314,7 @@ final class PluginHostRPC {
       reply(["ok": false, "error": "host.notify requires a message under 1 KiB"])
       return
     }
-    let durationMs = min(max((params["duration_ms"] as? Int) ?? 3000, 500), 10_000)
+    let durationMs = min(max(PluginJSON.integer(params["duration_ms"]) ?? 3000, 500), 10_000)
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       let now = Date()
@@ -467,7 +477,7 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let keyCode = params["key_code"] as? Int, (0...31).contains(keyCode) else {
+    guard let keyCode = PluginJSON.integer(params["key_code"]), (0...31).contains(keyCode) else {
       reply(["ok": false, "error": "host.post_media_key requires key_code 0-31"])
       return
     }
@@ -506,14 +516,14 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    let windowMs = min(max((params["sample_window_ms"] as? Int) ?? 150, 10), 2_000)
+    let windowMs = min(max(PluginJSON.integer(params["sample_window_ms"]) ?? 150, 10), 2_000)
     let requestedPID: pid_t?
     if let rawPID = params["pid"] {
-      guard let pid = rawPID as? Int, pid > 0 else {
+      guard let pid = PluginJSON.pid(rawPID) else {
         reply(["ok": false, "error": "host.process_table pid must be positive"])
         return
       }
-      requestedPID = pid_t(pid)
+      requestedPID = pid
     } else {
       requestedPID = nil
     }
@@ -591,11 +601,11 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = params["pid"] as? Int, pid > 1 else {
+    guard let pid = PluginJSON.pid(params["pid"]), pid > 1 else {
       reply(["ok": false, "error": "host.signal requires pid > 1"])
       return
     }
-    if Self.signalSender(pid_t(pid)) == 0 {
+    if Self.signalSender(pid) == 0 {
       reply(["ok": true])
     } else {
       reply(["ok": false, "error": String(cString: strerror(errno))])
@@ -738,7 +748,7 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = (params["pid"] as? Int).map(pid_t.init) else {
+    guard let pid = PluginJSON.pid(params["pid"]) else {
       reply(["ok": false, "error": "host.activate requires pid"])
       return
     }
@@ -762,7 +772,7 @@ final class PluginHostRPC {
   static func globalSyntheticKeyChord(
     from params: [String: Any]
   ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    guard let rawCode = params["key_code"] as? Int, rawCode >= 0, rawCode < 0x80,
+    guard let rawCode = PluginJSON.integer(params["key_code"]), rawCode >= 0, rawCode < 0x80,
       let names = params["modifiers"] as? [String], !names.isEmpty
     else { return nil }
     var flags: CGEventFlags = []
@@ -808,7 +818,7 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = (params["pid"] as? Int).map(pid_t.init), pid > 0,
+    guard let pid = PluginJSON.pid(params["pid"]), pid > 0,
       let steps = params["keys"] as? [[String: Any]],
       !steps.isEmpty, steps.count <= 32
     else {
@@ -817,7 +827,7 @@ final class PluginHostRPC {
     }
     var chords: [(key: CGKeyCode, flags: CGEventFlags)] = []
     for step in steps {
-      guard let rawCode = step["key_code"] as? Int, rawCode >= 0, rawCode < 0x80,
+      guard let rawCode = PluginJSON.integer(step["key_code"]), rawCode >= 0, rawCode < 0x80,
         let names = step["modifiers"] as? [String], !names.isEmpty
       else {
         reply(["ok": false, "error": "each key needs key_code and non-empty modifiers"])
@@ -833,7 +843,7 @@ final class PluginHostRPC {
       }
       chords.append((key: CGKeyCode(rawCode), flags: flags))
     }
-    let intervalMs = min(max((params["interval_ms"] as? Int) ?? 35, 8), 100)
+    let intervalMs = min(max(PluginJSON.integer(params["interval_ms"]) ?? 35, 8), 100)
     guard let post = onSyntheticKeysRequested else {
       reply(["ok": false, "error": "key posting unavailable"])
       return

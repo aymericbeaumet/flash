@@ -20,7 +20,14 @@ bundle; third-party plugins are listed in `[plugins] third_party` as
 `github:user/project@<commit-sha>` (full 40-character SHA, mandatory — the
 materializer fetches exactly that commit and refuses a mismatched checkout) or
 `file:<path>`. The manifest's optional `install` shell string (third-party
-only) runs sandboxed from the plugin root; `exec` is an argv array exec'd
+only) runs sandboxed from the plugin root on an asynchronous install job.
+The job owns a process group, drains both output pipes while it runs, retains
+at most 4 MiB stdout / 256 KiB stderr, and escalates timeout or cancellation
+from SIGTERM to SIGKILL after 500 ms. A stopped/replaced attempt cannot write
+an install stamp or launch a child. Install attempts for the same canonical
+root run in submission order across process replacements. Cancellation keeps
+ownership until the old group exits; cancelled waiting attempts never spawn.
+`exec` is an argv array exec'd
 directly with the scrubbed plugin environment — no shell wrap. Its first
 element resolves in order: absolute paths pass through, `./`-style paths
 resolve against the plugin root (official Rust plugins), and bare names resolve
@@ -47,27 +54,41 @@ never spawn at all.
 **Lifecycle state machine.**
 
 ```
-stopped → installing → launching → running → stopped
-              │            │          │
-              │   (no initialize reply│ (exit, write error, missed ping)
-              │    / version mismatch)▼
-              └────────► failed ◄── backoff restart loop (5 in 300 s → failed)
+initial / idle → installing → launching → running
+                   │            │          │
+                   └────────────┴──────────┴── failure → backoff → installing
+                                                        │
+                                               budget exhausted → failed
+stop → stopped (all attempt work invalidated)
 ```
 
 `launching` = spawned, awaiting the initialize reply; the host dispatches no
 other requests and no events until `running`. Restarts back off linearly
-(1..30 s); 5 restarts within 300 s parks the plugin in `failed` (recover with
-`:plugins reload` or a plugin-file change). The published catalog survives
+(1..30 s); after five retries within 300 s, another failure parks the plugin in `failed` (recover with
+`:plugins reload` or a plugin-file change). Successful initialize does not
+reset the rolling failure budget; even an initialize-then-crash loop parks.
+Lifecycle transitions belong to attempt generations. Stop/reload invalidates
+pending retries, installation completions, and transport work. Rejected
+initialize replies park immediately. The published catalog survives
 crashes and restarts (see `publish`) and is dropped on `failed` or unload;
 status segments clear on any teardown; in-flight `perform`s settle as errors.
+Asynchronous host RPC replies stay attached to the child that requested them:
+a replacement child can reuse an ID without receiving the old child's reply.
+
+Explicit reload and file changes reconcile the manifest through PluginManager.
+Unchanged definitions restart only the affected binaries and retain catalogs.
+A changed valid definition rebuilds its registrations, authorization, adapter,
+and process together and drops its previous catalog. An invalid replacement
+keeps the last validated definition running and reports its load error; fixing
+the file allows reconciliation to recover without a resident-app restart.
 A plugin should also exit when `FLASH_PLUGIN_PARENT_PID` dies.
 
 **Shutdown.** There is no shutdown method. The host closes the plugin's
 stdin; **stdin EOF is the shutdown signal** — run cleanup, exit 0. The host
 waits `shutdown_grace` (1 s), then SIGTERM, then (+0.5 s) SIGKILL.
 
-**Liveness.** There is no periodic heartbeat. Process death is caught by pipe
-EOF; a hung request is caught by its own deadline. The one residual probe: if
+**Liveness.** There is no periodic heartbeat. The process termination handler
+catches child exit; a hung request is caught by its own deadline. The one residual probe: if
 the host has received *no frame at all* from a plugin for `idle_before_ping`
 (60 s) and has nothing in flight, it sends `ping`; one missed reply (10 s)
 tears down and restarts. Any plugin frame — a publish, a log line, a response
@@ -79,12 +100,15 @@ conformant: pings never race in-flight requests.
 NDJSON on stdin/stdout: UTF-8, one JSON object per newline-terminated line, no
 envelope beyond `id`/`method`/`params`/`result` (`id`+`method` = request,
 `id` alone = response, `method` alone = notification). Ids are positive
-monotonic integers per sender; host and plugin counters are independent and
+monotonic integers per sender. Booleans and floating-point values are never
+integer IDs or protocol versions; `ok` and other Boolean fields accept only
+JSON booleans. Native process IDs are checked positive 32-bit integers.
+Host and plugin counters are independent and
 may overlap — an inbound `id`+`method` frame is always a request, never a
 reply. Exactly one reply per id'd request; responses to unknown ids are
 dropped. There is **no cancellation**: late replies are dropped and the
 deadline table is the contract. Lines are capped at 10 MiB in both
-directions; an undecodable or oversized line is dropped (never fatal) and the
+directions, excluding the terminating newline; an undecodable or oversized line is dropped (never fatal) and the
 stream self-heals at the next newline. An outbound response that would exceed
 the cap is replaced by `{"ok": false, "error": "response exceeded outbound
 frame limit"}` under the same id. stderr is diagnostics only — lines are
@@ -159,11 +183,13 @@ Notifications have no deadlines.
   cached-discovery path. The host owns commit: it posts the mouse event
   directly to the target app and never calls back into the plugin to
   activate a target. Use role `AXLink` for native-style semantic links (`f`
-  plain except Firefox-owned targets add Command; `F` Command-Shift), or
+  plain; `F` Command-Shift), or
   `FlashTerminalLink` for links inside terminal content (`f` Shift, `F`
-  Command-Shift). Non-link targets always receive a plain click. Targets:
+  Command-Shift). Every target preserves the requested click modifiers. Targets:
   `{id, frame{x,y,width,height}, role?, label?, url?, pid?,
-  enters_insert_mode?, priority?}`.
+  enters_insert_mode?, priority?}`. The nested `frame` is required; flat
+  coordinates and unknown target fields are rejected. Geometry must be finite
+  with positive width/height. One malformed target rejects the entire reply.
 - `perform` — the single effect method. Four kinds:
 
   ```json
@@ -283,7 +309,13 @@ they reject URLs: evaluators cannot manufacture navigation). There is
 deliberately no `run` effect — a host-executed argv would escape the
 plugin's sandbox; side effects that run commands belong in `perform`, inside
 the sandbox. Every bound rejects the complete payload atomically; nothing is
-silently truncated.
+silently truncated. Array byte quotas count the compact UTF-8 JSON encoding
+of `rows` or `answers`, including JSON syntax and string escaping, with literal
+Unicode and unescaped slashes; the surrounding request/response envelope is
+excluded. Publish and search apply the same catalog decoder and byte boundary.
+Optional values may be null, but present values must have the declared type.
+Perform outcomes form an exclusive union: success fields cannot accompany an
+error, and `unhandled` cannot accompany success or an error string.
 
 ## Manifest
 
@@ -403,7 +435,11 @@ selected by the capabilities declared in each manifest. Put behavior that is
 specific to one plugin process in `Plugins/<id>/specs/*.json`; put a host/Rust
 SDK wire-contract regression in `Plugins/_flash_plugin_specs/regressions/`.
 For a protocol defect, land the smallest shared reproduction before changing
-the implementation.
+the implementation. `fixtures/wire-values.fixture` is the shared malformed and
+boundary-value corpus consumed by Swift host tests, the Rust SDK, and runner
+tests. The subprocess runner supplies a scripted host; real host generation,
+manifest reconciliation, and shutdown behavior are covered separately by the
+plugin XCTest suites.
 
 `Plugins/_flash_plugin_specs/overrides.json` is the only skip/xfail escape
 hatch. Every entry needs a concrete reason. An expected failure that starts

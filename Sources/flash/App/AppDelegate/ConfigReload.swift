@@ -41,7 +41,6 @@ extension AppDelegate {
   func watchConfigFile() {
     teardownConfigWatchers()
     let candidates = ConfigLoader.candidatePaths(
-      arguments: CommandLine.arguments,
       environment: ProcessInfo.processInfo.environment)
     var watchedDirs = Set<String>()
     for url in candidates {
@@ -143,7 +142,7 @@ extension AppDelegate {
     overlay.debugConfig = cfg.debug
     overlay.statusBarPopupStyle = cfg.statusBar.popupStyle
     overlay.modeLabels = cfg.mode.labels
-    overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
+    overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     overlay.normalModePassthroughKeyCodes = cfg.mode.normalPassthroughKeyCodes
     overlay.normalModePassthroughModifiers = cfg.mode.normalPassthroughModifiers

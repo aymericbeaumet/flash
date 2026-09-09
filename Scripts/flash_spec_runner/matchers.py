@@ -46,9 +46,26 @@ def match(expected, actual, path="frame"):
         for index, (want, got) in enumerate(zip(expected, actual)):
             problems += match(want, got, f"{path}[{index}]")
         return problems
-    if expected != actual:
+    if not json_equal(expected, actual):
         return [f"{path}: expected {expected!r}, got {actual!r}"]
     return []
+
+
+def json_equal(expected, actual):
+    """JSON literal equality: booleans are distinct from JSON numbers."""
+    if type(expected) in (int, float) and type(actual) in (int, float):
+        return expected == actual
+    if type(expected) is not type(actual):
+        return False
+    if isinstance(expected, dict):
+        return expected.keys() == actual.keys() and all(
+            json_equal(value, actual[key]) for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(expected) == len(actual) and all(
+            json_equal(want, got) for want, got in zip(expected, actual)
+        )
+    return expected == actual
 
 
 _KINDS = {
@@ -103,7 +120,9 @@ def _match_shape(expected, actual, path):
     if "$contains" in expected:
         if not isinstance(actual, str) or expected["$contains"] not in actual:
             problems.append(f"{path}: expected substring {expected['$contains']!r} in {actual!r}")
-    if "$one_of" in expected and actual not in expected["$one_of"]:
+    if "$one_of" in expected and not any(
+        json_equal(value, actual) for value in expected["$one_of"]
+    ):
         problems.append(f"{path}: {actual!r} not in {expected['$one_of']!r}")
     if "$each" in expected:
         if not isinstance(actual, list):

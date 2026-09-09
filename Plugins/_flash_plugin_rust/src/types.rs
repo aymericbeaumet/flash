@@ -482,7 +482,7 @@ impl std::fmt::Display for Candidate {
 pub struct RunningApplication {
     #[serde(default)]
     pub bundle_id: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::wire::deserialize_pid")]
     pub pid: i64,
     #[serde(default)]
     pub localized_name: String,
@@ -529,7 +529,7 @@ impl CommandRequest {
 pub struct HintsRequest {
     #[serde(default)]
     pub bundle_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
@@ -540,7 +540,7 @@ pub struct HintsRequest {
 pub struct ActionContext {
     #[serde(default)]
     pub bundle_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
@@ -684,7 +684,7 @@ impl PerformResponse {
             ok: false,
             unhandled: false,
             // The response law: ok:false always carries a non-empty error.
-            error: Some(if message.is_empty() {
+            error: Some(if message.trim().is_empty() {
                 "perform failed".to_string()
             } else {
                 message
@@ -734,6 +734,22 @@ impl PerformResponse {
             // The one sanctioned errorless ok:false — subsetting keeps the
             // wire shape canonical whatever builders were chained.
             return serde_json::json!({ "ok": false, "unhandled": true });
+        }
+        if !self.ok {
+            return serde_json::json!({ "ok": false, "error": self.error });
+        }
+        if self
+            .target_pid
+            .is_some_and(|pid| !(1..=i64::from(i32::MAX)).contains(&pid))
+        {
+            return serde_json::json!({ "ok": false, "error": "invalid perform target_pid" });
+        }
+        if self
+            .navigation_url
+            .as_deref()
+            .is_some_and(|url| !crate::wire::absolute_url(url))
+        {
+            return serde_json::json!({ "ok": false, "error": "invalid perform navigation_url" });
         }
         serde_json::to_value(self).unwrap_or_else(|_| {
             serde_json::json!({ "ok": false, "error": "perform response could not be encoded" })
@@ -792,6 +808,47 @@ impl HintsResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn failure_builders_cannot_emit_success_fields() {
+        assert_eq!(
+            PerformResponse::fail("broken")
+                .target_pid(7)
+                .message("done")
+                .to_value(),
+            json!({ "ok": false, "error": "broken" })
+        );
+    }
+
+    #[test]
+    fn perform_builders_always_emit_valid_wire_outcomes() {
+        for response in [
+            PerformResponse::fail(" \t\n"),
+            PerformResponse::ok().navigation_url("relative/path"),
+        ] {
+            assert!(crate::wire::valid_result("perform", &response.to_value()));
+            assert_eq!(response.to_value()["ok"], false);
+        }
+    }
+
+    #[test]
+    fn optional_request_pids_accept_null_but_reject_invalid_values() {
+        for value in [json!({}), json!({"pid": null})] {
+            assert_eq!(
+                serde_json::from_value::<HintsRequest>(value.clone())
+                    .unwrap()
+                    .pid,
+                None
+            );
+            assert_eq!(
+                serde_json::from_value::<ActionContext>(value).unwrap().pid,
+                None
+            );
+        }
+        for pid in [json!(true), json!(0), json!(1.0), json!(2147483648_u64)] {
+            assert!(serde_json::from_value::<HintsRequest>(json!({"pid": pid})).is_err());
+        }
+    }
 
     #[test]
     fn rows_serialize_with_first_class_source_and_lean_optionals() {

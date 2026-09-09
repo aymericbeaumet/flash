@@ -15,22 +15,35 @@ enum PluginWireCodec {
   }
 
   static func protocolVersionValue(_ response: [String: Any]?) -> Int? {
-    if let value = response?["protocol_version"] as? Int { return value }
-    return (response?["protocol_version"] as? NSNumber)?.intValue
+    PluginJSON.integer(response?["protocol_version"])
   }
 
   /// Serialize one frame as a newline-terminated JSON line.
   /// JSONSerialization never emits raw newlines without .prettyPrinted, so
   /// the delimiter is unambiguous.
   static func encodeFrame(_ object: [String: Any]) throws -> Data {
-    var data = try JSONSerialization.data(withJSONObject: object)
+    var data = try JSONSerialization.data(
+      withJSONObject: object, options: [.withoutEscapingSlashes])
     data.append(0x0A)
     return data
   }
 
   static func decodeFrame(_ line: Data) throws -> [String: Any] {
-    guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-      throw PluginError.failure("non-object IPC frame")
+    guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+      Set(object.keys).isSubset(of: ["id", "method", "params", "result"])
+    else { throw PluginError.failure("invalid IPC envelope") }
+    if let id = object["id"] {
+      guard let integer = PluginJSON.integer(id), integer > 0 else {
+        throw PluginError.failure("invalid IPC id")
+      }
+    }
+    if let method = object["method"] {
+      guard let name = method as? String, !name.isEmpty, object["result"] == nil,
+        object["params"] == nil || object["params"] is [String: Any]
+      else { throw PluginError.failure("invalid IPC request") }
+    } else {
+      guard object["id"] != nil, object["params"] == nil, object["result"] is [String: Any]
+      else { throw PluginError.failure("invalid IPC response") }
     }
     return object
   }
@@ -39,7 +52,9 @@ enum PluginWireCodec {
   /// Returns the result payload iff `ok: true`; anything else (missing
   /// result, missing/false `ok`) is nil, and the caller settles empty.
   static func okPayload(_ result: [String: Any]?) -> [String: Any]? {
-    guard let result, result["ok"] as? Bool == true else { return nil }
+    guard let result, PluginJSON.boolean(result["ok"]) == true,
+      result["error"] == nil, result["unhandled"] == nil
+    else { return nil }
     return result
   }
 
@@ -50,68 +65,113 @@ enum PluginWireCodec {
   /// the caller's, decided before any frame is written.
   static func performOutcome(from result: [String: Any]?) -> PluginPerformOutcome {
     guard let result else { return .failed("no reply within the perform deadline") }
-    guard let ok = result["ok"] as? Bool else { return .failed("reply missing ok") }
+    return validatedPerformResult(result) ?? .failed("malformed perform reply")
+  }
+
+  static func validatedPerformResult(_ result: [String: Any]) -> PluginPerformOutcome? {
+    guard let ok = PluginJSON.boolean(result["ok"]) else { return nil }
     if ok {
-      let pid = (result["target_pid"] as? Int).map(pid_t.init)
-      let navigationURL = (result["navigation_url"] as? String).flatMap(URL.init(string:))
-      let message = (result["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      guard Set(result.keys).isSubset(of: ["ok", "target_pid", "navigation_url", "message"]) else {
+        return nil
+      }
+      let pid: pid_t?
+      if let raw = PluginJSON.present(result["target_pid"]) {
+        guard let decoded = PluginJSON.pid(raw) else { return nil }
+        pid = decoded
+      } else {
+        pid = nil
+      }
+      let navigationURL: URL?
+      if let raw = PluginJSON.present(result["navigation_url"]) {
+        guard let text = raw as? String, let url = URL(string: text), url.scheme != nil else {
+          return nil
+        }
+        navigationURL = url
+      } else {
+        navigationURL = nil
+      }
+      let message: String?
+      if let raw = PluginJSON.present(result["message"]) {
+        guard let text = raw as? String else { return nil }
+        message = text.isEmpty ? nil : text
+      } else {
+        message = nil
+      }
       return .performed(pid: pid, navigationURL: navigationURL, message: message)
     }
-    if result["unhandled"] as? Bool == true { return .unhandled }
-    let error =
-      (result["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-      ?? "unspecified error"
+    if Set(result.keys) == ["ok", "unhandled"], PluginJSON.boolean(result["unhandled"]) == true {
+      return .unhandled
+    }
+    guard Set(result.keys) == ["ok", "error"], let error = result["error"] as? String,
+      !error.trimmed.isEmpty
+    else { return nil }
     return .failed(error)
   }
 
-  /// Per-method ceiling on a reply frame, above the SDK-owned encoded value
-  /// boundary. The frame also carries id/result envelope keys outside those
-  /// SDK-owned values, hence the small fixed allowance.
-  static func responsePayloadLimit(for method: String) -> Int? {
-    switch method {
-    case "search":
-      return PluginProtocol.maxCatalogBytes + 1_024
-    case "evaluate":
-      return PluginProtocol.maxAnswersBytes + 1_024
-    default:
-      return nil
+  static func hintTargets(
+    from payload: [String: Any], sourceID: String, contextPID: pid_t
+  ) -> [PluginWireTarget]? {
+    guard PluginJSON.boolean(payload["ok"]) == true,
+      Set(payload.keys).isSubset(of: ["ok", "targets", "context_pid"]),
+      let raw = payload["targets"] as? [[String: Any]]
+    else { return nil }
+    if let value = PluginJSON.present(payload["context_pid"]) {
+      guard PluginJSON.pid(value) == contextPID else { return nil }
     }
+    var targets: [PluginWireTarget] = []
+    targets.reserveCapacity(raw.count)
+    for item in raw {
+      guard let target = target(from: item, sourceID: sourceID) else { return nil }
+      targets.append(target)
+    }
+    return targets
   }
 
   static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
-    guard let id = raw["id"] as? String else { return nil }
-    let frameRaw = raw["frame"] as? [String: Any] ?? raw
     guard
-      let x = number(frameRaw["x"]),
-      let y = number(frameRaw["y"]),
-      let width = number(frameRaw["width"]),
-      let height = number(frameRaw["height"]),
-      width > 0, height > 0
+      Set(raw.keys).isSubset(of: [
+        "id", "frame", "role", "label", "url", "pid", "enters_insert_mode", "priority",
+      ]),
+      let id = raw["id"] as? String, !id.isEmpty,
+      let frameRaw = raw["frame"] as? [String: Any],
+      Set(frameRaw.keys) == ["x", "y", "width", "height"],
+      let x = PluginJSON.number(frameRaw["x"]), let y = PluginJSON.number(frameRaw["y"]),
+      let width = PluginJSON.number(frameRaw["width"]),
+      let height = PluginJSON.number(frameRaw["height"]),
+      width > 0, height > 0, (x + width).isFinite, (y + height).isFinite
     else { return nil }
-    let role = raw["role"] as? String
-    // A plugin can state explicitly whether committing this target should
-    // enter insert mode. When it doesn't, fall back to the same AX-role
-    // heuristic the core walk uses so text-field hints still type.
-    let entersInsertMode =
-      raw["enters_insert_mode"] as? Bool
-      ?? JumpTarget.textInputRoles.contains(role ?? "")
+    for key in ["role", "label", "url"] {
+      if let value = PluginJSON.present(raw[key]), !(value is String) { return nil }
+    }
+    let role = PluginJSON.present(raw["role"]) as? String
+    let entersInsertMode: Bool
+    if let value = PluginJSON.present(raw["enters_insert_mode"]) {
+      guard let decoded = PluginJSON.boolean(value) else { return nil }
+      entersInsertMode = decoded
+    } else {
+      entersInsertMode = JumpTarget.textInputRoles.contains(role ?? "")
+    }
     let priority: FlashPriority
-    if let rawPriority = raw["priority"] as? String {
-      guard let parsed = FlashPriority(rawValue: rawPriority) else { return nil }
+    if let value = PluginJSON.present(raw["priority"]) {
+      guard let text = value as? String, let parsed = FlashPriority(rawValue: text) else {
+        return nil
+      }
       priority = parsed
     } else {
       priority = .normal
     }
+    let pid: pid_t?
+    if let value = PluginJSON.present(raw["pid"]) {
+      guard let decoded = PluginJSON.pid(value) else { return nil }
+      pid = decoded
+    } else {
+      pid = nil
+    }
     return PluginWireTarget(
-      id: id,
-      frame: CGRect(x: x, y: y, width: width, height: height),
-      role: role,
-      label: raw["label"] as? String,
-      url: raw["url"] as? String,
-      pid: (raw["pid"] as? Int).map(pid_t.init),
-      entersInsertMode: entersInsertMode,
-      sourceID: sourceID,
-      priority: priority)
+      id: id, frame: CGRect(x: x, y: y, width: width, height: height), role: role,
+      label: PluginJSON.present(raw["label"]) as? String,
+      url: PluginJSON.present(raw["url"]) as? String,
+      pid: pid, entersInsertMode: entersInsertMode, sourceID: sourceID, priority: priority)
   }
 
   /// Decode a complete catalog payload (`publish` rows or a `search` reply).
@@ -121,209 +181,113 @@ enum PluginWireCodec {
   /// rejects the whole payload (`nil`), and the caller keeps the previous
   /// catalog.
   static func catalogRows(
-    from raw: [[String: Any]],
-    sourceID: String,
-    allowedSources: Set<String>
+    from raw: [[String: Any]], sourceID: String, allowedSources: Set<String>
   ) -> (rows: [Candidate], encodedBytes: Int)? {
-    guard raw.count <= PluginProtocol.maxCatalogRows else { return nil }
-    var aggregateBytes = 0
-    var rows: [Candidate] = []
-    rows.reserveCapacity(raw.count)
+    decodeArray(
+      raw, countLimit: PluginProtocol.maxCatalogRows, byteLimit: PluginProtocol.maxCatalogBytes
+    ) {
+      decodedCatalogRow(from: $0, sourceID: sourceID, allowedSources: allowedSources)
+    }.map { ($0.values, $0.encodedBytes) }
+  }
+
+  private static func decodeArray<T>(
+    _ raw: [[String: Any]], countLimit: Int, byteLimit: Int, decode: ([String: Any]) -> T?
+  ) -> (values: [T], encodedBytes: Int)? {
+    guard raw.count <= countLimit, let encodedBytes = PluginJSON.encodedBytes(raw),
+      encodedBytes <= byteLimit
+    else { return nil }
+    var values: [T] = []
+    values.reserveCapacity(raw.count)
     for item in raw {
-      guard
-        let decoded = decodedCatalogRow(
-          from: item,
-          sourceID: sourceID,
-          allowedSources: allowedSources),
-        let nextBytes = addingBytes(
-          aggregateBytes,
-          decoded.stringBytes,
-          limit: PluginProtocol.maxCatalogBytes)
-      else {
-        // A catalog is atomic. Keeping the valid prefix would expose a
-        // deterministic but incomplete catalog and hide the plugin defect.
-        return nil
-      }
-      aggregateBytes = nextBytes
-      rows.append(decoded.candidate)
+      guard let value = decode(item) else { return nil }
+      values.append(value)
     }
-    return (rows, aggregateBytes)
+    return (values, encodedBytes)
   }
 
   private static func decodedCatalogRow(
-    from raw: [String: Any],
-    sourceID: String,
-    allowedSources: Set<String>
-  ) -> (candidate: Candidate, stringBytes: Int)? {
-    let allowedKeys: Set<String> = ["source", "title", "url", "metadata", "effect"]
-    guard Set(raw.keys).isSubset(of: allowedKeys),
-      let source = raw["source"] as? String,
-      allowedSources.contains(source),
-      let title = raw["title"] as? String,
-      !title.isEmpty,
+    from raw: [String: Any], sourceID: String, allowedSources: Set<String>
+  ) -> Candidate? {
+    guard Set(raw.keys).isSubset(of: ["source", "title", "url", "metadata", "effect"]),
+      let source = raw["source"] as? String, allowedSources.contains(source),
+      let title = raw["title"] as? String, !title.isEmpty,
       title.utf8.count <= PluginProtocol.maxTitleBytes
     else { return nil }
-
-    var stringBytes = source.utf8.count + title.utf8.count
     let url: URL?
-    if let rawURL = present(raw["url"]) {
-      guard
-        let value = rawURL as? String,
-        value.utf8.count <= PluginProtocol.maxURLBytes,
-        let parsed = URL(string: value),
-        parsed.scheme != nil,
-        let nextBytes = addingBytes(
-          stringBytes,
-          value.utf8.count,
-          limit: PluginProtocol.maxCatalogBytes)
+    if let value = PluginJSON.present(raw["url"]) {
+      guard let text = value as? String, text.utf8.count <= PluginProtocol.maxURLBytes,
+        let parsed = URL(string: text), parsed.scheme != nil
       else { return nil }
       url = parsed
-      stringBytes = nextBytes
     } else {
       url = nil
     }
-
     var metadata: [String: String] = [:]
-    if let rawMetadata = present(raw["metadata"]) {
-      guard
-        let dict = rawMetadata as? [String: Any],
-        dict.count <= PluginProtocol.maxMetadataEntries
+    if let value = PluginJSON.present(raw["metadata"]) {
+      guard let entries = value as? [String: Any],
+        entries.count <= PluginProtocol.maxMetadataEntries
       else { return nil }
-      metadata.reserveCapacity(dict.count + 3)
-      for (key, rawValue) in dict {
-        guard
-          key.utf8.count <= PluginProtocol.maxMetadataKeyBytes,
-          let value = rawValue as? String,
-          value.utf8.count <= PluginProtocol.maxMetadataValueBytes,
-          let withKey = addingBytes(
-            stringBytes,
-            key.utf8.count,
-            limit: PluginProtocol.maxCatalogBytes),
-          let withValue = addingBytes(
-            withKey,
-            value.utf8.count,
-            limit: PluginProtocol.maxCatalogBytes)
+      for (key, value) in entries {
+        guard key.utf8.count <= PluginProtocol.maxMetadataKeyBytes,
+          let text = value as? String, text.utf8.count <= PluginProtocol.maxMetadataValueBytes
         else { return nil }
-        stringBytes = withValue
-        metadata[key] = value
+        metadata[key] = text
       }
     }
-
     let effect: CandidateEffect?
-    if let rawEffect = present(raw["effect"]) {
+    if let value = PluginJSON.present(raw["effect"]) {
       guard
         let decoded = candidateEffect(
-          from: rawEffect,
-          maxTextBytes: PluginProtocol.maxEffectTextBytes,
-          allowOpen: true),
-        let nextBytes = addingBytes(
-          stringBytes,
-          decoded.textBytes,
-          limit: PluginProtocol.maxCatalogBytes)
+          from: value, maxTextBytes: PluginProtocol.maxEffectTextBytes, allowOpen: true)
       else { return nil }
-      effect = decoded.effect
-      stringBytes = nextBytes
+      effect = decoded
     } else {
       effect = nil
     }
-
-    // Provenance and routing ownership are host-stamped, never trusted from
-    // metadata: the first-class `source` overwrites any metadata echo.
+    // Routing and provenance are always owned by the receiving host.
     metadata[CandidateMetadataKey.source] = source
     metadata[CandidateMetadataKey.sourceID] = sourceID
-    if metadata[CandidateMetadataKey.kind] == nil {
-      metadata[CandidateMetadataKey.kind] = "plugin"
-    }
-    if let rawPriority = metadata[CandidateMetadataKey.priority],
-      FlashPriority(rawValue: rawPriority) == nil
+    if metadata[CandidateMetadataKey.kind] == nil { metadata[CandidateMetadataKey.kind] = "plugin" }
+    if let priority = metadata[CandidateMetadataKey.priority],
+      FlashPriority(rawValue: priority) == nil
     {
       return nil
     }
-    return (
-      Candidate(title: title, url: url, metadata: metadata, effect: effect),
-      stringBytes
-    )
+    return Candidate(title: title, url: url, metadata: metadata, effect: effect)
   }
 
   static func queryAnswers(
-    from raw: [[String: Any]],
-    sourceID: String,
-    source: String
+    from raw: [[String: Any]], sourceID: String, source: String
   ) -> [Candidate]? {
-    guard raw.count <= PluginProtocol.maxAnswers else { return nil }
-    var aggregateBytes = 0
-    var candidates: [Candidate] = []
-    candidates.reserveCapacity(raw.count)
-    for item in raw {
-      guard
-        let decoded = decodedQueryAnswer(
-          from: item,
-          sourceID: sourceID,
-          source: source),
-        let nextBytes = addingBytes(
-          aggregateBytes,
-          decoded.stringBytes,
-          limit: PluginProtocol.maxAnswersBytes)
-      else { return nil }
-      aggregateBytes = nextBytes
-      candidates.append(decoded.candidate)
-    }
-    return candidates
+    decodeArray(
+      raw, countLimit: PluginProtocol.maxAnswers, byteLimit: PluginProtocol.maxAnswersBytes
+    ) {
+      decodedQueryAnswer(from: $0, sourceID: sourceID, source: source)
+    }?.values
   }
 
   private static func decodedQueryAnswer(
-    from raw: [String: Any],
-    sourceID: String,
-    source: String
-  ) -> (candidate: Candidate, stringBytes: Int)? {
-    let allowedKeys: Set<String> = ["title", "subtitle", "effect"]
-    guard Set(raw.keys).isSubset(of: allowedKeys),
-      let title = raw["title"] as? String,
-      !title.isEmpty,
+    from raw: [String: Any], sourceID: String, source: String
+  ) -> Candidate? {
+    guard Set(raw.keys).isSubset(of: ["title", "subtitle", "effect"]),
+      let title = raw["title"] as? String, !title.isEmpty,
       title.utf8.count <= PluginProtocol.maxAnswerFieldBytes,
-      let rawEffect = present(raw["effect"]),
-      let decodedEffect = candidateEffect(
-        from: rawEffect,
-        maxTextBytes: PluginProtocol.maxAnswerFieldBytes,
-        allowOpen: false)
+      let value = PluginJSON.present(raw["effect"]),
+      let effect = candidateEffect(
+        from: value, maxTextBytes: PluginProtocol.maxAnswerFieldBytes, allowOpen: false)
     else { return nil }
-    var stringBytes = title.utf8.count
-    guard
-      let withEffect = addingBytes(
-        stringBytes,
-        decodedEffect.textBytes,
-        limit: PluginProtocol.maxAnswersBytes)
-    else { return nil }
-    stringBytes = withEffect
-    let subtitle: String?
-    if let rawSubtitle = present(raw["subtitle"]) {
-      guard
-        let value = rawSubtitle as? String,
-        value.utf8.count <= PluginProtocol.maxAnswerFieldBytes,
-        let nextBytes = addingBytes(
-          stringBytes,
-          value.utf8.count,
-          limit: PluginProtocol.maxAnswersBytes)
-      else { return nil }
-      subtitle = value
-      stringBytes = nextBytes
-    } else {
-      subtitle = nil
-    }
     var metadata: [String: String] = [
-      CandidateMetadataKey.source: source,
-      CandidateMetadataKey.sourceID: sourceID,
+      CandidateMetadataKey.source: source, CandidateMetadataKey.sourceID: sourceID,
       CandidateMetadataKey.kind: "query_answer",
       CandidateMetadataKey.priority: FlashPriority.urgent.rawValue,
       CandidateMetadataKey.finishesCommand: "1",
     ]
-    if let subtitle, !subtitle.isEmpty {
-      metadata[CandidateMetadataKey.subtitle] = subtitle
+    if let value = PluginJSON.present(raw["subtitle"]) {
+      guard let text = value as? String, text.utf8.count <= PluginProtocol.maxAnswerFieldBytes
+      else { return nil }
+      if !text.isEmpty { metadata[CandidateMetadataKey.subtitle] = text }
     }
-    return (
-      Candidate(title: title, metadata: metadata, effect: decodedEffect.effect),
-      stringBytes
-    )
+    return Candidate(title: title, metadata: metadata, effect: effect)
   }
 
   /// `allowOpen` gates the `open` effect to catalog rows: query evaluators
@@ -333,7 +297,7 @@ enum PluginWireCodec {
     from raw: Any,
     maxTextBytes: Int,
     allowOpen: Bool
-  ) -> (effect: CandidateEffect, textBytes: Int)? {
+  ) -> CandidateEffect? {
     guard let effect = raw as? [String: Any],
       let type = effect["type"] as? String
     else {
@@ -347,7 +311,7 @@ enum PluginWireCodec {
         !text.isEmpty,
         text.utf8.count <= maxTextBytes
       else { return nil }
-      return (type == "copy_text" ? .copyText(text) : .insertText(text), text.utf8.count)
+      return type == "copy_text" ? .copyText(text) : .insertText(text)
     case "open" where allowOpen:
       if Set(effect.keys) == Set(["type", "url"]) {
         guard
@@ -356,7 +320,7 @@ enum PluginWireCodec {
           let parsed = URL(string: value),
           parsed.scheme != nil
         else { return nil }
-        return (.openURL(value), value.utf8.count)
+        return .openURL(value)
       }
       if Set(effect.keys) == Set(["type", "bundle_id"]) {
         guard
@@ -364,33 +328,12 @@ enum PluginWireCodec {
           !value.isEmpty,
           value.utf8.count <= maxTextBytes
         else { return nil }
-        return (.openApplication(value), value.utf8.count)
+        return .openApplication(value)
       }
       return nil
     default:
       return nil
     }
-  }
-
-  /// JSON null decodes to NSNull, and `{"url": null}` is the natural
-  /// serialization of an absent optional in most languages. Treat it exactly
-  /// like a missing key — punishing it used to atomically discard whole
-  /// 10,000-row catalogs.
-  private static func present(_ value: Any?) -> Any? {
-    value is NSNull ? nil : value
-  }
-
-  private static func addingBytes(_ lhs: Int, _ rhs: Int, limit: Int) -> Int? {
-    let (sum, overflow) = lhs.addingReportingOverflow(rhs)
-    guard !overflow, sum <= limit else { return nil }
-    return sum
-  }
-
-  private static func number(_ value: Any?) -> Double? {
-    if let value = value as? Double { return value }
-    if let value = value as? Int { return Double(value) }
-    if let value = value as? NSNumber { return value.doubleValue }
-    return nil
   }
 
   /// Serialize a candidate back to the wire row shape for `perform

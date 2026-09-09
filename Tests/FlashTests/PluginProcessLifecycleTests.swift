@@ -289,6 +289,164 @@ final class PluginProcessLifecycleTests: XCTestCase {
 
   // MARK: 3. Never-initialize
 
+  func testInitializedCrashLoopStillExhaustsRestartBudget() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "initializedcrash",
+      manifest: PluginFixtureKit.manifest(id: "initializedcrash"),
+      script: PluginFixtureKit.script(
+        onInitialize: "\(PluginFixtureKit.initializeOK)\nsleep 0.1\nexit 7"))
+    defer { fixture.cleanup() }
+    try withSeams(attempts: 2, windowSeconds: 60, restartDelay: immediateRestartDelay) {
+      let process = try makeProcess(fixture)
+      defer { process.stopAndWait(reason: "test") }
+      process.start()
+      waitUntilTrue(timeout: 2, "initialized crash loop parks") {
+        process.runtimeStateSnapshot() == .failed
+      }
+      XCTAssertEqual(fixture.spawnCount(), 3)
+    }
+  }
+
+  func testStopDuringBackoffPreventsResurrection() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "stopbackoff", manifest: PluginFixtureKit.manifest(id: "stopbackoff"),
+      script: "#!/bin/sh\nprintf 'spawn\\n' >> \"$FLASH_PLUGIN_DATA_DIR/spawns\"\nexit 7\n")
+    defer { fixture.cleanup() }
+    try withSeams(
+      restartDelay: { _ in 1 },
+      {
+        let process = try makeProcess(fixture)
+        defer { process.stopAndWait(reason: "test_cleanup") }
+        process.start()
+        waitUntilTrue("first failure schedules restart") {
+          fixture.spawnCount() == 1 && process.statusSnapshot().restartCount == 1
+        }
+        process.stopAndWait(reason: "test_stop")
+        settleRunLoop(1.2)
+        XCTAssertEqual(fixture.spawnCount(), 1)
+        XCTAssertEqual(process.runtimeStateSnapshot(), .stopped)
+      })
+  }
+
+  func testHostReplyFromPreviousChildCannotSettleReusedRequestID() throws {
+    var script = PluginFixtureKit.script(
+      onInitialize: """
+        \(PluginFixtureKit.initializeOK)
+        printf '{"id":1,"method":"host.ping","params":{}}\\n'
+        """)
+    script = script.replacingOccurrences(
+      of: "  esac",
+      with: """
+        *'"result":'*) printf '%s\\n' "$line" >> "$D/replies" ;;
+        esac
+        """)
+    let fixture = try PluginFixtureKit.make(
+      id: "replygeneration", manifest: PluginFixtureKit.manifest(id: "replygeneration"),
+      script: script)
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    let repliesLock = NSLock()
+    var replies: [([String: Any]) -> Void] = []
+    process.onHostRequest = { _, _, _, reply in
+      repliesLock.lock()
+      replies.append(reply)
+      repliesLock.unlock()
+    }
+    func capturedReplies() -> [([String: Any]) -> Void] {
+      repliesLock.lock()
+      defer { repliesLock.unlock() }
+      return replies
+    }
+    process.start()
+    waitUntilTrue("first child host request") { capturedReplies().count == 1 }
+    process.reload(reason: "test")
+    waitUntilTrue("replacement child reuses ID") { capturedReplies().count == 2 }
+    let completions = capturedReplies()
+    guard completions.count == 2 else { return }
+    completions[0](["ok": true, "marker": "old"])
+    completions[1](["ok": true, "marker": "new"])
+    completions[1](["ok": true, "marker": "duplicate"])
+    let replyFile = fixture.dataDir.appendingPathComponent("replies")
+    waitUntilTrue("replacement receives its reply") {
+      (try? String(contentsOf: replyFile).contains("new")) == true
+    }
+    let received = try String(contentsOf: replyFile)
+    XCTAssertFalse(received.contains("old"))
+    XCTAssertFalse(received.contains("duplicate"))
+    XCTAssertEqual(received.split(separator: "\n").count, 1)
+  }
+
+  func testOutstandingHostCallsAreBoundedAndExcessCallSettles() throws {
+    let limit = PluginProtocol.maxHostRPCs
+    var script = PluginFixtureKit.script(
+      onInitialize: """
+        \(PluginFixtureKit.initializeOK)
+        n=1
+        while [ "$n" -le \(limit + 1) ]; do
+          printf '{"id":%s,"method":"host.ping","params":{}}\\n' "$n"
+          n=$((n + 1))
+        done
+        """)
+    script = script.replacingOccurrences(
+      of: "  esac",
+      with: """
+        *'"result":'*) printf '%s\\n' "$line" >> "$D/replies" ;;
+        esac
+        """)
+    let fixture = try PluginFixtureKit.make(
+      id: "hostcapacity", manifest: PluginFixtureKit.manifest(id: "hostcapacity"), script: script)
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    let callsLock = NSLock()
+    var calls = 0
+    process.onHostRequest = { _, _, _, _ in
+      callsLock.lock()
+      calls += 1
+      callsLock.unlock()
+    }
+    process.start()
+    let replyFile = fixture.dataDir.appendingPathComponent("replies")
+    waitUntilTrue("excess host call settles") {
+      (try? String(contentsOf: replyFile).contains(PluginProtocol.hostCallCapacityError)) == true
+    }
+    callsLock.lock()
+    let accepted = calls
+    callsLock.unlock()
+    XCTAssertEqual(accepted, limit)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running)
+    let received = try String(contentsOf: replyFile)
+    XCTAssertTrue(received.contains("\"id\":\(limit + 1)"))
+  }
+
+  func testStoppingDuringInstallDoesNotWriteStampOrLaunchChild() throws {
+    let manifest = PluginFixtureKit.manifest(
+      id: "cancelinstall",
+      extra:
+        #""status":["state"],"install":"touch \"$FLASH_PLUGIN_DATA_DIR/install-started\"; sleep 30""#
+    )
+    let fixture = try PluginFixtureKit.make(
+      id: "cancelinstall", manifest: manifest, script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test_cleanup") }
+    process.start()
+    waitUntilTrue("installer started") {
+      FileManager.default.fileExists(
+        atPath: fixture.dataDir.appendingPathComponent("install-started").path)
+    }
+    let started = ProcessInfo.processInfo.systemUptime
+    process.stopAndWait(reason: "test_cancel")
+    XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 0.2)
+    settleRunLoop(0.8)
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: fixture.dataDir.appendingPathComponent(".install-stamp").path))
+    XCTAssertEqual(fixture.spawnCount(), 0)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .stopped)
+  }
+
   func testNeverInitializingPluginTearsDownAndBackoffRestartsNotFatalPark() throws {
     // No initialize reply within the startup deadline: teardown + backoff
     // restart — unlike a version NAK, a hung binary may recover on relaunch.
@@ -320,9 +478,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
   // MARK: 4. Initialize NAK / protocol mismatch → fatal park
 
   func testInitializeNakParksFailedWithoutRestartAndDropsCatalog() throws {
-    // A publish is accepted any time after spawn — even before `running` —
-    // and an {ok:false} initialize reply is terminal: park in .failed, drop
-    // the published catalog, never auto-restart.
+    // Only initialized children may publish. An {ok:false} initialize reply
+    // parks and drops any catalog retained from a previous child.
     let fixture = try PluginFixtureKit.make(
       id: "initnak",
       manifest: PluginFixtureKit.manifest(
@@ -331,19 +488,19 @@ final class PluginProcessLifecycleTests: XCTestCase {
         prologue:
           #"printf '{"method":"publish","params":{"rows":[{"source":"fix.items","title":"Early"}]}}\n'"#,
         onInitialize: """
-          sleep 0.3
+          while [ ! -e "$D/allow-nak" ]; do sleep 0.01; done
           printf '{"id":%s,"result":{"ok":false,"protocol_version":1,"error":"nope"}}\\n' "$id"
+          sleep 0.2
           """))
     defer { fixture.cleanup() }
     let store = PluginCatalogStore()
+    store.publish(pluginID: "initnak", rows: [Candidate(title: "Previous")], encodedBytes: 20)
     let process = try makeProcess(fixture, store: store)
     process.start()
-    // Undocumented-but-real: the catalog store accepts a publish while the
-    // plugin is still `launching` (validation runs on the reader queue,
-    // independent of lifecycle state).
-    waitUntilTrue("publish accepted while launching") {
-      store.rows(for: "initnak").map(\.title) == ["Early"]
-    }
+    waitUntilTrue("child launched") { process.runtimeStateSnapshot() == .launching }
+    settleRunLoop(0.1)
+    XCTAssertEqual(store.rows(for: "initnak").map(\.title), ["Previous"])
+    try Data().write(to: fixture.dataDir.appendingPathComponent("allow-nak"))
     waitUntilTrue("park in failed") { process.runtimeStateSnapshot() == .failed }
     XCTAssertNil(
       store.entry(for: "initnak"),

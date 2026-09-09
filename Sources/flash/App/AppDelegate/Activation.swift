@@ -13,6 +13,7 @@ extension AppDelegate {
   // MARK: Activation
 
   func activateMouseTarget(_ command: MouseCommand, contextOverride: AppContext?) {
+    guard prepareHintActivation(.target(command, contextOverride)) else { return }
     let behavior: HintCommitBehavior =
       command.isDrag
       ? .drag
@@ -31,6 +32,7 @@ extension AppDelegate {
   }
 
   func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {
+    guard prepareHintActivation(.grid(command, contextOverride)) else { return }
     let context = contextOverride ?? currentNonFlashContext() ?? normalModeContext()
     let steps = config.hints.mouseGridSteps
     let region = MouseGrid.preparedRegion(
@@ -40,20 +42,20 @@ extension AppDelegate {
         fallback: OverlayPanel.unionScreenFrame()),
       alphabet: config.resolvedAlphabet.chars,
       steps: steps)
-    mouseGridRegion = region
-    mouseGridInitialRegion = region
-    mouseGridDepth = 0
-    sourceAppPID = context?.processID
-    pendingAction = command.action
-    pendingClickModifiers = command.modifiers
-    pendingHintCommitBehavior =
+    hintSession.mouseGridRegion = region
+    hintSession.mouseGridInitialRegion = region
+    hintSession.mouseGridDepth = 0
+    hintSession.sourceAppPID = context?.processID
+    hintSession.action = command.action
+    hintSession.presetClickModifiers = command.modifiers
+    hintSession.commitBehavior =
       command.isDrag
       ? .mouseGridDrag
       : command.isSelect
         ? .mouseGridSelect
         : command.isMulti
           ? .mouseGridMulti : command.isMove ? .mouseGridMove : .mouseGridClick
-    currentPrefix = ""
+    hintSession.prefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
     overlay.mouseGridOpacity = Float(config.hints.mouseGridOpacity)
@@ -64,7 +66,7 @@ extension AppDelegate {
     let steps = config.hints.mouseGridSteps
     let region = MouseGrid.preparedRegion(
       region, alphabet: config.resolvedAlphabet.chars, steps: steps)
-    mouseGridRegion = region
+    hintSession.mouseGridRegion = region
     // At the final visible step the renderer swaps to a compact chip
     // cluster centered on the past rectangle — give MouseGrid the exact
     // rendered chip dimensions so the cluster's geometry can never
@@ -84,8 +86,8 @@ extension AppDelegate {
       return
     }
     activationLifecycle.invalidate()
-    currentHints = hints
-    currentPrefix = ""
+    hintSession.hints = hints
+    hintSession.prefix = ""
     // Single projection-driven writer (yields `.hints` with the grid hints up),
     // not a direct `overlay.inputMode` poke.
     applyModeOverlay()
@@ -101,22 +103,7 @@ extension AppDelegate {
   ) {
     FlashLog.trace(
       "[activation] begin action=\(action) behavior=\(commitBehavior) mode=\(flashMode) "
-        + "hints=\(currentHints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
-
-    // Cancel any in-flight walk and clear any visible hints. The
-    // earlier "drop on busy" behaviour rejected the new trigger; the
-    // user-facing rule now is "the most recent mouse target wins" —
-    // pressing the hotkey again while hints are up restarts from
-    // scratch (cancel current, kick off a fresh walk on the now-
-    // focused window). cancelOverlay() bumps activationGen, so any
-    // in-flight discoverAsync completion will see a stale generation
-    // and bail before rendering.
-    if activationInFlight || !currentHints.isEmpty {
-      FlashLog.trace(
-        "[activation] restart previous_in_flight=\(activationInFlight) "
-          + "previous_hints=\(currentHints.count) gen=\(activationGen)")
-      cancelOverlay()
-    }
+        + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
 
     guard let context = contextOverride ?? currentNonFlashContext() else {
       FlashLog.debug("[activation] no target app")
@@ -129,10 +116,10 @@ extension AppDelegate {
       "[activation] target pid=\(context.processID) bundle=\(context.bundleIdentifier) "
         + "source=\(contextOverride == nil ? "focused" : "override")"
     )
-    sourceAppPID = context.processID
-    pendingAction = action
-    pendingClickModifiers = clickModifiers
-    pendingHintCommitBehavior = commitBehavior
+    hintSession.sourceAppPID = context.processID
+    hintSession.action = action
+    hintSession.presetClickModifiers = clickModifiers
+    hintSession.commitBehavior = commitBehavior
 
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
@@ -214,8 +201,8 @@ extension AppDelegate {
         statusBarTargets.isEmpty
         ? hints
         : self.assignHints(hints.map(\.target) + statusBarTargets)
-      self.currentHints = displayHints
-      self.currentPrefix = ""
+      self.hintSession.hints = displayHints
+      self.hintSession.prefix = ""
       self.overlay.display(hints: displayHints)
       if commitBehavior == .searchClick {
         // Seek & click: the panel routes subsequent keys to the search
@@ -301,19 +288,17 @@ extension AppDelegate {
   /// (`discoverScreenAsync`) — the focused-app prepared model is never used,
   /// and each app's walk completes whole or is dropped whole.
   func activateScreenScopeHints(_ command: MouseCommand) {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
-    }
+    guard prepareHintActivation(.screen(command)) else { return }
     guard let context = currentNonFlashContext() ?? normalModeContext() else {
       FlashLog.debug("[screen_scope] no target app")
       applyModeOverlay()
       return
     }
-    sourceAppPID = context.processID
-    pendingAction = command.action
-    pendingClickModifiers = command.modifiers
-    pendingHintCommitBehavior = .click
-    currentPrefix = ""
+    hintSession.sourceAppPID = context.processID
+    hintSession.action = command.action
+    hintSession.presetClickModifiers = command.modifiers
+    hintSession.commitBehavior = .click
+    hintSession.prefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
     if !isAccessibilityTrusted() {
@@ -332,8 +317,8 @@ extension AppDelegate {
         self.applyModeOverlay()
         return
       }
-      self.currentHints = hints
-      self.currentPrefix = ""
+      self.hintSession.hints = hints
+      self.hintSession.prefix = ""
       self.overlay.display(hints: hints)
       FlashLog.debug("[screen_scope] displayed hints=\(hints.count)")
     }
@@ -345,18 +330,18 @@ extension AppDelegate {
   /// position, so every subsequent scroll verb targets that area with no
   /// Scroller state at all. A single area short-circuits to a direct move.
   func activateScrollTargetHints() {
+    guard prepareHintActivation(.scroll) else { return }
     guard let context = currentNonFlashContext() ?? normalModeContext() else {
       applyModeOverlay()
       return
     }
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
-    }
+    let token = activationLifecycle.begin()
+    applyModeOverlay()
     let pid = context.processID
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let axFrames = NormalModeDispatcher.scrollAreaFrames(pid: pid)
       DispatchQueue.main.async {
-        guard let self else { return }
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
         let screenH = ActionDispatcher.primaryScreenHeight()
         let frames = axFrames.map { frame in
           CGRect(
@@ -383,16 +368,16 @@ extension AppDelegate {
             entersInsertMode: false,
             providerID: "scroll_target")
         }
-        self.sourceAppPID = pid
-        self.pendingAction = .leftClick
-        self.pendingClickModifiers = []
-        self.pendingHintCommitBehavior = .moveMouse
-        self.currentPrefix = ""
+        self.hintSession.sourceAppPID = pid
+        self.hintSession.action = .leftClick
+        self.hintSession.presetClickModifiers = []
+        self.hintSession.commitBehavior = .moveMouse
+        self.hintSession.prefix = ""
         self.overlay.overlayConfig = self.config.overlay
         self.overlay.debugConfig = self.config.debug
         let hints = self.assignHints(targets)
         self.activationLifecycle.invalidate()
-        self.currentHints = hints
+        self.hintSession.hints = hints
         self.applyModeOverlay()
         self.overlay.display(hints: hints)
         FlashLog.debug("[scroll_target] displayed pid=\(pid) areas=\(hints.count)")
@@ -409,21 +394,16 @@ extension AppDelegate {
 
   func cancelOverlay() {
     FlashLog.trace(
-      "[overlay] cancel hints=\(currentHints.count) in_flight=\(activationInFlight) "
+      "[overlay] cancel hints=\(hintSession.hints.count) in_flight=\(activationInFlight) "
         + "mode=\(flashMode) gen=\(activationGen) input=\(overlay.inputMode)")
     if overlay.inputMode == .commandLine {
       finishCommandLineInteraction(reason: "cancel_overlay")
       return
     }
-    // A cancelled pointer-mode drag must never leave the primary button held.
-    if hintSession.pointerDragActive {
-      _ = ActionDispatcher.releasePrimaryButton(at: NSEvent.mouseLocation)
-      hintSession.pointerDragActive = false
-    }
     // Dismissal observers fire on every app switch, including when no
     // transient overlay is up. Even then, re-render the mode badge so
     // normal mode can immediately recapture keyboard input.
-    if currentHints.isEmpty && !activationInFlight && !hintSession.pointerModeActive {
+    if !hintSession.isActive && !activationInFlight {
       overlay.hide()
       let captureOverride =
         Self.pointerInsertHandoffRecaptureSuppressionIsActive(

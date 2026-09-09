@@ -355,8 +355,8 @@ final class NormalModeTests: XCTestCase {
     // silently swallowing the keystroke.
     XCTAssertEqual(command(pending: "[", chars: "r"), .reload(force: false))
     XCTAssertEqual(command(pending: "]", chars: "r"), .reload(force: false))
-    // `gi` is a real mapping (Vimium: focus the first text input).
-    XCTAssertEqual(command(pending: "g", chars: "i"), .focusInput)
+    // Text-entry shortcuts are opt-in, including the former gi sequence.
+    XCTAssertNil(command(pending: "g", chars: "i"))
     assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
     XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
     // Valid sequence continuations still resolve to the mapped action.
@@ -370,346 +370,6 @@ final class NormalModeTests: XCTestCase {
     let unmappable = transition(pending: "g", chars: "z")
     XCTAssertNil(unmappable.command)
     XCTAssertEqual(unmappable.pending, "")
-  }
-
-  func testInsertFocusMachineCoversTextEntryStableControlsAndTransientSurfaces() {
-    struct Scenario {
-      var name: String
-      var snapshot: InputFocusSnapshot
-      var pointerPressed = false
-      var expected: InputFocusExitDecision
-    }
-
-    let scenarios = [
-      Scenario(
-        name: "true text input stays in INSERT",
-        snapshot: focusSnapshot(.editable, role: "AXTextField"),
-        expected: .stay),
-      Scenario(
-        name: "web checkbox toggles and exits to NORMAL",
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXCheckBox"),
-        expected: .exitToNormal),
-      Scenario(
-        name: "native checkbox toggles and exits to NORMAL",
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXCheckBox"),
-        expected: .exitToNormal),
-      Scenario(
-        name: "button click exits to NORMAL",
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton"),
-        expected: .exitToNormal),
-      Scenario(
-        name: "link click exits to NORMAL",
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXLink"),
-        expected: .exitToNormal),
-      Scenario(
-        name: "AX focus unavailable exits to NORMAL",
-        snapshot: focusSnapshot(.unavailable),
-        expected: .exitToNormal),
-      Scenario(
-        name: "custom dropdown option waits for popup settle",
-        snapshot: focusSnapshot(
-          .transientInteraction(reason: .role("AXListItem")), role: "AXListItem"),
-        expected: .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs)),
-      Scenario(
-        name: "Bitwarden/extension popup waits for popup settle",
-        snapshot: focusSnapshot(
-          .transientInteraction(reason: .extensionDocument(scheme: "moz-extension")),
-          role: "AXWebArea",
-          documentURL: "moz-extension://vault/popup.html"),
-        expected: .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs)),
-      Scenario(
-        name: "mouse selection waits until release before deciding",
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXStaticText"),
-        pointerPressed: true,
-        expected: .waitForPointerRelease),
-    ]
-
-    for scenario in scenarios {
-      let actual = InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(42),
-        eventPID: pid_t(42),
-        armedEditablePID: pid_t(42),
-        snapshot: scenario.snapshot,
-        pointerPressed: scenario.pointerPressed)
-      XCTAssertEqual(actual, scenario.expected, scenario.name)
-    }
-  }
-
-  func testInputFocusSnapshotClassifiesBrowserNativeAndExtensionSurfaces() {
-    struct Scenario {
-      var name: String
-      var isEditable = false
-      var role: String?
-      var expanded = false
-      var ancestorRoles: [String] = []
-      var windowSubrole: String?
-      var documentURL: String?
-      var expected: InputFocusSnapshot.Surface
-    }
-
-    let scenarios = [
-      Scenario(
-        name: "editable browser text field",
-        isEditable: true,
-        role: "AXTextField",
-        expected: .editable),
-      Scenario(
-        name: "web checkbox is stable non-editable",
-        role: "AXCheckBox",
-        expected: .stableNonEditable),
-      Scenario(
-        name: "native checkbox is stable non-editable",
-        role: "AXCheckBox",
-        expected: .stableNonEditable),
-      Scenario(
-        name: "web button is stable non-editable",
-        role: "AXButton",
-        expected: .stableNonEditable),
-      Scenario(
-        name: "web link is stable non-editable",
-        role: "AXLink",
-        expected: .stableNonEditable),
-      Scenario(
-        name: "ordinary table row is stable non-editable",
-        role: "AXRow",
-        ancestorRoles: ["AXTable"],
-        expected: .stableNonEditable),
-      Scenario(
-        name: "ordinary table cell is stable non-editable",
-        role: "AXCell",
-        ancestorRoles: ["AXRow", "AXTable"],
-        expected: .stableNonEditable),
-      Scenario(
-        name: "browser listbox option is transient",
-        role: "AXOption",
-        expected: .transientInteraction(reason: .role("AXOption"))),
-      Scenario(
-        name: "native menu item is transient",
-        role: "AXMenuItem",
-        expected: .transientInteraction(reason: .role("AXMenuItem"))),
-      Scenario(
-        name: "row under a listbox ancestor is transient",
-        role: "AXStaticText",
-        ancestorRoles: ["AXList"],
-        expected: .transientInteraction(reason: .ancestorRole("AXList"))),
-      Scenario(
-        name: "expanded popup button is transient",
-        role: "AXPopUpButton",
-        expanded: true,
-        expected: .transientInteraction(reason: .expandedRole("AXPopUpButton"))),
-      Scenario(
-        name: "closed popup button is stable non-editable",
-        role: "AXPopUpButton",
-        expanded: false,
-        expected: .stableNonEditable),
-      Scenario(
-        name: "browser extension popup is transient",
-        role: "AXWebArea",
-        documentURL: "moz-extension://abc/popup.html",
-        expected: .transientInteraction(reason: .extensionDocument(scheme: "moz-extension"))),
-      Scenario(
-        name: "chromium extension popup is transient",
-        role: "AXWebArea",
-        documentURL: "chrome-extension://abc/popup.html",
-        expected: .transientInteraction(reason: .extensionDocument(scheme: "chrome-extension"))),
-      Scenario(
-        name: "native floating popup window is transient",
-        role: "AXGroup",
-        windowSubrole: "AXFloatingWindow",
-        expected: .transientInteraction(reason: .windowSubrole("AXFloatingWindow"))),
-    ]
-
-    for scenario in scenarios {
-      let actual = InputFocusSnapshot.classifySurface(
-        isEditable: scenario.isEditable,
-        role: scenario.role,
-        expanded: scenario.expanded,
-        ancestorRoles: scenario.ancestorRoles,
-        windowSubrole: scenario.windowSubrole,
-        documentURL: scenario.documentURL)
-      XCTAssertEqual(actual, scenario.expected, scenario.name)
-    }
-  }
-
-  func testInsertFocusMachineIgnoresUnarmedOrUnrelatedFocusEvents() {
-    let checkbox = focusSnapshot(.stableNonEditable, role: "AXCheckBox")
-    XCTAssertEqual(
-      InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(42),
-        eventPID: pid_t(42),
-        armedEditablePID: nil,
-        snapshot: checkbox,
-        pointerPressed: false),
-      .stay)
-    XCTAssertEqual(
-      InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(43),
-        eventPID: pid_t(42),
-        armedEditablePID: pid_t(42),
-        snapshot: checkbox,
-        pointerPressed: false),
-      .stay)
-  }
-
-  func testNormalPointerHandoffMachineCoversEditableControlsAndPopups() {
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: focusSnapshot(.editable, role: "AXTextField")),
-      .enterInsert)
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXCheckBox")),
-      .recaptureNormal)
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton")),
-      .recaptureNormal)
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: focusSnapshot(.unavailable)),
-      .recaptureNormal)
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: focusSnapshot(
-          .transientInteraction(reason: .role("AXMenuItem")), role: "AXMenuItem")),
-      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: nil), .recaptureNormal)
-  }
-
-  func testSelectOptionPointerHandoffSuspendsNativeSurfaceWithoutInsert() {
-    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
-    let expandedSelect = focusSnapshot(
-      .transientInteraction(reason: .expandedRole("AXPopUpButton")),
-      role: "AXPopUpButton")
-    let selectList = focusSnapshot(
-      .transientInteraction(reason: .role("AXList")),
-      role: "AXList")
-    let option = focusSnapshot(
-      .transientInteraction(reason: .role("AXOption")),
-      role: "AXOption")
-
-    for snapshot in [expandedSelect, selectList, option] {
-      XCTAssertEqual(
-        InsertModeFocusMachine.normalPointerHandoffDecision(
-          snapshot: snapshot,
-          attempt: maxAttempts - 1),
-        .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
-      XCTAssertEqual(
-        InsertModeFocusMachine.normalPointerHandoffDecision(
-          snapshot: snapshot,
-          attempt: maxAttempts),
-        .suspendNativeSurface)
-    }
-  }
-
-  func testToolbarPopoverHandoffUsesFocusedTransientSurfaceWithoutStaleEditableFocus() {
-    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
-    let clickedShieldButton = focusSnapshot(.stableNonEditable, role: "AXButton")
-    let focusedPopover = focusSnapshot(
-      .transientInteraction(reason: .windowSubrole("AXPopover")),
-      role: "AXGroup",
-      windowSubrole: "AXPopover")
-    let staleFocusedTextInput = focusSnapshot(.editable, role: "AXTextField")
-
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        clickedSnapshot: clickedShieldButton,
-        focusedSnapshot: focusedPopover,
-        attempt: maxAttempts),
-      .suspendNativeSurface)
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        clickedSnapshot: clickedShieldButton,
-        focusedSnapshot: staleFocusedTextInput,
-        attempt: 0),
-      .recaptureNormal)
-  }
-
-  func testTransientResampleBudgetRecapturesAfterExhaustion() {
-    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
-    // Firefox web content: focused AXStaticText nested under an AXList. This
-    // classifies as transient but is persistent — pre-budget it spun the
-    // resamplers forever. It must not become INSERT unless it resolves to a
-    // genuinely editable focus target.
-    let persistentTransient = focusSnapshot(
-      .transientInteraction(reason: .ancestorRole("AXList")), role: "AXStaticText")
-
-    // Pointer handoff: resample while within budget, then recapture NORMAL.
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: persistentTransient, attempt: maxAttempts - 1),
-      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: persistentTransient, attempt: maxAttempts),
-      .recaptureNormal)
-
-    // Insert-mode exit probe: resample while within budget, then STAY — never
-    // kick the user out of a persistent surface they are typing into.
-    func insertDecision(attempt: Int) -> InputFocusExitDecision {
-      InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(42),
-        eventPID: pid_t(42),
-        armedEditablePID: pid_t(42),
-        snapshot: persistentTransient,
-        pointerPressed: false,
-        attempt: attempt)
-    }
-    XCTAssertEqual(
-      insertDecision(attempt: maxAttempts - 1),
-      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
-    XCTAssertEqual(insertDecision(attempt: maxAttempts), .stay)
-
-    // The budget governs only the transient branch: a genuinely stable
-    // non-editable surface still exits to NORMAL immediately, no matter how
-    // many attempts have elapsed.
-    XCTAssertEqual(
-      InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(42),
-        eventPID: pid_t(42),
-        armedEditablePID: pid_t(42),
-        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton"),
-        pointerPressed: false,
-        attempt: maxAttempts + 10),
-      .exitToNormal)
-  }
-
-  func testExtensionPopupTransientBudgetSuspendsOrExitsAfterExhaustion() {
-    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
-    let extensionPopup = focusSnapshot(
-      .transientInteraction(reason: .extensionDocument(scheme: "chrome-extension")),
-      role: "AXListItem",
-      documentURL: "chrome-extension://vault/popup.html")
-
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: extensionPopup,
-        attempt: maxAttempts - 1),
-      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
-    XCTAssertEqual(
-      InsertModeFocusMachine.normalPointerHandoffDecision(
-        snapshot: extensionPopup,
-        attempt: maxAttempts),
-      .suspendNativeSurface)
-
-    XCTAssertEqual(
-      InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(42),
-        eventPID: pid_t(42),
-        armedEditablePID: pid_t(42),
-        snapshot: extensionPopup,
-        pointerPressed: false,
-        attempt: maxAttempts - 1),
-      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
-    XCTAssertEqual(
-      InsertModeFocusMachine.insertFocusChangeDecision(
-        focusedPID: pid_t(42),
-        eventPID: pid_t(42),
-        armedEditablePID: pid_t(42),
-        snapshot: extensionPopup,
-        pointerPressed: false,
-        attempt: maxAttempts),
-      .exitToNormal)
   }
 
   func testEditableFocusRepairRequiresOneStrongVisibleTextInput() {
@@ -848,11 +508,11 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testBackgroundModelRefreshThrottleAppliesOnlyToNoisyRefreshes() {
-    XCTAssertTrue(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "ax:AXValueChanged"))
-    XCTAssertTrue(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "queued"))
-    XCTAssertTrue(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "maintenance"))
-    XCTAssertFalse(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "focus"))
-    XCTAssertFalse(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "config"))
+    XCTAssertTrue(PreparedModelScheduler.shouldThrottle(reason: "ax:AXValueChanged"))
+    XCTAssertTrue(PreparedModelScheduler.shouldThrottle(reason: "queued"))
+    XCTAssertFalse(PreparedModelScheduler.shouldThrottle(reason: "maintenance"))
+    XCTAssertFalse(PreparedModelScheduler.shouldThrottle(reason: "focus"))
+    XCTAssertFalse(PreparedModelScheduler.shouldThrottle(reason: "config"))
   }
 
   func testAXEventStormSuppressesOnlySpeculativePreparedModelRefreshes() {
@@ -860,7 +520,7 @@ final class NormalModeTests: XCTestCase {
     let monitor = AppMonitor(registry: registry, config: .default)
     let pid = pid_t(42)
     monitor.scheduleModelRefresh(for: pid, reason: "ax:AXUIElementDestroyed")
-    XCTAssertTrue(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
 
     for _ in 0..<AppMonitor.axEventStormCountThreshold {
       monitor.noteAXEventForStormDetection(
@@ -868,14 +528,14 @@ final class NormalModeTests: XCTestCase {
     }
 
     XCTAssertTrue(monitor.axEventStormingPIDs.contains(pid))
-    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.scheduleModelRefresh(for: pid, reason: "ax:AXUIElementDestroyed")
-    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.scheduleModelRefresh(for: pid, reason: "maintenance")
-    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
 
     monitor.scheduleModelRefresh(for: pid, reason: "focus")
-    XCTAssertTrue(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.cancelRefreshWork(for: pid)
   }
 
@@ -908,13 +568,13 @@ final class NormalModeTests: XCTestCase {
     monitor.slowAutomaticModelRefreshPIDs.insert(pid)
 
     monitor.scheduleModelRefresh(for: pid, reason: "ax:AXLayoutChanged")
-    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.scheduleModelRefresh(for: pid, reason: "queued")
-    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.scheduleModelRefresh(for: pid, reason: "maintenance")
-    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.scheduleModelRefresh(for: pid, reason: "focus")
-    XCTAssertTrue(monitor.modelRefreshArmed.contains(pid))
+    XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.cancelRefreshWork(for: pid)
   }
 
@@ -1050,65 +710,6 @@ final class NormalModeTests: XCTestCase {
       .normal)
   }
 
-  func testModeOverlayCaptureIsOnlyPossibleInIdleNormalMode() {
-    let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    XCTAssertEqual(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .insert,
-        labels: labels,
-        visible: true,
-        hasHints: false,
-        activationInFlight: false,
-        captureOverride: true),
-      ModeOverlaySnapshot(
-        text: "INSERT",
-        visible: true,
-        captureInput: false,
-        inputMode: .hints,
-        refreshActiveWindowBorder: true))
-    XCTAssertEqual(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .normal,
-        labels: labels,
-        visible: true,
-        hasHints: false,
-        activationInFlight: false,
-        captureOverride: true),
-      ModeOverlaySnapshot(
-        text: "NORMAL",
-        visible: true,
-        captureInput: true,
-        inputMode: .normal,
-        refreshActiveWindowBorder: true))
-    XCTAssertFalse(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .normal,
-        labels: labels,
-        visible: true,
-        hasHints: false,
-        activationInFlight: false,
-        captureOverride: false
-      ).captureInput)
-    XCTAssertFalse(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .normal,
-        labels: labels,
-        visible: true,
-        hasHints: true,
-        activationInFlight: false,
-        captureOverride: true
-      ).captureInput)
-    XCTAssertFalse(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .normal,
-        labels: labels,
-        visible: true,
-        hasHints: false,
-        activationInFlight: true,
-        captureOverride: true
-      ).captureInput)
-  }
-
   func testNormalModeInputCaptureStaysOwnedDuringSourceResolution() {
     XCTAssertTrue(
       AppDelegate.normalModeShouldOwnKeyboardInput(
@@ -1122,39 +723,6 @@ final class NormalModeTests: XCTestCase {
         overlayInputMode: .hints,
         hasHints: false,
         activationInFlight: false))
-  }
-
-  func testModeStatusBarVisibleInInsertWithoutCapturing() {
-    let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    let snapshot = AppDelegate.modeOverlaySnapshot(
-      mode: .insert,
-      labels: labels,
-      visible: true,
-      hasHints: false,
-      activationInFlight: false,
-      captureOverride: nil)
-    XCTAssertTrue(snapshot.visible)
-    XCTAssertEqual(snapshot.text, "INSERT")
-    XCTAssertFalse(snapshot.captureInput)
-    // NORMAL keeps respecting the advanced-mode flag.
-    XCTAssertTrue(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .normal,
-        labels: labels,
-        visible: true,
-        hasHints: false,
-        activationInFlight: false,
-        captureOverride: nil
-      ).visible)
-    XCTAssertFalse(
-      AppDelegate.modeOverlaySnapshot(
-        mode: .normal,
-        labels: labels,
-        visible: false,
-        hasHints: false,
-        activationInFlight: false,
-        captureOverride: nil
-      ).visible)
   }
 
   func testActiveWindowBorderVisibility() {
@@ -3347,15 +2915,6 @@ final class NormalModeTests: XCTestCase {
       return XCTFail("expected send_key \(keys)", file: file, line: line)
     }
     XCTAssertEqual(actualKeys, keys, file: file, line: line)
-  }
-
-  private func focusSnapshot(
-    _ surface: InputFocusSnapshot.Surface,
-    role: String? = nil,
-    windowSubrole: String? = nil,
-    documentURL: String? = nil
-  ) -> InputFocusSnapshot {
-    InputFocusSnapshot(surface: surface)
   }
 
   private func editableRepairCandidate(

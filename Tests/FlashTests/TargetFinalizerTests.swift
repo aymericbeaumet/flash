@@ -5,6 +5,30 @@ import XCTest
 @testable import flash
 
 final class TargetFinalizerTests: XCTestCase {
+  func testExtremeFiniteGeometryCannotOverflowSpatialBuckets() {
+    let outer = candidate(
+      id: "outer", frame: CGRect(x: -1.1e200, y: -1.1e200, width: 2.2e200, height: 2.2e200))
+    let inner = candidate(
+      id: "inner", frame: CGRect(x: -1e200, y: -1e200, width: 2e200, height: 2e200))
+    let visible = [CGRect(x: -10, y: -10, width: 20, height: 20)]
+    XCTAssertEqual(
+      TargetFinalizer.finalize([outer, inner], visibleRegions: visible).map(\.id), ["inner"])
+  }
+
+  func testVisualRowsHaveTheSameOrderForEveryInputPermutation() {
+    let targets = [
+      candidate(id: "a", frame: CGRect(x: 20, y: 18, width: 2, height: 2)),
+      candidate(id: "b", frame: CGRect(x: 10, y: 12, width: 2, height: 2)),
+      candidate(id: "c", frame: CGRect(x: 0, y: 6, width: 2, height: 2)),
+    ]
+    let visible = [CGRect(x: -100, y: -100, width: 300, height: 300)]
+    for order in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+      XCTAssertEqual(
+        TargetFinalizer.finalize(order.map { targets[$0] }, visibleRegions: visible)
+          .map(\.id), ["b", "a", "c"], "input order: \(order)")
+    }
+  }
+
   func testFiltersInvisibleTargetsBeforeLabelsAreAssigned() {
     let visible = CGRect(x: 0, y: 0, width: 200, height: 200)
     let candidates = (0..<700).map { i in

@@ -8,10 +8,13 @@
 
 mod context;
 mod emit;
+mod events;
+mod framing;
 pub mod process;
 mod runtime;
 pub mod testing;
 mod types;
+mod wire;
 
 /// Generate the typed plugin surface from `manifest.json` at compile time. See
 /// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`

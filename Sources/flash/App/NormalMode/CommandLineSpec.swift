@@ -84,19 +84,15 @@ extension NormalModeDispatcher {
       terminalCommandSyntax[verb] != nil,
       parts.count <= 2
     else { return nil }
-    var arguments: [String: String] = [:]
-    if parts.count == 2 {
-      guard parts[1].hasPrefix("--name=") else { return nil }
-      arguments["name"] = String(parts[1].dropFirst("--name=".count))
-    }
+    guard let arguments = try? CommandArguments.parse(parts.dropFirst()) else { return nil }
     return URLEventHandler.parse(verb: verb, args: arguments)
   }
 
-  static let terminalCommandSyntax = [
-    "terminal_show": ":terminal_show [--name=<terminal>]",
-    "terminal_dismiss": ":terminal_dismiss",
-    "terminal_restart": ":terminal_restart [--name=<terminal-or-popup>]",
-  ]
+  static let terminalCommandSyntax = Dictionary(
+    uniqueKeysWithValues: ["terminal_show", "terminal_dismiss", "terminal_restart"].compactMap {
+      name in
+      URLEventHandler.syntax(for: name, prefix: ":").map { (name, $0) }
+    })
 
   /// argv for `:open <args>` — the rest of the line split on whitespace,
   /// forwarded verbatim to `/usr/bin/open`. Returns nil when the line is
@@ -307,6 +303,7 @@ extension NormalModeDispatcher {
 
   struct CommandLineSpec {
     var names: [CommandLineName]
+    var description: String
     var bangPolicy: BangPolicy
     var build: (Bool) -> CommandLineCommand
 
@@ -326,57 +323,73 @@ extension NormalModeDispatcher {
   static let commandLineSpecs: [CommandLineSpec] = [
     // `:q` closes the focused OS window (vim's "close this window"); `:qa[ll]`
     // quits the whole app. `:q!` / `:qa!` force.
-    CommandLineSpec(names: ["q[uit]"], bangPolicy: .accepted) { _ in .closeWindow },
-    CommandLineSpec(names: ["qa[ll]"], bangPolicy: .accepted) { .quit(force: $0) },
-    CommandLineSpec(names: ["w[rite]"], bangPolicy: .accepted) { _ in .save },
-    CommandLineSpec(names: ["wq", "x[it]"], bangPolicy: .accepted) {
+    CommandLineSpec(
+      names: ["q[uit]"], description: "Close the focused window", bangPolicy: .accepted
+    ) { _ in .closeWindow },
+    CommandLineSpec(names: ["qa[ll]"], description: "Quit the focused app", bangPolicy: .accepted) {
+      .quit(force: $0)
+    },
+    CommandLineSpec(
+      names: ["w[rite]"], description: "Save the focused document", bangPolicy: .accepted
+    ) { _ in .save },
+    CommandLineSpec(names: ["wq", "x[it]"], description: "Save then quit", bangPolicy: .accepted) {
       .saveAndQuit(force: $0)
     },
-    CommandLineSpec(names: ["p[rint]"], bangPolicy: .rejected) { _ in .print },
-    CommandLineSpec(names: ["e[dit]"], bangPolicy: .rejected) { _ in .open },
-    CommandLineSpec(names: ["new"], bangPolicy: .rejected) { _ in .newWindow },
-    CommandLineSpec(names: ["tabnew", "tabedit", "tabe"], bangPolicy: .rejected) {
+    CommandLineSpec(
+      names: ["p[rint]"], description: "Print the focused document", bangPolicy: .rejected
+    ) { _ in .print },
+    CommandLineSpec(
+      names: ["e[dit]"], description: "Open the flashlight candidate finder", bangPolicy: .rejected
+    ) { _ in .open },
+    CommandLineSpec(names: ["new"], description: "Open a new window", bangPolicy: .rejected) { _ in
+      .newWindow
+    },
+    CommandLineSpec(
+      names: ["tabnew", "tabedit", "tabe"], description: "Open a new tab", bangPolicy: .rejected
+    ) {
       _ in .newTab
     },
-    CommandLineSpec(names: ["bd[elete]", "cl[ose]"], bangPolicy: .rejected) {
+    CommandLineSpec(
+      names: ["bd[elete]", "cl[ose]"], description: "Close the focused window/tab",
+      bangPolicy: .rejected
+    ) {
       _ in .close
     },
-    CommandLineSpec(names: ["find", "grep", "vimgrep"], bangPolicy: .rejected) { _ in .find },
-    CommandLineSpec(names: ["u[ndo]"], bangPolicy: .rejected) { _ in .undo },
-    CommandLineSpec(names: ["red[o]"], bangPolicy: .rejected) { _ in .redo },
-    CommandLineSpec(names: ["y[ank]", "copy"], bangPolicy: .rejected) { _ in .copy },
-    CommandLineSpec(names: ["d[elete]", "cut"], bangPolicy: .rejected) { _ in .cut },
-    CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
-    CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins(.modal) },
-    CommandLineSpec(names: ["logs"], bangPolicy: .rejected) { _ in .logs },
-    CommandLineSpec(names: ["commands"], bangPolicy: .rejected) { _ in .commands },
-    CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
-    CommandLineSpec(names: ["about"], bangPolicy: .rejected) { _ in .about },
+    CommandLineSpec(
+      names: ["find", "grep", "vimgrep"], description: "Open the app’s native find",
+      bangPolicy: .rejected
+    ) { _ in .find },
+    CommandLineSpec(names: ["u[ndo]"], description: "Undo", bangPolicy: .rejected) { _ in .undo },
+    CommandLineSpec(names: ["red[o]"], description: "Redo", bangPolicy: .rejected) { _ in .redo },
+    CommandLineSpec(
+      names: ["y[ank]", "copy"], description: "Copy the selection", bangPolicy: .rejected
+    ) { _ in .copy },
+    CommandLineSpec(
+      names: ["d[elete]", "cut"], description: "Cut the selection", bangPolicy: .rejected
+    ) { _ in .cut },
+    CommandLineSpec(names: ["pu[t]", "paste"], description: "Paste", bangPolicy: .rejected) { _ in
+      .paste
+    },
+    CommandLineSpec(
+      names: ["plugins"], description: "Open the plugins status view", bangPolicy: .rejected
+    ) { _ in .plugins(.modal) },
+    CommandLineSpec(
+      names: ["logs"], description: "Open the logs view in the HTTP debug dashboard",
+      bangPolicy: .rejected
+    ) { _ in .logs },
+    CommandLineSpec(
+      names: ["commands"], description: "Open the commands view in the HTTP debug dashboard",
+      bangPolicy: .rejected
+    ) { _ in .commands },
+    CommandLineSpec(
+      names: ["map[pings]"], description: "Show the active key mappings", bangPolicy: .rejected
+    ) { _ in .mappings },
+    CommandLineSpec(
+      names: ["about"], description: "Open the About Flash window", bangPolicy: .rejected
+    ) { _ in .about },
   ]
 
-  /// Human-readable descriptions for the built-in command-line commands,
-  /// keyed by primary `full` name. Lives next to `commandLineSpecs` so the
-  /// two stay in sync; consumed by the HTTP inspector's command catalog.
-  private static let coreCommandDescriptions: [String: String] = [
-    "quit": "Quit the focused app (⌘Q)",
-    "write": "Save the focused document (⌘S)",
-    "wq": "Save then quit",
-    "print": "Print the focused document",
-    "edit": "Open the flashlight candidate finder",
-    "new": "Open a new window",
-    "tabnew": "Open a new tab",
-    "bdelete": "Close the focused window/tab",
-    "find": "Open the app's native find",
-    "undo": "Undo (⌘Z)",
-    "redo": "Redo (⌘⇧Z)",
-    "yank": "Copy the selection (⌘C)",
-    "delete": "Cut the selection (⌘X)",
-    "put": "Paste (⌘V)",
-    "plugins": "Open the plugins view in the HTTP debug dashboard",
-    "logs": "Open the logs view in the HTTP debug dashboard",
-    "commands": "Open the commands view in the HTTP debug dashboard",
-    "mappings": "Show the active key mappings",
-    "about": "Open the About Flash window",
+  private static let argumentCommandDescriptions: [String: String] = [
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
@@ -397,7 +410,7 @@ extension NormalModeDispatcher {
         "name": ":\(primary.full)",
         "syntax": spec.helpLine,
         "aliases": spec.names.map { ":\($0.documented)" },
-        "description": coreCommandDescriptions[primary.full] ?? "",
+        "description": spec.description,
         "source": "core",
         "source_kind": "core",
       ])
@@ -407,7 +420,7 @@ extension NormalModeDispatcher {
         "name": ":\(extra)",
         "syntax": ":\(extra) <args>",
         "aliases": [":\(extra)"],
-        "description": coreCommandDescriptions[extra] ?? "",
+        "description": argumentCommandDescriptions[extra]!,
         "source": "core",
         "source_kind": "core",
       ])
@@ -417,7 +430,7 @@ extension NormalModeDispatcher {
         "name": ":\(name)",
         "syntax": terminalCommandSyntax[name]!,
         "aliases": [":\(name)"],
-        "description": coreCommandDescriptions[name]!,
+        "description": argumentCommandDescriptions[name]!,
         "source": "core",
         "source_kind": "core",
       ])

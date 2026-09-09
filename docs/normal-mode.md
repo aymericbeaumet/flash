@@ -14,8 +14,8 @@ Important defaults:
 - `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G.
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
-- `f`, `sf`, and `df` target discovered clickable elements, then enter insert
-  mode as explicit mouse interactions.
+- `f`, `sf`, and `df` target discovered clickable elements. Primary hint
+  clicks enter INSERT only when the target declares typing intent.
 - `mf` moves the cursor to a discovered target.
 - `F`, `sF`, and `dF` use mouse grid mode for precise screen clicks, then enter
   insert mode.
@@ -25,8 +25,9 @@ Important defaults:
 
 ## Shared mode exit
 
-`leave_mode`, `enter_insert_mode`, and `enter_command_mode` ship without
-default mappings in every scope. Users explicitly choose their shortcuts,
+`leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` ship
+without default mappings in every scope. Bare `a`, `A`, `i`, `I`, `o`, `O`,
+and `gi` do not enter INSERT. Users explicitly choose their shortcuts,
 including bindings that prefill the command line with `:flashlight`.
 
 Both `mode.normal.passthrough_keys` and `mode.normal.passthrough_modifiers`
@@ -41,6 +42,14 @@ NORMAL, closes command-line, finder, and terminal surfaces using their recorded
 return mode, and does nothing in idle NORMAL or with advanced mode disabled.
 `enter_normal_mode` remains the explicit action for selecting NORMAL even when
 a command panel was opened with `--restore-mode`.
+
+Advanced-mode eligibility follows the base mode through command, finder, and
+terminal surfaces. Opening a surface while disabled cannot enable NORMAL.
+Changing the enabling binding while a surface is open updates its return mode:
+enabling returns to INSERT, and disabling returns to passthrough. A label or
+configuration refresh preserves native-menu capture suspension; only an explicit
+mode entry resets that interaction context. Reentrant events wait until the
+current mode effect batch finishes, preserving transition order.
 
 Modified bindings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, and
 `[mode.command.mappings]` override the same physical chord from the all-mode
@@ -89,6 +98,30 @@ share the main run loop. Treat that loop as the input latency budget:
 its maintained threshold. A timeout-disabled event tap also logs before being
 re-enabled; either message is evidence of main-thread work that needs moving or
 narrowing.
+
+## Interaction ownership
+
+`ActivationLifecycle` distinguishes discovery, a pending commit, and an active
+gesture. A newer hint request replaces discovery or cancels a commit before its
+input starts. Once a gesture starts, it finishes its mouse release before the
+latest queued activation runs. Cancellation suppresses the old gesture's mode
+and UI outcome; an old completion cannot clear a newer operation's state. Dock
+and scroll-area discovery use the same ownership tokens as ordinary hints.
+
+`HintSession` owns the selected action, target data, and pointer drag. Every
+reset, replacement, mode exit, and application shutdown consumes any held
+primary button exactly once before forgetting the session. Shutdown also waits
+for finite synthetic gestures to post their release events. Click repetition
+records a pending click only when its generation is still current and input
+actually starts.
+
+`CandidateFinderSession` owns warm snapshots, query answers, live results, and
+their scoring caches. `CandidateFinderCoordinator` manages the prompt and
+publication lifecycle. Live source results stay separate from the warm catalog:
+each exact source/query has a token checked before background preparation and
+again at publication. Changing or leaving that query clears its rows and rejects
+both stale replies and timeout results. Initial snapshot publication never
+overwrites the current live-query result.
 
 ## Terminal popup input
 

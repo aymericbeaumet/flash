@@ -17,16 +17,13 @@ enum ModeReducer {
     case .enterInsert(let targetPID):
       // Advanced mode off → no normal mode exists, so there is nothing to
       // enter insert *from*; stay put.
-      if case .disabled = state { return (state, []) }
+      guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: targetPID) }
       let next = Mode.insert
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
     case .enterNormal(let targetPID):
       // The advanced gate: cannot enter NORMAL when the feature is off.
-      if state == .disabled || (state.isTerminal && state.asReturnMode == .disabled) {
-        if state.isTerminal { return reduce(state, .closeTerminal(targetPID: targetPID)) }
-        return (state, [])
-      }
+      guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: targetPID) }
       let departure: [ModeEffect] =
         state.isTerminal
         ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
@@ -81,6 +78,10 @@ enum ModeReducer {
       return (state, [.scheduleRecapture])
 
     case .advancedModeChanged(let enabled):
+      if case .command(let scope, let restoreTo) = state {
+        let base: ReturnMode = enabled ? (restoreTo == .disabled ? .insert : restoreTo) : .disabled
+        return (.command(scope: scope, restoreTo: base), [.renderSurface])
+      }
       if case .terminal(let restoreTo) = state {
         let base: ReturnMode =
           enabled
@@ -122,26 +123,30 @@ enum ModeReducer {
     switch mode {
     case .normal:
       return [
-        .setMappingScope(.normal), .clearTransientHintState, .renderSurface, .scheduleRecapture,
+        .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
+        .scheduleRecapture,
       ]
     case .insert:
       // Hide transient hint content BEFORE rendering so the surface (badge +
       // active-window border) is drawn last and survives the hide.
       return [
-        .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
+        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .renderSurface,
         .activateFocusedApp(pid: targetPID),
       ]
     case .disabled:
       return [
-        .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
+        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .renderSurface,
       ]
     case .command:
       // Command surfaces keep all-mode and command-specific modified mappings.
       // Hint cleanup belongs to their content setup (`enterCommandLineMode`).
-      return [.setMappingScope(.command), .renderSurface, .scheduleRecapture]
+      return [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture]
     case .terminal:
       return [
-        .setMappingScope(.terminal), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
+        .prepareModeEntry, .setMappingScope(.terminal), .clearTransientHintState,
+        .hideOverlayIfIdle, .renderSurface,
       ]
     }
   }
@@ -156,5 +161,15 @@ enum ModeReducer {
 
   private static func terminalDeparture(_ state: Mode) -> [ModeEffect] {
     state.isTerminal ? [.hideTerminalPopup] : []
+  }
+
+  private static func closeDisabledSurface(_ state: Mode, targetPID: pid_t?) -> (Mode, [ModeEffect])
+  {
+    switch state {
+    case .terminal: return reduce(state, .closeTerminal(targetPID: targetPID))
+    case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
+    case .disabled: return (state, [])
+    case .normal, .insert: preconditionFailure("Enabled mode has disabled eligibility")
+    }
   }
 }

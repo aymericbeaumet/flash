@@ -63,9 +63,15 @@ public enum TargetFinalizer {
       let lhsArea = area(lhs.target.frame)
       let rhsArea = area(rhs.target.frame)
       if lhsArea != rhsArea { return lhsArea < rhsArea }
+      if !lhsArea.isFinite {
+        let lhsLog = logArea(lhs.target.frame)
+        let rhsLog = logArea(rhs.target.frame)
+        if lhsLog != rhsLog { return lhsLog < rhsLog }
+      }
       if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
       if lhs.providerOrder != rhs.providerOrder { return lhs.providerOrder < rhs.providerOrder }
-      return lhs.ordinal < rhs.ordinal
+      if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+      return verticalOrder(lhs.target, rhs.target)
     }
     for candidate in byDedupPreference {
       guard !dedup.contains(candidate.target.frame) else { continue }
@@ -73,8 +79,7 @@ public enum TargetFinalizer {
       kept.append(candidate)
     }
 
-    kept.sort { visualOrder($0.target, $1.target) }
-    let targets = kept.map(\.target)
+    let targets = visualRows(kept.map(\.target))
     return TargetFinalizerResult(
       targets: targets,
       rawCount: candidates.count,
@@ -85,7 +90,9 @@ public enum TargetFinalizer {
   public static func isVisible(_ target: JumpTarget, in regions: [CGRect]) -> Bool {
     guard !regions.isEmpty else { return false }
     let frame = target.frame
-    guard frame.width > 0, frame.height > 0 else { return false }
+    guard frame.width > 0, frame.height > 0,
+      [frame.minX, frame.minY, frame.maxX, frame.maxY].allSatisfy(\.isFinite)
+    else { return false }
     let center = CGPoint(x: frame.midX, y: frame.midY)
     return regions.contains { $0.containsInclusive(center) }
   }
@@ -94,15 +101,40 @@ public enum TargetFinalizer {
     max(0, rect.width) * max(0, rect.height)
   }
 
-  private static func visualOrder(_ lhs: JumpTarget, _ rhs: JumpTarget) -> Bool {
-    let lhsTop = lhs.frame.maxY
-    let rhsTop = rhs.frame.maxY
-    if abs(lhsTop - rhsTop) > 8 { return lhsTop > rhsTop }
+  fileprivate static func logArea(_ rect: CGRect) -> CGFloat {
+    log(rect.width) + log(rect.height)
+  }
+
+  private static func visualRows(_ targets: [JumpTarget]) -> [JumpTarget] {
+    let ordered = targets.sorted(by: verticalOrder)
+    var result: [JumpTarget] = []
+    result.reserveCapacity(ordered.count)
+    var start = 0
+    while start < ordered.count {
+      let top = ordered[start].frame.maxY
+      var end = start + 1
+      // Anchor each row to its highest target. Pairwise tolerance in a sort
+      // comparator is nontransitive when three targets straddle two rows.
+      while end < ordered.count, top - ordered[end].frame.maxY <= 8 { end += 1 }
+      result.append(contentsOf: ordered[start..<end].sorted(by: horizontalOrder))
+      start = end
+    }
+    return result
+  }
+
+  private static func verticalOrder(_ lhs: JumpTarget, _ rhs: JumpTarget) -> Bool {
+    if lhs.frame.maxY != rhs.frame.maxY { return lhs.frame.maxY > rhs.frame.maxY }
+    return horizontalOrder(lhs, rhs)
+  }
+
+  private static func horizontalOrder(_ lhs: JumpTarget, _ rhs: JumpTarget) -> Bool {
     if lhs.frame.minX != rhs.frame.minX { return lhs.frame.minX < rhs.frame.minX }
     if lhs.frame.minY != rhs.frame.minY { return lhs.frame.minY > rhs.frame.minY }
     if lhs.frame.width != rhs.frame.width { return lhs.frame.width < rhs.frame.width }
     if lhs.frame.height != rhs.frame.height { return lhs.frame.height < rhs.frame.height }
-    return lhs.id < rhs.id
+    if lhs.id != rhs.id { return lhs.id < rhs.id }
+    if lhs.pid != rhs.pid { return (lhs.pid ?? .min) < (rhs.pid ?? .min) }
+    return lhs.providerID < rhs.providerID
   }
 }
 
@@ -112,21 +144,32 @@ public enum TargetFinalizer {
 private struct SpatialDedup {
   private static let cellSize: CGFloat = 256
   private var buckets: [Int64: [CGRect]] = [:]
+  private var allFrames: [CGRect] = []
+  private var oversizedFrames: [CGRect] = []
 
   private static func key(_ x: Int, _ y: Int) -> Int64 {
     (Int64(x) << 32) | (Int64(y) & 0xffff_ffff)
   }
 
-  private func bucketRange(_ rect: CGRect) -> (xMin: Int, xMax: Int, yMin: Int, yMax: Int) {
-    let xMin = Int((rect.minX / Self.cellSize).rounded(.down))
-    let xMax = Int((rect.maxX / Self.cellSize).rounded(.down))
-    let yMin = Int((rect.minY / Self.cellSize).rounded(.down))
-    let yMax = Int((rect.maxY / Self.cellSize).rounded(.down))
+  private func bucketRange(_ rect: CGRect) -> (xMin: Int, xMax: Int, yMin: Int, yMax: Int)? {
+    let left = (rect.minX / Self.cellSize).rounded(.down)
+    let right = (rect.maxX / Self.cellSize).rounded(.down)
+    let bottom = (rect.minY / Self.cellSize).rounded(.down)
+    let top = (rect.maxY / Self.cellSize).rounded(.down)
+    // Untrusted geometry must not trap integer conversion or allocate a grid
+    // proportional to its area. Exceptional frames use bounded linear lookup.
+    guard (right - left + 1) * (top - bottom + 1) <= 256,
+      let xMin = Int(exactly: left), let xMax = Int(exactly: right),
+      let yMin = Int(exactly: bottom), let yMax = Int(exactly: top)
+    else { return nil }
     return (xMin, xMax, yMin, yMax)
   }
 
   func contains(_ rect: CGRect) -> Bool {
-    let r = bucketRange(rect)
+    guard let r = bucketRange(rect) else {
+      return allFrames.contains { overlapsSubstantially($0, rect) }
+    }
+    if oversizedFrames.contains(where: { overlapsSubstantially($0, rect) }) { return true }
     for x in r.xMin...r.xMax {
       for y in r.yMin...r.yMax {
         guard let bucket = buckets[Self.key(x, y)] else { continue }
@@ -137,7 +180,11 @@ private struct SpatialDedup {
   }
 
   mutating func insert(_ rect: CGRect) {
-    let r = bucketRange(rect)
+    allFrames.append(rect)
+    guard let r = bucketRange(rect) else {
+      oversizedFrames.append(rect)
+      return
+    }
     for x in r.xMin...r.xMax {
       for y in r.yMin...r.yMax {
         buckets[Self.key(x, y), default: []].append(rect)
@@ -166,6 +213,13 @@ private struct SpatialDedup {
     let smaller = min(aArea, bArea)
     let larger = max(aArea, bArea)
     guard smaller > 0, larger > 0 else { return false }
+    if !larger.isFinite {
+      guard inter.width > 0, inter.height > 0 else { return false }
+      let aLog = TargetFinalizer.logArea(a)
+      let bLog = TargetFinalizer.logArea(b)
+      return TargetFinalizer.logArea(inter) - min(aLog, bLog) > log(0.6)
+        && min(aLog, bLog) - max(aLog, bLog) > log(0.5)
+    }
     let containment = interArea / smaller
     let sizeRatio = smaller / larger
     return containment > 0.6 && sizeRatio > 0.5

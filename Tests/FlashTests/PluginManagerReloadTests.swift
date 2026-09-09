@@ -113,6 +113,61 @@ final class PluginManagerReloadTests: XCTestCase {
 
   // MARK: - github: refs (local git fixture, no network)
 
+  func testExplicitReloadReconcilesChangedManifestAndKeepsLastGoodOnInvalidReplacement() throws {
+    let fixture = try residentFixture(id: "definitionreload")
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("initial definition running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let manifestURL = fixture.root.appendingPathComponent("manifest.json")
+    let replacement = PluginFixtureKit.manifest(
+      id: fixture.pluginID,
+      extra:
+        #""status":["replacement"],"commands":[{"command":"newcommand","subcommand":"ping","description":"test"}]"#
+    ).replacingOccurrences(of: "1.0.0", with: "2.0.0")
+    try replacement.write(to: manifestURL, atomically: true, encoding: .utf8)
+    manager.reloadAll()
+    waitUntilTrue("replacement definition registered") {
+      self.status(manager, fixture.pluginID)?.version == "2.0.0"
+    }
+    XCTAssertEqual(status(manager, fixture.pluginID)?.commandCount, 1)
+    waitUntilTrue("replacement running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let replacementPID = status(manager, fixture.pluginID)?.pid
+    try "{invalid".write(to: manifestURL, atomically: true, encoding: .utf8)
+    manager.reloadAll()
+    waitUntilTrue("invalid replacement reported") {
+      self.status(manager, fixture.pluginID)?.lastError?.contains("definition") == true
+    }
+    XCTAssertEqual(status(manager, fixture.pluginID)?.version, "2.0.0")
+    XCTAssertEqual(status(manager, fixture.pluginID)?.pid, replacementPID)
+    XCTAssertEqual(manager.pluginStatuses().filter { $0.id == fixture.pluginID }.count, 1)
+  }
+
+  func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
+    let fixture = try residentFixture(id: "definitionwatch")
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(fixture.root.path)"])
+    config.plugins.watchingEnabled = true
+    manager.start(config: config)
+    waitUntilTrue("watched definition running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let replacement = PluginFixtureKit.manifest(id: fixture.pluginID).replacingOccurrences(
+      of: "1.0.0", with: "2.0.0")
+    try replacement.write(
+      to: fixture.root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    waitUntilTrue("manifest watcher reconciles definition") {
+      self.status(manager, fixture.pluginID)?.version == "2.0.0"
+    }
+  }
+
   func testGithubMaterializationEnforcesTheCommitPin() throws {
     let fm = FileManager.default
     let temp = fm.temporaryDirectory

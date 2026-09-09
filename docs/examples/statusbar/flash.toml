@@ -9,7 +9,7 @@ template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=r
 "@right" = """
 #{flash.plugin.aiproviders.summary}
 #[fg=colour245] · #[popup=system]#[fg=#EBCB8B]SYS#[default]#[nopopup]
-#[fg=colour245] · #[popup=battery]#{flash.plugin.power.label}#[nopopup]
+#{?flash.plugin.power.label,#[fg=colour245] · #[popup=battery]#{flash.plugin.power.label}#[nopopup],}
 #[fg=colour245] · #[popup=date]#{flash.date}#[nopopup]
 """
 
@@ -21,18 +21,21 @@ active-app = """
 
 [terminal.system]
 persistent = true
+working_directory = "."
 command = ["btm", "--config_location", "status/bottom-system.toml"]
 columns = 100
 rows = 28
 
 [terminal.battery]
 persistent = true
+working_directory = "."
 command = ["btm", "--config_location", "status/bottom-battery.toml"]
 columns = 52
 rows = 12
 
 [terminal.date]
 persistent = true
+working_directory = "."
 command = ["calcurse", "--read-only", "--quiet", "-D", "status/calcurse", "-C", "status/calcurse"]
 columns = 74
 rows = 22

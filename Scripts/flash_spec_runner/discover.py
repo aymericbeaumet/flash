@@ -73,7 +73,7 @@ def probe_dirs():
 
 
 def manifest_features(manifest):
-    """Manifest v2 predicates (docs/plugin-protocol.md#manifest)."""
+    """Manifest predicates (docs/plugin-protocol.md#manifest)."""
     features = {"always"}
     if manifest.get("exec"):
         features.add("exec")
@@ -81,7 +81,10 @@ def manifest_features(manifest):
     if sources:
         features.add("sources")
         live = [s for s in sources if isinstance(s, dict) and s.get("live") is True]
-        features.add("sources_live" if live else "sources_warm")
+        if live:
+            features.add("sources_live")
+        if len(live) < len(sources):
+            features.add("sources_warm")
     if "query" in manifest:
         features.add("queries")
     if manifest.get("commands") or manifest.get("bangs"):

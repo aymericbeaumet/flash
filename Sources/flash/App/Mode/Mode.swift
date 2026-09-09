@@ -83,4 +83,6 @@ extension Mode {
     if case .terminal = self { return true }
     return false
   }
+
+  var advancedEnabled: Bool { asReturnMode != .disabled }
 }

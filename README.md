@@ -78,7 +78,7 @@ enabled = true
 
 Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on).
 
-`leave_mode`, `enter_insert_mode`, and `enter_command_mode` have no default mappings in any scope. Define the shortcuts you want in your configuration, including any command-line or flashlight shortcut.
+`leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` have no default mappings in any scope. Define the shortcuts you want in your configuration, including any command-line or flashlight shortcut. No default `a/A/i/I/o/O/gi` binding enters INSERT.
 
 ### Status-bar hover popups
 
@@ -221,7 +221,7 @@ template = """
 #[fg=colour245] · #{flash.plugin.memory.summary}
 #[fg=colour245] · #{flash.plugin.disks.summary}
 #[fg=colour245] · #{flash.plugin.network.summary}
-#[fg=colour245] · #{flash.plugin.power.summary}
+#{?flash.plugin.power.summary,#[fg=colour245] · #{flash.plugin.power.summary},}
 #[fg=colour245] · #{flash.date}
 """
 ```
@@ -233,6 +233,7 @@ addresses, and battery/power health. Use `:cpu`, `:memory`, `:disks`,
 `:flashlight @network.addresses` to copy an interface address. Date/time stays
 in the core status renderer (with the `timezones` plugin for lookup), and the
 dedicated `caffeinate` plugin remains the sole owner of sleep assertions.
+The battery indicator hides while charging or at 100%; `:power` still shows details.
 Passive network polling never requests Location access. Run `:network refresh`
 to request it explicitly when you want the current Wi-Fi name; refresh again
 after granting permission.
@@ -323,6 +324,9 @@ render. Flash retains that geometry as window intent: an explicit
 attachment/removal all reapply it against the destination screen.
 
 ## Configuration
+
+See [configuration and command boundaries](docs/configuration.md) for layer
+precedence, environment overrides and command argument/path handling.
 
 flash reads `$XDG_CONFIG_HOME/flash/flash.toml` when `XDG_CONFIG_HOME` is set, otherwise `~/.config/flash/flash.toml`. Changes apply without restarting.
 

@@ -335,47 +335,17 @@ final class StatusTerminalRegistry {
   static func configuration(
     for definition: Config.Terminal, environment base: [String: String]
   ) -> TerminalConfiguration {
-    var environment = base
-    // The child has a real color terminal even when Flash's launcher does not.
-    environment.removeValue(forKey: "NO_COLOR")
-    for (name, value) in definition.environment {
-      environment[name] = expand(value, environment: base)
-    }
+    let resolved = CommandLaunchConfiguration(
+      command: definition.command,
+      workingDirectory: definition.workingDirectory, overrides: definition.environment,
+      environment: base)
+    var environment = resolved.environment
+    // The child has a color terminal; only an explicit override opts out.
+    if definition.environment["NO_COLOR"] == nil { environment.removeValue(forKey: "NO_COLOR") }
     return TerminalConfiguration(
-      command: definition.command.map { expand($0, environment: environment) },
-      workingDirectory: definition.workingDirectory.map { expand($0, environment: environment) },
-      environment: environment, columns: definition.columns, rows: definition.rows)
+      command: resolved.command,
+      workingDirectory: resolved.workingDirectory, environment: environment,
+      columns: definition.columns, rows: definition.rows)
   }
 
-  static func expand(_ value: String, environment: [String: String]) -> String {
-    let value = CommandMappingRunner.expandLeadingTilde(value)
-    var result = ""
-    var cursor = value.startIndex
-    while cursor < value.endIndex {
-      guard value[cursor] == "$" else {
-        result.append(value[cursor])
-        cursor = value.index(after: cursor)
-        continue
-      }
-      let start = cursor
-      cursor = value.index(after: cursor)
-      let braced = cursor < value.endIndex && value[cursor] == "{"
-      if braced { cursor = value.index(after: cursor) }
-      let nameStart = cursor
-      while cursor < value.endIndex,
-        value[cursor].isASCII,
-        value[cursor].isLetter || value[cursor].isNumber || value[cursor] == "_"
-      {
-        cursor = value.index(after: cursor)
-      }
-      let name = String(value[nameStart..<cursor])
-      if !name.isEmpty, !braced || (cursor < value.endIndex && value[cursor] == "}") {
-        if braced { cursor = value.index(after: cursor) }
-        result += environment[name] ?? String(value[start..<cursor])
-      } else {
-        result += String(value[start..<cursor])
-      }
-    }
-    return result
-  }
 }

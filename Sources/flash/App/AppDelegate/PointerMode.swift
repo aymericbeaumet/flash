@@ -10,10 +10,7 @@ import FlashCore
 /// panel's `pointerModeActive` flag routes keys to `PointerModeInterpreter`.
 extension AppDelegate {
   func enterPointerMode() {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
-    }
-    clearHintSessionState()
+    guard prepareHintActivation(.pointer) else { return }
     hintSession.pointerModeActive = true
     applyModeOverlay()
     // `.hints` hides the cursor for chip picking; pointer mode is the
@@ -26,6 +23,10 @@ extension AppDelegate {
   func overlayDidPointer(_ command: PointerModeCommand) {
     guard hintSession.pointerModeActive else {
       cancelOverlay()
+      return
+    }
+    if activationLifecycle.isCommitting {
+      if case .exit = command { cancelOverlay() }
       return
     }
     let location = NSEvent.mouseLocation
@@ -57,17 +58,24 @@ extension AppDelegate {
       guard !hintSession.pointerDragActive else { return }
       clearHintSessionState()
       overlay.hide()
-      _ = ActionDispatcher.synthesizeClick(
-        at: location, action: .rightClick, modifiers: [], preserveCursor: false)
-      pointerModeSuspendForContextMenu()
+      let committedClick = LastCommittedClick(
+        point: location, action: .rightClick, modifiers: [], pid: nil)
+      performHintCommit(recording: committedClick) { finished in
+        ActionDispatcher.synthesizeClick(
+          at: location, action: .rightClick, modifiers: [], preserveCursor: false,
+          completion: finished)
+      } completion: { owner in
+        owner.pointerModeSuspendForContextMenu()
+      }
     case .toggleDrag:
       if hintSession.pointerDragActive {
+        _ = hintSession.releasePrimaryButton()
         _ = ActionDispatcher.releasePrimaryButton(at: location)
-        hintSession.pointerDragActive = false
         FlashLog.trace("[pointer_mode] drag_release")
       } else {
-        _ = ActionDispatcher.pressPrimaryButton(at: location)
-        hintSession.pointerDragActive = true
+        if ActionDispatcher.pressPrimaryButton(at: location) {
+          hintSession.didPressPrimaryButton()
+        }
         FlashLog.trace("[pointer_mode] drag_press")
       }
     case .commitClick:
@@ -80,10 +88,15 @@ extension AppDelegate {
   /// holds the button — a click mid-drag would corrupt the gesture.
   private func pointerModeClickInPlace(_ action: JumpAction, at location: CGPoint) {
     guard !hintSession.pointerDragActive else { return }
-    lastCommittedClick = LastCommittedClick(
+    let committedClick = LastCommittedClick(
       point: location, action: action, modifiers: [], pid: nil)
-    _ = ActionDispatcher.synthesizeClick(
-      at: location, action: action, modifiers: [], preserveCursor: false)
+    performHintCommit(recording: committedClick) { finished in
+      ActionDispatcher.synthesizeClick(
+        at: location, action: action, modifiers: [], preserveCursor: false,
+        completion: finished)
+    } completion: { owner in
+      owner.applyModeOverlay()
+    }
   }
 
   /// Return / space: finish the session. With the drag toggle held this
@@ -91,23 +104,24 @@ extension AppDelegate {
   /// the same INSERT handoff as a mouse-grid commit.
   private func commitPointerModeClick(at location: CGPoint) {
     if hintSession.pointerDragActive {
+      _ = hintSession.releasePrimaryButton()
       _ = ActionDispatcher.releasePrimaryButton(at: location)
-      hintSession.pointerDragActive = false
       cancelOverlay()
       return
     }
     let pid = currentNonFlashContext()?.processID ?? normalModeTargetPID
-    lastCommittedClick = LastCommittedClick(
+    let committedClick = LastCommittedClick(
       point: location, action: .leftClick, modifiers: [], pid: pid)
     clearHintSessionState()
     overlay.hide()
     let handoffToken = notePointerInsertHandoff(reason: "pointer_mode_commit")
     applyModeOverlay(captureOverride: false)
-    _ = ActionDispatcher.synthesizeClick(
-      at: location, action: .leftClick, modifiers: [], preserveCursor: false
-    ) { [weak self] in
-      guard let self else { return }
-      self.resolvePointerModeInsert(pid: pid, handoffToken: handoffToken)
+    performHintCommit(recording: committedClick) { finished in
+      ActionDispatcher.synthesizeClick(
+        at: location, action: .leftClick, modifiers: [], preserveCursor: false,
+        completion: finished)
+    } completion: { owner in
+      owner.resolvePointerModeInsert(pid: pid, handoffToken: handoffToken)
     }
   }
 
@@ -124,7 +138,7 @@ extension AppDelegate {
       y: min(max(point.y, frame.minY), frame.maxY - 1))
   }
 
-  /// `focus_input` (Vimium `gi`): focus the count-th editable text input of
+  /// `focus_input`: focus the count-th editable text input of
   /// the focused window via the AX focused attribute, then enter INSERT so
   /// typing flows immediately. The bounded AX walk runs off the main thread.
   func focusTextInputInNormalMode(index: Int) {
@@ -134,13 +148,14 @@ extension AppDelegate {
     }
     let pid = context.processID
     let normalized = max(1, index)
+    let generation = activationGen
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let focused = NormalModeDispatcher.focusTextInput(pid: pid, index: normalized)
       DispatchQueue.main.async {
-        guard let self else { return }
+        guard let self, self.activationLifecycle.isCurrent(generation) else { return }
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
-          if self.flashMode == .normal {
+          if self.modeStore.mode == .normal {
             self.enterInsertMode(reason: .explicitCommand, targetPID: pid)
           }
         } else {

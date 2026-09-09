@@ -129,6 +129,8 @@ final class PluginManager {
   /// superseded config (or after `stop()`) must not clobber newer state.
   private let generationLock = NSLock()
   private var configGeneration = 0
+  private var latestConfig: Config?
+  private var requestedRestarts: Set<String> = []
   private let baseDataDir: URL
   private let repository: PluginRepository
   /// The host-owned push catalog store every plugin's validated `publish`
@@ -331,7 +333,7 @@ final class PluginManager {
     }
 
     let snapshot = HotSnapshot(
-      sourceAdapters: Array(sourceAdaptersByID.values),
+      sourceAdapters: sourceAdaptersByID.keys.sorted().compactMap { sourceAdaptersByID[$0] },
       plugins: plugins,
       loadFailureStatuses: loadFailureStatuses,
       mappingIndex: mappingIndex,
@@ -347,13 +349,6 @@ final class PluginManager {
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
     hotSnapshotLock.unlock()
-  }
-
-  private func bumpGeneration() -> Int {
-    generationLock.lock()
-    defer { generationLock.unlock() }
-    configGeneration += 1
-    return configGeneration
   }
 
   private func isCurrentGeneration(_ generation: Int) -> Bool {
@@ -375,7 +370,11 @@ final class PluginManager {
     // resurrect plugins after shutdown, and clear the change callback before
     // the store empties — a post-stop tick must not reach a dead consumer
     // (the old lost-callback bug).
-    _ = bumpGeneration()
+    generationLock.lock()
+    configGeneration += 1
+    latestConfig = nil
+    requestedRestarts.removeAll()
+    generationLock.unlock()
     catalogStore.onCatalogsChanged = nil
     let plugins = queue.sync { () -> [PluginProcess] in
       let snapshot = Array(pluginsByID.values)
@@ -425,23 +424,58 @@ final class PluginManager {
   }
 
   func updateConfig(_ config: Config) {
-    let generation = bumpGeneration()
-    // Materialize third-party checkouts (network, a 60 s git timeout per
-    // call) BEFORE entering the manager queue — the serial materialize queue
-    // preserves config ordering; the generation guard drops a reload whose
-    // config was superseded while it fetched.
+    reconcile(config: config)
+  }
+
+  private func configurationSnapshot() -> (Config, Int)? {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    return latestConfig.map { ($0, configGeneration) }
+  }
+
+  private func reconcile(
+    config: Config, restartIDs: Set<String> = [], expectedGeneration: Int? = nil
+  ) {
+    generationLock.lock()
+    if let expectedGeneration, expectedGeneration != configGeneration {
+      generationLock.unlock()
+      return
+    }
+    latestConfig = config
+    requestedRestarts.formUnion(restartIDs)
+    configGeneration += 1
+    let generation = configGeneration
+    generationLock.unlock()
+    // Network materialization never occupies the manager or input queues.
+    // Pending restart IDs survive superseded reloads, so simultaneous binary
+    // changes cannot silently lose all but the final plugin's restart.
     materializeQueue.async { [weak self] in
       guard let self, self.isCurrentGeneration(generation) else { return }
       var thirdParty: [(root: URL, origin: PluginOrigin)] = []
       for ref in config.plugins.thirdParty {
-        if let materialized = self.repository.materialize(ref) {
-          thirdParty.append(materialized)
-        }
+        if let materialized = self.repository.materialize(ref) { thirdParty.append(materialized) }
       }
       self.queue.async {
-        guard self.isCurrentGeneration(generation) else { return }
-        self.reloadDesiredPlugins(config: config, thirdParty: thirdParty)
+        self.generationLock.lock()
+        guard self.configGeneration == generation else {
+          self.generationLock.unlock()
+          return
+        }
+        let restartIDs = self.requestedRestarts
+        self.requestedRestarts.removeAll()
+        self.generationLock.unlock()
+        self.reloadDesiredPlugins(config: config, thirdParty: thirdParty, restartIDs: restartIDs)
       }
+    }
+  }
+
+  private func reloadDefinition(_ plugin: PluginProcess) {
+    queue.async { [weak self, weak plugin] in
+      guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin,
+        let (config, generation) = self.configurationSnapshot()
+      else { return }
+      self.reconcile(
+        config: config, restartIDs: [plugin.identifier], expectedGeneration: generation)
     }
   }
 
@@ -746,7 +780,7 @@ final class PluginManager {
   }
 
   private func reloadDesiredPlugins(
-    config: Config, thirdParty: [(root: URL, origin: PluginOrigin)]
+    config: Config, thirdParty: [(root: URL, origin: PluginOrigin)], restartIDs: Set<String> = []
   ) {
     var desired: [(root: URL, origin: PluginOrigin)] = PluginRepository.officialPluginRoots().map {
       ($0, .official)
@@ -774,11 +808,15 @@ final class PluginManager {
         let settings = config.plugins.settings[manifest.id] ?? [:]
         let existing = pluginsByID[manifest.id]
         if existing?.root == item.root, existing?.manifest == manifest,
-          existing?.settings == settings
+          existing?.settings == settings, existing?.watchesFiles == config.plugins.watchingEnabled
         {
+          if restartIDs.contains(manifest.id) { existing?.reload(reason: "definition_reload") }
           continue
         }
         existing?.stopAndWait(reason: "config_reload")
+        if let existing, existing.manifest != manifest || existing.root != item.root {
+          catalogStore.drop(pluginID: existing.identifier)
+        }
         let plugin = PluginProcess(
           root: item.root,
           manifest: manifest,
@@ -792,6 +830,10 @@ final class PluginManager {
         }
         plugin.onStatusChanged = { [weak self] in
           self?.notifyStateChanged()
+        }
+        plugin.onFilesChanged = { [weak self, weak plugin] in
+          guard let plugin else { return }
+          self?.reloadDefinition(plugin)
         }
         // Capture immutable authorization with the process. A host RPC arrives
         // on PluginProcess.queue; consulting PluginManager.queue synchronously
@@ -814,6 +856,15 @@ final class PluginManager {
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin, store: catalogStore)
         plugin.start()
       } catch {
+        if let existing = pluginsByID.values.first(where: { $0.root == item.root }),
+          !config.plugins.disabled.contains(existing.identifier)
+        {
+          // A malformed edit is not a new definition. Keep the validated
+          // process, its authorization and catalog together until corrected.
+          nextIDs.insert(existing.identifier)
+          existing.reportDefinitionError(String(describing: error))
+          continue
+        }
         FlashLog.warn(
           "[plugins] failed to load \(item.root.path): \(error)",
           fields: [
@@ -867,14 +918,11 @@ final class PluginManager {
   /// manager queue.
   @discardableResult
   func reloadAll() -> [String] {
-    let plugins = readHotSnapshot().plugins
-    queue.async {
-      for plugin in plugins {
-        plugin.reload(reason: "plugins_reload")
-      }
+    let ids = readHotSnapshot().plugins.map(\.identifier)
+    if let (config, generation) = configurationSnapshot() {
+      reconcile(config: config, restartIDs: Set(ids), expectedGeneration: generation)
     }
-    notifyStateChanged()
-    return plugins.map(\.identifier)
+    return ids
   }
 
   private func notifyStateChanged() {

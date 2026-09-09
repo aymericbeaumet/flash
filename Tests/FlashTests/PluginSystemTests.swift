@@ -159,21 +159,20 @@ final class PluginSystemTests: XCTestCase {
   }
 
   func testPluginHintTargetCannotSpoofProviderOwnership() throws {
-    let target = try XCTUnwrap(
-      PluginWireCodec.target(
-        from: [
-          "id": "hint",
-          "frame": [
-            "x": 10,
-            "y": 20,
-            "width": 30,
-            "height": 40,
-          ],
-          "source_id": "plugin:attacker",
+    let target = PluginWireCodec.target(
+      from: [
+        "id": "hint",
+        "frame": [
+          "x": 10,
+          "y": 20,
+          "width": 30,
+          "height": 40,
         ],
-        sourceID: "plugin:safe"))
+        "source_id": "plugin:attacker",
+      ],
+      sourceID: "plugin:safe")
 
-    XCTAssertEqual(target.sourceID, "plugin:safe")
+    XCTAssertNil(target, "routing ownership never crosses the wire")
   }
 
   func testQueryAnswerHasANarrowShapeAndGetsHostOwnedSemantics() throws {
@@ -368,6 +367,40 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["protocol_version": 3]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["ok": true]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(nil))
+  }
+
+  func testJSONScalarTypesAndPerformVariantsAreStrict() throws {
+    func object(_ json: String) throws -> [String: Any] {
+      try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+    for json in [#"{"protocol_version":true}"#, #"{"protocol_version":1.5}"#] {
+      XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(try object(json)), json)
+    }
+    XCTAssertNil(PluginWireCodec.okPayload(try object(#"{"ok":1}"#)))
+    for json in [
+      #"{"ok":true,"error":"contradiction"}"#,
+      #"{"ok":false,"unhandled":true,"error":"effect failed"}"#,
+      #"{"ok":true,"target_pid":"123"}"#,
+      #"{"ok":true,"navigation_url":"relative/path"}"#,
+    ] {
+      guard case .failed = PluginWireCodec.performOutcome(from: try object(json)) else {
+        XCTFail("malformed perform result must fail: \(json)")
+        continue
+      }
+    }
+  }
+
+  func testCatalogQuotaCountsEncodedJSONAndHintsRequireNestedFrames() throws {
+    let rows = Array(
+      repeating: ["source": "safe", "title": String(repeating: "\n", count: 3_000)], count: 1_000)
+    XCTAssertGreaterThan(
+      try JSONSerialization.data(withJSONObject: rows).count, PluginProtocol.maxCatalogBytes)
+    XCTAssertTrue(
+      PluginWireCodec.catalogRows(from: rows, sourceID: "plugin:safe", allowedSources: ["safe"])
+        == nil)
+    XCTAssertNil(
+      PluginWireCodec.target(
+        from: ["id": "flat", "x": 0, "y": 0, "width": 1, "height": 1], sourceID: "plugin:safe"))
   }
 
   // MARK: - The perform trichotomy

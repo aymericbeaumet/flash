@@ -128,10 +128,13 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
       .copyURL)
-    for insertKey in ["a", "A", "i", "o", "O"] {
-      XCTAssertNil(c.mode.normal.first(where: { $0.key == insertKey }))
+    for insertKey in ["a", "A", "i", "I", "o", "O", "gi"] {
+      XCTAssertNil(c.mode.normal.first(where: { $0.key == key(insertKey) }))
     }
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "I" }))
+    for mapping in c.mode.all + c.mode.normal + c.mode.insert + c.mode.command + c.mode.terminal {
+      XCTAssertNotEqual(mapping.action.command, .insertMode, mapping.key)
+      XCTAssertNotEqual(mapping.action.command, .focusInput, mapping.key)
+    }
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("g4") })?.action.command,
@@ -793,7 +796,7 @@ final class ConfigLoaderTests: XCTestCase {
       keys = "as;d"
       """)
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "as;d")
-    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "ctrl", "alt"])
+    XCTAssertEqual(c.effectiveMagicModifiers, ["cmd", "ctrl", "alt"])
     XCTAssertEqual(c.warnings.count, 1)
     XCTAssertTrue(c.warnings[0].contains("removed \"shift\""))
     XCTAssertTrue(c.warnings[0].contains("as;d"))
@@ -805,8 +808,9 @@ final class ConfigLoaderTests: XCTestCase {
       [hints]
       keys = "as;d"
       """)
-    let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: [:])
-    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "ctrl", "alt"])
+    var c = base
+    c.prepareDerivedValues()
+    XCTAssertEqual(c.effectiveMagicModifiers, ["cmd", "ctrl", "alt"])
     XCTAssertEqual(c.warnings.filter { $0.contains("removed \"shift\"") }.count, 1)
   }
 
@@ -962,51 +966,13 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.hints.keys, "<dvorak>")
   }
 
-  // MARK: CLI + env overrides
-
-  func testCLIOverridesEveryField() {
-    let base = Config()
-    let args = [
-      "flash",
-      "--hints-keys=asdf",
-      "--hints-min-length=3",
-      "--hints-magic-modifiers=cmd,alt",
-      "--open-ignored-apps=Flash,com.flash.app",
-      "--overlay-font-size=20",
-      "--overlay-hint-fg=#FFFFFF",
-      "--overlay-hint-bg-top=#000000",
-      "--overlay-hint-bg-bottom=#111111",
-      "--overlay-hint-border=#222222",
-      "--flashlight-suggestion-count=14",
-      "--debug-show-bounds=true",
-      "--debug-bounds-bg=#11223344",
-      "--debug-bounds-fg=#55667788",
-      "--debug-log-level=debug",
-    ]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
-    XCTAssertEqual(c.hints.keys, "asdf")
-    XCTAssertEqual(String(c.resolvedAlphabet.chars), "asdf")
-    XCTAssertEqual(c.hints.minLength, 3)
-    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
-    XCTAssertEqual(c.open.ignoredApps, ["Flash", "com.flash.app"])
-    XCTAssertEqual(c.overlay.fontSize, 20)
-    XCTAssertEqual(c.overlay.hintFG, "#FFFFFF")
-    XCTAssertEqual(c.overlay.hintBGTop, "#000000")
-    XCTAssertEqual(c.overlay.hintBGBottom, "#111111")
-    XCTAssertEqual(c.overlay.hintBorder, "#222222")
-    XCTAssertEqual(c.flashlight.suggestionCount, 14)
-    XCTAssertTrue(c.debug.showHintsBounds)
-    XCTAssertEqual(c.debug.hintsBoundsBG, "#11223344")
-    XCTAssertEqual(c.debug.hintsBoundsFG, "#55667788")
-    XCTAssertEqual(c.debug.logLevel, .debug)
-  }
+  // MARK: Environment overrides
 
   func testEnvOverridesEveryField() {
-    let base = Config()
     let env = [
       "FLASH_HINTS_KEYS": "qwer",
       "FLASH_HINTS_MIN_LENGTH": "2",
-      "FLASH_HINTS_MAGIC_MODIFIERS": "ctrl,alt",
+      "FLASH_HINTS_MAGIC_MODIFIERS": "[\"ctrl\", \"alt\"]",
       "FLASH_OPEN_IGNORED_APPS": "[\"Flash\", \"com.flash.app\"]",
       "FLASH_OVERLAY_FONT_SIZE": "18",
       "FLASH_OVERLAY_HINT_FG": "#DDEEFF",
@@ -1014,12 +980,12 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_OVERLAY_HINT_BG_BOTTOM": "#998877",
       "FLASH_OVERLAY_HINT_BORDER": "#665544",
       "FLASH_FLASHLIGHT_SUGGESTION_COUNT": "13",
-      "FLASH_DEBUG_SHOW_BOUNDS": "yes",
-      "FLASH_DEBUG_BOUNDS_BG": "#11111111",
-      "FLASH_DEBUG_BOUNDS_FG": "#22222222",
+      "FLASH_DEBUG_SHOW_HINTS_BOUNDS": "true",
+      "FLASH_DEBUG_HINTS_BOUNDS_BG": "#11111111",
+      "FLASH_DEBUG_HINTS_BOUNDS_FG": "#22222222",
       "FLASH_DEBUG_LOG_LEVEL": "fatal",
     ]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
+    let c = ConfigLoader.parse("", environment: env)
     XCTAssertEqual(c.hints.keys, "qwer")
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "qwer")
     XCTAssertEqual(c.hints.minLength, 2)
@@ -1287,107 +1253,41 @@ final class ConfigLoaderTests: XCTestCase {
       keyCode: CGKeyCode(kVK_DownArrow))
   }
 
-  func testCLIBeatsEnv() {
-    // Both set; CLI must win.
-    let base = Config()
-    let args = ["flash", "--hints-min-length=3"]
-    let env = ["FLASH_HINTS_MIN_LENGTH": "5"]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: env)
-    XCTAssertEqual(c.hints.minLength, 3)
-  }
-
-  func testCLIKeysBeatEnvAndRefreshPreparedAlphabet() {
-    let base = ConfigLoader.parse("[hints]\nkeys = \"<qwerty_homerow>\"")
-    let env = ["FLASH_HINTS_KEYS": "<colemak_homerow>"]
-    let args = ["flash", "--hints-keys=zsaq"]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: env)
-    XCTAssertEqual(c.hints.keys, "zsaq")
-    XCTAssertNil(c.resolvedAlphabet.layoutName)
-    XCTAssertEqual(String(c.resolvedAlphabet.chars), "zsaq")
-    XCTAssertEqual(c.resolvedAlphabet.keyScores["z"], 4)
-    XCTAssertEqual(c.resolvedAlphabet.keyScores["q"], 1)
-  }
-
   func testEnvBeatsTOML() {
     // Simulate "TOML produced 2; env says 5".
-    var base = Config()
-    base.hints.minLength = 2
     let env = ["FLASH_HINTS_MIN_LENGTH": "5"]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
+    let c = ConfigLoader.parse("", environment: env)
     XCTAssertEqual(c.hints.minLength, 5)
   }
 
-  func testInvalidCLIValueIsDropped() {
-    var base = Config()
-    base.hints.minLength = 2
-    let args = ["flash", "--hints-min-length=garbage"]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
-    XCTAssertEqual(c.hints.minLength, 2)
-  }
-
-  func testUnknownCLIFlagIsIgnored() {
-    let base = Config()
-    let args = ["flash", "--nope=1", "--also-bad=foo"]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
-    XCTAssertEqual(c.hints.keys, base.hints.keys)
-  }
-
   func testEnvVarOutsideFlashPrefixIsIgnored() {
-    var base = Config()
-    base.hints.keys = "<qwerty>"
     let env = [
       "HINTS_KEYS": "should-not-take",
       "FOO_BAR": "nope",
     ]
-    let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
-    XCTAssertEqual(c.hints.keys, "<qwerty>")
-  }
-
-  func testBoolAcceptsCommonForms() {
-    let base = Config()
-    for v in ["true", "1", "yes", "on", "TRUE", "Yes"] {
-      let c = ConfigLoader.applyOverrides(
-        to: base, arguments: ["flash", "--debug-show-bounds=\(v)"], environment: [:])
-      XCTAssertTrue(c.debug.showHintsBounds, "expected `\(v)` to parse as true")
-    }
-    for v in ["false", "0", "no", "off", "FALSE"] {
-      var b = base
-      b.debug.showHintsBounds = true
-      let c = ConfigLoader.applyOverrides(
-        to: b, arguments: ["flash", "--debug-show-bounds=\(v)"], environment: [:])
-      XCTAssertFalse(c.debug.showHintsBounds, "expected `\(v)` to parse as false")
-    }
+    let c = ConfigLoader.parse("", environment: env)
+    XCTAssertEqual(c.hints.keys, Config.default.hints.keys)
   }
 
   // MARK: Config path resolution
 
-  func testResolvePathPrefersCLIConfigFlag() {
-    let args = ["flash", "--config=/tmp/explicit.toml"]
-    let env = ["FLASH_CONFIG": "/tmp/from-env.toml"]
-    let url = ConfigLoader.resolvePath(arguments: args, environment: env)
-    XCTAssertEqual(url.path, "/tmp/explicit.toml")
-  }
-
   func testResolvePathFallsBackToEnv() {
-    let args = ["flash"]
     let env = ["FLASH_CONFIG": "/tmp/from-env.toml"]
-    let url = ConfigLoader.resolvePath(arguments: args, environment: env)
+    let url = ConfigLoader.resolvePath(environment: env)
     XCTAssertEqual(url.path, "/tmp/from-env.toml")
   }
 
   func testCandidatePathsHonourXDGHome() {
     // First candidate when XDG_CONFIG_HOME is set is XDG-rooted.
-    let args = ["flash"]
     let env = ["XDG_CONFIG_HOME": "/tmp/xdg"]
-    let paths = ConfigLoader.candidatePaths(arguments: args, environment: env)
+    let paths = ConfigLoader.candidatePaths(environment: env)
     XCTAssertEqual(paths.first?.path, "/tmp/xdg/flash/flash.toml")
   }
 
   func testCandidatePathsDefaultToCanonicalConfigOnly() {
     // No XDG -> only the home-rooted canonical path.
-    let args = ["flash"]
     let env: [String: String] = [:]
-    let paths = ConfigLoader.candidatePaths(arguments: args, environment: env)
+    let paths = ConfigLoader.candidatePaths(environment: env)
       .map { $0.path }
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     XCTAssertEqual(
@@ -1400,7 +1300,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testLoadingErrorAlertIncludesResolvedAlphabetWarning() {
     // Unresolvable selectors are now rejected by the loader itself, so the
     // alert carries the located hints.keys diagnostic (the in-resolver
-    // fallback warning only survives for env/CLI overrides).
+    // fallback warning only survives for environment overrides).
     let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_toprow|colemak_homerow>\"")
     let message = c.loadingErrorAlertMessage
     XCTAssertNotNil(message)
@@ -1496,30 +1396,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(unknown.isEmpty, "default config produced unknown-key diagnostics: \(unknown)")
   }
 
-  func testUnknownCLIFlagWarns() {
-    let c = ConfigLoader.applyOverrides(
-      to: ConfigLoader.parse(""),
-      arguments: ["flash", "--hints-min-lenght=2"],
-      environment: [:])
-    XCTAssertTrue(
-      c.loadingDiagnostics.contains {
-        $0.message.contains("unknown command-line flag '--hints-min-lenght")
-      },
-      "expected an unknown-flag diagnostic, got: \(c.loadingDiagnostics.map(\.message))")
-  }
-
-  func testKnownCLIFlagsDoNotWarn() {
-    let c = ConfigLoader.applyOverrides(
-      to: ConfigLoader.parse(""),
-      arguments: ["flash", "--hints-min-length=3", "--config=/tmp/x.toml"],
-      environment: [:])
-    XCTAssertEqual(c.hints.minLength, 3)
-    XCTAssertFalse(
-      c.loadingDiagnostics.contains { $0.message.contains("unknown command-line flag") },
-      "known flags must not warn (--config is consumed elsewhere): "
-        + "\(c.loadingDiagnostics.map(\.message))")
-  }
-
   private func key(_ raw: String) -> String {
     NormalModeInterpreter.canonicalizeMappingKey(raw)!
   }
@@ -1565,60 +1441,29 @@ final class ConfigLoaderTests: XCTestCase {
     let d = Config.default
     let c = ConfigLoader.parse(toml)
 
-    XCTAssertEqual(c.hints.keys, d.hints.keys)
-    XCTAssertEqual(c.hints.minLength, d.hints.minLength)
-    XCTAssertEqual(c.hints.magicModifiers, d.hints.magicModifiers)
-    XCTAssertEqual(c.hints.mouseGridSteps, d.hints.mouseGridSteps)
-    XCTAssertEqual(c.hints.mouseGridOpacity, d.hints.mouseGridOpacity)
-    XCTAssertEqual(c.overlay.fontSize, d.overlay.fontSize)
-    XCTAssertEqual(c.statusBar.enabled, d.statusBar.enabled)
-    XCTAssertEqual(c.statusBar.template.template, d.statusBar.template.template)
-    XCTAssertEqual(c.statusBar.monitor, d.statusBar.monitor)
-    XCTAssertEqual(c.flashlight.suggestionCount, d.flashlight.suggestionCount)
-    XCTAssertEqual(c.flashlight.precedenceAliveBonus, d.flashlight.precedenceAliveBonus)
-    XCTAssertEqual(c.mode.labels, d.mode.labels)
-    XCTAssertEqual(c.mode.sequenceTimeoutMs, d.mode.sequenceTimeoutMs)
-    XCTAssertEqual(c.debug.showHintsBounds, d.debug.showHintsBounds)
-    XCTAssertEqual(c.debug.logLevel, d.debug.logLevel)
-    XCTAssertEqual(c.debug.httpInspectorEnabled, d.debug.httpInspectorEnabled)
-    XCTAssertEqual(c.debug.httpInspectorHost, d.debug.httpInspectorHost)
-    XCTAssertEqual(c.debug.httpInspectorPort, d.debug.httpInspectorPort)
-    XCTAssertEqual(c.app.menuBarIcon, d.app.menuBarIcon)
-    XCTAssertEqual(c.app.autostart, d.app.autostart)
-    XCTAssertEqual(c.overlay.windowBorder, d.overlay.windowBorder)
-    XCTAssertEqual(c.overlay.windowBorderSize, d.overlay.windowBorderSize)
-    XCTAssertEqual(c.overlay.windowBorderColor, d.overlay.windowBorderColor)
-    XCTAssertEqual(c.statusBar.refreshIntervalSeconds, d.statusBar.refreshIntervalSeconds)
-    XCTAssertEqual(c.statusBar.fontSize, d.statusBar.fontSize)
-    XCTAssertEqual(c.statusBar.commandTimeoutSeconds, d.statusBar.commandTimeoutSeconds)
-    XCTAssertEqual(c.statusBar.notchMargin, d.statusBar.notchMargin)
-    XCTAssertEqual(c.statusBar.clickActions, d.statusBar.clickActions)
-    XCTAssertEqual(c.overlay.alertDuration, d.overlay.alertDuration)
-    XCTAssertEqual(c.overlay.bannerDurationMs, d.overlay.bannerDurationMs)
-    XCTAssertEqual(c.mode.scrollStep, d.mode.scrollStep)
-    XCTAssertEqual(c.mode.scrollPageFraction, d.mode.scrollPageFraction)
-    XCTAssertEqual(c.mode.clickHoldMs, d.mode.clickHoldMs)
-    XCTAssertEqual(c.mode.sendKeyIntervalMs, d.mode.sendKeyIntervalMs)
-    XCTAssertEqual(c.flashlight.frecencyHalfLifeDays, d.flashlight.frecencyHalfLifeDays)
-    XCTAssertEqual(c.flashlight.frecencyMaxBoost, d.flashlight.frecencyMaxBoost)
-    XCTAssertEqual(c.plugins.installTimeoutSeconds, d.plugins.installTimeoutSeconds)
-    XCTAssertEqual(c.plugins.startupTimeoutSeconds, d.plugins.startupTimeoutSeconds)
-    XCTAssertEqual(c.open.ignoredApps, d.open.ignoredApps)
-    XCTAssertEqual(c.open.appDirectories, d.open.appDirectories)
-    XCTAssertEqual(c.plugins.disabled, d.plugins.disabled)
-    XCTAssertEqual(c.plugins.watchingEnabled, d.plugins.watchingEnabled)
-    XCTAssertEqual(c.mode.normalLeader, d.mode.normalLeader)
-    XCTAssertEqual(c.mode.normalPassthroughKeys, d.mode.normalPassthroughKeys)
-    XCTAssertEqual(c.mode.normalPassthroughModifiers, d.mode.normalPassthroughModifiers)
-    // The mapping tables in config.default.toml are real values now that the
-    // file loads at runtime as the base layer, so the file must be a NO-OP
-    // over the built-ins: every mapping it defines must match the baked-in
-    // default for that key, and it must not add or lose any. Re-defining a
-    // key re-appends it (setModeMapping is remove+append), so compare as
-    // key-indexed maps — order across the parse boundary is meaningless.
-    XCTAssertEqual(Self.mappingsByKey(c.mode.all), Self.mappingsByKey(d.mode.all))
-    XCTAssertEqual(Self.mappingsByKey(c.mode.normal), Self.mappingsByKey(d.mode.normal))
-    XCTAssertEqual(Self.mappingsByKey(c.mode.insert), Self.mappingsByKey(d.mode.insert))
+    XCTAssertEqual(c.app, d.app)
+    XCTAssertEqual(c.hints, d.hints)
+    XCTAssertEqual(c.overlay, d.overlay)
+    XCTAssertEqual(c.open, d.open)
+    XCTAssertEqual(c.plugins, d.plugins)
+    XCTAssertEqual(c.flashlight, d.flashlight)
+    XCTAssertEqual(c.debug, d.debug)
+    XCTAssertEqual(c.terminals, d.terminals)
+    var loadedMode = c.mode
+    var builtinMode = d.mode
+    loadedMode.normal.sort { $0.key < $1.key }
+    builtinMode.normal.sort { $0.key < $1.key }
+    loadedMode.recompileMappings()
+    builtinMode.recompileMappings()
+    XCTAssertEqual(loadedMode, builtinMode)
+    // Compilation locations describe the defining file; compare authoring
+    // values separately from those diagnostic coordinates.
+    var loadedStatus = c.statusBar
+    var builtinStatus = d.statusBar
+    XCTAssertEqual(loadedStatus.template.template, builtinStatus.template.template)
+    loadedStatus.template = .init(template: loadedStatus.template.template)
+    builtinStatus.template = .init(template: builtinStatus.template.template)
+    XCTAssertEqual(loadedStatus, builtinStatus)
   }
 
   private static func mappingsByKey(_ mappings: [ModeMapping]) -> [String: ModeMapping] {
@@ -1930,10 +1775,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
     XCTAssertEqual(
       c.statusBar.sources["base"]?.command,
-      ["/bin/sh", "/tmp/flash-defaults/details.sh"])
+      ["/bin/sh", "./details.sh"])
     XCTAssertEqual(
       c.statusBar.sources["user"]?.command,
-      ["/bin/sh", "/tmp/user/details.sh"])
+      ["/bin/sh", "./details.sh"])
     XCTAssertEqual(c.statusBar.sources["base"]?.workingDirectory, "/tmp/flash-defaults/work")
     XCTAssertEqual(c.statusBar.sources["user"]?.workingDirectory, "/tmp/user/work")
     XCTAssertEqual(c.statusBar.popupSourceURLs["base"], base.sourceURL)

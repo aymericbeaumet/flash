@@ -7,15 +7,7 @@ enum ConfigLoader {
   /// config AND creation of a higher-precedence one (e.g. user adds
   /// `$XDG_CONFIG_HOME/flash/flash.toml` while running with
   /// `~/.config/flash/flash.toml`).
-  static func candidatePaths(arguments: [String], environment: [String: String]) -> [URL] {
-    for arg in arguments.dropFirst() {
-      if arg.hasPrefix("--config=") {
-        let p = String(arg.dropFirst("--config=".count))
-        if !p.isEmpty {
-          return [URL(fileURLWithPath: (p as NSString).expandingTildeInPath)]
-        }
-      }
-    }
+  static func candidatePaths(environment: [String: String]) -> [URL] {
     if let p = environment["FLASH_CONFIG"], !p.isEmpty {
       return [URL(fileURLWithPath: (p as NSString).expandingTildeInPath)]
     }
@@ -30,8 +22,8 @@ enum ConfigLoader {
     return out
   }
 
-  static func resolvePath(arguments: [String], environment: [String: String]) -> URL {
-    let candidates = candidatePaths(arguments: arguments, environment: environment)
+  static func resolvePath(environment: [String: String]) -> URL {
+    let candidates = candidatePaths(environment: environment)
     let fm = FileManager.default
     if let existing = candidates.first(where: { fm.fileExists(atPath: $0.path) }) {
       return existing
@@ -62,24 +54,22 @@ enum ConfigLoader {
 
   /// Production entry point. Layers, in override order (low → high):
   /// the default config embedded in the app bundle, then the user's TOML
-  /// file, then environment-variable overrides and command-line overrides.
-  /// **Precedence (high → low): CLI flag > env var > user TOML > embedded
+  /// file, then environment-variable overrides.
+  /// **Precedence (high → low): env var > user TOML > embedded
   /// default TOML > built-in Swift default.** Parsing the embedded default
   /// on every launch also revalidates it: any diagnostic it produces is a
   /// Flash bug, and is logged with the file's name.
   static func load() -> Config {
-    let args = CommandLine.arguments
     let env = ProcessInfo.processInfo.environment
     var layers: [Layer] = []
     if let defaults = embeddedDefaultLayer() { layers.append(defaults) }
-    let url = resolvePath(arguments: args, environment: env)
+    let url = resolvePath(environment: env)
     if let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     {
       layers.append(Layer(text: text, sourceURL: url.resolvingSymlinksInPath()))
     }
-    let parsed = parseLayers(layers, environment: env)
-    return applyOverrides(to: parsed, arguments: args, environment: env)
+    return parseLayers(layers, environment: env)
   }
 
   /// The default config bundled into the app (`Resources/config.default.toml`
@@ -120,7 +110,7 @@ enum ConfigLoader {
     var config = Config()
     var pendingModeMappings: [PendingModeMapping] = []
 
-    for layer in layers {
+    for layer in layers + environmentLayers(environment) {
       let diagnosticsBefore = config.diagnostics.count
       let locations = ConfigSourceLocationIndex(text: layer.text)
       do {
@@ -974,9 +964,9 @@ enum ConfigLoader {
       invalid("command must be a nonempty array of strings")
       return nil
     }
-    let command = values.compactMap(\.string).map {
-      $0.hasPrefix("$") ? $0 : resolveCommandArgument($0, sourceURL: sourceURL)
-    }
+    let command =
+      [head.hasPrefix("$") ? head : resolveCommandArgument(head, sourceURL: sourceURL)]
+      + values.dropFirst().compactMap(\.string)
     guard command.allSatisfy({ !$0.utf8.contains(0) }) else {
       invalid("command must not contain NUL bytes")
       return nil
@@ -1991,8 +1981,7 @@ enum ConfigLoader {
     if mappingCommandHeadNamesFlash(head) || mappingCommandHeadNamesFlash(resolvedHead) {
       return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
     }
-    let resolved = argv.map { resolveCommandArgument($0, sourceURL: sourceURL) }
-    return parseMappingCommand(argv: resolved)
+    return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
   }
 
   private static func resolveCommandArgument(_ value: String, sourceURL: URL?) -> String {

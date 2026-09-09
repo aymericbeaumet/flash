@@ -150,19 +150,11 @@ final class AppMonitor {
   /// background-work budget. AX/queued/maintenance warming stays paused for
   /// them until another explicit focus/config refresh measures a cheap tree.
   var slowAutomaticModelRefreshPIDs: Set<pid_t> = []
-  /// Coalesced model refresh scheduling. The previous implementation
-  /// allocated a fresh `DispatchWorkItem` for every observed AX event
-  /// and cancelled the previous one. Under scroll storms
-  /// (`kAXValueChangedNotification` fires per frame) this churned
-  /// 60+ allocations per second on main. The new approach keeps one
-  /// dispatch in flight per pid; new events extend the deadline and
-  /// the in-flight closure re-arms itself if the burst is still
-  /// active when it wakes.
-  var modelRefreshArmed: Set<pid_t> = []
-  var modelRefreshDeadline: [pid_t: DispatchTime] = [:]
-  var modelRefreshReason: [pid_t: String] = [:]
-  var maintenanceRefresh: [pid_t: DispatchWorkItem] = [:]
-  var lastBackgroundModelRefreshAt: [pid_t: DispatchTime] = [:]
+  var modelScheduler = PreparedModelScheduler(
+    debounceMs: modelDebounceMs,
+    minimumIntervalMs: backgroundModelMinIntervalMs,
+    freshnessMs: modelFreshnessMs,
+    maintenanceLeadMs: modelMaintenanceLeadMs)
   /// Only the latest activation waiter matters — earlier waiters are
   /// stale activations whose generation has already moved on. A scalar
   /// per pid replaces the previous unbounded array; if a second

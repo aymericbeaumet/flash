@@ -89,8 +89,14 @@ final class AXBroker {
       ?? Self.defaultFollow
     let collect = params["collect"] as? [String] ?? []
     let pruneRoles = Set(params["prune_roles"] as? [String] ?? [])
-    let maxNodes = params["max_nodes"] as? Int ?? 3_000
-    let geometry = params["geometry"] as? Bool ?? false
+    guard params["max_nodes"] == nil || PluginJSON.integer(params["max_nodes"]) != nil,
+      params["geometry"] == nil || PluginJSON.boolean(params["geometry"]) != nil
+    else {
+      reply(["ok": false, "error": "invalid snapshot scalar params"])
+      return
+    }
+    let maxNodes = PluginJSON.integer(params["max_nodes"]) ?? 3_000
+    let geometry = PluginJSON.boolean(params["geometry"]) ?? false
 
     queue.async { [weak self] in
       guard let self else {
@@ -178,7 +184,7 @@ final class AXBroker {
         return
       }
       let cfValue: CFTypeRef
-      if let flag = value as? Bool {
+      if let flag = PluginJSON.boolean(value) {
         cfValue = flag ? kCFBooleanTrue : kCFBooleanFalse
       } else if let text = value as? String {
         cfValue = text as CFString
@@ -403,16 +409,12 @@ final class AXBroker {
   }
 
   private func uint64Param(_ value: Any?) -> UInt64? {
-    if let number = value as? NSNumber { return number.uint64Value }
-    if let value = value as? Int, value >= 0 { return UInt64(value) }
-    if let value = value as? UInt64 { return value }
-    return nil
+    guard let number = PluginJSON.integer(value), number >= 0 else { return nil }
+    return UInt64(exactly: number)
   }
 
   private func pidParam(_ params: [String: Any], key: String) -> pid_t? {
-    if let number = params[key] as? NSNumber { return pid_t(number.int32Value) }
-    if let value = params[key] as? Int { return pid_t(value) }
-    return nil
+    PluginJSON.pid(params[key])
   }
 
 }

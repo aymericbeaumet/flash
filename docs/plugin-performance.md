@@ -43,10 +43,15 @@ Use these regression budgets when changing the runtime or an official plugin:
 | idle ping round trip, p95 | 5 ms |
 | synchronous query evaluator round trip | 50 ms protocol deadline |
 | catalog decode/store | warn at 50 ms |
-| queued outbound transport | 256 frames / 20 MiB |
+| host queued outbound transport | 256 frames / 20 MiB |
+| host queued raw input / decoded frames | 256 entries / 20 MiB each |
+| host outstanding requests / host RPCs | 64 / 64 |
+| plugin outbound transport | 64 frames / 16 MiB |
 | full installed steady-state footprint | 130 MiB physical |
 
-These are regression tripwires, not protocol promises. Hardware, signing,
+The transport and outstanding-call limits are enforced admission caps, mirrored
+in the shared protocol specification. The timing and footprint budgets are
+regression tripwires. Hardware, signing,
 seatbelt compilation, TCC state, and debug versus release builds all affect
 absolute startup numbers.
 
@@ -75,11 +80,20 @@ least 50 ms.
 
 ## Hot-path rules
 
-- Plugin stdout decoding and stdin writes stay off the lifecycle queue.
-  Writes are FIFO and bounded; a stalled child is restarted instead of
-  freezing every lifecycle operation.
-- The shared SDK uses one current-thread Tokio executor per child. Events keep
-  wire order and interval callbacks do not overlap themselves; startup and
+- Plugin stdout framing, JSON parsing, catalog publication decoding, and stdin
+  writes stay off the lifecycle queue. Input and output queues are bounded;
+  a stalled or flooding child is restarted instead of
+  freezing every lifecycle operation. Deadlines include time spent awaiting
+  queue admission, and teardown invalidates work from the old child generation.
+  Stderr drains on its pipe callback without scheduling lifecycle work.
+- Third-party installation drains stdout/stderr concurrently on its own job
+  queue; output retention is capped at 4 MiB / 256 KiB. Stop/reload never waits
+  on an install script, and its process group receives bounded TERM/KILL
+  escalation even when a descendant keeps an output pipe open. Replacements
+  wait asynchronously for the preceding install to release the same root.
+- The shared SDK uses one current-thread Tokio executor per child. Accepted
+  events keep wire order, with pending application snapshots coalesced to the
+  newest state; interval callbacks do not overlap themselves. Startup and
   request callbacks may overlap and must coordinate shared refresh state.
   Async I/O and `spawn_blocking` retain concurrency without multiplying idle
   worker threads.

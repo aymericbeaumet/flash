@@ -1,0 +1,10 @@
+{
+  "contract": "protocol.json#protocol_version; fixtures/wire-values.fixture#protocol_version",
+  "issue": "Boolean and numeric JSON values must not be interchangeable at protocol boundaries",
+  "description": "A boolean true is not protocol version 1. Reject the handshake and exit cleanly.",
+  "steps": [
+    {"send":{"id":1,"method":"initialize","params":{"protocol_version":true}}},
+    {"expect":{"id":1,"result":{"ok":false,"protocol_version":1,"error":{"$type":"string","$min_len":1}}}},
+    {"expect_exit":{"code":0},"within_ms":3000}
+  ]
+}

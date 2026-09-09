@@ -163,7 +163,7 @@ final class StatusItemController: NSObject {
 
   @objc private func openConfiguration() {
     let url = ConfigLoader.resolvePath(
-      arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment)
+      environment: ProcessInfo.processInfo.environment)
     let fm = FileManager.default
     if !fm.fileExists(atPath: url.path) {
       // First open on a fresh machine: seed an empty file so the editor

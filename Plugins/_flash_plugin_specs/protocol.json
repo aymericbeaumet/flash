@@ -48,16 +48,35 @@
       "host.ax_select_child": "accessibility"
     }
   },
-  "perform_kinds": ["resolve", "command", "action", "navigate"],
+  "perform_kinds": [
+    "resolve",
+    "command",
+    "action",
+    "navigate"
+  ],
   "row": {
     "$comment": "Catalog row shape for publish and search. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
-    "required": ["source", "title"],
-    "optional": ["url", "metadata", "effect"]
+    "required": [
+      "source",
+      "title"
+    ],
+    "optional": [
+      "url",
+      "metadata",
+      "effect"
+    ]
   },
   "effects": {
     "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect — argv side effects belong in perform, inside the sandbox.",
-    "rows": ["copy_text", "insert_text", "open"],
-    "answers": ["copy_text", "insert_text"]
+    "rows": [
+      "copy_text",
+      "insert_text",
+      "open"
+    ],
+    "answers": [
+      "copy_text",
+      "insert_text"
+    ]
   },
   "quotas": {
     "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated.",
@@ -89,7 +108,9 @@
     "host_closed": "host closed stdin",
     "host_call_timeout": "host call timed out",
     "frame_overflow": "response exceeded outbound frame limit",
-    "capability_denied": "missing <capability> capability"
+    "capability_denied": "missing <capability> capability",
+    "request_capacity": "plugin request capacity exceeded",
+    "host_call_capacity": "host call capacity exceeded"
   },
   "capabilities": [
     "accessibility",
@@ -105,5 +126,21 @@
     "wifi_info"
   ],
   "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
-  "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline"
+  "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
+  "transport_limits": {
+    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of eight known state notifications in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
+    "plugin_requests": 16,
+    "plugin_request_bytes": 33554432,
+    "plugin_host_calls": 64,
+    "plugin_outbound_frames": 64,
+    "plugin_outbound_bytes": 16777216,
+    "plugin_event_frames": 256,
+    "plugin_event_bytes": 16777216,
+    "host_pending_requests": 64,
+    "host_host_rpcs": 64,
+    "host_outbound_frames": 256,
+    "host_outbound_bytes": 20971520,
+    "host_inbound_frames": 256,
+    "host_inbound_bytes": 20971520
+  }
 }

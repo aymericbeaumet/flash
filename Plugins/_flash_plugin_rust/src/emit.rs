@@ -1,18 +1,26 @@
 //! Outbound NDJSON emission: one shared bounded queue drained by a single
 //! stdout writer. Responses, plugin→host requests, and notifications all
-//! share it — ordering is submission order, and the only frame policy is the
-//! 10 MiB cap (an oversized response is substituted with the canonical
+//! share it — ordering is submission order, with frame and aggregate byte
+//! bounds (an oversized response is substituted with the canonical
 //! `response exceeded outbound frame limit` error under the same id).
 
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
 /// Wire frame cap, both directions (`quotas.frame_bytes` in protocol.json).
 pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
-pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 1024;
+pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 64;
+pub(crate) const OUTBOUND_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+
+pub(crate) struct OutboundFrame {
+    pub(crate) payload: Vec<u8>,
+    // The writer retains this reservation until the frame is flushed.
+    _bytes: OwnedSemaphorePermit,
+}
 
 /// Canonical substitution error for an outbound response above the frame cap.
 pub(crate) const FRAME_OVERFLOW_ERROR: &str = "response exceeded outbound frame limit";
@@ -23,6 +31,8 @@ pub(crate) enum EmitError {
     Rejected,
     /// The writer is gone (stdout closed or the emitter was shut down).
     Closed,
+    /// A synchronous control reply cannot wait on the reader's own transport.
+    Full,
 }
 
 /// Cloneable handle feeding the single stdout writer task. `close()` detaches
@@ -30,33 +40,67 @@ pub(crate) enum EmitError {
 /// interval tasks still hold [`Context`](crate::Context) clones.
 #[derive(Clone)]
 pub(crate) struct Emitter {
-    sender: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    sender: Arc<Mutex<Option<mpsc::Sender<OutboundFrame>>>>,
+    bytes: Arc<Semaphore>,
 }
 
 impl Emitter {
-    pub(crate) fn new(sender: mpsc::Sender<Vec<u8>>) -> Self {
+    pub(crate) fn new(sender: mpsc::Sender<OutboundFrame>) -> Self {
         Self {
             sender: Arc::new(Mutex::new(Some(sender))),
+            bytes: Arc::new(Semaphore::new(OUTBOUND_QUEUE_BYTES)),
         }
     }
 
-    fn encode(value: &Value) -> Option<Vec<u8>> {
-        let mut payload = serde_json::to_vec(value).ok()?;
-        if payload.len() > MAX_FRAME_BYTES {
-            return None;
-        }
+    fn encoded_len(value: &Value) -> Result<usize, EmitError> {
+        let mut count = FrameSize(0);
+        serde_json::to_writer(&mut count, value).map_err(|_| EmitError::Rejected)?;
+        Ok(count.0 + 1)
+    }
+
+    fn encode(value: &Value, bytes: OwnedSemaphorePermit, length: usize) -> OutboundFrame {
+        let mut payload = Vec::with_capacity(length);
+        // Counting already proved this immutable JSON value serializable.
+        serde_json::to_writer(&mut payload, value).expect("counted JSON serialization");
         payload.push(b'\n');
-        Some(payload)
+        OutboundFrame {
+            payload,
+            _bytes: bytes,
+        }
     }
 
-    fn sender(&self) -> Option<mpsc::Sender<Vec<u8>>> {
+    fn sender(&self) -> Option<mpsc::Sender<OutboundFrame>> {
         self.sender.lock().ok().and_then(|sender| sender.clone())
     }
 
     async fn send(&self, value: &Value) -> Result<(), EmitError> {
-        let payload = Self::encode(value).ok_or(EmitError::Rejected)?;
+        let length = Self::encoded_len(value)?;
         let sender = self.sender().ok_or(EmitError::Closed)?;
-        sender.send(payload).await.map_err(|_| EmitError::Closed)
+        let slot = sender.reserve().await.map_err(|_| EmitError::Closed)?;
+        let bytes = self
+            .bytes
+            .clone()
+            .acquire_many_owned(length as u32)
+            .await
+            .map_err(|_| EmitError::Closed)?;
+        slot.send(Self::encode(value, bytes, length));
+        Ok(())
+    }
+
+    fn try_send(&self, value: &Value) -> Result<(), EmitError> {
+        let length = Self::encoded_len(value)?;
+        let sender = self.sender().ok_or(EmitError::Closed)?;
+        let slot = sender.try_reserve().map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => EmitError::Full,
+            mpsc::error::TrySendError::Closed(_) => EmitError::Closed,
+        })?;
+        let bytes = self
+            .bytes
+            .clone()
+            .try_acquire_many_owned(length as u32)
+            .map_err(|_| EmitError::Full)?;
+        slot.send(Self::encode(value, bytes, length));
+        Ok(())
     }
 
     /// Emit a notification without blocking. Used for `publish`/`status`/`log`
@@ -65,15 +109,14 @@ impl Emitter {
     /// last-resort channel precisely because the frame itself cannot go out).
     pub(crate) fn notify(&self, method: &str, params: Value) {
         let value = json!({ "method": method, "params": params });
-        let Some(payload) = Self::encode(&value) else {
-            eprintln!("[plugin] dropped oversized outbound {method} notification");
-            return;
-        };
-        let Some(sender) = self.sender() else {
-            return;
-        };
-        if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(payload) {
-            eprintln!("[plugin] outbound queue full; dropped {method} notification");
+        match self.try_send(&value) {
+            Err(EmitError::Rejected) => {
+                eprintln!("[plugin] dropped oversized outbound {method} notification")
+            }
+            Err(EmitError::Full) => {
+                eprintln!("[plugin] outbound queue full; dropped {method} notification")
+            }
+            _ => {}
         }
     }
 
@@ -106,6 +149,19 @@ impl Emitter {
         }
     }
 
+    /// Reader-side lifecycle/error replies never suspend reading. On a full
+    /// writer queue the runtime closes the transport; silently losing a reply
+    /// or waiting here could deadlock a handler's pending host RPC.
+    pub(crate) fn try_respond(&self, id: Value, result: Value) -> Result<(), EmitError> {
+        let response = json!({ "id": id.clone(), "result": result });
+        match self.try_send(&response) {
+            Err(EmitError::Rejected) => self.try_send(&json!({
+                "id": id, "result": { "ok": false, "error": FRAME_OVERFLOW_ERROR }
+            })),
+            result => result,
+        }
+    }
+
     pub(crate) fn log(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
         self.notify(
             "log",
@@ -116,9 +172,26 @@ impl Emitter {
     /// Detach the queue: buffered frames still drain, later emits become
     /// no-ops.
     pub(crate) fn close(&self) {
+        self.bytes.close();
         if let Ok(mut sender) = self.sender.lock() {
             sender.take();
         }
+    }
+}
+
+struct FrameSize(usize);
+
+impl Write for FrameSize {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        if self.0 > MAX_FRAME_BYTES {
+            return Err(io::Error::other("outbound frame limit"));
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -126,8 +199,8 @@ impl Emitter {
 mod tests {
     use super::*;
 
-    fn frame(payload: Vec<u8>) -> Value {
-        serde_json::from_slice(&payload).unwrap()
+    fn frame(frame: OutboundFrame) -> Value {
+        serde_json::from_slice(&frame.payload).unwrap()
     }
 
     #[tokio::test]
@@ -179,5 +252,17 @@ mod tests {
         emitter.notify("log", json!({ "n": 1 }));
         // Must return immediately instead of awaiting queue space.
         emitter.notify("log", json!({ "n": 2 }));
+    }
+
+    #[tokio::test]
+    async fn byte_budget_includes_the_frame_held_by_the_writer() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let emitter = Emitter::new(tx);
+        let value = json!({ "data": "x".repeat(9 * 1024 * 1024) });
+        emitter.try_send(&value).unwrap();
+        let writing = rx.recv().await.unwrap();
+        assert_eq!(emitter.try_send(&value), Err(EmitError::Full));
+        drop(writing);
+        emitter.try_send(&value).unwrap();
     }
 }

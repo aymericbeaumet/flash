@@ -15,6 +15,7 @@ plugin that forked a grandchild inheriting the pipes can never hang the run.
 import json
 import os
 import queue
+import select
 import signal
 import subprocess
 import tempfile
@@ -27,10 +28,14 @@ ENV_ALLOWLIST = [
 ]
 
 STDERR_CAP = 256 * 1024
+FRAME_CAP = 10 * 1024 * 1024
+INTAKE_FRAME_CAP = 8192
+INTAKE_BYTE_CAP = 64 * 1024 * 1024
+QUEUED_FRAME_CAP = 256
 
 
 def frame_bytes(obj):
-    return json.dumps(obj, separators=(",", ":")).encode("utf-8") + b"\n"
+    return json.dumps(obj, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
 def build_environment(_plugins_dir, plugin_id, data_dir, config_json, parent_pid, spec):
@@ -69,30 +74,81 @@ class SpecProcess:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        self.frames = queue.Queue()
+        os.set_blocking(self.child.stdin.fileno(), False)
+        self.frames = queue.Queue(maxsize=QUEUED_FRAME_CAP)
         self._stderr_lock = threading.Lock()
         self._stderr = b""
         self.stderr_truncated = False
         self.undecodable_lines = 0
-        threading.Thread(target=self._drain_stdout, daemon=True).start()
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self.intake_error = None
+        self.intake_frames = 0
+        self.intake_bytes = 0
+        self.stdout_done = threading.Event()
+        self._stdout_thread = threading.Thread(target=self._drain_stdout, daemon=True)
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stdout_thread.start()
+        self._stderr_thread.start()
+
+    def _reject_output(self, message):
+        if self.intake_error is None:
+            self.intake_error = message
 
     def _drain_stdout(self):
-        buf = b""
+        buf = bytearray()
+        dropping = False
         stream = self.child.stdout
-        while True:
-            chunk = stream.read1(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                if not line.strip():
-                    continue
-                try:
-                    self.frames.put(json.loads(line))
-                except ValueError:
-                    self.undecodable_lines += 1
+        try:
+            while True:
+                chunk = stream.read1(1 << 16)
+                if not chunk:
+                    if buf or dropping:
+                        self._reject_output("stdout ended with an unterminated frame")
+                    return
+                start = 0
+                while start < len(chunk):
+                    newline = chunk.find(b"\n", start)
+                    end = len(chunk) if newline < 0 else newline
+                    if not dropping:
+                        if end - start > FRAME_CAP - len(buf):
+                            buf.clear()
+                            dropping = True
+                            self._reject_output("stdout frame exceeded byte limit")
+                        else:
+                            buf.extend(chunk[start:end])
+                    start = end + 1
+                    if newline < 0:
+                        continue
+                    if dropping:
+                        dropping = False
+                        continue
+                    if buf.strip():
+                        self._accept_line(buf)
+                    buf.clear()
+        except OSError as error:
+            self._reject_output(f"stdout read failed: {error}")
+        finally:
+            self.stdout_done.set()
+
+    def _accept_line(self, line):
+        self.intake_frames += 1
+        self.intake_bytes += len(line)
+        if self.intake_frames > INTAKE_FRAME_CAP or self.intake_bytes > INTAKE_BYTE_CAP:
+            self._reject_output("stdout exceeded total frame intake budget")
+            return
+        if self.intake_error is not None:
+            return
+        def reject_constant(value):
+            raise ValueError(f"invalid JSON constant {value}")
+        try:
+            frame = json.loads(line, parse_constant=reject_constant)
+            if not isinstance(frame, dict):
+                raise ValueError("frame must be an object")
+            self.frames.put_nowait(frame)
+        except queue.Full:
+            self._reject_output("stdout frame queue exceeded capacity")
+        except (ValueError, UnicodeError, RecursionError):
+            self.undecodable_lines += 1
+            self._reject_output("stdout contained an invalid JSON object")
 
     def _drain_stderr(self):
         stream = self.child.stderr
@@ -101,18 +157,29 @@ class SpecProcess:
             if not chunk:
                 break
             with self._stderr_lock:
-                if len(self._stderr) < STDERR_CAP:
-                    self._stderr += chunk[: STDERR_CAP - len(self._stderr)]
-                else:
+                remaining = STDERR_CAP - len(self._stderr)
+                self._stderr += chunk[:remaining]
+                if len(chunk) > remaining:
                     self.stderr_truncated = True
 
     def stderr_text(self):
         with self._stderr_lock:
             return self._stderr.decode("utf-8", "replace")
 
-    def write(self, data):
-        self.child.stdin.write(data)
-        self.child.stdin.flush()
+    def write(self, data, deadline=None):
+        deadline = deadline if deadline is not None else time.monotonic() + 5
+        descriptor = self.child.stdin.fileno()
+        remaining = memoryview(data)
+        while remaining:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("plugin stdin write timed out")
+            if self.intake_error is not None:
+                raise OSError(self.intake_error)
+            try:
+                count = os.write(descriptor, remaining)
+                remaining = remaining[count:]
+            except BlockingIOError:
+                select.select([], [descriptor], [], min(0.05, max(0, deadline - time.monotonic())))
 
     def close_stdin(self):
         try:
@@ -147,6 +214,18 @@ class SpecProcess:
                 except (OSError, ProcessLookupError):
                     pass
                 self.wait_exit(time.monotonic() + 1.0)
+        # A reaped leader may leave descendants holding stdout/stderr open.
+        # This session belongs to the runner, including those descendants.
+        try:
+            os.killpg(self.child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self._stdout_thread.join(timeout=1)
+        self._stderr_thread.join(timeout=1)
+        if not self._stdout_thread.is_alive():
+            self.child.stdout.close()
+        if not self._stderr_thread.is_alive():
+            self.child.stderr.close()
         if self.parent is not None:
             try:
                 self.parent.kill()

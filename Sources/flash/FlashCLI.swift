@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 // CLI half of the `flash` binary. When the executable is launched with any
-// extra argv (`flash mouse_target`, `flash app_open name=Firefox`, …), main
+// extra argv (`flash mouse_target`, `flash app_open --name=Firefox`, …), main
 // dispatches here instead of starting `NSApplication`. We then encode the
 // verb + key=value args into a custom AppleEvent and send it to the running
 // resident. The legacy `flash://` URL scheme is gone — this is the only
@@ -42,7 +42,7 @@ enum FlashCLI {
 
   static let usage = """
     Usage:
-      flash <verb> [key=value ...]
+      flash <verb> [--name=value | --flag ...]
 
     Examples:
       flash mouse_target
@@ -68,31 +68,18 @@ enum FlashCLI {
     }
     let verb = first
     let argEntries = Array(args.dropFirst())
-    let argDict = parseLongFlagArgs(rest: argEntries)
-    return sendVerb(verb, args: argDict)
-  }
-
-  /// Parse `--name=value` / `--flag` argv into a flat dictionary. Standard
-  /// long-flag shell convention — see `parseVerbArgs` in `Shortcut.swift`
-  /// for the matching config-side parser. Anything that doesn't start with
-  /// `--` is silently dropped so the user notices their mistake at the
-  /// verb dispatcher (missing required arg) instead of having a bad token
-  /// quietly land somewhere.
-  private static func parseLongFlagArgs(rest: [String]) -> [String: String] {
-    var out: [String: String] = [:]
-    for entry in rest {
-      guard entry.hasPrefix("--") else { continue }
-      let body = String(entry.dropFirst(2))
-      guard !body.isEmpty else { continue }
-      if let eq = body.firstIndex(of: "=") {
-        let key = String(body[..<eq]).replacingOccurrences(of: "-", with: "_")
-        let value = String(body[body.index(after: eq)...])
-        out[key] = value
-      } else {
-        out[body.replacingOccurrences(of: "-", with: "_")] = "1"
+    do {
+      let argDict = try CommandArguments.parse(argEntries)
+      guard URLEventHandler.parseOrPluginVerb(verb: verb, args: argDict) != nil else {
+        FileHandle.standardError.write(
+          Data("flash: invalid command or arguments for '\(verb)'\n".utf8))
+        return 2
       }
+      return sendVerb(verb, args: argDict)
+    } catch {
+      FileHandle.standardError.write(Data("flash: \(error)\n".utf8))
+      return 2
     }
-    return out
   }
 
   private static func sendVerb(_ verb: String, args: [String: String]) -> Int32 {

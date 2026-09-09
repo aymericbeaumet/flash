@@ -44,6 +44,8 @@ def validate(spec, origin):
         raise SpecError(f"{origin}: unknown top-level key(s) {sorted(unknown)}")
     if "contract" not in spec or not isinstance(spec["contract"], str) or not spec["contract"]:
         raise SpecError(f"{origin}: 'contract' (the pinned contract clause) is required")
+    if "timeout_ms" in spec and (type(spec["timeout_ms"]) is not int or spec["timeout_ms"] <= 0):
+        raise SpecError(f"{origin}: timeout_ms must be a positive integer")
     requires = spec.get("requires", [])
     if not isinstance(requires, list):
         raise SpecError(f"{origin}: 'requires' must be an array of predicates")
@@ -100,7 +102,10 @@ def _validate_step(step, origin):
     if kind == "expect_stderr":
         if not isinstance(body, dict) or not ({"contains", "absent"} & set(body)):
             raise SpecError(f"{origin}: expect_stderr needs 'contains' or 'absent'")
-    if kind == "sleep_ms" and not isinstance(body, int):
+    if kind == "sleep_ms" and (type(body) is not int or body < 0):
         raise SpecError(f"{origin}: sleep_ms takes milliseconds")
+    for key in ("within_ms", "not_before_ms", "for_ms"):
+        if key in step and (type(step[key]) is not int or step[key] < 0):
+            raise SpecError(f"{origin}: {key} must be nonnegative integer milliseconds")
     if kind == "send_batch" and (not isinstance(body, list) or not body):
         raise SpecError(f"{origin}: send_batch takes a non-empty frame array")

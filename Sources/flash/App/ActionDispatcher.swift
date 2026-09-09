@@ -21,6 +21,13 @@ enum ActionDispatcher {
   /// interleave their cursor warp/restore.
   private static let clickQueue = DispatchQueue(label: "flash.action.click", qos: .userInitiated)
 
+  /// Termination must allow an already-posted mouse-down to reach its mouse-up.
+  /// This barrier is shutdown-only; ordinary input never waits on the main thread.
+  static func waitForPendingMouseEvents() {
+    dispatchPrecondition(condition: .notOnQueue(clickQueue))
+    clickQueue.sync {}
+  }
+
   /// Height of the primary screen (the one whose origin is (0,0)), used for the
   /// AX(top-left) → NSScreen(bottom-left) Y-flip. `NSScreen` is main-affine, so
   /// callers must invoke this on the main thread.

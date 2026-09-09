@@ -121,7 +121,7 @@ enum PluginConfigValue: Equatable {
 }
 
 struct Config {
-  struct App {
+  struct App: Equatable {
     /// macOS menu-bar icon (see `StatusItemController.swift`, the single
     /// sanctioned status item) carrying About / Open Configuration / Quit.
     /// `[app] menu_bar_icon = false` hides it — Flash stays fully
@@ -131,7 +131,7 @@ struct Config {
     /// launch and config reload. `[app] autostart = false` unregisters.
     var autostart: Bool = true
   }
-  struct Hints {
+  struct Hints: Equatable {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
@@ -144,7 +144,7 @@ struct Config {
     /// stays clearly visible through the precision grid.
     var mouseGridOpacity: Double = 0.5
   }
-  struct Overlay {
+  struct Overlay: Equatable {
     var fontSize: Double = 12
     var hintFG: String = "#302505"
     /// Top stop of the chip's vertical gradient. Set this equal to
@@ -182,7 +182,7 @@ struct Config {
     var bannerDurationMs: Int = 700
   }
   /// Tunables for the `:flashlight` command-line surface.
-  struct Flashlight {
+  struct Flashlight: Equatable {
     /// Number of command-bar suggestions shown for `:flashlight`,
     /// `:emojis`, source filters, bangs, and command completions.
     var suggestionCount: Int = 10
@@ -236,7 +236,7 @@ struct Config {
     /// locations an effective rank of 60 vs. inactive 50.
     var precedenceAliveBonus: Int = 10
   }
-  struct Debug {
+  struct Debug: Equatable {
     /// When true, every detected target is outlined alongside its hint chip.
     /// Useful for diagnosing missing or misplaced hints — you can see exactly
     /// which AX rect Flash decided to use.
@@ -266,7 +266,7 @@ struct Config {
     /// TCP port the inspector listens on.
     var httpInspectorPort: Int = 4242
   }
-  struct Open {
+  struct Open: Equatable {
     var ignoredApps: [String] = []
     /// Directories scanned (recursively) and watched for `.app` bundles —
     /// the flashlight's installed-app catalog and the `app_open` verb's
@@ -284,7 +284,7 @@ struct Config {
       "~/Applications",
     ]
   }
-  struct Plugins {
+  struct Plugins: Equatable {
     /// Third-party plugins explicitly requested by the user. Official
     /// bundled plugins are discovered from the app bundle, not this list.
     var thirdParty: [PluginReference] = []
@@ -317,7 +317,7 @@ struct Config {
     var persistent: Bool = false
   }
 
-  struct StatusBar {
+  struct StatusBar: Equatable {
     struct PopupStyle: Equatable {
       /// Default text colour for popup content. Inline `#[fg=…]` markers
       /// override it exactly as they do in the status bar.
@@ -403,7 +403,7 @@ struct Config {
           source: .sdk(.date)),
       ], options: Self.defaultOptions)
   }
-  struct Mode {
+  struct Mode: Equatable {
     struct Labels: Equatable {
       var normal: String = "NORMAL"
       var insert: String = "INSERT"
@@ -553,7 +553,6 @@ struct Config {
         ("g8", .flashCommand(.tabSelect(index: 8))),
         ("g9", .flashCommand(.tabSelect(index: 9))),
         // Vimium `gi` — focus the first text input and enter INSERT.
-        ("gi", .flashCommand(.focusInput)),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
         ("gt", .flashCommand(.tabNext)),
@@ -751,7 +750,7 @@ struct Config {
   /// can't drift.
   var warnings: [String] { diagnostics.map(\.message) }
   var valueLocations: [String: ConfigLocation] = [:]
-  /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env/CLI
+  /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env
   /// precedence has settled. Activation should use this stored value
   /// instead of re-parsing layout selectors.
   private(set) var resolvedAlphabet: Alphabet.Resolved = Alphabet.resolve(Alphabet.defaultKeys)
@@ -782,19 +781,20 @@ struct Config {
   mutating func prepareDerivedValues() {
     mode.refreshLeaderDerivedDefaults()
     resolvedAlphabet = Alphabet.resolve(hints.keys)
-    removeAmbiguousShiftMagicModifier()
+    diagnoseAmbiguousShiftMagicModifier()
     mode.recompileMappings()
   }
 
-  private mutating func removeAmbiguousShiftMagicModifier() {
+  var effectiveMagicModifiers: [String] {
     guard resolvedAlphabet.chars.contains(where: { !$0.isLetter }) else {
-      removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
-      return
+      return hints.magicModifiers
     }
-    let original = hints.magicModifiers
-    hints.magicModifiers.removeAll { $0.lowercased() == "shift" }
-    guard original.count != hints.magicModifiers.count else { return }
+    return hints.magicModifiers.filter { $0.lowercased() != "shift" }
+  }
+
+  private mutating func diagnoseAmbiguousShiftMagicModifier() {
     removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
+    guard effectiveMagicModifiers.count != hints.magicModifiers.count else { return }
     addDiagnostic(
       "hints.magic_modifiers includes \"shift\", but resolved hints.keys "
         + "contains non-letter characters (\(String(resolvedAlphabet.chars))); "
@@ -846,7 +846,7 @@ struct Config {
       ],
       "hints": [
         "keys": hints.keys,
-        "magic_modifiers": hints.magicModifiers,
+        "magic_modifiers": effectiveMagicModifiers,
         "min_length": hints.minLength,
         "mouse_grid_opacity": hints.mouseGridOpacity,
         "mouse_grid_steps": hints.mouseGridSteps,

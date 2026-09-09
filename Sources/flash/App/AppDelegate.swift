@@ -32,14 +32,6 @@ enum InsertModeTransitionReason: Equatable {
   }
 }
 
-struct ModeOverlaySnapshot: Equatable {
-  var text: String
-  var visible: Bool
-  var captureInput: Bool
-  var inputMode: OverlayInputMode
-  var refreshActiveWindowBorder: Bool
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   enum HintCommitBehavior {
     case click
@@ -115,7 +107,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Bumped on every keystroke. The scoring queue captures it at
   /// submission time and discards any late DB walk that returns after
   /// the user has typed past the query.
-  var candidateFinderIndexGenerationCounter: UInt64 = 0
   var registry: SourceRegistry!
   var monitor: AppMonitor!
   var debugServer: DebugServer?
@@ -138,31 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var lastConfigErrorAlertMessage: String?
   var configErrorAlertVisible = false
 
-  /// The transient hint / mouse-grid session content. Reset in one move
-  /// (`clearHintSessionState`), so a new session field can't leak by being
-  /// forgotten in a hand-maintained reset list. The named accessors below
-  /// forward to it so existing call sites keep their field names.
+  /// Owns transient hint content and any primary button held by pointer mode.
   var hintSession = HintSession()
-  var currentHints: [AssignedHint] {
-    get { hintSession.hints }
-    set { hintSession.hints = newValue }
-  }
-  var currentPrefix: String {
-    get { hintSession.prefix }
-    set { hintSession.prefix = newValue }
-  }
-  /// The pointer action a committed hint performs. NOT part of `hintSession`:
-  /// the mouse-grid commit reads it *after* the session reset, so it must
-  /// outlive `clearHintSessionState()`.
-  var pendingAction: JumpAction = .leftClick
-  var pendingHintCommitBehavior: HintCommitBehavior {
-    get { hintSession.commitBehavior }
-    set { hintSession.commitBehavior = newValue }
-  }
-  var pendingClickModifiers: ClickModifiers {
-    get { hintSession.presetClickModifiers }
-    set { hintSession.presetClickModifiers = newValue }
-  }
   /// The single source of truth for the app's mode. Every UI-facing fact
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
   /// projection of `modeStore.mode`; transitions go through `dispatchMode`.
@@ -173,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// mode is `.disabled`, i.e. the user has an all-mode `leave_mode` or `enter_normal_mode` binding.
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
-  var modeBadgeEnabled: Bool { modeStore.mode != .disabled }
+  var modeBadgeEnabled: Bool { modeStore.mode.advancedEnabled }
   /// Whether the persistent top status bar is shown. Mirrors
   /// `config.statusBar.enabled` and is the sole condition for the bar — set
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
@@ -182,132 +150,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
   let registers = RegisterStore()
-  var candidateFinderCandidates: [Candidate] = [] {
-    didSet {
-      // Each flashlight session freezes one source snapshot. Bump the
-      // epoch only when that snapshot's observable candidate identity
-      // changes; selection movement and repeated renders should keep the
-      // filter and incremental scoring caches intact.
-      if Self.candidatePoolsCarrySameSourceIDs(oldValue, candidateFinderCandidates) {
-        return
-      }
-      candidateFinderCandidatesEpoch &+= 1
-      candidateFinderFilteredPoolCache = nil
-      candidateFinderIncrementalCache = nil
-    }
-  }
-
-  /// Fast pool-equality probe for candidate-finder cache invalidation. It
-  /// checks stable scalar identity only, avoiding attributed-display work while
-  /// still noticing same-source tab/window rows whose titles or URLs changed.
-  static func candidatePoolsCarrySameSourceIDs(
-    _ lhs: [Candidate],
-    _ rhs: [Candidate]
-  ) -> Bool {
-    guard lhs.count == rhs.count else { return false }
-    for index in lhs.indices {
-      let left = lhs[index]
-      let right = rhs[index]
-      if left.sourceID != right.sourceID
-        || left.source != right.source
-        || left.title != right.title
-        || left.url?.absoluteString != right.url?.absoluteString
-        || left.sourcePayload != right.sourcePayload
-      {
-        return false
-      }
-    }
-    return true
-  }
-  /// Monotonic counter bumped on every `candidateFinderCandidates`
-  /// reassignment so the filtered-pool cache can detect a stale base
-  /// without comparing 2k-entry arrays element-wise per keystroke.
-  var candidateFinderCandidatesEpoch: UInt64 = 0
-  /// One-slot cache for the per-keystroke pool filter. While the user
-  /// types into flashlight the base pool and selectors stay constant — so
-  /// re-filtering 2k+ candidates on every keystroke is pure waste. The
-  /// cache is invalidated whenever the underlying array or the filter
-  /// signature differs from the prior key.
-  var candidateFinderFilteredPoolCache: (epoch: UInt64, signature: String, pool: [Candidate])?
-  /// Frozen alongside `candidateFinderCandidates` when a flashlight session
-  /// opens. Source descriptors come from plugin manifests/native sources, so
-  /// do that lookup once per session instead of rebuilding the table on every
-  /// keystroke.
-  var candidateFinderPrecedenceTable: CandidateFinder.PrecedenceTable = .default
-  /// Session-local candidate normalization is CPU-only but can take tens of
-  /// milliseconds for installed apps or the full emoji catalog. Keep that work
-  /// off AppKit's main thread; generation checks still publish only the active
-  /// session's immutable prepared arrays.
-  let candidateFinderPreparationQueue = DispatchQueue(
-    label: "com.flash.candidate-preparation",
-    qos: .userInitiated,
-    attributes: .concurrent)
-  /// Incremental-narrowing cache for fuzzy scoring. When the next query
-  /// extends the previous one (`mo` → `mor` → `moria`), no candidate
-  /// that failed `mo` can pass `mor`, so we only need to re-score the
-  /// previous match set. Each keystroke narrows the candidate space and
-  /// the scoring path gets faster as the user types. Invalidated when
-  /// the pool epoch or attribute-filter signature change, since either
-  /// shifts the candidate base.
-  var candidateFinderIncrementalCache:
-    (normalizedQuery: String, matches: [CandidateMatch], epoch: UInt64, signature: String)?
-  var candidateFinderMatches: [CandidateMatch] = []
-  var candidateFinderSelectedIndex = 0
-  /// Ephemeral answer rows returned by query evaluators for the exact current
-  /// input. They are deliberately separate from the frozen catalog so they can
-  /// occupy a fixed lane above fuzzy matches without polluting later queries.
-  var candidateFinderQueryAnswers: [Candidate] = []
-  var candidateFinderQueryEvaluationText = ""
-  /// Dedup key for live-source pulls: `session\u{1F}filter\u{1F}text`. A
-  /// re-render at an unchanged scoped query never refires `search`.
-  var candidateFinderLiveQueryKey: String?
-  /// Independent from the flashlight-session generation: every bare query
-  /// supersedes the prior evaluator fan-out even within one open surface.
-  var candidateFinderQueryEvaluationGeneration: UInt64 = 0
-  /// The exact evaluator generation whose aggregate reply is still pending.
-  /// Return/Tab/Cmd-Return use this to defer selection until the answer lane is
-  /// final for the current input.
-  var candidateFinderQueryEvaluationInFlightGeneration: UInt64?
-  /// A reply may have arrived while its answer rows are still waiting for the
-  /// coalesced re-render. Keep submission gated until that render has actually
-  /// rebuilt `candidateFinderMatches`.
-  var candidateFinderQueryEvaluationSettledGeneration: UInt64?
+  let finder = CandidateFinderSession()
   /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
   /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
   /// then surfaced through `debugStateJSON`.
   var clipboardEntries: [ClipboardModalEntry] = []
-  var candidateFinderCurrentQuery = ""
-  var candidateFinderScope: CandidateScope = .all
-  /// Bumped every time a flashlight session is (re)seeded. Plugin replies and
-  /// the first-paint deadline capture this value so work from a closed or
-  /// superseded session cannot publish a stale snapshot.
-  var candidateFinderSessionGeneration: UInt64 = 0
-  /// Initial location rows are collected behind a session-local fan-in barrier.
-  /// The prompt renders while this exists, but the result list stays hidden
-  /// until the barrier publishes one frozen snapshot.
-  var candidateFinderInitialBarrier: CandidateSnapshotBarrier?
-  var candidateFinderInitialDeadlineWork: DispatchWorkItem?
-  /// Distinguishes a valid empty frozen snapshot from a session that has not
-  /// started gathering yet.
-  var candidateFinderInitialSnapshotReady = false
-  /// Return/Tab/Cmd-Return pressed during either the initial catalog gather or
-  /// the at-most-50-ms query evaluator fan-in is replayed against the exact
-  /// completed query generation.
-  var candidateFinderSubmissionDeferral = CandidateSubmissionDeferral()
-  /// Non-location plugin stores already pulled into this flashlight session.
-  /// Track providers individually so an explicit `@emojis.glyphs` query does
-  /// not deserialize every unrelated catalog, while a later `@notes.notes`
-  /// query can still fetch its own provider.
-  var candidateFinderFetchedNonLocationSourceIDs = Set<String>()
-  /// Prepared opt-in replies that finished while the deterministic initial
-  /// location snapshot was still being normalized. They are published with
-  /// that first snapshot instead of being overwritten or causing an extra
-  /// intermediate render.
-  var candidateFinderDeferredNonLocationSnapshots: [String: [Candidate]] = [:]
-  /// Non-location sources remain lazy and may reply in a burst after the user
-  /// explicitly selects one. Coalesce those opt-in updates within a runloop
-  /// turn; the initial location snapshot never uses this incremental path.
-  var candidateFinderMergeRerenderScheduled = false
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
@@ -330,34 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineHistoryCursor: Int?
   var commandLineHistoryStash: String = ""
   var selectedInitialMode = false
-  var sourceAppPID: pid_t? {
-    get { hintSession.sourceAppPID }
-    set { hintSession.sourceAppPID = newValue }
-  }
-  var mouseGridRegion: MouseGrid.Region? {
-    get { hintSession.mouseGridRegion }
-    set { hintSession.mouseGridRegion = newValue }
-  }
-  var mouseGridDepth: Int {
-    get { hintSession.mouseGridDepth }
-    set { hintSession.mouseGridDepth = newValue }
-  }
-  var dragSourcePoint: CGPoint? {
-    get { hintSession.dragSourcePoint }
-    set { hintSession.dragSourcePoint = newValue }
-  }
-  var mouseGridInitialRegion: MouseGrid.Region? {
-    get { hintSession.mouseGridInitialRegion }
-    set { hintSession.mouseGridInitialRegion = newValue }
-  }
-  var adjustingHint: AssignedHint? {
-    get { hintSession.adjustingHint }
-    set { hintSession.adjustingHint = newValue }
-  }
-  var adjustPoint: CGPoint? {
-    get { hintSession.adjustPoint }
-    set { hintSession.adjustPoint = newValue }
-  }
   /// The last click Flash committed (hints, grid, or multi session), replayed
   /// by `mouse_repeat`. Deliberately outside `hintSession`: it must survive
   /// the session reset so a repeat works after the overlay is gone.
@@ -421,37 +240,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderTrackedFrame: CGRect?
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
-  /// The activation generation-token machine (stale-walk rejection). The named
-  /// accessors below forward to it so existing call sites keep working; the
-  /// `begin`/`complete`/`supersede`/`invalidate` operations are the consolidated
-  /// home for what were scattered inline three-field mutations.
-  var activationLifecycle = ActivationLifecycle()
-  /// Set while an activation walk is in flight on the AX queue. New URL
-  /// events that arrive during this window are dropped, not queued. Same
-  /// guard rejects re-entry if hints are already on screen.
-  var activationInFlight: Bool {
-    get { activationLifecycle.inFlight }
-    set { activationLifecycle.inFlight = newValue }
-  }
-  /// Bumped on every `activate(action:)` *and* every `cancelOverlay()`.
-  /// The discovery completion captures the value at activation time and
-  /// only renders if it still matches when the walk finishes. This is what
-  /// prevents a stale walk from rendering hints over the wrong app after
-  /// the user dismisses or switches focus mid-flight.
-  var activationGen: UInt64 {
-    get { activationLifecycle.generation }
-    set { activationLifecycle.generation = newValue }
-  }
+  var activationLifecycle = ActivationLifecycle<HintActivationRequest>()
+  var activationInFlight: Bool { activationLifecycle.inFlight }
+  var activationGen: UInt64 { activationLifecycle.generation }
   /// AX trust is checked once per session — until we observe `true`, we
   /// re-query each time. Once granted, the value is sticky for the rest
   /// of the run. Saves one IPC per activation in the steady state.
   /// Reset to `false` if an activation walk returns zero targets, which
   /// is the symptom of permission revocation mid-session.
   var cachedAccessibilityTrusted: Bool = false
-  var activationInFlightGeneration: UInt64? {
-    get { activationLifecycle.inFlightGeneration }
-    set { activationLifecycle.inFlightGeneration = newValue }
-  }
   var lastPermissionPromptAt: Date?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -546,7 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.debugConfig = config.debug
     overlay.statusBarPopupStyle = config.statusBar.popupStyle
     overlay.modeLabels = config.mode.labels
-    overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
+    overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
     overlay.normalModePassthroughKeyCodes = config.mode.normalPassthroughKeyCodes
     overlay.normalModePassthroughModifiers = config.mode.normalPassthroughModifiers
@@ -609,7 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func handleURLCommand(_ cmd: URLCommand) {
     FlashLog.trace(
-      "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(currentHints.count) "
+      "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight) overlay=\(String(describing: overlay?.inputMode))")
     switch cmd {
     case .mouseTarget(let command):
@@ -939,7 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // updating the status-bar label left app-scoped plugin mappings stale,
       // so terminal chords such as tmux's `cmd+shift+[` leaked to Alacritty.
       self.reconcileFrontmostApplication(reason: "resign_key")
-      if !self.currentHints.isEmpty {
+      if !self.hintSession.hints.isEmpty {
         self.cancelOverlay()
         return
       }
@@ -965,7 +762,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshFocusDependentState(for: app)
     if flashMode == .normal {
       normalModeTargetPID = app.processIdentifier
-      suppressEditableFocus(for: app.processIdentifier)
     }
   }
 
@@ -991,7 +787,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     if flashMode == .normal {
       normalModeTargetPID = app.processIdentifier
-      suppressEditableFocus(for: app.processIdentifier)
     }
   }
 
@@ -1079,7 +874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     let aboutOwnsNativeKeyboard = Self.aboutWindowShouldOwnNativeKeyboard(
       visible: aboutWindowVisible,
-      hasTransientInput: !currentHints.isEmpty || hintSession.pointerModeActive,
+      hasTransientInput: hintSession.isActive,
       activationInFlight: activationInFlight)
     if aboutOwnsNativeKeyboard || nativeSurfaceSuspended {
       let flags = event.flags
@@ -1237,6 +1032,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
+    activationLifecycle.invalidate()
+    clearHintSessionState()
+    ActionDispatcher.waitForPendingMouseEvents()
     activeWindowBorderReconciliationGeneration &+= 1
     for token in workspaceTokens {
       NSWorkspace.shared.notificationCenter.removeObserver(token)

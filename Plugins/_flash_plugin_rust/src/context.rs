@@ -200,8 +200,15 @@ impl Context {
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.host_pending.lock() {
+            if pending.len() >= HOST_CALL_CAPACITY {
+                return json!({ "ok": false, "error": "host call capacity exceeded" });
+            }
             pending.insert(id, tx);
         }
+        let _pending_call = PendingCall {
+            pending: self.host_pending.clone(),
+            id,
+        };
         let outcome = tokio::time::timeout(timeout, async {
             self.emit.request(id, method, params).await?;
             rx.await.map_err(|_| crate::emit::EmitError::Closed)
@@ -219,7 +226,7 @@ impl Context {
             Ok(Err(crate::emit::EmitError::Rejected)) => {
                 json!({ "ok": false, "error": "host call exceeded outbound frame limit" })
             }
-            Ok(Err(crate::emit::EmitError::Closed)) => {
+            Ok(Err(crate::emit::EmitError::Closed | crate::emit::EmitError::Full)) => {
                 json!({ "ok": false, "error": HOST_CLOSED_ERROR })
             }
             Err(_) => {
@@ -535,6 +542,22 @@ impl Context {
             self.bin_dir(),
         ] {
             let _ = tokio::fs::create_dir_all(dir).await;
+        }
+    }
+}
+
+/// Aborting a request handler also releases its host correlation entry.
+struct PendingCall {
+    pending: HostPending,
+    id: u64,
+}
+
+pub(crate) const HOST_CALL_CAPACITY: usize = 64;
+
+impl Drop for PendingCall {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(&self.id);
         }
     }
 }
@@ -856,7 +879,10 @@ pub(crate) fn assemble_context(
 }
 
 #[cfg(test)]
-pub(crate) fn test_context_with_rx() -> (Context, tokio::sync::mpsc::Receiver<Vec<u8>>) {
+pub(crate) fn test_context_with_rx() -> (
+    Context,
+    tokio::sync::mpsc::Receiver<crate::emit::OutboundFrame>,
+) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     let ctx = assemble_context(
         "test".to_string(),
@@ -876,6 +902,33 @@ pub(crate) fn test_context() -> Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn host_call_admission_is_bounded_and_abort_releases_pending_entries() {
+        let (ctx, _rx) = test_context_with_rx();
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..HOST_CALL_CAPACITY {
+            let ctx = ctx.clone();
+            calls.spawn(async move {
+                ctx.call_host_timeout("host.ping", json!({}), Duration::from_secs(60))
+                    .await
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while ctx.host_pending.lock().unwrap().len() != HOST_CALL_CAPACITY {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            ctx.call_host("host.ping", json!({})).await["error"],
+            "host call capacity exceeded"
+        );
+        calls.abort_all();
+        while calls.join_next().await.is_some() {}
+        assert!(ctx.host_pending.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn running_applications_snapshot_is_clone_isolated() {
@@ -927,7 +980,7 @@ mod tests {
             let pending = ctx.host_pending.clone();
             let request = tokio::spawn(async move { ctx.wifi_ssid(request_authorization).await });
 
-            let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap()).unwrap();
+            let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap().payload).unwrap();
             assert_eq!(frame["method"], json!("host.wifi_info"));
             assert_eq!(
                 frame["params"],

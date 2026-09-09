@@ -1,0 +1,13 @@
+{
+  "contract": "protocol.json#encoding",
+  "issue": "The SDK dispatched complete JSON without its required newline when stdin closed",
+  "description": "EOF is a shutdown signal, not a record delimiter. A valid-looking partial ping must never be dispatched.",
+  "steps": [
+    {"send":{"id":1,"method":"initialize","params":{"protocol_version":1}}},
+    {"expect":{"id":1,"result":{"ok":true,"protocol_version":1}}},
+    {"send_raw":"{\"id\":2,\"method\":\"ping\",\"params\":{}}"},
+    {"close_stdin":true},
+    {"expect_none":{"id":2},"for_ms":100},
+    {"expect_exit":{"code":0},"within_ms":3000}
+  ]
+}

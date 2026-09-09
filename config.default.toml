@@ -318,7 +318,9 @@ send_key_interval_ms = 35
 # basename is "flash" dispatch the verb in-process; any other head is launched
 # as argv (no shell wrap) with `~` and env expansion on each element. Bare
 # strings and URLs are rejected.
-# Relative argv paths containing "/" are resolved from this config file.
+# A relative executable containing "/" resolves from this config file.
+# Remaining arguments stay opaque; set working_directory on sources/terminals
+# when their arguments refer to files relative to the configuration directory.
 #
 # Single modified-key mappings use Carbon. Non-modified keys and sequences
 # are read only by the overlay while Flash is capturing normal-mode input.
@@ -335,6 +337,8 @@ send_key_interval_ms = 35
 # installed by default.
 # leave_mode, enter_insert_mode, and enter_command_mode have no default
 # mappings in any scope. Define their shortcuts explicitly.
+# focus_input also has no default mapping; opt in if focusing a text input
+# should enter INSERT (for example, "gi" = ["flash", "focus_input"]).
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # Percentage frames require x/y/width/height together. x and y are offsets
@@ -446,7 +450,6 @@ leader = "\\"
 "g7" = ["flash", "tab_select", "--index=7"]
 "g8" = ["flash", "tab_select", "--index=8"]
 "g9" = ["flash", "tab_select", "--index=9"]
-"gi" = ["flash", "focus_input"]              # Vimium: focus the first text input
 "ctrl+o" = ["flash", "movement_back"]
 "ctrl+i" = ["flash", "movement_forward"]
 # `f` is a plain current-context click everywhere except terminal links, which

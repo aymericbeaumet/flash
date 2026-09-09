@@ -281,7 +281,7 @@ extension NormalModeDispatcher {
     "AXTextField", "AXTextArea",
   ]
 
-  /// `focus_input` (Vimium `gi`): focus the `index`-th (1-based) editable
+  /// `focus_input`: focus the `index`-th (1-based) editable
   /// text input of the focused window, in reading order (top-to-bottom, then
   /// left-to-right — AX frames are top-left-origin, so ascending y is
   /// downwards). Returns false when no input exists in the walk budget.

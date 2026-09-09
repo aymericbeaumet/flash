@@ -78,9 +78,21 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(errors["host_closed"] as? String, PluginProtocol.hostClosedError)
     XCTAssertEqual(errors["host_call_timeout"] as? String, PluginProtocol.hostCallTimeoutError)
     XCTAssertEqual(errors["frame_overflow"] as? String, PluginProtocol.frameOverflowError)
+    XCTAssertEqual(errors["request_capacity"] as? String, PluginProtocol.requestCapacityError)
+    XCTAssertEqual(errors["host_call_capacity"] as? String, PluginProtocol.hostCallCapacityError)
     XCTAssertEqual(
       errors["capability_denied"] as? String,
       PluginProtocol.capabilityDeniedError("<capability>"))
+  }
+
+  func testHostTransportAdmissionMatchesSpec() throws {
+    let limits = try XCTUnwrap(try spec()["transport_limits"] as? [String: Any])
+    XCTAssertEqual(limits["host_pending_requests"] as? Int, PluginProtocol.maxPendingRequests)
+    XCTAssertEqual(limits["host_host_rpcs"] as? Int, PluginProtocol.maxHostRPCs)
+    XCTAssertEqual(limits["host_outbound_frames"] as? Int, PluginProtocol.maxOutboundFrames)
+    XCTAssertEqual(limits["host_outbound_bytes"] as? Int, PluginProtocol.maxOutboundBytes)
+    XCTAssertEqual(limits["host_inbound_frames"] as? Int, PluginProtocol.maxInboundFrames)
+    XCTAssertEqual(limits["host_inbound_bytes"] as? Int, PluginProtocol.maxInboundBytes)
   }
 
   func testCapabilityRegistryMatchesSpec() throws {

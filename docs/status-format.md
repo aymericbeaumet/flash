@@ -103,7 +103,11 @@ line is published while running, and a final partial line is accepted on exit.
 Output is re-expanded as a format with nested jobs and extra time expansion
 disabled. Output updates are coalesced to at most once per second. A new job with
 no output can show tmux's not-ready text. Repeated executions follow Flash's
-status refresh cadence.
+status refresh cadence. Unchanged jobs survive template/configuration reloads.
+When a job leaves the evaluated template, its process and cached output are
+removed. Reappearing jobs start afresh; changed expanded commands keep their
+last output until replacement output arrives. Completion tokens prevent retired
+jobs from changing replacement records.
 
 For explicit argv, an independent cadence, environment, working directory, or
 rotating lines, declare a source:
@@ -122,8 +126,13 @@ Only evaluated source references start jobs. A source interval of zero runs
 once; `cycle_interval` rotates the latest successful nonempty lines independently
 and marks their typed runs for crossfade. Failed/empty named source output keeps
 the last good value. Named sources use the configured timeout; native shell jobs
-and PTYs do not inherit that timeout. Paths follow the defining configuration
-file, with `~` and environment expansion at execution.
+and PTYs do not inherit that timeout. Only the executable and explicit working
+directory resolve against the defining configuration file; remaining arguments
+stay opaque. Home/environment expansion happens at execution. Use
+`working_directory = "."` for arguments relative to the configuration directory.
+Inactive sources retain last-good output without running or rotating; only
+evaluated sources and cycles contribute timer deadlines. Changed/removed jobs
+are invalidated before their processes are stopped in one bounded batch.
 
 The additional style tokens are `pill/nopill`, `shrink/noshrink`,
 `cyc/nocyc`, `breathing/nobreathing`, `link=URL/nolink`, and

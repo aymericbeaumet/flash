@@ -7,11 +7,14 @@ expect_notification / expect_none; responses are correlated by id with arrival
 timestamps so latency floors (not_before_ms) measure send->arrival honestly.
 """
 import json
+import queue
 import time
+from collections import deque
 
 from .generators import expand, raw_bytes
 from .matchers import match
 from .process import SpecProcess, frame_bytes
+from .wire import validate_result
 
 DEFAULT_NAK = {"ok": False, "error": "not available in spec runner"}
 DEFAULT_SPEC_TIMEOUT_MS = 30000
@@ -40,10 +43,13 @@ class SpecRun:
         self.spec = spec
         self.variables = variables
         self.host = _HostState(spec.get("host", {}).get("replies", {}))
-        self.responses = {}  # id -> (frame, arrival_monotonic)
+        self.responses = {}  # id -> deque of (frame, arrival_monotonic)
         self.notifications = []  # (frame, arrival_monotonic)
         self.host_requests = []  # unmatched plugin->host requests already auto-replied
         self.send_times = {}  # request id -> monotonic write time
+        self.sent_methods = {}
+        self.outstanding = {}  # request count, including intentional repeated ids
+        self.received_ids = set()
         self.deadline = time.monotonic() + spec.get("timeout_ms", DEFAULT_SPEC_TIMEOUT_MS) / 1000.0
         self.process = SpecProcess(argv, cwd, env, sandbox_profile)
         if self.process.parent is not None:
@@ -54,17 +60,24 @@ class SpecRun:
 
     def _classify(self, frame, pending_rpc=None):
         """Route one inbound frame; returns the frame if it satisfies pending_rpc."""
+        self._check_intake()
+        if not isinstance(frame, dict):
+            raise StepFailure("protocol frame must be an object")
         method, mid = frame.get("method"), frame.get("id")
+        if mid is not None and (type(mid) is not int or mid <= 0):
+            raise StepFailure("protocol id must be a positive integer")
+        if method is not None and (not isinstance(method, str) or not method):
+            raise StepFailure("protocol method must be a nonempty string")
         if method is not None and mid is not None:
             if pending_rpc is not None and not match(pending_rpc, frame, "rpc"):
                 return frame  # delivered to the expect_host_rpc step un-replied
             reply = self.host.reply_for(method)
-            if reply != "drop":
+            if reply != "drop" and not self.process.child.stdin.closed:
                 self.process.write(frame_bytes({"id": mid, "result": reply}))
             self.host_requests.append((frame, time.monotonic()))
             return None
         if method is not None:
-            if method == "flash.log":
+            if method == "log":
                 self.log_lines.append(frame.get("params", {}).get("message"))
             # [frame, arrival, consumed] — expect_notification marks matched
             # entries consumed so two steps never double-count one frame,
@@ -72,8 +85,28 @@ class SpecRun:
             self.notifications.append([frame, time.monotonic(), False])
             return None
         if mid is not None:
-            self.responses.setdefault(mid, (frame, time.monotonic()))
+            error = validate_result(self.sent_methods.get(mid), frame.get("result"))
+            if error:
+                raise StepFailure(f"response {mid}: {error}")
+            if self.outstanding.get(mid, 0) == 0:
+                kind = "duplicate" if mid in self.received_ids else "unsolicited"
+                raise StepFailure(f"{kind} response for id {mid}")
+            self.outstanding[mid] -= 1
+            self.received_ids.add(mid)
+            self.responses.setdefault(mid, deque()).append((frame, time.monotonic()))
         return None
+
+    def _check_intake(self):
+        if self.process.intake_error is not None:
+            raise StepFailure(self.process.intake_error)
+
+    def drain_available(self):
+        self._check_intake()
+        while True:
+            try:
+                self._classify(self.process.frames.get_nowait())
+            except queue.Empty:
+                return
 
     def _pump(self, until, pending_rpc=None):
         """Drain frames until `until()` is truthy or the window closes.
@@ -86,6 +119,7 @@ class SpecRun:
         """
         exit_seen_at = None
         while True:
+            self._check_intake()
             hit = until() if until else None
             if hit:
                 return hit
@@ -94,7 +128,7 @@ class SpecRun:
                 raise StepFailure("spec wall-clock timeout")
             try:
                 frame = self.process.frames.get(timeout=0.01)
-            except Exception:
+            except queue.Empty:
                 frame = None
             if frame is None:
                 exited = self.process.child.poll()
@@ -121,6 +155,7 @@ class SpecRun:
             where = f"steps[{index}]"
             try:
                 self._play_step(step)
+                self._check_intake()
             except StepFailure as failure:
                 raise StepFailure(f"{where}: {failure}") from None
 
@@ -144,8 +179,8 @@ class SpecRun:
                 try:
                     frame = self.process.frames.get(timeout=0.01)
                     self._classify(frame)
-                except Exception:
-                    pass
+                except queue.Empty:
+                    self._check_intake()
         elif "close_stdin" in step:
             self.process.close_stdin()
         elif "kill_parent" in step:
@@ -185,14 +220,16 @@ class SpecRun:
             while time.monotonic() < window:
                 try:
                     frame = self.process.frames.get(timeout=0.01)
-                except Exception:
+                except queue.Empty:
+                    self._check_intake()
                     continue
                 self._classify(frame)
                 if not match(expected, frame, "frame"):
                     raise StepFailure(f"forbidden frame arrived: {frame!r}")
-            for mid, (frame, _) in self.responses.items():
-                if not match(expected, frame, "frame"):
-                    raise StepFailure(f"forbidden frame arrived: {frame!r}")
+            for replies in self.responses.values():
+                for frame, _ in replies:
+                    if not match(expected, frame, "frame"):
+                        raise StepFailure(f"forbidden frame arrived: {frame!r}")
         elif "expect_host_rpc" in step:
             expected = expand(step["expect_host_rpc"], self.variables)
             window = self._window(step, "within_ms", DEFAULT_EXPECT_MS)
@@ -235,6 +272,8 @@ class SpecRun:
                 raise StepFailure("plugin still running past expect_exit window")
             if code != body["code"]:
                 raise StepFailure(f"exit code {code}, expected {body['code']}")
+            self.process.stdout_done.wait(timeout=max(0, window - time.monotonic()))
+            self.drain_available()
         elif "expect_stderr" in step:
             body = step["expect_stderr"]
             text = self.process.stderr_text()
@@ -248,6 +287,8 @@ class SpecRun:
     def _register_send(self, frame):
         if isinstance(frame, dict) and frame.get("id") is not None and "method" in frame:
             self.send_times[frame["id"]] = time.monotonic()
+            self.sent_methods[frame["id"]] = frame["method"]
+            self.outstanding[frame["id"]] = self.outstanding.get(frame["id"], 0) + 1
         return frame
 
     def _send(self, frame):
@@ -255,7 +296,9 @@ class SpecRun:
 
     def _write(self, payload):
         try:
-            self.process.write(payload)
+            self.process.write(payload, deadline=self.deadline)
+        except TimeoutError:
+            raise StepFailure("plugin stdin write timed out") from None
         except (OSError, ValueError):
             raise StepFailure(
                 f"plugin closed stdin (exit status {self.process.child.poll()})"
@@ -274,13 +317,16 @@ class SpecRun:
         want_id = expected["id"]
 
         def hit():
-            return self.responses.get(want_id)
+            replies = self.responses.get(want_id)
+            return replies[0] if replies else None
 
         try:
             frame, arrived = self._pump(hit)
         except StepFailure as failure:
             raise StepFailure(f"no response with id {want_id} ({failure})")
-        del self.responses[want_id]
+        self.responses[want_id].popleft()
+        if not self.responses[want_id]:
+            del self.responses[want_id]
         problems = match(expected, frame, "frame")
         if problems:
             raise StepFailure("; ".join(problems))
@@ -305,6 +351,11 @@ def run_spec(spec, argv, cwd, env, variables, sandbox_profile=None):
         failure = f"runner error: {type(exc).__name__}: {exc}"
     finally:
         run.process.teardown()
+    if failure is None:
+        try:
+            run.drain_available()
+        except StepFailure as exc:
+            failure = str(exc)
     diagnostics = {
         "stderr_tail": run.process.stderr_text()[-2000:],
         "undecodable_lines": run.process.undecodable_lines,

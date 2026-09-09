@@ -69,7 +69,7 @@ func parseMappingCommand(argv: [String]) -> MappingCommand? {
   if mappingCommandHeadNamesFlash(first) {
     let tail = Array(argv.dropFirst())
     guard let verb = tail.first, !verb.isEmpty else { return nil }
-    let args = parseVerbArgs(tail.dropFirst())
+    guard let args = try? CommandArguments.parse(tail.dropFirst()) else { return nil }
     guard let cmd = URLEventHandler.parse(verb: verb, args: args) else { return nil }
     return .flashCommand(cmd)
   }
@@ -77,37 +77,8 @@ func parseMappingCommand(argv: [String]) -> MappingCommand? {
 }
 
 func mappingCommandHeadNamesFlash(_ value: String) -> Bool {
-  let expanded = CommandMappingRunner.expandLeadingTilde(value)
+  let expanded = CommandLaunchConfiguration.expandLeadingTilde(value)
   return URL(fileURLWithPath: expanded).lastPathComponent == "flash"
-}
-
-/// Parse `["--k1=v1", "--k2", "--k3=v with spaces"]` into a dict. Standard
-/// long-flag shell syntax:
-///   - `--name=value` → `{ "name": "value" }`
-///   - `--flag`       → `{ "flag": "1" }` (bare flag, value `"1"` so
-///                       `VerbArgs.bool` reports true)
-///   - `name` / `name=value` without the leading `--` → silently dropped
-///     to avoid a stale pre-`--` config sneaking in. The verb dispatcher
-///     will fail validation if the required arg never arrives.
-///
-/// Hyphens in the flag name are normalized to underscores so
-/// `--restore-mode` and `--restore_mode` both land in the dict as
-/// `restore_mode` — the internal key always uses snake_case.
-private func parseVerbArgs(_ entries: ArraySlice<String>) -> [String: String] {
-  var out: [String: String] = [:]
-  for entry in entries {
-    guard entry.hasPrefix("--") else { continue }
-    let body = String(entry.dropFirst(2))
-    guard !body.isEmpty else { continue }
-    if let eq = body.firstIndex(of: "=") {
-      let key = String(body[..<eq]).replacingOccurrences(of: "-", with: "_")
-      let value = String(body[body.index(after: eq)...])
-      out[key] = value
-    } else {
-      out[body.replacingOccurrences(of: "-", with: "_")] = "1"
-    }
-  }
-  return out
 }
 
 extension MappingCommand {

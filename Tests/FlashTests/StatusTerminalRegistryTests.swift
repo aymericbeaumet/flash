@@ -309,10 +309,10 @@ final class StatusTerminalRegistryTests: XCTestCase {
 
   func testArgumentExpansionDoesNotEvaluateShellCode() {
     XCTAssertEqual(
-      StatusTerminalRegistry.expand(
+      CommandLaunchConfiguration.expand(
         "$HOME/${NAME}/$(echo x)",
         environment: ["HOME": "/tmp", "NAME": "a b"]), "/tmp/a b/$(echo x)")
-    XCTAssertEqual(StatusTerminalRegistry.expand("${UNKNOWN}", environment: [:]), "${UNKNOWN}")
+    XCTAssertEqual(CommandLaunchConfiguration.expand("${UNKNOWN}", environment: [:]), "${UNKNOWN}")
   }
 
   func testHiddenSessionSurvivesPresentationChangesAndReapsReplacedChild() {

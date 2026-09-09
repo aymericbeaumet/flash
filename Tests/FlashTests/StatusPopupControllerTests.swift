@@ -500,6 +500,6 @@ final class StatusPopupControllerTests: XCTestCase {
       for: .init(command: ["/bin/sh"], environment: ["NO_COLOR": "1"]), environment: [:])
     XCTAssertEqual(explicitlyPlain.environment["NO_COLOR"], "1")
     XCTAssertEqual(
-      StatusTerminalRegistry.expand("$MISSING/${BAD", environment: [:]), "$MISSING/${BAD")
+      CommandLaunchConfiguration.expand("$MISSING/${BAD", environment: [:]), "$MISSING/${BAD")
   }
 }

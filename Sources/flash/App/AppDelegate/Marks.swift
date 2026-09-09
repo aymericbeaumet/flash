@@ -359,7 +359,6 @@ extension AppDelegate {
         {
           RunningApplicationActivation.activate(app, options: [.activateAllWindows])
           self.normalModeTargetPID = targetPID
-          self.suppressEditableFocus(for: targetPID)
         }
         if let route = result.navigationURL {
           self.movementCurrent = .route(route, pid: targetPID)

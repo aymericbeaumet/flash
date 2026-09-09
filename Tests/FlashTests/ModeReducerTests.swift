@@ -185,7 +185,6 @@ final class ModeReducerTests: XCTestCase {
     let commandStates: [Mode] = [
       .command(scope: .commandLine, restoreTo: .insert),
       .command(scope: .finder(all: true), restoreTo: .insert),
-      .command(scope: .finder(all: false), restoreTo: .disabled),
     ]
     let expectedEffects = ModeReducer.enterEffects(for: .normal, targetPID: nil)
     XCTAssertTrue(expectedEffects.contains(.clearTransientHintState))
@@ -198,6 +197,34 @@ final class ModeReducerTests: XCTestCase {
   }
 
   // MARK: Determinism + totality
+
+  func testDisabledEligibilitySurvivesExplicitRequestsInsideEverySurface() {
+    let surfaces: [ModeEvent] = [
+      .openCommand(scope: .commandLine, restoreMode: false),
+      .openCommand(scope: .finder(all: true), restoreMode: true),
+      .openTerminal,
+    ]
+    for open in surfaces {
+      for request in [ModeEvent.enterNormal(targetPID: nil), .enterInsert(targetPID: nil)] {
+        let opened = ModeReducer.reduce(.disabled, open).0
+        let closed = ModeReducer.reduce(opened, request).0
+        XCTAssertEqual(closed, .disabled, "\(open), \(request)")
+        XCTAssertEqual(ModeReducer.reduce(closed, .leaveMode(targetPID: nil)).0, .disabled)
+      }
+    }
+  }
+
+  func testEnablingAdvancedModeReconcilesEveryTransientReturn() {
+    for open in [
+      ModeEvent.openCommand(scope: .commandLine, restoreMode: false),
+      .openCommand(scope: .finder(all: false), restoreMode: true),
+      .openTerminal,
+    ] {
+      let opened = ModeReducer.reduce(.disabled, open).0
+      let enabled = ModeReducer.reduce(opened, .advancedModeChanged(enabled: true)).0
+      XCTAssertEqual(ModeReducer.reduce(enabled, .leaveMode(targetPID: nil)).0, .insert)
+    }
+  }
 
   func testReducerIsDeterministicAndTotal() {
     for state in allStates {
@@ -216,20 +243,25 @@ final class ModeReducerTests: XCTestCase {
     let normal = ModeReducer.enterEffects(for: .normal, targetPID: nil)
     XCTAssertEqual(
       normal,
-      [.setMappingScope(.normal), .clearTransientHintState, .renderSurface, .scheduleRecapture])
+      [
+        .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
+        .scheduleRecapture,
+      ])
 
     let insert = ModeReducer.enterEffects(for: .insert, targetPID: 42)
     XCTAssertEqual(
       insert,
       [
-        .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
+        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .renderSurface,
         .activateFocusedApp(pid: 42),
       ])
     XCTAssertFalse(insert.contains(.scheduleRecapture), "insert must not grab the keyboard")
 
     let command = ModeReducer.enterEffects(
       for: .command(scope: .commandLine, restoreTo: .normal), targetPID: nil)
-    XCTAssertEqual(command, [.setMappingScope(.command), .renderSurface, .scheduleRecapture])
+    XCTAssertEqual(
+      command, [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture])
   }
 
   // MARK: Projection correctness — the anti-drift table

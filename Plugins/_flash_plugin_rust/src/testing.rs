@@ -16,7 +16,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::context::{assemble_context, Context};
-use crate::emit::Emitter;
+use crate::emit::{Emitter, OutboundFrame};
 use crate::types::{Candidate, RunningApplication};
 
 /// Deliberately far above the production queue bound so a test that emits
@@ -29,7 +29,7 @@ static HARNESS_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub struct Harness {
     context: Context,
-    rx: mpsc::Receiver<Vec<u8>>,
+    rx: mpsc::Receiver<OutboundFrame>,
 }
 
 impl Harness {
@@ -80,7 +80,9 @@ impl Harness {
     pub fn drain(&mut self) -> Vec<Value> {
         let mut frames = Vec::new();
         while let Ok(bytes) = self.rx.try_recv() {
-            frames.push(serde_json::from_slice(&bytes).expect("harness frame must decode as JSON"));
+            frames.push(
+                serde_json::from_slice(&bytes.payload).expect("harness frame must decode as JSON"),
+            );
         }
         frames
     }

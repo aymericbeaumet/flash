@@ -13,9 +13,7 @@ extension AppDelegate {
   static let statusItemHintRole = "FlashStatusItem"
 
   func activateDockHints() {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
-    }
+    guard prepareHintActivation(.dock) else { return }
     guard
       let dock = NSWorkspace.shared.runningApplications.first(where: {
         $0.bundleIdentifier == "com.apple.dock"
@@ -26,10 +24,12 @@ extension AppDelegate {
       return
     }
     let pid = dock.processIdentifier
+    let token = activationLifecycle.begin()
+    applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let items = Self.dockItems(pid: pid)
       DispatchQueue.main.async {
-        guard let self else { return }
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
         let screenH = ActionDispatcher.primaryScreenHeight()
         let targets = items.enumerated().map { index, item in
           JumpTarget(
@@ -49,9 +49,7 @@ extension AppDelegate {
   }
 
   func activateStatusItemHints() {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
-    }
+    guard prepareHintActivation(.statusItems) else { return }
     // Layer 25 (`.statusBar`) windows are the menu-bar extras. Geometry only;
     // Flash's own click windows are excluded by pid.
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -98,16 +96,16 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    sourceAppPID = pid
-    pendingAction = .leftClick
-    pendingClickModifiers = []
-    pendingHintCommitBehavior = .click
-    currentPrefix = ""
+    hintSession.sourceAppPID = pid
+    hintSession.action = .leftClick
+    hintSession.presetClickModifiers = []
+    hintSession.commitBehavior = .click
+    hintSession.prefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
     let hints = assignHints(targets)
     activationLifecycle.invalidate()
-    currentHints = hints
+    hintSession.hints = hints
     applyModeOverlay()
     overlay.display(hints: hints)
     FlashLog.debug("[\(surface)] displayed targets=\(hints.count)")

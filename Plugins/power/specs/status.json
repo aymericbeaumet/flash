@@ -1,6 +1,6 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "The one-second charge collector and periodic/event-driven health refresh publish the compact popup-backed power summary, while an explicit refresh returns cached details within the perform deadline.",
+  "description": "The charge collector publishes string segments (summary and label are empty while charging or at 100%), while an explicit refresh returns cached details within the perform deadline.",
   "steps": [
     {
       "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
@@ -14,8 +14,8 @@
         "method": "status",
         "params": {
           "segments": {
-            "summary": { "$contains": "#[popup=inline:" },
-            "label": { "$contains": "#[fg=#EBCB8B]BAT#[default]" },
+            "summary": { "$type": "string" },
+            "label": { "$type": "string" },
             "details": { "$contains": "#[fg=colour245]Charge        #[default]" }
           }
         }
