@@ -44,8 +44,10 @@ Runtime home/environment expansion follows the command's launch contract.
 
 Named sources and terminals can set `working_directory = "."` when their
 arguments refer to files beside the defining TOML file. A working directory is
-an explicit path field and resolves against that file. Use an explicit shell
-argv for shell syntax, such as `["/bin/sh", "-c", "cat /tmp/value"]`.
+an explicit path field and resolves against that file, including `.`, `..`, and
+hidden directories such as `.cache`. It does not depend on Flash's launch
+directory. Use an explicit shell argv for shell syntax, such as
+`["/bin/sh", "-c", "cat /tmp/value"]`.
 
 ## Verbs and mappings
 

@@ -8,12 +8,10 @@ template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=r
 "@centre" = "#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]"
 "@right" = """
 #{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
-#{?flash.plugin.aiproviders.summary,#{flash.plugin.aiproviders.summary}  ,}
-#[popup=system]#[fg=#EBCB8B]SYS#[default]#[nopopup]
-#{?flash.plugin.cpu.summary, #{flash.plugin.cpu.summary},}
-#{?flash.plugin.memory.summary, #{flash.plugin.memory.summary},}
+#{?flash.plugin.aiproviders.summary,#{flash.plugin.aiproviders.summary} ,}
+#[fg=#EBCB8B]#[popup=cpu]CPU#[nopopup] #[popup=memory]MEM#[nopopup] #[popup=disks]DISK#[nopopup] #[popup=network]NET#[nopopup]#[default]
 #{?flash.plugin.power.label, #[popup=battery]#{flash.plugin.power.label}#[nopopup],}
-#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%d/%m }#[default,bold]%H:%M#[nobold,nopopup]
+#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default,bold]%H:%M#[nobold,nopopup]
 """
 
 [statusbar.popup]
@@ -22,12 +20,33 @@ active-app = """
 #{flash.plugin.processes.focused_app_details}
 """
 
-[terminal.system]
+[terminal.cpu]
 persistent = true
 working_directory = "."
-command = ["btm", "--config_location", "status/bottom-system.toml"]
-columns = 100
-rows = 28
+command = ["btm", "--config_location", "status/bottom-cpu.toml"]
+columns = 92
+rows = 22
+
+[terminal.memory]
+persistent = true
+working_directory = "."
+command = ["btm", "--config_location", "status/bottom-memory.toml"]
+columns = 92
+rows = 22
+
+[terminal.disks]
+persistent = true
+working_directory = "."
+command = ["btm", "--config_location", "status/bottom-disks.toml"]
+columns = 90
+rows = 16
+
+[terminal.network]
+persistent = true
+working_directory = "."
+command = ["btm", "--config_location", "status/bottom-network.toml"]
+columns = 84
+rows = 20
 
 [terminal.battery]
 persistent = true

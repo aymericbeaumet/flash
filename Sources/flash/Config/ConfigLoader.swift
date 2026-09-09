@@ -981,7 +981,7 @@ enum ConfigLoader {
         raw.hasPrefix("$")
         ? raw
         : resolveCommandArgument(
-          raw.hasPrefix(".") || raw.hasPrefix("~") || raw.contains("/") ? raw : "./" + raw,
+          raw.hasPrefix("/") || raw.hasPrefix("~") ? raw : "./" + raw,
           sourceURL: sourceURL)
     }
     var environment: [String: String] = [:]

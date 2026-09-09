@@ -1,7 +1,7 @@
 # Status popup TUI options
 
-The configured status strip groups resource monitoring into SYS, retains BAT,
-and opens a calendar from the date. The [ready-to-use files](examples/statusbar/README.md)
+The configured status strip gives CPU, MEM, DISK, and NET separate popups,
+retains BAT, and opens a calendar from the date. The [ready-to-use files](examples/statusbar/README.md)
 contain the tested layouts and command declarations. See
 [terminal lifecycle](terminal-popups.md) for startup, persistence, and input.
 
@@ -9,36 +9,28 @@ contain the tested layouts and command declarations. See
 
 | Status group | Persistent view | Purpose |
 | --- | --- | --- |
-| CPU / MEM / DSK / NET | One shared `bottom` dashboard | CPU, memory, disk capacity/I/O, network history, and processes |
+| CPU | Focused `bottom` layout | CPU history and processes sorted by CPU use |
+| MEM | Focused `bottom` layout | Memory/swap history and processes sorted by memory use |
+| DISK | Focused `bottom` layout | Mounted-volume capacity and read/write rates |
+| NET | Focused `bottom` layout | Network throughput history, rates, and totals |
 | BAT | Bottom's battery widget | Charge, consumption, time remaining, and health where macOS supplies them |
 | Clock | Read-only `calcurse` calendar and clock | Add date context rather than duplicate the bar's clock |
 
-Prefer one monitoring process with a deliberate layout over four independent
-copies. The initial shared dashboard can also include battery. Bottom's
-`--battery` flag affects default/basic layouts; a custom TOML layout must
-declare its battery widget explicitly.
+Each resource owns a persistent process with only its relevant widgets, so
+opening another popup preserves its history and navigation. CPU and MEM also
+include process tables; their separate processes repeat some collection work.
+The supplied declarations use `working_directory = "."` so bottom finds its
+layout beside the defining Flash configuration.
 
-Minimal shared dashboard declaration (the supplied setup adds a custom layout):
-
-```toml
-[terminal.system]
-persistent = true
-command = ["btm", "--battery", "--read_only", "--rate", "2s"]
-columns = 100
-rows = 28
-```
-
-Anchor it with `#[popup=system]SYS#[nopopup]`. Existing plugin summaries
+Anchor each resource explicitly, such as `#[popup=cpu]CPU#[nopopup]`. Plugin summaries
 contain their own inline popup markers, so merely wrapping those summaries
 with another popup marker does not override their hover target. Keep this
-choice explicit when composing the status strip. A custom bottom layout
-reduces the default widget set to keep the numeric CPU, memory, network, disks,
-and processes visible at this grid.
+choice explicit when composing the status strip.
 
 For a focused battery view, the supported argv is
 `btm --battery --default_widget_type battery --expanded --read_only --rate 5s`.
-Another process repeats some collection work. Bottom's interface totals are
-not per-process bandwidth.
+Custom TOML layouts must declare the battery widget explicitly. Bottom's
+interface totals are not per-process bandwidth.
 
 Sources: [bottom](https://github.com/ClementTsang/bottom),
 [layouts](https://bottom.pages.dev/stable/configuration/config-file/layout/),

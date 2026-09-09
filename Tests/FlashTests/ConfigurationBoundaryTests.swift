@@ -1,3 +1,4 @@
+import FlashTerminal
 import Foundation
 import XCTest
 
@@ -98,6 +99,65 @@ final class ConfigurationBoundaryTests: XCTestCase {
     XCTAssertTrue(config.warnings.isEmpty, "\(config.warnings)")
     XCTAssertEqual(config.statusBar.sources["news"]?.command, ["sh", "-c", "cat /tmp/news"])
     XCTAssertEqual(config.terminals["docs"]?.command, ["open", "https://example.com/docs"])
+  }
+
+  func testWorkingDirectoriesResolveDotPathsAgainstTheirConfigurationFile() {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-config-\(UUID().uuidString)", isDirectory: true)
+    let source = directory.appendingPathComponent("flash.toml")
+    for path in [".", "..", ".cache", "status", "./status", "../status"] {
+      let config = ConfigLoader.parse(
+        """
+        [statusbar.sources.example]
+        command = ["/bin/pwd"]
+        working_directory = "\(path)"
+        [terminal.example]
+        command = ["/bin/pwd"]
+        working_directory = "\(path)"
+        """, sourceURL: source)
+      let expected = directory.appendingPathComponent(path).standardizedFileURL.path
+      XCTAssertTrue(config.warnings.isEmpty, "\(config.warnings)")
+      XCTAssertEqual(config.statusBar.sources["example"]?.workingDirectory, expected, path)
+      XCTAssertEqual(config.terminals["example"]?.workingDirectory, expected, path)
+    }
+  }
+
+  func testTerminalCanReadRelativeResourcesBesideItsConfiguration() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-config-\(UUID().uuidString)", isDirectory: true)
+    let resources = directory.appendingPathComponent("status", isDirectory: true)
+    try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("config-relative-resource".utf8).write(to: resources.appendingPathComponent("value"))
+    let config = ConfigLoader.parse(
+      """
+      [terminal.example]
+      command = ["/bin/cat", "status/value"]
+      working_directory = "."
+      """, sourceURL: directory.appendingPathComponent("flash.toml"))
+    let definition = try XCTUnwrap(config.terminals["example"])
+    XCTAssertEqual(definition.command, ["/bin/cat", "status/value"])
+    let session = TerminalSession(
+      configuration: StatusTerminalRegistry.configuration(for: definition, environment: [:]))
+    defer { session.shutdown() }
+    let exited = expectation(description: "relative resource read completes")
+    session.onStateChange = { state in
+      switch state {
+      case .exited(let code):
+        XCTAssertEqual(code, 0)
+        XCTAssertEqual(
+          session.frame?.text.trimmingCharacters(in: .whitespacesAndNewlines),
+          "config-relative-resource")
+        exited.fulfill()
+      case .failed(let message):
+        XCTFail(message)
+        exited.fulfill()
+      default: break
+      }
+    }
+    session.start()
+    wait(for: [exited], timeout: 5)
+    session.onStateChange = nil
   }
 
   func testCommandCatalogDescriptionsCoverEveryDeclaredCommand() {
