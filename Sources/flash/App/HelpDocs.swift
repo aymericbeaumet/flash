@@ -174,7 +174,7 @@ enum HelpDocs {
       ## Entry points
 
       - `flash flashlight` from the CLI.
-      - `<leader><space>` in normal mode (default mapping).
+      - A user-defined mapping to `enter_command_mode --input=:flashlight`.
       - `:flashlight <query>` in command-line mode.
 
       `:open <args>` is unrelated: it forwards verbatim to `/usr/bin/open`

@@ -466,9 +466,7 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testParseFlashModeActions() {
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "enter_insert_mode"])?.command, .insertMode)
-    XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "enter_locked_insert_mode"])?.command,
-      .lockedInsertMode)
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_locked_insert_mode"]))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "url_copy"])?.command, .copyURL)

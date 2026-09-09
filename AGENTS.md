@@ -305,8 +305,8 @@ Keys:
 | `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
 | `[mode.all.mappings]` entries      | argv array or `{ action = [...], repeat = bool }` | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
-| `mode.normal.passthrough_keys`     | string array   | `["escape"]`         |
-| `mode.normal.passthrough_modifiers` | string array | `["cmd", "ctrl", "shift", "alt"]` |
+| `mode.normal.passthrough_keys`     | string array   | `[]`         |
+| `mode.normal.passthrough_modifiers` | string array | `[]` |
 | `[mode.normal.mappings]` entries   | argv array or `{ action = [...], repeat = bool }` | built-in normal map |
 | `[mode.insert.mappings]` entries   | argv array or `{ action = [...], repeat = bool }` | none             |
 | `[mode.command.mappings]` entries  | modified-key argv mappings | none |
@@ -688,7 +688,11 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 ### Mode Mappings
 
-`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). A mapping that needs metadata uses `{ action = [...], repeat = true }`; `repeat` keeps the completed normal-mode mapping armed so additional presses of its final key dispatch it again. Every built-in `[` / `]` mapping enables this metadata. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`. `[mode.normal] passthrough_keys = ["escape"]` and `passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]` make matching unmapped keypresses enter INSERT and continue natively; explicit mappings win, and setting both lists to `[]` keeps NORMAL hermetic.
+`leave_mode`, `enter_insert_mode`, and `enter_command_mode` must have no
+default mappings in any scope, including prefilled command-line variants.
+Only explicit user configuration binds these actions.
+
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). A mapping that needs metadata uses `{ action = [...], repeat = true }`; `repeat` keeps the completed normal-mode mapping armed so additional presses of its final key dispatch it again. Every built-in `[` / `]` mapping enables this metadata. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`. `[mode.normal] passthrough_keys` and `passthrough_modifiers` make matching unmapped keypresses enter INSERT and continue natively; explicit mappings win. Both default to `[]`, so NORMAL swallows unmapped keys unless the user opts in. Mapped `app_find` and `tab_new` actions must not implicitly enter INSERT.
 
 - Modified-key entries in `[mode.all.mappings]` apply in every mode, including
   command-line and candidate-finder surfaces. Non-modified entries are available
@@ -772,18 +776,16 @@ Three normal-mode keys carry a single semantic meaning regardless of focused-app
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The **complete** set of valid insert transitions is:
 
-- A normal-mode `a`, `A`, `i`, `I`, `o`, or `O` keypress (or its insert-mode verb twin invoked by the user).
-- A configured unmapped `passthrough_keys` / `passthrough_modifiers` keypress. The original event continues natively and the mode changes to INSERT, including when the About window owns the keyboard (for example, default `cmd+w` closes About and enters INSERT); an explicit mapping still wins.
-- A user-driven normal-mode command that intentionally opens a typing surface, currently `/` (`app_find`) and `t` (`tab_new`).
+- A user-invoked `enter_insert_mode` action, through the CLI or an explicitly configured mapping.
+- A `focus_input` command that explicitly selects an editable target for typing.
+- A configured unmapped `passthrough_keys` / `passthrough_modifiers` keypress. The original event continues natively and the mode changes to INSERT, including when the About window owns the keyboard (for example, with `cmd` allowed, unmapped `cmd+w` closes About and enters INSERT); an explicit mapping still wins.
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
 - A committed `f` / `F` (`mouse_target`) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. A target with `false` is authoritative and stays normal even when the app already has editable focus — notably, both tmux pane and link hints stay in NORMAL.
 - A committed `ctrl-f` / `ctrl-shift-f` (`mouse_grid`) left or double click. The grid is mouse simulation, so it enters insert unconditionally just like a physical pointer click. Grid move never enters insert, and grid right-click stays normal while its context menu owns the keyboard.
 
 Nothing else may auto-enter insert. Specifically: focused-element changes, app activation, and unrelated configured key sequences must leave the mode alone. Do not reintroduce passive focused-element observers that switch to insert merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers.
 
-Insert mode is allowed to leave automatically when input focus is lost. Track the pid that owned INSERT entry; if the focused app changes away from that pid, transition back to normal mode even if generic editable focus-loss exit was never armed. For focus changes inside the same app, require arming first: on INSERT entry, run a short delayed `AppMonitor.focusedElementIsEditable` probe for the active app; if it is false, leave generic focus-loss exit unarmed so non-input contexts can stay in INSERT pass-through. Once armed, a focused-element or focused-window change for the active app should query `AppMonitor.focusedElementIsEditable`, and if it is false, transition back to normal mode. If a mouse button is currently pressed, defer that transition until release and re-check editability; otherwise click-drag text selection gets interrupted by the normal-mode overlay recapturing mid-drag. Do not run that exit probe for `kAXValueChangedNotification`, or typing in an editable element will pay an AX query per keystroke.
-
-Browser `t` (`tab_new`) is a special insert exit: after opening a browser tab, Flash may poll the focused document URL on the AX queue and return to normal once it changes from the pre-tab baseline/internal new-tab URL to a committed `http` / `https` URL. This covers address-bar Return, where browsers often keep the location field as the focused editable AX element after navigation, so generic focus-loss detection never fires.
+INSERT is sticky across focused-app changes, focused-element changes, and mouse clicks. Only explicit mode commands or a configuration change leave it; command and terminal surfaces restore their recorded return mode. Do not add editable-focus probes or browser-tab polling to auto-exit INSERT.
 
 One structural exception: removing the last all-mode `leave_mode` or
 `enter_normal_mode` binding disables advanced mode and returns Flash to

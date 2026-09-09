@@ -333,6 +333,8 @@ send_key_interval_ms = 35
 # selects NORMAL regardless of a command panel's recorded return mode.
 # Mode-specific mappings override the same chord here; no exit override is
 # installed by default.
+# leave_mode, enter_insert_mode, and enter_command_mode have no default
+# mappings in any scope. Define their shortcuts explicitly.
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # Percentage frames require x/y/width/height together. x and y are offsets
@@ -354,11 +356,11 @@ send_key_interval_ms = 35
 [mode.normal]
 # Let named, unmapped keys switch Flash to INSERT and continue to the focused
 # app unchanged. Explicit normal/all mappings still win. Use [] to disable.
-passthrough_keys = ["escape"]
+passthrough_keys = []
 # Let an unmapped shortcut carrying any listed modifier switch Flash to INSERT
 # and continue to the focused app or macOS unchanged. Explicit normal/all
 # mappings still win. Use [] to keep NORMAL hermetic.
-passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
+passthrough_modifiers = []
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
 leader = "\\"
 
@@ -447,12 +449,6 @@ leader = "\\"
 "gi" = ["flash", "focus_input"]              # Vimium: focus the first text input
 "ctrl+o" = ["flash", "movement_back"]
 "ctrl+i" = ["flash", "movement_forward"]
-"a" = ["flash", "enter_insert_mode"]
-"A" = ["flash", "enter_insert_mode"]
-"i" = ["flash", "enter_insert_mode"]
-"I" = ["flash", "enter_locked_insert_mode"]
-"o" = ["flash", "enter_insert_mode"]
-"O" = ["flash", "enter_insert_mode"]
 # `f` is a plain current-context click everywhere except terminal links, which
 # add Shift so the terminal opens the link at all. `F` sends Command-Shift to
 # every target as the global new-context gesture. Tmux hints stay in NORMAL.
@@ -511,13 +507,11 @@ leader = "\\"
 # or a new browser tab in browsers. Other apps do nothing.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader><space>" = ["flash", "enter_command_mode", "--input=:flashlight "]
 # Context-aware reload: browsers reload the current page; tmux refreshes
 # the focused client. Other apps do nothing.
 "r" = ["flash", "app_reload"]
 "R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]
-":" = ["flash", "enter_command_mode"]
 
 # Named terminal command templates. persistent defaults to false: a new process
 # each time the window opens. All open terminals restart after process exit.

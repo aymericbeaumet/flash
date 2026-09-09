@@ -22,10 +22,8 @@ enum Mode: Equatable {
   /// "advanced-off but in NORMAL" combination unrepresentable.
   case disabled
 
-  /// Keyboard is handed to the focused app. `locked` distinguishes `I`
-  /// (locked) from `i` for the badge/diagnostics; it no longer gates any
-  /// transition now that automatic exits are gone.
-  case insert(locked: Bool)
+  /// Keyboard is handed to the focused app until an explicit mode change.
+  case insert
 
   /// The overlay owns the keyboard and interprets keys as commands.
   case normal
@@ -49,13 +47,13 @@ enum CommandScope: Equatable {
 /// A restricted projection of `Mode` — you can only return to a base mode.
 enum ReturnMode: Equatable {
   case disabled
-  case insert(locked: Bool)
+  case insert
   case normal
 
   var mode: Mode {
     switch self {
     case .disabled: return .disabled
-    case .insert(let locked): return .insert(locked: locked)
+    case .insert: return .insert
     case .normal: return .normal
     }
   }
@@ -67,7 +65,7 @@ extension Mode {
   var asReturnMode: ReturnMode {
     switch self {
     case .disabled: return .disabled
-    case .insert(let locked): return .insert(locked: locked)
+    case .insert: return .insert
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(_, let restoreTo), .terminal(let restoreTo): return restoreTo

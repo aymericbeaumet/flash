@@ -48,7 +48,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    dispatchMode(.enterInsert(reason: reason, targetPID: pid))
+    dispatchMode(.enterInsert(targetPID: pid))
   }
 
   /// The single mutation entry point for the mode: feed the event through the
@@ -260,111 +260,12 @@ extension AppDelegate {
     }
   }
 
-  static func normalModeMayEnterInsert(reason: InsertModeTransitionReason) -> Bool {
-    // `.explicitCommand` joins the user-driven set because mapped-key
-    // actions like `/` (app_find) and `t` (tab_new) follow a sendKey →
-    // enterInsertMode pattern: the user just pressed a normal-mode key
-    // and the intent is "open something and start typing". Holding the
-    // gate against `.explicitCommand` left those mappings stuck in
-    // NORMAL after the side-effect fired, so typing went to the empty
-    // search bar / new tab via the system, then nothing.
-    // `.normalModePassthrough` is user-driven too: it is scheduled only when
-    // the user presses an unmapped configured key or modifier chord in NORMAL.
-    reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
-      || reason == .pointerClick || reason == .explicitCommand
-      || reason == .normalModePassthrough
-  }
-
-  static func insertModeShouldExitAfterFocusedAppChange(
-    mode: FlashMode,
-    modeBadgeEnabled: Bool,
-    overlayInputMode: OverlayInputMode,
-    hasHints: Bool,
-    activationInFlight: Bool,
-    insertFocusOwnerPID: pid_t?,
-    focusedPID: pid_t?,
-    insertModeLocked: Bool = false
-  ) -> Bool {
-    guard !insertModeLocked else { return false }
-    guard let insertFocusOwnerPID, let focusedPID else { return false }
-    return mode == .insert
-      && modeBadgeEnabled
-      && overlayInputMode == .hints
-      && !hasHints
-      && !activationInFlight
-      && focusedPID != insertFocusOwnerPID
-  }
-
-  static func insertModeShouldExitAfterFocusedElementChange(
-    mode: FlashMode,
-    modeBadgeEnabled: Bool,
-    overlayInputMode: OverlayInputMode,
-    hasHints: Bool,
-    activationInFlight: Bool,
-    focusedPID: pid_t?,
-    eventPID: pid_t,
-    editableFocusExitPID: pid_t?,
-    focusedElementIsEditable: Bool,
-    insertModeLocked: Bool = false
-  ) -> Bool {
-    !insertModeLocked
-      && mode == .insert
-      && modeBadgeEnabled
-      && overlayInputMode == .hints
-      && !hasHints
-      && !activationInFlight
-      && focusedPID == eventPID
-      && focusedPID == editableFocusExitPID
-      && !focusedElementIsEditable
-  }
-
-  static func insertModeMayArmEditableFocusExit(
-    bundleIdentifier: String?,
-    insertModeLocked: Bool
-  ) -> Bool {
-    guard !insertModeLocked, let bundleIdentifier else { return false }
-    return !TerminalBundles.identifiers.contains(bundleIdentifier)
-  }
-
-  static func insertModeMayRepairEditableFocus(
-    reason: InsertModeTransitionReason?,
-    bundleIdentifier: String?,
-    insertModeLocked: Bool
-  ) -> Bool {
-    guard
-      insertModeMayArmEditableFocusExit(
-        bundleIdentifier: bundleIdentifier,
-        insertModeLocked: insertModeLocked)
-    else { return false }
-    return reason == .hintCommit || reason == .pointerClick
-  }
-
   static func insertEntryTargetPID(
     explicitTargetPID: pid_t?,
     currentMode: FlashMode,
     normalModeTargetPID: pid_t?
   ) -> pid_t? {
     explicitTargetPID ?? (currentMode == .normal ? normalModeTargetPID : nil)
-  }
-
-  static func insertFocusExitShouldWaitForPointerRelease(
-    pressedMouseButtons: Int = NSEvent.pressedMouseButtons
-  ) -> Bool {
-    pressedMouseButtons != 0
-  }
-
-  static func insertNavigationExitShouldExit(
-    currentURL: String?,
-    initialURL: String?
-  ) -> Bool {
-    guard let current = currentURL?.trimmed, !current.isEmpty else { return false }
-    if let initial = initialURL?.trimmed, !initial.isEmpty, current == initial {
-      return false
-    }
-    guard let url = URL(string: current), let scheme = url.scheme?.lowercased() else {
-      return false
-    }
-    return scheme == "http" || scheme == "https"
   }
 
   /// Scroll wheel events in idle normal mode are passive: the overlay
@@ -1007,8 +908,6 @@ extension AppDelegate {
     switch command {
     case .insertMode:
       enterInsertMode(reason: .normalModeInput)
-    case .lockedInsertMode:
-      enterInsertMode(reason: .lockedNormalModeInput)
     case .normalMode:
       enterNormalMode()
     case .terminalShow(let name):
@@ -1056,15 +955,10 @@ extension AppDelegate {
     case .tabClose:
       tabCloseInNormalMode(repeatCount: repeatCount)
     case .find:
-      // ⌘F opens the find bar in the focused app, then Flash drops to insert
-      // so the user can start typing the query immediately. The `/` chord
-      // is the user's explicit intent signal, so this still satisfies the
-      // audit-rule requirement that mode flips trace to a user-action path.
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
         flags: .maskCommand,
         repeatCount: repeatCount)
-      enterInsertMode(reason: .explicitCommand)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .enterCommand(let input, let restoreMode):
@@ -1144,9 +1038,6 @@ extension AppDelegate {
       }
     case .tabNew:
       tabNewInNormalMode(repeatCount: repeatCount)
-      // `t` is the user's explicit "open something fresh and start typing"
-      // intent: switch to insert so they can type into the new tab/window.
-      enterInsertMode(reason: .explicitCommand)
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:

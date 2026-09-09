@@ -10,9 +10,8 @@ import Foundation
 enum ModeEvent: Equatable {
   // MARK: User-explicit
 
-  /// `i` / `I` / `/` / `t` — the user asked to type. `reason.locksInsertMode`
-  /// decides the `locked` bit. `targetPID` is the app to hand the keyboard to.
-  case enterInsert(reason: InsertModeTransitionReason, targetPID: pid_t?)
+  /// The user asked to type. `targetPID` is the app to hand the keyboard to.
+  case enterInsert(targetPID: pid_t?)
 
   /// Explicitly select NORMAL regardless of a command surface's return mode.
   case enterNormal(targetPID: pid_t?)

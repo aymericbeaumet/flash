@@ -11,7 +11,7 @@ Important defaults:
 - `[t` / `]t` cycle previous/next tab.
 - `[h` / `]h` navigate target page history back/forward.
 - `[a` / `]a` cycle previous/next app in MRU order.
-- `n` sends Cmd-N to open a new window.
+- `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G.
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
 - `f`, `sf`, and `df` target discovered clickable elements, then enter insert
@@ -25,8 +25,18 @@ Important defaults:
 
 ## Shared mode exit
 
+`leave_mode`, `enter_insert_mode`, and `enter_command_mode` ship without
+default mappings in every scope. Users explicitly choose their shortcuts,
+including bindings that prefill the command line with `:flashlight`.
+
+Both `mode.normal.passthrough_keys` and `mode.normal.passthrough_modifiers`
+default to `[]`. Only matching configured unmapped keys or modifiers pass
+through NORMAL and enter INSERT; explicit mappings take precedence.
+`/` (`app_find`) and `t` (`tab_new`) execute their commands without changing
+mode. Use an explicit `enter_insert_mode` shortcut to type afterward.
+
 Bind `["flash", "leave_mode"]` in `[mode.all.mappings]` to enable advanced
-mode with one exit shortcut. It returns INSERT (including locked INSERT) to
+mode with one exit shortcut. It returns INSERT to
 NORMAL, closes command-line, finder, and terminal surfaces using their recorded
 return mode, and does nothing in idle NORMAL or with advanced mode disabled.
 `enter_normal_mode` remains the explicit action for selecting NORMAL even when

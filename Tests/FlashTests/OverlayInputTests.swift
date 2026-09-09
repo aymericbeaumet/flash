@@ -664,6 +664,7 @@ final class OverlayInputTests: XCTestCase {
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModePassthroughModifiers = ["cmd"]
 
     let event = try XCTUnwrap(
       NSEvent.keyEvent(
@@ -690,6 +691,7 @@ final class OverlayInputTests: XCTestCase {
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModePassthroughKeyCodes = [UInt32(kVK_Escape)]
 
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
@@ -703,6 +705,7 @@ final class OverlayInputTests: XCTestCase {
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
+    panel.normalModePassthroughKeyCodes = [UInt32(kVK_Escape)]
     panel.normalModeMappings = CompiledMappings([
       ModeMapping(key: "escape", action: .flashCommand(.scroll(.top)))
     ])
@@ -714,13 +717,12 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.scroll(.top)])
   }
 
-  func testKeyWindowFallbackConsumesEscapeWhenPassthroughIsDisabled() throws {
+  func testKeyWindowFallbackConsumesEscapeByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughKeyCodes = []
 
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
@@ -729,13 +731,12 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
   }
 
-  func testKeyWindowFallbackConsumesUnmappedModifierChordWhenDisabled() throws {
+  func testKeyWindowFallbackConsumesUnmappedModifierChordByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughModifiers = []
 
     let event = try XCTUnwrap(
       NSEvent.keyEvent(
@@ -761,7 +762,14 @@ final class OverlayInputTests: XCTestCase {
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModePassthroughModifiers = ["shift"]
+    panel.normalModeMappings =
+      ConfigLoader.parse(
+        """
+        [mode.normal.mappings]
+        "A" = ["flash", "enter_insert_mode"]
+        """
+      ).mode.compiledNormal
 
     let event = try keyEvent(
       keyCode: kVK_ANSI_A,
@@ -780,6 +788,7 @@ final class OverlayInputTests: XCTestCase {
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModePassthroughModifiers = ["shift"]
 
     let event = try keyEvent(
       keyCode: kVK_ANSI_Q,

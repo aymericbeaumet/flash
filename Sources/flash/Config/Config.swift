@@ -450,8 +450,8 @@ struct Config {
     /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
     /// same as in the editor users already have muscle memory for.
     static let defaultSequenceTimeoutMs = 1000
-    static let defaultNormalPassthroughKeys = ["escape"]
-    static let defaultNormalPassthroughModifiers = ["cmd", "ctrl", "shift", "alt"]
+    static let defaultNormalPassthroughKeys: [String] = []
+    static let defaultNormalPassthroughModifiers: [String] = []
 
     /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
     /// Use `\` bare or `<backslash>` — both resolve to the same key.
@@ -523,9 +523,9 @@ struct Config {
         // keystroke fallback delivers for any non-terminal app, and
         // terminals (no close-tab history) return `.unhandled`.
         ("X", .flashCommand(.tabReopen)),
-        // No default ⌘-based bindings: the system/browser ⌘ chords
-        // (⌘tab, ⌘1–9, ⌘R, ⌘[ / ⌘], ⌘⇧[ / ⌘⇧], ⌘T, ⌘W, ⌘N, ⌘F) are left to the
-        // OS / focused app. Their vim-style siblings cover the same actions in
+        // No default ⌘-based bindings. These chords reach the app in INSERT;
+        // NORMAL swallows them unless cmd passthrough is configured.
+        // Their vim-style siblings cover the same actions in
         // normal mode (`gt`/`gT`, `g1`–`g9`, `r`/`R`, `H`/`L`, `[t`/`]t`, `t`,
         // `x`, `/`, `[a`/`]a`).
         //
@@ -562,12 +562,6 @@ struct Config {
         // capital-letter siblings of `gT` / `gt`.
         ("J", .flashCommand(.tabPrev)),
         ("K", .flashCommand(.tabNext)),
-        ("a", .flashCommand(.insertMode)),
-        ("A", .flashCommand(.insertMode)),
-        ("i", .flashCommand(.insertMode)),
-        ("I", .flashCommand(.lockedInsertMode)),
-        ("o", .flashCommand(.insertMode)),
-        ("O", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
         // `F` requests the global Command-Shift new-context gesture. `f` stays
         // plain except for the Shift transport modifier terminal links require.
@@ -608,7 +602,7 @@ struct Config {
         ("x", sendKeyMapping("cmd+w")),
         // Vimium `n` / `N` cycle find matches. Flash drives the focused
         // app's native find-again (⌘G / ⌘⇧G) after `/` opens find. New
-        // windows stay on ⌘N (below) — `n` is needed for find parity.
+        // windows use native ⌘N in INSERT — `n` is needed for find parity.
         ("n", sendKeyMapping("cmd+g")),
         ("N", sendKeyMapping("cmd+shift+g")),
         // `y` yanks (copies) the current selection; `p` pastes it back.
@@ -623,11 +617,9 @@ struct Config {
         ("yy", .flashCommand(.copyURL)),
         ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
-        ("<leader><space>", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
         ("r", .flashCommand(.reload(force: false))),
         ("R", .flashCommand(.reload(force: true))),
         ("?", .flashCommand(.showUsage(topic: nil))),
-        (":", .flashCommand(.commandMode)),
       ]
       // Vim-style marks: `m<letter>` sets, `` `<letter> `` jumps.
       // Generated rather than hand-listed so the 52 mappings (26+26)
@@ -1003,7 +995,6 @@ extension URLCommand {
       return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
     case .leaveMode: return verb("leave_mode")
     case .insertMode: return verb("enter_insert_mode")
-    case .lockedInsertMode: return verb("enter_locked_insert_mode")
     case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):
       switch kind {

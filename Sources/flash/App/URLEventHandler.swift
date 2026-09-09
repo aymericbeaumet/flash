@@ -45,7 +45,6 @@ enum URLCommand: Hashable {
   case terminalRestart(name: String?)
   case leaveMode
   case insertMode
-  case lockedInsertMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
   case reload(force: Bool)
@@ -413,7 +412,6 @@ final class URLEventHandler: NSObject {
     },
     "leave_mode": { a in a.args.isEmpty ? .leaveMode : nil },
     "enter_insert_mode": { _ in .insertMode },
-    "enter_locked_insert_mode": { _ in .lockedInsertMode },
     "enter_command_mode": { a in
       guard let raw = a.value("input") else {
         return a.args.isEmpty ? .commandMode : nil
@@ -507,7 +505,6 @@ final class URLEventHandler: NSObject {
     flash terminal_restart [--name=<terminal-or-popup>]
     flash leave_mode
     flash enter_insert_mode
-    flash enter_locked_insert_mode
     flash enter_command_mode
     flash scroll_left
     flash scroll_right

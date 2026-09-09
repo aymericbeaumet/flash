@@ -6,7 +6,6 @@ import FlashCore
 enum InsertModeTransitionReason: Equatable {
   case explicitCommand
   case normalModeInput
-  case lockedNormalModeInput
   case pointerClick
   case hintCommit
   case advancedModeDisabled
@@ -19,8 +18,6 @@ enum InsertModeTransitionReason: Equatable {
       return "explicit_command"
     case .normalModeInput:
       return "normal_mode_input"
-    case .lockedNormalModeInput:
-      return "locked_normal_mode_input"
     case .pointerClick:
       return "pointer_click"
     case .hintCommit:
@@ -32,10 +29,6 @@ enum InsertModeTransitionReason: Equatable {
     case .normalModePassthrough:
       return "normal_mode_passthrough"
     }
-  }
-
-  var locksInsertMode: Bool {
-    self == .lockedNormalModeInput
   }
 }
 
@@ -649,8 +642,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       leaveMode()
     case .insertMode:
       enterInsertMode()
-    case .lockedInsertMode:
-      enterInsertMode(reason: .lockedNormalModeInput)
     case .commandMode:
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,

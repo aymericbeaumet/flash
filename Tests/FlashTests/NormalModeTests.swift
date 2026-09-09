@@ -148,8 +148,8 @@ final class NormalModeTests: XCTestCase {
       anchor = repeated.repeatAnchor
     }
 
-    let different = transition(repeatAnchor: anchor, chars: "i")
-    XCTAssertEqual(different.command, .insertMode)
+    let different = transition(repeatAnchor: anchor, chars: "r")
+    XCTAssertEqual(different.command, .reload(force: false))
     XCTAssertNil(different.repeatAnchor)
 
     let next = transition(pending: "]", chars: "a")
@@ -308,13 +308,13 @@ final class NormalModeTests: XCTestCase {
   // metadata. Virtual and physical primary clicks use the same post-click
   // terminal/input handoff check.
 
-  func testHelpReloadCommandLineAndModifiedKeyConsumption() {
-    XCTAssertEqual(command(chars: "a"), .insertMode)
-    XCTAssertEqual(command(chars: "A", ignoring: "a", flags: [.shift]), .insertMode)
-    XCTAssertEqual(command(chars: "i"), .insertMode)
-    XCTAssertEqual(command(chars: "I", ignoring: "i", flags: [.shift]), .lockedInsertMode)
-    XCTAssertEqual(command(chars: "o"), .insertMode)
-    XCTAssertEqual(command(chars: "O", ignoring: "o", flags: [.shift]), .insertMode)
+  func testHelpReloadAndModifiedKeyConsumption() {
+    XCTAssertNil(command(chars: "a"))
+    XCTAssertNil(command(chars: "A", ignoring: "a", flags: [.shift]))
+    XCTAssertNil(command(chars: "i"))
+    XCTAssertNil(command(chars: "I", ignoring: "i", flags: [.shift]))
+    XCTAssertNil(command(chars: "o"))
+    XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
     XCTAssertEqual(command(chars: "?"), .showUsage(topic: nil))
     XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
     XCTAssertNil(
@@ -330,7 +330,7 @@ final class NormalModeTests: XCTestCase {
     // any pending sequence — it resolves to reload on the first keystroke (no
     // sequence-timeout delay).
     XCTAssertEqual(command(chars: "r"), .reload(force: false))
-    XCTAssertEqual(command(chars: ":"), .commandMode)
+    XCTAssertNil(command(chars: ":"))
     assertSendKeyKeys(command(chars: "x"), "cmd+w")
     XCTAssertTrue(
       NormalModeInterpreter.recognizesPhysicalKey(
@@ -340,10 +340,8 @@ final class NormalModeTests: XCTestCase {
         modifierFlags: [],
         mappings: defaultMappings))
     XCTAssertEqual(command(chars: "/"), .find)
-    XCTAssertEqual(transition(chars: "\\").pending, "\\")
-    XCTAssertEqual(
-      transition(pending: "\\", keyCode: kVK_Space, chars: " ").command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+    XCTAssertEqual(transition(chars: "\\").pending, "")
+    XCTAssertNil(transition(pending: "\\", keyCode: kVK_Space, chars: " ").command)
     let modified = transition(chars: "r", flags: [.command])
     XCTAssertNil(modified.command)
     // The interpreter consumes an unrecognized modified chord; the keyboard
@@ -352,11 +350,11 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testPendingPrefixBrokenByUnmappableKeyFallsBackToFreshInterpretation() {
-    // `[` / `]` are prefixes but `[i` / `]i` are unmapped — falling back
-    // to interpreting `i` from scratch lands on insert mode instead of
+    // `[` / `]` are prefixes but `[r` / `]r` are unmapped — falling back
+    // to interpreting `r` from scratch reloads the app instead of
     // silently swallowing the keystroke.
-    XCTAssertEqual(command(pending: "[", chars: "i"), .insertMode)
-    XCTAssertEqual(command(pending: "]", chars: "i"), .insertMode)
+    XCTAssertEqual(command(pending: "[", chars: "r"), .reload(force: false))
+    XCTAssertEqual(command(pending: "]", chars: "r"), .reload(force: false))
     // `gi` is a real mapping (Vimium: focus the first text input).
     XCTAssertEqual(command(pending: "g", chars: "i"), .focusInput)
     assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
@@ -372,38 +370,6 @@ final class NormalModeTests: XCTestCase {
     let unmappable = transition(pending: "g", chars: "z")
     XCTAssertNil(unmappable.command)
     XCTAssertEqual(unmappable.pending, "")
-  }
-
-  func testNormalModeMayEnterInsertOnAnyUserDrivenTrigger() {
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .hintCommit))
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModeInput))
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .lockedNormalModeInput))
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .pointerClick))
-    // `.explicitCommand` is the reason `/` (app_find) and `t` (tab_new)
-    // pass when they want the side-effect followed by a switch to
-    // INSERT. They're user-driven, so the gate must let them through.
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
-    // `.normalModePassthrough` is scheduled only by an explicit unmapped
-    // configured keypress, so it is user-driven too.
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModePassthrough))
-    // `.advancedModeDisabled` stays out of the user-driven set — config
-    // reload uses `force: true` to bypass the gate when it needs to
-    // leave NORMAL because the user removed the normal-mode binding.
-    XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
-  }
-
-  func testInsertModeExitsWhenFocusedElementStopsBeingEditable() {
-    XCTAssertTrue(shouldExitAfterFocusedElementChange(focusedElementIsEditable: false))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(focusedElementIsEditable: true))
-    XCTAssertFalse(
-      shouldExitAfterFocusedElementChange(
-        focusedElementIsEditable: false,
-        insertModeLocked: true))
-  }
-
-  func testInsertModeDoesNotExitWhenFocusedAppChangesWhileLocked() {
-    XCTAssertTrue(shouldExitAfterFocusedAppChange(focusedPID: pid_t(7)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: pid_t(7), insertModeLocked: true))
   }
 
   func testInsertFocusMachineCoversTextEntryStableControlsAndTransientSurfaces() {
@@ -804,67 +770,6 @@ final class NormalModeTests: XCTestCase {
       [outer])
   }
 
-  func testInsertEntryMayArmEditableFocusExitSkipsTerminalsAndLockedInsert() {
-    XCTAssertFalse(
-      AppDelegate.insertModeMayArmEditableFocusExit(
-        bundleIdentifier: "org.alacritty",
-        insertModeLocked: false))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayArmEditableFocusExit(
-        bundleIdentifier: "com.apple.Terminal",
-        insertModeLocked: false))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayArmEditableFocusExit(
-        bundleIdentifier: "com.apple.MobileSMS",
-        insertModeLocked: true))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayArmEditableFocusExit(
-        bundleIdentifier: nil,
-        insertModeLocked: false))
-    XCTAssertTrue(
-      AppDelegate.insertModeMayArmEditableFocusExit(
-        bundleIdentifier: "com.apple.MobileSMS",
-        insertModeLocked: false))
-  }
-
-  func testInsertEntryOnlyRepairsEditableFocusAfterPointerOrHintEditableHandoff() {
-    XCTAssertTrue(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: .pointerClick,
-        bundleIdentifier: "com.apple.MobileSMS",
-        insertModeLocked: false))
-    XCTAssertTrue(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: .hintCommit,
-        bundleIdentifier: "org.mozilla.firefox",
-        insertModeLocked: false))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: .normalModeInput,
-        bundleIdentifier: "com.apple.MobileSMS",
-        insertModeLocked: false))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: .explicitCommand,
-        bundleIdentifier: "org.mozilla.firefox",
-        insertModeLocked: false))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: .lockedNormalModeInput,
-        bundleIdentifier: "com.apple.MobileSMS",
-        insertModeLocked: true))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: .pointerClick,
-        bundleIdentifier: "org.alacritty",
-        insertModeLocked: false))
-    XCTAssertFalse(
-      AppDelegate.insertModeMayRepairEditableFocus(
-        reason: nil,
-        bundleIdentifier: "com.apple.MobileSMS",
-        insertModeLocked: false))
-  }
-
   func testInsertEntryCarriesNormalModeTargetUnlessExplicitTargetIsProvided() {
     XCTAssertEqual(
       AppDelegate.insertEntryTargetPID(
@@ -928,40 +833,6 @@ final class NormalModeTests: XCTestCase {
         hasHints: false,
         activationInFlight: false,
         normalModeTargetPID: nil))
-  }
-
-  func testInsertModeFocusLossExitRequiresArmedEditablePID() {
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: nil))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: pid_t(43)))
-  }
-
-  func testInsertModeExitsWhenOwningAppLosesFocus() {
-    XCTAssertTrue(shouldExitAfterFocusedAppChange(focusedPID: pid_t(43)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: pid_t(42)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(insertFocusOwnerPID: nil, focusedPID: pid_t(43)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: nil))
-  }
-
-  func testInsertModeFocusLossExitRespectsModeGuards() {
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(mode: .normal))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(modeBadgeEnabled: false))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(overlayInputMode: .commandLine))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(hasHints: true))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(activationInFlight: true))
-    XCTAssertFalse(shouldExitAfterFocusedElementChange(focusedPID: pid_t(43)))
-
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(mode: .normal, focusedPID: pid_t(43)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(modeBadgeEnabled: false, focusedPID: pid_t(43)))
-    XCTAssertFalse(
-      shouldExitAfterFocusedAppChange(overlayInputMode: .commandLine, focusedPID: pid_t(43)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(hasHints: true, focusedPID: pid_t(43)))
-    XCTAssertFalse(shouldExitAfterFocusedAppChange(activationInFlight: true, focusedPID: pid_t(43)))
-  }
-
-  func testInsertFocusExitWaitsForPointerRelease() {
-    XCTAssertFalse(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 0))
-    XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 1))
-    XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 2))
   }
 
   func testInsertFocusExitOnlyProbesFocusChangingAXNotifications() {
@@ -1069,33 +940,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(
       AppMonitor.notificationShouldSchedulePreparedModelRefresh(
         kAXFocusedWindowChangedNotification as String))
-  }
-
-  func testBrowserTabNavigationExitRecognizesCommittedWebURLsOnly() {
-    XCTAssertTrue(
-      AppDelegate.insertNavigationExitShouldExit(
-        currentURL: "https://example.com/path",
-        initialURL: "about:blank"))
-    XCTAssertTrue(
-      AppDelegate.insertNavigationExitShouldExit(
-        currentURL: "http://localhost:3000",
-        initialURL: "chrome://newtab/"))
-    XCTAssertFalse(
-      AppDelegate.insertNavigationExitShouldExit(
-        currentURL: "https://example.com/path",
-        initialURL: "https://example.com/path"))
-    XCTAssertFalse(
-      AppDelegate.insertNavigationExitShouldExit(
-        currentURL: "chrome://newtab/",
-        initialURL: "https://previous.example"))
-    XCTAssertFalse(
-      AppDelegate.insertNavigationExitShouldExit(
-        currentURL: "about:blank",
-        initialURL: nil))
-    XCTAssertFalse(
-      AppDelegate.insertNavigationExitShouldExit(
-        currentURL: nil,
-        initialURL: nil))
   }
 
   func testPointerScrollPassesThroughInIdleNormalMode() {
@@ -2911,14 +2755,12 @@ final class NormalModeTests: XCTestCase {
       "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
       "gg", "G", "H", "L", "f", "F", "ctrl-f", "ctrl+shift+f", "sf", "Df", "mf", "sF",
       "DF", "mF", "u", "ctrl-r", "x", "n",
-      "/", "\\<space>", "r", "R", "e", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a",
+      "/", "r", "R", "e", "t", "MAPPINGS",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "g^", "g$", "[t", "]t", "[a",
       "]a", "g1", "g9", "N{mapping}",
-      ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
-      ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
-      ":open <args>", ":flashlight <query>", "flash mouse_target",
+      "flash mouse_target",
       "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
-      "flash enter_command_mode --input=flashlight ", "flash mouse_target --secondary",
+      "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_grid", "flash history_back",
       "flash history_forward",
       "flash app_previous", "flash app_next",
@@ -2929,6 +2771,28 @@ final class NormalModeTests: XCTestCase {
         "missing \(mapping)")
     }
     XCTAssertFalse(help.contains("flash enter_normal_mode"))
+    XCTAssertFalse(help.contains("flash leave_mode"))
+    XCTAssertFalse(help.contains("flash enter_insert_mode"))
+    XCTAssertFalse(help.contains("flash enter_command_mode"))
+    XCTAssertFalse(help.contains(":q[uit]"))
+  }
+
+  func testHelpTextListsCommandsWhenCommandModeMappingIsConfigured() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      ":" = ["flash", "enter_command_mode"]
+      """
+    )
+    let help = NormalModeDispatcher.helpText(config: config, showModes: true)
+    XCTAssertTrue(help.contains("flash enter_command_mode"))
+    for command in [
+      ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
+      ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
+      ":open <args>", ":flashlight <query>",
+    ] {
+      XCTAssertTrue(help.contains(command), "missing \(command)")
+    }
   }
 
   func testNormalModeHelpTopicOmitsTerminalOwnedMappings() {
@@ -3522,52 +3386,6 @@ final class NormalModeTests: XCTestCase {
       modifiers: [],
       flashWasActive: flashWasActive,
       frontmostPIDAtClick: frontmostPIDAtClick)
-  }
-
-  private func shouldExitAfterFocusedElementChange(
-    mode: FlashMode = .insert,
-    modeBadgeEnabled: Bool = true,
-    overlayInputMode: OverlayInputMode = .hints,
-    hasHints: Bool = false,
-    activationInFlight: Bool = false,
-    focusedPID: pid_t? = pid_t(42),
-    eventPID: pid_t = pid_t(42),
-    editableFocusExitPID: pid_t? = pid_t(42),
-    focusedElementIsEditable: Bool = false,
-    insertModeLocked: Bool = false
-  ) -> Bool {
-    AppDelegate.insertModeShouldExitAfterFocusedElementChange(
-      mode: mode,
-      modeBadgeEnabled: modeBadgeEnabled,
-      overlayInputMode: overlayInputMode,
-      hasHints: hasHints,
-      activationInFlight: activationInFlight,
-      focusedPID: focusedPID,
-      eventPID: eventPID,
-      editableFocusExitPID: editableFocusExitPID,
-      focusedElementIsEditable: focusedElementIsEditable,
-      insertModeLocked: insertModeLocked)
-  }
-
-  private func shouldExitAfterFocusedAppChange(
-    mode: FlashMode = .insert,
-    modeBadgeEnabled: Bool = true,
-    overlayInputMode: OverlayInputMode = .hints,
-    hasHints: Bool = false,
-    activationInFlight: Bool = false,
-    insertFocusOwnerPID: pid_t? = pid_t(42),
-    focusedPID: pid_t? = pid_t(42),
-    insertModeLocked: Bool = false
-  ) -> Bool {
-    AppDelegate.insertModeShouldExitAfterFocusedAppChange(
-      mode: mode,
-      modeBadgeEnabled: modeBadgeEnabled,
-      overlayInputMode: overlayInputMode,
-      hasHints: hasHints,
-      activationInFlight: activationInFlight,
-      insertFocusOwnerPID: insertFocusOwnerPID,
-      focusedPID: focusedPID,
-      insertModeLocked: insertModeLocked)
   }
 
   private func candidateFinderCandidate(

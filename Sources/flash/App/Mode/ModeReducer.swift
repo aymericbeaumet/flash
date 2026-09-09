@@ -14,11 +14,11 @@ import Foundation
 enum ModeReducer {
   static func reduce(_ state: Mode, _ event: ModeEvent) -> (Mode, [ModeEffect]) {
     switch event {
-    case .enterInsert(let reason, let targetPID):
+    case .enterInsert(let targetPID):
       // Advanced mode off → no normal mode exists, so there is nothing to
       // enter insert *from*; stay put.
       if case .disabled = state { return (state, []) }
-      let next = Mode.insert(locked: reason.locksInsertMode)
+      let next = Mode.insert
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
     case .enterNormal(let targetPID):
@@ -73,7 +73,7 @@ enum ModeReducer {
       // The mouse only acts in NORMAL and can never leave INSERT.
       guard case .normal = state else { return (state, []) }
       if entersInsert {
-        let next = Mode.insert(locked: false)
+        let next = Mode.insert
         return (next, enterEffects(for: next, targetPID: targetPID))
       }
       // A non-editable click in NORMAL keeps NORMAL; just make sure the overlay
@@ -84,7 +84,7 @@ enum ModeReducer {
       if case .terminal(let restoreTo) = state {
         let base: ReturnMode =
           enabled
-          ? (restoreTo == .disabled ? .insert(locked: false) : restoreTo) : .disabled
+          ? (restoreTo == .disabled ? .insert : restoreTo) : .disabled
         return (.terminal(restoreTo: base), [.renderSurface])
       }
       if enabled {
@@ -92,7 +92,7 @@ enum ModeReducer {
         // with their hotkey. If it was already on, just refresh the badge/label
         // (labels may have changed in the reload).
         if case .disabled = state {
-          let next = Mode.insert(locked: false)
+          let next = Mode.insert
           return (next, enterEffects(for: next, targetPID: nil))
         }
         return (state, [.renderSurface])

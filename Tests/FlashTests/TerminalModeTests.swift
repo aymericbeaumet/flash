@@ -4,7 +4,7 @@ import XCTest
 
 final class TerminalModeTests: XCTestCase {
   func testTerminalOwnsNoOverlayOrGlobalMappings() {
-    for base in [Mode.disabled, .normal, .insert(locked: true)] {
+    for base in [Mode.disabled, .normal, .insert] {
       let (mode, effects) = ModeReducer.reduce(base, .openTerminal)
       XCTAssertEqual(mode, .terminal(restoreTo: base.asReturnMode))
       XCTAssertFalse(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
@@ -18,7 +18,7 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testFocusLossRestoresBaseWithoutActivatingAnotherApp() {
-    for base in [Mode.disabled, .normal, .insert(locked: false), .insert(locked: true)] {
+    for base in [Mode.disabled, .normal, .insert] {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: nil))
       XCTAssertEqual(mode, base)
@@ -32,7 +32,7 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testExplicitPopupCloseRestoresPriorAppBeforeBaseModeRendering() {
-    for base in [Mode.disabled, .normal, .insert(locked: false), .insert(locked: true)] {
+    for base in [Mode.disabled, .normal, .insert] {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: 42))
       XCTAssertEqual(mode, base)
@@ -45,7 +45,7 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testPopupCloseOutsideTerminalDoesNotActivateApp() {
-    for base in [Mode.disabled, .normal, .insert(locked: true)] {
+    for base in [Mode.disabled, .normal, .insert] {
       let (mode, effects) = ModeReducer.reduce(base, .closeTerminal(targetPID: 42))
       XCTAssertEqual(mode, base)
       XCTAssertTrue(effects.isEmpty)
@@ -54,7 +54,7 @@ final class TerminalModeTests: XCTestCase {
 
   func testTerminalExitActivatesPriorAppBeforeNormalCapture() {
     let (mode, effects) = ModeReducer.reduce(
-      .terminal(restoreTo: .insert(locked: false)), .enterNormal(targetPID: 42))
+      .terminal(restoreTo: .insert), .enterNormal(targetPID: 42))
     XCTAssertEqual(mode, .normal)
     XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
     XCTAssertLessThan(

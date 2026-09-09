@@ -23,10 +23,10 @@ extension NormalModeDispatcher {
 
         Normal mode captures keyboard input through Flash's sanctioned session
         tap, with the overlay panel as its no-permission fallback. Configured
-        modified mappings use Carbon hotkeys. By default, Escape and an unmapped
-        Command, Control, Shift, or Option shortcut enter INSERT and continue
-        natively. Set `mode.normal.passthrough_keys = []` or
-        `mode.normal.passthrough_modifiers = []` to disable either fallback.
+        modified mappings use Carbon hotkeys. Unmapped keys are swallowed by
+        default. Configure `mode.normal.passthrough_keys` or
+        `mode.normal.passthrough_modifiers` to let matching unmapped keys
+        enter INSERT and continue natively; both lists default to `[]`.
 
         ## Core Motion
 
@@ -44,7 +44,7 @@ extension NormalModeDispatcher {
           to repeat (`[aaaa` / `]aaaa`).
         - `g1` ... `g9` select a numbered tab when the focused source supports it.
         - In browsers this maps to tab selection.
-        - `n` opens a new window with Cmd-N.
+        - `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G.
         - `t` opens a browser tab or tmux window when the focused source supports it.
         - `r` reloads browsers or refreshes the focused tmux client.
         - `e` archives the focused resource when a website source supports it.
@@ -63,7 +63,8 @@ extension NormalModeDispatcher {
 
         ## Command Line
 
-        `:` opens command-line mode. Use `:help` for the topic index,
+        Bind `enter_command_mode` to a shortcut of your choice to open the
+        command line. Use `:help` for the topic index,
         `:help plugins` for plugin docs, and `:mappings` for the resolved
         mapping table. `:flashlight <query>` searches source candidates;
         `:open <args>` forwards verbatim to `open` (URLs, files, `-a App`).

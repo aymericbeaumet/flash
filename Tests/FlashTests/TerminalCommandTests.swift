@@ -45,11 +45,16 @@ final class TerminalCommandTests: XCTestCase {
       Set(context.items.map(\.label)), ["terminal_show", "terminal_dismiss", "terminal_restart"])
     XCTAssertEqual(context.items.first { $0.label == "terminal_dismiss" }?.kind, .terminal)
     XCTAssertEqual(context.items.first { $0.label == "terminal_show" }?.kind, .acceptsArgs)
+    let config = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      ":" = ["flash", "enter_command_mode"]
+      """)
     let catalog = NormalModeDispatcher.coreCommandCatalog()
     for name in ["terminal_show", "terminal_dismiss", "terminal_restart"] {
       XCTAssertTrue(catalog.contains { $0["name"] as? String == ":" + name })
       XCTAssertTrue(
-        NormalModeDispatcher.helpText(config: Config(), showModes: true).contains(":" + name))
+        NormalModeDispatcher.helpText(config: config, showModes: true).contains(":" + name))
       XCTAssertTrue(URLEventHandler.usageText.contains("flash " + name))
     }
   }
