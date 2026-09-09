@@ -27,6 +27,7 @@ final class ModeReducerTests: XCTestCase {
     .enterInsert(reason: .normalModeInput, targetPID: 7),
     .enterInsert(reason: .lockedNormalModeInput, targetPID: 7),
     .enterNormal(targetPID: 7),
+    .leaveMode(targetPID: nil),
     .openCommand(scope: .commandLine, restoreMode: false),
     .openCommand(scope: .finder(all: true), restoreMode: true),
     .closeCommand(reason: "submit"),
@@ -137,6 +138,55 @@ final class ModeReducerTests: XCTestCase {
 
   func testCloseCommandFromNonCommandIsNoop() {
     XCTAssertEqual(ModeReducer.reduce(.normal, .closeCommand(reason: "x")).0, .normal)
+  }
+
+  func testLeaveModeReturnsInsertToNormal() {
+    for locked in [false, true] {
+      let (next, effects) = ModeReducer.reduce(.insert(locked: locked), .leaveMode(targetPID: nil))
+      XCTAssertEqual(next, .normal)
+      XCTAssertEqual(effects, ModeReducer.enterEffects(for: .normal, targetPID: nil))
+    }
+  }
+
+  func testLeaveModeRestoresEveryCommandSurface() {
+    for scope in [CommandScope.commandLine, .finder(all: true), .finder(all: false)] {
+      for origin in [Mode.normal, .insert(locked: false), .insert(locked: true), .disabled] {
+        for restoreMode in [false, true] {
+          let (opened, _) = ModeReducer.reduce(
+            origin, .openCommand(scope: scope, restoreMode: restoreMode))
+          let expected = ModeReducer.reduce(opened, .closeCommand(reason: "cancel"))
+          let actual = ModeReducer.reduce(opened, .leaveMode(targetPID: nil))
+          XCTAssertEqual(actual.0, expected.0)
+          XCTAssertEqual(actual.1, expected.1)
+          XCTAssertTrue(actual.1.contains(.clearTransientHintState))
+        }
+      }
+    }
+  }
+
+  func testLeaveModeKeepsNormalAndDisabled() {
+    for state in [Mode.normal, .disabled] {
+      let (next, effects) = ModeReducer.reduce(state, .leaveMode(targetPID: nil))
+      XCTAssertEqual(next, state)
+      XCTAssertTrue(effects.isEmpty)
+    }
+  }
+
+  func testLeaveModeRestoresTerminalAndPreviousApplication() {
+    for origin in [Mode.normal, .insert(locked: false), .insert(locked: true), .disabled] {
+      let (opened, _) = ModeReducer.reduce(origin, .openTerminal)
+      let actual = ModeReducer.reduce(opened, .leaveMode(targetPID: 42))
+      let expected = ModeReducer.reduce(opened, .closeTerminal(targetPID: 42))
+      XCTAssertEqual(actual.0, origin)
+      XCTAssertEqual(actual.1, expected.1)
+      XCTAssertTrue(actual.1.contains(.hideTerminalPopup))
+      XCTAssertTrue(actual.1.contains(.activateFocusedApp(pid: 42)))
+    }
+  }
+
+  func testLeaveModeVerbRejectsArguments() {
+    XCTAssertEqual(URLEventHandler.parse(verb: "leave_mode", args: [:]), .leaveMode)
+    XCTAssertNil(URLEventHandler.parse(verb: "leave_mode", args: ["mode": "insert"]))
   }
 
   func testEnterNormalClosesEveryCommandSurface() {

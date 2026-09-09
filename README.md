@@ -64,15 +64,17 @@ Mappings call the same actions as the CLI, so anything you can run as `flash <ve
 
 ### Normal mode
 
-Bind `enter_normal_mode` to turn macOS into a keyboard-first environment:
+Bind `leave_mode` once to enable normal mode and share an exit shortcut across insert and command modes:
 
 ```toml
 [mode.all.mappings]
-"ctrl+alt+n" = ["flash", "enter_normal_mode"]
+"ctrl+alt+n" = ["flash", "leave_mode"]
 
 [statusbar]
 enabled = true
 ```
+
+`leave_mode` returns insert mode to normal and closes command panels using their return mode (`--restore-mode` preserves the entry mode). In normal mode it does nothing. `enter_normal_mode` explicitly selects normal mode regardless of a panel's return mode. Modified mappings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`; no mode-specific exit override is installed by default.
 
 Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). Vim's `a`, `A`, `i`, `I`, `o`, and `O` all enter insert mode; `I` keeps Flash's locked-insert behavior.
 
@@ -299,6 +301,7 @@ flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
 flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
 flash enter_command_mode                 # open the command line
+flash leave_mode                         # leave insert or close the command panel
 flash help_show                          # show built-in help
 flash plugins                            # inspect plugins
 flash about                              # open the About Flash window

@@ -92,42 +92,6 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(HotkeySyntax.parse(hotkey: ""))
   }
 
-  func testAllScopeCommandMappingsDispatchInNormalMode() {
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .all,
-        currentMode: .normal,
-        modifiers: UInt32(cmdKey)))
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .all,
-        currentMode: .insert,
-        modifiers: UInt32(cmdKey)))
-  }
-
-  func testNormalScopeCommandMappingsDispatchInNormalMode() {
-    // `[mode.normal.mappings]` cmd-prefixed mappings must fire when in
-    // normal mode. The previous behaviour blocked them, which meant
-    // configuring `"cmd+a" = ["flash", "..."]` under `[mode.normal.mappings]`
-    // silently did nothing.
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .normal,
-        modifiers: UInt32(cmdKey | shiftKey)))
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .normal,
-        modifiers: UInt32(optionKey)))
-    // Normal-scope cmd-mappings must NOT fire when we're in insert mode.
-    XCTAssertFalse(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .insert,
-        modifiers: UInt32(cmdKey)))
-  }
-
   func testScopeIsActiveGovernsCarbonRegistration() {
     // The mapping scope filters Carbon registrations through
     // `scopeIsActive`. A `.normal`-scope mapping (e.g. `cmd+tab`) must
@@ -143,6 +107,9 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .normal))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.insert, for: .insert))
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .command))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .normal))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .insert))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.command, for: .command))
   }
 
   func testDefaultNormalMappingsOmitCmdChords() {

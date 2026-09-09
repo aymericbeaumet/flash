@@ -137,7 +137,7 @@ extension AppDelegate {
     // normal, a thicker blue one in insert — so the focused window stays
     // identifiable (most useful for apps with several windows). The user can
     // opt out wholesale (`[overlay] window_border = false`). Advanced mode
-    // (`["flash", "enter_normal_mode"]` bound somewhere) is the gate: without it
+    // (an all-mode `leave_mode` or `enter_normal_mode` binding) is the gate: without it
     // there's no normal/insert distinction to visualise. Suspended while hints
     // are up (chips aren't double-framed) and whenever the user session or
     // displays are inactive, so Flash never survives over the lock surface.

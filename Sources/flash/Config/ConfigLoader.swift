@@ -460,7 +460,8 @@ enum ConfigLoader {
         "live_query_timeout_ms",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "terminal", "scroll_step",
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
+        "scroll_step",
         "scroll_page_fraction", "click_hold_ms", "send_key_interval_ms",
       ],
       "overlay": [
@@ -1397,6 +1398,26 @@ enum ConfigLoader {
           location: locations.location(for: ["mode", name, key]))
       }
     }
+
+    if let command = sectionTable(
+      table["command"], name: "mode.command", locations: locations, into: &config)
+    {
+      applyModeMappingTable(
+        sectionTable(
+          command["mappings"], name: "mode.command.mappings", locations: locations, into: &config),
+        scope: .command,
+        path: ["mode", "command", "mappings"],
+        locations: locations,
+        sourceURL: sourceURL,
+        pendingModeMappings: &pendingModeMappings,
+        into: &config)
+
+      for (key, _) in command where key != "mappings" {
+        config.addDiagnostic(
+          "mode.command: unknown key '\(key)' — mappings belong under [mode.command.mappings]",
+          location: locations.location(for: ["mode", "command", key]))
+      }
+    }
   }
 
   private static func applyOverlay(
@@ -1776,6 +1797,9 @@ enum ConfigLoader {
     case .terminal:
       config.mode.terminal.removeAll { $0.key == key }
       config.mode.terminal.append(mapping)
+    case .command:
+      config.mode.command.removeAll { $0.key == key }
+      config.mode.command.append(mapping)
     }
   }
 
@@ -1793,6 +1817,14 @@ enum ConfigLoader {
       guard let key = resolvedMappingKey(mapping.key, scope: mapping.scope, config: config) else {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" uses <leader> but mode.normal.leader is not set",
+          location: mapping.location)
+        continue
+      }
+      if mapping.scope == .command,
+        ModeMapping(key: key, action: mapping.action).nativeHotkey == nil
+      {
+        config.addDiagnostic(
+          "mapping \"\(mapping.rawKey)\" in [mode.command.mappings] must be a single modified key",
           location: mapping.location)
         continue
       }

@@ -177,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The coarse insert/normal axis, projected from the unified mode.
   var flashMode: FlashMode { modeStore.mode.flashMode }
   /// Advanced mode (the normal/insert system) is configured — true unless the
-  /// mode is `.disabled`, i.e. the user has an `enter_normal_mode` binding.
+  /// mode is `.disabled`, i.e. the user has an all-mode `leave_mode` or `enter_normal_mode` binding.
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
   var modeBadgeEnabled: Bool { modeStore.mode != .disabled }
@@ -588,8 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     mappings.start(
       dispatch: { [weak self] action in
         self?.dispatchNativeMappingAction(action)
-      },
-      currentMode: { [weak self] in self?.flashMode ?? .insert })
+      })
     modeStore.perform = { [weak self] effects, previous, next in
       self?.applyModeEffects(effects, previous: previous, next: next)
     }
@@ -646,6 +645,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
+    case .leaveMode:
+      leaveMode()
     case .insertMode:
       enterInsertMode()
     case .lockedInsertMode:

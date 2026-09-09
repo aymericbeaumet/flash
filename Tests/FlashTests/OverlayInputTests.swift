@@ -5,6 +5,27 @@ import XCTest
 @testable import flash
 
 final class OverlayInputTests: XCTestCase {
+  func testCommandSurfacesDispatchMappedKeyEquivalentsBeforeEditing() throws {
+    let events = [
+      try keyEvent(
+        keyCode: kVK_ANSI_LeftBracket, characters: "[", modifierFlags: [.command, .control]),
+      try keyEvent(keyCode: kVK_Return, characters: "\r", modifierFlags: [.command]),
+    ]
+    for mode in [OverlayInputMode.commandLine, .candidateFinder] {
+      for event in events {
+        let panel = OverlayPanel()
+        let coordinator = SpyOverlayCoordinator()
+        panel.coordinator = coordinator
+        panel.inputMode = mode
+        coordinator.mappingEventsToHandle = 1
+
+        XCTAssertTrue(panel.performKeyEquivalent(with: event))
+        XCTAssertEqual(coordinator.mappingEventsToHandle, 0)
+        XCTAssertTrue(coordinator.submittedCommands.isEmpty)
+      }
+    }
+  }
+
   func testPresentedCommandLineUsesInPlaceRefresh() {
     XCTAssertTrue(
       OverlayPanel.commandLineCanRefreshInPlace(

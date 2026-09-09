@@ -17,8 +17,9 @@ enum ModeLabel: Equatable {
 extension Mode {
   /// The coarse insert/normal axis used by consumers that only care about that
   /// distinction and the pointer interaction policy. Command surfaces have a
-  /// separate mapping scope effect. Terminal input uses the non-capturing axis;
-  /// its label, input owner, and mapping scope remain explicitly terminal.
+  /// separate mapping scope effect that selects all-mode and command-specific
+  /// Carbon mappings while the field editor owns the keyboard.
+  /// Terminal input uses the non-capturing axis and its local mapping scope.
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert, .terminal: return .insert

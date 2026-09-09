@@ -143,6 +143,7 @@ extension NormalModeDispatcher {
       + mappingRows(scope: "normal", mappings: config.mode.normal)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
       + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
+      + mappingRows(scope: "command", mappings: config.mode.command)
     let scopeWidth = max("SCOPE".count, rows.map(\.scope.count).max() ?? 0)
     let keyWidth = max("KEY".count, rows.map(\.key.count).max() ?? 0)
     var lines = [
@@ -171,13 +172,13 @@ extension NormalModeDispatcher {
   }
 
   /// The configured mappings as structured rows for the inspector's Mappings
-  /// tab — the same `all`/`normal`/`insert` data `mappingsText` renders, minus
-  /// the Markdown table formatting.
+  /// tab — the same scope data `mappingsText` renders, minus Markdown formatting.
   static func mappingsJSON(config: Config) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
-      + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings))
+      + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
+      + mappingRows(scope: "command", mappings: config.mode.command))
       .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
   }
 
@@ -281,7 +282,7 @@ extension NormalModeDispatcher {
     for line in commandLineHelpLines {
       lines.append(line)
     }
-    lines.append("Command mode exits with Esc, ctrl-c, or empty backspace.")
+    lines.append("Command mode exits with the leave_mode mapping, Esc, ctrl-c, or empty backspace.")
   }
 
   private static var commandLineHelpLines: [String] {

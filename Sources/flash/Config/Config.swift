@@ -419,6 +419,7 @@ struct Config {
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = []
+    var command: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
     /// Keys and modifiers that make an unmapped keypress in NORMAL switch to
     /// INSERT and continue to the focused app or macOS unchanged. Explicit
@@ -669,9 +670,21 @@ struct Config {
     func mappings(for mode: FlashMode) -> [ModeMapping] {
       switch mode {
       case .normal:
-        return all + normal
+        return Self.resolveMappings(normal + all)
       case .insert:
-        return all + insert
+        return Self.resolveMappings(insert + all)
+      }
+    }
+
+    /// Scope-specific entries precede all-mode fallbacks. Chord aliases share
+    /// one winner across the interpreter and native hotkey dispatcher.
+    static func resolveMappings(_ mappings: [ModeMapping]) -> [ModeMapping] {
+      var keys: Set<String> = []
+      var chords: Set<ParsedHotkey> = []
+      return mappings.filter { mapping in
+        guard keys.insert(mapping.key).inserted else { return false }
+        guard let chord = mapping.nativeHotkey else { return true }
+        return chords.insert(chord).inserted
       }
     }
 
@@ -690,7 +703,8 @@ struct Config {
       let inherited = mappings(for: .insert).filter {
         let identity = CompiledMappings.physicalIdentity(for: $0.key)
         return insertClaimed.insert(identity).inserted
-          && $0.action.command == .normalMode && claimed.insert(identity).inserted
+          && ($0.action.command == .normalMode || $0.action.command == .leaveMode)
+          && claimed.insert(identity).inserted
       }
       return explicit + inherited
     }
@@ -715,14 +729,14 @@ struct Config {
     }
 
     var containsNormalModeMapping: Bool {
-      (all + normal + insert).contains { mapping in
-        mapping.action.command == .normalMode
+      (all + normal + insert + command + terminal).contains { mapping in
+        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
 
     var containsAdvancedModeMapping: Bool {
       all.contains { mapping in
-        mapping.action.command == .normalMode
+        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
   }
@@ -814,6 +828,7 @@ struct Config {
   var resolvedConfigJSON: String {
     let modeJSON: [String: Any] = [
       "all": mode.all.map(Self.mappingJSONValue),
+      "command": mode.command.map(Self.mappingJSONValue),
       "insert": mode.insert.map(Self.mappingJSONValue),
       "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
       "labels": [
@@ -986,6 +1001,7 @@ extension URLCommand {
       return verb("terminal_dismiss")
     case .terminalRestart(let name):
       return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
+    case .leaveMode: return verb("leave_mode")
     case .insertMode: return verb("enter_insert_mode")
     case .lockedInsertMode: return verb("enter_locked_insert_mode")
     case .commandMode: return verb("enter_command_mode")
@@ -1173,6 +1189,7 @@ extension Config {
       - `[mode.normal.mappings]`
       - `[mode.insert.mappings]`
       - `[mode.terminal.mappings]`
+      - `[mode.command.mappings]`
       - `[debug]`
 
       Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`,

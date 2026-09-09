@@ -8,12 +8,14 @@ final class EffectiveMappingsTests: XCTestCase {
   private func mode(
     all: [ModeMapping] = [],
     normal: [ModeMapping] = [],
-    insert: [ModeMapping] = []
+    insert: [ModeMapping] = [],
+    command: [ModeMapping] = []
   ) -> Config.Mode {
     var mode = Config().mode
     mode.all = all
     mode.normal = normal
     mode.insert = insert
+    mode.command = command
     mode.recompileMappings()
     return mode
   }
@@ -49,7 +51,7 @@ final class EffectiveMappingsTests: XCTestCase {
     XCTAssertEqual(effective.insert, base.insert)
   }
 
-  func testConfigAllBeatsConfigNormalAmongPriorityZeroEntries() {
+  func testConfigNormalOverridesAllAmongPriorityZeroEntries() {
     // Same lhs in `all` and `normal`; an unrelated plugin entry forces the
     // merge path so this exercises mergeScope, not the empty-plugin shortcut.
     let base = mode(
@@ -63,10 +65,17 @@ final class EffectiveMappingsTests: XCTestCase {
           mapping: ModeMapping(key: "z", action: .flashCommand(.insertMode))
         )
       ])
-    // `all`-scope config entry still wins for the shared key (first-writer-wins
-    // over the `all + normal` concat), and the plugin's own key is present.
-    XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .undo)
+    // A mode-specific binding overrides the all-mode fallback.
+    XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
     XCTAssertEqual(effective.compiledNormal.mapping(for: "z")?.action.command, .insertMode)
+  }
+
+  func testInsertOverridesAllWhileNormalInheritsFallback() {
+    let config = mode(
+      all: [ModeMapping(key: "q", action: .flashCommand(.undo))],
+      insert: [ModeMapping(key: "q", action: .flashCommand(.redo))])
+    XCTAssertEqual(config.compiledNormal.mapping(for: "q")?.action.command, .undo)
+    XCTAssertEqual(config.compiledInsert.mapping(for: "q")?.action.command, .redo)
   }
 
   func testEqualPriorityTieFavorsPlugin() {
@@ -81,4 +90,34 @@ final class EffectiveMappingsTests: XCTestCase {
       ])
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
   }
+
+  func testNativeScopeOverridesAllUsingPhysicalChordAliases() {
+    let config = mode(
+      all: [ModeMapping(key: "cmd+shift+]", action: .flashCommand(.undo))],
+      normal: [ModeMapping(key: "cmd+shift+}", action: .flashCommand(.redo))],
+      command: [ModeMapping(key: "cmd+shift+]", action: .flashCommand(.insertMode))])
+    XCTAssertEqual(
+      MappingsCoordinator.nativeMappings(in: config, scope: .normal).map(\.action.command), [.redo])
+    XCTAssertEqual(
+      MappingsCoordinator.nativeMappings(in: config, scope: .insert).map(\.action.command), [.undo])
+    XCTAssertEqual(
+      MappingsCoordinator.nativeMappings(in: config, scope: .command).map(\.action.command),
+      [.insertMode])
+    XCTAssertEqual(config.compiledNormal.ordered.count, 1)
+    XCTAssertEqual(config.compiledNormal.ordered.first?.action.command, .redo)
+    for scope in [MappingScope.normal, .insert, .command] {
+      XCTAssertTrue(
+        MappingsCoordinator.scopedNativeMappings(in: config, scope: scope).isEmpty,
+        "The existing all-mode registration serves every scoped override")
+    }
+  }
+
+  func testCommandOnlyChordIsRegisteredOnlyForCommandScope() {
+    let mapping = ModeMapping(key: "cmd+ctrl+i", action: .flashCommand(.insertMode))
+    let config = mode(command: [mapping])
+    XCTAssertEqual(MappingsCoordinator.scopedNativeMappings(in: config, scope: .command), [mapping])
+    XCTAssertTrue(MappingsCoordinator.nativeMappings(in: config, scope: .normal).isEmpty)
+    XCTAssertTrue(MappingsCoordinator.nativeMappings(in: config, scope: .insert).isEmpty)
+  }
+
 }

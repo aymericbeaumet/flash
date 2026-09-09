@@ -322,6 +322,7 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine {
+      if coordinator?.overlayDidHandleMapping(event) == true { return true }
       if handleCommandLineEditingShortcut(event) { return true }
       return super.performKeyEquivalent(with: event)
     }
@@ -621,6 +622,7 @@ extension OverlayPanel {
   @discardableResult
   private func handleCandidateFinderKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator = coordinator else { return false }
+    if coordinator.overlayDidHandleMapping(event) { return true }
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
     let ignoredChar =
       NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?

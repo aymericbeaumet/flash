@@ -50,6 +50,7 @@ enum FlashCLI {
       flash mouse_target --double
       flash mouse_grid --move
       flash enter_normal_mode
+      flash leave_mode
       flash enter_locked_insert_mode
       flash app_open --name=Firefox
       flash window_move --position=lefthalf

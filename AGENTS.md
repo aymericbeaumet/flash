@@ -11,7 +11,7 @@ Activation comes either through the `flash` CLI (which AppleEvents the verb to t
 ## Hard rules (do not violate)
 
 1. **No UI surface** beyond the transparent hint overlay, the status bar and its document/terminal popup panels, shortcut terminal panels / command-line cell, the help and open-app overlays, explicit `alert_show` toast, and exactly ONE sanctioned `NSStatusItem`: the menu-bar bolt in `StatusItemController.swift`, gated by `[app] menu_bar_icon` (default true), carrying exactly About / Open Configuration / Quit — it must never grow into a preferences surface (configuration stays in the TOML file the middle entry opens). Beyond that: no other menu bar items, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
-2. **Keyboard capture is confined to the sanctioned session tap + Carbon.** Global keystroke handling lives in exactly two places: (a) `Sources/flash/App/KeyboardCaptureTap.swift`, a session-level `CGEventTap` (`.cgSessionEventTap`, `keyDown` only, never mouse) that swallows NORMAL / hint keys and recognized modified mappings, passes INSERT, command-line, candidate-finder, configured unmapped key/modifier passthrough, and Flash's own synthetic keys straight through; and (b) `RegisterEventHotKey` for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do **not** add any *other* event tap, global key monitor, or keylogger, and the tap must never persist, log, or exfiltrate keystrokes — its only job is the swallow-vs-passthrough decision (`KeyboardCaptureTap.shouldSwallow`, a pure unit-tested function). `Scripts/check-guardrails.sh` enforces that `CGEventTap` appears only in `KeyboardCaptureTap.swift`. The tap runs under the Accessibility grant; if the OS refuses it, capture falls back to the overlay `NSPanel.keyDown` key-window path. Focused terminal popup input is local to TerminalView and the terminal mapping matcher; the existing tap passes every terminal key through and all Carbon registrations are suspended. Command-line, help, and open-app typing (the key-window surfaces) are handled through `NSPanel.keyDown` and are never swallowed by the tap.
+2. **Keyboard capture is confined to the sanctioned session tap + Carbon.** Global keystroke handling lives in exactly two places: (a) `Sources/flash/App/KeyboardCaptureTap.swift`, a session-level `CGEventTap` (`.cgSessionEventTap`, `keyDown` only, never mouse) that swallows NORMAL / hint keys and recognized modified mappings, passes INSERT, command-line, candidate-finder, configured unmapped key/modifier passthrough, and Flash's own synthetic keys straight through; and (b) `RegisterEventHotKey` for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]`. Do **not** add any *other* event tap, global key monitor, or keylogger, and the tap must never persist, log, or exfiltrate keystrokes — its only job is the swallow-vs-passthrough decision (`KeyboardCaptureTap.shouldSwallow`, a pure unit-tested function). `Scripts/check-guardrails.sh` enforces that `CGEventTap` appears only in `KeyboardCaptureTap.swift`. The tap runs under the Accessibility grant; if the OS refuses it, capture falls back to the overlay `NSPanel.keyDown` key-window path. Focused terminal popup input is local to TerminalView and the terminal mapping matcher; the existing tap passes every terminal key through and all Carbon registrations are suspended. Command-line, help, and open-app typing (the key-window surfaces) are handled through `NSPanel.keyDown` and are never swallowed by the tap.
 3. **Autolaunch is config-owned through SMAppService.** `AutoLaunch.reconcile` registers/unregisters the login item from `[app] autostart` (default true) on every config load — the entry shows in System Settings → General → Login Items. `Scripts/install.sh` only cleans up the legacy LaunchAgent. Do not add login-item UI, LaunchAgents, background helpers, or additional autostart mechanisms elsewhere.
 4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through NDJSON over stdin/stdout (protocol v1: one JSON object per newline-terminated line) with stderr as diagnostics only; Flash owns their lifecycle, liveness, reload, and shutdown (stdin EOF). Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The status controller may own configured short-lived jobs; `StatusTerminalRegistry` may own declared persistent and explicitly opened ephemeral PTY children through `FlashTerminal`, with bounded shutdown and reaping. Neither is an external activation interface. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
@@ -252,7 +252,7 @@ targets: `ActionDispatcher` owns the real host mouse event for every commit.
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. TOML syntax is parsed with the Swift package `TOMLKit`; `Sources/flash/Config/ConfigLoader.swift` owns only Flash's typed schema, validation, source-location indexing for known values, and command-path resolution.
 
-The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[statusbar.popup]`, `[statusbar.click]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, `[mode.terminal.mappings]`, `[terminal.<name>]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[statusbar.popup]`, `[statusbar.click]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, `[mode.command.mappings]`, `[mode.terminal.mappings]`, `[terminal.<name>]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -309,6 +309,7 @@ Keys:
 | `mode.normal.passthrough_modifiers` | string array | `["cmd", "ctrl", "shift", "alt"]` |
 | `[mode.normal.mappings]` entries   | argv array or `{ action = [...], repeat = bool }` | built-in normal map |
 | `[mode.insert.mappings]` entries   | argv array or `{ action = [...], repeat = bool }` | none             |
+| `[mode.command.mappings]` entries  | modified-key argv mappings | none |
 | `debug.show_hints_bounds`                | bool           | `false`              |
 | `debug.hints_bounds_bg` / `hints_bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.log_level`                  | string         | `"info"`             |
@@ -428,7 +429,7 @@ never after focus loss. Use `absolute-centre` for screen-centered labels; native
 centers the space between the sides. Terminal focus is a real transient Mode,
 with local mappings and lossless pending-prefix replay before reload/dismissal.
 Inherited exit mappings come only from winning INSERT-active
-`enter_normal_mode` bindings; other global mappings are suspended. Returning
+`leave_mode` or `enter_normal_mode` bindings; other global mappings are suspended. Returning
 to NORMAL restores the captured external application before keyboard recapture.
 
 Mouse-hover coordinate conversion must preserve the compiled popup document;
@@ -694,12 +695,22 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
   only while the overlay owns normal-mode input.
 - `[mode.normal.mappings]` applies only while the overlay is capturing normal-mode input.
 - `[mode.insert.mappings]` applies only in insert mode.
+- `[mode.command.mappings]` contains optional modified-key overrides for
+  command-line and candidate-finder surfaces; it is empty by default.
+- Mode-specific mappings override all-mode mappings for the same physical
+  chord, including alternate key spellings. Keep all-scope Carbon registrations
+  installed and resolve the winning action at dispatch time.
+- Command-panel key equivalents and finder input try the mapping matcher
+  before editing/navigation, preserving the same precedence as Carbon.
+- Carbon registry instances must use distinct hotkey identities and return
+  `eventNotHandledErr` for another registry's events. NORMAL/INSERT tap dispatch
+  can hide a broken Carbon path; verify COMMAND shortcuts against the resident.
 
 Actions must be non-empty string arrays. Use the array directly for a simple mapping or `{ action = [...], repeat = true }` when the final key should repeat a completed normal-mode sequence. Bare strings, URLs, and any other shape are deliberately unsupported. Arrays whose head is `"flash"` are interpreted as in-process verb dispatches and resolve through `URLEventHandler.parse(verb:args:)`; any other head is executed directly as argv (no shell wrap) with leading `~` expanded in each element. Relative path arguments containing `/` are resolved from the config file location at load time, so `["../../scripts/toggle"]` works for dotfiles-managed configs.
 
-Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal.mappings]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
+Single modified-key mappings are registered through Carbon; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal.mappings]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
 
-When any `[mode.all.mappings]` mapping resolves to `["flash", "enter_normal_mode"]`, Flash enters advanced mode:
+When any `[mode.all.mappings]` mapping resolves to `["flash", "leave_mode"]` or `["flash", "enter_normal_mode"]`, Flash enters advanced mode:
 
 - starts in normal mode by default;
 - always displays the status bar using configured `mode.labels`, including in the help view;
@@ -712,7 +723,12 @@ activation must leave the ring at its prior position so the next key can retry.
 
 The status bar is rendered from `FlashStatusBarTemplate`: one template string can read Flash SDK state (`flash.mode`, `flash.active_app_name`, `flash.active_bundle_identifier`, `flash.date`), tmux-compatible variables, plugin state (`PluginStatusSnapshot` counts and plugin `status` segment values), or named source output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The controller is source-driven where possible: mode, focused-app, plugin, and clock changes publish directly; command/script sections get their own poll only when the template contains them. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create additional persistent `NSStatusItem`s (the single sanctioned one lives in `StatusItemController.swift`; see hard rule 1), menu extras, app menus, or any other native menu/status UI.
 
-`["flash", "enter_normal_mode"]` is the only accepted normal-mode entry. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
+`leave_mode` is the shared exit: INSERT returns to NORMAL, command surfaces
+restore their recorded return mode, and NORMAL/disabled are unchanged.
+`enter_normal_mode` explicitly selects NORMAL even when a command surface was
+opened with `--restore-mode`. Only all-mode bindings to these actions enable
+advanced mode; mode-specific bindings do not. See
+`docs/normal-mode.md#shared-mode-exit` for the override contract.
 
 ### Verbs
 
@@ -769,7 +785,9 @@ Insert mode is allowed to leave automatically when input focus is lost. Track th
 
 Browser `t` (`tab_new`) is a special insert exit: after opening a browser tab, Flash may poll the focused document URL on the AX queue and return to normal once it changes from the pre-tab baseline/internal new-tab URL to a committed `http` / `https` URL. This covers address-bar Return, where browsers often keep the location field as the focused editable AX element after navigation, so generic focus-loss detection never fires.
 
-One structural exception: when a config reload removes the last `["flash", "enter_normal_mode"]` binding (advanced mode no longer wired), Flash forces `.insert` because there is no normal mode without that binding. Reason `.advancedModeDisabled`, `force: true`.
+One structural exception: removing the last all-mode `leave_mode` or
+`enter_normal_mode` binding disables advanced mode and returns Flash to
+INSERT passthrough.
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a layout selector token. Selector syntax is `<$layout[_$row][_$hand]+...>` where layout is `qwerty` / `colemak` / `dvorak`, row is `homerow` / `toprow` / `bottomrow`, and hand is `lefthand` / `righthand`. Examples: `<colemak>`, `<colemak_homerow+colemak_toprow>`, `<colemak_homerow_lefthand+colemak_toprow_righthand>`, `<colemak_lefthand>`. Selectors cannot mix layouts. Layout selectors are scored by the inferred layout's key scores; literal strings are scored by their written order. There is no `hints.layout` key. Resolution lives in `Alphabet.resolve(_:)`.
 

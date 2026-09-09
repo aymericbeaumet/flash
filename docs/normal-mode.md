@@ -23,6 +23,29 @@ Important defaults:
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.
 
+## Shared mode exit
+
+Bind `["flash", "leave_mode"]` in `[mode.all.mappings]` to enable advanced
+mode with one exit shortcut. It returns INSERT (including locked INSERT) to
+NORMAL, closes command-line, finder, and terminal surfaces using their recorded
+return mode, and does nothing in idle NORMAL or with advanced mode disabled.
+`enter_normal_mode` remains the explicit action for selecting NORMAL even when
+a command panel was opened with `--restore-mode`.
+
+Modified bindings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, and
+`[mode.command.mappings]` override the same physical chord from the all-mode
+map. The command map is empty by default, so the shared exit works without
+duplicating it per mode.
+
+Command surfaces try the configured mapping matcher before native editing or
+finder navigation. Their local `performKeyEquivalent` path uses the same
+precedence as Carbon. The global tap still passes command typing.
+
+The all-mode and scoped Carbon registries share an event dispatcher. Their
+hotkey identities must be distinct, and a handler must decline events owned by
+the other registry. Reused identities or consuming unowned events can break
+command shortcuts while NORMAL/INSERT still work through the keyboard tap.
+
 ## Input capture and latency
 
 NORMAL and hint input normally arrives through `KeyboardCaptureTap`, so the
@@ -46,10 +69,11 @@ share the main run loop. Treat that loop as the input latency budget:
 - Tab traversal and selection use `normalModeDispatchContext()`, which avoids an
   exact AX or WindowServer geometry lookup for an identity-only action.
 - Scope-only mode changes use `MappingsCoordinator.apply(scope:)`. All-scope
-  Carbon registrations stay installed across normal, insert, and command
-  surfaces; only normal/insert registrations are replaced. Focusing a status
-  popup suspends both all-scope and scoped registrations; leaving it restores
-  the active scope. Rebuild the complete registry when effective mappings change.
+  Carbon registrations stay installed and resolve the current mode's winning
+  action at dispatch; only mode-specific registrations are replaced. Rebuild
+  the complete registry only when the effective mappings change.
+  Focusing a terminal popup suspends every Carbon registration; leaving it
+  restores the active scope.
 
 `MainThreadWatchdog` records a `main_thread_stall` warning when the loop misses
 its maintained threshold. A timeout-disabled event tap also logs before being
@@ -65,7 +89,7 @@ and only `[mode.terminal.mappings]` can intercept keys in the popup. The label i
 configured with `mode.labels.terminal` and defaults to `TERMINAL`.
 
 Terminal mappings inherit only the effective INSERT-active bindings whose
-winning action is `enter_normal_mode`. Scope and plugin precedence are resolved
+winning action is `leave_mode` or `enter_normal_mode`. Scope and plugin precedence are resolved
 before this inheritance; an explicit terminal mapping overrides an inherited
 binding with the same canonical key. Other all, normal, and insert bindings are
 inactive. Plugins may contribute terminal mappings using the same priority rules.

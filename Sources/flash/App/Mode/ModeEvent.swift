@@ -6,7 +6,7 @@ import Foundation
 // are the old automatic triggers (app/element focus-change exit, browser URL
 // polling, timed focus-exit probes, pointer-handoff deferrals). The mouse
 // can ENTER insert (`clickResolved`) but nothing here can make it LEAVE insert
-// except `enterNormal` (a keyboard request).
+// except `enterNormal` or `leaveMode` (keyboard requests).
 enum ModeEvent: Equatable {
   // MARK: User-explicit
 
@@ -14,9 +14,12 @@ enum ModeEvent: Equatable {
   /// decides the `locked` bit. `targetPID` is the app to hand the keyboard to.
   case enterInsert(reason: InsertModeTransitionReason, targetPID: pid_t?)
 
-  /// The user's normal-mode hotkey / mapped `.normalMode`. THE ONLY event that
-  /// leaves insert.
+  /// Explicitly select NORMAL regardless of a command surface's return mode.
   case enterNormal(targetPID: pid_t?)
+
+  /// Shared exit: INSERT returns to NORMAL; command and terminal surfaces
+  /// restore their recorded return mode. NORMAL and disabled have no enclosing mode to leave.
+  case leaveMode(targetPID: pid_t?)
 
   /// `:` / flashlight / `enterCommand`. `restoreMode` mirrors the old
   /// `restore_mode=1` verbs: when true the surface returns to the entry mode,

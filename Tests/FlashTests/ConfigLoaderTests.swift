@@ -7,6 +7,41 @@ import XCTest
 @testable import flash
 
 final class ConfigLoaderTests: XCTestCase {
+  func testCommandMappingsOverrideAllWithoutReplacingCommandTyping() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+ctrl+<escape>" = ["flash", "leave_mode"]
+      [mode.command.mappings]
+      "cmd+ctrl+<escape>" = ["flash", "enter_insert_mode"]
+      "ctrl+j" = ["flash", "enter_normal_mode"]
+      "x" = ["flash", "leave_mode"]
+      "gg" = ["flash", "leave_mode"]
+      "<leader>x" = ["flash", "leave_mode"]
+      """)
+    XCTAssertEqual(config.mode.command.count, 2)
+    XCTAssertEqual(
+      config.mode.command.first { $0.key == "cmd+ctrl+escape" }?.action.command, .insertMode)
+    XCTAssertEqual(config.mode.command.first { $0.key == "ctrl-j" }?.action.command, .normalMode)
+    XCTAssertEqual(config.diagnostics.count, 3)
+    XCTAssertTrue(
+      config.diagnostics.map(\.message).contains {
+        $0.contains("must be a single modified key")
+      })
+    XCTAssertTrue(ConfigLoader.parse("").mode.command.isEmpty)
+  }
+
+  func testAllModeLeaveMappingEnablesAdvancedMode() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+ctrl+<escape>" = ["flash", "leave_mode"]
+      """)
+    XCTAssertTrue(config.warnings.isEmpty)
+    XCTAssertTrue(config.mode.containsNormalModeMapping)
+    XCTAssertTrue(config.mode.containsAdvancedModeMapping)
+  }
+
   func testDefaultsWhenEmpty() {
     let c = ConfigLoader.parse("")
     XCTAssertEqual(c.hints.keys, "<qwerty_homerow+qwerty_toprow>")

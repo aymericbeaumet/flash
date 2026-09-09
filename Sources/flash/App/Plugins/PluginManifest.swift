@@ -982,7 +982,7 @@ struct PluginManifest: Decodable, Equatable {
       }
     }
     for mapping in mappings {
-      guard ModeScope(rawValue: mapping.mode) != nil else {
+      guard ["all", "normal", "insert", "terminal"].contains(mapping.mode) else {
         throw PluginError.failure(
           "plugin mapping mode \(mapping.mode) must be all, normal, insert, or terminal")
       }

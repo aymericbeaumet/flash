@@ -25,9 +25,7 @@ struct CompiledMappings: Equatable {
     var prefixes: Set<String> = []
     var physicalAtomsBySignature: [UInt64: Set<String>] = [:]
     for mapping in mappings {
-      // First-writer-wins: matches `mappings.first(where:)` semantics
-      // when the caller concatenates `all + normal` and `all` should
-      // win on key collision.
+      // First-writer-wins: callers put the active scope before all-mode fallbacks.
       if byKey[mapping.key] == nil {
         byKey[mapping.key] = mapping
       }

@@ -32,6 +32,11 @@ extension AppDelegate {
     dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
   }
 
+  func leaveMode() {
+    if modeStore.mode.isTerminal { suppressDismissedTerminalHover() }
+    dispatchMode(.leaveMode(targetPID: terminalReturnApplicationPID))
+  }
+
   func enterInsertMode(
     reason: InsertModeTransitionReason = .explicitCommand,
     targetPID: pid_t? = nil
@@ -243,6 +248,7 @@ extension AppDelegate {
     switch overlay.inputMode {
     case .commandLine:
       FlashLog.trace("[mode] close_modal input=command_line reason=\(reason)")
+      overlay.resignCommandTextFieldFocus()
       resetCommandLineState()
       overlay.hide()
     case .candidateFinder:
@@ -1011,6 +1017,8 @@ extension AppDelegate {
       dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
+    case .leaveMode:
+      leaveMode()
     case .commandMode:
       enterCommandLineMode()
     case .scroll(let kind):

@@ -68,10 +68,10 @@ final class TerminalModeTests: XCTestCase {
     mode.insert = [mapping("x", .normalMode), mapping("z", .normalMode)]
     mode.terminal = [mapping("z", .commandMode)]
     mode.recompileMappings()
-    XCTAssertNil(mode.compiledTerminal.mapping(for: "x"))
+    XCTAssertEqual(mode.compiledTerminal.mapping(for: "x")?.action.command, .normalMode)
     XCTAssertEqual(mode.compiledTerminal.mapping(for: "y")?.action.command, .normalMode)
     XCTAssertEqual(mode.compiledTerminal.mapping(for: "z")?.action.command, .commandMode)
-    XCTAssertEqual(mode.effectiveTerminalMappings.count, 2)
+    XCTAssertEqual(mode.effectiveTerminalMappings.count, 3)
   }
 
   func testPluginPrecedenceIsResolvedBeforeTerminalDefaultsAreInherited() {
@@ -95,12 +95,26 @@ final class TerminalModeTests: XCTestCase {
     mode.all = [mapping("cmd+esc", .commandMode)]
     mode.insert = [mapping("cmd+escape", .normalMode)]
     mode.recompileMappings()
-    XCTAssertTrue(mode.effectiveTerminalMappings.isEmpty)
+    XCTAssertEqual(mode.effectiveTerminalMappings, [mapping("cmd+escape", .normalMode)])
 
     mode.all = [mapping("cmd+esc", .normalMode)]
     mode.terminal = [mapping("cmd+escape", .commandMode)]
     mode.recompileMappings()
     XCTAssertEqual(mode.effectiveTerminalMappings, [mapping("cmd+escape", .commandMode)])
+  }
+
+  func testTerminalInheritsSharedLeaveModeWithLocalOverride() {
+    var mode = Config.Mode()
+    mode.all = [mapping("cmd+ctrl+escape", .leaveMode)]
+    mode.recompileMappings()
+    XCTAssertEqual(
+      mode.compiledTerminal.mapping(for: "cmd+ctrl+escape")?.action.command, .leaveMode)
+    XCTAssertTrue(MappingsCoordinator.nativeMappings(in: mode, scope: .terminal).isEmpty)
+    XCTAssertTrue(MappingsCoordinator.scopedNativeMappings(in: mode, scope: .terminal).isEmpty)
+
+    mode.terminal = [mapping("cmd+ctrl+esc", .commandMode)]
+    mode.recompileMappings()
+    XCTAssertEqual(mode.effectiveTerminalMappings, mode.terminal)
   }
 
   func testTerminalConfigurationParsesSequencesAndRejectsLeader() {

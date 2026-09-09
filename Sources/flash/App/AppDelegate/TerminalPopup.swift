@@ -109,11 +109,15 @@ extension AppDelegate {
         weight: .medium))
   }
 
-  func dismissTerminal(restoreApplication: Bool = true) {
+  func suppressDismissedTerminalHover() {
     let popup = overlay.statusPopupController
     if let name = popup.presentation.identity?.name, !popup.presentation.isStandalone {
       overlay.statusBarHoverGate = .dismissed(name)
     }
+  }
+
+  func dismissTerminal(restoreApplication: Bool = true) {
+    suppressDismissedTerminalHover()
     let returnPID = terminalReturnApplicationPID
     if case .terminal = modeStore.mode {
       dispatchMode(.closeTerminal(targetPID: restoreApplication ? returnPID : nil))

@@ -9,11 +9,9 @@ import Foundation
 /// entries are stable-sorted by priority descending, so `CompiledMappings`'
 /// first-writer-wins hands each key to the highest-priority claimant.
 ///
-/// The merge is per scope (`all`/`normal`/`insert`/`terminal`): config's own order — and
-/// the `all`-before-`normal` precedence baked into `Config.Mode.mappings(for:)`
-/// — is preserved among the priority-0 entries. Cross-scope override of a
-/// user's `all`-scope binding by a plugin's `normal` mapping is intentionally
-/// out of scope.
+/// The merge is per scope. Mode-specific mappings override `all` fallbacks;
+/// plugin priority resolves collisions within each scope. Command mappings
+/// are config-owned and are preserved unchanged.
 enum EffectiveMappings {
   static func merge(
     base: Config.Mode,

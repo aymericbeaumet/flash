@@ -14,21 +14,9 @@ import Foundation
 /// is sub-millisecond.
 final class HotKeyManager {
 
-  /// One registered hotkey. Holds the Carbon `EventHotKeyRef` so
-  /// `UnregisterEventHotKey` can be paired with the original
-  /// `RegisterEventHotKey` call, plus the user-supplied callback.
-  private struct Registration {
-    let ref: EventHotKeyRef
-    let onFire: () -> Void
-  }
-
-  private var registrations: [UInt32: Registration] = [:]
-  private var nextID: UInt32 = 1
+  private var registrations: [UInt32: EventHotKeyRef] = [:]
+  private let router = HotKeyEventRouter()
   private var eventHandlerRef: EventHandlerRef?
-  /// 'flHS' (Flash HotKey System) — distinguishes our registrations
-  /// from any other Carbon hotkey client in the same process. Carbon
-  /// requires per-app uniqueness on (signature, id) tuples.
-  private let signature: OSType = 0x66_6C_48_53
 
   init() {
     installEventHandler()
@@ -46,31 +34,27 @@ final class HotKeyManager {
   func register(
     modifiers: UInt32, virtualKey: UInt32, onFire: @escaping () -> Void
   ) -> OSStatus {
-    let id = nextID
-    nextID += 1
-    let hotKeyID = EventHotKeyID(signature: signature, id: id)
+    let hotKeyID = router.register(onFire: onFire)
     var ref: EventHotKeyRef?
     let status = RegisterEventHotKey(
       virtualKey, modifiers, hotKeyID,
       GetEventDispatcherTarget(), 0, &ref)
     guard status == noErr, let ref else {
+      router.remove(id: hotKeyID.id)
       return status == noErr ? OSStatus(paramErr) : status
     }
-    registrations[id] = Registration(ref: ref, onFire: onFire)
+    registrations[hotKeyID.id] = ref
     return noErr
   }
 
   /// Drop every previously-registered hotkey. Used before reloading
   /// mode mappings so a removed line stops responding immediately.
   func unregisterAll() {
-    for (_, b) in registrations {
-      UnregisterEventHotKey(b.ref)
+    for ref in registrations.values {
+      UnregisterEventHotKey(ref)
     }
     registrations.removeAll()
-  }
-
-  fileprivate func fire(id: UInt32) {
-    registrations[id]?.onFire()
+    router.removeAll()
   }
 
   private func installEventHandler() {
@@ -79,25 +63,54 @@ final class HotKeyManager {
       eventKind: UInt32(kEventHotKeyPressed))
     let userData = Unmanaged.passUnretained(self).toOpaque()
     let callback: EventHandlerUPP = { (_, event, userData) -> OSStatus in
-      guard let userData, let event else { return noErr }
+      guard let userData else { return OSStatus(eventNotHandledErr) }
       let manager = Unmanaged<HotKeyManager>.fromOpaque(userData)
         .takeUnretainedValue()
-      var hotKeyID = EventHotKeyID()
-      let result = GetEventParameter(
-        event,
-        OSType(kEventParamDirectObject),
-        OSType(typeEventHotKeyID),
-        nil,
-        MemoryLayout<EventHotKeyID>.size,
-        nil,
-        &hotKeyID)
-      guard result == noErr else { return noErr }
-      manager.fire(id: hotKeyID.id)
-      return noErr
+      return manager.router.handle(event: event)
     }
     InstallEventHandler(
       GetEventDispatcherTarget(),
       callback,
       1, &eventType, userData, &eventHandlerRef)
+  }
+}
+
+/// Each Carbon handler must decline events owned by another manager so the
+/// dispatcher can continue through the handler chain. IDs remain unique across
+/// managers and reloads, including delayed events for removed registrations.
+final class HotKeyEventRouter {
+  private static let signature: OSType = 0x66_6C_48_53  // flHS
+  private static let idLock = NSLock()
+  private static var nextID: UInt32 = 1
+  private var callbacks: [UInt32: () -> Void] = [:]
+
+  func register(onFire: @escaping () -> Void) -> EventHotKeyID {
+    Self.idLock.lock()
+    let id = Self.nextID
+    Self.nextID += 1
+    Self.idLock.unlock()
+    callbacks[id] = onFire
+    return EventHotKeyID(signature: Self.signature, id: id)
+  }
+
+  func remove(id: UInt32) {
+    callbacks.removeValue(forKey: id)
+  }
+
+  func removeAll() {
+    callbacks.removeAll()
+  }
+
+  func handle(event: EventRef?) -> OSStatus {
+    guard let event else { return OSStatus(eventNotHandledErr) }
+    var hotKeyID = EventHotKeyID()
+    let result = GetEventParameter(
+      event, OSType(kEventParamDirectObject), OSType(typeEventHotKeyID), nil,
+      MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+    guard result == noErr, hotKeyID.signature == Self.signature,
+      let callback = callbacks[hotKeyID.id]
+    else { return OSStatus(eventNotHandledErr) }
+    callback()
+    return noErr
   }
 }

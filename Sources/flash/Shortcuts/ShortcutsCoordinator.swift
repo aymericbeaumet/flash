@@ -18,17 +18,10 @@ import Foundation
 ///     user configured that explicit native mapping.
 final class MappingsCoordinator {
 
-  private struct ActiveMapping {
-    let parsed: ParsedHotkey
-    let scope: ModeScope
-    let mapping: ModeMapping
-  }
-
   private let allHotkeys = HotKeyManager()
   private let scopedHotkeys = HotKeyManager()
   private var mappingDispatch: ((MappingCommand) -> Void)?
-  private var currentMode: (() -> FlashMode)?
-  private var activeMappings: [ActiveMapping] = []
+  private var activeMappings: [ParsedHotkey: ModeMapping] = [:]
   private var configuredMode: Config.Mode = .init()
   private var lastAppliedScope: MappingScope = .insert
   private var lastFireDiagnostic: String?
@@ -48,9 +41,8 @@ final class MappingsCoordinator {
   private var syntheticEchoes: [UInt64: (count: Int, at: Date)] = [:]
   private static let syntheticEchoWindow: TimeInterval = 0.3
 
-  func start(dispatch: @escaping (MappingCommand) -> Void, currentMode: @escaping () -> FlashMode) {
+  func start(dispatch: @escaping (MappingCommand) -> Void) {
     mappingDispatch = dispatch
-    self.currentMode = currentMode
   }
 
   func apply(mode: Config.Mode) {
@@ -59,9 +51,9 @@ final class MappingsCoordinator {
     rebuildScopedMappings(for: lastAppliedScope)
   }
 
-  /// Re-register Carbon hotkeys for the current input surface. Carbon
-  /// registrations are global. Command input retains only all-scope mappings;
-  /// terminal input suspends every registration in favor of its local matcher.
+  /// All-mode Carbon registrations stay installed; callbacks resolve the
+  /// current scope's winning action for their chord. Terminal input suspends
+  /// both registration sets in favor of its local matcher.
   func apply(scope: MappingScope) {
     guard scope != lastAppliedScope else { return }
     let wasTerminal = lastAppliedScope == .terminal
@@ -72,53 +64,29 @@ final class MappingsCoordinator {
 
   private func rebuildAllMappings() {
     allHotkeys.unregisterAll()
-    rebuildActiveMappings()
     guard lastAppliedScope != .terminal else { return }
-    registerMappings(
-      Self.nativeMappings(in: configuredMode).filter { $0.0 == .all },
-      with: allHotkeys)
+    registerMappings(Config.Mode.resolveMappings(configuredMode.all), with: allHotkeys)
   }
 
   private func rebuildScopedMappings(for mappingScope: MappingScope) {
     lastAppliedScope = mappingScope
     scopedHotkeys.unregisterAll()
-    rebuildActiveMappings()
-    let allKeys = Set(
-      Self.nativeMappings(in: configuredMode).lazy
-        .filter { $0.0 == .all }
-        .map { $0.1.key })
+    activeMappings = Dictionary(
+      uniqueKeysWithValues:
+        Self.nativeMappings(in: configuredMode, scope: mappingScope).compactMap { mapping in
+          mapping.nativeHotkey.map { ($0, mapping) }
+        })
     registerMappings(
-      Self.nativeMappings(in: configuredMode).filter {
-        $0.0 != .all && Self.scopeIsActive($0.0, for: mappingScope)
-          && !allKeys.contains($0.1.key)
-      },
-      with: scopedHotkeys)
+      Self.scopedNativeMappings(in: configuredMode, scope: mappingScope), with: scopedHotkeys)
   }
 
-  private func rebuildActiveMappings() {
-    activeMappings = Self.nativeMappings(in: configuredMode).compactMap { scope, mapping in
-      guard Self.scopeIsActive(scope, for: lastAppliedScope),
-        let parsed = HotkeySyntax.parse(hotkey: mapping.key)
-      else { return nil }
-      return ActiveMapping(parsed: parsed, scope: scope, mapping: mapping)
-    }
-  }
-
-  private func registerMappings(
-    _ mappings: [(ModeScope, ModeMapping)],
-    with hotkeys: HotKeyManager
-  ) {
-    for (scope, mapping) in mappings {
-      guard let parsed = HotkeySyntax.parse(hotkey: mapping.key) else {
-        if mapping.key.contains("+") {
-          FlashLog.warn("[mappings] could not parse native mapping \"\(mapping.key)\"")
-        }
-        continue
-      }
+  private func registerMappings(_ mappings: [ModeMapping], with hotkeys: HotKeyManager) {
+    for mapping in mappings {
+      guard let parsed = mapping.nativeHotkey else { continue }
       let status = hotkeys.register(
         modifiers: parsed.modifiers, virtualKey: parsed.virtualKey
       ) { [weak self] in
-        self?.fire(mapping, scope: scope, parsed: parsed)
+        self?.handle(hotkey: parsed)
       }
       if status == noErr {
         FlashLog.debug("[mappings] registered \"\(mapping.key)\"")
@@ -132,53 +100,56 @@ final class MappingsCoordinator {
 
   static func scopeIsActive(_ scope: ModeScope, for mappingScope: MappingScope) -> Bool {
     switch mappingScope {
-    case .terminal:
-      return false
-    case .command:
-      return scope == .all
-    case .normal:
-      switch scope {
-      case .all, .normal: return true
-      case .insert, .terminal: return false
-      }
-    case .insert:
-      switch scope {
-      case .all, .insert: return true
-      case .normal, .terminal: return false
-      }
+    case .terminal: return false
+    case .command: return scope == .all || scope == .command
+    case .normal: return scope == .all || scope == .normal
+    case .insert: return scope == .all || scope == .insert
+    }
+  }
+
+  static func nativeMappings(in mode: Config.Mode, scope: MappingScope) -> [ModeMapping] {
+    let scopes: [(ModeScope, [ModeMapping])] = [
+      (.normal, mode.normal), (.insert, mode.insert), (.command, mode.command), (.all, mode.all),
+    ]
+    let mappings = scopes.filter { scopeIsActive($0.0, for: scope) }.flatMap(\.1)
+    return Config.Mode.resolveMappings(mappings).filter { $0.nativeHotkey != nil }
+  }
+
+  /// All-scope chords already have a persistent Carbon registration, even
+  /// when a mode-specific entry overrides the action or spells the key differently.
+  static func scopedNativeMappings(in mode: Config.Mode, scope: MappingScope) -> [ModeMapping] {
+    let allChords = Set(mode.all.compactMap(\.nativeHotkey))
+    return nativeMappings(in: mode, scope: scope).filter {
+      guard let chord = $0.nativeHotkey else { return false }
+      return !allChords.contains(chord)
     }
   }
 
   // MARK: - Hot path
 
   func handle(event: NSEvent) -> Bool {
-    guard
-      let active = activeMapping(
-        virtualKey: UInt32(event.keyCode),
-        modifiers: Self.carbonModifiers(from: event.modifierFlags))
-    else { return false }
-    fire(active.mapping, scope: active.scope, parsed: active.parsed)
+    handle(
+      hotkey: ParsedHotkey(
+        modifiers: Self.carbonModifiers(from: event.modifierFlags),
+        virtualKey: UInt32(event.keyCode)))
+  }
+
+  /// Whether a raw event matches the same resolved chord used by Carbon and
+  /// panel dispatch, without allocating an NSEvent on the tap hot path.
+  func hasMapping(virtualKey: UInt32, cgFlags: CGEventFlags) -> Bool {
+    activeMappings[
+      ParsedHotkey(
+        modifiers: Self.carbonModifiers(fromCG: cgFlags), virtualKey: virtualKey)] != nil
+  }
+
+  @discardableResult
+  private func handle(hotkey: ParsedHotkey) -> Bool {
+    guard let mapping = activeMappings[hotkey] else { return false }
+    fire(mapping, parsed: hotkey)
     return true
   }
 
-  /// Whether a chord matches an active mapping, without firing it — from raw
-  /// CGEvent fields so the tap's swallow decision stays off the `NSEvent`
-  /// (keyboard-layout-resolving) path on the hot per-keystroke route. Lets an
-  /// *unmapped* keypress pass through (`passthrough_keys` / `passthrough_modifiers`) while a
-  /// mapped one is still captured.
-  func hasMapping(virtualKey: UInt32, cgFlags: CGEventFlags) -> Bool {
-    activeMapping(virtualKey: virtualKey, modifiers: Self.carbonModifiers(fromCG: cgFlags)) != nil
-  }
-
-  private func activeMapping(virtualKey: UInt32, modifiers: UInt32) -> ActiveMapping? {
-    activeMappings.first {
-      $0.parsed.modifiers == modifiers && $0.parsed.virtualKey == virtualKey
-    }
-  }
-
-  private func fire(_ mapping: ModeMapping, scope: ModeScope, parsed: ParsedHotkey) {
-    guard Self.scopeIsActive(scope, for: lastAppliedScope) else { return }
-    guard mappingApplies(scope: scope, parsed: parsed) else { return }
+  private func fire(_ mapping: ModeMapping, parsed: ParsedHotkey) {
     let diagnostic = mapping.action.diagnosticDescription
     let now = Date()
     if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now) {
@@ -192,25 +163,6 @@ final class MappingsCoordinator {
     lastFireAt = now
     FlashLog.debug("[mappings] fired \(diagnostic)")
     mappingDispatch?(mapping.action)
-  }
-
-  private func mappingApplies(scope: ModeScope, parsed: ParsedHotkey) -> Bool {
-    Self.mappingApplies(scope: scope, currentMode: currentMode?(), modifiers: parsed.modifiers)
-  }
-
-  static func mappingApplies(
-    scope: ModeScope,
-    currentMode: FlashMode?,
-    modifiers: UInt32
-  ) -> Bool {
-    guard scope != .all else { return true }
-    guard let current = currentMode else { return false }
-    switch (scope, current) {
-    case (.normal, .normal), (.insert, .insert):
-      return true
-    default:
-      return false
-    }
   }
 
   private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
@@ -269,16 +221,4 @@ final class MappingsCoordinator {
     return out
   }
 
-  private static func nativeMappings(in mode: Config.Mode) -> [(ModeScope, ModeMapping)] {
-    let scoped: [(ModeScope, [ModeMapping])] = [
-      (.all, mode.all),
-      (.normal, mode.normal),
-      (.insert, mode.insert),
-    ]
-    return scoped.flatMap { scope, mappings in
-      mappings
-        .filter { $0.key.contains("+") }
-        .map { (scope, $0) }
-    }
-  }
 }

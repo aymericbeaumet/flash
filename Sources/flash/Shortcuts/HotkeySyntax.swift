@@ -16,7 +16,7 @@ import Foundation
 /// the named keys (return, tab, space, escape, delete, arrows,
 /// home/end, pageup/down). `0xNN` accepts a raw virtual-key for
 /// keys without a name.
-struct ParsedHotkey {
+struct ParsedHotkey: Hashable {
   let modifiers: UInt32  // Carbon modifier flags
   let virtualKey: UInt32  // Carbon virtual key code
 }

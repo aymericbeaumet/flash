@@ -320,13 +320,19 @@ send_key_interval_ms = 35
 # strings and URLs are rejected.
 # Relative argv paths containing "/" are resolved from this config file.
 #
-# Native modified-key mappings are registered with Carbon only when the key
-# contains "+". Non-modified keys are read only by the overlay while Flash is
-# capturing normal-mode input.
+# Single modified-key mappings use Carbon. Non-modified keys and sequences
+# are read only by the overlay while Flash is capturing normal-mode input.
 #
 # Examples:
 # "ctrl+space" = ["flash", "mouse_target"]
-# "ctrl+alt+n" = ["flash", "enter_normal_mode"] # enables advanced mode
+# "ctrl+alt+n" = ["flash", "leave_mode"] # enables advanced mode; shared exit shortcut
+# "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+# "cmd+ctrl+semicolon" = ["flash", "enter_command_mode"]
+# leave_mode returns INSERT to NORMAL and closes command panels, respecting
+# --restore-mode. It does nothing in NORMAL. enter_normal_mode explicitly
+# selects NORMAL regardless of a command panel's recorded return mode.
+# Mode-specific mappings override the same chord here; no exit override is
+# installed by default.
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # Percentage frames require x/y/width/height together. x and y are offsets
@@ -529,10 +535,16 @@ leader = "\\"
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
-# Advanced mode is enabled only by binding ["flash", "enter_normal_mode"] in [mode.all.mappings].
+# Binding leave_mode or enter_normal_mode in [mode.all.mappings] enables advanced mode.
+
+[mode.command.mappings]
+# Optional modified-key overrides while command-line or candidate-finder
+# surfaces own the keyboard. All-mode shortcuts remain available by default.
 
 [mode.terminal.mappings]
 # Terminal input stays local to the focused window. Plain Escape goes to the TUI.
+# Winning INSERT leave_mode / enter_normal_mode bindings are inherited;
+# optional terminal mappings override them.
 # "cmd+w" = ["flash", "terminal_dismiss"]
 # "cmd+r" = ["flash", "terminal_restart"]
 
