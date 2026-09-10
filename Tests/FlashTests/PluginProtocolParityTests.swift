@@ -27,6 +27,7 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(deadlines["startup"] as? Int, PluginProtocol.startupDeadlineMs)
     XCTAssertEqual(deadlines["query"] as? Int, PluginProtocol.queryDeadlineMs)
     XCTAssertEqual(deadlines["live"] as? Int, PluginProtocol.liveDeadlineMs)
+    XCTAssertEqual(deadlines["hints"] as? Int, PluginProtocol.hintsDeadlineMs)
     XCTAssertEqual(deadlines["perform"] as? Int, PluginProtocol.performDeadlineMs)
     XCTAssertEqual(deadlines["ping"] as? Int, PluginProtocol.pingDeadlineMs)
     XCTAssertEqual(deadlines["idle_before_ping"] as? Int, PluginProtocol.idleBeforePingMs)

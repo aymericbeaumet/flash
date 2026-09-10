@@ -17,9 +17,12 @@ enum PluginProtocol {
   static let startupDeadlineMs = 5_000
   /// Per-keystroke `evaluate`.
   static let queryDeadlineMs = 50
-  /// `search` + `hints` (late replies dropped, non-fatal). Config
+  /// `search` (late replies dropped, non-fatal). Config
   /// `[flashlight] live_query_timeout_ms` tunes the live value.
   static let liveDeadlineMs = 1_000
+  /// Activation `hints` pull. Blocks the AX queue ahead of the prepared
+  /// model, so it is a fixed latency ceiling rather than a config knob.
+  static let hintsDeadlineMs = 500
   /// All four `perform` kinds; a manifest `commands[].timeout_ms` overrides
   /// per entry.
   static let performDeadlineMs = 10_000

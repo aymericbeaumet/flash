@@ -24,9 +24,13 @@ enum FlashTunables {
   /// reply is immediate by contract; this absorbs interpreter startup).
   static var pluginStartupTimeoutSeconds: Int = 5
   /// `[flashlight] live_query_timeout_ms` — per-keystroke deadline for
-  /// `live: true` plugin sources (`search` and `hints`). Never joins the
-  /// first paint, so raising it cannot regress the flashlight open.
+  /// `live: true` plugin sources (`search`). Never joins the first paint, so
+  /// raising it cannot regress the flashlight open.
   static var flashlightLiveQueryTimeoutMs: Int = 1000
+  /// Deadline for a plugin `hints` reply during activation. Not configurable:
+  /// the wait blocks the AX queue ahead of the prepared model, so it is a
+  /// latency ceiling rather than a tuning knob.
+  static let hintProviderTimeoutMs = PluginProtocol.hintsDeadlineMs
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
   /// `[statusbar] notch_margin` — points kept clear beside a notch.

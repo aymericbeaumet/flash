@@ -134,7 +134,8 @@ doc all share:
 | --- | --- | --- |
 | `startup` | 5 s (config `[plugins] startup_timeout`) | `initialize` |
 | `query` | 50 ms | `evaluate` |
-| `live` | 1000 ms (config `[flashlight] live_query_timeout_ms`) | `search`, `hints` |
+| `live` | 1000 ms (config `[flashlight] live_query_timeout_ms`) | `search` |
+| `hints` | 500 ms (fixed; blocks the AX queue ahead of the prepared model) | `hints` |
 | `perform` | 10 s (per-entry `commands[].timeout_ms` overrides) | `perform` |
 | `ping` | 10 s | `ping` reply |
 | `idle_before_ping` | 60 s | inbound silence before a ping |
@@ -423,8 +424,13 @@ Section semantics:
   Terminal sequences use the shared key syntax without `<leader>`, implicit
   counts, or register prefixes. See [terminal popup input](normal-mode.md#terminal-popup-input).
 
-`only_bundle_ids` may appear at the root and on mapping entries; root and
-entry selectors compound. The numeric manifest `priority` (default 25) is
+`only_bundle_ids` and `only_terminals` may appear at the root and on mapping
+entries; root and entry selectors compound. `only_terminals: true` scopes to
+the host-owned terminal emulator list (`TerminalBundles`, which includes
+Ghostty) so a plugin never carries its own terminal allowlist; the registry
+instantiates such a plugin only while a known terminal runs, and its `hints`
+provider is consulted only in those apps, keeping hint activation elsewhere on
+the zero-hop prepared-model path. The numeric manifest `priority` (default 25) is
 scheduling/collision arbitration — do not confuse it with the semantic
 `sources[].priority` salience enum.
 

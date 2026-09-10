@@ -118,21 +118,25 @@ struct PluginPattern: Hashable, Equatable {
 }
 
 /// Decode-only active-window selector data: the manifest root and mapping
-/// entries may scope with `only_bundle_ids`. All matching goes through
-/// ``CompiledPluginSelector``.
+/// entries may scope with `only_bundle_ids` and/or `only_terminals` (the
+/// host-owned `TerminalBundles` list, so a plugin never carries its own
+/// terminal allowlist). All matching goes through ``CompiledPluginSelector``.
 struct PluginSelector: Decodable, Hashable, Equatable {
   var onlyBundleIDs: [String]
+  var onlyTerminals: Bool
 
-  init(onlyBundleIDs: [String] = []) {
+  init(onlyBundleIDs: [String] = [], onlyTerminals: Bool = false) {
     self.onlyBundleIDs = onlyBundleIDs
+    self.onlyTerminals = onlyTerminals
   }
 
   var isEmpty: Bool {
-    onlyBundleIDs.isEmpty
+    onlyBundleIDs.isEmpty && !onlyTerminals
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
     case onlyBundleIDs = "only_bundle_ids"
+    case onlyTerminals = "only_terminals"
   }
 }
 
@@ -150,13 +154,15 @@ struct PluginSelectorContext: Equatable {
 
 struct CompiledPluginSelector: Hashable, Equatable {
   private let onlyBundleIDs: Set<String>
+  private let onlyTerminals: Bool
 
   init(_ selector: PluginSelector) {
     self.onlyBundleIDs = Set(selector.onlyBundleIDs)
+    self.onlyTerminals = selector.onlyTerminals
   }
 
   var isEmpty: Bool {
-    onlyBundleIDs.isEmpty
+    onlyBundleIDs.isEmpty && !onlyTerminals
   }
 
   func matches(_ context: PluginSelectorContext) -> Bool {
@@ -165,14 +171,18 @@ struct CompiledPluginSelector: Hashable, Equatable {
         return false
       }
     }
+    if onlyTerminals {
+      guard let bundleID = context.bundleID, TerminalBundles.identifiers.contains(bundleID)
+      else { return false }
+    }
     return true
   }
 
-  /// Scoped-beats-unscoped: a matching bundle-scoped selector outranks an
-  /// unscoped one; there is no finer gradient.
+  /// Scoped-beats-unscoped: a matching scoped selector outranks an unscoped
+  /// one; there is no finer gradient.
   func specificity(in context: PluginSelectorContext) -> Int? {
     guard matches(context) else { return nil }
-    return onlyBundleIDs.isEmpty ? 0 : 1
+    return isEmpty ? 0 : 1
   }
 }
 
@@ -371,6 +381,7 @@ struct PluginMappingRegistration: Decodable, Hashable {
   enum CodingKeys: String, CodingKey, CaseIterable {
     case key, mode, command
     case onlyBundleIDs = "only_bundle_ids"
+    case onlyTerminals = "only_terminals"
     case priority
   }
 
@@ -380,7 +391,8 @@ struct PluginMappingRegistration: Decodable, Hashable {
     self.mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "normal"
     self.command = try c.decode([String].self, forKey: .command)
     self.selector = PluginSelector(
-      onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [])
+      onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
+      onlyTerminals: try c.decodeIfPresent(Bool.self, forKey: .onlyTerminals) ?? false)
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
   }
 
@@ -661,6 +673,7 @@ struct PluginManifest: Decodable, Equatable {
     case id, name, version, description, install, exec, sandbox, listen, priority
     case fetchURLs = "fetch_urls"
     case onlyBundleIDs = "only_bundle_ids"
+    case onlyTerminals = "only_terminals"
     case capabilities, help
     case hints, query, commands, mappings, status, bangs
     case actions
@@ -738,7 +751,8 @@ struct PluginManifest: Decodable, Equatable {
     self.verbs = try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .verbs) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
-      onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [])
+      onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
+      onlyTerminals: try c.decodeIfPresent(Bool.self, forKey: .onlyTerminals) ?? false)
     self.sources =
       Self.uniqueSourceDescriptors(
         try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])

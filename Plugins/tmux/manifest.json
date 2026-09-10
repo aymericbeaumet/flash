@@ -12,6 +12,7 @@
     "app_control"
   ],
   "priority": 20,
+  "only_terminals": true,
   "hints": {
     "fallback_on_empty": true
   },

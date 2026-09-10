@@ -9,6 +9,7 @@ public enum TerminalBundles {
     "org.alacritty",
     "io.alacritty",
     "com.apple.Terminal",
+    "com.mitchellh.ghostty",
     "com.googlecode.iterm2",
     "net.kovidgoyal.kitty",
     "com.github.wez.wezterm",

@@ -784,6 +784,50 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  func testManifestOnlyTerminalsScopesToHostTerminalList() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "tmuxish",
+          "name": "tmuxish",
+          "version": "0.1.0",
+          "description": "Terminal-scoped hints",
+          "exec": ["/usr/bin/true"],
+          "only_terminals": true,
+          "hints": { "fallback_on_empty": true }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertTrue(manifest.selector.onlyTerminals)
+    XCTAssertTrue(manifest.onlyBundleIDs.isEmpty)
+    let selector = CompiledPluginSelector(manifest.selector)
+    XCTAssertFalse(selector.isEmpty)
+    XCTAssertTrue(TerminalBundles.identifiers.contains("com.mitchellh.ghostty"))
+    XCTAssertTrue(selector.matches(PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
+    XCTAssertTrue(selector.matches(PluginSelectorContext(bundleID: "org.alacritty")))
+    XCTAssertFalse(selector.matches(PluginSelectorContext(bundleID: "org.mozilla.firefox")))
+    XCTAssertFalse(selector.matches(PluginSelectorContext(bundleID: nil)))
+    XCTAssertEqual(selector.specificity(in: PluginSelectorContext(bundleID: "org.alacritty")), 1)
+    XCTAssertNil(selector.specificity(in: PluginSelectorContext(bundleID: "org.mozilla.firefox")))
+
+    let compound = CompiledPluginSelector(
+      PluginSelector(onlyBundleIDs: ["org.alacritty"], onlyTerminals: true))
+    XCTAssertTrue(compound.matches(PluginSelectorContext(bundleID: "org.alacritty")))
+    XCTAssertFalse(compound.matches(PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
+  }
+
+  func testBundledTmuxManifestIsTerminalScoped() throws {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Plugins/tmux")
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertTrue(manifest.selector.onlyTerminals)
+    XCTAssertEqual(manifest.hints?.fallbackOnEmpty, true)
+  }
+
   func testManifestDecodesSurfacesAcrossKinds() throws {
     let root = try temporaryPluginRoot(
       manifest:

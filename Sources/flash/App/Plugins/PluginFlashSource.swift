@@ -41,7 +41,13 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     }
     return caps
   }
+  /// Registry-level gate (is any matching app running?); the per-context
+  /// selector match happens in `supports(_:)`. A terminal-scoped plugin is
+  /// instantiated only while a known terminal emulator runs, and is never
+  /// consulted for hints in any other app — which is what keeps the warm
+  /// prepared-model path zero-hop outside terminals.
   var activationPolicy: FlashSourceActivationPolicy {
+    if plugin.manifest.selector.onlyTerminals { return .terminalBundles }
     let manifestBundles = Set(plugin.manifest.onlyBundleIDs)
     return manifestBundles.isEmpty ? .always : .bundleIDs(manifestBundles)
   }
@@ -86,7 +92,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   func discover(in context: AppContext) throws -> [JumpTarget] {
     plugin.discoverTargets(
       context: context,
-      timeout: Double(FlashTunables.flashlightLiveQueryTimeoutMs) / 1_000)
+      timeout: Double(FlashTunables.hintProviderTimeoutMs) / 1_000)
   }
 
   /// Warm candidates are a synchronous host-memory read of the push-based
