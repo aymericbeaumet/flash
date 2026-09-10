@@ -1,0 +1,21 @@
+# Capacity and I/O for visible volumes, sized for 90 columns by 16 rows.
+[flags]
+rate = "2s"
+expanded = true
+table_gap = "none"
+
+[styles]
+theme = "nord"
+
+[disk]
+columns = ["Mount", "Used%", "Free", "R/s", "W/s"]
+
+[disk.mount_filter]
+is_list_ignored = true
+list = ["^/System/Volumes/(Preboot|VM|Update|xarts|iSCPreboot|Hardware)$", "^/Library/Developer/CoreSimulator/"]
+regex = true
+
+[[row]]
+[[row.child]]
+type = "disk"
+default = true

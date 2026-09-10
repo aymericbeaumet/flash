@@ -25,6 +25,7 @@
   ],
   "status": [
     "summary",
+    "label",
     "details"
   ],
   "capabilities": [

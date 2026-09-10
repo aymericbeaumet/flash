@@ -20,6 +20,7 @@
   ],
   "status": [
     "summary",
+    "label",
     "details"
   ],
   "sandbox": {

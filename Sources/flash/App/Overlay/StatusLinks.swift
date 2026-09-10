@@ -21,11 +21,6 @@ struct StatusBarPopupRegion: Equatable {
   var document: [FlashStatusTextSegment]? = nil
 }
 
-enum StatusBarPopupActivation {
-  case toggle
-  case focus
-}
-
 enum StatusBarHintAction: Equatable {
   case click(URL)
   case hover(String)
@@ -97,7 +92,7 @@ final class StatusBarClickView: NSView {
   /// Reports the popup under the pointer (or nil) and the pointer in screen
   /// coordinates. The overlay moves its popup layer on every event.
   var onPopupHover: ((StatusBarPopupRegion?, NSPoint) -> Void)?
-  var onPopupClick: ((StatusBarPopupRegion, NSPoint, StatusBarPopupActivation) -> Void)?
+  var onPopupClick: ((StatusBarPopupRegion, NSPoint) -> Void)?
 
   static func focusesPopup(overLink: Bool, modifiers: NSEvent.ModifierFlags) -> Bool {
     !overLink || modifiers.contains(.option)
@@ -135,7 +130,7 @@ final class StatusBarClickView: NSView {
       Self.focusesPopup(overLink: url != nil, modifiers: event.modifierFlags)
     {
       let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
-      onPopupClick?(popup, point, .toggle)
+      onPopupClick?(popup, point)
       return
     }
     if let url {
@@ -168,7 +163,7 @@ final class StatusBarClickView: NSView {
     let local = convert(event.locationInWindow, from: nil)
     guard let popup = popups.first(where: { $0.rect.contains(local) }) else { return }
     let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
-    onPopupClick?(popup, point, .focus)
+    onPopupClick?(popup, point)
   }
 
   override func updateTrackingAreas() {
@@ -454,19 +449,16 @@ extension OverlayPanel {
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
 
-  func activateStatusBarPopup(
-    _ popup: StatusBarPopupRegion, at pointer: CGPoint, action: StatusBarPopupActivation
-  ) {
+  func activateStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {
     let wasFocused = statusPopupController.focusedName
-    if wasFocused == popup.name, action == .focus { return }
+    guard wasFocused != popup.name else { return }
     if wasFocused != nil {
       if let statusBarPopupDismissHandler {
-        statusBarPopupDismissHandler(wasFocused == popup.name)
+        statusBarPopupDismissHandler(false)
       } else {
         hideStatusBarPopup(reason: "anchor_clicked")
       }
     }
-    guard wasFocused != popup.name else { return }
     statusBarHoverGate = .ready
     showStatusBarPopup(popup, at: pointer)
     statusPopupController.focus()
@@ -552,10 +544,10 @@ extension OverlayPanel {
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
       view.onStatusBarAction = statusBarActionHandler
-      view.onPopupClick = { [weak self] popup, point, action in
+      view.onPopupClick = { [weak self] popup, point in
         var screenPopup = popup
         screenPopup.rect = popup.rect.offsetBy(dx: band.minX, dy: band.minY)
-        self?.activateStatusBarPopup(screenPopup, at: point, action: action)
+        self?.activateStatusBarPopup(screenPopup, at: point)
       }
       view.onPopupHover = { [weak self] popup, point in
         guard let self else { return }

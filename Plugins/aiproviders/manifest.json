@@ -2,7 +2,7 @@
   "id": "aiproviders",
   "name": "AI Providers",
   "version": "0.1.0",
-  "description": "Open AI chat providers from the flashlight with optional pre-filled queries, and publish unified Claude, Fable, OpenAI, and Astra usage status.",
+  "description": "Open AI chat providers from the flashlight and publish separate Claude and Codex quota labels and details.",
   "exec": [
     "./flash-plugin-aiproviders"
   ],
@@ -36,8 +36,10 @@
     ]
   },
   "status": [
-    "summary",
-    "details"
+    "claude_label",
+    "claude_details",
+    "codex_label",
+    "codex_details"
   ],
   "capabilities": [
     "open",

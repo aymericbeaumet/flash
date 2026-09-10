@@ -1,69 +1,52 @@
-# Status popup TUI options
+# Status popup CLI choices
 
-The configured status strip groups resource monitoring into SYS, retains BAT,
-and opens a calendar from the date. The [ready-to-use files](examples/statusbar/README.md)
-contain the tested layouts and command declarations. See
-[terminal lifecycle](terminal-popups.md) for startup, persistence, and input.
+The [ready-to-use status configuration](examples/statusbar/README.md) keeps
+Cld/Cdx separate from CPU/MEM/DISK/NET/BAT and attaches one focused interactive
+terminal to each section. Plugin-owned numeric labels remain cheap cached
+reads; hovering presents a terminal that Flash owns.
 
-## Configured grouping
-
-| Status group | Persistent view | Purpose |
-| --- | --- | --- |
-| CPU / MEM / DSK / NET | One shared `bottom` dashboard | CPU, memory, disk capacity/I/O, network history, and processes |
-| BAT | Bottom's battery widget | Charge, consumption, time remaining, and health where macOS supplies them |
-| Clock | Read-only `calcurse` calendar and clock | Add date context rather than duplicate the bar's clock |
-
-Prefer one monitoring process with a deliberate layout over four independent
-copies. The initial shared dashboard can also include battery. Bottom's
-`--battery` flag affects default/basic layouts; a custom TOML layout must
-declare its battery widget explicitly.
-
-Minimal shared dashboard declaration (the supplied setup adds a custom layout):
-
-```toml
-[terminal.system]
-persistent = true
-command = ["btm", "--battery", "--read_only", "--rate", "2s"]
-columns = 100
-rows = 28
-```
-
-Anchor it with `#[popup=system]SYS#[nopopup]`. Existing plugin summaries
-contain their own inline popup markers, so merely wrapping those summaries
-with another popup marker does not override their hover target. Keep this
-choice explicit when composing the status strip. A custom bottom layout
-reduces the default widget set to keep the numeric CPU, memory, network, disks,
-and processes visible at this grid.
-
-For a focused battery view, the supported argv is
-`btm --battery --default_widget_type battery --expanded --read_only --rate 5s`.
-Another process repeats some collection work. Bottom's interface totals are
-not per-process bandwidth.
-
-Sources: [bottom](https://github.com/ClementTsang/bottom),
-[layouts](https://bottom.pages.dev/stable/configuration/config-file/layout/),
-[battery widget](https://bottom.pages.dev/stable/usage/widgets/battery/).
-
-## Alternatives
-
-- `macmon --interval 2000` provides Apple Silicon CPU/GPU/ANE power, frequency,
-  temperature, and RAM details without sudo. It uses private macOS APIs and
-  does not replace disk, network, or battery views.
+- **Claude: ccu.** A focused dashboard reads the existing Claude Code login and
+  presents the real OAuth session, weekly, and model quota windows. It also
+  shows local token/cost history and cost-based projections; those projections
+  are not server quota guarantees. `r` or Space refreshes. `-api=false` disables
+  its optional HTTP listener. [ccu](https://github.com/sammcj/ccu)
+- **Codex: codex-meter.** A standalone dashboard combines live main-account
+  quota/reset windows with local session activity. `r` refreshes. It reads the
+  existing Codex login without refreshing or rewriting it, and needs at least
+  90 × 32 cells. Supplementary model buckets such as Astra remain available in
+  Flash's provider details rather than this CLI.
+  [codex-meter](https://github.com/h3nock/codex-meter)
+- **CPU: macmon.** Apple Silicon CPU/GPU/ANE usage, power, temperature,
+  frequency, and memory detail without sudo; `d`, `v`, and `r` change detail,
+  chart style, and CPU scaling. It uses private macOS APIs, so future OS
+  compatibility belongs to that external CLI. This is a popup child, not a new
+  API dependency in Flash's telemetry plugins.
   [macmon](https://github.com/vladkens/macmon)
-- `btop --update 2000` is an all-in-one alternative with disk, network,
-  processes, and a battery meter. Install with `brew install btop`.
-  [btop](https://github.com/aristocratos/btop)
-- `calcurse --read-only --quiet` is a persistent calendar/agenda TUI, available
-  through `brew install calcurse`. It uses its own calendar data; installing
-  it does not import Apple Calendar. For only a month grid, the existing
-  document popup can present `cal` output without adding an organizer.
-  [calcurse CLI](https://calcurse.org/files/calcurse.1.html)
-- `tty-clock -c -s -n -f "%a %d %b %Y"` is a simpler clock/date display,
-  available through `brew install tty-clock`.
-  [tty-clock](https://github.com/xorg62/tty-clock)
+- **Memory, disks, battery: bottom.** Its custom layouts isolate memory/swap
+  plus process sorting/search/actions, volume capacity/I/O, and battery
+  charge/power/health. Battery fields depend on the hardware's macOS reporting.
+  Focused layouts also avoid collecting every unused widget. Process controls
+  are enabled in this setup.
+  [bottom](https://github.com/ClementTsang/bottom),
+  [layouts](https://bottom.pages.dev/stable/configuration/config-file/layout/),
+  [battery](https://bottom.pages.dev/stable/usage/widgets/battery/)
+- **Network: nettop.** The macOS-shipped CLI adds per-process bandwidth and
+  connection detail beyond the aggregate status metric. The tested command
+  runs without sudo: `nettop -n -d -P -s 2 -J bytes_in,bytes_out`. Delta bytes
+  cover each two-second sample, rather than being the bar's bytes-per-second
+  value. `h` lists controls; `e`/`c` expand/collapse and `j` selects columns.
+  Consult `man nettop` on the installed macOS version.
+- **Date: calcurse.** Keep the existing isolated read-only calendar/agenda.
+  [calcurse manual](https://calcurse.org/files/calcurse.1.html)
 
-Hover shows a passive preview. Click the label to pin and focus it for
-keyboard or mouse interaction; click again to close. Option-click preserves
-this gesture on labels that also have a link. Bottom keeps navigation,
-sorting, and searching in read-only mode. Plain Escape remains TUI input;
-the inherited NORMAL mapping exits to the previous application.
+CodexBar is a maintained alternative for quota fetching, but its standalone
+`usage`/`cards` CLI produces one-shot output rather than an interactive TUI.
+Local token/cost tools such as ccusage are not substitutes for subscription
+quota. A separate dashboard daemon would duplicate Flash's lifecycle ownership.
+[CodexBar CLI](https://github.com/steipete/CodexBar/blob/main/docs/cli.md)
+
+Keep all commands as foreground `[terminal.<name>]` children. Do not add
+background services for popup monitoring. Either unbound mouse button pins the
+popup; existing click actions win. The same fixed cells hold grey values as
+metrics change, and clean `.label` segments let one named popup cover both the
+label and metric without nested inline-popup markers.

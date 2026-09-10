@@ -415,12 +415,12 @@ See [terminal popups](docs/terminal-popups.md) and
 [status plugins](docs/status-plugins.md).
 
 Popup presentation has explicit hidden/preview/focused states. Leaving the
-originating segment hides an ordinary preview immediately. Clicking a popup
-label pins/focuses it; focused popups survive pointer departure and ignore other
-hover targets. Clicking the same label closes it; another label switches it.
-Existing links keep their left-click action, with Option-click focusing their
-popup. Right-click pins any popup segment and enters terminal mode; repeating
-right-click must keep it open. Handle this through the existing local click view.
+originating segment hides an ordinary preview immediately. Left- or right-clicking
+an unbound popup label pins/focuses it; repeated clicks must keep it open.
+Focused popups survive pointer departure and ignore other hover targets;
+clicking another label switches the popup. Configured actions and links retain
+their normal left-click behavior, with Option-click or right-click focusing their
+popup. Handle this through the existing local click view.
 Terminal Shift-click opens links from immutable frame metadata; Shift-drag
 selects without opening or forwarding the gesture to the child.
 Preserve screen clamping and restore the previous app only on explicit close,
@@ -457,9 +457,13 @@ notch (default `0`).
 ### Status plugin contracts
 
 - Keep local telemetry split across `cpu`, `memory`, `disks`, `network`, and
-  `power`; each owns only `summary` and `details`, and every summary embeds its
-  details with `inline_status_popup`. Keep system actions in `system`, sleep
-  assertions in `caffeinate`, and AI usage in `aiproviders`.
+  `power`; each owns `summary`, `details`, and a popup-free fixed-width `label`.
+  Every summary embeds its details with `inline_status_popup`; named terminal
+  templates wrap `label` instead so the CLI owns the whole hover region. Keep
+  system actions in `system`, sleep assertions in `caffeinate`, and AI usage in
+  `aiproviders`. AI publishes separate Claude/Codex labels and details; main
+  quota badges expire after two provider refresh intervals, while detailed
+  last-good caches remain available.
 - Separate nominal one-second sampling from slower discovery/health work.
   Explicit refresh commands must skip occupied collectors and return last-good
   state instead of queueing behind background work.

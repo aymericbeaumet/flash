@@ -20,9 +20,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flash_plugin::process;
-use flash_plugin::{
-    inline_status_popup, run, run_osascript, CommandRequest, Context, PerformResponse, RefreshGate,
-};
+use flash_plugin::{run, run_osascript, CommandRequest, Context, PerformResponse, RefreshGate};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -144,8 +142,10 @@ struct UsageState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
-    summary: String,
-    details: String,
+    claude_label: String,
+    claude_details: String,
+    codex_label: String,
+    codex_details: String,
 }
 
 #[derive(Debug, Default)]
@@ -167,8 +167,13 @@ impl UsageRuntime {
 
 impl StatusSegments {
     #[cfg(test)]
-    fn all(&self) -> [&str; 2] {
-        [&self.summary, &self.details]
+    fn all(&self) -> [&str; 4] {
+        [
+            &self.claude_label,
+            &self.claude_details,
+            &self.codex_label,
+            &self.codex_details,
+        ]
     }
 }
 
@@ -221,8 +226,10 @@ async fn write_json<T: Serialize>(path: &Path, value: &T) -> bool {
 
 fn publish_status(ctx: &Context, segments: &StatusSegments) {
     ctx.status([
-        ("summary", segments.summary.as_str()),
-        ("details", segments.details.as_str()),
+        ("claude_label", segments.claude_label.as_str()),
+        ("claude_details", segments.claude_details.as_str()),
+        ("codex_label", segments.codex_label.as_str()),
+        ("codex_details", segments.codex_details.as_str()),
     ]);
 }
 
@@ -404,28 +411,64 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
             )
         })
         .unwrap_or((None, None, None, None));
-    let visible = "#[fg=#EBCB8B]AI#[default]";
-
     let openai_session_label = usage_window_label(openai_session, "5-hour");
     let openai_week_label = usage_window_label(openai_week, "7-day");
     let astra_session_label = usage_window_label(astra_session, "5-hour");
     let astra_week_label = usage_window_label(astra_week, "7-day");
-    let lines = [
-        "#[fg=#EBCB8B]AI#[default]".to_string(),
-        "#[fg=colour245]Provider  Window         Left  Reset#[default]".to_string(),
+    let heading = "#[fg=colour245]Provider  Window         Left  Reset#[default]";
+    let claude_details = [
+        "#[fg=#EBCB8B]Claude quotas#[default]".to_string(),
+        heading.to_string(),
         popup_row("Claude", "5-hour", shared_session, None, now),
         popup_row("", "7-day", claude_week, shared_session, now),
         popup_row("  Fable", "7-day", fable_week, shared_session, now),
-        popup_row("OpenAI", &openai_session_label, openai_session, None, now),
+    ]
+    .join("\n");
+    let codex_details = [
+        "#[fg=#EBCB8B]Codex quotas#[default]".to_string(),
+        heading.to_string(),
+        popup_row("Codex", &openai_session_label, openai_session, None, now),
         popup_row("", &openai_week_label, openai_week, openai_session, now),
         popup_row("  Astra", &astra_session_label, astra_session, None, now),
         popup_row("", &astra_week_label, astra_week, astra_session, now),
-    ];
-    let details = lines.join("\n");
+    ]
+    .join("\n");
     StatusSegments {
-        summary: inline_status_popup(visible, &details),
-        details,
+        claude_label: quota_label(
+            "Cld",
+            [shared_session, claude_week].into_iter().filter(|_| {
+                state
+                    .anthropic
+                    .as_ref()
+                    .is_some_and(|usage| fresh(usage.updated_at, 2 * ANTHROPIC_USAGE_TTL, now))
+            }),
+        ),
+        claude_details,
+        codex_label: quota_label(
+            "Cdx",
+            [openai_session, openai_week].into_iter().filter(|_| {
+                state
+                    .openai
+                    .as_ref()
+                    .is_some_and(|usage| fresh(usage.updated_at, 2 * OPENAI_USAGE_TTL, now))
+            }),
+        ),
+        codex_details,
     }
+}
+
+fn quota_label<'a>(
+    label: &str,
+    windows: impl IntoIterator<Item = Option<&'a WindowUsage>>,
+) -> String {
+    let metric = windows
+        .into_iter()
+        .flatten()
+        .map(|window| remaining_percent(window.used_percent))
+        .min()
+        .map(|remaining| format!("{remaining:>3}%"))
+        .unwrap_or_else(|| "   —".to_string());
+    format!("#[fg=#EBCB8B]{label} #[fg=colour245]{metric}#[default]")
 }
 
 fn usage_window_label(usage: Option<&WindowUsage>, fallback: &str) -> String {
@@ -1176,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn status_segments_consolidate_every_provider_into_one_aligned_popup() {
+    fn status_segments_split_providers_and_show_the_tightest_shared_quota() {
         let state = UsageState {
             anthropic: Some(AnthropicUsage {
                 updated_at: 0,
@@ -1192,36 +1235,77 @@ mod tests {
                 },
                 astra: UsageWindows {
                     session: Some(WindowUsage::new(12.0, Some(10_800), 300)),
-                    weekly: Some(WindowUsage::new(10.0, Some(604_800), 10_080)),
+                    weekly: Some(WindowUsage::new(99.0, Some(604_800), 10_080)),
                 },
             }),
         };
-
         let segments = render_status_segments(&state, 0);
         assert_eq!(
-            segments.details,
-            "#[fg=#EBCB8B]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]  Fable   7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]  Astra   5-hour       #[default]   88%  3h\n#[fg=colour245]          7-day        #[default]   90%  7d"
+            segments.claude_label,
+            "#[fg=#EBCB8B]Cld #[fg=colour245] 53%#[default]"
         );
         assert_eq!(
-            segments.summary,
-            inline_status_popup("#[fg=#EBCB8B]AI#[default]", &segments.details)
+            segments.codex_label,
+            "#[fg=#EBCB8B]Cdx #[fg=colour245] 54%#[default]"
         );
-        assert!(!segments.summary.contains("#[link="));
-        assert!(!segments.details.ends_with('\n'));
+        assert!(segments.claude_details.contains("Claude"));
+        assert!(segments.claude_details.contains("Fable"));
+        assert!(!segments.claude_details.contains("Codex"));
+        assert!(segments.codex_details.contains("Codex"));
+        assert!(segments.codex_details.contains("Astra"));
+        assert!(!segments.codex_details.contains("Claude"));
+        for label in [&segments.claude_label, &segments.codex_label] {
+            assert!(!label.contains("#[popup="));
+            assert!(!label.contains("#[link="));
+        }
+    }
+
+    #[test]
+    fn quota_labels_reserve_four_columns_including_unavailable_and_full() {
+        for (used, expected) in [(0.0, "100%"), (91.0, "  9%"), (100.0, "  0%")] {
+            let window = WindowUsage::new(used, None, 300);
+            assert_eq!(
+                quota_label("Cld", [Some(&window)]),
+                format!("#[fg=#EBCB8B]Cld #[fg=colour245]{expected}#[default]")
+            );
+        }
+        let segments = render_status_segments(&UsageState::default(), 0);
+        assert_eq!(
+            segments.claude_label,
+            "#[fg=#EBCB8B]Cld #[fg=colour245]   —#[default]"
+        );
+        assert_eq!(
+            segments.codex_label,
+            "#[fg=#EBCB8B]Cdx #[fg=colour245]   —#[default]"
+        );
         assert!(!segments.all().iter().any(|value| value.contains("?%")));
     }
 
     #[test]
-    fn unavailable_segments_are_explicit_and_never_ambiguous() {
-        let segments = render_status_segments(&UsageState::default(), 0);
-        assert_eq!(
-            segments.summary,
-            inline_status_popup("#[fg=#EBCB8B]AI#[default]", &segments.details)
-        );
-        assert!(segments
-            .details
-            .contains("#[fg=colour245]Claude    5-hour       #[default]     —  —"));
-        assert!(!segments.all().iter().any(|value| value.contains("?%")));
+    fn stale_quota_labels_become_unavailable_without_discarding_cached_details() {
+        let state = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 1_000,
+                shared_session: Some(WindowUsage::new(25.0, None, 300)),
+                ..AnthropicUsage::default()
+            }),
+            openai: Some(OpenAIUsage {
+                updated_at: 1_000,
+                openai: UsageWindows {
+                    session: Some(WindowUsage::new(40.0, None, 300)),
+                    weekly: None,
+                },
+                ..OpenAIUsage::default()
+            }),
+        };
+        let current = render_status_segments(&state, 1_000);
+        assert!(current.claude_label.contains(" 75%"));
+        assert!(current.codex_label.contains(" 60%"));
+        let old = render_status_segments(&state, 1_000 + 2 * ANTHROPIC_USAGE_TTL);
+        assert!(old.claude_label.contains("   —"));
+        assert!(old.codex_label.contains("   —"));
+        assert!(old.claude_details.contains("75%"));
+        assert!(old.codex_details.contains("60%"));
     }
 
     #[test]

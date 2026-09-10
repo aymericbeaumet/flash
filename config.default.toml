@@ -208,6 +208,10 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # Native tmux options. @names are tmux user options; E expands a value as a
 # format, T additionally expands its strftime codes. Fragments are optional:
 # the same text can be written directly in template.
+# Named terminal popups can wrap popup-free plugin labels, for example:
+# #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup]
+# CPU/MEM/DISK/BAT labels carry padded percentages; NET carries a padded byte rate.
+# AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
 [statusbar.options]
 "@left" = "#[pill]#{flash.mode}#[nopill]"
 "@right" = "#[fg=#EBCB8B]#{flash.date}"

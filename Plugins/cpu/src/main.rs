@@ -54,6 +54,7 @@ enum GatePolicy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
     summary: String,
+    label: String,
     details: String,
     plain_details: String,
 }
@@ -349,6 +350,7 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     };
     ctx.status([
         ("summary", next.summary.as_str()),
+        ("label", next.label.as_str()),
         ("details", next.details.as_str()),
     ]);
 }
@@ -561,6 +563,7 @@ Load: {:.2} · {:.2} · {:.2}",
 
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
+        label: format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{total:>3.0}%#[default]"),
         details,
         plain_details,
     }
@@ -613,6 +616,30 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+
+    #[test]
+    fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
+        for (user, expected) in [
+            (0.0, "  0%"),
+            (9.0, "  9%"),
+            (10.0, " 10%"),
+            (99.6, "100%"),
+            (100.0, "100%"),
+        ] {
+            let cpu = CpuSnapshot {
+                user,
+                system: 0.0,
+                idle: 100.0 - user,
+                load: [0.0; 3],
+            };
+            let status = render_status(&cpu, None, &VecDeque::from([user]), SummaryMode::Full);
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {

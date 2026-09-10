@@ -135,14 +135,15 @@ rows = 24
 ```
 
 Hover previews disappear when the pointer leaves their status segment. Click
-a popup label to keep it open and use the terminal; click again to close it.
+a popup label to keep it open and use the terminal; repeated clicks keep it pinned.
 Right-click a popup segment to keep it open and enter terminal mode. Links
 still open normally on left-click; Option-click also focuses their popup.
 Terminal mode defaults to Command-R to restart the process, Command-Q to quit
 it (automatic restart still applies), and Command-W to hide the window.
 Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a popup
-keeps its child alive. See the [SYS, battery, and calendar setup](docs/examples/statusbar/README.md)
-for a combined system dashboard and persistent calendar.
+keeps its child alive. See the [interactive status strip](docs/examples/statusbar/README.md)
+for separate Cld/Cdx quotas, padded CPU/MEM/DISK/NET/BAT metrics, focused
+interactive CLI popups, and the calendar.
 See [terminal lifecycle and configuration](docs/terminal-popups.md).
 
 The template follows tmux 3.7b formats and styles. `@left`/`@right` above are

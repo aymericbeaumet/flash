@@ -99,6 +99,7 @@ struct TransferRates {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedStatus {
     summary: String,
+    label: String,
     details: String,
 }
 
@@ -377,7 +378,11 @@ fn emit_status_if_changed(ctx: &Context) {
         };
         rendered
     };
-    ctx.status([("summary", rendered.summary), ("details", rendered.details)]);
+    ctx.status([
+        ("summary", rendered.summary),
+        ("label", rendered.label),
+        ("details", rendered.details),
+    ]);
 }
 
 fn status_update(
@@ -568,7 +573,12 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
 fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
     let details = render_popup_details(state)?;
     let visible = visible_summary(state, summary_mode);
+    let rate = state
+        .rates
+        .map(|rates| label_rate(rates.received + rates.sent))
+        .unwrap_or_else(|| "       —".to_string());
     Some(RenderedStatus {
+        label: format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{rate}#[default]"),
         summary: inline_status_popup(&visible, &details),
         details,
     })
@@ -740,6 +750,17 @@ fn render_details_body(state: &NetworkState) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+fn label_rate(bytes_per_second: f64) -> String {
+    const UNITS: [char; 6] = ['B', 'K', 'M', 'G', 'T', 'P'];
+    let mut value = bytes_per_second.max(0.0);
+    let mut unit = 0;
+    while value >= 999.95 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    format!("{:>5.1}{}/s", value.min(999.9), UNITS[unit])
+}
+
 fn compact_rate(bytes_per_second: f64) -> String {
     scaled_bytes(bytes_per_second, false)
 }
@@ -810,6 +831,36 @@ mod tests {
     use flash_plugin::CandidateEffect;
 
     use super::*;
+
+    #[test]
+    fn label_keeps_aggregate_rate_width_across_units_and_sampling() {
+        for (rate, expected) in [
+            (None, "       —"),
+            (Some(0.0), "  0.0B/s"),
+            (Some(9.0), "  9.0B/s"),
+            (Some(999.0), "999.0B/s"),
+            (Some(999.96), "  1.0K/s"),
+            (Some(1200.0), "  1.2K/s"),
+            (Some(1_200_000.0), "  1.2M/s"),
+            (Some(1_200_000_000.0), "  1.2G/s"),
+            (Some(f64::MAX), "999.9P/s"),
+        ] {
+            let state = NetworkState {
+                default_interface: Some("en0".to_string()),
+                rates: rate.map(|rate| TransferRates {
+                    received: rate * 0.75,
+                    sent: rate * 0.25,
+                }),
+                ..NetworkState::default()
+            };
+            let status = render_status(&state, SummaryMode::Full).unwrap();
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
@@ -1087,6 +1138,7 @@ en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
     fn identical_rendered_status_is_suppressed() {
         let rendered = RenderedStatus {
             summary: "summary".to_string(),
+            label: "label".to_string(),
             details: "details".to_string(),
         };
         let mut last = None;

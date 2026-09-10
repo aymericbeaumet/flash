@@ -13,8 +13,11 @@ in place.
 The local system-monitor suite is deliberately split by resource. Each plugin
 owns `summary` and `details`; the summary embeds the details with
 `inline_status_popup`, while the standalone details segment supports custom
-templates. `power` also publishes `label`, the styled battery summary without
-an inline popup, for attaching a named battery terminal. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
+templates. Each also publishes a popup-free `label` for a named terminal: yellow section
+name plus a grey fixed-width metric. CPU/MEM/DISK/BAT percentages reserve four
+cells through 100%; NET reserves eight cells for aggregate decimal byte rate.
+The labels contain no links or inline popups, so surrounding template bindings
+own clicks and hover. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
 
 | Plugin | Nominal fast path | Slower path | Additional surface |
@@ -86,15 +89,19 @@ explicit `:network refresh` action may request Location authorization.
 ## Adjacent AI usage status
 
 `aiproviders` is adjacent to, not part of, the local system-monitor suite. It
-owns one unified `summary`/`details` pair: Fable is nested under Claude, and the
-separate `codex_bengalfox` rate-limit bucket is presented as Astra beneath
-OpenAI. “Astra” is a local presentation alias, not app-server schema
+publishes `claude_label`/`claude_details` and `codex_label`/`codex_details`.
+Cld/Cdx labels show the lowest remaining percentage across the main session
+and weekly quotas in a fixed four-cell metric. Model-specific quotas stay in
+details: Fable under Claude, and the separate `codex_bengalfox` rate-limit
+bucket as Astra under Codex. “Astra” is a local presentation alias, not app-server schema
 terminology. Grok remains a launcher only; do not add quota polling that reads
 or mutates unsupported credential stores.
 
 The plugin republishes a sanitized last-good cache at startup, refreshes
 Anthropic usage at a ten-minute TTL and OpenAI usage at a two-minute TTL, and
-rerenders relative reset labels once per minute. Popup hover and status layout
+rerenders relative reset labels once per minute. Quota labels show a padded
+dash once the cache is older than twice the provider TTL; cached detail tables
+remain available for inspection. Popup hover and status layout
 must remain pure reads of that state.
 
 ## Feed headlines

@@ -409,9 +409,14 @@ fn render_status(
     let plain_details = rows.join("\n");
     let details = render_popup_details(snapshot, health, history);
     let visible = visible_summary(snapshot, summary_mode);
+    let charge = snapshot
+        .battery
+        .as_ref()
+        .map(|battery| format!("{:>3}%", battery.percent))
+        .unwrap_or_else(|| "   —".to_string());
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
-        label: visible,
+        label: format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{charge}#[default]"),
         details,
         plain_details,
     }
@@ -654,6 +659,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn label_keeps_charge_width_and_leaves_popup_interactions_to_the_template() {
+        for (percent, expected) in [
+            (None, "   —"),
+            (Some(0), "  0%"),
+            (Some(9), "  9%"),
+            (Some(10), " 10%"),
+            (Some(100), "100%"),
+        ] {
+            let snapshot = PowerSnapshot {
+                source: PowerSource::Adapter,
+                battery: percent.map(|percent| BatterySnapshot {
+                    percent,
+                    state: BatteryState::Charging,
+                    estimate_minutes: Some(90),
+                }),
+            };
+            let status = render_status(&snapshot, None, SummaryMode::Full, &VecDeque::new());
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+    }
+
+    #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
         assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
         assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
@@ -686,19 +717,6 @@ mod tests {
         assert!(visible_summary(&no_battery, SummaryMode::Compact).contains(
             "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
         ));
-    }
-
-    #[test]
-    fn label_preserves_charge_without_embedding_a_document_popup() {
-        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
-        let status = render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new());
-        assert_eq!(
-            status.label,
-            visible_summary(&snapshot, SummaryMode::Compact)
-        );
-        assert!(status.label.contains("26%"));
-        assert!(!status.label.contains("popup="));
-        assert!(status.summary.contains("popup="));
     }
 
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";
