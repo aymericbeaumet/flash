@@ -504,7 +504,8 @@ leader = "\\"
 "n" = ["flash", "send_key", "--keys=cmd+g"]
 "N" = ["flash", "send_key", "--keys=cmd+shift+g"]
 # Context-aware new: opens a new tmux window when a tmux client is focused
-# or a new browser tab in browsers. Other apps do nothing.
+# or a new browser tab in browsers, then enters INSERT so the new tab can be
+# typed into. Other apps do nothing.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
 # Context-aware reload: browsers reload the current page; tmux refreshes

@@ -50,7 +50,9 @@ contracts before changing a subsystem:
    every committed host mouse event. There are only two hint providers: generic
    Accessibility and the bundled tmux plugin. Browser content comes through AX
    web areas; do not add DOM bridges or AppleScript-based hint discovery.
-9. Default keyboard shortcuts must not enter INSERT (`a/A/i/I/o/O/gi` included).
+9. Default keyboard shortcuts must not enter INSERT (`a/A/i/I/o/O/gi` included);
+   the exception is a command that creates or focuses a text input and hands the
+   keyboard over afterwards (`tab_new`, `focus_input`).
    `enter_insert_mode` and `focus_input` are explicit configuration choices.
    NORMAL is hermetic: unmapped keys and chords are swallowed, never forwarded.
    App activation or editable focus alone never changes NORMAL. See the mode document for deliberate pointer/target commits.

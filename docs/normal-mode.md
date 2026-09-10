@@ -33,8 +33,10 @@ including bindings that prefill the command line with `:flashlight`.
 NORMAL is hermetic: every unmapped key and modifier chord is swallowed, and
 only explicit mappings act. A chord the focused app should receive is bound
 to `send_key`, or the user enters INSERT first.
-`/` (`app_find`) and `t` (`tab_new`) execute their commands without changing
-mode. Use an explicit `enter_insert_mode` shortcut to type afterward.
+`/` (`app_find`) executes its command without changing mode. `t` (`tab_new`)
+enters INSERT once the tab or window is open, so the browser's address bar or
+the new tmux shell can be typed into immediately; in an unsupported app it does
+nothing and NORMAL stays.
 
 Bind `["flash", "leave_mode"]` in `[mode.all.mappings]` to enable advanced
 mode with one exit shortcut. It returns INSERT to
@@ -220,9 +222,11 @@ An empty command prompt remains quiet.
 ## Explicit INSERT entry
 
 The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases,
-and `/` / `t` no longer enter INSERT after their action. INSERT is entered by:
+and `/` does not enter INSERT after its action. INSERT is entered by:
 
 - a configured `enter_insert_mode` mapping;
+- `t` (`tab_new`) once the new tab or window exists, and `focus_input` once a
+  text input is focused;
 - a physical click or a mouse-grid / pointer-mode / adjust commit while NORMAL
   is capturing (pointer simulation always hands the keyboard to the app);
 - an `f` / `F` hint whose target is editable (`JumpTarget.entersInsertMode`).

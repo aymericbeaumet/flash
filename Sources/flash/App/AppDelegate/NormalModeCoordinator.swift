@@ -1287,11 +1287,15 @@ extension AppDelegate {
     applyModeOverlay()
   }
 
+  /// `completion` runs once the last chord has been posted, in place of the
+  /// default NORMAL recapture; a command that hands the keyboard to the app
+  /// afterwards (`tab_new`) enters INSERT there.
   func sendNormalModeKey(
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
     repeatCount: Int = 1,
-    suppressInTerminalFor command: URLCommand? = nil
+    suppressInTerminalFor command: URLCommand? = nil,
+    completion: (() -> Void)? = nil
   ) {
     guard let target = normalModeKeyDispatchTarget() else {
       FlashLog.debug("[normal_mode] no target app for key \(key)")
@@ -1327,7 +1331,11 @@ extension AppDelegate {
     let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)
     DispatchQueue.main.asyncAfter(deadline: .now() + finalDelay) { [weak self] in
       guard let self else { return }
-      self.scheduleNormalModeRecapture()
+      if let completion {
+        completion()
+      } else {
+        self.scheduleNormalModeRecapture()
+      }
     }
   }
 

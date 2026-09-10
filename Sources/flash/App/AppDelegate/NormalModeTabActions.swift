@@ -279,6 +279,9 @@ extension AppDelegate {
       })
   }
 
+  /// A new tab or window exists to be typed into (a browser focuses its
+  /// address bar, tmux a fresh shell), so a successful `tab_new` hands the
+  /// keyboard over by entering INSERT. An unsupported app keeps NORMAL.
   func tabNewInNormalMode(repeatCount: Int) {
     performTabSourceAction(
       name: "tab_new",
@@ -293,7 +296,16 @@ extension AppDelegate {
           self?.applyModeOverlay()
           return
         }
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count)
+        self?.sendNormalModeKey(
+          CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count,
+          completion: { [weak self] in
+            self?.enterInsertMode(reason: .explicitCommand, targetPID: context.processID)
+          })
+      },
+      onPerformed: { [weak self] context in
+        guard let self else { return }
+        self.enterInsertMode(
+          reason: .explicitCommand, targetPID: self.normalModeTargetPID ?? context.processID)
       })
   }
 
@@ -397,6 +409,8 @@ extension AppDelegate {
     )
   }
 
+  /// `onPerformed` runs after every repeat succeeded through a source, in
+  /// place of the default NORMAL recapture.
   func performTabSourceAction(
     name: String,
     repeatCount: Int,
@@ -406,7 +420,8 @@ extension AppDelegate {
         AppContext,
         @escaping (SourceActionResult) -> Void
       ) -> Void,
-    fallback: @escaping (AppContext, Int) -> Void
+    fallback: @escaping (AppContext, Int) -> Void,
+    onPerformed: ((AppContext) -> Void)? = nil
   ) {
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(name)")
@@ -417,7 +432,11 @@ extension AppDelegate {
 
     func attempt(_ remaining: Int) {
       guard remaining > 0 else {
-        scheduleNormalModeRecapture()
+        if let onPerformed {
+          onPerformed(context)
+        } else {
+          scheduleNormalModeRecapture()
+        }
         return
       }
       action(registry, context) { [weak self] result in
