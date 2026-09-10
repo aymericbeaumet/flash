@@ -99,6 +99,30 @@ final class KeyboardCaptureTapTests: XCTestCase {
         nativeSurfaceOwnsKeyboard: true))
   }
 
+  func testNativeSurfacePassthroughEntersInsertUnlessMapped() {
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
+        flashMode: .normal,
+        modifierFlags: .maskCommand,
+        hasMapping: false,
+        isPassthroughKey: false,
+        passthroughModifierFlags: [.maskCommand, .maskControl, .maskShift, .maskAlternate]))
+    XCTAssertFalse(
+      KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
+        flashMode: .normal,
+        modifierFlags: .maskCommand,
+        hasMapping: true,
+        isPassthroughKey: false,
+        passthroughModifierFlags: [.maskCommand]))
+    XCTAssertFalse(
+      KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
+        flashMode: .insert,
+        modifierFlags: .maskCommand,
+        hasMapping: false,
+        isPassthroughKey: false,
+        passthroughModifierFlags: [.maskCommand]))
+  }
+
   func testInsertModeNeverSwallows() {
     // INSERT is invisible to the tap regardless of overlay input mode — keys
     // flow straight to the focused app.

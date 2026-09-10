@@ -5,11 +5,12 @@ import Foundation
 // case here, it cannot move the mode. Notably absent — and deliberately so —
 // are the old automatic triggers (app/element focus-change exit, browser URL
 // polling, timed focus-exit probes, pointer-handoff deferrals). The mouse
-// never changes the base mode; INSERT entry requires an explicit command.
+// never changes the base mode; INSERT entry requires an explicit command or a
+// configured passthrough keypress.
 enum ModeEvent: Equatable {
   // MARK: User-explicit
 
-  /// An explicit configured insert command. `reason.locksInsertMode`
+  /// An explicit insert command or configured passthrough keypress. `reason.locksInsertMode`
   /// decides the `locked` bit. `targetPID` is the app to hand the keyboard to.
   case enterInsert(reason: InsertModeTransitionReason, targetPID: pid_t?)
 

@@ -109,11 +109,13 @@ An empty command prompt remains quiet.
 
 ## Explicit INSERT entry
 
-Only an explicitly configured `enter_insert_mode` or `enter_locked_insert_mode`
-action enters INSERT. The default mapping set has no `i`, `I`, `a`, `A`, `o`, or
-`O` insert aliases. Unmapped passthrough keys/modifiers keep the base mode;
-clicks, editable hints, focus changes, find/new-tab actions, secure input, and
-configuration enabling advanced mode do not infer INSERT intent.
+Only an explicitly configured `enter_insert_mode` / `enter_locked_insert_mode`
+action or a configured passthrough keypress enters INSERT. The default mapping set has no `i`, `I`, `a`, `A`, `o`, or
+`O` insert aliases. A configured `passthrough_keys` / `passthrough_modifiers`
+keypress (for example `cmd+l` with the default modifiers) continues to the app
+and enters INSERT, because the user configured that key. Clicks, editable hints,
+focus changes, find/new-tab actions, secure input, and configuration enabling
+advanced mode do not infer INSERT intent.
 
 ```toml
 [mode.all.mappings]

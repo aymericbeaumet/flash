@@ -351,11 +351,11 @@ send_key_interval_ms = 35
 # "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
 
 [mode.normal]
-# Let named, unmapped keys pass to the focused app without changing mode.
-# Explicit normal/all mappings still win. Use [] to disable.
+# Let named, unmapped keys switch Flash to INSERT and continue to the focused
+# app unchanged. Explicit normal/all mappings still win. Use [] to disable.
 passthrough_keys = ["escape"]
-# Let an unmapped shortcut carrying any listed modifier pass to the focused
-# app or macOS without changing mode. Explicit normal/all
+# Let an unmapped shortcut carrying any listed modifier switch Flash to INSERT
+# and continue to the focused app or macOS unchanged. Explicit normal/all
 # mappings still win. Use [] to keep NORMAL hermetic.
 passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -368,7 +368,7 @@ leader = "\\"
 # that one default mapping; unrelated defaults stay available.
 # Mapped keys dispatch Flash commands and other bare unmapped keys are swallowed.
 # With `passthrough_keys` / `passthrough_modifiers`, matching unmapped keypresses
-# continue natively without changing mode.
+# instead switch to INSERT and continue natively.
 # Use an inline table when a mapping needs metadata. `repeat = true` lets each
 # additional press of the final key repeat the completed sequence (`[tttt`).
 # Every built-in [ / ] sequence below enables it.

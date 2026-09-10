@@ -698,7 +698,7 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 ### Mode Mappings
 
-`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). A mapping that needs metadata uses `{ action = [...], repeat = true }`; `repeat` keeps the completed normal-mode mapping armed so additional presses of its final key dispatch it again. Every built-in `[` / `]` mapping enables this metadata. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`. `[mode.normal] passthrough_keys = ["escape"]` and `passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]` let matching unmapped keypresses continue natively without changing mode; explicit mappings win, and setting both lists to `[]` keeps NORMAL hermetic.
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). A mapping that needs metadata uses `{ action = [...], repeat = true }`; `repeat` keeps the completed normal-mode mapping armed so additional presses of its final key dispatch it again. Every built-in `[` / `]` mapping enables this metadata. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`. `[mode.normal] passthrough_keys = ["escape"]` and `passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]` make matching unmapped keypresses enter INSERT and continue natively; explicit mappings win, and setting both lists to `[]` keeps NORMAL hermetic.
 
 - Modified-key entries in `[mode.all.mappings]` apply in every mode, including
   command-line and candidate-finder surfaces. Non-modified entries are available
@@ -765,14 +765,17 @@ Three normal-mode keys carry a single semantic meaning regardless of focused-app
 
 ### Explicit mode changes
 
-INSERT is opt-in through user-configured mappings to `enter_insert_mode` or
-`enter_locked_insert_mode` (or an explicit invocation of those verbs). There
-are no built-in `i`, `I`, `a`, `A`, `o`, or `O` insert shortcuts. Do not infer
-insert intent from typing surfaces, editable targets, clicks, focus changes,
-secure input, or unmapped passthrough keys/modifiers. `app_find`, `tab_new`, and
-`focus_input` perform their action while preserving the base mode.
+INSERT is opt-in through user configuration: a mapping to `enter_insert_mode`
+or `enter_locked_insert_mode` (or an explicit invocation of those verbs), or an
+unmapped keypress matching the user's `[mode.normal] passthrough_keys` /
+`passthrough_modifiers` (reason `.normalModePassthrough`; the original event
+continues natively and INSERT lands on the next main-loop turn). There are no
+built-in `i`, `I`, `a`, `A`, `o`, or `O` insert shortcuts. Do not infer insert
+intent from typing surfaces, editable targets, clicks, focus changes, or secure
+input. `app_find`, `tab_new`, and `focus_input` perform their action while
+preserving the base mode.
 
-Configured passthrough, secure fields, native menus, and pointer delivery may
+Secure fields, native menus, and pointer delivery may
 require temporary keyboard-routing handoffs; those handoffs must not change the
 base mode. Keep them separate from explicit mode transitions and preserve the
 existing bounded recapture/lifecycle behavior. `JumpTarget.entersInsertMode` is
