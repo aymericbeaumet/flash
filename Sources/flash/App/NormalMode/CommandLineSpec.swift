@@ -96,6 +96,7 @@ extension NormalModeDispatcher {
     "terminal_show": ":terminal_show [--name=<terminal>]",
     "terminal_dismiss": ":terminal_dismiss",
     "terminal_restart": ":terminal_restart [--name=<terminal-or-popup>]",
+    "terminal_quit": ":terminal_quit [--name=<terminal-or-popup>]",
   ]
 
   /// argv for `:open <args>` — the rest of the line split on whitespace,
@@ -383,6 +384,7 @@ extension NormalModeDispatcher {
     "terminal_show": "Open a fresh shell or a configured terminal",
     "terminal_dismiss": "Close the terminal window; persistent sessions keep running",
     "terminal_restart": "Restart the focused or named terminal session",
+    "terminal_quit": "Quit the focused or named terminal process; automatic restart still applies",
   ]
 
   /// Flat catalog of every built-in command-line command, tagged

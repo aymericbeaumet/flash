@@ -418,7 +418,7 @@ struct Config {
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
-    var terminal: [ModeMapping] = []
+    var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var normalLeader: String? = Self.defaultNormalLeader
     /// Keys and modifiers that make an unmapped keypress in NORMAL switch to
     /// INSERT and continue to the focused app or macOS unchanged. Explicit
@@ -457,6 +457,20 @@ struct Config {
     static let defaultNormalLeader = "\\"
 
     static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
+
+    static let defaultTerminalMappings: [ModeMapping] = {
+      let bindings: [(String, URLCommand)] = [
+        ("cmd+r", .terminalRestart(name: nil)),
+        ("cmd+q", .terminalQuit(name: nil)),
+        ("cmd+w", .terminalDismiss),
+      ]
+      return bindings.map { key, command in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("invalid default terminal mapping: \(key)")
+        }
+        return ModeMapping(key: canonical, action: .flashCommand(command))
+      }
+    }()
 
     private static func makeDefaultNormalMappings() -> [ModeMapping] {
       // Bare punctuation is allowed by the parser; defaults stay
@@ -986,6 +1000,8 @@ extension URLCommand {
       return verb("terminal_dismiss")
     case .terminalRestart(let name):
       return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
+    case .terminalQuit(let name):
+      return verb("terminal_quit", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")
     case .lockedInsertMode: return verb("enter_locked_insert_mode")
     case .commandMode: return verb("enter_command_mode")

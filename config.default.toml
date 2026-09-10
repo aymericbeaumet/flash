@@ -533,8 +533,9 @@ leader = "\\"
 
 [mode.terminal.mappings]
 # Terminal input stays local to the focused window. Plain Escape goes to the TUI.
-# "cmd+w" = ["flash", "terminal_dismiss"]
-# "cmd+r" = ["flash", "terminal_restart"]
+"cmd+r" = ["flash", "terminal_restart"] # restart immediately
+"cmd+q" = ["flash", "terminal_quit"] # stop the child; automatic restart applies
+"cmd+w" = ["flash", "terminal_dismiss"] # hide; persistent sessions keep running
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

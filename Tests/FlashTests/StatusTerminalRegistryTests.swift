@@ -137,6 +137,58 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNil(registry.sessions[temporary])
   }
 
+  func testQuitReapsChildAndAutomaticallyRestartsSameOwnedSession() {
+    for persistent in [false, true] {
+      let registry = StatusTerminalRegistry()
+      defer { registry.shutdown() }
+      var config = Config()
+      config.terminals["process"] = .init(
+        command: ["/bin/sleep", "30"], persistent: persistent)
+      let name = registry.openTerminal(name: "process", configuration: config)!
+      let session = registry.sessions[name]
+      waitUntil {
+        if case .running = session?.state { return true }
+        return false
+      }
+      guard case .running(let originalPID) = session?.state else { return }
+      let generation = registry.inputGenerations[name]
+      var sawStopped = false
+      registry.didChange = {
+        if case .stopped = session?.state { sawStopped = true }
+      }
+      registry.quit(name: name)
+      XCTAssertNotEqual(registry.inputGenerations[name], generation)
+      waitUntil {
+        if case .running(let pid) = session?.state { return pid != originalPID }
+        return false
+      }
+      XCTAssertTrue(sawStopped)
+      XCTAssertTrue(registry.sessions[name] === session)
+      XCTAssertTrue(registry.automaticallyRestarts(name: name))
+      XCTAssertEqual(kill(originalPID, 0), -1)
+      XCTAssertEqual(errno, ESRCH)
+    }
+  }
+
+  func testDismissalDuringQuitCancelsAutomaticRestart() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var config = Config()
+    config.terminals["process"] = .init(command: ["/bin/sleep", "30"])
+    let name = registry.openTerminal(name: "process", configuration: config)!
+    waitUntil {
+      if case .running = registry.sessions[name]?.state { return true }
+      return false
+    }
+    guard case .running(let pid) = registry.sessions[name]?.state else { return }
+    registry.quit(name: name)
+    registry.releaseTerminal(name: name)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    XCTAssertNil(registry.sessions[name])
+    XCTAssertNil(registry.inputGenerations[name])
+    XCTAssertEqual(kill(pid, 0), -1)
+  }
+
   func testEphemeralRestartPreservesSessionWithNewPIDAndReleaseCancelsNextRetry() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }

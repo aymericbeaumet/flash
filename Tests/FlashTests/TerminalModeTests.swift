@@ -95,7 +95,8 @@ final class TerminalModeTests: XCTestCase {
     mode.all = [mapping("cmd+esc", .commandMode)]
     mode.insert = [mapping("cmd+escape", .normalMode)]
     mode.recompileMappings()
-    XCTAssertTrue(mode.effectiveTerminalMappings.isEmpty)
+    let escapeKey = NormalModeInterpreter.canonicalizeMappingKey("cmd+escape")!
+    XCTAssertNil(mode.compiledTerminal.mapping(for: escapeKey))
 
     mode.all = [mapping("cmd+esc", .normalMode)]
     mode.terminal = [mapping("cmd+escape", .commandMode)]
@@ -116,7 +117,7 @@ final class TerminalModeTests: XCTestCase {
     XCTAssertEqual(config.mode.labels.terminal, "TTY")
     let key = NormalModeInterpreter.canonicalizeMappingKey("gg")!
     XCTAssertEqual(config.mode.compiledTerminal.mapping(for: key)?.action.command, .normalMode)
-    XCTAssertEqual(config.mode.terminal.count, 1)
+    XCTAssertEqual(config.mode.terminal.count, 4)
     XCTAssertTrue(
       config.loadingDiagnostics.contains { $0.message.contains("uses <leader> outside") })
     XCTAssertTrue(
@@ -139,7 +140,7 @@ final class TerminalModeTests: XCTestCase {
     let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let mappings = try XCTUnwrap(mode["terminal"] as? [[String: Any]])
-    XCTAssertEqual(mappings.count, 1)
+    XCTAssertEqual(mappings.count, 4)
     let labels = try XCTUnwrap(mode["labels"] as? [String: String])
     XCTAssertEqual(labels["terminal"], "TERMINAL")
   }

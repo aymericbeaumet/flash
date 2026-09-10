@@ -228,28 +228,36 @@ final class StatusTerminalRegistry {
       restart.pending = nil
       restart.backoff.running(at: ProcessInfo.processInfo.systemUptime)
     case .exited, .failed:
-      guard restart.pending == nil else { return }
-      let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime)
-      let generation = inputGenerations[name]
-      let work = DispatchWorkItem { [weak self, weak session] in
-        guard let self, let session, self.sessions[name] === session,
-          self.inputGenerations[name] == generation, self.automaticallyRestarts(name: name)
-        else { return }
-        self.restarts[name]?.pending = nil
-        self.restartSession(name: name, resetBackoff: false)
-      }
-      restart.pending = work
-      FlashLog.info(
-        "Status terminal restart scheduled",
-        fields: [
-          "popup_id": StatusFormatDocument.stableID(name),
-          "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
-        ], source: "core:StatusTerminalRegistry.restart")
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+      scheduleRestart(name: name, session: session)
+      return
     case .idle, .stopped:
       break
     }
     restarts[name] = restart
+  }
+
+  private func scheduleRestart(name: String, session: TerminalSession) {
+    guard automaticallyRestarts(name: name) else { return }
+    var restart = restarts[name] ?? Restart()
+    guard restart.pending == nil else { return }
+    let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime)
+    let generation = inputGenerations[name]
+    let work = DispatchWorkItem { [weak self, weak session] in
+      guard let self, let session, self.sessions[name] === session,
+        self.inputGenerations[name] == generation, self.automaticallyRestarts(name: name)
+      else { return }
+      self.restarts[name]?.pending = nil
+      self.restartSession(name: name, resetBackoff: false)
+    }
+    restart.pending = work
+    restarts[name] = restart
+    FlashLog.info(
+      "Status terminal restart scheduled",
+      fields: [
+        "popup_id": StatusFormatDocument.stableID(name),
+        "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
+      ], source: "core:StatusTerminalRegistry.restart")
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
 
   private func remove(name: String) {
@@ -296,6 +304,21 @@ final class StatusTerminalRegistry {
 
   func restart(name: String) {
     restartSession(name: name, resetBackoff: true)
+  }
+
+  func quit(name: String) {
+    guard let session = sessions[name], case .running = session.state else { return }
+    restarts[name]?.pending?.cancel()
+    restarts[name]?.pending = nil
+    willChange?([.replace(name)])
+    advanceInputGeneration(for: name)
+    let generation = inputGenerations[name]
+    session.stop { [weak self, weak session] in
+      guard let self, let session, self.sessions[name] === session,
+        self.inputGenerations[name] == generation
+      else { return }
+      self.scheduleRestart(name: name, session: session)
+    }
   }
 
   private func restartSession(name: String, resetBackoff: Bool) {

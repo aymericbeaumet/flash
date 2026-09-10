@@ -646,6 +646,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
+    case .terminalQuit(let name):
+      quitStatusTerminal(named: name)
     case .insertMode:
       enterInsertMode()
     case .lockedInsertMode:

@@ -43,6 +43,7 @@ enum URLCommand: Hashable {
   case terminalShow(name: String?)
   case terminalDismiss
   case terminalRestart(name: String?)
+  case terminalQuit(name: String?)
   case insertMode
   case lockedInsertMode
   case commandMode
@@ -410,6 +411,12 @@ final class URLEventHandler: NSObject {
       }
       return .terminalRestart(name: args.value("name"))
     },
+    "terminal_quit": { args in
+      guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+        return nil
+      }
+      return .terminalQuit(name: args.value("name"))
+    },
     "enter_insert_mode": { _ in .insertMode },
     "enter_locked_insert_mode": { _ in .lockedInsertMode },
     "enter_command_mode": { a in
@@ -503,6 +510,7 @@ final class URLEventHandler: NSObject {
     flash terminal_show [--name=<terminal>]
     flash terminal_dismiss
     flash terminal_restart [--name=<terminal-or-popup>]
+    flash terminal_quit [--name=<terminal-or-popup>]
     flash enter_insert_mode
     flash enter_locked_insert_mode
     flash enter_command_mode

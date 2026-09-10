@@ -427,6 +427,11 @@ Preserve screen clamping and restore the previous app only on explicit close,
 never after focus loss. Use `absolute-centre` for screen-centered labels; native `centre`
 centers the space between the sides. Terminal focus is a real transient Mode,
 with local mappings and lossless pending-prefix replay before reload/dismissal.
+Terminal defaults are Command-R (`terminal_restart`), Command-Q
+(`terminal_quit`), and Command-W (`terminal_dismiss`). Quit uses bounded child
+cleanup and the existing automatic restart backoff without dismissing the
+popup; invalidate input generations before stopping so delayed input cannot
+reach its replacement. Dismissal retains the declared persistence policy.
 Inherited exit mappings come only from winning INSERT-active
 `enter_normal_mode` bindings; other global mappings are suspended. Returning
 to NORMAL restores the captured external application before keyboard recapture.

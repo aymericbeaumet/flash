@@ -1011,6 +1011,8 @@ extension AppDelegate {
       dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
+    case .terminalQuit(let name):
+      quitStatusTerminal(named: name)
     case .commandMode:
       enterCommandLineMode()
     case .scroll(let kind):

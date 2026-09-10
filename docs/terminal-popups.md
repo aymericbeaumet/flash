@@ -5,6 +5,14 @@ input mappings, exit commands, and renderer. Declare every process under
 `[terminal.<name>]`; `#[popup=<name>]` and `terminal_show --name=<name>` present
 the same session. `[statusbar.popup]` contains document strings only.
 
+The default terminal-mode shortcuts are Command-R to restart immediately,
+Command-Q to quit the child and let automatic restart relaunch it, and
+Command-W to hide the window. Hiding keeps persistent sessions running and
+stops nonpersistent sessions. Override these in `[mode.terminal.mappings]`.
+Both process commands keep the popup open and accept an optional `--name`;
+without one they operate on the focused terminal. Document popups have no
+process, so only Command-W applies.
+
 `persistent = true` starts a session after the login-shell environment resolves,
 even if the status bar is disabled or no template refers to it. Hiding it keeps
 the process and history. The default, `persistent = false`, starts on an
@@ -26,6 +34,8 @@ rows = 24
 
 [mode.terminal.mappings]
 "cmd+r" = ["flash", "terminal_restart"]
+"cmd+q" = ["flash", "terminal_quit"]
+"cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
 Commands are argv arrays, with the same environment and path resolution as other Flash commands. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. The inherited `NO_COLOR` setting is removed because these children own a color-capable PTY; an explicit `[terminal.<name>] env = { NO_COLOR = "1" }` still opts that terminal out of colors. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
@@ -64,6 +74,7 @@ rows = 36
 [mode.terminal.mappings]
 "cmd+w" = ["flash", "terminal_dismiss"]
 "cmd+r" = ["flash", "terminal_restart"]
+"cmd+q" = ["flash", "terminal_quit"]
 ```
 
 Named definitions accept `command`, `working_directory`, `env`, `columns`,
