@@ -10,6 +10,7 @@ enum InsertModeTransitionReason: Equatable {
   case hintCommit
   case advancedModeDisabled
   case secureInput
+  case normalModePassthrough
 
   var logValue: String {
     switch self {
@@ -25,6 +26,8 @@ enum InsertModeTransitionReason: Equatable {
       return "advanced_mode_disabled"
     case .secureInput:
       return "secure_input"
+    case .normalModePassthrough:
+      return "normal_mode_passthrough"
     }
   }
 }
@@ -603,6 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.reconcileFrontmostApplication(reason: "space_changed")
       self.cancelOverlay()
+      self.overlay.reassertStatusBar(reason: "space_changed")
       self.scheduleActiveWindowBorderReconciliation(
         delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
       self.pluginManager.emit(
@@ -680,6 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
+      self.overlay.reassertStatusBar(reason: "session_active")
       self.setActiveWindowBorderSessionSuspended(
         false, source: .session, reason: "session_active")
       // The secure login surface may have activated without a corresponding
@@ -701,6 +706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
+      self?.overlay.reassertStatusBar(reason: "screens_wake")
       self?.setActiveWindowBorderSessionSuspended(
         false, source: .screens, reason: "screens_wake")
     }
@@ -717,6 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
+      self?.overlay.reassertStatusBar(reason: "system_wake")
       self?.setActiveWindowBorderSessionSuspended(
         false, source: .systemSleep, reason: "system_wake")
     }
@@ -956,6 +963,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       let flags = event.flags
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
+      if aboutOwnsNativeKeyboard, flashMode == .normal, !hasMapping,
+        overlay.normalModePassthroughKeyCodes.contains(keyCode)
+          || !flags.intersection(overlay.normalModePassthroughModifierFlags).isEmpty
+      {
+        scheduleInsertAfterPassthrough(
+          targetPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
+      }
       return KeyboardCaptureTap.shouldSwallow(
         flashMode: flashMode,
         inputMode: overlay.inputMode,
@@ -971,10 +985,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     // In NORMAL, an unmapped keypress matching a configured passthrough key or
     // carrying a configured passthrough modifier is NOT swallowed — the original
-    // event flows to the app / system natively and Flash stays in NORMAL; only
-    // explicit mappings change the mode. Not swallowing (rather than swallow +
-    // re-post) is what makes system-level chords like ⌘Tab work. A mapped
-    // keypress is still swallowed and fired by `routeTapCapturedKey`.
+    // event flows to the app / system natively. Flash follows it into INSERT
+    // only if the app then leaves an editable element focused (⌘T's address
+    // bar); otherwise NORMAL stays (⌘I's page-info window). Not swallowing
+    // (rather than swallow + re-post) is what makes system-level chords like
+    // ⌘Tab work. A mapped keypress is still swallowed and fired by
+    // `routeTapCapturedKey`.
     //
     // Runs synchronously on every keystroke, so the decision reads raw CGEvent
     // fields — no `NSEvent(cgEvent:)`, which resolves the keyboard layout and
@@ -993,13 +1009,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     reconcileFrontmostApplication(
       forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
     let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-    return KeyboardCaptureTap.shouldSwallow(
+    let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
       flashMode: flashMode,
       inputMode: overlay.inputMode,
       modifierFlags: flags,
       hasMapping: hasMapping,
       isPassthroughKey: isPassthroughKey,
       passthroughModifierFlags: passthroughModifierFlags)
+    if !shouldSwallow {
+      scheduleInsertAfterPassthrough(
+        targetPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
+    }
+    return shouldSwallow
+  }
+
+  /// Focus settles a beat after the app receives a chord (a new tab's
+  /// address bar, a find field). Probe twice so a slow app is not missed
+  /// while a fast one enters INSERT promptly.
+  static let passthroughFocusProbeDelaysMs = [120, 380]
+  private static var passthroughFollowGeneration: UInt64 = 0
+
+  /// A passthrough chord reached the app. Enter INSERT only if it left an
+  /// editable element focused; a later chord, mode change, or app switch
+  /// cancels the pending probes.
+  func scheduleInsertAfterPassthrough(targetPID: pid_t?) {
+    Self.passthroughFollowGeneration &+= 1
+    let generation = Self.passthroughFollowGeneration
+    let pid = targetPID.flatMap { $0 > 0 ? $0 : nil } ?? currentNonFlashContext()?.processID
+    guard let pid else { return }
+    for delay in Self.passthroughFocusProbeDelaysMs {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
+        guard let self, generation == Self.passthroughFollowGeneration,
+          self.flashMode == .normal, self.overlay.inputMode == .normal
+        else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let editable = NormalModeDispatcher.focusedElementIsEditable(pid: pid)
+          DispatchQueue.main.async { [weak self] in
+            guard let self, editable, generation == Self.passthroughFollowGeneration,
+              self.flashMode == .normal, self.overlay.inputMode == .normal,
+              self.currentNonFlashContext()?.processID == pid
+            else { return }
+            Self.passthroughFollowGeneration &+= 1
+            self.enterInsertMode(reason: .normalModePassthrough, targetPID: pid)
+          }
+        }
+      }
+    }
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {

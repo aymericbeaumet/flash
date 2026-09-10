@@ -147,6 +147,29 @@ extension OverlayPanel {
     if candidateFinderResultsVisible {
       configureCandidateFinderResults(panelFrame: frame)
     }
+    // A published model must reach the screen: if the bar layer lost its
+    // parent or the panel is not on screen, rebuild the layer tree and
+    // re-order the panel instead of waiting for the next mode transition.
+    if modeBadgeVisible, modeBadgeLayer.superlayer == nil || !isVisible {
+      FlashLog.warn(
+        "[statusbar] reattach layer_attached=\(modeBadgeLayer.superlayer != nil) "
+          + "panel_visible=\(isVisible)")
+      renderModeBadgeOnlyOrHide()
+    }
+  }
+
+  /// Re-anchor and re-order the bar after a space change or wake. Display
+  /// geometry may have changed without `didChangeScreenParameters`, and the
+  /// panel's z-order is only reasserted by `orderFrontRegardless`.
+  func reassertStatusBar(reason: String) {
+    guard modeBadgeVisible else { return }
+    FlashLog.trace("[statusbar] reassert reason=\(reason)")
+    OverlayPanel.invalidateScreenSnapshot()
+    updateModeBadge(
+      text: modeBadgeText,
+      visible: modeBadgeVisible,
+      captureInput: modeBadgeCapturesInput,
+      style: modeBadgeStyle)
   }
 
   func renderModeBadgeOnlyOrHide() {
@@ -312,6 +335,15 @@ extension OverlayPanel {
     configure(
       primaryStatusBarSurface, screen: mainFrame, visible: visible, scale: snapshot.mainScale,
       notch: mainNotch)
+    if primaryStatusBarSurface.visibleRuns.isEmpty,
+      document.runs.contains(where: { !$0.isStyleBoundary && !$0.text.isEmpty })
+    {
+      FlashLog.warn(
+        "[statusbar] empty_render screens=\(snapshot.screens.count) "
+          + "main=\(NSStringFromRect(mainFrame)) visible=\(NSStringFromRect(visible)) "
+          + "panel=\(NSStringFromRect(panelFrame)) columns=\(primaryStatusBarSurface.availableColumns) "
+          + "notch=\(mainNotch.map(NSStringFromRect) ?? "none")")
+    }
     for (surface, screen) in zip(secondaryStatusBars, extras) {
       configure(
         surface, screen: screen.frame, visible: screen.visibleFrame, scale: screen.scale,

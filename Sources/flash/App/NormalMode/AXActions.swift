@@ -189,6 +189,26 @@ extension NormalModeDispatcher {
     return AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success
   }
 
+  /// Whether `pid`'s focused element takes typed text. Decides whether a
+  /// passthrough chord that reached the app is followed into INSERT.
+  static func focusedElementIsEditable(pid: pid_t) -> Bool {
+    let app = AXApp.make(pid: pid)
+    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
+      return false
+    }
+    return passthroughFocusIsEditable(
+      role: stringAttribute(focused, kAXRoleAttribute as String),
+      subrole: stringAttribute(focused, kAXSubroleAttribute as String))
+  }
+
+  /// Text inputs, search fields, combo boxes, and web editors count; a
+  /// window, web area, button, or list does not.
+  static func passthroughFocusIsEditable(role: String?, subrole: String?) -> Bool {
+    guard let role else { return false }
+    if JumpTarget.textInputRoles.contains(role) { return true }
+    return subrole == "AXContentEditable" || subrole == "AXSearchField"
+  }
+
   static func strongEditableFocusCandidates(
     _ candidates: [EditableFocusRepairCandidate],
     windowFrame: CGRect?

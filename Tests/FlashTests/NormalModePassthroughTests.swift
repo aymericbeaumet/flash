@@ -70,4 +70,16 @@ final class NormalModePassthroughTests: XCTestCase {
       characters: characters, charactersIgnoringModifiers: characters,
       mappings: CompiledMappings(mappings))
   }
+
+  func testPassthroughFollowsOnlyEditableFocus() {
+    for role in ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"] {
+      XCTAssertTrue(NormalModeDispatcher.passthroughFocusIsEditable(role: role, subrole: nil), role)
+    }
+    XCTAssertTrue(
+      NormalModeDispatcher.passthroughFocusIsEditable(role: "AXGroup", subrole: "AXContentEditable"))
+    for role in ["AXWindow", "AXWebArea", "AXButton", "AXList", "AXGroup"] {
+      XCTAssertFalse(NormalModeDispatcher.passthroughFocusIsEditable(role: role, subrole: nil), role)
+    }
+    XCTAssertFalse(NormalModeDispatcher.passthroughFocusIsEditable(role: nil, subrole: nil))
+  }
 }

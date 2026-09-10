@@ -530,7 +530,8 @@ extension OverlayPanel {
     if isPassthroughKey || usesPassthroughModifier, !recognized {
       // The session tap normally leaves the original event in the native event
       // stream. This path is only the no-tap key-window fallback, so the
-      // coordinator replays the keypress to the focused pid; NORMAL stays.
+      // coordinator replays the keypress to the focused pid and then follows
+      // an editable focus into INSERT.
       coordinator.overlayDidPassthroughNormalModeKey(event)
       return true
     }

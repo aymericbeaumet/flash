@@ -1002,16 +1002,18 @@ extension AppDelegate {
 
   /// The Accessibility tap is unavailable, so the panel already received and
   /// consumed the original event. Replay the equivalent chord to the focused
-  /// app; Flash stays in NORMAL. The normal-scope matcher already rejected this
-  /// chord before this method was called.
+  /// app, then follow it into INSERT only if it leaves an editable element
+  /// focused. The normal-scope matcher already rejected this chord before
+  /// this method was called.
   func overlayDidPassthroughNormalModeKey(_ event: NSEvent) {
     guard flashMode == .normal,
       let pid = currentNonFlashContext()?.processID ?? normalModeTargetPID
     else { return }
     let keyCode = CGKeyCode(event.keyCode)
     let flags = ClickModifiers(eventFlags: event.modifierFlags).cgEventFlags
-    DispatchQueue.main.async {
+    DispatchQueue.main.async { [weak self] in
       _ = NormalModeDispatcher.sendKey(virtualKey: keyCode, flags: flags, to: pid)
+      self?.scheduleInsertAfterPassthrough(targetPID: pid)
     }
   }
 
