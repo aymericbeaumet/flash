@@ -65,7 +65,13 @@ Build the native-architecture binaries, then run the report-only benchmark:
 ./Scripts/benchmark-plugins.py --plugin firefox --plugin safari --samples 20
 ```
 
-It launches each official executable from a clean data directory, measures
+`Scripts/measure-footprint.sh [sample-seconds] [log-window-minutes]` is the
+whole-system counterpart: it samples the running resident and every child
+(CPU, idle wakeups, memory, descriptors, threads) and summarises watchdog
+stalls, tap re-enables, and log lines per minute over the window. It is
+read-only and expects one installed Flash to be running.
+
+The plugin benchmark launches each official executable from a clean data directory, measures
 the protocol initialize round trip, lets post-initialize startup settle,
 measures an idle ping, samples RSS/thread count, then
 shuts the child down through stdin EOF. It does not enforce thresholds in CI;

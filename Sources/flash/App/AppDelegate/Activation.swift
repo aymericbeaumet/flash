@@ -101,6 +101,7 @@ extension AppDelegate {
     targetFilter: ((JumpTarget) -> Bool)? = nil,
     contextOverride: AppContext? = nil
   ) {
+    MainThreadWatchdog.note("activation")
     FlashLog.trace(
       "[activation] begin action=\(action) behavior=\(commitBehavior) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")

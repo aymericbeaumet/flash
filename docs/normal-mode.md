@@ -98,9 +98,21 @@ share the main run loop. Treat that loop as the input latency budget:
   restores the active scope.
 
 `MainThreadWatchdog` records a `main_thread_stall` warning when the loop misses
-its maintained threshold. A timeout-disabled event tap also logs before being
-re-enabled; either message is evidence of main-thread work that needs moving or
-narrowing.
+its maintained threshold. The warning carries `last_activity_ms_ago`: the most
+recent coarse main-thread units of work (`tap_key`, `mode_effects`,
+`mode_overlay`, `effective_mappings`, `activation`, `hint_commit`,
+`config_reload`) with their age, so a stall names what main was doing. Call
+`MainThreadWatchdog.note` at the top of any new coarse main-thread unit of
+work. A
+timeout-disabled event tap also logs before being re-enabled; either message is
+evidence of main-thread work that needs moving or narrowing.
+
+Two debug-level probes measure the path itself: `[latency] tap_to_route` is the
+delay from the HID timestamp to the main-thread turn that routes a swallowed
+key, and `[latency] normal_dispatch` is the synchronous cost of one normal-mode
+action. `Scripts/measure-footprint.sh` samples the resident and its children
+(CPU, idle wakeups, memory, descriptors) and summarises stalls and log volume
+for a before/after comparison.
 
 ## Interaction ownership
 

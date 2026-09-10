@@ -97,6 +97,7 @@ extension AppDelegate {
   /// then publish to overlay + monitor under their internal locks. Every
   /// future activation snapshots the new config at the start of its walk.
   private func reloadConfig() {
+    MainThreadWatchdog.note("config_reload")
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.

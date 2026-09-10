@@ -61,6 +61,7 @@ extension AppDelegate {
   /// transition and what to sync; this just does the AppKit work, reusing the
   /// existing routines. No decisions live here.
   func applyModeEffects(_ effects: [ModeEffect], previous _: Mode, next: Mode) {
+    MainThreadWatchdog.note("mode_effects")
     for effect in effects {
       switch effect {
       case .prepareKeyboardCapture:
@@ -283,6 +284,7 @@ extension AppDelegate {
   }
 
   func applyModeOverlay(captureOverride: Bool? = nil) {
+    MainThreadWatchdog.note("mode_overlay")
     let mode = modeStore.mode
     // A pointer-mode session behaves exactly like a hint set being up: the
     // transient overlay owns input (`.hints`) and NORMAL's own capture is off.

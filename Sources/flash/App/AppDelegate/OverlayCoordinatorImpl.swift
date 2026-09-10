@@ -190,7 +190,14 @@ extension AppDelegate {
     overlay.normalModePending = ""
     FlashLog.trace(
       "[input] normal dispatch reason=\(reason) action=\(action.diagnosticDescription)")
+    let dispatchStartedAt = DispatchTime.now()
     performMappingCommand(action, repeatCount: repeatCount)
+    FlashLog.debug(
+      "[latency] normal_dispatch action=\(action.diagnosticDescription) sync_ms="
+        + String(
+          format: "%.2f",
+          Double(DispatchTime.now().uptimeNanoseconds - dispatchStartedAt.uptimeNanoseconds)
+            / 1_000_000))
     let focusChanging = Self.normalModeActionMayChangeKeyboardFocus(action)
     if guardNormalModeInputAfterActionDispatch(force: focusChanging) {
       scheduleNormalModeRecapture(

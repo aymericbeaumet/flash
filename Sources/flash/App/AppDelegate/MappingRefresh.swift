@@ -10,6 +10,7 @@ extension AppDelegate {
   /// changed, so an ordinary app switch doesn't churn global-hotkey
   /// registrations.
   func refreshEffectiveMappings(for bundleID: String?) {
+    MainThreadWatchdog.note("effective_mappings")
     let effective = effectiveMode(
       for: pluginSelectorContext(fallbackBundleID: bundleID))
     overlay?.normalModeMappings = effective.compiledNormal

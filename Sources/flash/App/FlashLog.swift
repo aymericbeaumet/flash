@@ -5,8 +5,12 @@ import Foundation
 /// compact JSON object, written to stderr and appended to
 /// `~/Library/Logs/Flash/flash.log`.
 ///
-/// File writes are dispatched onto a dedicated background queue so a
-/// slow disk never blocks the activation hot path.
+/// The calling thread only decides whether the record passes and builds the
+/// record value; JSON encoding, the stderr write, and the file append all run
+/// on one background I/O queue so the input hot path never blocks on a
+/// `write(2)`. A suppressed call costs one lock round trip and no allocation:
+/// the message autoclosure is not evaluated and the default `source` is
+/// derived from `StaticString` literals only for records that pass.
 enum FlashLog {
   /// Severity ordering. The configured `minLevel` is the floor —
   /// messages below it are dropped before any string interpolation
@@ -76,12 +80,17 @@ enum FlashLog {
   private static let lock = NSLock()
   private static var minLevel: Level = .info
   private static var sinks: [UUID: Sink] = [:]
+  private static let pid = Int(getpid())
+  /// Serial queue owning every byte of log output (stderr and file).
+  private static let ioQueue = DispatchQueue(label: "flash.log.io", qos: .utility)
   static let defaultLogFileURL: URL? = {
     guard NSClassFromString("XCTestCase") == nil else { return nil }
     return FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Logs/Flash/flash.log")
   }()
-  private static let fileWriter = defaultLogFileURL.map { FlashLogFileWriter(url: $0) }
+  private static let fileWriter = defaultLogFileURL.map {
+    FlashLogFileWriter(url: $0, queue: ioQueue)
+  }
 
   static func setLevel(_ level: Level) {
     lock.lock()
@@ -109,7 +118,13 @@ enum FlashLog {
     return level >= minLevel || !sinks.isEmpty
   }
 
-  static func coreSource(fileID: String, function: String) -> String {
+  /// Block until every record emitted so far has been written out.
+  static func flush() {
+    ioQueue.sync {}
+  }
+
+  static func coreSource(fileID: StaticString, function: StaticString) -> String {
+    let fileID = fileID.description
     let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
     return "core:\(file).\(function)"
   }
@@ -117,30 +132,38 @@ enum FlashLog {
   static func debug(
     _ message: @autoclosure () -> String,
     fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.debug, source: source, fields: fields, message)
+    emit(.debug, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func trace(
     _ message: @autoclosure () -> String,
     fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.trace, source: source, fields: fields, message)
+    emit(.trace, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func info(
     _ message: @autoclosure () -> String,
     fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.info, source: source, fields: fields, message)
+    emit(.info, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func warn(
     _ message: @autoclosure () -> String,
     fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.warn, source: source, fields: fields, message)
+    emit(.warn, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func plugin(
     _ level: Level,
@@ -148,47 +171,60 @@ enum FlashLog {
     message: @autoclosure () -> String,
     fields: [String: String] = [:]
   ) {
-    emit(level, source: "plugin:\(pluginID)", fields: fields, message)
+    emit(level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields, message)
   }
 
   private static func emit(
     _ level: Level,
-    source: String,
+    source: String?,
+    fileID: StaticString,
+    function: StaticString,
     fields: [String: String],
     _ message: () -> String
   ) {
     lock.lock()
     let pass = level >= minLevel
-    let sinkSnapshot = Array(sinks.values)
+    let hasSinks = !sinks.isEmpty
     lock.unlock()
-    guard pass || !sinkSnapshot.isEmpty else { return }
+    guard pass || hasSinks else { return }
     let record = Record(
       level: level,
-      source: source,
+      source: source ?? coreSource(fileID: fileID, function: function),
       message: message(),
       fields: fields,
-      pid: Int(ProcessInfo.processInfo.processIdentifier),
+      pid: pid,
       timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()))
-    let line = jsonLine(record)
-    for sink in sinkSnapshot {
-      sink(record)
+    if hasSinks {
+      lock.lock()
+      let sinkSnapshot = Array(sinks.values)
+      lock.unlock()
+      for sink in sinkSnapshot {
+        sink(record)
+      }
     }
     guard pass else { return }
-    fputs(line, stderr)
-    if let data = line.data(using: .utf8) { fileWriter?.append(data) }
+    ioQueue.async {
+      let line = jsonLineData(record)
+      line.withUnsafeBytes { bytes in
+        guard let base = bytes.baseAddress else { return }
+        _ = fwrite(base, 1, bytes.count, stderr)
+      }
+      fileWriter?.writeOnQueue(line)
+    }
   }
 
-  static func jsonLine(_ record: Record) -> String {
+  /// One newline-terminated JSON object, encoded exactly once.
+  static func jsonLineData(_ record: Record) -> Data {
     let object = record.jsonObject
     guard
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
-      var line = String(data: data, encoding: .utf8)
+      var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     else {
-      return
+      return Data(
         "{\"level\":\"error\",\"message\":\"log serialization failed\",\"source\":\"core:FlashLog\"}\n"
+          .utf8)
     }
-    line.append("\n")
-    return line
+    data.append(0x0A)
+    return data
   }
 
 }
@@ -197,25 +233,37 @@ final class FlashLogFileWriter {
   private let url: URL
   private let rotationByteLimit: UInt64
   private let rotationKeep: Int
-  private let queue = DispatchQueue(label: "flash.log.write", qos: .utility)
+  private let queue: DispatchQueue
   private var handle: FileHandle?
   private var bytesWritten: UInt64 = 0
 
-  init(url: URL, rotationByteLimit: UInt64 = 10 * 1024 * 1024, rotationKeep: Int = 3) {
+  init(
+    url: URL,
+    rotationByteLimit: UInt64 = 10 * 1024 * 1024,
+    rotationKeep: Int = 3,
+    queue: DispatchQueue = DispatchQueue(label: "flash.log.write", qos: .utility)
+  ) {
     precondition(rotationByteLimit > 0 && rotationKeep > 0)
     self.url = url
     self.rotationByteLimit = rotationByteLimit
     self.rotationKeep = rotationKeep
+    self.queue = queue
   }
 
   func append(_ data: Data) {
     queue.async { [self] in
-      openIfNeeded()
-      guard let handle else { return }
-      do { try handle.write(contentsOf: data) } catch { return }
-      bytesWritten &+= UInt64(data.count)
-      if bytesWritten >= rotationByteLimit { rotate() }
+      writeOnQueue(data)
     }
+  }
+
+  /// Append from a block already running on this writer's queue.
+  func writeOnQueue(_ data: Data) {
+    dispatchPrecondition(condition: .onQueue(queue))
+    openIfNeeded()
+    guard let handle else { return }
+    do { try handle.write(contentsOf: data) } catch { return }
+    bytesWritten &+= UInt64(data.count)
+    if bytesWritten >= rotationByteLimit { rotate() }
   }
 
   func flush() { queue.sync {} }

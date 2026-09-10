@@ -36,6 +36,47 @@ final class FlashLogTests: XCTestCase {
     wait(for: [emitted], timeout: 1)
   }
 
+  func testSuppressedLevelLeavesMessageUnevaluated() {
+    FlashLog.setLevel(.info)
+    var evaluated = false
+    func message() -> String {
+      evaluated = true
+      return "never formatted"
+    }
+    FlashLog.trace(message())
+    FlashLog.debug(message())
+    XCTAssertFalse(evaluated)
+    FlashLog.warn(message())
+    XCTAssertTrue(evaluated)
+    FlashLog.flush()
+  }
+
+  func testDefaultSourceNamesTheCallSite() {
+    let emitted = expectation(description: "call-site source")
+    let sink = FlashLog.addSink { record in
+      guard record.message == "call-site source" else { return }
+      XCTAssertEqual(
+        record.source, "core:FlashLogTests.swift.testDefaultSourceNamesTheCallSite()")
+      emitted.fulfill()
+    }
+    defer { FlashLog.removeSink(sink) }
+    FlashLog.info("call-site source")
+    wait(for: [emitted], timeout: 1)
+  }
+
+  func testJSONLineIsNewlineTerminatedAndSorted() throws {
+    let record = FlashLog.Record(
+      level: .info, source: "core:test", message: "m", fields: ["k": "v"], pid: 7,
+      timeUnixMs: 42)
+    let line = FlashLog.jsonLineData(record)
+    XCTAssertEqual(line.last, 0x0A)
+    let object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: line.dropLast()) as? [String: Any])
+    XCTAssertEqual(object["message"] as? String, "m")
+    XCTAssertEqual((object["fields"] as? [String: String])?["k"], "v")
+    XCTAssertTrue(String(decoding: line, as: UTF8.self).hasPrefix("{\"fields\""))
+  }
+
   func testQueuedRecordsSurviveRepeatedRotation() throws {
     let directory = try temporaryDirectory()
     let writer = FlashLogFileWriter(

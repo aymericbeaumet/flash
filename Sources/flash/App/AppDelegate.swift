@@ -996,6 +996,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// interpreter. Passthrough chords never reach here because the tap leaves
   /// them native.
   func routeTapCapturedKey(_ event: NSEvent) {
+    MainThreadWatchdog.note("tap_key")
+    // HID timestamp → this main-thread turn: the tap-side latency budget.
+    FlashLog.debug(
+      "[latency] tap_to_route key=\(event.keyCode) ms="
+        + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
     // A chord the tap swallowed in INSERT is an active mapping (see
     // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
     // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.

@@ -1332,7 +1332,9 @@ final class PluginSystemTests: XCTestCase {
 
     XCTAssertEqual(records.first?.source, "core:test")
     XCTAssertEqual(records.last?.source, "plugin:spotify")
-    XCTAssertTrue(FlashLog.jsonLine(records[0]).contains("\"source\":\"core:test\""))
+    XCTAssertTrue(
+      String(decoding: FlashLog.jsonLineData(records[0]), as: UTF8.self)
+        .contains("\"source\":\"core:test\""))
   }
 
   // MARK: - Clipboard dashboard decode

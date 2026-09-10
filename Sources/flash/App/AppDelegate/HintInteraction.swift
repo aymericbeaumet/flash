@@ -51,6 +51,7 @@ extension AppDelegate {
     action: @escaping (@escaping () -> Void) -> Void,
     completion: @escaping (AppDelegate) -> Void
   ) {
+    MainThreadWatchdog.note("hint_commit")
     guard let token = activationLifecycle.prepareCommit() else { return }
     applyModeOverlay(captureOverride: false)
     let start = { [weak self] in
