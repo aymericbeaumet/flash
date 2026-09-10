@@ -6,7 +6,7 @@ import Foundation
 /// "is anything holding recapture off right now?" has a single answer.
 ///
 /// These windows are a deliberate *backstop*, not the primary recapture trigger.
-/// A native surface (a context menu, or an in-flight pointer commit) owns
+/// A native surface (a context menu, or an in-flight pointer→insert handoff) owns
 /// the keyboard and the real recapture fires on the user's next interaction. We
 /// never force a recapture when a window merely expires: doing so would re-grab
 /// the keyboard out from under a menu the user is still holding open — and an
@@ -17,20 +17,20 @@ struct RecaptureSuppression: Equatable {
   var menuBarUntil: Date?
   /// A context menu (right-click / `AXShowMenu`) owns its own modal key session.
   var contextMenuUntil: Date?
-  /// A pointer click is still being delivered to its target.
-  var pointerCommitHandoffUntil: Date?
+  /// A pointer click is being probed for an insert-mode handoff.
+  var pointerInsertHandoffUntil: Date?
 
   func menuBarActive(now: Date) -> Bool { Self.active(menuBarUntil, now: now) }
   func contextMenuActive(now: Date) -> Bool { Self.active(contextMenuUntil, now: now) }
-  func pointerCommitHandoffActive(now: Date) -> Bool {
-    Self.active(pointerCommitHandoffUntil, now: now)
+  func pointerInsertHandoffActive(now: Date) -> Bool {
+    Self.active(pointerInsertHandoffUntil, now: now)
   }
 
   /// True while any reason is still holding recapture off.
   func anyActive(now: Date) -> Bool {
     menuBarActive(now: now)
       || contextMenuActive(now: now)
-      || pointerCommitHandoffActive(now: now)
+      || pointerInsertHandoffActive(now: now)
   }
 
   /// Clear windows whose expiry has already elapsed, so a stale `Date?` can't
@@ -38,7 +38,7 @@ struct RecaptureSuppression: Equatable {
   mutating func pruneExpired(now: Date) {
     if let until = menuBarUntil, until <= now { menuBarUntil = nil }
     if let until = contextMenuUntil, until <= now { contextMenuUntil = nil }
-    if let until = pointerCommitHandoffUntil, until <= now { pointerCommitHandoffUntil = nil }
+    if let until = pointerInsertHandoffUntil, until <= now { pointerInsertHandoffUntil = nil }
   }
 
   /// The single suppression-window predicate (was copy-pasted three times).

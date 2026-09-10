@@ -362,8 +362,9 @@ passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
 leader = "\\"
 
 [mode.normal.mappings]
-# INSERT entry has no default binding; define enter_insert_mode or
-# enter_locked_insert_mode explicitly in your own mappings.
+# No key here enters INSERT by default; bind enter_insert_mode or
+# enter_locked_insert_mode yourself. Clicks into text fields and passthrough
+# keys still switch to INSERT.
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
 # that one default mapping; unrelated defaults stay available.
 # Mapped keys dispatch Flash commands and other bare unmapped keys are swallowed.

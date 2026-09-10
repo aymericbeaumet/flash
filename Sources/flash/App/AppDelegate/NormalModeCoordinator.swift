@@ -267,6 +267,21 @@ extension AppDelegate {
     }
   }
 
+  static func normalModeMayEnterInsert(reason: InsertModeTransitionReason) -> Bool {
+    // `.explicitCommand` joins the user-driven set because mapped-key
+    // actions like `/` (app_find) and `t` (tab_new) follow a sendKey →
+    // enterInsertMode pattern: the user just pressed a normal-mode key
+    // and the intent is "open something and start typing". Holding the
+    // gate against `.explicitCommand` left those mappings stuck in
+    // NORMAL after the side-effect fired, so typing went to the empty
+    // search bar / new tab via the system, then nothing.
+    // `.normalModePassthrough` is user-driven too: it is scheduled only when
+    // the user presses an unmapped configured key or modifier chord in NORMAL.
+    reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
+      || reason == .pointerClick || reason == .explicitCommand
+      || reason == .normalModePassthrough
+  }
+
   static func insertModeShouldExitAfterFocusedAppChange(
     mode: FlashMode,
     modeBadgeEnabled: Bool,
@@ -316,6 +331,19 @@ extension AppDelegate {
   ) -> Bool {
     guard !insertModeLocked, let bundleIdentifier else { return false }
     return !TerminalBundles.identifiers.contains(bundleIdentifier)
+  }
+
+  static func insertModeMayRepairEditableFocus(
+    reason: InsertModeTransitionReason?,
+    bundleIdentifier: String?,
+    insertModeLocked: Bool
+  ) -> Bool {
+    guard
+      insertModeMayArmEditableFocusExit(
+        bundleIdentifier: bundleIdentifier,
+        insertModeLocked: insertModeLocked)
+    else { return false }
+    return reason == .hintCommit || reason == .pointerClick
   }
 
   static func insertEntryTargetPID(
@@ -442,10 +470,10 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
       return
     }
-    if Self.pointerCommitHandoffRecaptureSuppressionIsActive(
-      until: pointerCommitHandoffRecaptureSuppressedUntil)
+    if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+      until: pointerInsertHandoffRecaptureSuppressedUntil)
     {
-      FlashLog.trace("[mode] recapture_skip reason=pointer_commit_handoff_pending")
+      FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
       return
     }
     // Reaching here means no suppression is active — any native surface (context
@@ -533,61 +561,61 @@ extension AppDelegate {
   }
 
   @discardableResult
-  func notePointerCommitHandoff(reason: String, now: Date = Date()) -> UInt64 {
-    pointerCommitHandoffToken &+= 1
-    pointerCommitHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
-      Double(Self.pointerCommitHandoffRecaptureSuppressionMs) / 1_000.0)
+  func notePointerInsertHandoff(reason: String, now: Date = Date()) -> UInt64 {
+    pointerInsertHandoffToken &+= 1
+    pointerInsertHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
+      Double(Self.pointerInsertHandoffRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "pointer_commit_handoff")
+    cancelNormalModeCaptureRecovery(reason: "pointer_insert_handoff")
     FlashLog.trace(
-      "[mode] pointer_commit_handoff reason=\(reason) token=\(pointerCommitHandoffToken) "
+      "[mode] pointer_insert_handoff reason=\(reason) token=\(pointerInsertHandoffToken) "
         + "recapture_suppressed=true")
-    return pointerCommitHandoffToken
+    return pointerInsertHandoffToken
   }
 
-  func clearPointerCommitHandoff(reason: String, token: UInt64? = nil) {
-    if let token, token != pointerCommitHandoffToken {
+  func clearPointerInsertHandoff(reason: String, token: UInt64? = nil) {
+    if let token, token != pointerInsertHandoffToken {
       FlashLog.trace(
-        "[mode] pointer_commit_handoff_clear_skip reason=\(reason) token=\(token) "
-          + "current=\(pointerCommitHandoffToken)")
+        "[mode] pointer_insert_handoff_clear_skip reason=\(reason) token=\(token) "
+          + "current=\(pointerInsertHandoffToken)")
       return
     }
-    if pointerCommitHandoffRecaptureSuppressedUntil != nil {
-      FlashLog.trace("[mode] pointer_commit_handoff_clear reason=\(reason)")
+    if pointerInsertHandoffRecaptureSuppressedUntil != nil {
+      FlashLog.trace("[mode] pointer_insert_handoff_clear reason=\(reason)")
     }
-    pointerCommitHandoffRecaptureSuppressedUntil = nil
-    pointerCommitHandoffToken &+= 1
+    pointerInsertHandoffRecaptureSuppressedUntil = nil
+    pointerInsertHandoffToken &+= 1
   }
 
-  func cancelPointerCommitHandoff(reason: String) {
-    let hadSuppression = pointerCommitHandoffRecaptureSuppressedUntil != nil
-    pointerCommitHandoffRecaptureSuppressedUntil = nil
-    pointerCommitHandoffToken &+= 1
+  func cancelPointerInsertHandoff(reason: String) {
+    let hadSuppression = pointerInsertHandoffRecaptureSuppressedUntil != nil
+    pointerInsertHandoffRecaptureSuppressedUntil = nil
+    pointerInsertHandoffToken &+= 1
     if hadSuppression {
       normalModeRecaptureToken &+= 1
-      FlashLog.trace("[mode] pointer_commit_handoff_cancel reason=\(reason)")
+      FlashLog.trace("[mode] pointer_insert_handoff_cancel reason=\(reason)")
     }
   }
 
-  func pointerCommitHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
-    Self.pointerCommitHandoffIsCurrent(
+  func pointerInsertHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
+    Self.pointerInsertHandoffIsCurrent(
       token: token,
-      currentToken: pointerCommitHandoffToken,
-      pointerCommitHandoffRecaptureSuppressedUntil:
-        pointerCommitHandoffRecaptureSuppressedUntil,
+      currentToken: pointerInsertHandoffToken,
+      pointerInsertHandoffRecaptureSuppressedUntil:
+        pointerInsertHandoffRecaptureSuppressedUntil,
       now: now)
   }
 
-  static func pointerCommitHandoffIsCurrent(
+  static func pointerInsertHandoffIsCurrent(
     token: UInt64?,
     currentToken: UInt64,
-    pointerCommitHandoffRecaptureSuppressedUntil: Date?,
+    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
     now: Date
   ) -> Bool {
     guard let token else { return true }
     guard token == currentToken else { return false }
-    return pointerCommitHandoffRecaptureSuppressionIsActive(
-      until: pointerCommitHandoffRecaptureSuppressedUntil,
+    return pointerInsertHandoffRecaptureSuppressionIsActive(
+      until: pointerInsertHandoffRecaptureSuppressedUntil,
       now: now)
   }
 
@@ -597,8 +625,8 @@ extension AppDelegate {
       menuBarInteractionRecaptureSuppressedUntil: menuBarInteractionRecaptureSuppressedUntil,
       contextMenuInteractionRecaptureSuppressedUntil:
         contextMenuInteractionRecaptureSuppressedUntil,
-      pointerCommitHandoffRecaptureSuppressedUntil:
-        pointerCommitHandoffRecaptureSuppressedUntil,
+      pointerInsertHandoffRecaptureSuppressedUntil:
+        pointerInsertHandoffRecaptureSuppressedUntil,
       now: now)
     if !shouldRecapture,
       Self.menuBarInteractionRecaptureSuppressionIsActive(
@@ -615,11 +643,11 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
     }
     if !shouldRecapture,
-      Self.pointerCommitHandoffRecaptureSuppressionIsActive(
-        until: pointerCommitHandoffRecaptureSuppressedUntil,
+      Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: pointerInsertHandoffRecaptureSuppressedUntil,
         now: now)
     {
-      FlashLog.trace("[mode] recapture_skip reason=pointer_commit_handoff_pending")
+      FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
     }
     recaptureSuppression.pruneExpired(now: now)
     return shouldRecapture
@@ -629,7 +657,7 @@ extension AppDelegate {
     mode: FlashMode,
     menuBarInteractionRecaptureSuppressedUntil: Date?,
     contextMenuInteractionRecaptureSuppressedUntil: Date? = nil,
-    pointerCommitHandoffRecaptureSuppressedUntil: Date? = nil,
+    pointerInsertHandoffRecaptureSuppressedUntil: Date? = nil,
     now: Date
   ) -> Bool {
     mode == .normal
@@ -639,8 +667,8 @@ extension AppDelegate {
       && !contextMenuInteractionRecaptureSuppressionIsActive(
         until: contextMenuInteractionRecaptureSuppressedUntil,
         now: now)
-      && !pointerCommitHandoffRecaptureSuppressionIsActive(
-        until: pointerCommitHandoffRecaptureSuppressedUntil,
+      && !pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: pointerInsertHandoffRecaptureSuppressedUntil,
         now: now)
   }
 
@@ -658,8 +686,8 @@ extension AppDelegate {
     RecaptureSuppression.active(until, now: now)
   }
 
-  static func pointerActionNeedsFocusHandoff(_ action: JumpAction) -> Bool {
-    NormalModePointerPolicy.pointerActionNeedsFocusHandoff(action)
+  static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
+    NormalModePointerPolicy.pointerActionMayEnterInsert(action)
   }
 
   private func cancelNormalModeCaptureRecovery(reason: String) {
@@ -676,10 +704,10 @@ extension AppDelegate {
       FlashLog.trace("[mode] pointer_recapture_skip reason=context_menu_interaction")
       return
     }
-    if Self.pointerCommitHandoffRecaptureSuppressionIsActive(
-      until: pointerCommitHandoffRecaptureSuppressedUntil)
+    if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+      until: pointerInsertHandoffRecaptureSuppressedUntil)
     {
-      FlashLog.trace("[mode] pointer_recapture_skip reason=pointer_commit_handoff_pending")
+      FlashLog.trace("[mode] pointer_recapture_skip reason=pointer_insert_handoff_pending")
       return
     }
     if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
@@ -695,7 +723,7 @@ extension AppDelegate {
       currentEventType: NSApp.currentEvent?.type,
       location: NSEvent.mouseLocation)
     {
-      cancelPointerCommitHandoff(reason: "pointer_focus_loss")
+      cancelPointerInsertHandoff(reason: "pointer_focus_loss")
       FlashLog.trace(
         "[mode] pointer_focus_loss_handoff action=\(click.action) "
           + "buttons=\(NSEvent.pressedMouseButtons)")
@@ -750,12 +778,12 @@ extension AppDelegate {
         return
       }
       guard
-        !Self.pointerCommitHandoffRecaptureSuppressionIsActive(
-          until: self.pointerCommitHandoffRecaptureSuppressedUntil)
+        !Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+          until: self.pointerInsertHandoffRecaptureSuppressedUntil)
       else {
         FlashLog.trace(
           "[mode] pointer_recapture_defer_skip token=\(token) "
-            + "reason=pointer_commit_handoff_pending")
+            + "reason=pointer_insert_handoff_pending")
         return
       }
       if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
@@ -782,8 +810,8 @@ extension AppDelegate {
   static let normalModeCaptureRecoveryDelaysMs = [250, 750, 1_500, 3_000]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
-  static let pointerCommitHandoffRecaptureSuppressionMs = 1_500
-  // Brief: just long enough for the pointer monitor to deliver a click to its target
+  static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
+  // Brief: just long enough for the pointer monitor to turn a click into INSERT
   // before we reclaim key. Any longer and an app that spontaneously steals
   // focus would sit on it while the badge still reads NORMAL — the exact
   // "shown but not capturing" inconsistency we want to make impossible.
@@ -837,7 +865,7 @@ extension AppDelegate {
     return false
   }
 
-  static func pointerCommitHandoffRecaptureSuppressionIsActive(
+  static func pointerInsertHandoffRecaptureSuppressionIsActive(
     until: Date?,
     now: Date = Date()
   ) -> Bool {
@@ -852,7 +880,7 @@ extension AppDelegate {
     keyboardCaptureIsActive: Bool,
     menuBarInteractionRecaptureSuppressedUntil: Date?,
     contextMenuInteractionRecaptureSuppressedUntil: Date?,
-    pointerCommitHandoffRecaptureSuppressedUntil: Date?,
+    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
     now: Date = Date()
   ) -> Bool {
     guard mode == .normal, !hasHints, !activationInFlight, !keyboardCaptureIsActive else {
@@ -870,8 +898,8 @@ extension AppDelegate {
       && !contextMenuInteractionRecaptureSuppressionIsActive(
         until: contextMenuInteractionRecaptureSuppressedUntil,
         now: now)
-      && !pointerCommitHandoffRecaptureSuppressionIsActive(
-        until: pointerCommitHandoffRecaptureSuppressedUntil,
+      && !pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: pointerInsertHandoffRecaptureSuppressedUntil,
         now: now)
   }
 

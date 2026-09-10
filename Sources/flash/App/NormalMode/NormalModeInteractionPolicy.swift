@@ -1,8 +1,27 @@
 import FlashCore
 
+/// The user intent behind a primary pointer commit. Semantic hints honor the
+/// provider's target metadata; physical and grid clicks are pointer simulation
+/// and therefore hand the keyboard to the app unconditionally.
+enum PointerInsertIntent: Equatable {
+  case physicalClick
+  case mouseGridClick
+  case hintTarget(entersInsertMode: Bool)
+
+  var shouldEnterInsertMode: Bool {
+    switch self {
+    case .physicalClick, .mouseGridClick:
+      return true
+    case .hintTarget(let entersInsertMode):
+      return entersInsertMode
+    }
+  }
+}
+
 enum NormalModePointerPolicy {
   struct AppClickDecision: Equatable {
     var releaseCapture: Bool
+    var enterInsert: Bool
     var suspendForNativeSurface: Bool
     var dismissTransientHintsWithoutRekey: Bool
   }
@@ -55,7 +74,7 @@ enum NormalModePointerPolicy {
       wasCommandLine: overlayInputMode == .commandLine,
       hasHints: hasHints,
       action: click.action)
-    guard decision.releaseCapture || decision.suspendForNativeSurface
+    guard decision.releaseCapture || decision.enterInsert || decision.suspendForNativeSurface
     else { return .cancelOverlay }
     return .app(decision)
   }
@@ -69,6 +88,7 @@ enum NormalModePointerPolicy {
     guard mode == .normal, !wasCommandLine else {
       return AppClickDecision(
         releaseCapture: false,
+        enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false)
     }
@@ -80,22 +100,33 @@ enum NormalModePointerPolicy {
     if action == .rightClick {
       return AppClickDecision(
         releaseCapture: false,
+        enterInsert: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: hasHints)
     }
-    // Release capture long enough for the click to reach its owning app,
-    // then recapture without changing the base mode.
+    // A physical left / double click always hands the keyboard to the app and
+    // enters INSERT. Semantic `mouse_target` hints make their own decision from
+    // `JumpTarget.entersInsertMode`; a `mouse_grid` click shares this physical
+    // pointer intent because it synthesizes the same mouse action.
     return AppClickDecision(
       releaseCapture: true,
+      enterInsert: true,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
   }
 
-  static func pointerActionNeedsFocusHandoff(_ action: JumpAction) -> Bool {
+  static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
     switch action {
     case .leftClick, .doubleClick, .tripleClick:
       return true
-    case .rightClick, .middleClick:
+    case .rightClick:
+      // Right-click only ever opens a context menu; it never hands the keyboard
+      // to the app, so a committed right-click stays in NORMAL (the menu takes
+      // its own modal session via `suspendNormalCaptureForNativeSurface`).
+      return false
+    case .middleClick:
+      // Middle-click gestures (open-in-background-tab, close-tab, autoscroll)
+      // act on the target without moving keyboard focus into a text surface.
       return false
     }
   }

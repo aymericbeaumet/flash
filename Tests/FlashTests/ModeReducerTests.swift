@@ -34,7 +34,8 @@ final class ModeReducerTests: XCTestCase {
     .closeCommand(reason: "submit"),
     .openTerminal,
     .closeTerminal(targetPID: nil),
-    .pointerCommitted,
+    .clickResolved(entersInsert: true, targetPID: 7),
+    .clickResolved(entersInsert: false, targetPID: 7),
     .advancedModeChanged(enabled: true),
     .advancedModeChanged(enabled: false),
     .startup(advancedEnabled: true),
@@ -54,7 +55,8 @@ final class ModeReducerTests: XCTestCase {
   func testMouseAndFocusNeverLeaveInsert() {
     for insert in [Mode.insert(locked: false), .insert(locked: true)] {
       for event in [
-        ModeEvent.pointerCommitted,
+        ModeEvent.clickResolved(entersInsert: true, targetPID: 7),
+        .clickResolved(entersInsert: false, targetPID: 7),
         .focusedAppChanged(pid: 7),
         .enterInsert(reason: .normalModeInput, targetPID: 7),
       ] {
@@ -86,11 +88,18 @@ final class ModeReducerTests: XCTestCase {
     }
   }
 
-  func testPointerAndFocusEventsNeverChangeTheMode() {
-    for state in allStates {
-      for event in [ModeEvent.pointerCommitted, .focusedAppChanged(pid: 7)] {
-        XCTAssertEqual(ModeReducer.reduce(state, event).0, state)
-      }
+  // MARK: Mouse enters only from normal
+
+  func testClickEntersInsertOnlyFromNormal() {
+    XCTAssertEqual(
+      ModeReducer.reduce(.normal, .clickResolved(entersInsert: true, targetPID: 7)).0,
+      .insert(locked: false))
+    XCTAssertEqual(
+      ModeReducer.reduce(.normal, .clickResolved(entersInsert: false, targetPID: 7)).0, .normal)
+    // From any non-normal state, a click cannot change the mode.
+    for state in allStates where !state.isNormal {
+      XCTAssertEqual(
+        ModeReducer.reduce(state, .clickResolved(entersInsert: true, targetPID: 7)).0, state)
     }
   }
 
@@ -102,7 +111,7 @@ final class ModeReducerTests: XCTestCase {
       ModeReducer.reduce(.disabled, .enterInsert(reason: .normalModeInput, targetPID: 7)).0,
       .disabled)
     XCTAssertEqual(
-      ModeReducer.reduce(.disabled, .advancedModeChanged(enabled: true)).0, .normal)
+      ModeReducer.reduce(.disabled, .advancedModeChanged(enabled: true)).0, .insert(locked: false))
   }
 
   // MARK: Command / modal lifecycle + restore fidelity

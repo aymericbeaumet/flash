@@ -309,9 +309,13 @@ final class NormalModeTests: XCTestCase {
   // terminal/input handoff check.
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
-    for key in ["a", "A", "i", "I", "o", "O"] {
-      XCTAssertNil(command(chars: key), "\(key) must have no built-in insert action")
-    }
+    // No built-in letter shortcuts enter INSERT; users bind enter_insert_mode.
+    XCTAssertNil(command(chars: "a"))
+    XCTAssertNil(command(chars: "A", ignoring: "a", flags: [.shift]))
+    XCTAssertNil(command(chars: "i"))
+    XCTAssertNil(command(chars: "I", ignoring: "i", flags: [.shift]))
+    XCTAssertNil(command(chars: "o"))
+    XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
     XCTAssertEqual(command(chars: "?"), .showUsage(topic: nil))
     XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
     XCTAssertNil(
@@ -348,25 +352,10 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(modified.pending, "")
   }
 
-  func testInsertRequiresAnExplicitMapping() {
-    for key in ["a", "A", "i", "I", "o", "O"] {
-      let config = ConfigLoader.parse(
-        "[mode.normal.mappings]\n\"\(key)\" = [\"flash\", \"enter_insert_mode\"]")
-      let transition = NormalModeInterpreter.interpret(
-        pending: "", keyCode: 0, modifierFlags: [], characters: key,
-        charactersIgnoringModifiers: key, mappings: config.mode.compiledNormal)
-      XCTAssertEqual(transition.command, .insertMode)
-      XCTAssertEqual(
-        ModeReducer.reduce(
-          .normal,
-          .enterInsert(reason: .normalModeInput, targetPID: nil)
-        ).0, .insert(locked: false))
-    }
-  }
-
   func testPendingPrefixBrokenByUnmappableKeyFallsBackToFreshInterpretation() {
     // `[` / `]` are prefixes but `[i` / `]i` are unmapped — falling back
-    // to interpreting `i` from scratch still leaves it unbound.
+    // to interpreting `i` from scratch lands on insert mode instead of
+    // silently swallowing the keystroke.
     XCTAssertNil(command(pending: "[", chars: "i"))
     XCTAssertNil(command(pending: "]", chars: "i"))
     // `gi` is a real mapping (Vimium: focus the first text input).
@@ -386,6 +375,24 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(unmappable.pending, "")
   }
 
+  func testNormalModeMayEnterInsertOnAnyUserDrivenTrigger() {
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .hintCommit))
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModeInput))
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .lockedNormalModeInput))
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .pointerClick))
+    // `.explicitCommand` is the reason `/` (app_find) and `t` (tab_new)
+    // pass when they want the side-effect followed by a switch to
+    // INSERT. They're user-driven, so the gate must let them through.
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
+    // `.normalModePassthrough` is scheduled only by an explicit unmapped
+    // configured keypress, so it is user-driven too.
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModePassthrough))
+    // `.advancedModeDisabled` stays out of the user-driven set — config
+    // reload uses `force: true` to bypass the gate when it needs to
+    // leave NORMAL because the user removed the normal-mode binding.
+    XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
+  }
+
   func testInsertModeExitsWhenFocusedElementStopsBeingEditable() {
     XCTAssertTrue(shouldExitAfterFocusedElementChange(focusedElementIsEditable: false))
     XCTAssertFalse(shouldExitAfterFocusedElementChange(focusedElementIsEditable: true))
@@ -398,6 +405,69 @@ final class NormalModeTests: XCTestCase {
   func testInsertModeDoesNotExitWhenFocusedAppChangesWhileLocked() {
     XCTAssertTrue(shouldExitAfterFocusedAppChange(focusedPID: pid_t(7)))
     XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: pid_t(7), insertModeLocked: true))
+  }
+
+  func testInsertFocusMachineCoversTextEntryStableControlsAndTransientSurfaces() {
+    struct Scenario {
+      var name: String
+      var snapshot: InputFocusSnapshot
+      var pointerPressed = false
+      var expected: InputFocusExitDecision
+    }
+
+    let scenarios = [
+      Scenario(
+        name: "true text input stays in INSERT",
+        snapshot: focusSnapshot(.editable, role: "AXTextField"),
+        expected: .stay),
+      Scenario(
+        name: "web checkbox toggles and exits to NORMAL",
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXCheckBox"),
+        expected: .exitToNormal),
+      Scenario(
+        name: "native checkbox toggles and exits to NORMAL",
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXCheckBox"),
+        expected: .exitToNormal),
+      Scenario(
+        name: "button click exits to NORMAL",
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton"),
+        expected: .exitToNormal),
+      Scenario(
+        name: "link click exits to NORMAL",
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXLink"),
+        expected: .exitToNormal),
+      Scenario(
+        name: "AX focus unavailable exits to NORMAL",
+        snapshot: focusSnapshot(.unavailable),
+        expected: .exitToNormal),
+      Scenario(
+        name: "custom dropdown option waits for popup settle",
+        snapshot: focusSnapshot(
+          .transientInteraction(reason: .role("AXListItem")), role: "AXListItem"),
+        expected: .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs)),
+      Scenario(
+        name: "Bitwarden/extension popup waits for popup settle",
+        snapshot: focusSnapshot(
+          .transientInteraction(reason: .extensionDocument(scheme: "moz-extension")),
+          role: "AXWebArea",
+          documentURL: "moz-extension://vault/popup.html"),
+        expected: .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs)),
+      Scenario(
+        name: "mouse selection waits until release before deciding",
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXStaticText"),
+        pointerPressed: true,
+        expected: .waitForPointerRelease),
+    ]
+
+    for scenario in scenarios {
+      let actual = InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: scenario.snapshot,
+        pointerPressed: scenario.pointerPressed)
+      XCTAssertEqual(actual, scenario.expected, scenario.name)
+    }
   }
 
   func testInputFocusSnapshotClassifiesBrowserNativeAndExtensionSurfaces() {
@@ -496,6 +566,187 @@ final class NormalModeTests: XCTestCase {
     }
   }
 
+  func testInsertFocusMachineIgnoresUnarmedOrUnrelatedFocusEvents() {
+    let checkbox = focusSnapshot(.stableNonEditable, role: "AXCheckBox")
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: nil,
+        snapshot: checkbox,
+        pointerPressed: false),
+      .stay)
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(43),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: checkbox,
+        pointerPressed: false),
+      .stay)
+  }
+
+  func testNormalPointerHandoffMachineCoversEditableControlsAndPopups() {
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: focusSnapshot(.editable, role: "AXTextField")),
+      .enterInsert)
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXCheckBox")),
+      .recaptureNormal)
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton")),
+      .recaptureNormal)
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: focusSnapshot(.unavailable)),
+      .recaptureNormal)
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: focusSnapshot(
+          .transientInteraction(reason: .role("AXMenuItem")), role: "AXMenuItem")),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: nil), .recaptureNormal)
+  }
+
+  func testSelectOptionPointerHandoffSuspendsNativeSurfaceWithoutInsert() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    let expandedSelect = focusSnapshot(
+      .transientInteraction(reason: .expandedRole("AXPopUpButton")),
+      role: "AXPopUpButton")
+    let selectList = focusSnapshot(
+      .transientInteraction(reason: .role("AXList")),
+      role: "AXList")
+    let option = focusSnapshot(
+      .transientInteraction(reason: .role("AXOption")),
+      role: "AXOption")
+
+    for snapshot in [expandedSelect, selectList, option] {
+      XCTAssertEqual(
+        InsertModeFocusMachine.normalPointerHandoffDecision(
+          snapshot: snapshot,
+          attempt: maxAttempts - 1),
+        .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+      XCTAssertEqual(
+        InsertModeFocusMachine.normalPointerHandoffDecision(
+          snapshot: snapshot,
+          attempt: maxAttempts),
+        .suspendNativeSurface)
+    }
+  }
+
+  func testToolbarPopoverHandoffUsesFocusedTransientSurfaceWithoutStaleEditableFocus() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    let clickedShieldButton = focusSnapshot(.stableNonEditable, role: "AXButton")
+    let focusedPopover = focusSnapshot(
+      .transientInteraction(reason: .windowSubrole("AXPopover")),
+      role: "AXGroup",
+      windowSubrole: "AXPopover")
+    let staleFocusedTextInput = focusSnapshot(.editable, role: "AXTextField")
+
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        clickedSnapshot: clickedShieldButton,
+        focusedSnapshot: focusedPopover,
+        attempt: maxAttempts),
+      .suspendNativeSurface)
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        clickedSnapshot: clickedShieldButton,
+        focusedSnapshot: staleFocusedTextInput,
+        attempt: 0),
+      .recaptureNormal)
+  }
+
+  func testTransientResampleBudgetRecapturesAfterExhaustion() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    // Firefox web content: focused AXStaticText nested under an AXList. This
+    // classifies as transient but is persistent — pre-budget it spun the
+    // resamplers forever. It must not become INSERT unless it resolves to a
+    // genuinely editable focus target.
+    let persistentTransient = focusSnapshot(
+      .transientInteraction(reason: .ancestorRole("AXList")), role: "AXStaticText")
+
+    // Pointer handoff: resample while within budget, then recapture NORMAL.
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: persistentTransient, attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: persistentTransient, attempt: maxAttempts),
+      .recaptureNormal)
+
+    // Insert-mode exit probe: resample while within budget, then STAY — never
+    // kick the user out of a persistent surface they are typing into.
+    func insertDecision(attempt: Int) -> InputFocusExitDecision {
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: persistentTransient,
+        pointerPressed: false,
+        attempt: attempt)
+    }
+    XCTAssertEqual(
+      insertDecision(attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(insertDecision(attempt: maxAttempts), .stay)
+
+    // The budget governs only the transient branch: a genuinely stable
+    // non-editable surface still exits to NORMAL immediately, no matter how
+    // many attempts have elapsed.
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton"),
+        pointerPressed: false,
+        attempt: maxAttempts + 10),
+      .exitToNormal)
+  }
+
+  func testExtensionPopupTransientBudgetSuspendsOrExitsAfterExhaustion() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    let extensionPopup = focusSnapshot(
+      .transientInteraction(reason: .extensionDocument(scheme: "chrome-extension")),
+      role: "AXListItem",
+      documentURL: "chrome-extension://vault/popup.html")
+
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: extensionPopup,
+        attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: extensionPopup,
+        attempt: maxAttempts),
+      .suspendNativeSurface)
+
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: extensionPopup,
+        pointerPressed: false,
+        attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: extensionPopup,
+        pointerPressed: false,
+        attempt: maxAttempts),
+      .exitToNormal)
+  }
+
   func testEditableFocusRepairRequiresOneStrongVisibleTextInput() {
     let window = CGRect(x: 0, y: 0, width: 800, height: 600)
     let compose = editableRepairCandidate(
@@ -573,6 +824,44 @@ final class NormalModeTests: XCTestCase {
         insertModeLocked: false))
     XCTAssertTrue(
       AppDelegate.insertModeMayArmEditableFocusExit(
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+  }
+
+  func testInsertEntryOnlyRepairsEditableFocusAfterPointerOrHintEditableHandoff() {
+    XCTAssertTrue(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .pointerClick,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+    XCTAssertTrue(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .hintCommit,
+        bundleIdentifier: "org.mozilla.firefox",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .normalModeInput,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .explicitCommand,
+        bundleIdentifier: "org.mozilla.firefox",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .lockedNormalModeInput,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: true))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .pointerClick,
+        bundleIdentifier: "org.alacritty",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: nil,
         bundleIdentifier: "com.apple.MobileSMS",
         insertModeLocked: false))
   }
@@ -1296,7 +1585,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertTrue(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1307,7 +1596,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1318,7 +1607,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1329,7 +1618,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1340,7 +1629,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1351,7 +1640,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1362,7 +1651,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: true,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
   }
 
@@ -1380,7 +1669,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: activeSuppression,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1391,7 +1680,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: activeSuppression,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1402,7 +1691,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertTrue(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1413,7 +1702,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: expiredSuppression,
         contextMenuInteractionRecaptureSuppressedUntil: expiredSuppression,
-        pointerCommitHandoffRecaptureSuppressedUntil: expiredSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
   }
 
@@ -1475,6 +1764,7 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: true,
+        enterInsert: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1485,6 +1775,7 @@ final class NormalModeTests: XCTestCase {
         action: .doubleClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: true,
+        enterInsert: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     // Right-click never flips the mode: it suspends normal capture so the
@@ -1498,6 +1789,7 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
+        enterInsert: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: true))
     XCTAssertEqual(
@@ -1508,6 +1800,7 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
+        enterInsert: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1518,6 +1811,7 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
+        enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1528,20 +1822,38 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
+        enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
   }
 
-  func testPointerFocusHandoffExcludesRightClick() {
-    // Primary clicks briefly release focus for delivery; context menus own
-    // their native input session instead. Neither changes the base mode.
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionNeedsFocusHandoff(.leftClick))
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionNeedsFocusHandoff(.doubleClick))
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionNeedsFocusHandoff(.tripleClick))
-    XCTAssertFalse(NormalModePointerPolicy.pointerActionNeedsFocusHandoff(.rightClick))
+  func testPointerActionMayEnterInsertExcludesRightClick() {
+    // Left / double click can hand the keyboard to the app; right-click only
+    // ever opens a context menu and must keep the current mode, so it is
+    // excluded here. This keeps hint/grid right-click commits on the suspend
+    // path instead of insert.
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.leftClick))
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.doubleClick))
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.tripleClick))
+    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.rightClick))
     // Middle-click gestures act on the target without moving keyboard focus
     // into a text surface, so they stay in NORMAL like right-click.
-    XCTAssertFalse(NormalModePointerPolicy.pointerActionNeedsFocusHandoff(.middleClick))
+    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.middleClick))
+  }
+
+  func testPointerInsertIntentSeparatesSemanticHintsFromMouseSimulation() {
+    // A provider's `false` is authoritative even when the host app (such as
+    // Alacritty) already exposes editable focus. This pins tmux pane/link hints
+    // to NORMAL while preserving INSERT for real text-input hints.
+    XCTAssertFalse(
+      PointerInsertIntent.hintTarget(entersInsertMode: false).shouldEnterInsertMode)
+    XCTAssertTrue(
+      PointerInsertIntent.hintTarget(entersInsertMode: true).shouldEnterInsertMode)
+
+    // The grid synthesizes a real pointer click, so it follows the same
+    // unconditional handoff rule as a physical primary click.
+    XCTAssertTrue(PointerInsertIntent.mouseGridClick.shouldEnterInsertMode)
+    XCTAssertTrue(PointerInsertIntent.physicalClick.shouldEnterInsertMode)
   }
 
   func testNormalAppRightClickSuspendsForContextMenuInsteadOfInsert() {
@@ -1565,6 +1877,7 @@ final class NormalModeTests: XCTestCase {
       .app(
         NormalModePointerPolicy.AppClickDecision(
           releaseCapture: false,
+          enterInsert: false,
           suspendForNativeSurface: true,
           dismissTransientHintsWithoutRekey: false)))
   }
@@ -1572,10 +1885,12 @@ final class NormalModeTests: XCTestCase {
   func testPhysicalPointerClickForwardingOnlyCoversActivationOnlyPrimaryClicks() {
     let released = NormalModePointerPolicy.AppClickDecision(
       releaseCapture: true,
+      enterInsert: true,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
     let notReleased = NormalModePointerPolicy.AppClickDecision(
       releaseCapture: false,
+      enterInsert: false,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
 
@@ -1675,7 +1990,7 @@ final class NormalModeTests: XCTestCase {
           dismissTransientHintsWithoutRekey: true)))
   }
 
-  func testWorkspaceActivationRecaptureSkipsPointerCommitHandoff() {
+  func testWorkspaceActivationRecaptureSkipsPointerInsertHandoff() {
     let now = Date(timeIntervalSince1970: 1_000)
     let activeSuppression = now.addingTimeInterval(0.5)
     let expiredSuppression = now.addingTimeInterval(-0.1)
@@ -1684,13 +1999,13 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
         mode: .normal,
         menuBarInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertTrue(
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
         mode: .normal,
         menuBarInteractionRecaptureSuppressedUntil: nil,
-        pointerCommitHandoffRecaptureSuppressedUntil: expiredSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
   }
 
@@ -1702,37 +2017,37 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(AppDelegate.pointerFocusLossRecaptureDeferralMs, 120)
     XCTAssertLessThan(
       AppDelegate.pointerFocusLossRecaptureDeferralMs,
-      AppDelegate.pointerCommitHandoffRecaptureSuppressionMs)
+      AppDelegate.pointerInsertHandoffRecaptureSuppressionMs)
   }
 
-  func testPointerCommitHandoffTokenRejectsStaleAndExpiredProbes() {
+  func testPointerInsertHandoffTokenRejectsStaleAndExpiredProbes() {
     let now = Date(timeIntervalSince1970: 1_000)
     let activeSuppression = now.addingTimeInterval(0.5)
     let expiredSuppression = now.addingTimeInterval(-0.1)
 
     XCTAssertTrue(
-      AppDelegate.pointerCommitHandoffIsCurrent(
+      AppDelegate.pointerInsertHandoffIsCurrent(
         token: 7,
         currentToken: 7,
-        pointerCommitHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertFalse(
-      AppDelegate.pointerCommitHandoffIsCurrent(
+      AppDelegate.pointerInsertHandoffIsCurrent(
         token: 6,
         currentToken: 7,
-        pointerCommitHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertFalse(
-      AppDelegate.pointerCommitHandoffIsCurrent(
+      AppDelegate.pointerInsertHandoffIsCurrent(
         token: 7,
         currentToken: 7,
-        pointerCommitHandoffRecaptureSuppressedUntil: expiredSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
     XCTAssertTrue(
-      AppDelegate.pointerCommitHandoffIsCurrent(
+      AppDelegate.pointerInsertHandoffIsCurrent(
         token: nil,
         currentToken: 7,
-        pointerCommitHandoffRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
   }
 

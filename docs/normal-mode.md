@@ -14,9 +14,11 @@ Important defaults:
 - `n` sends Cmd-N to open a new window.
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
-- `f`, `sf`, and `df` click discovered elements while preserving the base mode.
+- `f`, `sf`, and `df` target discovered clickable elements, then enter insert
+  mode as explicit mouse interactions.
 - `mf` moves the cursor to a discovered target.
-- `F`, `sF`, and `dF` use mouse grid mode while preserving the base mode.
+- `F`, `sF`, and `dF` use mouse grid mode for precise screen clicks, then enter
+  insert mode.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.
@@ -109,13 +111,19 @@ An empty command prompt remains quiet.
 
 ## Explicit INSERT entry
 
-Only an explicitly configured `enter_insert_mode` / `enter_locked_insert_mode`
-action or a configured passthrough keypress enters INSERT. The default mapping set has no `i`, `I`, `a`, `A`, `o`, or
-`O` insert aliases. A configured `passthrough_keys` / `passthrough_modifiers`
-keypress (for example `cmd+l` with the default modifiers) continues to the app
-and enters INSERT, because the user configured that key. Clicks, editable hints,
-focus changes, find/new-tab actions, secure input, and configuration enabling
-advanced mode do not infer INSERT intent.
+The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases,
+and `/` / `t` no longer enter INSERT after their action. INSERT is entered by:
+
+- a configured `enter_insert_mode` / `enter_locked_insert_mode` mapping;
+- a configured `passthrough_keys` / `passthrough_modifiers` keypress (for
+  example `cmd+l` with the default modifiers), which continues to the app;
+- a physical click or a mouse-grid / pointer-mode / adjust commit while NORMAL
+  is capturing (pointer simulation always hands the keyboard to the app);
+- an `f` / `F` hint whose target is editable (`JumpTarget.entersInsertMode`).
+
+Focus changes, app activation, and unrelated key sequences never enter INSERT.
+INSERT exits automatically when the focused element stops being editable, as
+before, or explicitly through `leave_mode` / `enter_normal_mode`.
 
 ```toml
 [mode.all.mappings]
@@ -124,6 +132,4 @@ advanced mode do not infer INSERT intent.
 "alt+space" = ["flash", "terminal_show"]
 ```
 
-Temporary routing handoffs for native menus, secure input, and pointer delivery
-remain separate from mode changes. INSERT stays active until an explicit exit;
-closing a terminal or command surface may restore its saved INSERT mode.
+Closing a terminal or command surface may restore its saved INSERT mode.

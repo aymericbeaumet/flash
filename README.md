@@ -77,7 +77,7 @@ keyboard-first modes:
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` / `enter_locked_insert_mode` mapping or a configured passthrough key or modifier chord; use `leave_mode` to exit.
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` / `enter_locked_insert_mode` mapping, a configured passthrough key or modifier chord, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
 
 ### Status-bar hover popups
 
@@ -273,7 +273,7 @@ can send the user's normal tmux prefix bindings with zero Flash round trips.
 Flash still resolves any discovered local or remote window from the finder.
 Tmux hint discovery recognizes quoted absolute paths (including spaces and
 Unicode), slash-separated relative paths, URLs, and ordinary filenames while
-excluding dotted source identifiers such as `JumpTarget.frame`.
+excluding dotted source identifiers such as `JumpTarget.entersInsertMode`.
 Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
 so the terminal can open it in a new context. Flash does not open the value
 itself.
