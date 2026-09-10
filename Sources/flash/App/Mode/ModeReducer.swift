@@ -7,8 +7,7 @@ import Foundation
 // Invariants guaranteed here (and pinned by `ModeReducerTests`):
 //  - Insert stickiness: only explicit keyboard requests and disabling
 //    advanced mode leave `.insert`.
-//  - Mouse enters only: `.clickResolved` acts only from `.normal`; it can move
-//    NORMAL→insert but can never move insert→anything.
+//  - Pointer events preserve the current base mode.
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
 //  - Advanced gate: `.enterNormal` is refused while `.disabled`.
 enum ModeReducer {
@@ -68,30 +67,22 @@ enum ModeReducer {
       let next = restoreTo.mode
       return (next, enterEffects(for: next, targetPID: nil))
 
-    case .clickResolved(let entersInsert, let targetPID):
-      // The mouse only acts in NORMAL and can never leave INSERT.
-      guard case .normal = state else { return (state, []) }
-      if entersInsert {
-        let next = Mode.insert(locked: false)
-        return (next, enterEffects(for: next, targetPID: targetPID))
-      }
-      // A non-editable click in NORMAL keeps NORMAL; just make sure the overlay
-      // keeps key focus if the click stole it.
-      return (state, [.scheduleRecapture])
+    case .pointerCommitted:
+      return (state, state.isNormal ? [.scheduleRecapture] : [])
 
     case .advancedModeChanged(let enabled):
       if case .terminal(let restoreTo) = state {
         let base: ReturnMode =
           enabled
-          ? (restoreTo == .disabled ? .insert(locked: false) : restoreTo) : .disabled
+          ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
         return (.terminal(restoreTo: base), [.renderSurface])
       }
       if enabled {
-        // Hot-enabling advanced mode lands in INSERT; the user opts into NORMAL
-        // with their hotkey. If it was already on, just refresh the badge/label
+        // Hot-enabling advanced mode starts NORMAL. If it was already on,
+        // just refresh the badge/label
         // (labels may have changed in the reload).
         if case .disabled = state {
-          let next = Mode.insert(locked: false)
+          let next = Mode.normal
           return (next, enterEffects(for: next, targetPID: nil))
         }
         return (state, [.renderSurface])

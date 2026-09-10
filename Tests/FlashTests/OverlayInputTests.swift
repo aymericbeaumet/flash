@@ -740,7 +740,9 @@ final class OverlayInputTests: XCTestCase {
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModeMappings = CompiledMappings([
+      ModeMapping(key: "A", action: .flashCommand(.insertMode))
+    ])
 
     let event = try keyEvent(
       keyCode: kVK_ANSI_A,

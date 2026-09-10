@@ -7,11 +7,6 @@ enum InsertModeTransitionReason: Equatable {
   case explicitCommand
   case normalModeInput
   case lockedNormalModeInput
-  case pointerClick
-  case hintCommit
-  case advancedModeDisabled
-  case secureInput
-  case normalModePassthrough
 
   var logValue: String {
     switch self {
@@ -21,16 +16,6 @@ enum InsertModeTransitionReason: Equatable {
       return "normal_mode_input"
     case .lockedNormalModeInput:
       return "locked_normal_mode_input"
-    case .pointerClick:
-      return "pointer_click"
-    case .hintCommit:
-      return "hint_commit"
-    case .advancedModeDisabled:
-      return "advanced_mode_disabled"
-    case .secureInput:
-      return "secure_input"
-    case .normalModePassthrough:
-      return "normal_mode_passthrough"
     }
   }
 
@@ -406,11 +391,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     get { recaptureSuppression.contextMenuUntil }
     set { recaptureSuppression.contextMenuUntil = newValue }
   }
-  var pointerInsertHandoffRecaptureSuppressedUntil: Date? {
-    get { recaptureSuppression.pointerInsertHandoffUntil }
-    set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
+  var pointerCommitHandoffRecaptureSuppressedUntil: Date? {
+    get { recaptureSuppression.pointerCommitHandoffUntil }
+    set { recaptureSuppression.pointerCommitHandoffUntil = newValue }
   }
-  var pointerInsertHandoffToken: UInt64 = 0
+  var pointerCommitHandoffToken: UInt64 = 0
   /// True while a native surface (context menu / OS popup) owns the keyboard.
   /// The sole non-base-mode input to the capture projection — set by
   /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
@@ -1095,7 +1080,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// and the session tap swallows the event before Carbon dispatch, so there's no
   /// double-fire. An unmapped keypress matching a configured passthrough key or
   /// carrying a configured passthrough modifier instead passes through unchanged
-  /// and switches Flash to INSERT. Command-line /
+  /// without changing mode. Command-line /
   /// modal / candidate-finder own the key window and type into their own fields,
   /// so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
@@ -1103,15 +1088,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // A focused secure text field (password) turns on secure event input.
     // Never intercept keystrokes bound for it — they must reach the field, and
     // a keyboard tap swallowing secure input is exactly what that mechanism
-    // exists to prevent. Reflect it as INSERT (like focusing any text input) so
-    // the badge/state match. Checked first, so even the first keystroke isn't
-    // swallowed before the mode transition lands.
-    if IsSecureEventInputEnabled() {
-      if flashMode == .normal, overlay.inputMode == .normal {
-        enterInsertMode(reason: .secureInput, targetPID: currentNonFlashContext()?.processID)
-      }
-      return false
-    }
+    // exists to prevent. The base mode remains unchanged.
+    if IsSecureEventInputEnabled() { return false }
     let aboutOwnsNativeKeyboard = Self.aboutWindowShouldOwnNativeKeyboard(
       visible: aboutWindowVisible,
       hasTransientInput: !currentHints.isEmpty || hintSession.pointerModeActive,
@@ -1120,25 +1098,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       let flags = event.flags
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-      let passthroughModifierFlags = KeyModifier.cgEventFlags(
-        config.mode.normalPassthroughModifiers)
-      let shouldEnterInsert =
-        aboutOwnsNativeKeyboard
-        && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
-          flashMode: flashMode,
-          modifierFlags: flags,
-          hasMapping: hasMapping,
-          isPassthroughKey: overlay.normalModePassthroughKeyCodes.contains(keyCode),
-          passthroughModifierFlags: passthroughModifierFlags)
-      if shouldEnterInsert {
-        let targetPID = normalModeTargetPID
-        DispatchQueue.main.async { [weak self] in
-          guard let self, self.flashMode == .normal else { return }
-          self.enterInsertMode(
-            reason: .normalModePassthrough,
-            targetPID: targetPID)
-        }
-      }
       return KeyboardCaptureTap.shouldSwallow(
         flashMode: flashMode,
         inputMode: overlay.inputMode,
@@ -1150,7 +1109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // must still fire Flash's action. Historically that went only through a
     // Carbon hotkey — a slower keypress→dispatch route than this session tap —
     // which is why *leaving* insert (⌘⌃[ → NORMAL) lagged while *entering* it
-    // (`i`, swallowed right here) was instant, and why the app also saw the
+    // (a configured insert mapping) was instant, and why the app also saw the
     // chord. Handle mapped chords on the same fast tap path instead: swallow
     // (so the app never receives the chord) and let `routeTapCapturedKey` fire
     // the mapping. Only *mapped* chords are swallowed — ordinary typing and
@@ -1203,19 +1162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       hasMapping: hasMapping,
       isPassthroughKey: isPassthroughKey,
       passthroughModifierFlags: passthroughModifierFlags)
-    guard !shouldSwallow else { return true }
-
-    // Keep the NORMAL mapping scope installed until the original event has
-    // continued downstream. Switching synchronously would register INSERT-only
-    // Carbon mappings soon enough to steal this very chord. The next main-loop
-    // turn runs after the event has reached the app / WindowServer.
-    DispatchQueue.main.async { [weak self] in
-      guard let self, self.flashMode == .normal, self.overlay.inputMode == .normal else { return }
-      self.enterInsertMode(
-        reason: .normalModePassthrough,
-        targetPID: self.currentNonFlashContext()?.processID)
-    }
-    return false
+    return shouldSwallow
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {

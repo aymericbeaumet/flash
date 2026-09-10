@@ -262,4 +262,15 @@ mod tests {
         assert_eq!(state.refresh(Ok(vec![a]), 222), None);
         assert_eq!(state.cycle(231), None);
     }
+
+    #[test]
+    fn title_alone_is_elastic_and_outbound_arrow_remains_in_fixed_suffix() {
+        let summary = render(&article("Long title", 100), "NEWS");
+        let (_, elastic) = summary.split_once("#[shrink]").unwrap();
+        let (title, suffix) = elastic.split_once("#[noshrink]").unwrap();
+        assert_eq!(title, "Long title");
+        assert!(suffix.contains("(source.example)"));
+        assert!(suffix.contains("#[link=https://www.source.example/original]↗#[nolink]"));
+        assert!(!suffix.contains("#[shrink]"));
+    }
 }

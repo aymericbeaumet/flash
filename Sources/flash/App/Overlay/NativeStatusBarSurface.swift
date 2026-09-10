@@ -66,13 +66,17 @@ final class NativeStatusBarSurface {
     }
     let prepared = Self.preparedDocument(
       document, pillColumns: pillColumns, hideCentre: notch != nil)
-    layout = StatusFormatLayout.layout(
-      Self.shrinkingDocument(prepared, columns: availableColumns), columns: availableColumns)
     let notchLocal = notch.map {
       let start = $0.minX - screenFrame.minX - OverlayPanel.statusBarNotchMargin
       let end = $0.maxX - screenFrame.minX + OverlayPanel.statusBarNotchMargin
       return start..<end
     }
+    let leftColumns = notchLocal.map {
+      max(0, Int(floor(($0.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth)))
+    }
+    layout = StatusFormatLayout.layout(
+      Self.shrinkingDocument(prepared, columns: availableColumns, leftColumns: leftColumns),
+      columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
     runFrames = Self.frames(
       for: visibleRuns, cellWidth: cellWidth, pillWidth: pillWidth,
@@ -143,7 +147,7 @@ final class NativeStatusBarSurface {
           let animation = CATransition()
           animation.type = .push
           animation.subtype = .fromBottom
-          animation.duration = 0.42
+          animation.duration = 0.8
           animation.beginTime = layers.text.convertTime(cycleStartedAt, from: nil)
           animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
           layers.text.add(animation, forKey: kCATransition)
@@ -321,9 +325,9 @@ final class NativeStatusBarSurface {
 
   /// Flash's opt-in elastic spans consume overflow before native alignment and
   /// list drawing. Unmarked formats pass through to tmux's clipping unchanged.
-  static func shrinkingDocument(_ document: StatusFormatDocument, columns: Int)
-    -> StatusFormatDocument
-  {
+  static func shrinkingDocument(
+    _ document: StatusFormatDocument, columns: Int, leftColumns: Int? = nil
+  ) -> StatusFormatDocument {
     var runs = document.runs
     let ordinary = runs.indices.filter {
       !runs[$0].isStyleBoundary && runs[$0].alignment != .absoluteCentre
@@ -332,11 +336,30 @@ final class NativeStatusBarSurface {
     var overflow = max(
       0, ordinary.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) } - columns
     )
-    guard overflow > 0 else { return document }
+    let absoluteCentreWidth = document.runs.filter {
+      !$0.isStyleBoundary && $0.alignment == .absoluteCentre
+    }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
+    let centreStart =
+      absoluteCentreWidth > 0 ? (columns - min(columns, absoluteCentreWidth)) / 2 : columns
+    let leftLimit = min(leftColumns ?? columns, centreStart)
+    func isLeft(_ index: Int) -> Bool {
+      runs[index].alignment == .left || runs[index].alignment == .default
+    }
+    var leftOverflow = max(
+      0,
+      ordinary.filter(isLeft).reduce(0) {
+        $0 + StatusFormatCells.width(runs[$1].text, styles: false)
+      }
+        - leftLimit)
+    guard overflow > 0 || leftOverflow > 0 else { return document }
     var groups: [[Int]] = []
     var group: [Int] = []
     for index in ordinary {
       if runs[index].shrink {
+        if let previous = group.last, runs[previous].alignment != runs[index].alignment {
+          groups.append(group)
+          group = []
+        }
         group.append(index)
       } else if !group.isEmpty {
         groups.append(group)
@@ -344,9 +367,11 @@ final class NativeStatusBarSurface {
       }
     }
     if !group.isEmpty { groups.append(group) }
-    for group in groups where overflow > 0 {
+    for group in groups {
+      let left = isLeft(group[0])
+      let required = max(overflow, left ? leftOverflow : 0)
       let width = group.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) }
-      let removed = min(overflow, max(0, width - 1))
+      let removed = min(required, max(0, width - 1))
       guard removed > 0 else { continue }
       var remaining = width - removed - 1
       var truncated = false
@@ -364,7 +389,8 @@ final class NativeStatusBarSurface {
           }
         }
       }
-      overflow -= removed
+      overflow = max(0, overflow - removed)
+      if left { leftOverflow = max(0, leftOverflow - removed) }
     }
     return StatusFormatDocument(runs: runs)
   }

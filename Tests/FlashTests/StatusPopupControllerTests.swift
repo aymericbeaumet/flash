@@ -131,7 +131,7 @@ final class StatusPopupControllerTests: XCTestCase {
       if focused { controller.focus() }
       var callbacks: [String] = []
       controller.willDismissFocus = { callbacks.append("flush") }
-      controller.didDismissFocus = { callbacks.append("restore") }
+      controller.didDismissFocus = { _ in callbacks.append("restore") }
       controller.leaveAnchor()
       XCTAssertEqual(controller.isVisible, focused)
       XCTAssertEqual(controller.terminalView.isRenderingEnabled, focused)
@@ -181,7 +181,7 @@ final class StatusPopupControllerTests: XCTestCase {
     controller.focus()
     var callbacks: [String] = []
     controller.willDismissFocus = { callbacks.append("flush") }
-    controller.didDismissFocus = { callbacks.append("restore") }
+    controller.didDismissFocus = { _ in callbacks.append("restore") }
     controller.refresh([region("other", text: "Other content")])
     XCTAssertFalse(controller.isVisible)
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
@@ -293,7 +293,7 @@ final class StatusPopupControllerTests: XCTestCase {
       XCTAssertTrue(controller.terminalView.isRenderingEnabled)
       callbacks.append("flush")
     }
-    controller.didDismissFocus = {
+    controller.didDismissFocus = { _ in
       XCTAssertNil(controller.focusedName)
       XCTAssertFalse(controller.terminalView.isRenderingEnabled)
       callbacks.append("restore")
@@ -359,7 +359,7 @@ final class StatusPopupControllerTests: XCTestCase {
     var callbacks: [String] = []
     controller.willFocus = { callbacks.append("focus") }
     controller.willDismissFocus = { callbacks.append("flush") }
-    controller.didDismissFocus = { callbacks.append("restore") }
+    controller.didDismissFocus = { _ in callbacks.append("restore") }
     controller.didDismiss = { name in
       XCTAssertEqual(name, "shell")
       XCTAssertNil(controller.focusedName)

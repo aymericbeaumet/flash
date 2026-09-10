@@ -448,7 +448,7 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
     StatusSegments {
         claude_label: quota_label(
             "Cld",
-            [shared_session, claude_week].into_iter().filter(|_| {
+            claude_week.filter(|_| {
                 state
                     .anthropic
                     .as_ref()
@@ -459,7 +459,7 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
         claude_details,
         codex_label: quota_label(
             "Cdx",
-            [openai_session, openai_week].into_iter().filter(|_| {
+            openai_week.filter(|_| {
                 state
                     .openai
                     .as_ref()
@@ -488,15 +488,8 @@ fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, provider: &str) 
     format!("#[fg=colour245]{status}#[default]")
 }
 
-fn quota_label<'a>(
-    label: &str,
-    windows: impl IntoIterator<Item = Option<&'a WindowUsage>>,
-    now: u64,
-) -> String {
-    let metric = windows
-        .into_iter()
-        .flatten()
-        .min_by_key(|window| remaining_percent(window.used_percent))
+fn quota_label(label: &str, weekly: Option<&WindowUsage>, now: u64) -> String {
+    let metric = weekly
         .map(|window| {
             let remaining = remaining_percent(window.used_percent).min(99);
             let mut metric = format!("{remaining}%");
@@ -1297,7 +1290,7 @@ mod tests {
     }
 
     #[test]
-    fn status_segments_split_providers_and_show_the_tightest_shared_quota() {
+    fn status_segments_split_providers_and_show_the_weekly_quota() {
         let state = UsageState {
             anthropic: Some(AnthropicUsage {
                 updated_at: 0,
@@ -1343,7 +1336,7 @@ mod tests {
         for (used, expected) in [(0.0, "99%"), (91.0, "9%"), (100.0, "0%")] {
             let window = WindowUsage::new(used, None, 300);
             assert_eq!(
-                quota_label("Cld", [Some(&window)], 0),
+                quota_label("Cld", Some(&window), 0),
                 format!("#[fg=#EBCB8B]Cld #[fg=colour245]{expected}#[default]")
             );
         }
@@ -1360,13 +1353,38 @@ mod tests {
     }
 
     #[test]
-    fn quota_reset_matches_the_limiting_window() {
-        let weekly = WindowUsage::new(40.0, Some(432_000), 10_080);
-        let session = WindowUsage::new(95.0, Some(3_600), 300);
+    fn badge_uses_weekly_quota_and_reset_even_when_session_is_tighter() {
+        let state = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 0,
+                shared_session: Some(WindowUsage::new(95.0, Some(3_600), 300)),
+                claude_week: Some(WindowUsage::new(40.0, Some(432_000), 10_080)),
+                ..AnthropicUsage::default()
+            }),
+            ..UsageState::default()
+        };
         assert_eq!(
-            quota_label("Cld", [Some(&weekly), Some(&session)], 0),
-            "#[fg=#EBCB8B]Cld #[fg=colour245]5%↻1h#[default]"
+            render_status_segments(&state, 0).claude_label,
+            "#[fg=#EBCB8B]Cld #[fg=colour245]60%↻5d#[default]"
         );
+    }
+
+    #[test]
+    fn missing_weekly_quota_does_not_use_a_session_reset() {
+        let state = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 0,
+                shared_session: Some(WindowUsage::new(5.0, Some(3_600), 300)),
+                ..AnthropicUsage::default()
+            }),
+            ..UsageState::default()
+        };
+        let status = render_status_segments(&state, 0);
+        assert_eq!(
+            status.claude_label,
+            "#[fg=#EBCB8B]Cld #[fg=colour245]—#[default]"
+        );
+        assert!(status.claude_details.contains("95%"));
     }
 
     #[test]
@@ -1394,14 +1412,14 @@ mod tests {
         let state = UsageState {
             anthropic: Some(AnthropicUsage {
                 updated_at: 1_000,
-                shared_session: Some(WindowUsage::new(25.0, None, 300)),
+                claude_week: Some(WindowUsage::new(25.0, None, 10_080)),
                 ..AnthropicUsage::default()
             }),
             openai: Some(OpenAIUsage {
                 updated_at: 1_000,
                 openai: UsageWindows {
-                    session: Some(WindowUsage::new(40.0, None, 300)),
-                    weekly: None,
+                    session: None,
+                    weekly: Some(WindowUsage::new(40.0, None, 10_080)),
                 },
                 ..OpenAIUsage::default()
             }),

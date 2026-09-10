@@ -101,9 +101,8 @@ explicit `:network refresh` action may request Location authorization.
 
 `aiproviders` is adjacent to, not part of, the local system-monitor suite. It
 publishes `claude_label`/`claude_details` and `codex_label`/`codex_details`.
-Cld/Cdx labels show the lowest remaining percentage across the main session
-and weekly quotas with an unpadded percentage capped at 99, followed by `↻`
-and the time until that same limiting window resets (for example `53%↻5d`). Model-specific quotas stay in
+Cld/Cdx labels show the remaining weekly quota with an unpadded percentage capped at 99, followed by `↻`
+and the time until the weekly window resets (for example `53%↻5d`). Model-specific quotas stay in
 details: Fable under Claude, and the separate `codex_bengalfox` rate-limit
 bucket as Astra under Codex. “Astra” is a local presentation alias, not app-server schema
 terminology. Grok remains a launcher only; do not add quota polling that reads
@@ -128,8 +127,8 @@ requires signing in again through Claude Code.
 `feed` owns the `summary` segment, selected with
 `#{flash.plugin.feed.summary}`. Set `[plugin.feed] url` to an RSS feed URL;
 without one, the plugin makes no network requests. `refresh_interval` defaults
-to 300 seconds and `cycle_interval` to 10 seconds. Article content uses
-`#[cyc]`/`#[nocyc]` for a 0.42-second upward slide. The title, domain, and
+to 300 seconds and `cycle_interval` to 30 seconds. Article content uses
+`#[cyc]`/`#[nocyc]` for a 0.8-second upward slide. The title, domain, and
 outbound arrow move together while the label stays still.
 Other metrics update without this transition, including when pooled layers are reused.
 
@@ -139,7 +138,9 @@ Rotation also expires old items during a failed refresh; a transient network
 or parse failure retains the remaining last-good items, while a successful
 empty feed clears the segment.
 
-The linked title shrinks before the domain and outbound arrow. RSS item links
+Only the linked title shrinks, ending in an ellipsis while reserving the domain
+and outbound arrow. The feed stays before the notch or, without one, before
+the actual centre component; its arrow and click target remain visible. RSS item links
 open the feed's article page; an Atom `link rel="via"` extension supplies the
 original article link when present. For AGGR, this means the title opens the
 archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`

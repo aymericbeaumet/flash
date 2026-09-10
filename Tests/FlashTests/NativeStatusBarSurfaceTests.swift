@@ -154,7 +154,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let transition = article.text.animation(forKey: kCATransition) as? CATransition
     XCTAssertEqual(transition?.type, .push)
     XCTAssertEqual(transition?.subtype, .fromBottom)
-    XCTAssertEqual(transition?.duration, 0.42)
+    XCTAssertEqual(transition?.duration, 0.8)
     XCTAssertNil(surface.runLayers[0].text.animation(forKey: kCATransition))
     XCTAssertNil(surface.runLayers[2].text.animation(forKey: kCATransition))
     article.text.removeAllAnimations()

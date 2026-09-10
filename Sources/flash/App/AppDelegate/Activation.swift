@@ -426,8 +426,8 @@ extension AppDelegate {
     if currentHints.isEmpty && !activationInFlight && !hintSession.pointerModeActive {
       overlay.hide()
       let captureOverride =
-        Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-          until: pointerInsertHandoffRecaptureSuppressedUntil)
+        Self.pointerCommitHandoffRecaptureSuppressionIsActive(
+          until: pointerCommitHandoffRecaptureSuppressedUntil)
         ? false : nil
       applyModeOverlay(captureOverride: captureOverride)
       return

@@ -4,7 +4,7 @@ import FlashCore
 /// Pointer mode (`mouse_pointer`): freestyle keyboard cursor control.
 /// h/j/k/l or arrows move with autorepeat acceleration (shift = 2px fine),
 /// `m` / `,` / `.` click left/middle/right in place, `v` toggles a drag,
-/// Return or space clicks and exits with the same INSERT handoff as a
+/// Return or space clicks and exits with the same capture handoff as a
 /// mouse-grid commit, Escape (or `q`) exits. Runs as a hint-session variant:
 /// `inputMode` stays `.hints` so the capture policy is untouched, and the
 /// panel's `pointerModeActive` flag routes keys to `PointerModeInterpreter`.
@@ -88,7 +88,7 @@ extension AppDelegate {
 
   /// Return / space: finish the session. With the drag toggle held this
   /// releases the button (completing the drag); otherwise it left-clicks with
-  /// the same INSERT handoff as a mouse-grid commit.
+  /// the same capture handoff as a mouse-grid commit.
   private func commitPointerModeClick(at location: CGPoint) {
     if hintSession.pointerDragActive {
       _ = ActionDispatcher.releasePrimaryButton(at: location)
@@ -101,13 +101,13 @@ extension AppDelegate {
       point: location, action: .leftClick, modifiers: [], pid: pid)
     clearHintSessionState()
     overlay.hide()
-    let handoffToken = notePointerInsertHandoff(reason: "pointer_mode_commit")
+    let handoffToken = notePointerCommitHandoff(reason: "pointer_mode_commit")
     applyModeOverlay(captureOverride: false)
     _ = ActionDispatcher.synthesizeClick(
       at: location, action: .leftClick, modifiers: [], preserveCursor: false
     ) { [weak self] in
       guard let self else { return }
-      self.resolvePointerModeInsert(pid: pid, handoffToken: handoffToken)
+      self.finishPointerModeCommit(handoffToken: handoffToken)
     }
   }
 
@@ -125,8 +125,8 @@ extension AppDelegate {
   }
 
   /// `focus_input` (Vimium `gi`): focus the count-th editable text input of
-  /// the focused window via the AX focused attribute, then enter INSERT so
-  /// typing flows immediately. The bounded AX walk runs off the main thread.
+  /// the focused window via the AX focused attribute, preserving the current
+  /// mode. The bounded AX walk runs off the main thread.
   func focusTextInputInNormalMode(index: Int) {
     guard let context = normalModeContext() ?? currentNonFlashContext() else {
       applyModeOverlay()
@@ -141,7 +141,7 @@ extension AppDelegate {
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
           if self.flashMode == .normal {
-            self.enterInsertMode(reason: .explicitCommand, targetPID: pid)
+            self.scheduleNormalModeRecapture()
           }
         } else {
           FlashLog.debug("[focus_input] no_text_input pid=\(pid)")

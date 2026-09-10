@@ -57,14 +57,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
       .copyURL)
-    for insertKey in ["a", "A", "i", "o", "O"] {
-      XCTAssertEqual(
-        c.mode.normal.first(where: { $0.key == insertKey })?.action.command,
-        .insertMode)
+    for insertKey in ["a", "A", "i", "I", "o", "O"] {
+      XCTAssertNil(c.mode.normal.first(where: { $0.key == insertKey }))
     }
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "I" })?.action.command,
-      .lockedInsertMode)
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("g4") })?.action.command,
@@ -1151,10 +1146,8 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
-    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "i" })?.action.command, .insertMode)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "I" })?.action.command,
-      .lockedInsertMode)
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "i" }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "I" }))
     XCTAssertEqual(c.mode.normal.filter { $0.key == "j" }.count, 1)
   }
 

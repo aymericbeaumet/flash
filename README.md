@@ -23,7 +23,7 @@ The current build is published through Homebrew:
 brew install --cask aymericbeaumet/tap/flash@nightly
 ```
 
-This installs `/Applications/Flash.app`, the `flash` CLI, and a login LaunchAgent. Open **System Settings → Privacy & Security → Accessibility**, enable Flash, then restart the app once.
+This installs `/Applications/Flash.app`, the `flash` CLI, and config-owned login-item registration. Open **System Settings → Privacy & Security → Accessibility**, enable Flash, then restart the app once.
 
 ### Build from source
 
@@ -69,13 +69,15 @@ keyboard-first modes:
 
 ```toml
 [mode.all.mappings]
-"ctrl+alt+n" = ["flash", "enter_normal_mode"]
+"cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+"cmd+ctrl+[" = ["flash", "leave_mode"]
+"alt+space" = ["flash", "terminal_show"]
 
 [statusbar]
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). Vim's `a`, `A`, `i`, `I`, `o`, and `O` all enter insert mode; `I` keeps Flash's locked-insert behavior.
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts or automatic entry. Bind `enter_insert_mode` or `enter_locked_insert_mode` explicitly in your configuration; use `leave_mode` to exit.
 
 ### Status-bar hover popups
 
@@ -140,11 +142,11 @@ a popup label to keep it open and use the terminal; repeated clicks keep it pinn
 Right-click a popup segment to keep it open and enter terminal mode. Links
 still open normally on left-click; Option-click also focuses their popup.
 Terminal mode defaults to Command-R to restart the process, Command-Q to quit
-it (automatic restart still applies), and Command-W to hide the window.
-Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a popup
+it (named terminals restart automatically), and Command-W to hide the window.
+Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a persistent popup
 keeps its child alive. See the [interactive status strip](docs/examples/statusbar/README.md)
-for separate Cld/Cdx quotas, padded CPU/MEM/DISK/NET/BAT metrics, focused
-interactive CLI popups, and the calendar.
+for separate Cld/Cdx quotas, compact CPU/MEM/DSK/NET/BAT metrics, native
+detail popups, and the calendar.
 See [terminal lifecycle and configuration](docs/terminal-popups.md).
 
 The template follows tmux 3.7b formats and styles. `@left`/`@right` above are
@@ -156,7 +158,10 @@ cadence, or rotating output.
 
 ### Shortcut terminal windows
 
-`flash terminal_show` opens a fresh login shell. Named terminals can persist
+`flash terminal_show` opens a one-shot fresh login shell. Closing, hiding,
+exiting, or killing it permanently removes that session. Bind it to `alt+space`
+in your all-scope and terminal mappings to create a new shell every time.
+Named terminals can persist
 across openings and start with Flash:
 
 ```toml
@@ -174,7 +179,7 @@ rows = 36
 "cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
-Omit `persistent` for a new process each time the window opens. All terminal
+Omit `persistent` for a new process each time the window opens. Named terminal
 windows and status popup processes restart after exiting. The first retry is
 prompt; repeated immediate failures back off. Closing a nonpersistent window
 stops its process and cancels retries.
@@ -268,7 +273,7 @@ can send the user's normal tmux prefix bindings with zero Flash round trips.
 Flash still resolves any discovered local or remote window from the finder.
 Tmux hint discovery recognizes quoted absolute paths (including spaces and
 Unicode), slash-separated relative paths, URLs, and ordinary filenames while
-excluding dotted source identifiers such as `JumpTarget.entersInsertMode`.
+excluding dotted source identifiers such as `JumpTarget.frame`.
 Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
 so the terminal can open it in a new context. Flash does not open the value
 itself.
@@ -355,7 +360,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; the defaults are Escape and Command, Control, Shift, and Option. Explicit mappings win. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` continues to the app or macOS without changing the base mode; the defaults are Escape and Command, Control, Shift, and Option. Explicit mappings win. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
 
 ## Use your existing hotkey tool
 

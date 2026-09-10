@@ -14,11 +14,9 @@ Important defaults:
 - `n` sends Cmd-N to open a new window.
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
-- `f`, `sf`, and `df` target discovered clickable elements, then enter insert
-  mode as explicit mouse interactions.
+- `f`, `sf`, and `df` click discovered elements while preserving the base mode.
 - `mf` moves the cursor to a discovered target.
-- `F`, `sF`, and `dF` use mouse grid mode for precise screen clicks, then enter
-  insert mode.
+- `F`, `sF`, and `dF` use mouse grid mode while preserving the base mode.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.
@@ -108,3 +106,22 @@ positional subcommands, and returns status 2 when parsing or resident dispatch
 rejects an invocation. Successful dispatch does not imply an asynchronous plugin
 operation completed successfully; later failures appear in the toast and logs.
 An empty command prompt remains quiet.
+
+## Explicit INSERT entry
+
+Only an explicitly configured `enter_insert_mode` or `enter_locked_insert_mode`
+action enters INSERT. The default mapping set has no `i`, `I`, `a`, `A`, `o`, or
+`O` insert aliases. Unmapped passthrough keys/modifiers keep the base mode;
+clicks, editable hints, focus changes, find/new-tab actions, secure input, and
+configuration enabling advanced mode do not infer INSERT intent.
+
+```toml
+[mode.all.mappings]
+"cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+"cmd+ctrl+[" = ["flash", "leave_mode"]
+"alt+space" = ["flash", "terminal_show"]
+```
+
+Temporary routing handoffs for native menus, secure input, and pointer delivery
+remain separate from mode changes. INSERT stays active until an explicit exit;
+closing a terminal or command surface may restore its saved INSERT mode.

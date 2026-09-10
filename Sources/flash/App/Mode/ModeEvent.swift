@@ -5,12 +5,11 @@ import Foundation
 // case here, it cannot move the mode. Notably absent — and deliberately so —
 // are the old automatic triggers (app/element focus-change exit, browser URL
 // polling, timed focus-exit probes, pointer-handoff deferrals). The mouse
-// can ENTER insert (`clickResolved`) but nothing here can make it LEAVE insert
-// except explicit keyboard requests (`enterNormal` / `leaveMode`).
+// never changes the base mode; INSERT entry requires an explicit command.
 enum ModeEvent: Equatable {
   // MARK: User-explicit
 
-  /// `i` / `I` / `/` / `t` — the user asked to type. `reason.locksInsertMode`
+  /// An explicit configured insert command. `reason.locksInsertMode`
   /// decides the `locked` bit. `targetPID` is the app to hand the keyboard to.
   case enterInsert(reason: InsertModeTransitionReason, targetPID: pid_t?)
 
@@ -35,10 +34,8 @@ enum ModeEvent: Equatable {
   /// Restore the base mode; an explicit dismissal can reactivate its prior app.
   case closeTerminal(targetPID: pid_t?)
 
-  /// A primary click resolved by its source: physical and mouse-grid clicks
-  /// enter INSERT, while semantic hints honor `JumpTarget.entersInsertMode`.
-  /// From INSERT this never leaves insert.
-  case clickResolved(entersInsert: Bool, targetPID: pid_t?)
+  /// A pointer action completed without changing the base mode.
+  case pointerCommitted
 
   // MARK: System
 

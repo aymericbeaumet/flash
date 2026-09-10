@@ -52,7 +52,7 @@ final class StatusPopupController {
   private var font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
-  var didDismissFocus: (() -> Void)?
+  var didDismissFocus: ((String) -> Void)?
   var didDismiss: ((String) -> Void)?
   var inputInterceptor: ((NSEvent) -> Bool)?
 
@@ -168,10 +168,11 @@ final class StatusPopupController {
     if wasFocused { willDismissFocus?() }
     transition(.dismiss)
     terminalView.isRenderingEnabled = false
+    terminalView.bind(session: nil)
     if windowActionsEnabled { panel.orderOut(nil) }
     logLifecycle(reason: reason)
     region = nil
-    if wasFocused { didDismissFocus?() }
+    if wasFocused { didDismissFocus?(reason) }
     if let previousName { didDismiss?(previousName) }
   }
 

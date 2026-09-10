@@ -13,8 +13,7 @@ for download + upload on the default-route interface, in decimal bytes/second.
 
 AI percentages also cap at 99, with no padding because they change slowly.
 
-Cld/Cdx show the least remaining main session/weekly quota and that window’s reset
-delay. Each has its own popup showing that provider’s session,
+Cld/Cdx show the remaining weekly quota and the weekly reset delay. Each has its own popup showing that provider’s session,
 weekly, and available model quotas, remaining bars, reset times, and cache age.
 Left-click opens that provider’s usage page; right-click pins its popup.
 A stale badge becomes a dash (Claude: 20 minutes; Codex: 4 minutes), while
@@ -44,11 +43,12 @@ Option-left-click available to pin. The configuration has no separate right-clic
 binding. Focused documents support selection, copying, scrolling, and the shared
 terminal-mode mappings. `leave_mode` restores the prior mode and app.
 
-For actual process-backed terminals, Command-W hides, Command-R restarts, and
-Command-Q quits the child so the configured automatic restart applies. The native
+For named process-backed terminals, Command-W hides, Command-R restarts, and
+Command-Q quits the child so automatic restart applies. Unnamed fresh shells
+end permanently on quit or hide. The native
 metric documents have no process to restart.
 
 Feed headlines rotate newest first through the last 24 hours, sliding upward
-every ten seconds while the label stays still. Hover shows the cached excerpt.
+every 30 seconds while the label stays still. Hover shows the cached excerpt.
 
 See [status popups](../../status-popups.md) and [terminal lifecycle](../../terminal-popups.md).

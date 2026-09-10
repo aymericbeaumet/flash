@@ -68,6 +68,11 @@ final class StatusTerminalRegistry {
   private var restarts: [String: Restart] = [:]
   var willChange: (([StatusTerminalChange]) -> Void)?
   var didChange: (() -> Void)?
+  private let processEnvironment: FlashProcessEnvironment
+
+  init(environment: FlashProcessEnvironment = .shared) {
+    processEnvironment = environment
+  }
 
   func apply(
     _ statusBar: Config.StatusBar, terminals: [String: Config.Terminal] = [:],
@@ -115,7 +120,9 @@ final class StatusTerminalRegistry {
   }
 
   func automaticallyRestarts(name: String) -> Bool {
-    ownership[name] != nil
+    guard let owner = ownership[name] else { return false }
+    if case .ephemeral(template: nil) = owner { return false }
+    return true
   }
 
   func openTerminal(name: String?, configuration config: Config) -> String? {
@@ -135,7 +142,7 @@ final class StatusTerminalRegistry {
       }
       definition = terminal
     } else {
-      let shell = FlashProcessEnvironment.shared.environment["SHELL"] ?? "/bin/zsh"
+      let shell = processEnvironment.environment["SHELL"] ?? "/bin/zsh"
       definition = .init(
         command: [shell, "-l"], workingDirectory: NSHomeDirectory(), columns: 100, rows: 28)
     }
@@ -163,6 +170,8 @@ final class StatusTerminalRegistry {
 
   func releaseTerminal(name: String) {
     guard case .ephemeral = ownership[name] else { return }
+    // Dismissal callbacks may release this terminal again.
+    ownership.removeValue(forKey: name)
     willChange?([.remove(name)])
     remove(name: name)
     didChange?()
@@ -177,7 +186,7 @@ final class StatusTerminalRegistry {
     ownership[name] = owner
     let session = TerminalSession(
       configuration: Self.configuration(
-        for: definition, environment: FlashProcessEnvironment.shared.environment))
+        for: definition, environment: processEnvironment.environment))
     sessions[name] = session
     definitions[name] = definition
     var previousState: TerminalSessionState?
@@ -190,7 +199,7 @@ final class StatusTerminalRegistry {
       }
       guard let self, let session, self.sessions[name] === session else { return }
       self.observe(state: state, name: name, session: session)
-      self.didChange?()
+      if self.sessions[name] === session { self.didChange?() }
     }
     session.onInputRejected = { count in
       FlashLog.warn(
@@ -220,7 +229,13 @@ final class StatusTerminalRegistry {
   }
 
   private func observe(state: TerminalSessionState, name: String, session: TerminalSession) {
-    guard automaticallyRestarts(name: name) else { return }
+    guard automaticallyRestarts(name: name) else {
+      switch state {
+      case .exited, .failed: releaseTerminal(name: name)
+      case .idle, .running, .stopped: break
+      }
+      return
+    }
     var restart = restarts[name] ?? Restart()
     switch state {
     case .running:
@@ -307,7 +322,12 @@ final class StatusTerminalRegistry {
   }
 
   func quit(name: String) {
-    guard let session = sessions[name], case .running = session.state else { return }
+    guard let session = sessions[name] else { return }
+    guard automaticallyRestarts(name: name) else {
+      releaseTerminal(name: name)
+      return
+    }
+    guard case .running = session.state else { return }
     restarts[name]?.pending?.cancel()
     restarts[name]?.pending = nil
     willChange?([.replace(name)])

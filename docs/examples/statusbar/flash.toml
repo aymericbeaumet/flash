@@ -45,4 +45,4 @@ rows = 22
 label = "AGGR"
 url = "https://aggr.aymericbeaumet.com/rss.xml"
 refresh_interval = 300
-cycle_interval = 10
+cycle_interval = 30

@@ -31,8 +31,8 @@ final class KeyboardCaptureTap {
 
   /// Pure swallow decision. NORMAL captures keys unless an unmapped keypress
   /// matches a configured passthrough key or carries a configured passthrough
-  /// modifier. Passthrough input continues unchanged and moves Flash to INSERT
-  /// at the AppDelegate edge. Every hint key is captured; INSERT and key-window
+  /// modifier. Passthrough input continues without changing the base mode.
+  /// Every hint key is captured; INSERT and key-window
   /// surfaces are left untouched unless an explicit mapping owns the key.
   ///
   /// Extracted as a static, side-effect-free function so the tap's single most
@@ -61,18 +61,6 @@ final class KeyboardCaptureTap {
     case .commandLine, .candidateFinder:
       return false
     }
-  }
-
-  static func shouldEnterInsertAfterNativeSurfacePassthrough(
-    flashMode: FlashMode,
-    modifierFlags: CGEventFlags,
-    hasMapping: Bool,
-    isPassthroughKey: Bool,
-    passthroughModifierFlags: CGEventFlags
-  ) -> Bool {
-    guard flashMode == .normal, !hasMapping else { return false }
-    return isPassthroughKey
-      || !modifierFlags.intersection(passthroughModifierFlags).isEmpty
   }
 
   /// Create + install the tap. Returns false if the OS refused it (no

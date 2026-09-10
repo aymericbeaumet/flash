@@ -575,12 +575,6 @@ struct Config {
         // capital-letter siblings of `gT` / `gt`.
         ("J", .flashCommand(.tabPrev)),
         ("K", .flashCommand(.tabNext)),
-        ("a", .flashCommand(.insertMode)),
-        ("A", .flashCommand(.insertMode)),
-        ("i", .flashCommand(.insertMode)),
-        ("I", .flashCommand(.lockedInsertMode)),
-        ("o", .flashCommand(.insertMode)),
-        ("O", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
         // `F` requests the global Command-Shift new-context gesture. `f` stays
         // plain except for the Shift transport modifier terminal links require.
