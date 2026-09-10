@@ -236,22 +236,6 @@ final class OverlayPanel: NSPanel {
   var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
-  var normalModePassthroughKeyCodes = Set(
-    Config.Mode.defaultNormalPassthroughKeys.compactMap(HotkeySyntax.parseKey))
-  var normalModePassthroughModifiers = Config.Mode.defaultNormalPassthroughModifiers {
-    didSet { recomputeNormalModePassthroughModifierFlags() }
-  }
-  /// `normalModePassthroughModifiers` resolved once per config apply, so the
-  /// per-keystroke tap decision and panel key path never re-parse tokens.
-  private(set) var normalModePassthroughModifierFlags: CGEventFlags = KeyModifier.cgEventFlags(
-    Config.Mode.defaultNormalPassthroughModifiers)
-  private(set) var normalModePassthroughNSModifierFlags: NSEvent.ModifierFlags =
-    KeyModifier.nsEventFlags(Config.Mode.defaultNormalPassthroughModifiers)
-
-  private func recomputeNormalModePassthroughModifierFlags() {
-    normalModePassthroughModifierFlags = KeyModifier.cgEventFlags(normalModePassthroughModifiers)
-    normalModePassthroughNSModifierFlags = KeyModifier.nsEventFlags(normalModePassthroughModifiers)
-  }
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
   }
@@ -637,7 +621,6 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
-  func overlayDidPassthroughNormalModeKey(_ event: NSEvent)
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool

@@ -230,7 +230,7 @@ enum NormalModeInterpreter {
       repeatAnchor: mapping.repeatsOnFinalKey ? mapping.key : nil)
   }
 
-  /// Fast raw-event recognition for the keyboard tap's passthrough decision.
+  /// Fast raw-event recognition for the keyboard tap's mapping decision.
   /// `CompiledMappings` pre-indexes canonical atoms by physical hotkey, so this
   /// remains layout-free and allocation-light for repeated system chords such
   /// as Command-Tab while still preserving shifted mappings and modified

@@ -421,16 +421,6 @@ struct Config {
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
-    /// Keys and modifiers that make an unmapped keypress in NORMAL switch to
-    /// INSERT and continue to the focused app or macOS unchanged. Explicit
-    /// `[mode.normal.mappings]` and `[mode.all.mappings]` bindings still win.
-    var normalPassthroughKeys = Self.defaultNormalPassthroughKeys
-    var normalPassthroughModifiers = Self.defaultNormalPassthroughModifiers
-
-    var normalPassthroughKeyCodes: Set<UInt32> {
-      Set(normalPassthroughKeys.compactMap(HotkeySyntax.parseKey))
-    }
-
     var labels = Labels()
     /// How long the interpreter waits for the next key in a pending
     /// sequence before resolving the longest matching prefix.
@@ -450,8 +440,6 @@ struct Config {
     /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
     /// same as in the editor users already have muscle memory for.
     static let defaultSequenceTimeoutMs = 1000
-    static let defaultNormalPassthroughKeys: [String] = []
-    static let defaultNormalPassthroughModifiers: [String] = []
 
     /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
     /// Use `\` bare or `<backslash>` — both resolve to the same key.
@@ -538,7 +526,7 @@ struct Config {
         // terminals (no close-tab history) return `.unhandled`.
         ("X", .flashCommand(.tabReopen)),
         // No default ⌘-based bindings. These chords reach the app in INSERT;
-        // NORMAL swallows them unless cmd passthrough is configured.
+        // NORMAL swallows them.
         // Their vim-style siblings cover the same actions in
         // normal mode (`gt`/`gT`, `g1`–`g9`, `r`/`R`, `H`/`L`, `[t`/`]t`, `t`,
         // `x`, `/`, `[a`/`]a`).
@@ -845,8 +833,6 @@ struct Config {
       ],
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
-      "normal_passthrough_keys": mode.normalPassthroughKeys,
-      "normal_passthrough_modifiers": mode.normalPassthroughModifiers,
     ]
     return compactJSON([
       "debug": [

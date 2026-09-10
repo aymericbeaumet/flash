@@ -312,23 +312,28 @@ final class NativeStatusBarSurface {
     return true
   }
 
-  /// Carousel article change: the old line lifts out of the cell while the
-  /// new one rises into place, both easing along a decelerating curve. Every
-  /// run of one carousel group shares `startedAt`, so its parts move together.
+  static let cycleTransitionDuration: CFTimeInterval = 0.45
+
+  /// Carousel article change as one vertical push: the old line travels a
+  /// full line height up and fades out while the new line rises the same
+  /// distance from below and fades in. Both share one duration and the
+  /// standard ease-in-out curve (cubic-bezier 0.4, 0, 0.2, 1), so they read
+  /// as one strip sliding. Every run of one carousel group shares `startedAt`.
   private static func runCycleTransition(
     _ layers: RunLayer, outgoing: Any?, textRect: CGRect, startedAt: CFTimeInterval
   ) {
-    let distance = textRect.height * 0.55
+    let distance = textRect.height
     let beginTime = layers.text.convertTime(startedAt, from: nil)
+    let curve = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
     let incoming = CAAnimationGroup()
     incoming.animations = [
       basic("opacity", from: 0, to: 1),
       basic("transform.translation.y", from: -distance, to: 0),
     ]
-    incoming.duration = 0.55
+    incoming.duration = cycleTransitionDuration
     incoming.beginTime = beginTime
     incoming.fillMode = .backwards
-    incoming.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
+    incoming.timingFunction = curve
     layers.text.add(incoming, forKey: cycleAnimationKey)
     layers.effect.add(incoming, forKey: cycleAnimationKey)
     guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
@@ -337,10 +342,10 @@ final class NativeStatusBarSurface {
       basic("opacity", from: 1, to: 0),
       basic("transform.translation.y", from: 0, to: distance),
     ]
-    leaving.duration = 0.32
+    leaving.duration = cycleTransitionDuration
     leaving.beginTime = beginTime
     leaving.fillMode = .backwards
-    leaving.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.7, 0.2)
+    leaving.timingFunction = curve
     layers.outgoing.add(leaving, forKey: cycleAnimationKey)
   }
 

@@ -100,9 +100,6 @@ final class ConfigLoaderTests: XCTestCase {
       keys: "up",
       keyCode: CGKeyCode(kVK_UpArrow))
     XCTAssertEqual(c.mode.normalLeader, "\\")
-    XCTAssertEqual(c.mode.normalPassthroughKeys, [])
-    XCTAssertEqual(c.mode.normalPassthroughKeyCodes, [])
-    XCTAssertEqual(c.mode.normalPassthroughModifiers, [])
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("\\<space>") }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("sf") })?.action.command,
@@ -232,62 +229,6 @@ final class ConfigLoaderTests: XCTestCase {
     }
     XCTAssertEqual(command("ctrl+tab"), .tabNext)
     XCTAssertEqual(command("ctrl+shift+tab"), .tabPrev)
-  }
-
-  func testParsesNormalPassthroughModifiers() {
-    XCTAssertEqual(
-      ConfigLoader.parse("").mode.normalPassthroughModifiers,
-      [])
-    let c = ConfigLoader.parse(
-      """
-      [mode.normal]
-      passthrough_modifiers = ["cmd", "shift"]
-      """)
-    XCTAssertEqual(c.mode.normalPassthroughModifiers, ["cmd", "shift"])
-
-    let invalid = ConfigLoader.parse(
-      """
-      [mode.normal]
-      passthrough_modifiers = ["cmd", "hyper"]
-      """)
-    // Unknown tokens are diagnosed AND filtered out of the live config.
-    XCTAssertEqual(invalid.mode.normalPassthroughModifiers, ["cmd"])
-    XCTAssertTrue(
-      invalid.diagnostics.contains {
-        $0.message.contains("passthrough_modifiers: unknown modifier \"hyper\"")
-      })
-  }
-
-  func testParsesNormalPassthroughKeys() {
-    XCTAssertEqual(ConfigLoader.parse("").mode.normalPassthroughKeys, [])
-    let c = ConfigLoader.parse(
-      """
-      [mode.normal]
-      passthrough_keys = ["escape", "tab"]
-      """)
-    XCTAssertEqual(c.mode.normalPassthroughKeys, ["escape", "tab"])
-    XCTAssertEqual(c.mode.normalPassthroughKeyCodes, [UInt32(kVK_Escape), UInt32(kVK_Tab)])
-
-    let disabled = ConfigLoader.parse(
-      """
-      [mode.normal]
-      passthrough_keys = []
-      """)
-    XCTAssertTrue(disabled.mode.normalPassthroughKeys.isEmpty)
-    XCTAssertTrue(disabled.mode.normalPassthroughKeyCodes.isEmpty)
-
-    let invalid = ConfigLoader.parse(
-      """
-      [mode.normal]
-      passthrough_keys = ["escape", "hyper"]
-      """)
-    // Unknown tokens are diagnosed AND filtered out of the live config.
-    XCTAssertEqual(invalid.mode.normalPassthroughKeys, ["escape"])
-    XCTAssertEqual(invalid.mode.normalPassthroughKeyCodes, [UInt32(kVK_Escape)])
-    XCTAssertTrue(
-      invalid.diagnostics.contains {
-        $0.message.contains("passthrough_keys: unknown key \"hyper\"")
-      })
   }
 
   func testParsesStatusBarTemplateOptionsAndExplicitSources() {
@@ -847,10 +788,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(flashlight["suggestion_count"] as? Int, 10)
     XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
-    XCTAssertEqual(mode["normal_passthrough_keys"] as? [String], [])
-    XCTAssertEqual(
-      mode["normal_passthrough_modifiers"] as? [String],
-      [])
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])

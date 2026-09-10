@@ -658,54 +658,11 @@ final class OverlayInputTests: XCTestCase {
       NormalModeInterpreter.canonicalizeMappingKey("[a"))
   }
 
-  func testKeyWindowFallbackPassesUnmappedModifierChordWhenEnabled() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughModifiers = ["cmd"]
-
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [.command],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: "'",
-        charactersIgnoringModifiers: "'",
-        isARepeat: false,
-        keyCode: UInt16(kVK_ANSI_Quote)))
-
-    XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertEqual(panel.normalModePending, "")
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Quote)])
-  }
-
-  func testKeyWindowFallbackPassesConfiguredEscapeKey() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughKeyCodes = [UInt32(kVK_Escape)]
-
-    let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
-
-    XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_Escape)])
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-  }
-
   func testKeyWindowFallbackKeepsExplicitEscapeMappingInNormalMode() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
-    panel.normalModePassthroughKeyCodes = [UInt32(kVK_Escape)]
     panel.normalModeMappings = CompiledMappings([
       ModeMapping(key: "escape", action: .flashCommand(.scroll(.top)))
     ])
@@ -713,7 +670,6 @@ final class OverlayInputTests: XCTestCase {
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.scroll(.top)])
   }
 
@@ -727,7 +683,6 @@ final class OverlayInputTests: XCTestCase {
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
   }
 
@@ -754,7 +709,6 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
     XCTAssertEqual(panel.normalModePending, "")
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
   }
 
   func testKeyWindowFallbackKeepsExplicitShiftMappingInNormalMode() throws {
@@ -762,7 +716,6 @@ final class OverlayInputTests: XCTestCase {
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
-    panel.normalModePassthroughModifiers = ["shift"]
     panel.normalModeMappings =
       ConfigLoader.parse(
         """
@@ -779,26 +732,6 @@ final class OverlayInputTests: XCTestCase {
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.insertMode])
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
-  }
-
-  func testKeyWindowFallbackPassesUnknownShiftShortcut() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughModifiers = ["shift"]
-
-    let event = try keyEvent(
-      keyCode: kVK_ANSI_Q,
-      characters: "Q",
-      charactersIgnoringModifiers: "q",
-      modifierFlags: [.shift])
-
-    XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Q)])
   }
 
   func testNormalModeConsumesDeadKeyEventWithoutCharacters() throws {
@@ -946,7 +879,6 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var insertSelectionCount = 0
   var submittedCommands: [String] = []
   var mappingEventsToHandle = 0
-  var passthroughEvents: [NSEvent] = []
   var normalModeActions: [(MappingCommand?, Int)] = []
   var cancelCount = 0
   var commitCenterModifiers: [ClickModifiers] = []
@@ -975,9 +907,6 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     guard mappingEventsToHandle > 0 else { return false }
     mappingEventsToHandle -= 1
     return true
-  }
-  func overlayDidPassthroughNormalModeKey(_ event: NSEvent) {
-    passthroughEvents.append(event)
   }
   func overlayDidCancelCommandLine() {}
   func overlayDidUpdateCommandLine(

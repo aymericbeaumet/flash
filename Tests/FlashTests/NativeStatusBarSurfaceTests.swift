@@ -208,11 +208,24 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     redraw(surface, "NEWS #[cyc]second#[nocyc] CPU 20%", columns: 40)
     let article = surface.runLayers[1]
     let incoming = article.text.animation(forKey: cycleKey) as? CAAnimationGroup
-    XCTAssertEqual(
-      incoming?.animations?.compactMap { ($0 as? CABasicAnimation)?.keyPath },
-      ["opacity", "transform.translation.y"])
-    XCTAssertEqual(incoming?.duration, 0.55)
+    let rise = incoming?.animations?.compactMap { $0 as? CABasicAnimation }
+    XCTAssertEqual(rise?.map(\.keyPath), ["opacity", "transform.translation.y"])
+    XCTAssertEqual(incoming?.duration, NativeStatusBarSurface.cycleTransitionDuration)
+    let lineHeight = article.text.frame.height
+    // The new line rises a full line height from below while fading in ...
+    XCTAssertEqual(rise?[1].fromValue as? CGFloat, -lineHeight)
+    XCTAssertEqual(rise?[1].toValue as? CGFloat, 0)
+    XCTAssertEqual(rise?[0].fromValue as? CGFloat, 0)
+    XCTAssertEqual(rise?[0].toValue as? CGFloat, 1)
+    // ... and the old line is pushed the same distance up while fading out,
+    // in lockstep.
     let leaving = article.outgoing.animation(forKey: cycleKey) as? CAAnimationGroup
+    let push = leaving?.animations?.compactMap { $0 as? CABasicAnimation }
+    XCTAssertEqual(push?[1].fromValue as? CGFloat, 0)
+    XCTAssertEqual(push?[1].toValue as? CGFloat, lineHeight)
+    XCTAssertEqual(push?[0].fromValue as? CGFloat, 1)
+    XCTAssertEqual(push?[0].toValue as? CGFloat, 0)
+    XCTAssertEqual(leaving?.duration, incoming?.duration)
     XCTAssertEqual(leaving?.beginTime, incoming?.beginTime)
     XCTAssertEqual((article.outgoing.string as? NSAttributedString)?.string, "first")
     XCTAssertEqual(article.outgoing.opacity, 0)

@@ -29,34 +29,22 @@ final class KeyboardCaptureTap {
     self.handle = handle
   }
 
-  /// Pure swallow decision. NORMAL captures keys unless an unmapped keypress
-  /// matches a configured passthrough key or carries a configured passthrough
-  /// modifier. Passthrough input continues unchanged and moves Flash to INSERT
-  /// at the AppDelegate edge. Every hint key is captured; INSERT and key-window
-  /// surfaces are left untouched unless an explicit mapping owns the key.
+  /// Pure swallow decision. NORMAL and hints capture every key; INSERT and
+  /// key-window surfaces are left untouched unless a native surface owns the
+  /// keyboard and an explicit mapping claims the key.
   ///
   /// Extracted as a static, side-effect-free function so the tap's single most
   /// security-sensitive decision is unit-testable without a live `CGEventTap`.
   static func shouldSwallow(
     flashMode: FlashMode,
     inputMode: OverlayInputMode,
-    modifierFlags: CGEventFlags = [],
     hasMapping: Bool = false,
-    isPassthroughKey: Bool = false,
-    passthroughModifierFlags: CGEventFlags = [],
     nativeSurfaceOwnsKeyboard: Bool = false
   ) -> Bool {
     if nativeSurfaceOwnsKeyboard { return hasMapping }
     guard flashMode == .normal else { return false }
     switch inputMode {
-    case .normal:
-      let usesPassthroughModifier =
-        !modifierFlags.intersection(passthroughModifierFlags).isEmpty
-      if isPassthroughKey || usesPassthroughModifier, !hasMapping {
-        return false
-      }
-      return true
-    case .hints:
+    case .normal, .hints:
       return true
     case .commandLine, .candidateFinder:
       return false

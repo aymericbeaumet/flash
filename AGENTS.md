@@ -25,7 +25,7 @@ contracts before changing a subsystem:
    status items, Dock tile, preferences window or `NSAlert`.
 2. Global keyboard capture lives only in `KeyboardCaptureTap.swift` (session
    keyDown tap) and Carbon registrations for explicit modified-key mappings.
-   The tap only decides swallow versus passthrough and routes permitted keys;
+   The tap only decides whether a keypress is swallowed and routes swallowed keys;
    it never logs, persists or exfiltrates keys. Command/modal typing goes through
    `NSPanel.keyDown`; the key-window path also supplies the no-tap fallback.
    No additional event taps or global key monitors.
@@ -51,10 +51,9 @@ contracts before changing a subsystem:
    Accessibility and the bundled tmux plugin. Browser content comes through AX
    web areas; do not add DOM bridges or AppleScript-based hint discovery.
 9. Default keyboard shortcuts must not enter INSERT (`a/A/i/I/o/O/gi` included).
-   `enter_insert_mode` and `focus_input` are explicit configuration choices;
-   unmapped-key/modifier passthrough forwards the event and enters INSERT only
-   when the app then focuses an editable element. App activation or editable
-   focus alone never changes NORMAL. See the mode document for deliberate pointer/target commits.
+   `enter_insert_mode` and `focus_input` are explicit configuration choices.
+   NORMAL is hermetic: unmapped keys and chords are swallowed, never forwarded.
+   App activation or editable focus alone never changes NORMAL. See the mode document for deliberate pointer/target commits.
 10. Dev deployment must use `Scripts/install.sh --dev`, which owns build,
     signing, replacement and restart order. Do not hand-copy/sign/kill the app.
     The dev bundle is `/Applications/Flash 🧪.app`; release is

@@ -149,7 +149,9 @@ along its bottom edge; default-background cells are transparent so both show
 through. Mode pills are lit from the top. A hovered `#[link]` or `#[popup]` run
 gets a rounded wash that fades in, glides between neighbouring runs, and fades
 out. A value changing in place (a metric tick, the clock) crossfades over
-220 ms; a carousel article lifts out while the next rises in over 550 ms. All
+220 ms. A carousel article change is one vertical push over 450 ms: the old
+line moves a full line height up and fades out while the next rises the same
+distance from below and fades in, both on the standard ease-in-out curve. All
 of it runs on the render server: no host timers, no per-frame CPU work.
 
 Inline popup identities derive from their source origin and invocation, not the

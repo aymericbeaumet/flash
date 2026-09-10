@@ -553,9 +553,8 @@ enum ConfigLoader {
       message: "hints.magic_modifiers must be an array of strings", locations: locations,
       into: &config
     ) { value, config in
-      // Diagnose unknown tokens instead of silently dropping them (the
-      // passthrough_modifiers list already diagnoses this exact typo class),
-      // and assign only the recognised ones.
+      // Diagnose unknown tokens instead of silently dropping them, and assign
+      // only the recognised ones.
       let unknown = KeyModifier.parseList(value).unknown
       if !unknown.isEmpty {
         config.addDiagnostic(
@@ -1298,37 +1297,6 @@ enum ConfigLoader {
         assign: { value, config in
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
-      applyStringArray(
-        normal["passthrough_keys"], path: ["mode", "normal", "passthrough_keys"],
-        message: "mode.normal.passthrough_keys must be an array of key names",
-        locations: locations, into: &config,
-        assign: { value, config in
-          for token in value where HotkeySyntax.parseKey(token) == nil {
-            config.addDiagnostic(
-              "mode.normal.passthrough_keys: unknown key \"\(token)\"",
-              location: locations.location(for: ["mode", "normal", "passthrough_keys"]))
-          }
-          // Keep only the tokens that parse — carrying known-invalid
-          // entries in the live config helps nobody.
-          config.mode.normalPassthroughKeys = value.filter { HotkeySyntax.parseKey($0) != nil }
-        })
-      applyStringArray(
-        normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
-        message:
-          "mode.normal.passthrough_modifiers must be an array of "
-          + "\"cmd\"/\"ctrl\"/\"shift\"/\"alt\"",
-        locations: locations, into: &config,
-        assign: { value, config in
-          let unknown = KeyModifier.parseList(value).unknown
-          for token in unknown {
-            config.addDiagnostic(
-              "mode.normal.passthrough_modifiers: unknown modifier \"\(token)\" "
-                + "(use cmd/ctrl/shift/alt)",
-              location: locations.location(for: ["mode", "normal", "passthrough_modifiers"]))
-          }
-          let unknownSet = Set(unknown)
-          config.mode.normalPassthroughModifiers = value.filter { !unknownSet.contains($0) }
-        })
       applyModeMappingTable(
         sectionTable(
           normal["mappings"], name: "mode.normal.mappings", locations: locations, into: &config),
@@ -1339,14 +1307,10 @@ enum ConfigLoader {
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in normal
-      where key != "leader" && key != "passthrough_keys" && key != "passthrough_modifiers"
-        && key != "mappings"
-      {
+      for (key, _) in normal where key != "leader" && key != "mappings" {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
-            + "[mode.normal.mappings]; valid keys are leader, "
-            + "passthrough_keys, passthrough_modifiers, mappings",
+            + "[mode.normal.mappings]; valid keys are leader, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }

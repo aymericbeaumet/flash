@@ -23,10 +23,8 @@ extension NormalModeDispatcher {
 
         Normal mode captures keyboard input through Flash's sanctioned session
         tap, with the overlay panel as its no-permission fallback. Configured
-        modified mappings use Carbon hotkeys. Unmapped keys are swallowed by
-        default. Configure `mode.normal.passthrough_keys` or
-        `mode.normal.passthrough_modifiers` to let matching unmapped keys
-        enter INSERT and continue natively; both lists default to `[]`.
+        modified mappings use Carbon hotkeys. Unmapped keys and chords are
+        swallowed; only explicit mappings act.
 
         ## Core Motion
 

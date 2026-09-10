@@ -63,6 +63,6 @@ Colon-command descriptions live beside their command specifications. When adding
 a command, update its definition, canonical configuration examples and contract
 tests together rather than adding a second parser or help inventory.
 
-Mode-entry shortcuts and normal-mode passthrough are opt-in. No default
+Mode-entry shortcuts are opt-in. No default
 `a/A/i/I/o/O/gi` binding enters INSERT; users can explicitly bind
 `enter_insert_mode` or `focus_input` when desired.

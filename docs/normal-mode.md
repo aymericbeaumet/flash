@@ -30,13 +30,9 @@ without default mappings in every scope. Bare `a`, `A`, `i`, `I`, `o`, `O`,
 and `gi` do not enter INSERT. Users explicitly choose their shortcuts,
 including bindings that prefill the command line with `:flashlight`.
 
-Both `mode.normal.passthrough_keys` and `mode.normal.passthrough_modifiers`
-default to `[]`. Only matching configured unmapped keys or modifiers pass
-through NORMAL to the focused app; explicit mappings take precedence. Flash
-follows the chord into INSERT only when the app then leaves an editable element
-focused (`cmd+t` opening a tab with its address bar focused, `cmd+f`), probed
-shortly after the keypress; a chord that opens a window or runs a command
-(`cmd+i` page info) keeps NORMAL.
+NORMAL is hermetic: every unmapped key and modifier chord is swallowed, and
+only explicit mappings act. A chord the focused app should receive is bound
+to `send_key`, or the user enters INSERT first.
 `/` (`app_find`) and `t` (`tab_new`) execute their commands without changing
 mode. Use an explicit `enter_insert_mode` shortcut to type afterward.
 
@@ -50,7 +46,7 @@ a command panel was opened with `--restore-mode`.
 Advanced-mode eligibility follows the base mode through command, finder, and
 terminal surfaces. Opening a surface while disabled cannot enable NORMAL.
 Changing the enabling binding while a surface is open updates its return mode:
-enabling returns to INSERT, and disabling returns to passthrough. A label or
+enabling returns to INSERT, and disabling returns to the disabled base mode. A label or
 configuration refresh preserves native-menu capture suspension; only an explicit
 mode entry resets that interaction context. Reentrant events wait until the
 current mode effect batch finishes, preserving transition order.
@@ -84,9 +80,9 @@ share the main run loop. Treat that loop as the input latency budget:
 
 - The synchronous tap callback only makes the pure swallow decision and queues
   handling. AX IPC, `CGWindowListCopyWindowInfo`, subprocesses, filesystem I/O,
-  sleeps, and full overlay layout belong off this path. Passthrough modifier
-  flags are resolved once per config apply, the INSERT branch tests raw flags
-  and the O(1) mapping table before anything else, and the frontmost reconcile
+  sleeps, and full overlay layout belong off this path. The INSERT branch tests
+  raw flags and the O(1) mapping table before anything else, and the frontmost
+  reconcile
   does no work when the event's target pid already matches the observed
   frontmost app (`reconcileFrontmostApplication(forKeyTargetingPID:)`).
 - A recapture-only event calls `recaptureNormalModeKeyboardInput()`. With a live
@@ -227,8 +223,6 @@ The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases,
 and `/` / `t` no longer enter INSERT after their action. INSERT is entered by:
 
 - a configured `enter_insert_mode` mapping;
-- a configured `passthrough_keys` / `passthrough_modifiers` keypress whose
-  effect leaves an editable element focused;
 - a physical click or a mouse-grid / pointer-mode / adjust commit while NORMAL
   is capturing (pointer simulation always hands the keyboard to the app);
 - an `f` / `F` hint whose target is editable (`JumpTarget.entersInsertMode`).

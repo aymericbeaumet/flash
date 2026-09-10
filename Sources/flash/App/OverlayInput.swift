@@ -516,38 +516,10 @@ extension OverlayPanel {
   private func handleNormalModeKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator else { return false }
     if coordinator.overlayDidHandleMapping(event) { return true }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let passthroughFlags = normalModePassthroughNSModifierFlags
-    let rawFlags = Self.cgEventFlags(from: modifiers)
-    let recognized = NormalModeInterpreter.recognizesPhysicalKey(
-      pending: normalModePending,
-      repeatAnchor: normalModeRepeatAnchor,
-      virtualKey: UInt32(event.keyCode),
-      modifierFlags: rawFlags,
-      mappings: normalModeMappings)
-    let isPassthroughKey = normalModePassthroughKeyCodes.contains(UInt32(event.keyCode))
-    let usesPassthroughModifier = !modifiers.intersection(passthroughFlags).isEmpty
-    if isPassthroughKey || usesPassthroughModifier, !recognized {
-      // The session tap normally leaves the original event in the native event
-      // stream. This path is only the no-tap key-window fallback, so the
-      // coordinator replays the keypress to the focused pid and then follows
-      // an editable focus into INSERT.
-      coordinator.overlayDidPassthroughNormalModeKey(event)
-      return true
-    }
-    // With passthrough disabled, anything unclaimed is interpreted or consumed
-    // by `NormalModeInterpreter`, keeping NORMAL hermetic.
+    // Anything unclaimed is interpreted or consumed by `NormalModeInterpreter`,
+    // keeping NORMAL hermetic.
     processNormalModeKey(event)
     return true
-  }
-
-  private static func cgEventFlags(from modifiers: NSEvent.ModifierFlags) -> CGEventFlags {
-    var flags: CGEventFlags = []
-    if modifiers.contains(.command) { flags.insert(.maskCommand) }
-    if modifiers.contains(.control) { flags.insert(.maskControl) }
-    if modifiers.contains(.option) { flags.insert(.maskAlternate) }
-    if modifiers.contains(.shift) { flags.insert(.maskShift) }
-    return flags
   }
 
   /// Handles `⌘a` / `⌘c` / `⌘x` / `⌘v` / `⌘z` / `⌘⇧z` while the

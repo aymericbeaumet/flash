@@ -77,7 +77,7 @@ keyboard-first modes:
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` mapping, a configured passthrough key or modifier chord, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` mapping, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
 
 `leave_mode` also closes command panels using their return mode (`--restore-mode` preserves the entry mode) and only dismisses active hints in normal mode; `enter_normal_mode` explicitly selects normal mode regardless of a panel's return mode. Modified mappings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`; no mode-specific exit override is installed by default. `leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` have no default mappings in any scope: define the shortcuts you want, including any command-line or flashlight shortcut.
 
@@ -355,8 +355,6 @@ third_party = []
 suggestion_count = 10
 
 [mode.normal]
-passthrough_keys = []
-passthrough_modifiers = []
 leader = "\\"
 
 [mode.normal.mappings]
@@ -368,7 +366,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` continues to the app or macOS; Flash enters INSERT only if the app then focuses an editable element. Both lists are empty by default. Explicit mappings win. `/` (`app_find`) and `t` (`tab_new`) perform their actions while staying in NORMAL; use your configured insert-mode shortcut to type afterward. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, unmapped keys and shortcuts are swallowed; only explicit mappings act. `/` (`app_find`) and `t` (`tab_new`) perform their actions while staying in NORMAL; use your configured insert-mode shortcut to type afterward. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
 
 ## Use your existing hotkey tool
 
