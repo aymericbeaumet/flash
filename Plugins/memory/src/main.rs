@@ -2,16 +2,11 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flash_plugin::{
-    inline_status_popup, run, run_command, CommandRequest, Context, PerformResponse,
-};
+use flash_plugin::{inline_status_popup, run, sys, CommandRequest, Context, PerformResponse};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const HISTORY_SAMPLES: usize = 20;
 const DETAIL_LABEL_WIDTH: usize = 14;
-const VM_STAT: &str = "/usr/bin/vm_stat";
-const SYSCTL: &str = "/usr/sbin/sysctl";
 const KIB: u64 = 1024;
 const MIB: u64 = KIB * 1024;
 const GIB: u64 = MIB * 1024;
@@ -142,7 +137,7 @@ async fn refresh_and_publish(
     let Some(_guard) = acquire_collection(gate, policy).await else {
         return;
     };
-    let result = collect_memory(ctx).await;
+    let result = sys::memory_stats().ok().and_then(snapshot_from).ok_or(());
     {
         let mut state = lock_state(state);
         match result {
@@ -163,23 +158,6 @@ async fn refresh_and_publish(
         }
     }
     publish_if_changed(ctx, state);
-}
-
-async fn collect_memory(ctx: &Context) -> Result<MemorySnapshot, ()> {
-    let vm_stat_argv = [VM_STAT.to_string()];
-    let sysctl_argv = [
-        SYSCTL.to_string(),
-        "hw.memsize".to_string(),
-        "vm.swapusage".to_string(),
-    ];
-    let (vm_stat, sysctl) = tokio::join!(
-        run_command(ctx, &vm_stat_argv, COMMAND_TIMEOUT),
-        run_command(ctx, &sysctl_argv, COMMAND_TIMEOUT)
-    );
-    if !vm_stat.ok || !sysctl.ok {
-        return Err(());
-    }
-    parse_memory(&vm_stat.stdout, &sysctl.stdout).ok_or(())
 }
 
 fn begin_collection(gate: &tokio::sync::Mutex<()>) -> Option<tokio::sync::MutexGuard<'_, ()>> {
@@ -237,34 +215,25 @@ fn details_response(status: Option<StatusSegments>) -> PerformResponse {
         .unwrap_or_else(|| PerformResponse::fail("memory information unavailable"))
 }
 
-fn parse_memory(vm_stat: &str, sysctl: &str) -> Option<MemorySnapshot> {
-    let page_size = parse_page_size(vm_stat)?;
-    let free_pages = vm_counter(vm_stat, "Pages free")?;
-    let speculative_pages = vm_counter(vm_stat, "Pages speculative").unwrap_or(0);
-    let wired_pages = vm_counter(vm_stat, "Pages wired down")?;
-    let compressed_pages = vm_counter(vm_stat, "Pages occupied by compressor").unwrap_or(0);
-
-    let total = sysctl
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("hw.memsize:"))?
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    if total == 0 {
+/// Same composition the old `vm_stat` + `sysctl` parser produced, from the
+/// kernel counters directly: free counts speculative pages, and every
+/// component is clamped to physical memory.
+fn snapshot_from(stats: sys::MemoryStats) -> Option<MemorySnapshot> {
+    let page_size = stats.page_size;
+    let total = stats.total_bytes;
+    if page_size == 0 || total == 0 {
         return None;
     }
-    let swap_line = sysctl
-        .lines()
-        .find(|line| line.trim().starts_with("vm.swapusage:"))?;
-    let swap_total = named_size(swap_line, "total")?;
-    let swap_used = named_size(swap_line, "used")?.min(swap_total);
+    let swap_total = stats.swap_total_bytes;
+    let swap_used = stats.swap_used_bytes.min(swap_total);
 
-    let free = free_pages
-        .checked_add(speculative_pages)?
+    let free = stats
+        .free_pages
+        .checked_add(stats.speculative_pages)?
         .checked_mul(page_size)?
         .min(total);
-    let wired = wired_pages.checked_mul(page_size)?.min(total);
-    let compressed = compressed_pages.checked_mul(page_size)?.min(total);
+    let wired = stats.wired_pages.checked_mul(page_size)?.min(total);
+    let compressed = stats.compressor_pages.checked_mul(page_size)?.min(total);
 
     Some(MemorySnapshot {
         total,
@@ -276,56 +245,6 @@ fn parse_memory(vm_stat: &str, sysctl: &str) -> Option<MemorySnapshot> {
         swap_used,
         page_size,
     })
-}
-
-fn parse_page_size(raw: &str) -> Option<u64> {
-    let (_, after_marker) = raw.split_once("page size of ")?;
-    let digits = after_marker
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    let size = digits.parse::<u64>().ok()?;
-    (size > 0).then_some(size)
-}
-
-fn vm_counter(raw: &str, label: &str) -> Option<u64> {
-    raw.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if name.trim() != label {
-            return None;
-        }
-        value
-            .trim()
-            .trim_end_matches('.')
-            .replace(',', "")
-            .parse::<u64>()
-            .ok()
-    })
-}
-
-fn named_size(raw: &str, name: &str) -> Option<u64> {
-    let marker = format!("{name} =");
-    let (_, after_marker) = raw.split_once(&marker)?;
-    parse_size(after_marker.split_whitespace().next()?)
-}
-
-fn parse_size(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    let (number, multiplier) = match raw.as_bytes().last().copied()? {
-        b'K' | b'k' => (&raw[..raw.len() - 1], KIB),
-        b'M' | b'm' => (&raw[..raw.len() - 1], MIB),
-        b'G' | b'g' => (&raw[..raw.len() - 1], GIB),
-        b'T' | b't' => (&raw[..raw.len() - 1], TIB),
-        b'B' | b'b' => (&raw[..raw.len() - 1], 1),
-        character if character.is_ascii_digit() => (raw, 1),
-        _ => return None,
-    };
-    let value = number.parse::<f64>().ok()?;
-    let bytes = value * multiplier as f64;
-    if !bytes.is_finite() || bytes < 0.0 || bytes > u64::MAX as f64 {
-        return None;
-    }
-    Some(bytes.round() as u64)
 }
 
 fn append_history(history: &mut VecDeque<f64>, value: f64) {
@@ -498,12 +417,30 @@ mod tests {
     }
 
     #[test]
-    fn parses_vm_stat_and_sysctl_with_runtime_page_size() {
-        let snapshot = parse_memory(
-            include_str!("../fixtures/vm_stat.txt"),
-            include_str!("../fixtures/sysctl.txt"),
-        )
-        .expect("memory snapshot");
+    fn an_in_flight_collection_is_skipped_instead_of_queued() {
+        let gate = tokio::sync::Mutex::new(());
+        let held = begin_collection(&gate).expect("first collection");
+        assert!(begin_collection(&gate).is_none());
+        drop(held);
+        assert!(begin_collection(&gate).is_some());
+    }
+
+    fn stats(free: u64, speculative: u64, wired: u64, compressor: u64) -> sys::MemoryStats {
+        sys::MemoryStats {
+            total_bytes: 17_179_869_184,
+            page_size: 4096,
+            free_pages: free,
+            speculative_pages: speculative,
+            wired_pages: wired,
+            compressor_pages: compressor,
+            swap_total_bytes: 2_147_483_648,
+            swap_used_bytes: 537_395_200,
+        }
+    }
+
+    #[test]
+    fn builds_the_snapshot_from_kernel_counters_with_runtime_page_size() {
+        let snapshot = snapshot_from(stats(100, 20, 300, 50)).expect("memory snapshot");
         assert_eq!(snapshot.page_size, 4096);
         assert_eq!(snapshot.total, 17_179_869_184);
         assert_eq!(snapshot.free, 120 * 4096);
@@ -515,41 +452,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_page_size_total_and_required_counters() {
-        let sysctl = include_str!("../fixtures/sysctl.txt");
-        assert!(parse_memory("Pages free: 1.", sysctl).is_none());
-        assert!(parse_memory(
-            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages wired down: 1.",
-            sysctl
-        )
-        .is_none());
-        assert!(parse_memory(
-            include_str!("../fixtures/vm_stat.txt"),
-            "vm.swapusage: total = 0M used = 0M"
-        )
-        .is_none());
+    fn rejects_zero_total_or_page_size() {
+        let mut zero_total = stats(1, 0, 1, 0);
+        zero_total.total_bytes = 0;
+        assert!(snapshot_from(zero_total).is_none());
+        let mut zero_page = stats(1, 0, 1, 0);
+        zero_page.page_size = 0;
+        assert!(snapshot_from(zero_page).is_none());
     }
 
     #[test]
-    fn an_in_flight_collection_is_skipped_instead_of_queued() {
-        let gate = tokio::sync::Mutex::new(());
-        let held = begin_collection(&gate).expect("first collection");
-        assert!(begin_collection(&gate).is_none());
-        drop(held);
-        assert!(begin_collection(&gate).is_some());
-    }
-
-    #[test]
-    fn parses_binary_swap_units_and_clamps_impossible_free_memory() {
-        assert_eq!(parse_size("1.5G"), Some(1_610_612_736));
-        assert_eq!(parse_size("512K"), Some(524_288));
-        let snapshot = parse_memory(
-            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 999999999.\nPages wired down: 1.",
-            "hw.memsize: 4096\nvm.swapusage: total = 0.00M used = 0.00M",
-        )
-        .expect("clamped snapshot");
+    fn clamps_impossible_free_memory_and_swap_used() {
+        let mut huge = stats(999_999_999, 0, 1, 0);
+        huge.total_bytes = 4096;
+        huge.swap_used_bytes = huge.swap_total_bytes + 1;
+        let snapshot = snapshot_from(huge).expect("clamped snapshot");
         assert_eq!(snapshot.free, 4096);
         assert_eq!(snapshot.occupied, 0);
+        assert_eq!(snapshot.swap_used, snapshot.swap_total);
     }
 
     #[test]

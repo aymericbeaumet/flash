@@ -3,20 +3,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, run_command_with_slow_threshold,
-    CommandRequest, Context, PerformResponse,
+    escape_status_text, inline_status_popup, run, run_command, sys, CommandRequest, Context,
+    PerformResponse,
 };
 
-// iostat blocks for the one-second differential sample but consumes
-// negligible CPU, unlike repeatedly launching top on a busy machine.
+// CPU load comes from `host_processor_info` tick counters sampled once per
+// period in-process; only the GPU metadata still shells out (`ioreg`).
 const CPU_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 const GPU_INTERVAL: Duration = Duration::from_secs(15);
-const CPU_TIMEOUT: Duration = Duration::from_secs(3);
-const CPU_SLOW_THRESHOLD: Duration = Duration::from_millis(1_500);
 const GPU_TIMEOUT: Duration = Duration::from_secs(4);
 const HISTORY_SAMPLES: usize = 20;
 const DETAIL_LABEL_WIDTH: usize = 14;
-const IOSTAT: &str = "/usr/sbin/iostat";
 const IOREG: &str = "/usr/sbin/ioreg";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +85,8 @@ fn warn_invalid_summary_mode(ctx: &Context) {
 #[derive(Default)]
 struct MonitorState {
     cpu: Option<CpuSnapshot>,
+    /// Baseline for the next differential sample.
+    ticks: Option<sys::CpuTicks>,
     gpu: Option<GpuSnapshot>,
     history: VecDeque<f64>,
     published: Option<StatusSegments>,
@@ -174,7 +173,7 @@ async fn refresh_all(
     policy: GatePolicy,
 ) {
     let (cpu, gpu) = tokio::join!(
-        collect_cpu(ctx, cpu_gate, policy),
+        collect_cpu(state, cpu_gate, policy),
         collect_gpu(ctx, gpu_gate, policy)
     );
     apply_cpu_result(ctx, state, cpu);
@@ -187,7 +186,7 @@ async fn refresh_cpu(
     state: &Arc<Mutex<MonitorState>>,
     gate: &Arc<tokio::sync::Mutex<()>>,
 ) {
-    let result = collect_cpu(ctx, gate, GatePolicy::Wait).await;
+    let result = collect_cpu(state, gate, GatePolicy::Wait).await;
     apply_cpu_result(ctx, state, result);
     publish_if_changed(ctx, state);
 }
@@ -203,30 +202,35 @@ async fn refresh_gpu(
 }
 
 async fn collect_cpu(
-    ctx: &Context,
+    state: &Arc<Mutex<MonitorState>>,
     gate: &Arc<tokio::sync::Mutex<()>>,
     policy: GatePolicy,
 ) -> Collection<CpuSnapshot> {
     let Some(_guard) = acquire_collection(gate, policy).await else {
         return Collection::Busy;
     };
-    let output = run_command_with_slow_threshold(
-        ctx,
-        &[
-            IOSTAT.to_string(),
-            "-c".to_string(),
-            "2".to_string(),
-            "-w".to_string(),
-            "1".to_string(),
-        ],
-        CPU_TIMEOUT,
-        CPU_SLOW_THRESHOLD,
-    )
-    .await;
-    if !output.ok {
+    let baseline = lock_state(state).ticks;
+    let previous = match baseline {
+        Some(ticks) => ticks,
+        None => {
+            // First sample: bracket one period so the initial publish carries a
+            // real figure instead of waiting for the next loop iteration.
+            let Ok(first) = sys::cpu_ticks() else {
+                return Collection::Failed;
+            };
+            tokio::time::sleep(CPU_SAMPLE_PERIOD).await;
+            first
+        }
+    };
+    let Ok(current) = sys::cpu_ticks() else {
         return Collection::Failed;
-    }
-    parse_iostat(&output.stdout)
+    };
+    lock_state(state).ticks = Some(current);
+    let (Some(percentages), Ok(load)) = (current.percentages_since(&previous), sys::load_averages())
+    else {
+        return Collection::Failed;
+    };
+    cpu_snapshot(percentages.user, percentages.system, percentages.idle, load)
         .map(Collection::Fresh)
         .unwrap_or(Collection::Failed)
 }
@@ -376,22 +380,14 @@ fn details_response(status: Option<StatusSegments>) -> PerformResponse {
         .unwrap_or_else(|| PerformResponse::fail("CPU information unavailable"))
 }
 
-fn parse_iostat(raw: &str) -> Option<CpuSnapshot> {
-    raw.lines().rev().find_map(parse_iostat_row)
-}
-
-fn parse_iostat_row(line: &str) -> Option<CpuSnapshot> {
-    let values = line
-        .split_whitespace()
-        .map(str::parse::<f64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let offset = values.len().checked_sub(6)?;
+/// Validates one differential sample the way the old `iostat` row parser did:
+/// finite percentages that sum to 100 and non-negative load averages.
+fn cpu_snapshot(user: f64, system: f64, idle: f64, load: [f64; 3]) -> Option<CpuSnapshot> {
     let snapshot = CpuSnapshot {
-        user: values[offset],
-        system: values[offset + 1],
-        idle: values[offset + 2],
-        load: [values[offset + 3], values[offset + 4], values[offset + 5]],
+        user,
+        system,
+        idle,
+        load,
     };
     let percentages = [snapshot.user, snapshot.system, snapshot.idle];
     if percentages
@@ -676,19 +672,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_second_iostat_cpu_and_load_fixture() {
-        let snapshot = parse_iostat(include_str!("../fixtures/iostat.txt")).expect("CPU snapshot");
-        assert_eq!(snapshot.user, 12.5);
-        assert_eq!(snapshot.system, 7.25);
-        assert_eq!(snapshot.idle, 80.25);
+    fn accepts_a_consistent_differential_sample() {
+        let snapshot = cpu_snapshot(12.5, 7.25, 80.25, [1.25, 2.5, 3.75]).expect("CPU snapshot");
         assert_eq!(snapshot.total(), 19.75);
         assert_eq!(snapshot.load, [1.25, 2.5, 3.75]);
     }
 
     #[test]
-    fn rejects_incomplete_or_impossible_cpu_samples() {
-        assert!(parse_iostat("disk0 cpu load average\nKB/t tps MB/s us sy id 1m 5m 15m").is_none());
-        assert!(parse_iostat("1 2 3 90 20 0 1 2 3").is_none());
+    fn rejects_impossible_cpu_samples() {
+        assert!(cpu_snapshot(90.0, 20.0, 0.0, [1.0, 2.0, 3.0]).is_none());
+        assert!(cpu_snapshot(f64::NAN, 0.0, 100.0, [1.0, 2.0, 3.0]).is_none());
+        assert!(cpu_snapshot(10.0, 10.0, 80.0, [-1.0, 2.0, 3.0]).is_none());
     }
 
     #[test]
@@ -823,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn cpu_sampler_accounts_for_the_blocking_iostat_window() {
+    fn cpu_sampler_keeps_a_fixed_period_regardless_of_sample_cost() {
         assert_eq!(
             cpu_sample_delay(Duration::from_millis(250)),
             Duration::from_millis(750)

@@ -4,8 +4,8 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, Candidate, CommandRequest, Context,
-    PerformResponse, RefreshGate,
+    escape_status_text, inline_status_popup, run, run_command, sys, Candidate, CommandRequest,
+    Context, PerformResponse, RefreshGate,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
@@ -323,26 +323,18 @@ async fn refresh_network_locked(
 
     let mut traffic_failed = None;
     if let Some(interface) = interface {
-        let argv = [
-            NETSTAT.to_string(),
-            "-bI".to_string(),
-            interface.clone(),
-            "-n".to_string(),
-        ];
-        let output = run_command(ctx, &argv, COMMAND_TIMEOUT).await;
-        if output.ok {
-            if let Some(counters) = parse_netstat_counters(&output.stdout, &interface) {
+        // Lifetime byte counters straight from the routing sysctl — the same
+        // 64-bit figures `netstat -bI` prints, without a subprocess per second.
+        match interface_counters(&interface) {
+            Some(counters) => {
                 state().apply_sample(TimedCounters {
                     interface,
                     counters,
                     sampled_at: Instant::now(),
                 });
                 traffic_failed = Some(false);
-            } else {
-                traffic_failed = Some(true);
             }
-        } else {
-            traffic_failed = Some(true);
+            None => traffic_failed = Some(true),
         }
     }
     let log_traffic_failure = {
@@ -353,7 +345,7 @@ async fn refresh_network_locked(
         log_failure
     };
     if log_traffic_failure {
-        ctx.log("warn", "[network] netstat collection failed");
+        ctx.log("warn", "[network] traffic counters unavailable");
     }
 
     emit_status_if_changed(ctx);
@@ -502,37 +494,15 @@ fn parse_default_interface(output: &str) -> Option<String> {
     None
 }
 
-fn parse_netstat_counters(output: &str, interface: &str) -> Option<NetCounters> {
-    let mut received_index = None;
-    let mut sent_index = None;
-    let mut fallback = None;
-
-    for line in output.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.first() == Some(&"Name") {
-            received_index = fields.iter().position(|field| *field == "Ibytes");
-            sent_index = fields.iter().position(|field| *field == "Obytes");
-            continue;
-        }
-        if fields.first() != Some(&interface) {
-            continue;
-        }
-        let (Some(received_index), Some(sent_index)) = (received_index, sent_index) else {
-            continue;
-        };
-        let counters = NetCounters {
-            received: fields.get(received_index)?.parse().ok()?,
-            sent: fields.get(sent_index)?.parse().ok()?,
-        };
-        if fields
-            .get(2)
-            .is_some_and(|network| network.starts_with("<Link#"))
-        {
-            return Some(counters);
-        }
-        fallback.get_or_insert(counters);
-    }
-    fallback
+fn interface_counters(interface: &str) -> Option<NetCounters> {
+    sys::interface_counters()
+        .ok()?
+        .into_iter()
+        .find(|entry| entry.name == interface)
+        .map(|entry| NetCounters {
+            received: entry.received_bytes,
+            sent: entry.sent_bytes,
+        })
 }
 
 fn calculate_rates(previous: &TimedCounters, current: &TimedCounters) -> RateDecision {
@@ -845,20 +815,6 @@ default 10.10.0.1 UGScg en0\n\
         let ipv6 = "Internet6:\nDestination Gateway Flags Netif Expire\n\
 default fe80::%utun6 UGcIg utun6\n";
         assert_eq!(parse_default_interface(ipv6).as_deref(), Some("utun6"));
-    }
-
-    #[test]
-    fn parses_link_row_without_summing_duplicate_address_rows() {
-        let output = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\n\
-en0 1500 <Link#14> aa:bb 10 0 12000 8 0 3400 0\n\
-en0 1500 10.0/16 10.0.0.2 10 - 12000 8 - 3400 -\n";
-        assert_eq!(
-            parse_netstat_counters(output, "en0"),
-            Some(NetCounters {
-                received: 12_000,
-                sent: 3_400
-            })
-        );
     }
 
     #[test]

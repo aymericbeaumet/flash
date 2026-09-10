@@ -8,7 +8,10 @@ use flash_plugin::{
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// Safety poll only: `core:power.changed` (an IOKit power-source notification
+/// the host relays) drives every charge, source, and state change, so the
+/// timer merely bounds how stale the display can get if an event is missed.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const HISTORY_LEN: usize = 20;
 const DETAIL_LABEL_WIDTH: usize = 14;
@@ -840,7 +843,7 @@ mod tests {
 #[fg=colour245]Adapter       #[default] 67 W\n\
 #[fg=colour245]History       #[default]····················"
         );
-        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
+        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(HEALTH_REFRESH_INTERVAL, Duration::from_secs(30));
         assert!(!status.details.ends_with('\n'));
         assert!(status

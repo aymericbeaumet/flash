@@ -12,6 +12,7 @@ mod events;
 mod framing;
 pub mod process;
 mod runtime;
+pub mod sys;
 pub mod testing;
 mod types;
 mod wire;

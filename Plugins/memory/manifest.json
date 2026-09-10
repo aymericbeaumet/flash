@@ -22,10 +22,5 @@
     "summary",
     "details"
   ],
-  "sandbox": {
-    "exec": [
-      "/usr/bin/vm_stat",
-      "/usr/sbin/sysctl"
-    ]
-  }
+  "sandbox": {}
 }

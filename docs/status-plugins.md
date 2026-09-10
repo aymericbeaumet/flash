@@ -24,15 +24,19 @@ default to compact, and warn before falling back from an invalid value.
 
 | Plugin | Nominal fast path | Slower path | Additional surface |
 | --- | --- | --- | --- |
-| `cpu` | CPU sample every second, compensating for `iostat` collection time | GPU metadata every 15 seconds | `:cpu [refresh]` |
-| `memory` | Memory composition every second | — | `:memory [refresh]` |
-| `disks` | I/O counters every second | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
-| `network` | Default-interface traffic every second | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
-| `power` | Battery/power snapshot every second | Battery health every 30 seconds and on `core:power.changed` | `:power [refresh]` |
+| `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU metadata every 15 seconds (`ioreg`) | `:cpu [refresh]` |
+| `memory` | Memory composition every second (`host_statistics64` + `sysctl`, in-process) | — | `:memory [refresh]` |
+| `disks` | I/O counters every second (`ioreg`) | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
+| `network` | Default-interface traffic every second (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
+| `power` | Battery/power snapshot on `core:power.changed`, with a 60-second safety poll | Battery health every 30 seconds and on `core:power.changed` | `:power [refresh]` |
 
-Every monitor retains 20 fast samples for its chart. CPU is the only fixed-
-period loop: it subtracts the blocking sample duration before sleeping. The
-other monitors use the SDK interval primitive, whose delay begins after the
+Every monitor retains 20 fast samples for its chart. The one-second samplers
+read kernel counters through the SDK's `flash_plugin::sys` module (the unsafe
+FFI lives in the SDK, never in a plugin) instead of forking a CLI per sample;
+`disks` still runs `ioreg` and `cpu` runs it for GPU metadata. CPU is the only
+fixed-period loop: it subtracts the sample duration before sleeping, and its
+first sample brackets one period so the initial publish carries a real figure.
+The other monitors use the SDK interval primitive, whose delay begins after the
 awaited callback completes, so their cadence is nominal rather than a wall-
 clock guarantee.
 

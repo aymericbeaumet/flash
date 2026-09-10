@@ -24,7 +24,6 @@
   ],
   "sandbox": {
     "exec": [
-      "/usr/sbin/iostat",
       "/usr/sbin/ioreg"
     ]
   }
