@@ -517,11 +517,7 @@ extension OverlayPanel {
     guard let coordinator else { return false }
     if coordinator.overlayDidHandleMapping(event) { return true }
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let passthroughFlags = KeyModifier.parseList(normalModePassthroughModifiers).modifiers.reduce(
-      into: NSEvent.ModifierFlags()
-    ) { flags, modifier in
-      flags.insert(modifier.nsEventFlag)
-    }
+    let passthroughFlags = normalModePassthroughNSModifierFlags
     let rawFlags = Self.cgEventFlags(from: modifiers)
     let recognized = NormalModeInterpreter.recognizesPhysicalKey(
       pending: normalModePending,

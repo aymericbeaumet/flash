@@ -745,6 +745,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
+  /// Key-path reconcile. The focused app can change through the system app
+  /// switcher without a workspace notification landing before the next
+  /// keydown, so app-scoped plugin chords must be matched against the actual
+  /// frontmost app. This runs inside the tap callback, so it does zero work
+  /// when the event already names the observed frontmost pid, one workspace
+  /// lookup otherwise, and the full focus refresh only on a real change.
+  func reconcileFrontmostApplication(forKeyTargetingPID targetPID: pid_t) {
+    if targetPID > 0, targetPID == observedFocusedAppPID { return }
+    guard let front = NSWorkspace.shared.frontmostApplication,
+      front.processIdentifier != observedFocusedAppPID,
+      front.bundleIdentifier != Bundle.main.bundleIdentifier,
+      !Self.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: front.bundleIdentifier)
+    else { return }
+    FlashLog.trace(
+      "[focus] key_reconcile target_pid=\(targetPID) observed=\(observedFocusedAppPID ?? 0) "
+        + "front=\(front.processIdentifier)")
+    applyFocusedApplicationChange(front, reason: "key_down", emitFocusEvent: true)
+  }
+
   func reconcileFrontmostApplication(reason: String) {
     guard let front = NSWorkspace.shared.frontmostApplication,
       front.bundleIdentifier != Bundle.main.bundleIdentifier,
@@ -860,6 +879,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
     if case .terminal = modeStore.mode { return false }
+    // INSERT is transparent so typing flows to the focused app. But a modified
+    // chord bound to an active mapping (`[mode.all]` / `[mode.insert]`) must
+    // still fire Flash's action. Historically that went only through a Carbon
+    // hotkey — a slower keypress→dispatch route than this session tap — which
+    // is why *leaving* insert (⌘⌃[ → NORMAL) lagged while *entering* it (`i`,
+    // swallowed right here) was instant, and why the app also saw the chord.
+    // Handle mapped chords on the same fast tap path instead: swallow (so the
+    // app never receives the chord) and let `routeTapCapturedKey` fire the
+    // mapping. Only *mapped* chords are swallowed — ordinary typing and
+    // unmapped chords (⌘C, ⌘Tab, …) pass straight through, and `hasMapping`
+    // matches only modified chords so a bare key can never match. This is the
+    // highest-rate branch (every keystroke while typing), so it is ordered
+    // cheapest-first: raw flag test, O(1) table lookup, and only for a mapped
+    // chord the frontmost reconcile and the secure-input syscall.
+    if flashMode == .insert, !(aboutWindowVisible || nativeSurfaceSuspended) {
+      let flags = event.flags
+      guard
+        flags.contains(.maskCommand) || flags.contains(.maskControl)
+          || flags.contains(.maskAlternate)
+      else { return false }
+      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+      reconcileFrontmostApplication(
+        forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
+      guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
+      // A focused secure text field (password) turns on secure event input;
+      // never intercept keystrokes bound for it.
+      return !IsSecureEventInputEnabled()
+    }
     // A focused secure text field (password) turns on secure event input.
     // Never intercept keystrokes bound for it — they must reach the field, and
     // a keyboard tap swallowing secure input is exactly what that mechanism
@@ -880,8 +927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       let flags = event.flags
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-      let passthroughModifierFlags = KeyModifier.cgEventFlags(
-        config.mode.normalPassthroughModifiers)
+      let passthroughModifierFlags = overlay.normalModePassthroughModifierFlags
       let shouldEnterInsert =
         aboutOwnsNativeKeyboard
         && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
@@ -905,27 +951,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         hasMapping: hasMapping,
         nativeSurfaceOwnsKeyboard: true)
     }
-    // INSERT is otherwise transparent so typing flows to the focused app. But a
-    // modified chord bound to an active mapping (`[mode.all]` / `[mode.insert]`)
-    // must still fire Flash's action. Historically that went only through a
-    // Carbon hotkey — a slower keypress→dispatch route than this session tap —
-    // which is why *leaving* insert (⌘⌃[ → NORMAL) lagged while *entering* it
-    // (`i`, swallowed right here) was instant, and why the app also saw the
-    // chord. Handle mapped chords on the same fast tap path instead: swallow
-    // (so the app never receives the chord) and let `routeTapCapturedKey` fire
-    // the mapping. Only *mapped* chords are swallowed — ordinary typing and
-    // unmapped chords (⌘C, ⌘Tab, …) still pass straight through, and
-    // `hasMapping` matches only modified chords so a bare key can never match.
-    if flashMode == .insert {
-      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-      let flags = event.flags
-      if flags.contains(.maskCommand) || flags.contains(.maskControl)
-        || flags.contains(.maskAlternate)
-      {
-        reconcileFrontmostApplication(reason: "key_down")
-      }
-      return mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
-    }
+    // INSERT under a native surface (About window / suspended session) was
+    // handled above; a bare INSERT never reaches here.
     guard flashMode == .normal, overlay.inputMode == .normal else {
       return KeyboardCaptureTap.shouldSwallow(
         flashMode: flashMode,
@@ -943,18 +970,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // than INSERT.
     guard overlay.inputMode == .normal else { return true }
     let flags = event.flags
-    let passthroughModifierFlags = KeyModifier.cgEventFlags(
-      config.mode.normalPassthroughModifiers)
+    let passthroughModifierFlags = overlay.normalModePassthroughModifierFlags
     let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
     let isPassthroughKey = overlay.normalModePassthroughKeyCodes.contains(keyCode)
     let usesPassthroughModifier = !flags.intersection(passthroughModifierFlags).isEmpty
     guard isPassthroughKey || usesPassthroughModifier else { return true }
-    // The focused app can change through the system app switcher without a
-    // workspace notification landing before the next keydown. Reconcile here
-    // before deciding mapped-vs-passthrough so app-scoped plugin chords (tmux
-    // `cmd+shift+[` / `cmd+shift+]`) are registered for the actual frontmost
-    // app instead of leaking to the terminal as plain text.
-    reconcileFrontmostApplication(reason: "key_down")
+    // Reconcile before deciding mapped-vs-passthrough so app-scoped plugin
+    // chords (tmux `cmd+shift+[` / `cmd+shift+]`) are matched for the actual
+    // frontmost app instead of leaking to the terminal as plain text.
+    reconcileFrontmostApplication(
+      forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
     let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
     let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
       flashMode: flashMode,

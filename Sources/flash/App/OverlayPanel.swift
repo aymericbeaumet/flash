@@ -221,7 +221,20 @@ final class OverlayPanel: NSPanel {
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var normalModePassthroughKeyCodes = Set(
     Config.Mode.defaultNormalPassthroughKeys.compactMap(HotkeySyntax.parseKey))
-  var normalModePassthroughModifiers = Config.Mode.defaultNormalPassthroughModifiers
+  var normalModePassthroughModifiers = Config.Mode.defaultNormalPassthroughModifiers {
+    didSet { recomputeNormalModePassthroughModifierFlags() }
+  }
+  /// `normalModePassthroughModifiers` resolved once per config apply, so the
+  /// per-keystroke tap decision and panel key path never re-parse tokens.
+  private(set) var normalModePassthroughModifierFlags: CGEventFlags = KeyModifier.cgEventFlags(
+    Config.Mode.defaultNormalPassthroughModifiers)
+  private(set) var normalModePassthroughNSModifierFlags: NSEvent.ModifierFlags =
+    KeyModifier.nsEventFlags(Config.Mode.defaultNormalPassthroughModifiers)
+
+  private func recomputeNormalModePassthroughModifierFlags() {
+    normalModePassthroughModifierFlags = KeyModifier.cgEventFlags(normalModePassthroughModifiers)
+    normalModePassthroughNSModifierFlags = KeyModifier.nsEventFlags(normalModePassthroughModifiers)
+  }
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
   }

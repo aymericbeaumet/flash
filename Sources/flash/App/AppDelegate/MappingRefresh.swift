@@ -30,12 +30,21 @@ extension AppDelegate {
     lastAppliedMappingMode = nil
   }
 
+  /// Selectors only need a bundle id. A caller that already knows the
+  /// frontmost app passes it as `fallbackBundleID` and skips the WindowServer
+  /// snapshot behind `currentNonFlashContext()`; Flash's own bundle still
+  /// resolves through the non-Flash context so the About window or a terminal
+  /// popup never becomes the selector target.
   func pluginSelectorContext(
     for context: AppContext? = nil,
     fallbackBundleID: String? = nil
   ) -> PluginSelectorContext {
-    let resolved = context ?? currentNonFlashContext()
-    return PluginSelectorContext(bundleID: resolved?.bundleIdentifier ?? fallbackBundleID)
+    if let context { return PluginSelectorContext(bundleID: context.bundleIdentifier) }
+    if let fallbackBundleID, fallbackBundleID != Bundle.main.bundleIdentifier {
+      return PluginSelectorContext(bundleID: fallbackBundleID)
+    }
+    return PluginSelectorContext(
+      bundleID: currentNonFlashContext()?.bundleIdentifier ?? fallbackBundleID)
   }
 
   private func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {

@@ -80,7 +80,11 @@ share the main run loop. Treat that loop as the input latency budget:
 
 - The synchronous tap callback only makes the pure swallow decision and queues
   handling. AX IPC, `CGWindowListCopyWindowInfo`, subprocesses, filesystem I/O,
-  sleeps, and full overlay layout belong off this path.
+  sleeps, and full overlay layout belong off this path. Passthrough modifier
+  flags are resolved once per config apply, the INSERT branch tests raw flags
+  and the O(1) mapping table before anything else, and the frontmost reconcile
+  does no work when the event's target pid already matches the observed
+  frontmost app (`reconcileFrontmostApplication(forKeyTargetingPID:)`).
 - A recapture-only event calls `recaptureNormalModeKeyboardInput()`. With a live
   tap this restores `.normal` routing and stops; only the no-tap fallback needs
   key-window retries. Recapture must not rebuild the status bar or active-window

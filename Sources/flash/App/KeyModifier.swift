@@ -91,4 +91,9 @@ extension KeyModifier {
   static func cgEventFlags(_ tokens: [String]) -> CGEventFlags {
     parseList(tokens).modifiers.reduce(into: []) { $0.insert($1.cgEventFlag) }
   }
+
+  /// Combined `NSEvent.ModifierFlags` for a token list (unknown tokens ignored).
+  static func nsEventFlags(_ tokens: [String]) -> NSEvent.ModifierFlags {
+    parseList(tokens).modifiers.reduce(into: []) { $0.insert($1.nsEventFlag) }
+  }
 }
