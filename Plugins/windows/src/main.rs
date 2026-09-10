@@ -30,9 +30,9 @@
 use flash_plugin::{run, Candidate, Context, Event, PerformResponse, RefreshGate};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 const SOURCE_ITEMS: &str = "windows.items";
@@ -42,6 +42,9 @@ const REFRESH_SECONDS: u64 = 60;
 /// Event bursts (an app launch fires apps.changed + focus.changed +
 /// window.focus.changed back to back) coalesce into one refresh.
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
+/// A full sweep walks up to `APPS_PER_REFRESH_LIMIT` apps through the host's
+/// single AX broker queue, so `apps.changed` bursts coalesce more coarsely.
+const FULL_REFRESH_DEBOUNCE: Duration = Duration::from_secs(1);
 /// Per-`host.ax_snapshot` RPC deadline. One wedged app must not consume the
 /// whole refresh budget.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -60,6 +63,14 @@ const MAX_TITLE_CHARS: usize = 256;
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 /// Debounce latch: one pending coalesced refresh at a time.
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+/// Latch for the per-app refresh; `PENDING_PIDS` collects the apps named by
+/// focus events until it fires.
+static APP_REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static PENDING_PIDS: LazyLock<Mutex<BTreeSet<i64>>> = LazyLock::new(|| Mutex::new(BTreeSet::new()));
+/// Last-good rows per app. A focus event re-snapshots only its own app and
+/// republishes the rest from here; the 60 s sweep rebuilds it whole.
+static ROWS_BY_PID: LazyLock<Mutex<BTreeMap<i64, Vec<Candidate>>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 /// One flat node from a `host.ax_snapshot` reply.
 #[derive(Clone, Debug, Deserialize)]
@@ -104,11 +115,15 @@ impl FlashPlugin for Windows {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        if matches!(
-            event.name.as_str(),
-            "core:apps.changed" | "core:window.focus.changed" | "core:focus.changed"
-        ) {
-            schedule_refresh(&ctx);
+        match event.name.as_str() {
+            // A focus change names one app: re-snapshot that app alone instead
+            // of walking every running app through the AX broker.
+            "core:window.focus.changed" | "core:focus.changed" => match event.pid {
+                Some(pid) if pid > 0 => schedule_app_refresh(&ctx, pid),
+                _ => schedule_refresh(&ctx),
+            },
+            "core:apps.changed" => schedule_refresh(&ctx),
+            _ => {}
         }
     }
 
@@ -125,10 +140,64 @@ fn schedule_refresh(ctx: &Context) {
     }
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(EVENT_DEBOUNCE).await;
+        tokio::time::sleep(FULL_REFRESH_DEBOUNCE).await;
         REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
         refresh_catalog(&ctx).await;
     });
+}
+
+/// Coalesce focus events into one pass over the apps they named.
+fn schedule_app_refresh(ctx: &Context, pid: i64) {
+    PENDING_PIDS.lock().unwrap_or_else(|e| e.into_inner()).insert(pid);
+    if APP_REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(EVENT_DEBOUNCE).await;
+        APP_REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
+        let pids: Vec<i64> = std::mem::take(&mut *PENDING_PIDS.lock().unwrap_or_else(|e| e.into_inner()))
+            .into_iter()
+            .collect();
+        refresh_apps(&ctx, pids).await;
+    });
+}
+
+/// Re-snapshot the named apps and republish the catalog from the last-good
+/// rows of every other app. An app that is no longer running drops out.
+async fn refresh_apps(ctx: &Context, pids: Vec<i64>) {
+    REFRESH_GATE
+        .run(ctx, |ctx, running| async move {
+            let started_at = Instant::now();
+            for pid in pids {
+                let Some(app) = running.iter().find(|app| app.pid == pid) else {
+                    ROWS_BY_PID.lock().unwrap_or_else(|e| e.into_inner()).remove(&pid);
+                    continue;
+                };
+                if let Some(rows) = window_rows(&ctx, pid).await {
+                    let app_label = app_label(app);
+                    let candidates = rows.iter().map(|row| candidate(&app_label, pid, row)).collect();
+                    ROWS_BY_PID.lock().unwrap_or_else(|e| e.into_inner()).insert(pid, candidates);
+                }
+            }
+            let count = publish_rows(&ctx);
+            log_refresh(&ctx, if count == 0 { "empty" } else { "ok" }, count, started_at);
+        })
+        .await
+}
+
+/// Publish every retained app's rows, in pid order, under the row cap.
+fn publish_rows(ctx: &Context) -> usize {
+    let rows: Vec<Candidate> = ROWS_BY_PID
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .flat_map(|rows| rows.iter().cloned())
+        .take(TOTAL_ROWS_LIMIT)
+        .collect();
+    let count = rows.len();
+    ctx.publish(rows);
+    count
 }
 
 // ---------------------------------------------------------------------------
@@ -143,26 +212,28 @@ async fn refresh_catalog(ctx: &Context) -> bool {
     REFRESH_GATE
         .run(ctx, |ctx, running| async move {
             let started_at = Instant::now();
-            let mut candidates: Vec<Candidate> = Vec::new();
+            let mut by_pid: BTreeMap<i64, Vec<Candidate>> = BTreeMap::new();
+            let mut total = 0usize;
             let mut snapshot_failures = 0usize;
             let mut apps_walked = 0usize;
             for app in running.iter().take(APPS_PER_REFRESH_LIMIT) {
                 if app.pid <= 0 {
                     continue;
                 }
-                if candidates.len() >= TOTAL_ROWS_LIMIT {
+                if total >= TOTAL_ROWS_LIMIT {
                     break;
                 }
                 apps_walked += 1;
                 match window_rows(&ctx, app.pid).await {
                     Some(rows) => {
                         let app_label = app_label(app);
-                        for row in rows {
-                            if candidates.len() >= TOTAL_ROWS_LIMIT {
-                                break;
-                            }
-                            candidates.push(candidate(&app_label, app.pid, &row));
-                        }
+                        let candidates: Vec<Candidate> = rows
+                            .iter()
+                            .take(TOTAL_ROWS_LIMIT - total)
+                            .map(|row| candidate(&app_label, app.pid, row))
+                            .collect();
+                        total += candidates.len();
+                        by_pid.insert(app.pid, candidates);
                     }
                     None => snapshot_failures += 1,
                 }
@@ -176,8 +247,8 @@ async fn refresh_catalog(ctx: &Context) -> bool {
                 log_refresh(&ctx, "failed", 0, started_at);
                 return false;
             }
-            let count = candidates.len();
-            ctx.publish(candidates);
+            *ROWS_BY_PID.lock().unwrap_or_else(|e| e.into_inner()) = by_pid;
+            let count = publish_rows(&ctx);
             log_refresh(
                 &ctx,
                 if count == 0 { "empty" } else { "ok" },

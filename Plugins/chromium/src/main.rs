@@ -1,4 +1,5 @@
 use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
@@ -7,9 +8,30 @@ use flash_plugin::{
 };
 use serde::{Deserialize, Serialize};
 
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Safety-net poll; events (app/focus changes, flashlight open) drive the
+/// authoritative refreshes, so this only bounds staleness for tab changes
+/// that emit no host event.
+const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Event bursts (a launch fires apps.changed + focus.changed +
+/// window.focus.changed back to back) coalesce into one refresh.
+const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
 const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+/// Debounce latch: one pending coalesced event refresh at a time.
+static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+/// Coalesce an event burst into one refresh `EVENT_DEBOUNCE` out.
+fn schedule_refresh(ctx: &Context) {
+    if REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(EVENT_DEBOUNCE).await;
+        REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
+        refresh_locations(&ctx).await;
+    });
+}
 
 #[derive(Default)]
 struct RefreshLogState {
@@ -78,9 +100,8 @@ impl FlashPlugin for Chromium {
             | "core:apps.launched"
             | "core:apps.terminated"
             | "core:focus.changed"
-            | "core:window.focus.changed" => {
-                refresh_locations(&ctx).await;
-            }
+            | "core:window.focus.changed"
+            | "core:session.opened" => schedule_refresh(&ctx),
             _ => {}
         }
     }

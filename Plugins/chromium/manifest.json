@@ -40,7 +40,8 @@
     "core:apps.launched",
     "core:apps.terminated",
     "core:focus.changed",
-    "core:window.focus.changed"
+    "core:window.focus.changed",
+    "core:session.opened"
   ],
   "sources": [
     {

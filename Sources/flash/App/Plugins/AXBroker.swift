@@ -42,7 +42,9 @@ final class AXBroker {
   /// Serial queue guarding the handle registry and serializing AX reads. AX
   /// attribute calls are thread-safe and the previous in-core sources walked
   /// trees off the main thread, so the walk stays off-main.
-  private let queue = DispatchQueue(label: "flash.ax.broker")
+  /// Background-tier: snapshots serve warm catalogs (windows, browser tabs),
+  /// never a keypress, and must not outrank the AX walk on `flash.ax`.
+  private let queue = DispatchQueue(label: "flash.ax.broker", qos: .utility)
   private var entries: [UInt64: Entry] = [:]
   private var nextHandle: UInt64 = 0
 

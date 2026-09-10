@@ -66,6 +66,10 @@ const MAX_TITLE_CHARS: usize = 256;
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+/// Whether kitty was running at the last refresh. Absence publishes the
+/// authoritative empty catalog once, on the transition, instead of an empty
+/// publish plus a log frame on every poll while kitty is not installed.
+static KITTY_PRESENT: AtomicBool = AtomicBool::new(true);
 /// The `--to` argument of the last successful `kitten @` invocation
 /// (`None` = bare invocation worked or no route known yet).
 static WORKING_SOCKET: Mutex<Option<Option<String>>> = Mutex::new(None);
@@ -240,10 +244,13 @@ async fn refresh_catalog(ctx: &Context) {
                 .find(|app| app.bundle_id == KITTY_BUNDLE_ID)
                 .map(|app| app.pid);
             let Some(kitty_pid) = kitty_pid else {
-                publish_empty(&ctx);
-                log_refresh(&ctx, "kitty_absent", 0, started_at);
+                if KITTY_PRESENT.swap(false, Ordering::SeqCst) {
+                    publish_empty(&ctx);
+                    log_refresh(&ctx, "kitty_absent", 0, started_at);
+                }
                 return;
             };
+            KITTY_PRESENT.store(true, Ordering::SeqCst);
             let Some(raw) = run_kitten(&ctx, &["ls"]).await else {
                 publish_empty(&ctx);
                 log_refresh(&ctx, "remote_control_unavailable", 0, started_at);

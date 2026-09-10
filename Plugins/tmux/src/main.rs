@@ -1707,6 +1707,30 @@ async fn list_remote_clients(config: &RemoteTmuxConfig) -> Result<Vec<TmuxClient
         .collect())
 }
 
+/// Owned inputs of one `capture-pane`, so pane captures can run as spawned
+/// tasks without borrowing the plugin.
+#[derive(Clone)]
+enum PaneCaptureRunner {
+    Local {
+        tmux_path: Option<String>,
+        socket_registry: std::sync::Arc<TmuxSocketRegistry>,
+    },
+    Remote(Option<RemoteTmuxConfig>),
+}
+
+impl PaneCaptureRunner {
+    async fn capture(&self, pane_id: &str) -> Option<String> {
+        let args = ["capture-pane", "-t", pane_id, "-p"];
+        match self {
+            Self::Local {
+                tmux_path,
+                socket_registry,
+            } => run_tmux_default(tmux_path.as_deref(), &args, socket_registry).await,
+            Self::Remote(config) => run_remote_tmux_default(config.as_ref()?, &args).await,
+        }
+    }
+}
+
 async fn run_tmux_for_client(plugin: &Tmux, client: &TmuxClient, args: &[&str]) -> Option<String> {
     if client.remote {
         let config = plugin.remote_config(&client.backend_id)?;
@@ -2124,6 +2148,12 @@ fn read_toml_number(text: &str, section: &str, key: &str) -> Option<f64> {
     read_toml_raw(text, section, key)?.parse::<f64>().ok()
 }
 
+/// (path, mtime, font) of the last Alacritty config read; this sits on the
+/// `f` hot path, so the file is re-read only when its modification time moves.
+type AlacrittyFontCache = Option<(String, std::time::SystemTime, (String, f64))>;
+static ALACRITTY_FONT_CACHE: std::sync::LazyLock<std::sync::Mutex<AlacrittyFontCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
 async fn alacritty_font() -> Option<(String, f64)> {
     let home = std::env::var("HOME").ok()?;
     let paths = [
@@ -2131,13 +2161,29 @@ async fn alacritty_font() -> Option<(String, f64)> {
         format!("{home}/.alacritty.toml"),
     ];
     for path in paths {
+        let Ok(metadata) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        let modified = metadata.modified().ok()?;
+        if let Some((cached_path, cached_modified, font)) = ALACRITTY_FONT_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            if *cached_path == path && *cached_modified == modified {
+                return Some(font.clone());
+            }
+        }
         let Ok(text) = tokio::fs::read_to_string(&path).await else {
             continue;
         };
         let size = read_toml_number(&text, "font", "size").unwrap_or(11.0);
         let family =
             read_toml_string(&text, "font.normal", "family").unwrap_or_else(|| "Menlo".to_string());
-        return Some((family, size));
+        let font = (family, size);
+        *ALACRITTY_FONT_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((path, modified, font.clone()));
+        return Some(font);
     }
     None
 }
@@ -2334,6 +2380,27 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     }
     let mut raw_links: Vec<RawLink> = Vec::new();
 
+    // Capture every pane concurrently: this used to be one awaited tmux
+    // subprocess per pane, strictly sequential, on the `f` hot path.
+    let capture_runner = if client.remote {
+        PaneCaptureRunner::Remote(plugin.remote_config(&client.backend_id))
+    } else {
+        PaneCaptureRunner::Local {
+            tmux_path: plugin.resolved_tmux_path().await.map(str::to_string),
+            socket_registry: std::sync::Arc::clone(&plugin.tmux_socket_registry_arc),
+        }
+    };
+    let mut capture_tasks = tokio::task::JoinSet::new();
+    for (i, pane) in panes.iter().enumerate() {
+        let runner = capture_runner.clone();
+        let pane_id = pane.id.clone();
+        capture_tasks.spawn(async move { (i, runner.capture(&pane_id).await) });
+    }
+    let mut captures: Vec<Option<String>> = vec![None; panes.len()];
+    while let Some(Ok((i, raw))) = capture_tasks.join_next().await {
+        captures[i] = raw;
+    }
+
     for (i, pane) in panes.iter().enumerate() {
         let center_col = pane.left + pane.cols / 2;
         let center_row = top_offset + pane.top + pane.rows / 2;
@@ -2359,9 +2426,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             Priority::Urgent,
         ));
 
-        let Some(raw) =
-            run_tmux_for_client(plugin, &client, &["capture-pane", "-t", &pane.id, "-p"]).await
-        else {
+        let Some(raw) = captures[i].take() else {
             continue;
         };
         // Collect this pane's links, then keep the most useful within the
@@ -3504,6 +3569,10 @@ async fn refresh_remote_backends(
 }
 
 const POLL_INTERVAL_SECS: u64 = 1;
+/// Poll period while no tmux client is attached anywhere: nobody is looking
+/// at a tmux window, so the catalog can lag a few seconds instead of running a
+/// `tmux` inventory subprocess every second.
+const IDLE_POLL_INTERVAL_SECS: u64 = 5;
 const STARTUP_WARM_BUDGET: Duration = Duration::from_secs(10);
 
 fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
@@ -3540,7 +3609,12 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 // an unbounded subprocess fan-out.
                 tokio::task::yield_now().await;
             } else {
-                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+                let attached = client_snapshot
+                    .lock()
+                    .map(|snapshot| !snapshot.clients.is_empty())
+                    .unwrap_or(true);
+                let period = if attached { POLL_INTERVAL_SECS } else { IDLE_POLL_INTERVAL_SECS };
+                tokio::time::sleep(Duration::from_secs(period)).await;
             }
             refresh_candidate_locations_for_path(
                 path.as_deref(),
