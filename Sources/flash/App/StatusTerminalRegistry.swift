@@ -76,6 +76,11 @@ final class StatusTerminalRegistry {
   private var restarts: [String: Restart] = [:]
   var willChange: (([StatusTerminalChange]) -> Void)?
   var didChange: (() -> Void)?
+  private let processEnvironment: FlashProcessEnvironment
+
+  init(environment: FlashProcessEnvironment = .shared) {
+    processEnvironment = environment
+  }
 
   func apply(
     _ statusBar: Config.StatusBar, terminals: [String: Config.Terminal] = [:],
@@ -123,7 +128,9 @@ final class StatusTerminalRegistry {
   }
 
   func automaticallyRestarts(name: String) -> Bool {
-    ownership[name] != nil
+    guard let owner = ownership[name] else { return false }
+    if case .ephemeral(template: nil) = owner { return false }
+    return true
   }
 
   func openTerminal(name: String?, configuration config: Config) -> String? {
@@ -143,7 +150,7 @@ final class StatusTerminalRegistry {
       }
       definition = terminal
     } else {
-      let shell = FlashProcessEnvironment.shared.environment["SHELL"] ?? "/bin/zsh"
+      let shell = processEnvironment.environment["SHELL"] ?? "/bin/zsh"
       definition = .init(
         command: [shell, "-l"], workingDirectory: NSHomeDirectory(), columns: 100, rows: 28)
     }
@@ -171,6 +178,8 @@ final class StatusTerminalRegistry {
 
   func releaseTerminal(name: String) {
     guard case .ephemeral = ownership[name] else { return }
+    // Dismissal callbacks may release this terminal again.
+    ownership.removeValue(forKey: name)
     willChange?([.remove(name)])
     remove(name: name)
     didChange?()
@@ -185,7 +194,7 @@ final class StatusTerminalRegistry {
     ownership[name] = owner
     let session = TerminalSession(
       configuration: Self.configuration(
-        for: definition, environment: FlashProcessEnvironment.shared.environment))
+        for: definition, environment: processEnvironment.environment))
     sessions[name] = session
     definitions[name] = definition
     var previousState: TerminalSessionState?
@@ -198,7 +207,7 @@ final class StatusTerminalRegistry {
       }
       guard let self, let session, self.sessions[name] === session else { return }
       self.observe(state: state, name: name, session: session)
-      self.didChange?()
+      if self.sessions[name] === session { self.didChange?() }
     }
     session.onInputRejected = { count in
       FlashLog.warn(
@@ -228,7 +237,13 @@ final class StatusTerminalRegistry {
   }
 
   private func observe(state: TerminalSessionState, name: String, session: TerminalSession) {
-    guard automaticallyRestarts(name: name) else { return }
+    guard automaticallyRestarts(name: name) else {
+      switch state {
+      case .exited, .failed: releaseTerminal(name: name)
+      case .idle, .running, .stopped: break
+      }
+      return
+    }
     var restart = restarts[name] ?? Restart()
     switch state {
     case .running:
@@ -236,37 +251,45 @@ final class StatusTerminalRegistry {
       restart.pending = nil
       restart.backoff.running(at: ProcessInfo.processInfo.systemUptime)
     case .exited, .failed:
-      guard restart.pending == nil else { return }
-      guard let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime) else {
-        FlashLog.warn(
-          "Status terminal restart parked after repeated failures",
-          fields: [
-            "popup_id": StatusFormatDocument.stableID(name),
-            "attempts": String(restart.backoff.attempt),
-          ], source: "core:StatusTerminalRegistry.restart")
-        restarts[name] = restart
-        return
-      }
-      let generation = inputGenerations[name]
-      let work = DispatchWorkItem { [weak self, weak session] in
-        guard let self, let session, self.sessions[name] === session,
-          self.inputGenerations[name] == generation, self.automaticallyRestarts(name: name)
-        else { return }
-        self.restarts[name]?.pending = nil
-        self.restartSession(name: name, resetBackoff: false)
-      }
-      restart.pending = work
-      FlashLog.info(
-        "Status terminal restart scheduled",
-        fields: [
-          "popup_id": StatusFormatDocument.stableID(name),
-          "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
-        ], source: "core:StatusTerminalRegistry.restart")
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+      scheduleRestart(name: name, session: session)
+      return
     case .idle, .stopped:
       break
     }
     restarts[name] = restart
+  }
+
+  private func scheduleRestart(name: String, session: TerminalSession) {
+    guard automaticallyRestarts(name: name) else { return }
+    var restart = restarts[name] ?? Restart()
+    guard restart.pending == nil else { return }
+    guard let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime) else {
+      FlashLog.warn(
+        "Status terminal restart parked after repeated failures",
+        fields: [
+          "popup_id": StatusFormatDocument.stableID(name),
+          "attempts": String(restart.backoff.attempt),
+        ], source: "core:StatusTerminalRegistry.restart")
+      restarts[name] = restart
+      return
+    }
+    let generation = inputGenerations[name]
+    let work = DispatchWorkItem { [weak self, weak session] in
+      guard let self, let session, self.sessions[name] === session,
+        self.inputGenerations[name] == generation, self.automaticallyRestarts(name: name)
+      else { return }
+      self.restarts[name]?.pending = nil
+      self.restartSession(name: name, resetBackoff: false)
+    }
+    restart.pending = work
+    restarts[name] = restart
+    FlashLog.info(
+      "Status terminal restart scheduled",
+      fields: [
+        "popup_id": StatusFormatDocument.stableID(name),
+        "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
+      ], source: "core:StatusTerminalRegistry.restart")
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
 
   private func remove(name: String) {
@@ -313,6 +336,26 @@ final class StatusTerminalRegistry {
 
   func restart(name: String) {
     restartSession(name: name, resetBackoff: true)
+  }
+
+  func quit(name: String) {
+    guard let session = sessions[name] else { return }
+    guard automaticallyRestarts(name: name) else {
+      releaseTerminal(name: name)
+      return
+    }
+    guard case .running = session.state else { return }
+    restarts[name]?.pending?.cancel()
+    restarts[name]?.pending = nil
+    willChange?([.replace(name)])
+    advanceInputGeneration(for: name)
+    let generation = inputGenerations[name]
+    session.stop { [weak self, weak session] in
+      guard let self, let session, self.sessions[name] === session,
+        self.inputGenerations[name] == generation
+      else { return }
+      self.scheduleRestart(name: name, session: session)
+    }
   }
 
   private func restartSession(name: String, resetBackoff: Bool) {

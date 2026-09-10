@@ -8,18 +8,30 @@ runs plugin work: inline popup content arrives in the same status value, and a
 live update re-hit-tests the stationary pointer and replaces the existing popup
 in place.
 
+Planned resident-plugin reloads preserve each last status segment for at most
+10 seconds while replacement values arrive. Republishing replaces it immediately;
+an explicit empty value clears it. Stop, error, removal, and configuration
+replacement clear immediately. This avoids blinking during a normal hot reload
+without keeping failed telemetry indefinitely. Development builds stage binaries
+outside watched plugin directories and replace only changed code or signing
+identity; rebuilding unchanged plugins must not trigger resident reloads.
+Ordinary status updates render in place without animation: only `#[cyc]`
+content opts into the upward carousel transition, and a pooled layer reused
+for an ordinary metric must clear that transition first.
+
 ## System-monitor ownership
 
 The local system-monitor suite is deliberately split by resource. Each plugin
 owns `summary` and `details`; the summary embeds the details with
 `inline_status_popup`, while the standalone details segment supports custom
-templates. `power` shows just `BAT` when fully charged on AC power; otherwise it
-keeps the numeric charge, including below 100% while charging and at 100% on
-battery power. Details and `:power` remain available in every state. Wrap any
-separator in the same condition as the segment so an unavailable plugin leaves
-no dangling separator.
-`power` also publishes `label`, the styled battery summary without
-an inline popup, for attaching a named battery terminal. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
+templates. Each also publishes a popup-free `label` for a named popup: yellow section
+name plus a grey fixed-width metric. CPU/MEM/DSK/BAT percentages use two digits plus `%`, capped at 99;
+detailed reports retain the actual values. NET uses four cells for aggregate
+download + upload on the default-route interface (`1.2M`, ` 12K`), in decimal
+bytes per second. Counting the default route avoids double-counting VPN traffic.
+The labels contain no links or inline popups, so surrounding template bindings
+own clicks and hover. The maintained configuration uses native `details` popups;
+no third-party monitoring application is required. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
 
 | Plugin | Nominal fast path | Slower path | Additional surface |
@@ -95,23 +107,37 @@ explicit `:network refresh` action may request Location authorization.
 ## Adjacent AI usage status
 
 `aiproviders` is adjacent to, not part of, the local system-monitor suite. It
-owns one unified `summary`/`details` pair: Fable is nested under Claude, and the
-separate `codex_bengalfox` rate-limit bucket is presented as Astra beneath
-OpenAI. “Astra” is a local presentation alias, not app-server schema
+publishes `claude_label`/`claude_details` and `codex_label`/`codex_details`.
+Cld/Cdx labels show the remaining weekly quota with an unpadded percentage capped at 99, followed by `↻`
+and the time until the weekly window resets (for example `53%↻5d`). Model-specific quotas stay in
+details: Fable under Claude, and the separate `codex_bengalfox` rate-limit
+bucket as Astra under Codex. “Astra” is a local presentation alias, not app-server schema
 terminology. Grok remains a launcher only; do not add quota polling that reads
 or mutates unsupported credential stores.
 
 The plugin republishes a sanitized last-good cache at startup, refreshes
 Anthropic usage at a ten-minute TTL and OpenAI usage at a two-minute TTL, and
-rerenders relative reset labels once per minute. Popup hover and status layout
+rerenders relative reset labels once per minute. Quota labels show an unpadded
+dash once the cache is older than twice the provider TTL; cached detail tables
+remain available for inspection. Popup hover and status layout
 must remain pure reads of that state.
+
+Claude OAuth refresh preserves the complete credential document. Keychain writes
+use hex-encoded password data on `security -i` stdin, followed by read-back
+verification. Never pass credential JSON to a trailing `security ... -w` on stdin:
+that option prompts on the terminal and can save an empty password. Secrets must
+remain off subprocess argv and diagnostic output. An already empty credential
+requires signing in again through Claude Code.
 
 ## Feed headlines
 
 `feed` owns the `summary` segment, selected with
 `#{flash.plugin.feed.summary}`. Set `[plugin.feed] url` to an RSS feed URL;
 without one, the plugin makes no network requests. `refresh_interval` defaults
-to 300 seconds and `cycle_interval` to 60 seconds.
+to 300 seconds and `cycle_interval` to 30 seconds. Article content uses
+`#[cyc]`/`#[nocyc]` for a 0.8-second upward slide. The title, domain, and
+outbound arrow move together while the label stays still.
+Other metrics update without this transition, including when pooled layers are reused.
 
 Only items with a valid publication date within the rolling last 24 hours
 participate, newest first. Missing dates and future dates are excluded.
@@ -119,7 +145,9 @@ Rotation also expires old items during a failed refresh; a transient network
 or parse failure retains the remaining last-good items, while a successful
 empty feed clears the segment.
 
-The linked title shrinks before the domain and outbound arrow. RSS item links
+Only the linked title shrinks, ending in an ellipsis while reserving the domain
+and outbound arrow. The feed stays before the notch or, without one, before
+the actual centre component; its arrow and click target remain visible. RSS item links
 open the feed's article page; an Atom `link rel="via"` extension supplies the
 original article link when present. For AGGR, this means the title opens the
 archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`

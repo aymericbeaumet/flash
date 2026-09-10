@@ -173,7 +173,7 @@ and only `[mode.terminal.mappings]` can intercept keys in the popup. The label i
 configured with `mode.labels.terminal` and defaults to `TERMINAL`.
 
 Terminal mappings inherit only the effective INSERT-active bindings whose
-winning action is `leave_mode` or `enter_normal_mode`. Scope and plugin precedence are resolved
+winning action is `enter_normal_mode` or `leave_mode`. Scope and plugin precedence are resolved
 before this inheritance; an explicit terminal mapping overrides an inherited
 binding with the same canonical key. Other all, normal, and insert bindings are
 inactive. Plugins may contribute terminal mappings using the same priority rules.
@@ -194,3 +194,50 @@ popups use the same focus mode for selection, copying, and scrolling. Leaving vi
 before NORMAL recapture. Losing popup focus restores the prior base mode without
 activating a different app. Popup focus and visibility do not determine the
 lifetime of a configured terminal process.
+
+`leave_mode` provides one configured exit across surfaces. It dismisses a terminal
+and restores its prior base mode/app, restores the saved mode from command or
+finder input, and leaves INSERT for NORMAL. In NORMAL or disabled mode it only
+dismisses active hints and is otherwise a no-op. An all-scope binding to either
+`enter_normal_mode` or `leave_mode` enables advanced mode. For a shifted bracket,
+use `"cmd+shift+[" = ["flash", "leave_mode"]`; the key matcher handles the `{`
+character produced by Shift.
+
+## Rejected commands
+
+Unknown commands and unsupported subcommands use Flash’s existing error toast
+and warning log. The diagnostic names the invocation and points to the mapping
+or configuration. Invalid mapping arrays report their source location during
+configuration loading. Malformed built-in commands cannot silently become plugin
+calls, and plugin execution failures are also surfaced.
+
+The CLI accepts `--key=value` and boolean `--flag` arguments, rejects stray
+positional subcommands, and returns status 2 when parsing or resident dispatch
+rejects an invocation. Successful dispatch does not imply an asynchronous plugin
+operation completed successfully; later failures appear in the toast and logs.
+An empty command prompt remains quiet.
+
+## Explicit INSERT entry
+
+The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases,
+and `/` / `t` no longer enter INSERT after their action. INSERT is entered by:
+
+- a configured `enter_insert_mode` mapping;
+- a configured `passthrough_keys` / `passthrough_modifiers` keypress (for
+  example `cmd+l` with the default modifiers), which continues to the app;
+- a physical click or a mouse-grid / pointer-mode / adjust commit while NORMAL
+  is capturing (pointer simulation always hands the keyboard to the app);
+- an `f` / `F` hint whose target is editable (`JumpTarget.entersInsertMode`).
+
+Focus changes, app activation, and unrelated key sequences never enter INSERT.
+INSERT exits automatically when the focused element stops being editable, as
+before, or explicitly through `leave_mode` / `enter_normal_mode`.
+
+```toml
+[mode.all.mappings]
+"cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+"cmd+ctrl+[" = ["flash", "leave_mode"]
+"alt+space" = ["flash", "terminal_show"]
+```
+
+Closing a terminal or command surface may restore its saved INSERT mode.

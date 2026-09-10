@@ -70,6 +70,8 @@ fi
 if want units; then
   echo "==> units: Python protocol runner"
   python3 -W error::ResourceWarning -m unittest Scripts.flash_spec_runner.test_runner
+  echo "==> units: plugin publication"
+  python3 Scripts/test-build-plugins.py
   echo "==> units: per-crate cargo test"
   for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/; do
     [[ -f "$dir/Cargo.toml" ]] || continue

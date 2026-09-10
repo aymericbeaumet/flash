@@ -99,6 +99,7 @@ struct TransferRates {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedStatus {
     summary: String,
+    label: String,
     details: String,
 }
 
@@ -369,7 +370,11 @@ fn emit_status_if_changed(ctx: &Context) {
         };
         rendered
     };
-    ctx.status([("summary", rendered.summary), ("details", rendered.details)]);
+    ctx.status([
+        ("summary", rendered.summary),
+        ("label", rendered.label),
+        ("details", rendered.details),
+    ]);
 }
 
 fn status_update(
@@ -538,7 +543,12 @@ fn push_history(history: &mut VecDeque<f64>, value: f64) {
 fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
     let details = render_popup_details(state)?;
     let visible = visible_summary(state, summary_mode);
+    let rate = state
+        .rates
+        .map(|rates| label_rate(rates.received + rates.sent))
+        .unwrap_or_else(|| "   —".to_string());
     Some(RenderedStatus {
+        label: format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{rate}#[default]"),
         summary: inline_status_popup(&visible, &details),
         details,
     })
@@ -710,6 +720,21 @@ fn render_details_body(state: &NetworkState) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+fn label_rate(bytes_per_second: f64) -> String {
+    const UNITS: [char; 6] = ['B', 'K', 'M', 'G', 'T', 'P'];
+    let mut value = bytes_per_second.max(0.0);
+    let mut unit = 0;
+    while value >= 999.5 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit > 0 && value < 9.95 {
+        format!("{value:>3.1}{}", UNITS[unit])
+    } else {
+        format!("{:>3.0}{}", value.min(999.0), UNITS[unit])
+    }
+}
+
 fn compact_rate(bytes_per_second: f64) -> String {
     scaled_bytes(bytes_per_second, false)
 }
@@ -780,6 +805,36 @@ mod tests {
     use flash_plugin::CandidateEffect;
 
     use super::*;
+
+    #[test]
+    fn label_keeps_aggregate_rate_width_across_units_and_sampling() {
+        for (rate, expected) in [
+            (None, "   —"),
+            (Some(0.0), "  0B"),
+            (Some(9.0), "  9B"),
+            (Some(999.0), "999B"),
+            (Some(999.96), "1.0K"),
+            (Some(1200.0), "1.2K"),
+            (Some(1_200_000.0), "1.2M"),
+            (Some(1_200_000_000.0), "1.2G"),
+            (Some(f64::MAX), "999P"),
+        ] {
+            let state = NetworkState {
+                default_interface: Some("en0".to_string()),
+                rates: rate.map(|rate| TransferRates {
+                    received: rate * 0.75,
+                    sent: rate * 0.25,
+                }),
+                ..NetworkState::default()
+            };
+            let status = render_status(&state, SummaryMode::Full).unwrap();
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
@@ -1043,6 +1098,7 @@ default fe80::%utun6 UGcIg utun6\n";
     fn identical_rendered_status_is_suppressed() {
         let rendered = RenderedStatus {
             summary: "summary".to_string(),
+            label: "label".to_string(),
             details: "details".to_string(),
         };
         let mut last = None;
@@ -1060,5 +1116,51 @@ default fe80::%utun6 UGcIg utun6\n";
         assert!(!first_failure(&mut logged, true));
         assert!(!first_failure(&mut logged, false));
         assert!(first_failure(&mut logged, true));
+    }
+
+    #[test]
+    fn label_rate_uses_four_cells_at_every_decimal_unit_boundary() {
+        for (rate, expected) in [
+            (0.0, "  0B"),
+            (9.0, "  9B"),
+            (999.4, "999B"),
+            (999.5, "1.0K"),
+            (1_200.0, "1.2K"),
+            (9_950.0, " 10K"),
+            (12_000.0, " 12K"),
+            (999_499.0, "999K"),
+            (999_500.0, "1.0M"),
+            (1e9, "1.0G"),
+            (1e12, "1.0T"),
+            (1e15, "1.0P"),
+            (1e30, "999P"),
+            (f64::INFINITY, "999P"),
+            (f64::NAN, "  0B"),
+            (-1.0, "  0B"),
+        ] {
+            let rendered = label_rate(rate);
+            assert_eq!(rendered, expected, "rate {rate}");
+            assert_eq!(rendered.chars().count(), 4);
+        }
+    }
+
+    #[test]
+    fn label_sums_download_and_upload_without_changing_width_while_sampling() {
+        let mut state = NetworkState {
+            default_interface: Some("en0".into()),
+            ..NetworkState::default()
+        };
+        assert_eq!(
+            render_status(&state, SummaryMode::Compact).unwrap().label,
+            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]   —#[default]"
+        );
+        state.rates = Some(TransferRates {
+            received: 600_000.0,
+            sent: 600_000.0,
+        });
+        assert_eq!(
+            render_status(&state, SummaryMode::Compact).unwrap().label,
+            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]1.2M#[default]"
+        );
     }
 }

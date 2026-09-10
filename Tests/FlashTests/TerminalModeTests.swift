@@ -1,3 +1,5 @@
+import AppKit
+import Carbon.HIToolbox
 import XCTest
 
 @testable import flash
@@ -92,6 +94,7 @@ final class TerminalModeTests: XCTestCase {
 
   func testPhysicalChordAliasesCannotBypassInsertPrecedence() {
     var mode = Config.Mode()
+    mode.terminal = []
     mode.all = [mapping("cmd+esc", .commandMode)]
     mode.insert = [mapping("cmd+escape", .normalMode)]
     mode.recompileMappings()
@@ -130,7 +133,7 @@ final class TerminalModeTests: XCTestCase {
     XCTAssertEqual(config.mode.labels.terminal, "TTY")
     let key = NormalModeInterpreter.canonicalizeMappingKey("gg")!
     XCTAssertEqual(config.mode.compiledTerminal.mapping(for: key)?.action.command, .normalMode)
-    XCTAssertEqual(config.mode.terminal.count, 1)
+    XCTAssertEqual(config.mode.terminal.count, 4)
     XCTAssertTrue(
       config.loadingDiagnostics.contains { $0.message.contains("uses <leader> outside") })
     XCTAssertTrue(
@@ -153,9 +156,67 @@ final class TerminalModeTests: XCTestCase {
     let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let mappings = try XCTUnwrap(mode["terminal"] as? [[String: Any]])
-    XCTAssertEqual(mappings.count, 1)
+    XCTAssertEqual(mappings.count, 4)
     let labels = try XCTUnwrap(mode["labels"] as? [String: String])
     XCTAssertEqual(labels["terminal"], "TERMINAL")
+  }
+
+  func testLeaveModeConfigEnablesAdvancedModeAndInheritsIntoTerminal() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+shift+[" = ["flash", "leave_mode"]
+      """
+    )
+    XCTAssertTrue(config.loadingDiagnostics.isEmpty)
+    XCTAssertTrue(config.mode.containsAdvancedModeMapping)
+    XCTAssertTrue(config.mode.containsNormalModeMapping)
+    let key = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("cmd+shift+["))
+    let mapping = try XCTUnwrap(config.mode.compiledTerminal.mapping(for: key))
+    XCTAssertEqual(mapping.action.command, URLEventHandler.parse(verb: "leave_mode", args: [:]))
+    XCTAssertEqual(mapping.action.command?.diagnosticDescription, "flash leave_mode")
+    XCTAssertNil(URLEventHandler.parse(verb: "leave_mode", args: ["unexpected": "1"]))
+  }
+
+  func testShiftedBracketExitReachesTerminalMapping() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+shift+[" = ["flash", "leave_mode"]
+      """
+    )
+    var commands: [URLCommand] = []
+    var replayed = false
+    let handler = TerminalInputMappingHandler<String>(
+      mappings: config.mode.compiledTerminal, timeoutMs: 1000,
+      replay: { _, _ in replayed = true },
+      dispatch: { mapping, _ in
+        if let command = mapping.action.command { commands.append(command) }
+      })
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
+        timestamp: 0, windowNumber: 0, context: nil, characters: "{",
+        charactersIgnoringModifiers: "{", isARepeat: false, keyCode: UInt16(kVK_ANSI_LeftBracket)))
+    handler.handle(event: event, origin: "popup")
+    XCTAssertEqual(commands, [.leaveMode])
+    XCTAssertFalse(replayed)
+  }
+
+  func testExplicitTerminalMappingOverridesInheritedLeaveMode() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+shift+[" = ["flash", "leave_mode"]
+      [mode.terminal.mappings]
+      "cmd+shift+[" = ["flash", "terminal_restart"]
+      """
+    )
+    XCTAssertTrue(config.loadingDiagnostics.isEmpty)
+    let key = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("cmd+shift+["))
+    XCTAssertEqual(
+      config.mode.compiledTerminal.mapping(for: key)?.action.command,
+      .terminalRestart(name: nil))
   }
 
   private func mapping(_ key: String, _ command: URLCommand) -> ModeMapping {

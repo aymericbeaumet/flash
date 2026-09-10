@@ -89,7 +89,7 @@ extension NormalModeDispatcher {
   }
 
   static let terminalCommandSyntax = Dictionary(
-    uniqueKeysWithValues: ["terminal_show", "terminal_dismiss", "terminal_restart"].compactMap {
+    uniqueKeysWithValues: ["terminal_show", "terminal_dismiss", "terminal_restart", "terminal_quit"].compactMap {
       name in
       URLEventHandler.syntax(for: name, prefix: ":").map { (name, $0) }
     })
@@ -396,6 +396,7 @@ extension NormalModeDispatcher {
     "terminal_show": "Open a fresh shell or a configured terminal",
     "terminal_dismiss": "Close the terminal window; persistent sessions keep running",
     "terminal_restart": "Restart the focused or named terminal session",
+    "terminal_quit": "Quit the focused or named terminal process; automatic restart still applies",
   ]
 
   /// Flat catalog of every built-in command-line command, tagged

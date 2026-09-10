@@ -3,6 +3,27 @@ import XCTest
 @testable import flash
 
 final class TerminalConfigTests: XCTestCase {
+  func testTerminalDefaultsRestartQuitAndDismissTheFocusedProcess() throws {
+    let referenceURL = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("config.default.toml")
+    let reference = ConfigLoader.parse(try String(contentsOf: referenceURL, encoding: .utf8))
+    let expected: [(String, URLCommand)] = [
+      ("cmd+r", .terminalRestart(name: nil)),
+      ("cmd+q", .terminalQuit(name: nil)),
+      ("cmd+w", .terminalDismiss),
+    ]
+    for config in [Config.default, ConfigLoader.parse(""), reference] {
+      for (chord, command) in expected {
+        let key = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey(chord))
+        XCTAssertEqual(
+          config.mode.compiledTerminal.mapping(for: key)?.action.command, command, chord)
+      }
+    }
+  }
+
   func testTerminalsHaveExplicitPersistenceAndIndependentDefaults() {
     let config = ConfigLoader.parse(
       """

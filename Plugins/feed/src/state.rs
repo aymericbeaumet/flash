@@ -97,7 +97,7 @@ pub(crate) fn render(article: &Article, label: &str) -> String {
     };
     let label = escape_status_text(label);
     let row = format!(
-        "#[fg=#EBCB8B]{label}#[fg=colour245] {} #[link={}]({})#[nolink] #[fg=colour178]#[link={}]↗#[nolink]#[fg=colour245]",
+        "#[fg=#EBCB8B]{label}#[fg=colour245] #[cyc]{} #[link={}]({})#[nolink] #[fg=colour178]#[link={}]↗#[nolink]#[fg=colour245]#[nocyc]",
         title_link,
         marker_url(origin.as_str()),
         domain,
@@ -245,5 +245,32 @@ mod tests {
             .0;
         assert!(encoded.len() <= 16_384);
         assert!(summary.contains("#[nopopup]"));
+    }
+
+    #[test]
+    fn carousel_marks_article_content_only_and_repeated_refresh_does_not_rotate() {
+        let mut state = State::new("NEWS".into());
+        let a = article("Latest", 200);
+        let b = article("Earlier", 100);
+        let initial = state.refresh(Ok(vec![a.clone(), b.clone()]), 201).unwrap();
+        assert!(initial.contains("#[fg=#EBCB8B]NEWS#[fg=colour245] #[cyc]"));
+        assert!(initial.ends_with("#[nocyc]#[nopopup]"));
+        assert_eq!(initial.matches("#[cyc]").count(), 1);
+        assert_eq!(state.refresh(Ok(vec![a.clone(), b.clone()]), 202), None);
+        assert_eq!(state.cycle(211), Some(render(&b, "NEWS")));
+        assert_eq!(state.cycle(221), Some(render(&a, "NEWS")));
+        assert_eq!(state.refresh(Ok(vec![a]), 222), None);
+        assert_eq!(state.cycle(231), None);
+    }
+
+    #[test]
+    fn title_alone_is_elastic_and_outbound_arrow_remains_in_fixed_suffix() {
+        let summary = render(&article("Long title", 100), "NEWS");
+        let (_, elastic) = summary.split_once("#[shrink]").unwrap();
+        let (title, suffix) = elastic.split_once("#[noshrink]").unwrap();
+        assert_eq!(title, "Long title");
+        assert!(suffix.contains("(source.example)"));
+        assert!(suffix.contains("#[link=https://www.source.example/original]↗#[nolink]"));
+        assert!(!suffix.contains("#[shrink]"));
     }
 }

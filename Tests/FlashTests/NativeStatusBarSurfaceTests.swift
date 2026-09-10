@@ -162,6 +162,87 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(surface.runLayers[1].text.animation(forKey: kCATransition) is CATransition)
   }
 
+  func testCarouselSlidesUpOnlyOnArticleChangesAndClearsWhenLayerBecomesAMetric() {
+    let surface = render("NEWS #[cyc]first#[nocyc] CPU 10%", columns: 40)
+    XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animation(forKey: kCATransition) == nil })
+    redraw(surface, "NEWS #[cyc]second#[nocyc] CPU 20%", columns: 40)
+    let article = surface.runLayers[1]
+    let transition = article.text.animation(forKey: kCATransition) as? CATransition
+    XCTAssertEqual(transition?.type, .push)
+    XCTAssertEqual(transition?.subtype, .fromBottom)
+    XCTAssertEqual(transition?.duration, 0.8)
+    XCTAssertNil(surface.runLayers[0].text.animation(forKey: kCATransition))
+    XCTAssertNil(surface.runLayers[2].text.animation(forKey: kCATransition))
+    article.text.removeAllAnimations()
+    article.effect.removeAllAnimations()
+    redraw(surface, "NEWS #[cyc]second#[nocyc] CPU 30%", columns: 40)
+    XCTAssertNil(article.text.animation(forKey: kCATransition))
+    redraw(surface, "NEWS #[cyc]third#[nocyc] CPU 30%", columns: 40)
+    XCTAssertNotNil(article.text.animation(forKey: kCATransition))
+    redraw(surface, "NEWS #[fg=red]CPU 40%#[default] MEM 50%", columns: 40)
+    XCTAssertTrue(surface.runLayers[1] === article)
+    XCTAssertNil(article.text.animation(forKey: kCATransition))
+    XCTAssertNil(article.effect.animation(forKey: kCATransition))
+  }
+
+  func testCarouselMovesUnchangedArrowAndDomainWithTheChangedArticle() {
+    func source(
+      _ title: String, url: String = "https://example.com/a", popup: String = "feed-a"
+    ) -> String {
+      "NEWS #[cyc,popup=\(popup),link=\(url)]\(title)#[nolink] #[fg=yellow]example.com "
+        + "#[link=\(url)]↗#[nolink,nocyc,nopopup,default] CPU 10%"
+    }
+    let surface = render(source("first"), columns: 60)
+    redraw(surface, source("other"), columns: 60)
+    let cyclic = surface.visibleRuns.indices.filter { surface.visibleRuns[$0].segment.cycle }
+    XCTAssertGreaterThan(cyclic.count, 2)
+    for index in cyclic {
+      let transition =
+        surface.runLayers[index].text.animation(forKey: kCATransition) as? CATransition
+      XCTAssertEqual(transition?.subtype, .fromBottom, surface.visibleRuns[index].segment.text)
+    }
+    let starts = cyclic.compactMap {
+      surface.runLayers[$0].text.animation(forKey: kCATransition)?.beginTime
+    }
+    XCTAssertEqual(Set(starts).count, 1)
+    for layer in surface.runLayers {
+      layer.text.removeAllAnimations()
+      layer.effect.removeAllAnimations()
+    }
+    redraw(surface, source("other"), columns: 60)
+    XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animationKeys()?.isEmpty != false })
+    redraw(surface, source("other", url: "https://example.com/b"), columns: 60)
+    for index in cyclic {
+      XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+    }
+    for index in surface.visibleRuns.indices where !surface.visibleRuns[index].segment.cycle {
+      XCTAssertNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+    }
+    for layer in surface.runLayers {
+      layer.text.removeAllAnimations()
+      layer.effect.removeAllAnimations()
+    }
+    redraw(surface, source("other", url: "https://example.com/b", popup: "feed-b"), columns: 60)
+    for index in cyclic {
+      XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+    }
+    redraw(surface, "NEWS #[fg=red]CPU 40%#[default] MEM 50%", columns: 60)
+    XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animationKeys()?.isEmpty != false })
+    XCTAssertTrue(surface.runLayers.allSatisfy { $0.effect.animationKeys()?.isEmpty != false })
+  }
+
+  func testIndependentCarouselGroupsDoNotAnimateEachOther() {
+    let surface = render("A #[cyc]one#[nocyc] B #[cyc]two#[nocyc]", columns: 40)
+    redraw(surface, "A #[cyc]new#[nocyc] B #[cyc]two#[nocyc]", columns: 40)
+    for (index, run) in surface.visibleRuns.enumerated() {
+      if run.segment.text == "new" {
+        XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+      } else {
+        XCTAssertNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+      }
+    }
+  }
+
   func testUnicodeClustersKeepFollowingGlyphAndHitAtNativeCellColumn() {
     let surface = render("#[link=https://example.com]👩‍💻🇫🇷A", columns: 20)
     let ascii = surface.visibleRuns.first { $0.segment.text == "A" }

@@ -14,8 +14,8 @@
         "method": "status",
         "params": {
           "segments": {
-            "summary": { "$contains": "BAT" },
-            "label": { "$contains": "BAT" },
+            "summary": { "$contains": "#[popup=inline:" },
+            "label": { "$contains": "#[fg=#EBCB8B]BAT#[default] #[fg=colour245]" },
             "details": { "$contains": "#[fg=colour245]Charge        #[default]" }
           }
         }

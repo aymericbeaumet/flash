@@ -412,9 +412,14 @@ fn render_status(
     let plain_details = rows.join("\n");
     let details = render_popup_details(snapshot, health, history);
     let visible = visible_summary(snapshot, summary_mode);
+    let charge = snapshot
+        .battery
+        .as_ref()
+        .map(|battery| format!("{:>2}%", battery.percent.min(99)))
+        .unwrap_or_else(|| "  —".to_string());
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
-        label: visible,
+        label: format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{charge}#[default]"),
         details,
         plain_details,
     }
@@ -538,7 +543,7 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
     }
     let (mut value, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("{:>2}%", battery.percent),
+            format!("{:>2}%", battery.percent.min(99)),
             snapshot.source == PowerSource::Adapter,
         ),
         None => ("—".to_string(), false),
@@ -665,6 +670,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn label_keeps_charge_width_and_leaves_popup_interactions_to_the_template() {
+        for (percent, expected) in [
+            (None, "  —"),
+            (Some(0), " 0%"),
+            (Some(9), " 9%"),
+            (Some(10), "10%"),
+            (Some(100), "99%"),
+        ] {
+            let snapshot = PowerSnapshot {
+                source: PowerSource::Adapter,
+                battery: percent.map(|percent| BatterySnapshot {
+                    percent,
+                    state: BatteryState::Charging,
+                    estimate_minutes: Some(90),
+                }),
+            };
+            let status = render_status(&snapshot, None, SummaryMode::Full, &VecDeque::new());
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+    }
+
+    #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
         assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
         assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
@@ -674,7 +705,7 @@ mod tests {
 
     #[test]
     fn compact_power_summary_uses_grey_two_column_percentage() {
-        for (percent, expected) in [(9, " 9%"), (10, "10%"), (99, "99%")] {
+        for (percent, expected) in [(9, " 9%"), (10, "10%"), (100, "99%")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
                 battery: Some(BatterySnapshot {
@@ -697,19 +728,6 @@ mod tests {
         assert!(visible_summary(&no_battery, SummaryMode::Compact).contains(
             "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
         ));
-    }
-
-    #[test]
-    fn label_preserves_charge_without_embedding_a_document_popup() {
-        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
-        let status = render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new());
-        assert_eq!(
-            status.label,
-            visible_summary(&snapshot, SummaryMode::Compact)
-        );
-        assert!(status.label.contains("26%"));
-        assert!(!status.label.contains("popup="));
-        assert!(status.summary.contains("popup="));
     }
 
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";
@@ -881,23 +899,24 @@ mod tests {
                 };
                 for mode in [SummaryMode::Compact, SummaryMode::Full] {
                     let status = render_status(&snapshot, None, mode, &VecDeque::new());
+                    let visible = visible_summary(&snapshot, mode);
                     assert!(!status.label.is_empty(), "{snapshot:?} {mode:?}");
                     assert!(status.summary.contains("popup="), "{snapshot:?} {mode:?}");
                     assert!(!status.label.contains("popup="));
-                    assert!(status.label.contains("range=user|bat-prefs"));
+                    assert!(status.summary.contains(&visible), "{snapshot:?} {mode:?}");
+                    assert!(visible.contains("range=user|bat-prefs"));
                     if label_only {
                         assert_eq!(
-                            status.label,
-                            "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
+                            visible, "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
                             "{snapshot:?} {mode:?}"
                         );
                     } else {
                         assert!(
-                            status.label.contains(&format!("{percent:>2}%")),
+                            visible.contains(&format!("{:>2}%", percent.min(99))),
                             "{snapshot:?} {mode:?}"
                         );
                         if mode == SummaryMode::Full {
-                            assert!(status.label.contains(source.label()));
+                            assert!(visible.contains(source.label()));
                         }
                     }
                     assert!(status

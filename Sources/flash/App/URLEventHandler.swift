@@ -40,10 +40,11 @@ enum URLCommand: Hashable {
   /// Hint-label the menu-bar status items (WindowServer geometry only).
   case mouseStatusBar
   case normalMode
+  case leaveMode
   case terminalShow(name: String?)
   case terminalDismiss
   case terminalRestart(name: String?)
-  case leaveMode
+  case terminalQuit(name: String?)
   case insertMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
@@ -269,10 +270,12 @@ struct MoveWindowParams: Hashable {
 }
 
 final class URLEventHandler: NSObject {
-  private let handler: (URLCommand) -> Void
+  private let handler: (URLCommand) -> Bool
+  private let rejected: (String) -> Void
 
-  init(handler: @escaping (URLCommand) -> Void) {
+  init(handler: @escaping (URLCommand) -> Bool, rejected: @escaping (String) -> Void) {
     self.handler = handler
+    self.rejected = rejected
     super.init()
     NSAppleEventManager.shared().setEventHandler(
       self,
@@ -295,23 +298,40 @@ final class URLEventHandler: NSObject {
     // call can reach plugin-registered verbs. Config-load goes through
     // strict `parse` instead, so a stale verb in `[mode.*.mappings]`
     // still surfaces as a config error rather than a silent runtime miss.
-    guard let arguments = Self.decodeArgs(json: argsJSON),
-      let cmd = Self.parseOrPluginVerb(verb: verb, args: arguments)
-    else {
-      reply.setParam(NSAppleEventDescriptor(int32: -1708), forKeyword: keyErrorNumber)
-      reply.setParam(
-        NSAppleEventDescriptor(string: "Invalid command or arguments"),
-        forKeyword: keyErrorString)
+    guard let args = Self.decodeArgs(json: argsJSON) else {
+      Self.reject(reply: reply, message: "Invalid command or arguments")
       return
     }
-    handler(cmd)
+    let invocation =
+      (["flash", verb]
+      + args.keys.sorted().map {
+        "--\($0)=\(args[$0] ?? "")"
+      }).joined(separator: " ")
+    let message = Self.rejectionMessage(invocation)
+    guard let cmd = Self.parseOrPluginVerb(verb: verb, args: args) else {
+      rejected(invocation)
+      Self.reject(reply: reply, message: message)
+      return
+    }
+    if !handler(cmd) { Self.reject(reply: reply, message: message) }
+  }
+
+  static func rejectionMessage(_ invocation: String) -> String {
+    "Unsupported command or invalid arguments: \(invocation). Check the command and its configuration or mapping."
+  }
+
+  private static func reject(reply: NSAppleEventDescriptor, message: String) {
+    reply.setParam(
+      NSAppleEventDescriptor(int32: Int32(errAEEventNotHandled)),
+      forKeyword: AEKeyword(keyErrorNumber))
+    reply.setParam(NSAppleEventDescriptor(string: message), forKeyword: AEKeyword(keyErrorString))
   }
 
   /// Look up a verb in the dispatch table and turn its args dict into a
   /// resolved ``URLCommand``. Returns nil for unknown verbs or for verbs
-  /// whose required parameters are missing/invalid — callers (the AE
-  /// handler, the mapping config loader) treat nil as "ignore" and emit a
-  /// diagnostic where appropriate.
+  /// whose required parameters are missing/invalid. The AppleEvent handler
+  /// rejects the invocation with an error reply; config loading emits a
+  /// located diagnostic naming the rejected command.
   ///
   /// Strict by design: plugin-registered verbs are NOT resolved here so the
   /// mapping/CLI parsers reject stale verbs at config-load time. Runtime
@@ -428,6 +448,14 @@ final class URLEventHandler: NSObject {
           return nil
         }
         return .terminalRestart(name: args.value("name"))
+      }),
+    "terminal_quit": .init(
+      [.text("name", "terminal-or-popup")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+          return nil
+        }
+        return .terminalQuit(name: args.value("name"))
       }),
 
     "leave_mode": .init(parse: { a in a.args.isEmpty ? .leaveMode : nil }),

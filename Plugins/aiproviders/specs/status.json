@@ -1,12 +1,24 @@
 {
   "contract": "docs/plugin-protocol.md#plugin--host",
-  "description": "AI Providers immediately publishes one popup-backed compact summary and one aligned Claude/Fable/OpenAI/Astra detail surface before cached provider refreshes complete.",
+  "description": "AI Providers publishes separate fixed-width Claude and Codex quota labels and detail surfaces before cached provider refreshes complete.",
   "steps": [
     {
-      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+      "send": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocol_version": 1
+        }
+      }
     },
     {
-      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "expect": {
+        "id": 1,
+        "result": {
+          "ok": true,
+          "protocol_version": 1
+        }
+      },
       "within_ms": 5000
     },
     {
@@ -14,18 +26,31 @@
         "method": "status",
         "params": {
           "segments": {
-            "summary": {
-              "$contains": "]#[fg=#EBCB8B]AI#[default]#[nopopup]"
+            "claude_label": {
+              "$contains": "#[fg=#EBCB8B]Cld #[fg=colour245]"
             },
-            "details": {
-              "$contains": "#[fg=colour245]  Astra   5-hour"
+            "claude_details": {
+              "$contains": "Fable"
+            },
+            "codex_label": {
+              "$contains": "#[fg=#EBCB8B]Cdx #[fg=colour245]"
+            },
+            "codex_details": {
+              "$contains": "Astra"
             }
           }
         }
       },
       "within_ms": 5000
     },
-    { "close_stdin": true },
-    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+    {
+      "close_stdin": true
+    },
+    {
+      "expect_exit": {
+        "code": 0
+      },
+      "within_ms": 3000
+    }
   ]
 }

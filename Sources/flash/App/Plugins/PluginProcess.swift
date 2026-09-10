@@ -68,9 +68,14 @@ final class PluginProcess {
   /// Runtime status-bar segments, merged under `lock` on every `status`
   /// notification so concurrent updates can never lose each other.
   private var statusSegments: [String: String] = [:]
+  private var staleStatusSegments: Set<String> = []
+  private var statusExpiryWork: DispatchWorkItem?
   private var startDate: Date?
   private var lifecycle = PluginLifecycle()
   private var restartWork: DispatchWorkItem?
+  /// Set by a user-initiated reload so the lifecycle teardown keeps the
+  /// published status segments (see `stopOnQueue(preserveStatus:)`).
+  private var preserveStatusOnTeardown = false
   private var installer: PluginInstallJob?
   /// Guards `notifyStatus` so a burst of status changes collapses to one
   /// main-thread callback per runloop turn instead of one hop per change.
@@ -84,6 +89,7 @@ final class PluginProcess {
   // lifecycle tests so restart parking and idle-ping teardown run in
   // milliseconds instead of minutes. `var` + internal on purpose.
   static var restartWindowAttempts = 5
+  static var statusReloadGraceSeconds: TimeInterval = 10
   static var restartWindowSeconds: TimeInterval = 300
   static var idleBeforePingMs = PluginProtocol.idleBeforePingMs
   static var pingTimeoutMs = PluginProtocol.pingDeadlineMs
@@ -179,6 +185,7 @@ final class PluginProcess {
 
   func reload(reason: String) {
     queue.async {
+      self.preserveStatusOnTeardown = self.manifest.activation == .resident
       self.applyLifecycle(.reload(resident: self.manifest.activation == .resident))
       if self.watchFiles { self.installFileWatchers() }
     }
@@ -192,7 +199,8 @@ final class PluginProcess {
     for effect in effects {
       switch effect {
       case .teardown:
-        stopOnQueue(reason: "lifecycle")
+        stopOnQueue(reason: "lifecycle", preserveStatus: preserveStatusOnTeardown)
+        preserveStatusOnTeardown = false
       case .start(let generation):
         startOnQueue(generation: generation)
       case .retry(let generation, let delay):
@@ -250,7 +258,7 @@ final class PluginProcess {
   /// Shutdown contract: there is no shutdown method. Closing stdin IS the
   /// signal — the plugin runs cleanup and exits 0. `shutdown_grace` later
   /// comes SIGTERM, and +0.5 s after that SIGKILL.
-  private func stopOnQueue(reason: String) {
+  private func stopOnQueue(reason: String, preserveStatus: Bool = false) {
     // Remove every callback before invoking any of them. A completion can
     // enqueue another plugin request, so iterating the live dictionary would
     // be reentrant and could strand or double-complete work.
@@ -282,10 +290,35 @@ final class PluginProcess {
     process = nil
     stdinPipe = nil
     startDate = nil
-    // Segments are live state (unlike catalogs): cleared on any teardown.
     lock.lock()
-    statusSegments.removeAll()
+    if preserveStatus {
+      staleStatusSegments.formUnion(statusSegments.keys)
+    } else {
+      statusSegments.removeAll()
+      staleStatusSegments.removeAll()
+    }
+    let needsStatusExpiry = !staleStatusSegments.isEmpty
     lock.unlock()
+    if !preserveStatus {
+      statusExpiryWork?.cancel()
+      statusExpiryWork = nil
+    } else if needsStatusExpiry, statusExpiryWork == nil {
+      // A planned reload keeps the previous labels until each segment is
+      // refreshed. One bounded grace window also handles a replacement that
+      // initializes successfully but never republishes its status.
+      let work = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.lock.lock()
+        for name in self.staleStatusSegments { self.statusSegments.removeValue(forKey: name) }
+        self.staleStatusSegments.removeAll()
+        self.lock.unlock()
+        self.statusExpiryWork = nil
+        self.notifyStatus()
+      }
+      statusExpiryWork = work
+      queue.asyncAfter(deadline: .now() + Self.statusReloadGraceSeconds, execute: work)
+    }
+
     for callback in abandonedCallbacks {
       callback(nil)
     }
@@ -1527,6 +1560,7 @@ final class PluginProcess {
       let key = name.trimmed
       guard declared.contains(key) else { continue }
       guard let text = value as? String else { continue }
+      staleStatusSegments.remove(key)
       let trimmed = text.trimmed
       if trimmed.isEmpty {
         statusSegments.removeValue(forKey: key)

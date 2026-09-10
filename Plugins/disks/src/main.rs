@@ -68,6 +68,7 @@ impl CapacitySnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedStatus {
     summary: String,
+    label: String,
     details: String,
 }
 
@@ -294,7 +295,11 @@ fn emit_status_if_changed(ctx: &Context) {
         };
         rendered
     };
-    ctx.status([("summary", rendered.summary), ("details", rendered.details)]);
+    ctx.status([
+        ("summary", rendered.summary),
+        ("label", rendered.label),
+        ("details", rendered.details),
+    ]);
 }
 
 fn status_update(
@@ -504,7 +509,11 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
             visible.push_str(&chart);
         }
     }
+    let label_percent = primary
+        .map(|volume| format!("{:>2}%", volume.percent.min(99)))
+        .unwrap_or_else(|| "  —".to_string());
     Some(RenderedStatus {
+        label: format!("#[fg=#EBCB8B]DSK#[default] #[fg=colour245]{label_percent}#[default]"),
         summary: inline_status_popup(&visible, &details),
         details,
     })
@@ -673,6 +682,47 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn label_keeps_startup_usage_width_and_excludes_popup_markup() {
+        for (percent, expected) in [(0, " 0%"), (9, " 9%"), (10, "10%"), (100, "99%")] {
+            let state = DiskState {
+                capacity: Some(CapacitySnapshot {
+                    volumes: vec![
+                        Volume {
+                            name: "Backup".to_string(),
+                            mount: "/Volumes/Backup".to_string(),
+                            total: 100,
+                            used: 99,
+                            percent: 99,
+                        },
+                        Volume {
+                            name: "Startup".to_string(),
+                            mount: "/".to_string(),
+                            total: 100,
+                            used: u64::from(percent),
+                            percent,
+                        },
+                    ],
+                }),
+                ..DiskState::default()
+            };
+            let status = render_status(&state, SummaryMode::Full).unwrap();
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]DSK#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+        let state = DiskState {
+            capacity: Some(CapacitySnapshot::default()),
+            ..DiskState::default()
+        };
+        assert_eq!(
+            render_status(&state, SummaryMode::Compact).unwrap().label,
+            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]  —#[default]"
+        );
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
@@ -974,6 +1024,7 @@ mod tests {
     fn identical_rendered_status_is_suppressed() {
         let rendered = RenderedStatus {
             summary: "summary".to_string(),
+            label: "label".to_string(),
             details: "details".to_string(),
         };
         let mut last = None;

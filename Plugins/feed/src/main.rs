@@ -32,7 +32,7 @@ fn settings(ctx: &Context) -> Result<Option<Settings>, &'static str> {
         url,
         label: label(ctx.config_json("label"))?,
         refresh_interval: interval(ctx.config_json("refresh_interval"), 300)?,
-        cycle_interval: interval(ctx.config_json("cycle_interval"), 60)?,
+        cycle_interval: interval(ctx.config_json("cycle_interval"), 30)?,
     }))
 }
 
@@ -261,7 +261,7 @@ mod tests {
         );
         let configured = settings(&harness.context()).unwrap().unwrap();
         assert_eq!(configured.refresh_interval, Duration::from_secs(300));
-        assert_eq!(configured.cycle_interval, Duration::from_secs(60));
+        assert_eq!(configured.cycle_interval, Duration::from_secs(30));
         assert_eq!(configured.label, "FEED");
     }
 

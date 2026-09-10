@@ -5,6 +5,14 @@ input mappings, exit commands, and renderer. Declare every process under
 `[terminal.<name>]`; `#[popup=<name>]` and `terminal_show --name=<name>` present
 the same session. `[statusbar.popup]` contains document strings only.
 
+The default terminal-mode shortcuts are Command-R to restart immediately,
+Command-Q to quit the child, and Command-W to hide the window. Named terminal
+processes restart automatically after a quit; unnamed fresh shells end permanently. Hiding keeps persistent sessions running and
+stops nonpersistent sessions. Override these in `[mode.terminal.mappings]`.
+Both process commands accept an optional `--name`;
+without one they operate on the focused terminal. Document popups have no
+process, so only Command-W applies.
+
 `persistent = true` starts a session after the login-shell environment resolves,
 even if the status bar is disabled or no template refers to it. Hiding it keeps
 the process and history. The default, `persistent = false`, starts on an
@@ -20,7 +28,7 @@ template = "#[popup=system]System#[nopopup]"
 
 [terminal.system]
 persistent = true
-command = ["btm", "--read_only", "--rate", "2s"]
+command = ["/usr/bin/top", "-s", "2"]
 columns = 80
 rows = 24
 # working_directory = "~/workspace"
@@ -28,15 +36,17 @@ rows = 24
 
 [mode.terminal.mappings]
 "cmd+r" = ["flash", "terminal_restart"]
+"cmd+q" = ["flash", "terminal_quit"]
+"cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
 Commands are argv arrays, with the shared [environment and path resolution](configuration.md#executables-and-opaque-arguments). Only the executable and explicit working directory resolve against the defining configuration file; remaining arguments stay opaque. Set `working_directory = "."` for arguments relative to that directory. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. The inherited `NO_COLOR` setting is removed because these children own a color-capable PTY; an explicit `[terminal.<name>] env = { NO_COLOR = "1" }` still opts that terminal out of colors. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
 
-The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Every owned terminal restarts after any exit, including a normal quit or a killed process. The first retry waits 100 ms. Repeated exits within one second of startup back off to 1, 2, 4, 8, 16, then at most 30 seconds; running for at least one second resets the delay. Nonpersistent terminals retry only until their window or preview is dismissed. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
+The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Named terminal processes restart after any exit, including a normal quit or a killed process. Unnamed fresh shells are one-shot and are permanently removed when they exit or are hidden. The first retry waits 100 ms. Repeated exits within one second of startup back off to 1, 2, 4, 8, 16, then at most 30 seconds; running for at least one second resets the delay. Nonpersistent terminals retry only until their window or preview is dismissed. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
 
-Hover placement remains centered below the pointer and clamped to the hovered screen. Leaving the originating status segment hides an ordinary preview immediately. Click a popup label to pin it and focus its terminal; it then stays anchored while the pointer moves into the popup or over other segments. Clicking its label again closes it and restores the previous application. Clicking another popup label switches views. Right-click any popup segment, including a linked title, to pin it and enter terminal mode; right-clicking it again keeps it open. Existing links retain their normal left-click action; Option-click also pins their popup. Menu reveal, focus loss, removed anchors, and other Flash surfaces dismiss presentation without ending the child.
+Hover placement remains centered below the pointer and clamped to the hovered screen. Leaving the originating status segment hides an ordinary preview immediately. Left- or right-click a popup label to pin it and focus its terminal; repeated clicks keep it open. It stays anchored while the pointer moves into the popup or over other segments. Clicking another popup label switches views. Configured click actions and links retain their normal left-click action; right-click or Option-click pins their popup. Close a pinned popup with Command-W or a configured terminal exit mapping. Menu reveal, focus loss, removed anchors, and other Flash surfaces dismiss presentation. Persistent children keep running; nonpersistent children stop.
 
-Terminal focus has its own mode. Global mappings are suspended while local terminal mappings run before native copy/paste and terminal input. Pending sequences preserve the order of key presses, releases, and modifier changes; a matched mapping consumes its releases. Replays retain the originating session and restart generation, so a late release cannot enter a replacement child. Only effective INSERT mappings for `leave_mode` or `enter_normal_mode` are inherited as terminal exit mappings; explicit terminal mappings override them. Plain Escape remains available to the TUI. Exiting through an inherited NORMAL mapping restores the previously focused application. Losing focus to another app does not steal focus back.
+Terminal focus has its own mode. Global mappings are suspended while local terminal mappings run before native copy/paste and terminal input. Pending sequences preserve the order of key presses, releases, and modifier changes; a matched mapping consumes its releases. Replays retain the originating session and restart generation, so a late release cannot enter a replacement child. Only effective INSERT mappings for `enter_normal_mode` or `leave_mode` are inherited as terminal exit mappings; explicit terminal mappings override them. Plain Escape remains available to the TUI. Exiting through an inherited NORMAL mapping restores the previously focused application. Losing focus to another app does not steal focus back.
 
 Command popups and document popups share the same cell renderer. Documents never spawn children: styled runs become generated VT, while literal control characters are made inert. Replacing a document clears previous content and its history. Long documents can scroll; selecting text and Command-C work in both kinds of popup. Shift-click opens HTTP(S) links, including printed URLs and terminal hyperlinks (OSC 8), without forwarding the click to the running application. Wrapped URLs remain one link. Shift-drag selects text even when a TUI requests mouse reporting; dragging never opens a link. Command-V uses Ghostty's paste encoder and respects bracketed paste mode. macOS input-method composition is local to the terminal view.
 
@@ -44,9 +54,24 @@ Command popups and document popups share the same cell renderer. Documents never
 
 `flash terminal_show` opens a fresh login shell in the home directory. Each
 invocation creates a new process. `flash terminal_dismiss` closes the focused
-terminal and restores the previous application. Exiting a fresh shell starts
-a replacement in the same window. Dismissing the window stops and reaps its
-child and cancels pending retries.
+terminal and restores the previous application. Exiting, killing, closing, or
+hiding a fresh shell removes its session, window, and scrollback permanently.
+It never restarts automatically. Command-R can explicitly restart it while it
+is open; Command-Q ends it. Each later invocation creates a new identity.
+
+Bind a fresh shell explicitly in the desired scopes:
+
+```toml
+[mode.all.mappings]
+"alt+space" = ["flash", "terminal_show"]
+
+[mode.terminal.mappings]
+"alt+space" = ["flash", "terminal_show"]
+```
+
+The terminal-scope binding also creates a new shell while another terminal has
+focus. Fresh shell exit restores the captured app; clicking another app keeps
+focus where the user moved it.
 
 Declare a named terminal to launch a particular process:
 
@@ -66,6 +91,7 @@ rows = 36
 [mode.terminal.mappings]
 "cmd+w" = ["flash", "terminal_dismiss"]
 "cmd+r" = ["flash", "terminal_restart"]
+"cmd+q" = ["flash", "terminal_quit"]
 ```
 
 Named definitions accept `command`, `working_directory`, `env`, `columns`,
@@ -74,7 +100,8 @@ grid: the name then identifies a command template, and each opening gets a
 fresh process. With `persistent = true`, Flash starts the session after its
 login environment resolves, even when hidden or the status bar is disabled.
 Reopening preserves the process, screen, and history. All sessions use
-the same automatic restart policy as status popups while owned by Flash.
+the same automatic restart policy as named status popups while owned by Flash;
+the unnamed `terminal_show` fresh shell is the one-shot exception.
 
 Windows appear centered on the focused application's screen and clamp to its
 available area. One terminal window is presented at a time; changing windows
@@ -177,5 +204,14 @@ space there. `monitor = "all"` draws a bar on every display.
 
 Use `#[align=absolute-centre]` for a label at the physical center of the screen. Native tmux `#[align=centre]` instead centers the space remaining between the left and right content, so unequal side widths shift that label.
 
-For the combined SYS dashboard, battery widget, and calendar setup, see the
+For separate quota and system metrics with native detail popups, see the
 [ready-to-use configurations](examples/statusbar/README.md).
+
+`leave_mode` is inherited from effective INSERT-active mappings just like
+`enter_normal_mode`. It hides the popup and restores its saved mode and external
+app; an explicit terminal binding still takes precedence. For a shared exit:
+
+```toml
+[mode.all.mappings]
+"cmd+ctrl+[" = ["flash", "leave_mode"]
+```

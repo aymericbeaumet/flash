@@ -47,6 +47,7 @@ final class NativeStatusBarSurface {
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
     palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle
   ) {
+    let previousRuns = visibleRuns
     cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
@@ -65,13 +66,17 @@ final class NativeStatusBarSurface {
     }
     let prepared = Self.preparedDocument(
       document, pillColumns: pillColumns, hideCentre: notch != nil)
-    layout = StatusFormatLayout.layout(
-      Self.shrinkingDocument(prepared, columns: availableColumns), columns: availableColumns)
     let notchLocal = notch.map {
       let start = $0.minX - screenFrame.minX - OverlayPanel.statusBarNotchMargin
       let end = $0.maxX - screenFrame.minX + OverlayPanel.statusBarNotchMargin
       return start..<end
     }
+    let leftColumns = notchLocal.map {
+      max(0, Int(floor(($0.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth)))
+    }
+    layout = StatusFormatLayout.layout(
+      Self.shrinkingDocument(prepared, columns: availableColumns, leftColumns: leftColumns),
+      columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
     runFrames = Self.frames(
       for: visibleRuns, cellWidth: cellWidth, pillWidth: pillWidth,
@@ -88,6 +93,8 @@ final class NativeStatusBarSurface {
     backgroundLayer.colors = [fill, fill]
     let textHeight = font.pointSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
+    let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: visibleRuns)
+    let cycleStartedAt = CACurrentMediaTime()
     for (index, run) in visibleRuns.enumerated() {
       if index == runLayers.count {
         let layers = RunLayer()
@@ -128,18 +135,23 @@ final class NativeStatusBarSurface {
         segment.background = .defaultBackground
         segment.reverse = false
       }
+      if !segment.cycle, layers.previous?.cycle == true {
+        layers.text.removeAnimation(forKey: kCATransition)
+        layers.effect.removeAnimation(forKey: kCATransition)
+      }
       let changed =
         layers.previous != segment || layers.previousFont != font
-        || layers.previousPalette != modeStyle
+        || layers.previousPalette != modeStyle || cycling.contains(index)
       if changed {
-        if segment.cycle, layers.previous?.cycle == true, layers.previous?.text != segment.text {
+        if cycling.contains(index) {
           let animation = CATransition()
           animation.type = .push
           animation.subtype = .fromBottom
-          animation.duration = 0.42
+          animation.duration = 0.8
+          animation.beginTime = layers.text.convertTime(cycleStartedAt, from: nil)
           animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-          layers.text.add(animation, forKey: "cycleSlide")
-          layers.effect.add(animation, forKey: "cycleSlide")
+          layers.text.add(animation, forKey: kCATransition)
+          layers.effect.add(animation, forKey: kCATransition)
         }
         let attributed = FlashStatusBarRenderer.attributedSegment(segment, font: font)
         layers.text.string = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
@@ -212,6 +224,37 @@ final class NativeStatusBarSurface {
     }
   }
 
+  private static func cycleTransitionIndices(
+    previous: [StatusFormatLayout.PositionedRun], next: [StatusFormatLayout.PositionedRun]
+  ) -> Set<Int> {
+    func groups(_ runs: [StatusFormatLayout.PositionedRun]) -> [Range<Int>] {
+      var result: [Range<Int>] = []
+      for index in runs.indices where runs[index].segment.cycle {
+        if let last = result.last, last.upperBound == index,
+          runs[last.lowerBound].segment.alignment == runs[index].segment.alignment
+        {
+          result[result.count - 1] = last.lowerBound..<(index + 1)
+        } else {
+          result.append(index..<(index + 1))
+        }
+      }
+      return result
+    }
+    var changed = Set<Int>()
+    for (old, new) in zip(groups(previous), groups(next)) {
+      let sameArticle =
+        old.count == new.count
+        && zip(old, new).allSatisfy { before, after in
+          let lhs = previous[before].segment
+          let rhs = next[after].segment
+          return lhs.text == rhs.text && lhs.link == rhs.link && lhs.popup == rhs.popup
+            && lhs.popupContent == rhs.popupContent
+        }
+      if !sameArticle { changed.formUnion(new) }
+    }
+    return changed
+  }
+
   /// Native cells reserve enough room for Flash's pill, but the pill keeps its
   /// original point geometry. Remove only that reservation's rounding within
   /// its alignment lane, retaining the native centre/right anchor.
@@ -282,9 +325,9 @@ final class NativeStatusBarSurface {
 
   /// Flash's opt-in elastic spans consume overflow before native alignment and
   /// list drawing. Unmarked formats pass through to tmux's clipping unchanged.
-  static func shrinkingDocument(_ document: StatusFormatDocument, columns: Int)
-    -> StatusFormatDocument
-  {
+  static func shrinkingDocument(
+    _ document: StatusFormatDocument, columns: Int, leftColumns: Int? = nil
+  ) -> StatusFormatDocument {
     var runs = document.runs
     let ordinary = runs.indices.filter {
       !runs[$0].isStyleBoundary && runs[$0].alignment != .absoluteCentre
@@ -293,11 +336,30 @@ final class NativeStatusBarSurface {
     var overflow = max(
       0, ordinary.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) } - columns
     )
-    guard overflow > 0 else { return document }
+    let absoluteCentreWidth = document.runs.filter {
+      !$0.isStyleBoundary && $0.alignment == .absoluteCentre
+    }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
+    let centreStart =
+      absoluteCentreWidth > 0 ? (columns - min(columns, absoluteCentreWidth)) / 2 : columns
+    let leftLimit = min(leftColumns ?? columns, centreStart)
+    func isLeft(_ index: Int) -> Bool {
+      runs[index].alignment == .left || runs[index].alignment == .default
+    }
+    var leftOverflow = max(
+      0,
+      ordinary.filter(isLeft).reduce(0) {
+        $0 + StatusFormatCells.width(runs[$1].text, styles: false)
+      }
+        - leftLimit)
+    guard overflow > 0 || leftOverflow > 0 else { return document }
     var groups: [[Int]] = []
     var group: [Int] = []
     for index in ordinary {
       if runs[index].shrink {
+        if let previous = group.last, runs[previous].alignment != runs[index].alignment {
+          groups.append(group)
+          group = []
+        }
         group.append(index)
       } else if !group.isEmpty {
         groups.append(group)
@@ -305,9 +367,11 @@ final class NativeStatusBarSurface {
       }
     }
     if !group.isEmpty { groups.append(group) }
-    for group in groups where overflow > 0 {
+    for group in groups {
+      let left = isLeft(group[0])
+      let required = max(overflow, left ? leftOverflow : 0)
       let width = group.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) }
-      let removed = min(overflow, max(0, width - 1))
+      let removed = min(required, max(0, width - 1))
       guard removed > 0 else { continue }
       var remaining = width - removed - 1
       var truncated = false
@@ -325,7 +389,8 @@ final class NativeStatusBarSurface {
           }
         }
       }
-      overflow -= removed
+      overflow = max(0, overflow - removed)
+      if left { leftOverflow = max(0, leftOverflow - removed) }
     }
     return StatusFormatDocument(runs: runs)
   }

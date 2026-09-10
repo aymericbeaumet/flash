@@ -14,6 +14,7 @@
         "method": "status",
         "params": {
           "segments": {
+            "label": { "$contains": "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]" },
             "summary": { "$type": "string", "$min_len": 1 },
             "details": { "$type": "string", "$min_len": 1 }
           }

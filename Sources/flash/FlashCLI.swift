@@ -51,6 +51,7 @@ enum FlashCLI {
       flash mouse_grid --move
       flash enter_normal_mode
       flash leave_mode
+
       flash app_open --name=Firefox
       flash window_move --position=lefthalf
       flash window_move --x=10% --y=10% --width=80% --height=80%
@@ -80,6 +81,7 @@ enum FlashCLI {
       FileHandle.standardError.write(Data("flash: \(error)\n".utf8))
       return 2
     }
+
   }
 
   private static func sendVerb(_ verb: String, args: [String: String]) -> Int32 {
@@ -128,8 +130,19 @@ enum FlashCLI {
     addUTF8(value: argsJSON, to: &event, key: argsKey)
 
     var reply = AppleEvent()
-    let status = AESendMessage(&event, &reply, AESendMode(kAENoReply), 5 * 60)
-    defer { AEDisposeDesc(&reply) }
+    // Quit tears down the resident before a reply can be sent.
+    let sendMode = verb == "flash_quit" ? kAENoReply : kAEWaitReply
+    let status = AESendMessage(&event, &reply, AESendMode(sendMode), 5 * 60)
+    let replyDescriptor = NSAppleEventDescriptor(aeDescNoCopy: &reply)
+    if let error = replyDescriptor.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)),
+      error.int32Value != 0
+    {
+      let message =
+        replyDescriptor.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?
+        .stringValue ?? URLEventHandler.rejectionMessage("flash \(verb)")
+      FileHandle.standardError.write(("flash: " + message + "\n").data(using: .utf8) ?? Data())
+      return 2
+    }
     if status != noErr {
       FileHandle.standardError.write(
         "flash: could not send \(verb) (OSStatus=\(status))\n".data(using: .utf8) ?? Data())

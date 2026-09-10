@@ -33,8 +33,17 @@ extension AppDelegate {
   }
 
   func leaveMode() {
-    if modeStore.mode.isTerminal { suppressDismissedTerminalHover() }
-    dispatchMode(.leaveMode(targetPID: terminalReturnApplicationPID))
+    if modeStore.mode.isTerminal {
+      suppressDismissedTerminalHover()
+      dismissTerminal()
+      return
+    }
+    if overlay.statusPopupController.isVisible { dismissTerminal() }
+    overlay.resignCommandTextFieldFocus()
+    dispatchMode(
+      .leaveMode(
+        hasHints: hintSession.isActive || activationInFlight,
+        targetPID: terminalReturnApplicationPID))
   }
 
   func enterInsertMode(
@@ -903,14 +912,16 @@ extension AppDelegate {
       enterInsertMode(reason: .normalModeInput)
     case .normalMode:
       enterNormalMode()
+    case .leaveMode:
+      leaveMode()
     case .terminalShow(let name):
       showTerminal(named: name)
     case .terminalDismiss:
       dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
-    case .leaveMode:
-      leaveMode()
+    case .terminalQuit(let name):
+      quitStatusTerminal(named: name)
     case .commandMode:
       enterCommandLineMode()
     case .scroll(let kind):

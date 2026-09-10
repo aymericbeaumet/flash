@@ -22,6 +22,7 @@
         "method": "status",
         "params": {
           "segments": {
+            "label": { "$contains": "#[fg=#EBCB8B]NET#[default] #[fg=colour245]" },
             "summary": { "$type": "string", "$min_len": 1 },
             "details": {
               "$contains": "#[fg=#EBCB8B]Network#[default]\n#[fg=colour245]Wi-Fi         #[default]Atelier\n"

@@ -33,6 +33,7 @@ impl MemorySnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
     summary: String,
+    label: String,
     details: String,
     plain_details: String,
 }
@@ -190,6 +191,7 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     };
     ctx.status([
         ("summary", next.summary.as_str()),
+        ("label", next.label.as_str()),
         ("details", next.details.as_str()),
     ]);
 }
@@ -334,6 +336,10 @@ Page size: {}",
 
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
+        label: format!(
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{:>2.0}%#[default]",
+            percent.min(99.0)
+        ),
         details,
         plain_details,
     }
@@ -376,6 +382,34 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+
+    #[test]
+    fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
+        for (occupied, expected) in [
+            (0, " 0%"),
+            (90, " 9%"),
+            (100, "10%"),
+            (999, "99%"),
+            (1000, "99%"),
+        ] {
+            let snapshot = MemorySnapshot {
+                total: 1000,
+                occupied,
+                free: 1000 - occupied,
+                wired: 0,
+                compressed: 0,
+                swap_total: 0,
+                swap_used: 0,
+                page_size: 4096,
+            };
+            let status = render_status(&snapshot, &VecDeque::from([9.0]), SummaryMode::Full);
+            assert_eq!(
+                status.label,
+                format!("#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(status.summary.contains("popup="));
+        }
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {

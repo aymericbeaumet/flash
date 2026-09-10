@@ -418,7 +418,7 @@ struct Config {
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
-    var terminal: [ModeMapping] = []
+    var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
     /// Keys and modifiers that make an unmapped keypress in NORMAL switch to
@@ -458,6 +458,20 @@ struct Config {
     static let defaultNormalLeader = "\\"
 
     static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
+
+    static let defaultTerminalMappings: [ModeMapping] = {
+      let bindings: [(String, URLCommand)] = [
+        ("cmd+q", .terminalQuit(name: nil)),
+        ("cmd+r", .terminalRestart(name: nil)),
+        ("cmd+w", .terminalDismiss),
+      ]
+      return bindings.map { key, command in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("invalid default terminal mapping: \(key)")
+        }
+        return ModeMapping(key: canonical, action: .flashCommand(command))
+      }
+    }()
 
     private static func makeDefaultNormalMappings() -> [ModeMapping] {
       // Bare punctuation is allowed by the parser; defaults stay
@@ -987,13 +1001,15 @@ extension URLCommand {
     case .mouseDock: return verb("mouse_dock")
     case .mouseStatusBar: return verb("mouse_statusbar")
     case .normalMode: return verb("enter_normal_mode")
+    case .leaveMode: return verb("leave_mode")
     case .terminalShow(let name):
       return verb("terminal_show", name.map { ["--name=\($0)"] } ?? [])
     case .terminalDismiss:
       return verb("terminal_dismiss")
     case .terminalRestart(let name):
       return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
-    case .leaveMode: return verb("leave_mode")
+    case .terminalQuit(let name):
+      return verb("terminal_quit", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")
     case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):

@@ -378,10 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.aboutWindowVisibilityDidChange(visible)
     }
 
-    let dispatch: (URLCommand) -> Void = { [weak self] cmd in
-      self?.handleURLCommand(cmd)
-    }
-    urlHandler = URLEventHandler(handler: dispatch)
+    urlHandler = URLEventHandler(
+      handler: { [weak self] cmd in self?.handleURLCommand(cmd) ?? false },
+      rejected: { [weak self] command in self?.warnUnsupportedCommand(command) })
     mappings.start(
       dispatch: { [weak self] action in
         self?.dispatchNativeMappingAction(action)
@@ -410,7 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     emitRunningApplicationsChanged(reason: "launch")
   }
 
-  func handleURLCommand(_ cmd: URLCommand) {
+  @discardableResult
+  func handleURLCommand(_ cmd: URLCommand) -> Bool {
     FlashLog.trace(
       "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight) overlay=\(String(describing: overlay?.inputMode))")
@@ -435,14 +435,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateStatusItemHints()
     case .normalMode:
       enterNormalMode()
+    case .leaveMode:
+      leaveMode()
     case .terminalShow(let name):
       showTerminal(named: name)
     case .terminalDismiss:
       dismissTerminal()
     case .terminalRestart(let name):
       restartStatusTerminal(named: name)
-    case .leaveMode:
-      leaveMode()
+    case .terminalQuit(let name):
+      quitStatusTerminal(named: name)
     case .insertMode:
       enterInsertMode()
     case .commandMode:
@@ -482,17 +484,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .openApp(let name):
       openSourceItem(matching: name)
     case .pluginCommand(let command, let subcommand, let args):
-      pluginManager.invoke(
+      let dispatched = pluginManager.invoke(
         command: command,
         subcommand: subcommand,
         args: args,
         raw: cmd.diagnosticDescription,
         in: pluginSelectorContext()
       ) { [weak self] ok, pid, stdout, navigationURL in
-        guard ok else { return }
+        guard ok else {
+          self?.warnCommandFailure(cmd.diagnosticDescription)
+          return
+        }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
+      if !dispatched { warnUnsupportedCommand(cmd.diagnosticDescription) }
+      return dispatched
     case .moveWindow(let params):
       // Use the *non-Flash* frontmost app as the move target. Without
       // this, normal-mode capture (which activates Flash to satisfy the
@@ -521,14 +528,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         in: pluginSelectorContext(for: target),
         focusedPID: target?.processID
       ) { [weak self] ok, pid, stdout, navigationURL in
-        guard ok else { return }
+        guard ok else {
+          self?.warnCommandFailure(cmd.diagnosticDescription)
+          return
+        }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
       if !dispatched {
-        FlashLog.debug("[plugin_verb] no plugin claims verb=\(name)")
+        warnUnsupportedCommand(cmd.diagnosticDescription)
       }
+      return dispatched
     }
+    return true
+  }
+
+  func warnUnsupportedCommand(_ command: String) {
+    displayCommandWarning(URLEventHandler.rejectionMessage(command))
+  }
+
+  func warnCommandFailure(_ command: String) {
+    displayCommandWarning("Command failed or was not handled: \(command). Check :logs for details.")
+  }
+
+  private func displayCommandWarning(_ message: String) {
+    FlashLog.warn(message, source: "core:Command")
+    overlay.displayAlert(message, duration: 8, style: .error)
   }
 
   private func installDismissObservers() {

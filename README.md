@@ -23,7 +23,7 @@ The current build is published through Homebrew:
 brew install --cask aymericbeaumet/tap/flash@nightly
 ```
 
-This installs `/Applications/Flash.app`, the `flash` CLI, and a login LaunchAgent. Open **System Settings → Privacy & Security → Accessibility**, enable Flash, then restart the app once.
+This installs `/Applications/Flash.app`, the `flash` CLI, and config-owned login-item registration. Open **System Settings → Privacy & Security → Accessibility**, enable Flash, then restart the app once.
 
 ### Build from source
 
@@ -64,21 +64,22 @@ Mappings call the same actions as the CLI, so anything you can run as `flash <ve
 
 ### Normal mode
 
-Bind `leave_mode` once to enable normal mode and share an exit shortcut across insert and command modes:
+Bind `enter_normal_mode` (or an all-scope `leave_mode` exit) to enable the
+keyboard-first modes:
 
 ```toml
 [mode.all.mappings]
-"ctrl+alt+n" = ["flash", "leave_mode"]
+"cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+"cmd+ctrl+[" = ["flash", "leave_mode"]
+"alt+space" = ["flash", "terminal_show"]
 
 [statusbar]
 enabled = true
 ```
 
-`leave_mode` returns insert mode to normal and closes command panels using their return mode (`--restore-mode` preserves the entry mode). In normal mode it does nothing. `enter_normal_mode` explicitly selects normal mode regardless of a panel's return mode. Modified mappings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`; no mode-specific exit override is installed by default.
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` mapping, a configured passthrough key or modifier chord, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on).
-
-`leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` have no default mappings in any scope. Define the shortcuts you want in your configuration, including any command-line or flashlight shortcut. No default `a/A/i/I/o/O/gi` binding enters INSERT.
+`leave_mode` also closes command panels using their return mode (`--restore-mode` preserves the entry mode) and only dismisses active hints in normal mode; `enter_normal_mode` explicitly selects normal mode regardless of a panel's return mode. Modified mappings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`; no mode-specific exit override is installed by default. `leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` have no default mappings in any scope: define the shortcuts you want, including any command-line or flashlight shortcut.
 
 ### Status-bar hover popups
 
@@ -139,12 +140,15 @@ rows = 24
 ```
 
 Hover previews disappear when the pointer leaves their status segment. Click
-a popup label to keep it open and use the terminal; click again to close it.
+a popup label to keep it open and use the terminal; repeated clicks keep it pinned.
 Right-click a popup segment to keep it open and enter terminal mode. Links
 still open normally on left-click; Option-click also focuses their popup.
-Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a popup
-keeps its child alive. See the [SYS, battery, and calendar setup](docs/examples/statusbar/README.md)
-for a combined system dashboard and persistent calendar.
+Terminal mode defaults to Command-R to restart the process, Command-Q to quit
+it (named terminals restart automatically), and Command-W to hide the window.
+Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a persistent popup
+keeps its child alive. See the [interactive status strip](docs/examples/statusbar/README.md)
+for separate Cld/Cdx quotas, compact CPU/MEM/DSK/NET/BAT metrics, native
+detail popups, and the calendar.
 See [terminal lifecycle and configuration](docs/terminal-popups.md).
 
 The template follows tmux 3.7b formats and styles. `@left`/`@right` above are
@@ -156,7 +160,10 @@ cadence, or rotating output.
 
 ### Shortcut terminal windows
 
-`flash terminal_show` opens a fresh login shell. Named terminals can persist
+`flash terminal_show` opens a one-shot fresh login shell. Closing, hiding,
+exiting, or killing it permanently removes that session. Bind it to `alt+space`
+in your all-scope and terminal mappings to create a new shell every time.
+Named terminals can persist
 across openings and start with Flash:
 
 ```toml
@@ -174,7 +181,7 @@ rows = 36
 "cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
-Omit `persistent` for a new process each time the window opens. All terminal
+Omit `persistent` for a new process each time the window opens. Named terminal
 windows and status popup processes restart after exiting. The first retry is
 prompt; repeated immediate failures back off. Closing a nonpersistent window
 stops its process and cancels retries.
@@ -192,7 +199,7 @@ preview, preserving paragraphs, headings, lists, and code. For AGGR:
 label = "AGGR"
 url = "https://aggr.aymericbeaumet.com/rss.xml"
 refresh_interval = 300
-cycle_interval = 60
+cycle_interval = 10
 
 [statusbar.options]
 "@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"

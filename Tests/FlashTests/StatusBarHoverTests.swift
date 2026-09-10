@@ -9,8 +9,7 @@ final class StatusBarHoverTests: XCTestCase {
     view.popups = [.init(rect: view.bounds, name: "article", content: "Preview")]
     view.links = [(view.bounds, URL(string: "https://example.com/article")!)]
     var selected: [String] = []
-    view.onPopupClick = { popup, _, action in
-      XCTAssertEqual(action, .focus)
+    view.onPopupClick = { popup, _ in
       selected.append(popup.name)
     }
     func click(upX: CGFloat = 30) throws {
@@ -38,8 +37,7 @@ final class StatusBarHoverTests: XCTestCase {
     let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
     view.popups = [.init(rect: view.bounds, name: "article", content: "Preview")]
     var selected: [String] = []
-    view.onPopupClick = { popup, _, action in
-      XCTAssertEqual(action, .toggle)
+    view.onPopupClick = { popup, _ in
       selected.append(popup.name)
     }
     func click(_ modifiers: NSEvent.ModifierFlags, upX: CGFloat = 30) throws {
@@ -66,7 +64,41 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertTrue(StatusBarClickView.focusesPopup(overLink: true, modifiers: .option))
   }
 
-  func testPinnedPopupSurvivesOverlayRefreshAndPointerExitThenTogglesClosed() {
+  func testConfiguredLeftClickActionTakesPrecedenceWhileRightClickPins() throws {
+    let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
+    view.popups = [.init(rect: view.bounds, name: "metrics", content: "Preview")]
+    view.links = [
+      (view.bounds, try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "metrics-action")))
+    ]
+    var actions: [String] = []
+    var popups: [String] = []
+    view.onStatusBarAction = { actions.append($0) }
+    view.onPopupClick = { popup, _ in popups.append(popup.name) }
+    for type: NSEvent.EventType in [.leftMouseDown, .rightMouseDown] {
+      let down = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: type, location: CGPoint(x: 30, y: 12), modifierFlags: [], timestamp: 0,
+          windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+      let up = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: type == .leftMouseDown ? .leftMouseUp : .rightMouseUp,
+          location: CGPoint(x: 30, y: 12), modifierFlags: [], timestamp: 0,
+          windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+      if type == .leftMouseDown {
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
+        XCTAssertEqual(actions, ["metrics-action"])
+        XCTAssertTrue(popups.isEmpty)
+      } else {
+        view.rightMouseDown(with: down)
+        view.rightMouseUp(with: up)
+        XCTAssertEqual(actions, ["metrics-action"])
+        XCTAssertEqual(popups, ["metrics"])
+      }
+    }
+  }
+
+  func testPinnedPopupSurvivesOverlayRefreshPointerExitAndRepeatedClicks() {
     let panel = OverlayPanel()
     panel.statusPopupController = StatusPopupController(
       terminals: panel.statusTerminals, windowActionsEnabled: false)
@@ -80,7 +112,7 @@ final class StatusBarHoverTests: XCTestCase {
       region, pointer: CGPoint(x: 150, y: 812),
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
-    panel.activateStatusBarPopup(region, at: .zero, action: .focus)
+    panel.activateStatusBarPopup(region, at: .zero)
     XCTAssertEqual(focusTransitions, 1)
     panel.syncStatusBarClickWindows(
       bandRects: [CGRect(x: 0, y: 800, width: 900, height: 25)], links: [], popups: [region])
@@ -92,12 +124,29 @@ final class StatusBarHoverTests: XCTestCase {
       .init(rect: region.rect, name: "other", content: "Other"), at: .zero)
     XCTAssertEqual(controller.focusedName, "article")
     XCTAssertEqual(controller.frame, frame)
-    panel.activateStatusBarPopup(region, at: .zero, action: .focus)
+    panel.activateStatusBarPopup(region, at: .zero)
     XCTAssertTrue(controller.isVisible)
     XCTAssertEqual(focusTransitions, 1, "Right-click must keep the focused popup open")
-    panel.activateStatusBarPopup(region, at: .zero, action: .toggle)
-    XCTAssertFalse(controller.isVisible)
-    XCTAssertNil(panel.activeStatusBarPopupName)
+    let view = panel.statusBarClickWindows[0].clickView
+    for type: NSEvent.EventType in [.leftMouseDown, .rightMouseDown] {
+      let upType: NSEvent.EventType = type == .leftMouseDown ? .leftMouseUp : .rightMouseUp
+      let down = NSEvent.mouseEvent(
+        with: type, location: CGPoint(x: 150, y: 12), modifierFlags: [], timestamp: 0,
+        windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+      let up = NSEvent.mouseEvent(
+        with: upType, location: CGPoint(x: 150, y: 12), modifierFlags: [], timestamp: 0,
+        windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 0)!
+      if type == .leftMouseDown {
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
+      } else {
+        view.rightMouseDown(with: down)
+        view.rightMouseUp(with: up)
+      }
+      XCTAssertTrue(controller.isVisible)
+      XCTAssertEqual(controller.focusedName, "article")
+      XCTAssertEqual(focusTransitions, 1, "Repeated clicks must not release or refocus the session")
+    }
   }
 
   func testStandaloneTerminalSurvivesHiddenStatusBar() {

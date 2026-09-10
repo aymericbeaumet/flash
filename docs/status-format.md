@@ -139,7 +139,10 @@ The additional style tokens are `pill/nopill`, `shrink/noshrink`,
 `popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`.
 Native `range=user|name` selects a `[statusbar.click]` action. The status renderer
 reserves explicit mode-pill space and notch clearance, then draws the native
-cell layout. These host surfaces do not alter format evaluation.
+cell layout. Elastic `#[shrink]` spans in the left lane reserve any fixed suffix
+and stop before the notch or an absolute-centre component. The feed uses this
+for title-only ellipsis with an always-visible outbound arrow. These host
+surfaces do not alter format evaluation.
 
 Inline popup identities derive from their source origin and invocation, not the
 current text or screen position. A changing source value refreshes an open

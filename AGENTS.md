@@ -13,7 +13,8 @@ contracts before changing a subsystem:
 - [Plugin protocol](docs/plugin-protocol.md), [Rust SDK](docs/plugin-rust-sdk.md),
   [cookbook](docs/plugin-cookbook.md), [performance](docs/plugin-performance.md).
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
-  [terminal popups](docs/terminal-popups.md), [help](docs/help.md).
+  [status popups](docs/status-popups.md), [terminal popups](docs/terminal-popups.md),
+  [help](docs/help.md).
 
 ## Hard constraints
 

@@ -5,8 +5,8 @@ import Foundation
 // next `Mode` plus the AppKit effects to apply. No AppKit, no clock, no I/O.
 //
 // Invariants guaranteed here (and pinned by `ModeReducerTests`):
-//  - Insert stickiness: only explicit keyboard requests or configuration can
-//    leave `.insert`; mouse and focus events never do.
+//  - Insert stickiness: only explicit keyboard requests and disabling
+//    advanced mode leave `.insert`.
 //  - Mouse enters only: `.clickResolved` acts only from `.normal`; it can move
 //    NORMAL→insert but can never move insert→anything.
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
@@ -29,17 +29,19 @@ enum ModeReducer {
         ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
       return (.normal, departure + enterEffects(for: .normal, targetPID: targetPID))
 
-    case .leaveMode(let targetPID):
+    case .leaveMode(let hasHints, let targetPID):
       switch state {
-      case .insert:
-        return (.normal, enterEffects(for: .normal, targetPID: nil))
-      case .command(_, let restoreTo):
-        let next = restoreTo.mode
-        return (next, enterEffects(for: next, targetPID: nil))
       case .terminal:
         return reduce(state, .closeTerminal(targetPID: targetPID))
-      case .normal, .disabled:
-        return (state, [])
+      case .command:
+        return reduce(state, .closeCommand(reason: "leave_mode"))
+      case .insert where !hasHints:
+        return reduce(state, .enterNormal(targetPID: targetPID))
+      case .insert, .normal, .disabled:
+        // Active hints are dismissed in place; without hints there is no
+        // enclosing mode to leave, so nothing re-renders.
+        guard hasHints else { return (state, []) }
+        return (state, enterEffects(for: state, targetPID: targetPID))
       }
 
     case .openCommand(let scope, let restoreMode):

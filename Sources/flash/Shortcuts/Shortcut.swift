@@ -86,6 +86,7 @@ func mappingCommandHeadNamesFlash(_ value: String) -> Bool {
   return URL(fileURLWithPath: expanded).lastPathComponent == "flash"
 }
 
+
 extension MappingCommand {
   var command: URLCommand? {
     switch self {

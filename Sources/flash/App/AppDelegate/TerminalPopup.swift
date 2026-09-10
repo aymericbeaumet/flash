@@ -41,9 +41,12 @@ extension AppDelegate {
       self.dispatchMode(.openTerminal)
     }
     popup.willDismissFocus = { [weak self] in self?.terminalInputMappings?.flush() }
-    popup.didDismissFocus = { [weak self] in
+    popup.didDismissFocus = { [weak self] reason in
       guard let self else { return }
-      if case .terminal = self.modeStore.mode { self.dispatchMode(.closeTerminal(targetPID: nil)) }
+      if case .terminal = self.modeStore.mode {
+        let targetPID = reason == "terminal_removed" ? self.terminalReturnApplicationPID : nil
+        self.dispatchMode(.closeTerminal(targetPID: targetPID))
+      }
       self.terminalReturnApplicationPID = nil
     }
     overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
@@ -133,13 +136,22 @@ extension AppDelegate {
   }
 
   func restartStatusTerminal(named name: String?) {
-    let focused = overlay.statusPopupController.focusedName
-    let key =
-      name.flatMap { overlay.statusTerminals.terminalKey(named: $0, focusedName: focused) }
-      ?? (name == nil ? focused : nil)
-    guard let key else { return }
+    guard let key = statusTerminalKey(named: name) else { return }
     terminalInputMappings?.flush()
     overlay.statusTerminals.restart(name: key)
+  }
+
+  func quitStatusTerminal(named name: String?) {
+    guard let key = statusTerminalKey(named: name) else { return }
+    terminalInputMappings?.flush()
+    overlay.statusTerminals.quit(name: key)
+  }
+
+  private func statusTerminalKey(named name: String?) -> String? {
+    let focused = overlay.statusPopupController.focusedName
+    return
+      name.flatMap { overlay.statusTerminals.terminalKey(named: $0, focusedName: focused) }
+      ?? (name == nil ? focused : nil)
   }
 
   func statusTerminalDebugState() -> [String: Any] {
