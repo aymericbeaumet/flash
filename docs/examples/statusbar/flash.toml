@@ -11,7 +11,7 @@ template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=r
 #{?flash.plugin.aiproviders.summary,#{flash.plugin.aiproviders.summary} ,}
 #[fg=#EBCB8B]#[popup=cpu]CPU#[nopopup] #[popup=memory]MEM#[nopopup] #[popup=disks]DISK#[nopopup] #[popup=network]NET#[nopopup]#[default]
 #{?flash.plugin.power.label, #[popup=battery]#{flash.plugin.power.label}#[nopopup],}
-#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default,bold]%H:%M#[nobold,nopopup]
+#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
 
 [statusbar.popup]
