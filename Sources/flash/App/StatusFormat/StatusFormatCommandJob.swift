@@ -244,13 +244,18 @@ final class StatusFormatCommandJob {
   deinit {
     closeSources()
     if !completed, process > 0 {
-      kill(-process, SIGKILL)
-      let deadline = ProcessInfo.processInfo.systemUptime + 1
-      repeat {
-        reapIfExited()
-        if exitStatus != nil { break }
-        usleep(2_000)
-      } while ProcessInfo.processInfo.systemUptime < deadline
+      let pid = process
+      kill(-pid, SIGKILL)
+      // Reap off whichever thread dropped the last reference: a bounded
+      // poll on a utility queue, never a sleep loop inside `deinit`.
+      DispatchQueue.global(qos: .utility).async {
+        let deadline = ProcessInfo.processInfo.systemUptime + 1
+        repeat {
+          var status: Int32 = 0
+          if waitpid(pid, &status, WNOHANG) != 0 { return }
+          usleep(2_000)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+      }
     }
   }
 }

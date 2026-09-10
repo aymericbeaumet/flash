@@ -32,6 +32,16 @@ final class StatusTerminalRegistryTests: XCTestCase {
     }
   }
 
+  func testRestartsParkAfterRepeatedImmediateExits() {
+    var backoff = TerminalRestartBackoff()
+    let delays = (0..<TerminalRestartBackoff.maxAttempts).map { _ in backoff.nextDelay(at: 0) }
+    XCTAssertEqual(delays.compactMap { $0 }.count, TerminalRestartBackoff.maxAttempts)
+    XCTAssertNil(backoff.nextDelay(at: 0), "parks after \(TerminalRestartBackoff.maxAttempts)")
+    XCTAssertNil(backoff.nextDelay(at: 0))
+    backoff.running(at: 100)
+    XCTAssertEqual(backoff.nextDelay(at: 101.5), 0.1, "a run of one second resets the count")
+  }
+
   func testImmediateExitStormBacksOffAndUserQuitsAfterOneSecondRestartPromptly() {
     var backoff = TerminalRestartBackoff()
     XCTAssertEqual((0..<8).map { _ in backoff.nextDelay(at: 0) }, [0.1, 1, 2, 4, 8, 16, 30, 30])

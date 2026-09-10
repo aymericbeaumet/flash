@@ -47,6 +47,10 @@ final class FlashStatusBarController {
   private var activeBundleIdentifier = ""
   private var modeLabel = "INSERT"
   private(set) var lastPublishedModel: FlashStatusBarModel?
+  /// Inputs of the last evaluation; an identical capture skips the evaluation.
+  private var lastEvaluation:
+    (dependencies: StatusFormatDependencies, inputs: FlashStatusBarTemplateEngine.EvaluationInputs)?
+  private let popupCache = FlashStatusBarTemplateEngine.PopupEvaluationCache()
 
   init(
     overlay: OverlayPanel? = nil, template: FlashStatusBarTemplate,
@@ -131,6 +135,8 @@ final class FlashStatusBarController {
     queue.async { [weak self] in
       guard let self else { return }
       self.template = template
+      self.lastEvaluation = nil
+      self.popupCache.memos.removeAll()
       if let popupTemplates { self.popupTemplates = popupTemplates }
       if let options { self.options = options }
       if let sources {
@@ -179,10 +185,29 @@ final class FlashStatusBarController {
       if let cycle = record.cycle { values[name] = "#[cyc]" + cycle.visibleLine + "#[nocyc]" }
     }
     let jobValues = shellRecords.compactMapValues(\.value)
+    var native = FlashStatusBarTemplateEngine.formatContext(
+      context, dynamicValues: values, jobValues: jobValues)
+    native.options = options.merging(template.options) { _, local in local }
+    if let last = lastEvaluation,
+      FlashStatusBarTemplateEngine.EvaluationInputs.capture(
+        dependencies: last.dependencies, native: native) == last.inputs
+    {
+      // Nothing the template or its popups read has changed since the last
+      // evaluation: only the time-driven bookkeeping below runs.
+      guard started else { return }
+      runDueJobs(now: now)
+      armTimer()
+      return
+    }
     let result = FlashStatusBarTemplateEngine.evaluate(
       template: template, popupTemplates: popupTemplates, context: context,
       dynamicValues: values, jobValues: jobValues, options: options,
-      terminalPopupNames: terminalPopupNames)
+      terminalPopupNames: terminalPopupNames, nativeContext: native, popupCache: popupCache)
+    lastEvaluation = (
+      result.dependencies,
+      FlashStatusBarTemplateEngine.EvaluationInputs.capture(
+        dependencies: result.dependencies, native: native)
+    )
     if result.model != lastPublishedModel {
       lastPublishedModel = result.model
       DispatchQueue.main.async { [weak overlay] in overlay?.setStatusBarModel(result.model) }

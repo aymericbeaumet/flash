@@ -19,6 +19,7 @@ public final class TerminalView: NSView, NSTextInputClient {
   public var background: NSColor = .black { didSet { updateColors() } }
   public var isRenderingEnabled = false {
     didSet {
+      session?.setWantsFrames(isRenderingEnabled)
       if isRenderingEnabled { needsDisplay = true }
       updateBlinkTimer()
     }
@@ -74,6 +75,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     guard self.session !== session || document != nil else { return }
     self.session?.setFocused(false)
     self.session?.onFrame = nil
+    self.session?.setWantsFrames(false)
     document?.onFrame = nil
     document = nil
     self.session = session
@@ -81,6 +83,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     selection = nil
     mouseGesture = nil
     session?.onFrame = { [weak self] in self?.receive($0) }
+    session?.setWantsFrames(isRenderingEnabled)
     if window?.firstResponder === self { session?.setFocused(true) }
     updateCellGeometry()
     updateColors()
@@ -105,8 +108,7 @@ public final class TerminalView: NSView, NSTextInputClient {
   private func updateBlinkTimer() {
     let blinking =
       terminalFrame.map {
-        $0.cursorBlinking && $0.cursorVisible && session != nil
-          || $0.cells.contains { $0.flags & 8 != 0 }
+        $0.cursorBlinking && $0.cursorVisible && session != nil || $0.hasBlinkingCells
       } ?? false
     guard isRenderingEnabled && blinking else {
       blinkTimer?.invalidate()

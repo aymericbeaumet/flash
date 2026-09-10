@@ -553,7 +553,13 @@ final class PluginProcess {
     }
   }
 
-  private func deliverEventOnQueue(_ event: PluginEvent) {
+  /// The `event` frame every listener receives for `event`; nil when the
+  /// payload is not JSON-encodable (the per-plugin path then logs the drop).
+  static func encodedEventFrame(_ event: PluginEvent) -> Data? {
+    try? PluginWireCodec.encodeFrame(eventFrameObject(event))
+  }
+
+  private static func eventFrameObject(_ event: PluginEvent) -> [String: Any] {
     var payload = event.payload
     if let bundleID = event.bundleID, payload["bundle_id"] == nil {
       payload["bundle_id"] = bundleID
@@ -571,13 +577,21 @@ final class PluginProcess {
         "height": frame.height,
       ]
     }
-    writeFrame([
+    return [
       "method": "event",
       "params": [
         "name": event.name,
         "payload": payload,
       ],
-    ])
+    ]
+  }
+
+  private func deliverEventOnQueue(_ event: PluginEvent) {
+    if let frame = event.encodedFrame, frame.count - 1 <= PluginProtocol.maxFrameBytes {
+      enqueueWrite(frame, label: "event")
+      return
+    }
+    writeFrame(Self.eventFrameObject(event))
   }
 
   // MARK: - Host → plugin requests
@@ -1584,26 +1598,12 @@ final class PluginProcess {
 
   private func installFileWatchers() {
     removeFileWatchers()
-    let fm = FileManager.default
-    guard
-      let enumerator = fm.enumerator(
-        at: root,
-        includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
-        options: [.skipsHiddenFiles]
-      )
-    else { return }
-    // Watch directories only. The previous code opened one fd per file
-    // in the plugin tree, so a plugin with `node_modules` (typically
-    // 30k+ files) blew past the default `ulimit -n` (256–2560). DirOnly
-    // still triggers reload on any file write inside a watched dir, so
-    // semantics are equivalent for the dev-iteration use case.
+    // Root only: `manifest.json` and the `flash-plugin-<id>` binary both live
+    // there, and `build-plugins.sh` lands a rebuilt binary as a rename in the
+    // root, which a vnode watcher on the directory sees. Watching the whole
+    // tree opened one descriptor per directory (hundreds with a stray
+    // `target/`) and fired on source edits that change nothing the host loads.
     watchPath(root)
-    for case let url as URL in enumerator {
-      let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey])
-      if resourceValues?.isDirectory == true {
-        watchPath(url)
-      }
-    }
   }
 
   private func watchPath(_ url: URL) {

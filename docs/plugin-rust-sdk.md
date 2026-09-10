@@ -205,11 +205,13 @@ restart a process parked by its restart budget.
 ./Scripts/build-plugins.sh dev <id>   # build + sign + stage just this plugin
 ```
 
-The staged `mv -f` lands as a rename; the host's file watcher restarts only
-that plugin (~300 ms debounce) while the other plugins keep their published
-catalogs. If watching is disabled, run `:plugins reload`.
+The staged `mv -f` lands as a rename in the plugin root; the host watches only
+that root directory (`manifest.json` and the binary live there — source edits
+under `src/` change nothing the host loads) and restarts only that plugin
+(~300 ms debounce) while the other plugins keep their published catalogs. If
+watching is disabled, run `:plugins reload`.
 `CARGO_TARGET_DIR=build/plugin-target cargo test --manifest-path
 Plugins/<id>/Cargo.toml` needs no built binaries at all (always set
-`CARGO_TARGET_DIR` for manual cargo runs — a bare run creates a watched
-`Plugins/<id>/target/`). Debug any plugin by running its binary in a
+`CARGO_TARGET_DIR` for manual cargo runs so no `Plugins/<id>/target/` tree
+appears in the checkout). Debug any plugin by running its binary in a
 terminal and typing NDJSON at it — no host required.

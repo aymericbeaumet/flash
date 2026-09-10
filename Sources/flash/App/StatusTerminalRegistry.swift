@@ -36,15 +36,23 @@ enum StatusTerminalChange: Equatable {
 }
 
 struct TerminalRestartBackoff {
+  /// Consecutive failed starts before restarts stop; a session that ran for
+  /// at least a second resets the count. Without a ceiling a command that
+  /// exits immediately respawns forever at 30 s.
+  static let maxAttempts = 10
+
   private(set) var attempt = 0
   private var runningSince: TimeInterval?
 
   mutating func running(at time: TimeInterval) { runningSince = time }
 
-  mutating func nextDelay(at time: TimeInterval) -> TimeInterval {
+  /// `nil` once the ceiling is reached: the session stays exited until an
+  /// explicit restart or a definition change.
+  mutating func nextDelay(at time: TimeInterval) -> TimeInterval? {
     if let runningSince, time - runningSince >= 1 { attempt = 0 }
     runningSince = nil
     attempt += 1
+    guard attempt <= Self.maxAttempts else { return nil }
     return attempt == 1 ? 0.1 : min(30, pow(2, Double(min(5, attempt - 2))))
   }
 }
@@ -229,7 +237,16 @@ final class StatusTerminalRegistry {
       restart.backoff.running(at: ProcessInfo.processInfo.systemUptime)
     case .exited, .failed:
       guard restart.pending == nil else { return }
-      let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime)
+      guard let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime) else {
+        FlashLog.warn(
+          "Status terminal restart parked after repeated failures",
+          fields: [
+            "popup_id": StatusFormatDocument.stableID(name),
+            "attempts": String(restart.backoff.attempt),
+          ], source: "core:StatusTerminalRegistry.restart")
+        restarts[name] = restart
+        return
+      }
       let generation = inputGenerations[name]
       let work = DispatchWorkItem { [weak self, weak session] in
         guard let self, let session, self.sessions[name] === session,

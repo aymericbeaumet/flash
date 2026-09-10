@@ -71,6 +71,9 @@ struct PluginEvent {
   /// Process id of the focused app for the event. Some events embed this
   /// in `payload.pid` already.
   var pid: pid_t?
+  /// The wire frame for this event, encoded once by `PluginManager.emit` and
+  /// shared by every listener instead of re-serializing the payload per plugin.
+  var encodedFrame: Data?
 }
 
 struct PluginStatus {

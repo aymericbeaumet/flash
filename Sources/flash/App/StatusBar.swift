@@ -382,6 +382,41 @@ enum FlashStatusBarTemplateEngine {
     ).model
   }
 
+  /// Every input one evaluation read, captured so the next publish can skip
+  /// re-evaluating when none of them changed. Plugin samplers publish at 1 Hz;
+  /// most of those publishes change nothing the template references.
+  struct EvaluationInputs: Equatable {
+    var values: [String: String?]
+    var options: [String: String?]
+    var jobs: [String: String]
+    var second: Int?
+
+    static func capture(
+      dependencies: StatusFormatDependencies, native: StatusFormatContext
+    ) -> EvaluationInputs {
+      var values: [String: String?] = [:]
+      for name in dependencies.values { values[name] = native.values[name] }
+      var options: [String: String?] = [:]
+      for name in dependencies.options { options[name] = native.options[name] }
+      return EvaluationInputs(
+        values: values, options: options,
+        jobs: dependencies.containsJobs ? native.jobs : [:],
+        second: dependencies.containsTime ? Int(native.now.timeIntervalSince1970) : nil)
+    }
+  }
+
+  /// Per-popup memo: a popup program is re-evaluated only when a value or
+  /// option it read last time changed. Time- and job-dependent popups are
+  /// never memoized.
+  final class PopupEvaluationCache {
+    struct Memo {
+      var dependencies: StatusFormatDependencies
+      var inputs: EvaluationInputs
+      var runs: [FlashStatusTextSegment]
+    }
+    var memos: [String: Memo] = [:]
+  }
+
   static func evaluate(
     template: FlashStatusBarTemplate,
     popupTemplates: [String: FlashStatusBarTemplate] = [:],
@@ -389,12 +424,15 @@ enum FlashStatusBarTemplateEngine {
     dynamicValues: [String: String] = [:],
     jobValues: [String: String] = [:],
     options: [String: String] = [:],
-    terminalPopupNames: Set<String> = []
+    terminalPopupNames: Set<String> = [],
+    nativeContext: StatusFormatContext? = nil,
+    popupCache: PopupEvaluationCache? = nil
   ) -> (
     model: FlashStatusBarModel, jobs: [StatusFormatJobRequest], sources: Set<String>,
-    needsClock: Bool
+    needsClock: Bool, dependencies: StatusFormatDependencies
   ) {
-    var native = formatContext(context, dynamicValues: dynamicValues, jobValues: jobValues)
+    var native =
+      nativeContext ?? formatContext(context, dynamicValues: dynamicValues, jobValues: jobValues)
     native.options = options.merging(template.options) { _, local in local }
     let result = template.program.evaluate(native, expandTime: true)
     let document = StatusFormatDocument.parse(result)
@@ -415,6 +453,14 @@ enum FlashStatusBarTemplateEngine {
       guard let popup = popupTemplates[name] else { continue }
       var popupContext = native
       popupContext.options.merge(popup.options) { _, local in local }
+      if let memo = popupCache?.memos[name],
+        EvaluationInputs.capture(dependencies: memo.dependencies, native: popupContext)
+          == memo.inputs
+      {
+        dependencies.formUnion(memo.dependencies)
+        popups[name] = memo.runs
+        continue
+      }
       let expanded = popup.program.evaluate(popupContext, expandTime: true)
       jobs.append(contentsOf: expanded.jobs)
       dependencies.formUnion(expanded.dependencies)
@@ -432,6 +478,15 @@ enum FlashStatusBarTemplateEngine {
         }
       }
       popups[name] = runs
+      if let popupCache, !expanded.dependencies.containsTime,
+        !expanded.dependencies.containsJobs
+      {
+        popupCache.memos[name] = PopupEvaluationCache.Memo(
+          dependencies: expanded.dependencies,
+          inputs: EvaluationInputs.capture(
+            dependencies: expanded.dependencies, native: popupContext),
+          runs: runs)
+      }
     }
     for name in terminalPopupNames { popups[name] = [] }
     return (
@@ -451,7 +506,8 @@ enum FlashStatusBarTemplateEngine {
         dependencies.values.filter { $0.hasPrefix("flash.source.") }.map {
           String($0.dropFirst(13))
         }),
-      dependencies.containsTime || dependencies.values.contains("flash.date")
+      dependencies.containsTime || dependencies.values.contains("flash.date"),
+      dependencies
     )
   }
 

@@ -481,7 +481,11 @@ final class PluginManager {
 
   func emit(_ event: PluginEvent) {
     // sendEvent filters by listen pattern off-queue and hops to each
-    // plugin's own queue, so fan-out from the snapshot is safe anywhere.
+    // plugin's own queue, so fan-out from the snapshot is safe anywhere. The
+    // frame is identical for every listener (a full running-app list for
+    // `core:apps.changed`), so it is encoded once here.
+    var event = event
+    event.encodedFrame = PluginProcess.encodedEventFrame(event)
     for plugin in readHotSnapshot().plugins {
       plugin.sendEvent(event)
     }

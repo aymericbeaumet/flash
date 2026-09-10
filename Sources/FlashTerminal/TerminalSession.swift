@@ -74,6 +74,8 @@ public final class TerminalSession {
   public private(set) var state: TerminalSessionState = .idle
   public private(set) var frame: TerminalFrame?
   public var onFrame: ((TerminalFrame) -> Void)?
+  /// Queue-confined; see `setWantsFrames`.
+  private var wantsFrames = true
   public var onInputRejected: ((Int) -> Void)?
   public var onStateChange: ((TerminalSessionState) -> Void)?
   public var onDiagnostic: ((TerminalSessionDiagnostic) -> Void)?
@@ -374,8 +376,19 @@ public final class TerminalSession {
       self?.onStateChange?(state)
     }
   }
+  /// Whether anything consumes frames. A hidden persistent popup keeps
+  /// parsing output but skips the per-frame grid snapshot (one `String` per
+  /// cell) and the main-thread hop; re-enabling publishes one frame at once.
+  public func setWantsFrames(_ wants: Bool) {
+    queue.async { [weak self] in
+      guard let self, self.wantsFrames != wants else { return }
+      self.wantsFrames = wants
+      if wants { self.publishFrame() }
+    }
+  }
+
   private func scheduleFrame() {
-    guard !scheduledFrame else { return }
+    guard wantsFrames, !scheduledFrame else { return }
     scheduledFrame = true
     queue.asyncAfter(deadline: .now() + .milliseconds(33)) { [weak self] in
       guard let self else { return }
@@ -384,7 +397,7 @@ public final class TerminalSession {
     }
   }
   private func publishFrame() {
-    guard let snapshot = buffer.snapshot() else { return }
+    guard wantsFrames, let snapshot = buffer.snapshot() else { return }
     DispatchQueue.main.async { [weak self] in
       self?.frame = snapshot
       self?.onFrame?(snapshot)

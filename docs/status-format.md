@@ -154,6 +154,15 @@ expanded style stream once and retains marker-only transitions.
 `StatusFormatLayout` computes native cells and ranges. Production drawing uses
 these typed results directly; raw string parsing is an input boundary.
 
+A publish first captures every value, option, job value, and (for
+time-dependent formats) the current second that the previous evaluation read
+(`FlashStatusBarTemplateEngine.EvaluationInputs`); an identical capture skips
+the evaluation entirely, so a 1 Hz plugin sample that changes nothing the bar
+references costs one dictionary comparison. Each named popup is memoized the
+same way on its own dependency set, so a changed CPU sample re-evaluates the bar
+and the CPU popup, not every popup. Time- and job-dependent popups are never
+memoized.
+
 The compiler cache is bounded to 256 entries/1 MiB of source text, and the POSIX
 regex cache to 128 entries/256 KiB of patterns. Evaluation limits recursion to
 100 levels and retains tmux's width/repeat bounds. Repeated output is capped at

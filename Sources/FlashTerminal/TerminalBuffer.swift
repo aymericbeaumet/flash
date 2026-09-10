@@ -42,6 +42,9 @@ public struct TerminalFrame: Equatable, Sendable {
   public let cursorStyle: Int
   public let mouseTracking: Bool
   public let wrappedRows: Set<Int>
+  /// Whether any cell carries the blink attribute; computed while the grid is
+  /// built so a view never rescans the cells per frame to decide on a timer.
+  public let hasBlinkingCells: Bool
 
   func link(atColumn column: Int, row: Int) -> URL? {
     guard (0..<columns).contains(column), (0..<rows).contains(row) else { return nil }
@@ -172,6 +175,7 @@ final class TerminalBuffer {
     guard flash_vt_frame(handle, &frame) else { return nil }
     var cells: [TerminalCell] = []
     var wrappedRows = Set<Int>()
+    var hasBlinkingCells = false
     cells.reserveCapacity(Int(frame.columns) * Int(frame.rows))
     for row in 0..<frame.rows {
       for column in 0..<frame.columns {
@@ -182,6 +186,7 @@ final class TerminalBuffer {
             String(decoding: UnsafeBufferPointer(start: $0, count: cell.length), as: UTF8.self)
           } ?? ""
         if column == 0 && cell.row_wrapped { wrappedRows.insert(Int(row)) }
+        if cell.flags & 8 != 0 { hasBlinkingCells = true }
         let hyperlink = cell.hyperlink.flatMap { bytes -> String? in
           guard cell.hyperlink_length > 0 else { return nil }
           return String(
@@ -202,7 +207,8 @@ final class TerminalBuffer {
       cursorX: Int(frame.cursor_x), cursorY: Int(frame.cursor_y),
       cursorVisible: frame.cursor_visible,
       cursorBlinking: frame.cursor_blinking, cursorStyle: Int(frame.cursor_style),
-      mouseTracking: frame.mouse_tracking, wrappedRows: wrappedRows)
+      mouseTracking: frame.mouse_tracking, wrappedRows: wrappedRows,
+      hasBlinkingCells: hasBlinkingCells)
   }
 }
 

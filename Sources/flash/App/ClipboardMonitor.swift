@@ -14,7 +14,11 @@ import AppKit
 final class ClipboardMonitor {
   private let pasteboard: NSPasteboard
   private let onChange: (String) -> Void
-  private var timer: Timer?
+  /// The 2 Hz poll lives on its own utility queue: `changeCount` is a cheap
+  /// read that never needs the main run loop (which hosts the keyboard tap),
+  /// and only an actual change hops to main to read the payload.
+  private let queue = DispatchQueue(label: "flash.clipboard", qos: .utility)
+  private var timer: DispatchSourceTimer?
   private var lastChangeCount: Int
 
   /// Pasteboard types that mark a payload as a password (`ConcealedType`) or
@@ -31,15 +35,16 @@ final class ClipboardMonitor {
 
   func start(interval: TimeInterval = 0.5) {
     guard timer == nil else { return }
-    let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-      self?.poll()
-    }
-    RunLoop.main.add(timer, forMode: .common)
+    let timer = DispatchSource.makeTimerSource(queue: queue)
+    timer.schedule(
+      deadline: .now() + interval, repeating: interval, leeway: .milliseconds(100))
+    timer.setEventHandler { [weak self] in self?.poll() }
     self.timer = timer
+    timer.resume()
   }
 
   func stop() {
-    timer?.invalidate()
+    timer?.cancel()
     timer = nil
   }
 
@@ -47,11 +52,13 @@ final class ClipboardMonitor {
     let current = pasteboard.changeCount
     guard current != lastChangeCount else { return }
     lastChangeCount = current
-
-    let types = pasteboard.types ?? []
-    if types.contains(Self.concealedType) || types.contains(Self.transientType) { return }
-    guard let text = pasteboard.string(forType: .string), !text.isEmpty else { return }
-    onChange(text)
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let types = self.pasteboard.types ?? []
+      if types.contains(Self.concealedType) || types.contains(Self.transientType) { return }
+      guard let text = self.pasteboard.string(forType: .string), !text.isEmpty else { return }
+      self.onChange(text)
+    }
   }
 
   deinit { stop() }
