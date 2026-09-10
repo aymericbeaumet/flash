@@ -249,7 +249,22 @@ extension AppMonitor {
       hints: result.hints,
       computedAt: DispatchTime.now(),
       dirtyToken: dirtyToken,
-      configRevision: configRevision)
+      configRevision: configRevision,
+      fingerprint: Self.targetsFingerprint(result.targets),
+      freshnessMs: Self.modelFreshnessMs)
+  }
+
+  static func targetsFingerprint(_ targets: [JumpTarget]) -> Int {
+    var hasher = Hasher()
+    hasher.combine(targets.count)
+    for target in targets {
+      hasher.combine(Int(target.frame.minX.rounded()))
+      hasher.combine(Int(target.frame.minY.rounded()))
+      hasher.combine(Int(target.frame.width.rounded()))
+      hasher.combine(Int(target.frame.height.rounded()))
+      hasher.combine(target.role ?? "")
+    }
+    return hasher.finalize()
   }
 
   private func runActivationDiscovery(

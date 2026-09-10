@@ -9,6 +9,14 @@ struct PreparedModel {
   let computedAt: DispatchTime
   let dirtyToken: UInt64
   let configRevision: UInt64
+  /// Geometry/role digest of `targets`; equal digests across consecutive
+  /// maintenance walks are the evidence that lets the freshness ceiling grow.
+  let fingerprint: Int
+  /// How long this model may be served without a refresh. Starts at
+  /// `AppMonitor.modelFreshnessMs` and doubles (to `modelFreshnessMaxMs`) for
+  /// every maintenance walk that reproduces the previous model unchanged, so a
+  /// static focused app is re-walked seconds apart instead of every 1.3 s.
+  var freshnessMs: Int
 
   var isEmptyReady: Bool { hints.isEmpty }
 }
@@ -38,19 +46,22 @@ struct PreparedModelStore {
     queuedAfterRebuild.removeAll()
   }
 
+  func current(pid: pid_t) -> PreparedModel? {
+    models[pid]
+  }
+
   func lookup(
     pid: pid_t,
     dirtyToken: UInt64,
     configRevision: UInt64,
-    now: DispatchTime,
-    freshnessMs: Int
+    now: DispatchTime
   ) -> PreparedModel? {
     guard let model = models[pid] else { return nil }
     guard model.dirtyToken == dirtyToken else { return nil }
     guard model.configRevision == configRevision else { return nil }
     let ageNs = now.uptimeNanoseconds - model.computedAt.uptimeNanoseconds
     let ageMs = Double(ageNs) / 1_000_000
-    guard ageMs <= Double(freshnessMs) else { return nil }
+    guard ageMs <= Double(model.freshnessMs) else { return nil }
     return model
   }
 

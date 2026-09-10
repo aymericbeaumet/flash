@@ -6,8 +6,11 @@ use flash_plugin::{run, Candidate, CommandRequest, Context, Event, PerformRespon
 use serde_json::Value;
 
 const SOURCE_PROCESSES: &str = "processes.processes";
-const POLL_SECONDS: u64 = 10;
-const FOCUSED_STATUS_POLL_SECONDS: u64 = 5;
+const POLL_SECONDS: u64 = 30;
+const FOCUSED_STATUS_POLL_SECONDS: u64 = 10;
+/// A burst of focus changes (cmd-tab through several apps) samples only the
+/// app the user settles on.
+const FOCUS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SLOW_REFRESH_MS: u128 = 1_000;
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static FOCUSED_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -50,7 +53,7 @@ impl FlashPlugin for Processes {
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
-            "core:apps.launched" | "core:apps.terminated"
+            "core:apps.launched" | "core:apps.terminated" | "core:session.opened"
         ) {
             refresh_candidates(&ctx).await;
         }
@@ -66,6 +69,10 @@ impl FlashPlugin for Processes {
                 focused_app_placeholder(&sample.app, "Collecting metrics…"),
             );
             tokio::spawn(async move {
+                tokio::time::sleep(FOCUS_REFRESH_DEBOUNCE).await;
+                if !focused_sample_is_current(&sample) {
+                    return;
+                }
                 refresh_focused_status(&ctx).await;
             });
         }
@@ -140,7 +147,7 @@ struct FocusedProcessMetrics {
     memory_bytes: u64,
     mem_percent: f64,
     process_count: u64,
-    network_socket_count: u64,
+    socket_count: u64,
     thread_count: u64,
     uptime_seconds: u64,
     disk_read_bytes: u64,
@@ -188,6 +195,13 @@ impl FocusedState {
     fn is_current(&self, sample: &FocusedSample) -> bool {
         self.generation == sample.generation && self.app.as_ref() == Some(&sample.app)
     }
+}
+
+fn focused_sample_is_current(sample: &FocusedSample) -> bool {
+    FOCUSED_STATE
+        .lock()
+        .map(|state| state.is_current(sample))
+        .unwrap_or(false)
 }
 
 async fn initialize_focused_status(ctx: &Context) {
@@ -239,7 +253,7 @@ fn focused_process_metrics(response: &Value, pid: i64) -> Option<FocusedProcessM
         memory_bytes: row.get("memory_bytes")?.as_u64()?,
         mem_percent: row.get("mem_percent")?.as_f64()?,
         process_count: row.get("process_count")?.as_u64()?,
-        network_socket_count: row.get("network_socket_count")?.as_u64()?,
+        socket_count: row.get("socket_count")?.as_u64()?,
         thread_count: row.get("thread_count")?.as_u64()?,
         uptime_seconds: row.get("uptime_seconds")?.as_u64()?,
         disk_read_bytes: row.get("disk_read_bytes")?.as_u64()?,
@@ -257,10 +271,7 @@ fn focused_app_details(app: &FocusedApp, metrics: &FocusedProcessMetrics) -> Str
             format_bytes(metrics.memory_bytes),
             metrics.mem_percent
         ),
-        format!(
-            "Network: {} IPv4/IPv6 sockets",
-            metrics.network_socket_count
-        ),
+        format!("Sockets: {}", metrics.socket_count),
         format!(
             "Processes: {} · Threads: {}",
             metrics.process_count, metrics.thread_count,
@@ -553,7 +564,7 @@ mod tests {
             memory_bytes: 1_610_612_736,
             mem_percent: 6.25,
             process_count: 9,
-            network_socket_count: 7,
+            socket_count: 7,
             thread_count: 42,
             uptime_seconds: 7_384,
             disk_read_bytes: 536_870_912,
@@ -562,7 +573,7 @@ mod tests {
 
         assert_eq!(
             focused_app_details(&app, &metrics),
-            "Bundle: org.mozilla.firefox\nPID: 4242 · Process: firefox\nCPU: 12.5%\nMemory: 1.5 GB (6.2%)\nNetwork: 7 IPv4/IPv6 sockets\nProcesses: 9 · Threads: 42\nUptime: 2h 3m\nDisk I/O: 512 MB read · 64 MB written"
+            "Bundle: org.mozilla.firefox\nPID: 4242 · Process: firefox\nCPU: 12.5%\nMemory: 1.5 GB (6.2%)\nSockets: 7\nProcesses: 9 · Threads: 42\nUptime: 2h 3m\nDisk I/O: 512 MB read · 64 MB written"
         );
     }
 
@@ -592,7 +603,7 @@ mod tests {
                 "memory_bytes": 2048,
                 "mem_percent": 0.5,
                 "process_count": 4,
-                "network_socket_count": 2,
+                "socket_count": 2,
                 "thread_count": 3,
                 "uptime_seconds": 4,
                 "disk_read_bytes": 5,
@@ -602,7 +613,7 @@ mod tests {
 
         let metrics = focused_process_metrics(&response, 42).expect("metrics");
         assert_eq!(metrics.comm, "right");
-        assert_eq!(metrics.network_socket_count, 2);
+        assert_eq!(metrics.socket_count, 2);
         assert_eq!(metrics.process_count, 4);
         assert_eq!(metrics.disk_write_bytes, 6);
     }

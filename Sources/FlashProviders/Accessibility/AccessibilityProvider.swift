@@ -38,8 +38,10 @@ struct AXTraversalWorklist<Element> {
 /// not the per-app fork. See AGENTS.md ("Project layout") for the rationale.
 ///
 /// Performance contract:
-///   - Exactly one batched IPC per visited element via
-///     `AXUIElementCopyMultipleAttributeValues`.
+///   - One batched IPC per visited element via
+///     `AXUIElementCopyMultipleAttributeValues`, plus one single-attribute
+///     re-query only when the batch returned an error placeholder for the
+///     child list.
 ///   - Walks the full `kAXChildrenAttribute` tree, then supplements native
 ///     table/outline containers with `kAXVisibleRowsAttribute` when available.
 ///     This keeps the complete tree path deterministic while still catching
@@ -153,6 +155,8 @@ public final class AccessibilityProvider: FlashSource {
   /// subtree (e.g. inside an AXWebArea or a large AXGroup). Beyond
   /// two levels the dispatch overhead dominates the IPC win.
   public static let maxFanoutLevels: Int = 2
+  /// Concurrent subtree walkers per fan-out point (see the fan-out comment).
+  public static let maxFanoutWidth: Int = 8
 
   public init() {}
 
@@ -774,12 +778,13 @@ public final class AccessibilityProvider: FlashSource {
     //
     // **Single-attribute children fallback**: the batched IPC can
     // occasionally drop `kAXChildrenAttribute` (returns an error
-    // placeholder in vals[5] instead of the real child list — Firefox's
+    // placeholder in vals[4] instead of the real child list — Firefox's
     // a11y does this for `AXTabPanel` under concurrent IPC contention).
-    // Re-query that one attribute on its own when the batch came back
-    // empty.
+    // Re-query that one attribute on its own only for a placeholder: a
+    // genuinely empty child array is authoritative for every leaf, and
+    // re-querying leaves doubled the IPC count of a whole walk.
     var children: [AXUIElement] = allChildren ?? []
-    if children.isEmpty {
+    if allChildren == nil {
       var raw: CFTypeRef?
       if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
         == .success,
@@ -828,8 +833,14 @@ public final class AccessibilityProvider: FlashSource {
       // the old lock-based append (order = worker scheduling) could flip which
       // of two equal-area overlapping targets survived dedup run-to-run.
       var workerStates = [WalkState](repeating: WalkState(), count: childrenSnapshot.count)
+      // Bounded width: the target's AX server is single-threaded, so more
+      // than a handful of concurrent IPC streams only queue behind each
+      // other while exploding GCD threads. Each worker owns a strided set of
+      // child slots; the merge below still runs in child order.
+      let width = min(childrenSnapshot.count, Self.maxFanoutWidth)
       workerStates.withUnsafeMutableBufferPointer { buf in
-        DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
+        DispatchQueue.concurrentPerform(iterations: width) { worker in
+          for i in stride(from: worker, to: childrenSnapshot.count, by: width) {
           var workerState = WalkState()
           // Encode the fan-out level into the id prefix so ids stay
           // unique across nested fan-out points. Outer fan-out emits
@@ -850,6 +861,7 @@ public final class AccessibilityProvider: FlashSource {
             state: &workerState
           )
           buf[i] = workerState
+          }
         }
       }
       for workerState in workerStates {

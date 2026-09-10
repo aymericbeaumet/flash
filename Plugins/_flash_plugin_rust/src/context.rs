@@ -363,8 +363,9 @@ impl Context {
 
     /// Sample one process through `host.process_table`. Exact-PID mode also
     /// includes resident bytes, lifetime disk I/O, uptime, thread count, and
-    /// the current IPv4/IPv6 socket count. The host performs the libproc work
-    /// off its main thread. Requires the `process_control` capability.
+    /// the open socket descriptor count across the process tree. CPU is the
+    /// delta since the host's previous sample of that pid, so steady polling
+    /// never sleeps host-side. Requires the `process_control` capability.
     pub async fn process_metrics(&self, pid: i64, sample_window_ms: Option<u64>) -> Value {
         let mut params = json!({ "pid": pid });
         if let Some(window) = sample_window_ms {

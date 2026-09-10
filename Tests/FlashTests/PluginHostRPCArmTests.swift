@@ -295,7 +295,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertNotNil(rows.first?["disk_write_bytes"] as? Int)
     XCTAssertNotNil(rows.first?["uptime_seconds"] as? Int)
     XCTAssertNotNil(rows.first?["thread_count"] as? Int)
-    XCTAssertNotNil(rows.first?["network_socket_count"] as? Int)
+    XCTAssertNotNil(rows.first?["socket_count"] as? Int)
     XCTAssertGreaterThanOrEqual(rows.first?["process_count"] as? Int ?? 0, 2)
   }
 

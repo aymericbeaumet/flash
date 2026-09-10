@@ -17,7 +17,8 @@
   "listen": [
     "core:apps.launched",
     "core:apps.terminated",
-    "core:focus.changed"
+    "core:focus.changed",
+    "core:session.opened"
   ],
   "status": [
     "focused_app_details"

@@ -79,6 +79,17 @@ final class PreparedModelSchedulingTests: XCTestCase {
     XCTAssertEqual(state.wake(refresh.ticket, now: clock.now), .fire(.refresh("maintenance")))
   }
 
+  func testMaintenanceWakesLeadBeforeTheModelsOwnFreshness() {
+    var state = scheduler()
+    let extended = state.scheduleMaintenance(
+      pid: 42, computedAt: 0, dirtyToken: 7, configRevision: 2, freshnessNs: 6_000_000_000)
+    XCTAssertEqual(extended.deadline, 5_750_000_000)
+    XCTAssertEqual(state.wake(extended.ticket, now: 5_000_000_000), .wait(extended))
+    XCTAssertEqual(
+      state.wake(extended.ticket, now: 5_750_000_000),
+      .fire(.maintenance(dirtyToken: 7, configRevision: 2)))
+  }
+
   func testReplacingMaintenanceRejectsOlderTimerEvenWithSameModelTokens() {
     var state = scheduler()
     let old = state.scheduleMaintenance(pid: 42, computedAt: 0, dirtyToken: 7, configRevision: 2)

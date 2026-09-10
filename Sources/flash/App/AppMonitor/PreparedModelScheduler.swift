@@ -38,7 +38,8 @@ struct PreparedModelScheduler {
 
   private let debounceNs: UInt64
   private let minimumIntervalNs: UInt64
-  private let maintenanceDelayNs: UInt64
+  private let defaultFreshnessNs: UInt64
+  private let maintenanceLeadNs: UInt64
   private var generation: UInt64 = 0
   private var entries: [Key: Entry] = [:]
   private var lastStartedAt: [pid_t: UInt64] = [:]
@@ -46,7 +47,8 @@ struct PreparedModelScheduler {
   init(debounceMs: Int, minimumIntervalMs: Int, freshnessMs: Int, maintenanceLeadMs: Int) {
     debounceNs = UInt64(debounceMs) * 1_000_000
     minimumIntervalNs = UInt64(minimumIntervalMs) * 1_000_000
-    maintenanceDelayNs = UInt64(max(0, freshnessMs - maintenanceLeadMs)) * 1_000_000
+    defaultFreshnessNs = UInt64(freshnessMs) * 1_000_000
+    maintenanceLeadNs = UInt64(maintenanceLeadMs) * 1_000_000
   }
 
   static func isSpeculative(reason: String) -> Bool {
@@ -90,12 +92,17 @@ struct PreparedModelScheduler {
     return replace(key: key, deadline: deadline, request: .refresh(reason))
   }
 
+  /// Maintenance wakes `maintenanceLeadMs` before the model's own freshness
+  /// ceiling (`freshnessNs`, defaulting to the configured base freshness).
   mutating func scheduleMaintenance(
-    pid: pid_t, computedAt: UInt64, dirtyToken: UInt64, configRevision: UInt64
+    pid: pid_t, computedAt: UInt64, dirtyToken: UInt64, configRevision: UInt64,
+    freshnessNs: UInt64? = nil
   ) -> Arm {
-    replace(
+    let freshness = freshnessNs ?? defaultFreshnessNs
+    let delay = freshness > maintenanceLeadNs ? freshness - maintenanceLeadNs : 0
+    return replace(
       key: Key(pid: pid, kind: .maintenance),
-      deadline: computedAt + maintenanceDelayNs,
+      deadline: computedAt + delay,
       request: .maintenance(dirtyToken: dirtyToken, configRevision: configRevision))
   }
 

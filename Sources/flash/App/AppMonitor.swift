@@ -86,6 +86,11 @@ final class AppMonitor {
   /// observer set missed (some apps don't fire `kAXLayoutChanged` on
   /// every UI transition).
   static let modelFreshnessMs: Int = 1500
+  /// Ceiling for the per-model freshness backoff (see `PreparedModel.freshnessMs`).
+  static let modelFreshnessMaxMs: Int = 30_000
+  /// No maintenance walks while the user has produced no input for this long;
+  /// the next activation performs a complete walk on demand.
+  static let maintenanceIdleSuspendSeconds: Double = 60
   static let modelDebounceMs: Int = 80
   static let modelMaintenanceLeadMs: Int = 250
   static let backgroundModelMinIntervalMs: Int = 2500
@@ -421,8 +426,7 @@ final class AppMonitor {
       pid: pid,
       dirtyToken: dirtyTokens[pid] ?? 0,
       configRevision: configRevision,
-      now: DispatchTime.now(),
-      freshnessMs: Self.modelFreshnessMs)
+      now: DispatchTime.now())
   }
 
 }

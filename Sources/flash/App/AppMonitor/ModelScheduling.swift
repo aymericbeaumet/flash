@@ -60,6 +60,12 @@ extension AppMonitor {
           self.configRevision == configRevision,
           NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
         else { return }
+        // Idle desk, locked screen, or sleeping display: nothing is looking
+        // at the hints, so let the model expire; the next activation walks.
+        guard Self.userInputIsRecent(withinSeconds: Self.maintenanceIdleSuspendSeconds) else {
+          FlashLog.debug("[ax] maintenance_suspended pid=\(pid) reason=user_idle")
+          return
+        }
         self.scheduleModelRefresh(for: pid, reason: "maintenance")
       }
     }
@@ -70,8 +76,34 @@ extension AppMonitor {
     guard allowsAutomaticRefresh(pid: model.pid, reason: "maintenance") else { return }
     let arm = modelScheduler.scheduleMaintenance(
       pid: model.pid, computedAt: model.computedAt.uptimeNanoseconds,
-      dirtyToken: model.dirtyToken, configRevision: model.configRevision)
+      dirtyToken: model.dirtyToken, configRevision: model.configRevision,
+      freshnessNs: UInt64(model.freshnessMs) * 1_000_000)
     armRefreshTimer(arm)
+  }
+
+  /// Seconds since the last keyboard, mouse, or scroll event in the session.
+  static func userInputIsRecent(withinSeconds limit: Double) -> Bool {
+    let types: [CGEventType] = [
+      .keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged,
+    ]
+    let idle = types.map {
+      CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
+    }.min() ?? 0
+    return idle < limit
+  }
+
+  /// A maintenance walk that reproduces the current model unchanged is
+  /// evidence the app is static: serve it longer before walking again. Any
+  /// other outcome resets to the base ceiling.
+  static func nextFreshnessMs(previous: PreparedModel?, built: PreparedModel, reason: String)
+    -> Int
+  {
+    guard reason == "maintenance", let previous,
+      previous.dirtyToken == built.dirtyToken,
+      previous.configRevision == built.configRevision,
+      previous.fingerprint == built.fingerprint
+    else { return modelFreshnessMs }
+    return min(previous.freshnessMs * 2, modelFreshnessMaxMs)
   }
 
   func runModelRefresh(
@@ -184,6 +216,9 @@ extension AppMonitor {
         let tokenStillMatches = (self.dirtyTokens[pid] ?? 0) == startToken
         let revisionStillMatches = self.configRevision == revision
         let stillFocused = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        var built = built
+        built.freshnessMs = Self.nextFreshnessMs(
+          previous: self.preparedModels.current(pid: pid), built: built, reason: reason)
         if tokenStillMatches, revisionStillMatches, stillFocused {
           self.preparedModels.store(built)
           self.scheduleMaintenanceRefresh(for: built)
