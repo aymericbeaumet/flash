@@ -238,12 +238,14 @@ final class NativeStatusBarSurface {
     }
     var changed = Set<Int>()
     for (old, new) in zip(groups(previous), groups(next)) {
-      let sameArticle = old.count == new.count && zip(old, new).allSatisfy { before, after in
-        let lhs = previous[before].segment
-        let rhs = next[after].segment
-        return lhs.text == rhs.text && lhs.link == rhs.link && lhs.popup == rhs.popup
-          && lhs.popupContent == rhs.popupContent
-      }
+      let sameArticle =
+        old.count == new.count
+        && zip(old, new).allSatisfy { before, after in
+          let lhs = previous[before].segment
+          let rhs = next[after].segment
+          return lhs.text == rhs.text && lhs.link == rhs.link && lhs.popup == rhs.popup
+            && lhs.popupContent == rhs.popupContent
+        }
       if !sameArticle { changed.formUnion(new) }
     }
     return changed

@@ -181,7 +181,8 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let cyclic = surface.visibleRuns.indices.filter { surface.visibleRuns[$0].segment.cycle }
     XCTAssertGreaterThan(cyclic.count, 2)
     for index in cyclic {
-      let transition = surface.runLayers[index].text.animation(forKey: kCATransition) as? CATransition
+      let transition =
+        surface.runLayers[index].text.animation(forKey: kCATransition) as? CATransition
       XCTAssertEqual(transition?.subtype, .fromBottom, surface.visibleRuns[index].segment.text)
     }
     let starts = cyclic.compactMap {
