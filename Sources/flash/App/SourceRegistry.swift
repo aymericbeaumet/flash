@@ -26,6 +26,10 @@ final class SourceRegistry {
   private let lock = NSLock()
   private var activeSourcesByID: [String: FlashSource] = [:]
   private var runningApplications: [NSRunningApplication] = []
+  /// Bundle ids of `runningApplications`, resolved once per refresh so
+  /// activation checks never touch `NSRunningApplication.bundleIdentifier`
+  /// (a LaunchServices round trip on a cold instance) on a read path.
+  private var runningBundleIDs: Set<String> = []
   private var openConfig: Config.Open
 
   init(
@@ -92,16 +96,21 @@ final class SourceRegistry {
     return FlashSourceEnvironment(runningApplications: runningApplications)
   }
 
+  /// Refresh the running-app set from the workspace. Event-driven (app
+  /// launch / terminate / activation, config reload); read paths use the
+  /// cached set rather than re-enumerating the workspace per query.
   func refreshRunningApplications(_ applications: [NSRunningApplication]? = nil) {
     let applications = applications ?? runningApplicationsProvider()
+    let bundleIDs = Set(applications.compactMap(\.bundleIdentifier))
     lock.lock()
     runningApplications = applications
+    runningBundleIDs = bundleIDs
     let activeIDs = Set(
       descriptors
         .filter { descriptor in
           Self.activationPolicyMatches(
             descriptor.activationPolicy,
-            runningApplications: applications,
+            runningBundleIDs: bundleIDs,
             terminalBundleIDs: terminalBundleIDs)
         }
         .map(\.identifier))
@@ -287,12 +296,12 @@ final class SourceRegistry {
   /// flashlight fan-out.
   private func activePluginSources() -> [FlashSource] {
     lock.lock()
-    let applications = runningApplications
+    let bundleIDs = runningBundleIDs
     lock.unlock()
     return pluginSourcesProvider().filter { source in
       Self.activationPolicyMatches(
         source.activationPolicy,
-        runningApplications: applications,
+        runningBundleIDs: bundleIDs,
         terminalBundleIDs: terminalBundleIDs)
     }
   }
@@ -462,7 +471,6 @@ final class SourceRegistry {
       }
       return
     }
-    refreshRunningApplications()
     let env = environment
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
@@ -518,7 +526,6 @@ final class SourceRegistry {
   }
 
   func candidate(forProcessID pid: pid_t) -> Candidate? {
-    refreshRunningApplications()
     let env = environment
     for source in sources where source.identifier == "core.apps" {
       if let appSource = source as? ApplicationSource,
@@ -562,7 +569,6 @@ final class SourceRegistry {
     _ item: Candidate,
     completion: @escaping (CandidateResolution) -> Void
   ) {
-    refreshRunningApplications()
     let env = environment
     guard let source = source(identifier: item.sourceID) else {
       DispatchQueue.main.async { completion(.unresolved) }
@@ -603,7 +609,6 @@ final class SourceRegistry {
 
   func canRestoreNavigation(to url: URL) -> Bool {
     guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else { return false }
-    refreshRunningApplications()
     return sources.contains { source in
       source.capabilities.contains(.navigationRoutes)
         && source.navigationSchemes.contains(scheme)
@@ -618,7 +623,6 @@ final class SourceRegistry {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    refreshRunningApplications()
     let env = environment
     let sourceSnapshot = sources.filter { source in
       source.capabilities.contains(.navigationRoutes)
@@ -714,8 +718,6 @@ final class SourceRegistry {
     // trace level: materializing a reason string for every excluded plugin was
     // measurable on each repeated normal-mode mapping.
     let startedNs = DispatchTime.now().uptimeNanoseconds
-    refreshRunningApplications()
-    let refreshMs = Self.elapsedMs(since: startedNs)
     let env = environment
     let allSources = sources
     var sourceSnapshot: [FlashSource] = []
@@ -735,7 +737,7 @@ final class SourceRegistry {
     guard !sourceSnapshot.isEmpty else {
       FlashLog.trace(
         "[source_action] action=\(capability.traceDescription) considered=\(allSources.count) "
-          + "passing=0 refresh_ms=\(refreshMs) unhandled "
+          + "passing=0 unhandled "
           + "bundle=\(context.bundleIdentifier)")
       DispatchQueue.main.async { completion(.unhandled) }
       return
@@ -743,13 +745,12 @@ final class SourceRegistry {
     FlashLog.trace(
       "[source_action] action=\(capability.traceDescription) "
         + "considered=\(allSources.count) passing=\(sourceSnapshot.count) "
-        + "chain=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))] "
-        + "refresh_ms=\(refreshMs)")
+        + "chain=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))]")
 
     func finish(_ result: SourceActionResult, handledBy: String) {
       FlashLog.trace(
         "[source_action] cap=\(capability.rawValue) handled_by=\(handledBy) "
-          + "refresh_ms=\(refreshMs) total_ms=\(Self.elapsedMs(since: startedNs)) "
+          + "total_ms=\(Self.elapsedMs(since: startedNs)) "
           + "did_perform=\(result.didPerform)")
       completion(result)
     }
@@ -785,22 +786,16 @@ final class SourceRegistry {
 
   private static func activationPolicyMatches(
     _ policy: FlashSourceActivationPolicy,
-    runningApplications: [NSRunningApplication],
+    runningBundleIDs: Set<String>,
     terminalBundleIDs: Set<String>
   ) -> Bool {
     switch policy {
     case .always:
       return true
     case .bundleIDs(let bundleIDs):
-      return runningApplications.contains { app in
-        guard let bundleID = app.bundleIdentifier else { return false }
-        return bundleIDs.contains(bundleID)
-      }
+      return !bundleIDs.isDisjoint(with: runningBundleIDs)
     case .terminalBundles:
-      return runningApplications.contains { app in
-        guard let bundleID = app.bundleIdentifier else { return false }
-        return terminalBundleIDs.contains(bundleID)
-      }
+      return !terminalBundleIDs.isDisjoint(with: runningBundleIDs)
     }
   }
 }

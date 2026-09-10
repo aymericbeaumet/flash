@@ -50,6 +50,15 @@ extension AppDelegate {
         attachWatcher(forPath: dir)
       }
     }
+    // Re-arming the watchers above is always needed (the inode may have been
+    // replaced); re-applying the config is not when its bytes are unchanged.
+    let contents = try? Data(
+      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
+    if let lastAppliedConfigFileContents, contents == lastAppliedConfigFileContents {
+      FlashLog.trace("[config] reload_skipped reason=unchanged")
+      return
+    }
+    lastAppliedConfigFileContents = contents
     reloadConfig()
   }
 
@@ -69,12 +78,23 @@ extension AppDelegate {
     let mask: DispatchSource.FileSystemEvent =
       [.write, .delete, .rename, .extend]
     let source = makeWatcher(fd: fd, eventMask: mask) { [weak self] _ in
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) {
-        [weak self] in
-        self?.watchConfigFile()
-      }
+      self?.scheduleConfigReload()
     }
     configSources.append(source)
+  }
+
+  /// One editor save produces a burst of vnode events (write, extend, attrib,
+  /// rename of the temp file, …). Coalesce the burst into a single trailing
+  /// re-watch + reload instead of one synchronous reload per event.
+  private func scheduleConfigReload() {
+    configReloadWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.configReloadWork = nil
+      self.watchConfigFile()
+    }
+    configReloadWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
   }
 
   private func makeWatcher(
@@ -105,6 +125,7 @@ extension AppDelegate {
       FlashProcessEnvironment.shared.refresh()
     }
     let cfg = ConfigLoader.load()
+    let previousAutostart = config.app.autostart
     // Rebuild the frecency store only when its tuning actually changed —
     // reconstruction reloads the on-disk snapshot, which is fine but not
     // worth doing on every unrelated reload.
@@ -138,7 +159,12 @@ extension AppDelegate {
     // config on every load — the TOML file is the single source of truth
     // for both (defaults: visible + autostart).
     statusItemController.apply(enabled: cfg.app.menuBarIcon)
-    AutoLaunch.reconcile(enabled: cfg.app.autostart)
+    // SMAppService status/register is an XPC round trip; reconcile once at
+    // startup and afterwards only when the setting changes.
+    if !autoLaunchReconciled || cfg.app.autostart != previousAutostart {
+      autoLaunchReconciled = true
+      AutoLaunch.reconcile(enabled: cfg.app.autostart)
+    }
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     overlay.statusBarPopupStyle = cfg.statusBar.popupStyle

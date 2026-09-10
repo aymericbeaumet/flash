@@ -119,7 +119,7 @@ extension AppDelegate {
         ?? currentNonFlashRunningApplication(),
       !app.isTerminated
     else { return }
-    RunningApplicationActivation.activate(app, options: [])
+    RunningApplicationActivation.activate(app, options: [], restoringMinimizedWindows: false)
   }
 
   /// The frontmost non-Flash application by identity alone (no geometry):

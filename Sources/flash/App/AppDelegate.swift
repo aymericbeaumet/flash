@@ -117,6 +117,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
+  /// Trailing-edge coalescer for config file events (one reload per burst).
+  var configReloadWork: DispatchWorkItem?
+  /// Bytes of the config file at the last applied reload; an event that
+  /// leaves them unchanged (editor temp/rename dance, `touch`) is a no-op.
+  var lastAppliedConfigFileContents: Data?
+  var autoLaunchReconciled = false
   let mappings = MappingsCoordinator()
   let windowLayoutManager = WindowLayoutManager()
   /// Per-focused-app effective mapping tables (config + applicable plugin

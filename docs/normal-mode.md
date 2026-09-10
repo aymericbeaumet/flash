@@ -108,6 +108,18 @@ share the main run loop. Treat that loop as the input latency budget:
   afterwards. `configureModeBadge` is memoized on its inputs
   (`ModeBadgeLayoutStamp`), so re-applying an unchanged mode surface skips the
   per-screen relayout.
+- AX observer sources live on `AXObserverThread`, not the main loop. A burst of
+  notifications (a browser render storm) costs main one drain
+  (`AppMonitor.drainAXEvents`) that applies every event's dirty-token bump in
+  order; nothing about the prepared-model contract changes.
+- Config file events coalesce into one trailing reload per burst
+  (`scheduleConfigReload`, 150 ms), a reload whose file bytes are unchanged is
+  skipped, and `AutoLaunch.reconcile` runs only when `app.autostart` changes.
+- A hint commit never probes minimized windows (the hinted window is on
+  screen) and, when the target app is already frontmost, dispatches the click
+  on the same turn instead of after the 20 ms activation delay. The registry's
+  read paths use the event-driven running-app set instead of re-enumerating
+  the workspace per query.
   Focusing a terminal popup suspends every Carbon registration; leaving it
   restores the active scope.
 

@@ -210,11 +210,7 @@ extension AppMonitor {
     let notifications = Self.observedNotifications(
       forBundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
 
-    CFRunLoopAddSource(
-      CFRunLoopGetMain(),
-      AXObserverGetRunLoopSource(observer),
-      .commonModes
-    )
+    AXObserverThread.shared.add(AXObserverGetRunLoopSource(observer))
 
     // Store the entry before the registrations land so a second focus
     // change can't double-install; a notification registered before its
@@ -288,11 +284,7 @@ extension AppMonitor {
     // IPC — usually against an already-dead process here — so they follow
     // on axQueue, off the input path. `entry` is captured strongly, which
     // keeps observer/element/refcon alive until the removals finish.
-    CFRunLoopRemoveSource(
-      CFRunLoopGetMain(),
-      AXObserverGetRunLoopSource(entry.observer),
-      .commonModes
-    )
+    AXObserverThread.shared.remove(AXObserverGetRunLoopSource(entry.observer))
     axQueue.async {
       if let window = entry.focusedWindow {
         for n in Self.focusedWindowObservedNotifications {

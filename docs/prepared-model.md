@@ -22,8 +22,10 @@ cheap walks to finish before the current model expires. A newer completed
 model replaces the prior maintenance ticket even when its dirty token and
 configuration revision are unchanged.
 
-AX storms and automatic walks taking at least 50 ms suppress AX, queued, and
-maintenance warming. Focus and configuration requests can reassess those apps;
+AX observer sources are hosted on a dedicated `AXObserverThread`; callbacks
+enqueue and the main thread drains each burst in one hop, bumping every dirty
+token in arrival order. AX storms and automatic walks taking at least 50 ms
+suppress AX, queued, and maintenance warming. Focus and configuration requests can reassess those apps;
 explicit activation remains available and complete. Suppression, invalidation,
 termination, and shutdown revoke the applicable tickets. No timer is a second
 source of model validity: maintenance also rechecks focus, dirty token, and

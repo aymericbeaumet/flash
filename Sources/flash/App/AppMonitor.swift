@@ -224,23 +224,56 @@ final class AppMonitor {
     }
   }
 
+  /// Runs on `AXObserverThread`. Touches no monitor state: it appends to the
+  /// pending batch and arms at most one main-thread drain per burst.
   static let observerCallback: AXObserverCallback = { _, element, notification, refcon in
     guard let refcon else { return }
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
     guard let monitor = ctx.monitor else { return }
-    let pid = ctx.pid
-    let notificationName = notification as String
-    // AXObserver callbacks already run on the run loop that holds the
-    // source — we add it to the main run loop below, so we're already
-    // on main here. Hop anyway to make the invariant explicit and
-    // bullet-proof against future relocation of the source.
     let isFocusedWindow = ctx.isFocusedWindow(element)
-    MainThreadHopper.runOrAsync {
-      monitor.onAXEvent(
-        pid: pid,
-        notification: notificationName,
+    monitor.enqueueAXEvent(
+      PendingAXEvent(
+        pid: ctx.pid,
+        notification: notification as String,
         observedElementIsFocusedWindow: isFocusedWindow,
-        observedWindow: isFocusedWindow ? element : nil)
+        observedWindow: isFocusedWindow ? element : nil))
+  }
+
+  struct PendingAXEvent {
+    let pid: pid_t
+    let notification: String
+    let observedElementIsFocusedWindow: Bool
+    let observedWindow: AXUIElement?
+  }
+
+  private let pendingAXEventsLock = NSLock()
+  private var pendingAXEvents: [PendingAXEvent] = []
+  private var axDrainArmed = false
+
+  func enqueueAXEvent(_ event: PendingAXEvent) {
+    pendingAXEventsLock.lock()
+    pendingAXEvents.append(event)
+    let arm = !axDrainArmed
+    if arm { axDrainArmed = true }
+    pendingAXEventsLock.unlock()
+    guard arm else { return }
+    DispatchQueue.main.async { [weak self] in self?.drainAXEvents() }
+  }
+
+  /// Main thread. One drain handles everything that arrived since the last
+  /// one, so a 1000-event storm costs one wakeup, not a thousand.
+  func drainAXEvents() {
+    pendingAXEventsLock.lock()
+    let batch = pendingAXEvents
+    pendingAXEvents.removeAll(keepingCapacity: true)
+    axDrainArmed = false
+    pendingAXEventsLock.unlock()
+    for event in batch {
+      onAXEvent(
+        pid: event.pid,
+        notification: event.notification,
+        observedElementIsFocusedWindow: event.observedElementIsFocusedWindow,
+        observedWindow: event.observedWindow)
     }
   }
 

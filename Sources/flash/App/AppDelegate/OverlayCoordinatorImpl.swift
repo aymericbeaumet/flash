@@ -405,12 +405,21 @@ extension AppDelegate {
     }
     overlay.hide()
     // Restore focus to the target app before posting the mouse event so the
-    // underlying surface receives and interprets the click.
-    if let targetApp {
-      RunningApplicationActivation.activate(targetApp, options: [])
+    // underlying surface receives and interprets the click. The hinted window
+    // is on screen by construction, so no minimized-window AX probe; and when
+    // the target already is frontmost there is nothing to settle, so the
+    // click goes out on this turn instead of after the activation delay.
+    let targetAlreadyFrontmost =
+      targetApp.map {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.processIdentifier
+      } ?? true
+    if let targetApp, !targetAlreadyFrontmost {
+      RunningApplicationActivation.activate(
+        targetApp, options: [], restoringMinimizedWindows: false)
     }
     clearHintSessionState()
-    performHintCommit(delayMs: 20, recording: committedClick) { finished in
+    performHintCommit(delayMs: targetAlreadyFrontmost ? 0 : 20, recording: committedClick) {
+      finished in
       ActionDispatcher.perform(
         action, on: hint.target, clickPoint: clickPoint,
         modifiers: resolvedClickModifiers,
