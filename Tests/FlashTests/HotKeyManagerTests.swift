@@ -68,6 +68,36 @@ final class HotKeyManagerTests: XCTestCase {
     XCTAssertEqual(router.handle(event: missingParameter), OSStatus(eventNotHandledErr))
   }
 
+  func testReconcileTouchesOnlyChordsThatDiffer() {
+    let manager = HotKeyManager()
+    defer { manager.unregisterAll() }
+    let a = ParsedHotkey(modifiers: UInt32(cmdKey | optionKey | controlKey), virtualKey: 0x7A)
+    let b = ParsedHotkey(modifiers: UInt32(cmdKey | optionKey | controlKey), virtualKey: 0x78)
+    let c = ParsedHotkey(modifiers: UInt32(cmdKey | optionKey | controlKey), virtualKey: 0x63)
+    var fired: [ParsedHotkey] = []
+
+    let first = manager.reconcile(desired: [a, b]) { fired.append($0) }
+    XCTAssertEqual(first.added, 2)
+    XCTAssertEqual(first.removed, 0)
+    XCTAssertEqual(manager.registeredChords, [a, b])
+
+    let second = manager.reconcile(desired: [b, c]) { fired.append($0) }
+    XCTAssertEqual(second.added, 1)
+    XCTAssertEqual(second.removed, 1)
+    XCTAssertEqual(manager.registeredChords, [b, c])
+
+    let unchanged = manager.reconcile(desired: [b, c]) { fired.append($0) }
+    XCTAssertEqual(unchanged.added, 0)
+    XCTAssertEqual(unchanged.removed, 0)
+    XCTAssertTrue(fired.isEmpty)
+  }
+
+  func testModeMappingParsesNativeHotkeyOnce() {
+    let mapping = ModeMapping(key: "ctrl-d", action: .shellCommand(["true"]))
+    XCTAssertEqual(mapping.nativeHotkey, ModeMapping.parseNativeHotkey("ctrl+d"))
+    XCTAssertNil(ModeMapping(key: "gi", action: .shellCommand(["true"])).nativeHotkey)
+  }
+
   private func event(id: EventHotKeyID?) throws -> EventRef {
     var event: EventRef?
     XCTAssertEqual(

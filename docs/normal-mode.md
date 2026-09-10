@@ -96,8 +96,18 @@ share the main run loop. Treat that loop as the input latency budget:
   exact AX or WindowServer geometry lookup for an identity-only action.
 - Scope-only mode changes use `MappingsCoordinator.apply(scope:)`. All-scope
   Carbon registrations stay installed and resolve the current mode's winning
-  action at dispatch; only mode-specific registrations are replaced. Rebuild
-  the complete registry only when the effective mappings change.
+  action at dispatch; mode-specific registrations are reconciled by chord, so
+  only the chords that differ between the two scopes are unregistered or
+  registered. Each `ModeMapping` parses its native chord once at construction.
+  Reconcile the registry only when the effective mappings change.
+- A mode transition never takes a WindowServer snapshot on main: mode-entry
+  bookkeeping and INSERT target activation resolve the app by identity, and
+  the active-window border resolves its frame on `AppMonitor.geometryQueue`
+  and applies it one hop later under a generation token. Scroll verbs resolve
+  the wheel target frame on the AX queue and do not re-render the mode surface
+  afterwards. `configureModeBadge` is memoized on its inputs
+  (`ModeBadgeLayoutStamp`), so re-applying an unchanged mode surface skips the
+  per-screen relayout.
   Focusing a terminal popup suspends every Carbon registration; leaving it
   restores the active scope.
 

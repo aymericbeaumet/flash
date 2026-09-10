@@ -98,7 +98,8 @@ extension AppDelegate {
     nativeSurfaceSuspended = false
     switch next {
     case .normal:
-      if let context = normalModeContext() {
+      // Identity only: the target pid needs no WindowServer geometry.
+      if let context = normalModeDispatchContext() {
         normalModeTargetPID = context.processID
       }
     case .insert, .disabled:
@@ -111,12 +112,28 @@ extension AppDelegate {
   /// Re-activate the focused app on INSERT entry so its window reclaims key
   /// status from the panel (the Messages "first keystroke dropped" fix).
   private func activateInsertTargetApp(_ pid: pid_t?) {
-    let target = pid.flatMap { monitor.context(for: $0) } ?? currentNonFlashContext()
-    guard let target,
-      let app = NSRunningApplication(processIdentifier: target.processID),
+    // Identity only: activation needs the app, never its window frame, so this
+    // never takes a WindowServer snapshot on the mode-transition path.
+    guard
+      let app = pid.flatMap({ NSRunningApplication(processIdentifier: $0) })
+        ?? currentNonFlashRunningApplication(),
       !app.isTerminated
     else { return }
     RunningApplicationActivation.activate(app, options: [])
+  }
+
+  /// The frontmost non-Flash application by identity alone (no geometry):
+  /// the workspace frontmost app unless that is Flash itself, in which case
+  /// the last observed focused app.
+  func currentNonFlashRunningApplication() -> NSRunningApplication? {
+    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
+    if let frontmost = NSWorkspace.shared.frontmostApplication,
+      frontmost.bundleIdentifier != flashBundleIdentifier
+    {
+      return frontmost
+    }
+    guard let observedFocusedAppPID else { return nil }
+    return NSRunningApplication(processIdentifier: observedFocusedAppPID)
   }
 
   /// Map a projected mode label to the user-configured string.

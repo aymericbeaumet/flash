@@ -605,6 +605,7 @@ extension OverlayPanel {
 
   /// Tear down every click window (bar hidden).
   func hideStatusBarClickWindows() {
+    lastModeBadgeLayoutStamp = nil
     stopMenuBarRevealTracking()
     if !statusPopupController.presentation.isStandalone { hideStatusBarPopup() }
     guard !statusBarClickWindows.isEmpty || lastStatusBarClickSignature != nil else { return }

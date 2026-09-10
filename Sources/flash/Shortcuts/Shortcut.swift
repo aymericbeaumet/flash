@@ -18,8 +18,19 @@ struct ModeMapping: Equatable {
   let key: String
   let action: MappingCommand
   let repeatsOnFinalKey: Bool
+  /// The single modified chord this mapping registers natively, parsed once
+  /// at construction (config load) so scope changes and Carbon reconciliation
+  /// never re-parse mapping keys.
+  let nativeHotkey: ParsedHotkey?
 
-  var nativeHotkey: ParsedHotkey? {
+  init(key: String, action: MappingCommand, repeatsOnFinalKey: Bool = false) {
+    self.key = key
+    self.action = action
+    self.repeatsOnFinalKey = repeatsOnFinalKey
+    self.nativeHotkey = Self.parseNativeHotkey(key)
+  }
+
+  static func parseNativeHotkey(_ key: String) -> ParsedHotkey? {
     let atoms = NormalModeInterpreter.keyAtoms(from: key)
     guard atoms.count == 1, let atom = atoms.first else { return nil }
     let hotkey =
@@ -29,12 +40,6 @@ struct ModeMapping: Equatable {
       return nil
     }
     return parsed
-  }
-
-  init(key: String, action: MappingCommand, repeatsOnFinalKey: Bool = false) {
-    self.key = key
-    self.action = action
-    self.repeatsOnFinalKey = repeatsOnFinalKey
   }
 }
 

@@ -30,8 +30,29 @@ extension AppDelegate {
       hideActiveWindowBorder(reason: "hidden_\(reason)")
       return
     }
-    let frame = activeWindowBorderContext()?.frontWindowFrame
     FlashLog.trace("[mode] active_border_update reason=\(reason) mode=\(flashMode)")
+    // Identity resolves on main; the WindowServer frame lookup is a
+    // synchronous round trip, so it runs on the geometry queue and the stroke
+    // is applied one hop later unless a newer update or hide superseded it.
+    activeWindowBorderUpdateGeneration &+= 1
+    let generation = activeWindowBorderUpdateGeneration
+    guard let app = activeWindowBorderApplication() else {
+      applyActiveWindowBorder(frame: nil)
+      return
+    }
+    let pid = app.processIdentifier
+    let primaryH = monitor.primaryScreenHeight()
+    let monitor: AppMonitor = self.monitor
+    monitor.geometryQueue.async { [weak self] in
+      let frame = AppMonitor.topApplicationWindowFrame(for: pid, primaryH: primaryH)
+      DispatchQueue.main.async {
+        guard let self, self.activeWindowBorderUpdateGeneration == generation else { return }
+        self.applyActiveWindowBorder(frame: frame)
+      }
+    }
+  }
+
+  private func applyActiveWindowBorder(frame: CGRect?) {
     let style = resolvedActiveWindowBorderStyle()
     overlay.setActiveWindowBorder(
       around: frame, color: style.color, lineWidth: style.lineWidth,
@@ -40,6 +61,7 @@ extension AppDelegate {
   }
 
   func hideActiveWindowBorder(reason: String) {
+    activeWindowBorderUpdateGeneration &+= 1
     overlay.setActiveWindowBorder(around: nil)
     activeWindowBorderTrackedFrame = nil
     cancelActiveWindowBorderReconciliations(reason: reason)
@@ -225,25 +247,21 @@ extension AppDelegate {
     }
   }
 
-  private func activeWindowBorderContext() -> AppContext? {
-    // Mode is global/sticky, so the typing target is simply the currently
-    // focused non-Flash app (the old per-insert "owner pid" is gone). Resolve
-    // its WindowServer frame in one snapshot: `currentNonFlashContext` also
-    // snapshots window ordering, which would duplicate this reconciliation.
-    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
-    let frontmost = NSWorkspace.shared.frontmostApplication
-    let app: NSRunningApplication?
-    if let frontmost, frontmost.bundleIdentifier != flashBundleIdentifier {
-      app = frontmost
-    } else if let observedFocusedAppPID {
-      app = NSRunningApplication(processIdentifier: observedFocusedAppPID)
-    } else {
-      app = nil
-    }
-    guard let app,
+  /// Mode is global/sticky, so the border target is simply the currently
+  /// focused non-Flash app (the old per-insert "owner pid" is gone). Identity
+  /// only — no WindowServer geometry.
+  private func activeWindowBorderApplication() -> NSRunningApplication? {
+    guard let app = currentNonFlashRunningApplication(),
       !app.isTerminated,
       !Self.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: app.bundleIdentifier)
     else { return nil }
+    return app
+  }
+
+  /// Reconciliation ticks run off the keypress path and may resolve the frame
+  /// synchronously in one WindowServer snapshot.
+  private func activeWindowBorderContext() -> AppContext? {
+    guard let app = activeWindowBorderApplication() else { return nil }
     return monitor.appWindowContext(for: app.processIdentifier)
   }
 

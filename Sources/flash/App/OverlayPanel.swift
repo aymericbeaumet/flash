@@ -76,7 +76,13 @@ final class OverlayPanel: NSPanel {
   var secondaryStatusBars: [NativeStatusBarSurface] = []
   /// Which displays render the bar (`[statusbar] monitor`). `primary` skips the
   /// secondary (non-main) screen bars. Set by the AppDelegate on config load.
-  var statusBarMonitor: Config.StatusBar.Monitor = .all
+  var statusBarMonitor: Config.StatusBar.Monitor = .all {
+    didSet { statusBarLayoutRevision &+= 1 }
+  }
+  /// Bumped whenever an input of the status-bar relayout changes; see
+  /// `ModeBadgeLayoutStamp`.
+  var statusBarLayoutRevision: UInt64 = 0
+  var lastModeBadgeLayoutStamp: ModeBadgeLayoutStamp?
   /// One full-band click window per screen (the bar's visual lives on this
   /// click-through panel, so these windows do the click work). They swallow
   /// band clicks so a click on the bar never reveals the desktop, and open a
@@ -170,10 +176,14 @@ final class OverlayPanel: NSPanel {
 
   weak var coordinator: OverlayCoordinator?
 
-  var overlayConfig: Config.Overlay = .init()
+  var overlayConfig: Config.Overlay = .init() {
+    didSet { statusBarLayoutRevision &+= 1 }
+  }
   var debugConfig: Config.Debug = .init()
   var mouseGridOpacity: Float = 0.5
-  var modeLabels: Config.Mode.Labels = .init()
+  var modeLabels: Config.Mode.Labels = .init() {
+    didSet { statusBarLayoutRevision &+= 1 }
+  }
   var magicModifiers: ClickModifiers = .defaultMagic
   var inputMode: OverlayInputMode = .hints {
     didSet {
@@ -286,9 +296,14 @@ final class OverlayPanel: NSPanel {
     return snapshot
   }
 
+  /// Incremented with every invalidation so layout memos keyed on display
+  /// geometry (see `ModeBadgeLayoutStamp`) recompute after a screen change.
+  private(set) static var screenSnapshotRevision: UInt64 = 0
+
   static func invalidateScreenSnapshot() {
     os_unfair_lock_lock(&snapshotLock)
     cachedSnapshot = nil
+    screenSnapshotRevision &+= 1
     os_unfair_lock_unlock(&snapshotLock)
   }
 

@@ -47,54 +47,58 @@ final class MappingsCoordinator {
 
   func apply(mode: Config.Mode) {
     configuredMode = mode
-    rebuildAllMappings()
-    rebuildScopedMappings(for: lastAppliedScope)
+    reconcileAllMappings()
+    reconcileScopedMappings(for: lastAppliedScope)
   }
 
   /// All-mode Carbon registrations stay installed; callbacks resolve the
   /// current scope's winning action for their chord. Terminal input suspends
-  /// both registration sets in favor of its local matcher.
+  /// both registration sets in favor of its local matcher. Registrations are
+  /// reconciled by chord, so a scope change only touches chords that differ
+  /// between the two scopes.
   func apply(scope: MappingScope) {
     guard scope != lastAppliedScope else { return }
     let wasTerminal = lastAppliedScope == .terminal
     lastAppliedScope = scope
-    if wasTerminal || scope == .terminal { rebuildAllMappings() }
-    rebuildScopedMappings(for: scope)
+    if wasTerminal || scope == .terminal { reconcileAllMappings() }
+    reconcileScopedMappings(for: scope)
   }
 
-  private func rebuildAllMappings() {
-    allHotkeys.unregisterAll()
-    guard lastAppliedScope != .terminal else { return }
-    registerMappings(Config.Mode.resolveMappings(configuredMode.all), with: allHotkeys)
+  private func reconcileAllMappings() {
+    let desired =
+      lastAppliedScope == .terminal ? [] : Config.Mode.resolveMappings(configuredMode.all)
+    reconcile(desired, with: allHotkeys, label: "all")
   }
 
-  private func rebuildScopedMappings(for mappingScope: MappingScope) {
+  private func reconcileScopedMappings(for mappingScope: MappingScope) {
     lastAppliedScope = mappingScope
-    scopedHotkeys.unregisterAll()
     activeMappings = Dictionary(
       uniqueKeysWithValues:
         Self.nativeMappings(in: configuredMode, scope: mappingScope).compactMap { mapping in
           mapping.nativeHotkey.map { ($0, mapping) }
         })
-    registerMappings(
-      Self.scopedNativeMappings(in: configuredMode, scope: mappingScope), with: scopedHotkeys)
+    reconcile(
+      Self.scopedNativeMappings(in: configuredMode, scope: mappingScope), with: scopedHotkeys,
+      label: "\(mappingScope)")
   }
 
-  private func registerMappings(_ mappings: [ModeMapping], with hotkeys: HotKeyManager) {
+  private func reconcile(_ mappings: [ModeMapping], with hotkeys: HotKeyManager, label: String) {
+    var keysByChord: [ParsedHotkey: String] = [:]
     for mapping in mappings {
-      guard let parsed = mapping.nativeHotkey else { continue }
-      let status = hotkeys.register(
-        modifiers: parsed.modifiers, virtualKey: parsed.virtualKey
-      ) { [weak self] in
-        self?.handle(hotkey: parsed)
-      }
-      if status == noErr {
-        FlashLog.debug("[mappings] registered \"\(mapping.key)\"")
-      } else {
-        FlashLog.warn(
-          "[mappings] could not register \"\(mapping.key)\" — "
-            + "status=\(status); another app may already own this hotkey")
-      }
+      if let chord = mapping.nativeHotkey { keysByChord[chord] = mapping.key }
+    }
+    let result = hotkeys.reconcile(desired: Set(keysByChord.keys)) { [weak self] chord in
+      self?.handle(hotkey: chord)
+    }
+    for chord in result.refused {
+      FlashLog.warn(
+        "[mappings] could not register \"\(keysByChord[chord] ?? "?")\" — "
+          + "another app may already own this hotkey")
+    }
+    if result.added > 0 || result.removed > 0 {
+      FlashLog.debug(
+        "[mappings] \(label) registrations added=\(result.added) removed=\(result.removed) "
+          + "active=\(hotkeys.registeredChords.count)")
     }
   }
 

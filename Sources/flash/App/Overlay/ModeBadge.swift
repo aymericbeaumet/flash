@@ -135,6 +135,7 @@ extension OverlayPanel {
     statusBarModel = model
     statusBarPopupTexts = model.popupTexts
     statusBarPopupDocuments = model.popupDocuments
+    statusBarLayoutRevision &+= 1
     guard modeBadgeVisible || commandPromptVisible || candidateFinderResultsVisible else {
       return
     }
@@ -249,7 +250,26 @@ extension OverlayPanel {
     }
   }
 
+  /// Everything `configureModeBadge` reads, so an unchanged input set skips
+  /// the per-screen relayout. Model, popup, label, config, and screen changes
+  /// bump `statusBarLayoutRevision` / `screenSnapshotRevision`; the remaining
+  /// inputs are cheap values compared directly.
+  struct ModeBadgeLayoutStamp: Equatable {
+    var text: String
+    var style: OverlayModeBadgeStyle
+    var visible: Bool
+    var panelFrame: CGRect
+    var layoutRevision: UInt64
+    var screenRevision: UInt64
+  }
+
   private func configureModeBadge(panelFrame: CGRect) {
+    let stamp = ModeBadgeLayoutStamp(
+      text: modeBadgeText, style: modeBadgeStyle, visible: modeBadgeVisible,
+      panelFrame: panelFrame, layoutRevision: statusBarLayoutRevision,
+      screenRevision: Self.screenSnapshotRevision)
+    guard stamp != lastModeBadgeLayoutStamp else { return }
+    lastModeBadgeLayoutStamp = stamp
     configureModeBadge(
       panelFrame: panelFrame,
       screenSnapshot: Self.currentScreenSnapshot())

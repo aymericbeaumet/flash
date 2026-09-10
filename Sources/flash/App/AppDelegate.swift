@@ -238,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `captureKeyboardInput`.
   var keyboardCaptureTap: KeyboardCaptureTap?
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
+  var activeWindowBorderUpdateGeneration: UInt64 = 0
   var activeWindowBorderTrackedFrame: CGRect?
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>()

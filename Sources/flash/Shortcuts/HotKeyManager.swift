@@ -15,8 +15,11 @@ import Foundation
 final class HotKeyManager {
 
   private var registrations: [UInt32: EventHotKeyRef] = [:]
+  private var routerIDsByChord: [ParsedHotkey: UInt32] = [:]
   private let router = HotKeyEventRouter()
   private var eventHandlerRef: EventHandlerRef?
+
+  var registeredChords: Set<ParsedHotkey> { Set(routerIDsByChord.keys) }
 
   init() {
     installEventHandler()
@@ -34,26 +37,70 @@ final class HotKeyManager {
   func register(
     modifiers: UInt32, virtualKey: UInt32, onFire: @escaping () -> Void
   ) -> OSStatus {
+    register(ParsedHotkey(modifiers: modifiers, virtualKey: virtualKey), onFire: onFire)
+  }
+
+  @discardableResult
+  func register(_ chord: ParsedHotkey, onFire: @escaping () -> Void) -> OSStatus {
     let hotKeyID = router.register(onFire: onFire)
     var ref: EventHotKeyRef?
     let status = RegisterEventHotKey(
-      virtualKey, modifiers, hotKeyID,
+      chord.virtualKey, chord.modifiers, hotKeyID,
       GetEventDispatcherTarget(), 0, &ref)
     guard status == noErr, let ref else {
       router.remove(id: hotKeyID.id)
       return status == noErr ? OSStatus(paramErr) : status
     }
     registrations[hotKeyID.id] = ref
+    routerIDsByChord[chord] = hotKeyID.id
     return noErr
   }
 
-  /// Drop every previously-registered hotkey. Used before reloading
-  /// mode mappings so a removed line stops responding immediately.
+  func unregister(_ chord: ParsedHotkey) {
+    guard let id = routerIDsByChord.removeValue(forKey: chord) else { return }
+    if let ref = registrations.removeValue(forKey: id) {
+      UnregisterEventHotKey(ref)
+    }
+    router.remove(id: id)
+  }
+
+  struct ReconcileResult {
+    var added = 0
+    var removed = 0
+    var refused: [ParsedHotkey] = []
+  }
+
+  /// Bring the registration set to exactly `desired` with the minimum Carbon
+  /// churn: chords that stay registered are untouched, so a NORMAL↔INSERT
+  /// scope change or a config reload only touches the chords that actually
+  /// differ. `onFire` receives the chord so callbacks stay mapping-independent
+  /// and a kept registration dispatches whatever the current scope resolves.
+  @discardableResult
+  func reconcile(
+    desired: Set<ParsedHotkey>, onFire: @escaping (ParsedHotkey) -> Void
+  ) -> ReconcileResult {
+    var result = ReconcileResult()
+    for chord in routerIDsByChord.keys where !desired.contains(chord) {
+      unregister(chord)
+      result.removed += 1
+    }
+    for chord in desired where routerIDsByChord[chord] == nil {
+      if register(chord, onFire: { onFire(chord) }) == noErr {
+        result.added += 1
+      } else {
+        result.refused.append(chord)
+      }
+    }
+    return result
+  }
+
+  /// Drop every previously-registered hotkey.
   func unregisterAll() {
     for ref in registrations.values {
       UnregisterEventHotKey(ref)
     }
     registrations.removeAll()
+    routerIDsByChord.removeAll()
     router.removeAll()
   }
 
