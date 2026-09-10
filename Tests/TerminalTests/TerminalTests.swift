@@ -139,6 +139,32 @@ final class TerminalTests: XCTestCase {
     XCTAssertEqual(TerminalDocument.sanitize(text: "a\u{1B}[2J\u{9B}31m\n\t\0"), "a�[2J�31m\n\t�")
   }
 
+  func testControlChordsFromTheViewReachTheChildAsControlBytes() throws {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(
+        command: ["/bin/sh", "-c", "stty -echo; printf READY; cat; printf CAT_DONE"],
+        columns: 30, rows: 4))
+    defer { session.shutdown() }
+    let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 300, height: 100))
+    view.isRenderingEnabled = true
+    view.bind(session: session)
+    session.start()
+    func waitForText(_ text: String) {
+      let ready = expectation(
+        for: NSPredicate { _, _ in view.terminalFrame?.text.contains(text) == true },
+        evaluatedWith: nil)
+      wait(for: [ready], timeout: 5)
+    }
+    waitForText("READY")
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
+        windowNumber: 0, context: nil, characters: "\u{04}", charactersIgnoringModifiers: "d",
+        isARepeat: false, keyCode: 2))
+    view.keyDown(with: event)
+    waitForText("CAT_DONE")
+  }
+
   func testPTYStartsBeforeAnyViewAndRetainsExitedScreen() {
     let session = TerminalSession(
       configuration: TerminalConfiguration(

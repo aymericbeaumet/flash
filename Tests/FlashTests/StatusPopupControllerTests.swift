@@ -345,7 +345,7 @@ final class StatusPopupControllerTests: XCTestCase {
     original.onStateChange = stateChanged
   }
 
-  func testCrashedTerminalsRestartInEveryPresentationWithoutLosingFocusOrSession() {
+  func testCrashedPersistentTerminalsRestartInEveryPresentationAndNonpersistentOnesClose() {
     for persistent in [false, true] {
       for presentation in ["preview", "pinned", "standalone"] {
         let registry = StatusTerminalRegistry()
@@ -379,6 +379,14 @@ final class StatusPopupControllerTests: XCTestCase {
         var dismissals = 0
         controller.didDismissFocus = { _ in dismissals += 1 }
         XCTAssertEqual(kill(originalPID, SIGKILL), 0)
+        if !persistent {
+          waitUntil("crashed nonpersistent terminal closed after \(presentation)") {
+            registry.sessions[name] == nil && !controller.isVisible
+          }
+          XCTAssertEqual(dismissals, presentation == "preview" ? 0 : 1)
+          XCTAssertNil(registry.definitions[name])
+          continue
+        }
         waitUntil("crashed terminal replaced and rendered") {
           guard case .running(let pid) = session.state, pid != originalPID else { return false }
           return controller.terminalView.terminalFrame?.text.contains("ready-\(pid)") == true
@@ -500,7 +508,7 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
   }
 
-  func testNonpersistentWindowKeepsFocusAcrossProcessExitAndRestarts() throws {
+  func testNonpersistentWindowClosesWhenItsProcessExits() throws {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
     var config = Config()
@@ -508,9 +516,13 @@ final class StatusPopupControllerTests: XCTestCase {
     let name = try XCTUnwrap(registry.openTerminal(name: "shell", configuration: config))
     let session = try XCTUnwrap(registry.sessions[name])
     defer { registry.shutdown() }
-    controller.didDismiss = { registry.releaseTerminal(name: $0) }
-    var focusCount = 0
-    controller.willFocus = { focusCount += 1 }
+    var dismissed: [String] = []
+    controller.didDismiss = {
+      dismissed.append($0)
+      registry.releaseTerminal(name: $0)
+    }
+    var focusDismissalReasons: [String] = []
+    controller.didDismissFocus = { focusDismissalReasons.append($0) }
     controller.showTerminal(
       name: name, visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 800),
       style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
@@ -518,20 +530,16 @@ final class StatusPopupControllerTests: XCTestCase {
       if case .running = session.state { return true }
       return false
     }
-    guard case .running(let firstPID) = session.state else { return XCTFail("Missing child") }
-    XCTAssertEqual(kill(firstPID, SIGTERM), 0)
-    waitUntil("replacement child running") {
-      if case .running(let pid) = session.state { return pid != firstPID }
-      return false
+    guard case .running(let pid) = session.state else { return XCTFail("Missing child") }
+    XCTAssertEqual(kill(pid, SIGTERM), 0)
+    waitUntil("window closed with its process") {
+      registry.sessions[name] == nil && controller.presentation == .hidden
     }
-    XCTAssertEqual(controller.presentation, .terminal(name: name))
-    XCTAssertEqual(controller.focusedName, name)
-    XCTAssertEqual(focusCount, 1)
-    XCTAssertTrue(controller.terminalView.isRenderingEnabled)
-    XCTAssertEqual(controller.exitStatusText, "")
-    controller.dismiss()
-    XCTAssertNil(registry.sessions[name])
-    XCTAssertEqual(controller.presentation, .hidden)
+    XCTAssertEqual(dismissed, [name])
+    XCTAssertEqual(focusDismissalReasons, ["terminal_removed"])
+    XCTAssertNil(controller.focusedName)
+    XCTAssertFalse(controller.terminalView.isRenderingEnabled)
+    XCTAssertEqual(kill(pid, 0), -1)
   }
 
   func testTerminalEnvironmentExpandsOverridesAgainstBaseThenArguments() {

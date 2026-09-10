@@ -178,7 +178,7 @@ font_size = 13
 command_timeout = 6.0
 # Points kept clear on each side of a notch (camera housing). The centre
 # region hides entirely on notched screens.
-notch_margin = 0
+notch_margin = 6
 # Hover-popup chrome. Popup bodies use the same inline text styles as the bar;
 # these values control their default foreground and surrounding surface.
 popup_fg = "#D8DEE9"
@@ -362,11 +362,11 @@ send_key_interval_ms = 35
 # "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
 
 [mode.normal]
-# Let named, unmapped keys switch Flash to INSERT and continue to the focused
-# app unchanged. Explicit normal/all mappings still win. Use [] to disable.
+# Let named, unmapped keys continue to the focused app unchanged while Flash
+# stays in NORMAL. Explicit normal/all mappings still win. Use [] to disable.
 passthrough_keys = []
-# Let an unmapped shortcut carrying any listed modifier switch Flash to INSERT
-# and continue to the focused app or macOS unchanged. Explicit normal/all
+# Let an unmapped shortcut carrying any listed modifier continue to the focused
+# app or macOS unchanged while Flash stays in NORMAL. Explicit normal/all
 # mappings still win. Use [] to keep NORMAL hermetic.
 passthrough_modifiers = []
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -374,7 +374,7 @@ leader = "\\"
 
 [mode.normal.mappings]
 # No key here enters INSERT by default; bind enter_insert_mode yourself.
-# Clicks into text fields and passthrough keys still switch to INSERT.
+# Clicks into text fields still switch to INSERT; passthrough keys never do.
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
 # that one default mapping; unrelated defaults stay available.
 # Mapped keys dispatch Flash commands and other bare unmapped keys are swallowed.
@@ -523,8 +523,9 @@ leader = "\\"
 "?" = ["flash", "help_show"]
 
 # Named terminal command templates. persistent defaults to false: a new process
-# each time the window opens. All open terminals restart after process exit.
-# Persistent sessions start with Flash and keep running after the window closes.
+# each time the window opens, and the window closes when that process exits.
+# Persistent sessions start with Flash, keep running after the window closes,
+# and restart after process exit.
 # [terminal.bonsai]
 # command = ["bonsai", "hq", "--no-open", "--port", "0"]
 # persistent = true

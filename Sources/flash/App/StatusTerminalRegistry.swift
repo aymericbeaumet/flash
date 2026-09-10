@@ -127,10 +127,12 @@ final class StatusTerminalRegistry {
     if !changes.isEmpty { didChange?() }
   }
 
+  /// Only persistent declarations restart on their own. Every other terminal
+  /// ends with its process: the popup or window closes and the session is
+  /// released.
   func automaticallyRestarts(name: String) -> Bool {
-    guard let owner = ownership[name] else { return false }
-    if case .ephemeral(template: nil) = owner { return false }
-    return true
+    if case .persistent = ownership[name] { return true }
+    return false
   }
 
   func openTerminal(name: String?, configuration config: Config) -> String? {

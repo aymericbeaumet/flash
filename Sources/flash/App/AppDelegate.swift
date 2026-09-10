@@ -10,7 +10,6 @@ enum InsertModeTransitionReason: Equatable {
   case hintCommit
   case advancedModeDisabled
   case secureInput
-  case normalModePassthrough
 
   var logValue: String {
     switch self {
@@ -26,8 +25,6 @@ enum InsertModeTransitionReason: Equatable {
       return "advanced_mode_disabled"
     case .secureInput:
       return "secure_input"
-    case .normalModePassthrough:
-      return "normal_mode_passthrough"
     }
   }
 }
@@ -959,24 +956,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       let flags = event.flags
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-      let passthroughModifierFlags = overlay.normalModePassthroughModifierFlags
-      let shouldEnterInsert =
-        aboutOwnsNativeKeyboard
-        && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
-          flashMode: flashMode,
-          modifierFlags: flags,
-          hasMapping: hasMapping,
-          isPassthroughKey: overlay.normalModePassthroughKeyCodes.contains(keyCode),
-          passthroughModifierFlags: passthroughModifierFlags)
-      if shouldEnterInsert {
-        let targetPID = normalModeTargetPID
-        DispatchQueue.main.async { [weak self] in
-          guard let self, self.flashMode == .normal else { return }
-          self.enterInsertMode(
-            reason: .normalModePassthrough,
-            targetPID: targetPID)
-        }
-      }
       return KeyboardCaptureTap.shouldSwallow(
         flashMode: flashMode,
         inputMode: overlay.inputMode,
@@ -992,9 +971,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     // In NORMAL, an unmapped keypress matching a configured passthrough key or
     // carrying a configured passthrough modifier is NOT swallowed — the original
-    // event flows to the app / system natively. Not swallowing (rather than
-    // swallow + re-post) is what makes system-level chords like ⌘Tab work. A
-    // mapped keypress is still swallowed and fired by `routeTapCapturedKey`.
+    // event flows to the app / system natively and Flash stays in NORMAL; only
+    // explicit mappings change the mode. Not swallowing (rather than swallow +
+    // re-post) is what makes system-level chords like ⌘Tab work. A mapped
+    // keypress is still swallowed and fired by `routeTapCapturedKey`.
     //
     // Runs synchronously on every keystroke, so the decision reads raw CGEvent
     // fields — no `NSEvent(cgEvent:)`, which resolves the keyboard layout and
@@ -1013,26 +993,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     reconcileFrontmostApplication(
       forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
     let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-    let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
+    return KeyboardCaptureTap.shouldSwallow(
       flashMode: flashMode,
       inputMode: overlay.inputMode,
       modifierFlags: flags,
       hasMapping: hasMapping,
       isPassthroughKey: isPassthroughKey,
       passthroughModifierFlags: passthroughModifierFlags)
-    guard !shouldSwallow else { return true }
-
-    // Keep the NORMAL mapping scope installed until the original event has
-    // continued downstream. Switching synchronously would register INSERT-only
-    // Carbon mappings soon enough to steal this very chord. The next main-loop
-    // turn runs after the event has reached the app / WindowServer.
-    DispatchQueue.main.async { [weak self] in
-      guard let self, self.flashMode == .normal, self.overlay.inputMode == .normal else { return }
-      self.enterInsertMode(
-        reason: .normalModePassthrough,
-        targetPID: self.currentNonFlashContext()?.processID)
-    }
-    return false
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {

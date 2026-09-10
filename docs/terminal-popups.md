@@ -6,8 +6,9 @@ input mappings, exit commands, and renderer. Declare every process under
 the same session. `[statusbar.popup]` contains document strings only.
 
 The default terminal-mode shortcuts are Command-R to restart immediately,
-Command-Q to quit the child, and Command-W to hide the window. Named terminal
-processes restart automatically after a quit; unnamed fresh shells end permanently. Hiding keeps persistent sessions running and
+Command-Q to quit the child, and Command-W to hide the window. Persistent
+sessions restart automatically after a quit or exit; every other terminal
+closes when its process ends. Hiding keeps persistent sessions running and
 stops nonpersistent sessions. Override these in `[mode.terminal.mappings]`.
 Both process commands accept an optional `--name`;
 without one they operate on the focused terminal. Document popups have no
@@ -99,9 +100,9 @@ Named definitions accept `command`, `working_directory`, `env`, `columns`,
 grid: the name then identifies a command template, and each opening gets a
 fresh process. With `persistent = true`, Flash starts the session after its
 login environment resolves, even when hidden or the status bar is disabled.
-Reopening preserves the process, screen, and history. All sessions use
-the same automatic restart policy as named status popups while owned by Flash;
-the unnamed `terminal_show` fresh shell is the one-shot exception.
+Reopening preserves the process, screen, and history, and the session restarts
+after its process exits. A nonpersistent terminal closes its window and releases
+its session as soon as the process ends, like the unnamed `terminal_show` shell.
 
 Windows appear centered on the focused application's screen and clamp to its
 available area. One terminal window is presented at a time; changing windows
@@ -117,7 +118,8 @@ Use `flash terminal_show --name=bonsai` from the CLI or `:terminal_show
 --name=bonsai` from Flash's command line. `terminal_restart --name=bonsai`
 restarts the named persistent session. A nonpersistent name resolves to the
 focused instance of that template; without a name it restarts the focused
-terminal, including a fresh shell.
+terminal, including a fresh shell. Explicit restarts apply to every terminal;
+automatic ones only to persistent sessions.
 
 ## Hover diagnostics
 

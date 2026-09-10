@@ -32,7 +32,8 @@ including bindings that prefill the command line with `:flashlight`.
 
 Both `mode.normal.passthrough_keys` and `mode.normal.passthrough_modifiers`
 default to `[]`. Only matching configured unmapped keys or modifiers pass
-through NORMAL and enter INSERT; explicit mappings take precedence.
+through NORMAL to the focused app; Flash stays in NORMAL and explicit mappings
+take precedence.
 `/` (`app_find`) and `t` (`tab_new`) execute their commands without changing
 mode. Use an explicit `enter_insert_mode` shortcut to type afterward.
 
@@ -223,8 +224,6 @@ The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases,
 and `/` / `t` no longer enter INSERT after their action. INSERT is entered by:
 
 - a configured `enter_insert_mode` mapping;
-- a configured `passthrough_keys` / `passthrough_modifiers` keypress (for
-  example `cmd+l` with the default modifiers), which continues to the app;
 - a physical click or a mouse-grid / pointer-mode / adjust commit while NORMAL
   is capturing (pointer simulation always hands the keyboard to the app);
 - an `f` / `F` hint whose target is editable (`JumpTarget.entersInsertMode`).

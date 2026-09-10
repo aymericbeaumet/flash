@@ -353,7 +353,7 @@ struct Config {
     /// SIGTERM then SIGKILL past it, keeping the previous value.
     var commandTimeoutSeconds: Double = 6
     /// Points kept clear on each side of a notch (camera housing).
-    var notchMargin: Double = 0
+    var notchMargin: Double = 6
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
     /// One native tmux format, with Flash presentation styles and values.

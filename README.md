@@ -144,7 +144,7 @@ a popup label to keep it open and use the terminal; repeated clicks keep it pinn
 Right-click a popup segment to keep it open and enter terminal mode. Links
 still open normally on left-click; Option-click also focuses their popup.
 Terminal mode defaults to Command-R to restart the process, Command-Q to quit
-it (named terminals restart automatically), and Command-W to hide the window.
+it (persistent terminals restart automatically), and Command-W to hide the window.
 Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a persistent popup
 keeps its child alive. See the [interactive status strip](docs/examples/statusbar/README.md)
 for separate Cld/Cdx quotas, compact CPU/MEM/DSK/NET/BAT metrics, native
@@ -181,10 +181,10 @@ rows = 36
 "cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
-Omit `persistent` for a new process each time the window opens. Named terminal
-windows and status popup processes restart after exiting. The first retry is
-prompt; repeated immediate failures back off. Closing a nonpersistent window
-stops its process and cancels retries.
+Omit `persistent` for a new process each time the window opens; that window
+closes when its process exits. Persistent sessions restart after exiting: the
+first retry is prompt and repeated immediate failures back off. Closing a
+nonpersistent window stops its process.
 See [terminal sessions and shortcuts](docs/terminal-popups.md#shortcut-terminals).
 
 ### Feed headlines
@@ -368,7 +368,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; both lists are empty by default. Explicit mappings win. `/` (`app_find`) and `t` (`tab_new`) perform their actions while staying in NORMAL; use your configured insert-mode shortcut to type afterward. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` continues to the app or macOS while Flash stays in NORMAL; both lists are empty by default. Explicit mappings win. `/` (`app_find`) and `t` (`tab_new`) perform their actions while staying in NORMAL; use your configured insert-mode shortcut to type afterward. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
 
 ## Use your existing hotkey tool
 

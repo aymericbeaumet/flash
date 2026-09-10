@@ -1002,8 +1002,7 @@ extension AppDelegate {
 
   /// The Accessibility tap is unavailable, so the panel already received and
   /// consumed the original event. Replay the equivalent chord to the focused
-  /// app while NORMAL mappings are still registered, then enter INSERT on the
-  /// following main-loop turn. The normal-scope matcher already rejected this
+  /// app; Flash stays in NORMAL. The normal-scope matcher already rejected this
   /// chord before this method was called.
   func overlayDidPassthroughNormalModeKey(_ event: NSEvent) {
     guard flashMode == .normal,
@@ -1013,10 +1012,6 @@ extension AppDelegate {
     let flags = ClickModifiers(eventFlags: event.modifierFlags).cgEventFlags
     DispatchQueue.main.async {
       _ = NormalModeDispatcher.sendKey(virtualKey: keyCode, flags: flags, to: pid)
-      DispatchQueue.main.async { [weak self] in
-        guard let self, self.flashMode == .normal, self.overlay.inputMode == .normal else { return }
-        self.enterInsertMode(reason: .normalModePassthrough, targetPID: pid)
-      }
     }
   }
 

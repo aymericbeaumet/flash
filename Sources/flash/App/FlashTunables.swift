@@ -34,7 +34,7 @@ enum FlashTunables {
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
   /// `[statusbar] notch_margin` — points kept clear beside a notch.
-  static var statusBarNotchMargin: Double = 0
+  static var statusBarNotchMargin: Double = 6
 
   static func apply(_ config: Config) {
     scrollStepPixels = Int32(config.mode.scrollStep)
