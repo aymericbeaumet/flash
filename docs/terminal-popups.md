@@ -198,7 +198,7 @@ colour draw as one Core Text line; wide, non-ASCII, or differently styled cells
 still draw alone in their own clipped cell so shaping never shifts a neighbour.
 Font variants and the cell size are cached per font change.
 
-Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects and cycle transitions use Core Animation.
+Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects, carousel transitions, in-place value crossfades, and the hover wash are Core Animation only: the host adds an animation when a value changes and never redraws on a timer.
 
 `monitor = "primary"` selects the display at desktop origin `(0, 0)`. Moving
 keyboard focus to another display does not move the bar or reserve status-bar

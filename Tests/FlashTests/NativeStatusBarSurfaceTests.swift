@@ -4,6 +4,47 @@ import XCTest
 @testable import flash
 
 final class NativeStatusBarSurfaceTests: XCTestCase {
+  private let cycleKey = NativeStatusBarSurface.cycleAnimationKey
+  private let crossfadeKey = NativeStatusBarSurface.crossfadeAnimationKey
+
+  func testValueChangingInPlaceCrossfadesWhileMovedRunsSnap() {
+    let surface = render("CPU #[fg=yellow]10%#[default] END", columns: 30)
+    let value = surface.runLayers[1]
+    XCTAssertEqual((value.text.string as? NSAttributedString)?.string, "10%")
+    XCTAssertNil(value.text.animation(forKey: crossfadeKey))
+    redraw(surface, "CPU #[fg=yellow]11%#[default] END", columns: 30)
+    XCTAssertNotNil(value.text.animation(forKey: crossfadeKey))
+    XCTAssertNotNil(value.outgoing.animation(forKey: crossfadeKey))
+    XCTAssertEqual((value.outgoing.string as? NSAttributedString)?.string, "10%")
+    XCTAssertEqual(value.outgoing.opacity, 0)
+    XCTAssertNil(surface.runLayers[0].text.animation(forKey: crossfadeKey))
+    value.text.removeAllAnimations()
+    value.outgoing.removeAllAnimations()
+    redraw(surface, "CPUS #[fg=yellow]12%#[default] END", columns: 30)
+    XCTAssertEqual((value.text.string as? NSAttributedString)?.string, "12%")
+    XCTAssertNil(value.text.animation(forKey: crossfadeKey))
+    XCTAssertNil(value.outgoing.animation(forKey: crossfadeKey))
+  }
+
+  func testHoverWashFollowsSegmentsAndBarDrawsHairlineUnderTransparentRuns() {
+    let surface = render("A #[fg=red]B#[default] C", columns: 10)
+    let key = NativeStatusBarSurface.hoverAnimationKey
+    XCTAssertEqual(surface.hoverHighlight.opacity, 0)
+    surface.setHoverHighlight(CGRect(x: 20, y: 0, width: 30, height: 26))
+    XCTAssertEqual(surface.hoverHighlight.opacity, 1)
+    XCTAssertEqual(surface.hoverHighlight.frame.minX, 16)
+    XCTAssertEqual(surface.hoverHighlight.frame.width, 38)
+    XCTAssertNotNil(surface.hoverHighlight.animation(forKey: key))
+    surface.setHoverHighlight(nil)
+    XCTAssertEqual(surface.hoverHighlight.opacity, 0)
+    let sublayers = surface.backgroundLayer.sublayers ?? []
+    XCTAssertTrue(sublayers.first === surface.hairline)
+    XCTAssertTrue(sublayers.dropFirst().first === surface.hoverHighlight)
+    XCTAssertTrue(surface.runLayers.allSatisfy { $0.container.backgroundColor == nil })
+    XCTAssertEqual(surface.hairline.frame.height, 0.5)
+    XCTAssertEqual(surface.backgroundLayer.colors?.count, 2)
+  }
+
   func testFirstModelPopulatesPreviouslyEmptySurfaceWithoutFocusOrModeChange() {
     let surface = render("", columns: 40)
     XCTAssertTrue(surface.layout.text.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -42,9 +83,8 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       }
     }
     let fill = render("A#[fill=red]", columns: 10)
-    XCTAssertEqual(
-      fill.runLayers[0].container.backgroundColor,
-      FlashStatusTextColor.nsColor(.defaultBackground).cgColor)
+    // Default-background cells stay transparent so the bar fill shows through.
+    XCTAssertNil(fill.runLayers[0].container.backgroundColor)
     XCTAssertEqual(
       fill.backgroundLayer.backgroundColor, FlashStatusTextColor.nsColor(.palette(1)).cgColor)
   }
@@ -159,30 +199,35 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       columns: 20)
     XCTAssertTrue(surface.runLayers[0] === first)
     XCTAssertEqual(first.effect.animation(forKey: "flashEffect")?.beginTime, animation?.beginTime)
-    XCTAssertTrue(surface.runLayers[1].text.animation(forKey: kCATransition) is CATransition)
+    XCTAssertTrue(surface.runLayers[1].text.animation(forKey: cycleKey) is CAAnimationGroup)
   }
 
   func testCarouselSlidesUpOnlyOnArticleChangesAndClearsWhenLayerBecomesAMetric() {
     let surface = render("NEWS #[cyc]first#[nocyc] CPU 10%", columns: 40)
-    XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animation(forKey: kCATransition) == nil })
+    XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animation(forKey: cycleKey) == nil })
     redraw(surface, "NEWS #[cyc]second#[nocyc] CPU 20%", columns: 40)
     let article = surface.runLayers[1]
-    let transition = article.text.animation(forKey: kCATransition) as? CATransition
-    XCTAssertEqual(transition?.type, .push)
-    XCTAssertEqual(transition?.subtype, .fromBottom)
-    XCTAssertEqual(transition?.duration, 0.8)
-    XCTAssertNil(surface.runLayers[0].text.animation(forKey: kCATransition))
-    XCTAssertNil(surface.runLayers[2].text.animation(forKey: kCATransition))
+    let incoming = article.text.animation(forKey: cycleKey) as? CAAnimationGroup
+    XCTAssertEqual(
+      incoming?.animations?.compactMap { ($0 as? CABasicAnimation)?.keyPath },
+      ["opacity", "transform.translation.y"])
+    XCTAssertEqual(incoming?.duration, 0.55)
+    let leaving = article.outgoing.animation(forKey: cycleKey) as? CAAnimationGroup
+    XCTAssertEqual(leaving?.beginTime, incoming?.beginTime)
+    XCTAssertEqual((article.outgoing.string as? NSAttributedString)?.string, "first")
+    XCTAssertEqual(article.outgoing.opacity, 0)
+    XCTAssertNil(surface.runLayers[0].text.animation(forKey: cycleKey))
+    XCTAssertNil(surface.runLayers[2].text.animation(forKey: cycleKey))
     article.text.removeAllAnimations()
     article.effect.removeAllAnimations()
     redraw(surface, "NEWS #[cyc]second#[nocyc] CPU 30%", columns: 40)
-    XCTAssertNil(article.text.animation(forKey: kCATransition))
+    XCTAssertNil(article.text.animation(forKey: cycleKey))
     redraw(surface, "NEWS #[cyc]third#[nocyc] CPU 30%", columns: 40)
-    XCTAssertNotNil(article.text.animation(forKey: kCATransition))
+    XCTAssertNotNil(article.text.animation(forKey: cycleKey))
     redraw(surface, "NEWS #[fg=red]CPU 40%#[default] MEM 50%", columns: 40)
     XCTAssertTrue(surface.runLayers[1] === article)
-    XCTAssertNil(article.text.animation(forKey: kCATransition))
-    XCTAssertNil(article.effect.animation(forKey: kCATransition))
+    XCTAssertNil(article.text.animation(forKey: cycleKey))
+    XCTAssertNil(article.effect.animation(forKey: cycleKey))
   }
 
   func testCarouselMovesUnchangedArrowAndDomainWithTheChangedArticle() {
@@ -197,12 +242,12 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let cyclic = surface.visibleRuns.indices.filter { surface.visibleRuns[$0].segment.cycle }
     XCTAssertGreaterThan(cyclic.count, 2)
     for index in cyclic {
-      let transition =
-        surface.runLayers[index].text.animation(forKey: kCATransition) as? CATransition
-      XCTAssertEqual(transition?.subtype, .fromBottom, surface.visibleRuns[index].segment.text)
+      XCTAssertNotNil(
+        surface.runLayers[index].text.animation(forKey: cycleKey),
+        surface.visibleRuns[index].segment.text)
     }
     let starts = cyclic.compactMap {
-      surface.runLayers[$0].text.animation(forKey: kCATransition)?.beginTime
+      surface.runLayers[$0].text.animation(forKey: cycleKey)?.beginTime
     }
     XCTAssertEqual(Set(starts).count, 1)
     for layer in surface.runLayers {
@@ -213,10 +258,10 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animationKeys()?.isEmpty != false })
     redraw(surface, source("other", url: "https://example.com/b"), columns: 60)
     for index in cyclic {
-      XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+      XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: cycleKey))
     }
     for index in surface.visibleRuns.indices where !surface.visibleRuns[index].segment.cycle {
-      XCTAssertNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+      XCTAssertNil(surface.runLayers[index].text.animation(forKey: cycleKey))
     }
     for layer in surface.runLayers {
       layer.text.removeAllAnimations()
@@ -224,7 +269,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     }
     redraw(surface, source("other", url: "https://example.com/b", popup: "feed-b"), columns: 60)
     for index in cyclic {
-      XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+      XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: cycleKey))
     }
     redraw(surface, "NEWS #[fg=red]CPU 40%#[default] MEM 50%", columns: 60)
     XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animationKeys()?.isEmpty != false })
@@ -236,9 +281,9 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     redraw(surface, "A #[cyc]new#[nocyc] B #[cyc]two#[nocyc]", columns: 40)
     for (index, run) in surface.visibleRuns.enumerated() {
       if run.segment.text == "new" {
-        XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+        XCTAssertNotNil(surface.runLayers[index].text.animation(forKey: cycleKey))
       } else {
-        XCTAssertNil(surface.runLayers[index].text.animation(forKey: kCATransition))
+        XCTAssertNil(surface.runLayers[index].text.animation(forKey: cycleKey))
       }
     }
   }

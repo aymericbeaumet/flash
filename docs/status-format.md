@@ -144,6 +144,14 @@ and stop before the notch or an absolute-centre component. The feed uses this
 for title-only ellipsis with an always-visible outbound arrow. These host
 surfaces do not alter format evaluation.
 
+The bar itself is a vertical gradient over the `fill` colour with a hairline
+along its bottom edge; default-background cells are transparent so both show
+through. Mode pills are lit from the top. A hovered `#[link]` or `#[popup]` run
+gets a rounded wash that fades in, glides between neighbouring runs, and fades
+out. A value changing in place (a metric tick, the clock) crossfades over
+220 ms; a carousel article lifts out while the next rises in over 550 ms. All
+of it runs on the render server: no host timers, no per-frame CPU work.
+
 Inline popup identities derive from their source origin and invocation, not the
 current text or screen position. A changing source value refreshes an open
 popup in place; separate calls to the same fragment remain distinct anchors.

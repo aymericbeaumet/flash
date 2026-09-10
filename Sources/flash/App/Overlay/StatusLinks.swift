@@ -93,6 +93,9 @@ final class StatusBarClickView: NSView {
   /// coordinates. The overlay moves its popup layer on every event.
   var onPopupHover: ((StatusBarPopupRegion?, NSPoint) -> Void)?
   var onPopupClick: ((StatusBarPopupRegion, NSPoint) -> Void)?
+  /// Reports the hovered link or popup run (view coordinates, nil when the
+  /// pointer is over plain text or has left) so the bar can wash it.
+  var onHoverHighlight: ((CGRect?) -> Void)?
 
   static func focusesPopup(overLink: Bool, modifiers: NSEvent.ModifierFlags) -> Bool {
     !overLink || modifiers.contains(.option)
@@ -194,12 +197,14 @@ final class StatusBarClickView: NSView {
     let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
     logHover(event: "exited", popup: nil, overLink: false, point: point)
     onPopupHover?(nil, point)
+    onHoverHighlight?(nil)
   }
 
   /// Pointing hand over a link run, the default arrow over the rest of the bar.
   private func updatePointer(at event: NSEvent) {
     let local = convert(event.locationInWindow, from: nil)
-    let overLink = links.contains(where: { $0.rect.contains(local) })
+    let link = links.first(where: { $0.rect.contains(local) })
+    let overLink = link != nil
     let popup = popups.first(where: { $0.rect.contains(local) })
     if overLink || popup != nil {
       NSCursor.pointingHand.set()
@@ -211,6 +216,7 @@ final class StatusBarClickView: NSView {
       event: event.type == .mouseEntered ? "entered" : "moved",
       popup: popup, overLink: overLink, point: point)
     onPopupHover?(popup, point)
+    onHoverHighlight?(popup?.rect ?? link?.rect)
   }
 
   private func logHover(event: String, popup: StatusBarPopupRegion?, overLink: Bool, point: CGPoint)
@@ -522,6 +528,19 @@ extension OverlayPanel {
     }
   }
 
+  /// Route a hovered segment (screen coordinates) to the surface drawing it;
+  /// every other surface fades its wash out.
+  func setStatusBarHoverHighlight(_ screenRect: CGRect?) {
+    for surface in [primaryStatusBarSurface] + secondaryStatusBars {
+      let bar = surface.backgroundLayer.frame.offsetBy(dx: frame.minX, dy: frame.minY)
+      if let screenRect, bar.intersects(screenRect) {
+        surface.setHoverHighlight(screenRect.offsetBy(dx: -bar.minX, dy: -bar.minY))
+      } else {
+        surface.setHoverHighlight(nil)
+      }
+    }
+  }
+
   /// Pool, position, and show one full-band click window per screen, each
   /// carrying the link runs that fall inside its band (in window-local
   /// coordinates). Skips all work when nothing moved.
@@ -588,6 +607,9 @@ extension OverlayPanel {
           self.statusPopupController.leaveAnchor()
           self.activeStatusBarPopupName = self.statusPopupController.presentation.identity?.name
         }
+      }
+      view.onHoverHighlight = { [weak self] rect in
+        self?.setStatusBarHoverHighlight(rect?.offsetBy(dx: band.minX, dy: band.minY))
       }
       window.orderFrontRegardless()
     }

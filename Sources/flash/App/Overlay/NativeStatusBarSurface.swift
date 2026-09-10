@@ -16,30 +16,55 @@ final class NativeStatusBarSurface {
     let container = CALayer()
     let pill = CAGradientLayer()
     let text = CATextLayer()
+    /// Holds the previous string while a transition fades or slides it out.
+    /// Its model opacity is always 0; only explicit animations reveal it.
+    let outgoing = CATextLayer()
     let effect = CATextLayer()
     let overline = CALayer()
     let curlyUnderline = CAShapeLayer()
     var previous: FlashStatusTextSegment?
     var previousFont: NSFont?
     var previousPalette: OverlayModeBadgeStyle?
+    var previousFrame: CGRect?
     init() {
-      for layer in [container, pill, text, effect, overline, curlyUnderline] {
+      for layer in [container, pill, text, outgoing, effect, overline, curlyUnderline] {
         layer.actions = OverlayPanel.noActions
       }
       container.masksToBounds = true
       pill.cornerRadius = 4
       text.alignmentMode = .left
+      outgoing.alignmentMode = .left
       effect.alignmentMode = .left
       text.truncationMode = .none
+      outgoing.truncationMode = .none
       effect.truncationMode = .none
-      container.sublayers = [pill, text, effect, overline, curlyUnderline]
+      outgoing.opacity = 0
+      container.sublayers = [pill, outgoing, text, effect, overline, curlyUnderline]
     }
   }
+
+  /// Bottom-edge hairline and the wash behind the hovered segment. Both sit
+  /// beneath the run containers, which stay transparent over the default
+  /// background so the bar's gradient shows through.
+  let hairline = CALayer()
+  let hoverHighlight = CALayer()
+  private var hoverBand = CGRect.zero
+
+  static let cycleAnimationKey = "flashCycle"
+  static let crossfadeAnimationKey = "flashCrossfade"
+  static let hoverAnimationKey = "flashHover"
 
   init(backgroundLayer: CAGradientLayer = CAGradientLayer()) {
     self.backgroundLayer = backgroundLayer
     backgroundLayer.actions = OverlayPanel.noActions
     backgroundLayer.masksToBounds = true
+    for layer in [hairline, hoverHighlight] { layer.actions = OverlayPanel.noActions }
+    hairline.backgroundColor = OverlayPanel.statusBarHairlineCG
+    hoverHighlight.backgroundColor = OverlayPanel.statusBarHoverHighlightCG
+    hoverHighlight.cornerRadius = 4
+    hoverHighlight.opacity = 0
+    backgroundLayer.insertSublayer(hairline, at: 0)
+    backgroundLayer.insertSublayer(hoverHighlight, at: 1)
   }
 
   func render(
@@ -87,12 +112,17 @@ final class NativeStatusBarSurface {
     backgroundLayer.isHidden = false
     backgroundLayer.cornerRadius = 0
     backgroundLayer.borderWidth = 0
-    let fill =
-      layout.fill.map(FlashStatusTextColor.nsColor)?.cgColor ?? OverlayPanel.nordPolarNight0CG
+    let fillColor = layout.fill.map(FlashStatusTextColor.nsColor) ?? OverlayPanel.nordPolarNight0
+    let fill = fillColor.cgColor
     backgroundLayer.backgroundColor = fill
-    backgroundLayer.colors = [fill, fill]
+    // Layer coordinates run bottom-up: the lifted tint sits at the top edge.
+    backgroundLayer.colors = [fill, OverlayPanel.lifted(fillColor, by: 0.045).cgColor]
+    hairline.frame = CGRect(x: 0, y: 0, width: barFrame.width, height: 1 / max(1, scale))
+    hairline.contentsScale = scale
     let textHeight = font.pointSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
+    hoverBand = CGRect(x: 0, y: textY - 1, width: barFrame.width, height: textHeight + 2)
+    hoverHighlight.contentsScale = scale
     let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: visibleRuns)
     let cycleStartedAt = CACurrentMediaTime()
     for (index, run) in visibleRuns.enumerated() {
@@ -107,8 +137,10 @@ final class NativeStatusBarSurface {
       layers.container.isHidden = false
       layers.container.contentsScale = scale
       let cellBackground = run.segment.reverse ? run.segment.foreground : run.segment.background
+      let paintsBackground =
+        !run.segment.pill && (run.segment.reverse || cellBackground != .defaultBackground)
       layers.container.backgroundColor =
-        run.segment.pill ? nil : FlashStatusTextColor.nsColor(cellBackground).cgColor
+        paintsBackground ? FlashStatusTextColor.nsColor(cellBackground).cgColor : nil
       let textRect = CGRect(x: 0, y: textY, width: rect.width, height: textHeight)
       layers.pill.frame = textRect
       layers.pill.contentsScale = scale
@@ -136,23 +168,18 @@ final class NativeStatusBarSurface {
         segment.reverse = false
       }
       if !segment.cycle, layers.previous?.cycle == true {
-        layers.text.removeAnimation(forKey: kCATransition)
-        layers.effect.removeAnimation(forKey: kCATransition)
+        layers.text.removeAnimation(forKey: Self.cycleAnimationKey)
+        layers.effect.removeAnimation(forKey: Self.cycleAnimationKey)
+        layers.outgoing.removeAllAnimations()
       }
+      let sameFont = layers.previousFont == font
       let changed =
-        layers.previous != segment || layers.previousFont != font
+        layers.previous != segment || !sameFont
         || layers.previousPalette != modeStyle || cycling.contains(index)
       if changed {
-        if cycling.contains(index) {
-          let animation = CATransition()
-          animation.type = .push
-          animation.subtype = .fromBottom
-          animation.duration = 0.8
-          animation.beginTime = layers.text.convertTime(cycleStartedAt, from: nil)
-          animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-          layers.text.add(animation, forKey: kCATransition)
-          layers.effect.add(animation, forKey: kCATransition)
-        }
+        let outgoingString = layers.text.string
+        let previousText = layers.previous?.text
+        let samePlace = layers.previousFrame == rect && sameFont
         let attributed = FlashStatusBarRenderer.attributedSegment(segment, font: font)
         layers.text.string = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
           from: [segment], font: font)
@@ -162,7 +189,18 @@ final class NativeStatusBarSurface {
         layers.previous = segment
         layers.previousFont = font
         layers.previousPalette = modeStyle
+        if cycling.contains(index) {
+          Self.runCycleTransition(
+            layers, outgoing: outgoingString, textRect: textRect, startedAt: cycleStartedAt)
+        } else if !segment.pill, !segment.cycle, samePlace, let previousText,
+          previousText != segment.text
+        {
+          // A value changing in place (a metric tick, the clock) crossfades
+          // instead of snapping; a run that moved or was re-segmented does not.
+          Self.runCrossfade(layers, outgoing: outgoingString, textRect: textRect)
+        }
       }
+      layers.previousFrame = rect
       let animated = segment.blink || segment.breathing
       layers.effect.isHidden = !animated
       if animated {
@@ -218,10 +256,104 @@ final class NativeStatusBarSurface {
       layers.container.isHidden = true
       layers.effect.removeAllAnimations()
       layers.text.removeAllAnimations()
+      layers.outgoing.removeAllAnimations()
       layers.overline.removeAllAnimations()
       layers.curlyUnderline.removeAllAnimations()
       layers.previous = nil
+      layers.previousFrame = nil
     }
+  }
+
+  /// Show or hide the wash behind a hovered segment. `rect` is in this bar's
+  /// coordinates; nil fades the wash out. Everything animates on the render
+  /// server: no timers, no redraw of the text layers.
+  func setHoverHighlight(_ rect: CGRect?) {
+    let target: Float = rect == nil ? 0 : 1
+    if let rect {
+      let frame = CGRect(
+        x: rect.minX - 4, y: hoverBand.minY, width: rect.width + 8, height: hoverBand.height)
+      if frame != hoverHighlight.frame {
+        if hoverHighlight.opacity > 0, let presented = hoverHighlight.presentation() {
+          // Sliding between neighbouring segments glides instead of jumping.
+          let move = CABasicAnimation(keyPath: "position")
+          move.fromValue = presented.position
+          move.duration = 0.14
+          move.timingFunction = CAMediaTimingFunction(name: .easeOut)
+          hoverHighlight.add(move, forKey: "\(Self.hoverAnimationKey)Move")
+        }
+        hoverHighlight.frame = frame
+      }
+    }
+    guard hoverHighlight.opacity != target else { return }
+    let fade = CABasicAnimation(keyPath: "opacity")
+    fade.fromValue = hoverHighlight.presentation()?.opacity ?? hoverHighlight.opacity
+    fade.toValue = target
+    fade.duration = target == 1 ? 0.12 : 0.18
+    fade.timingFunction = CAMediaTimingFunction(name: target == 1 ? .easeOut : .easeIn)
+    hoverHighlight.opacity = target
+    hoverHighlight.add(fade, forKey: Self.hoverAnimationKey)
+  }
+
+  private static func basic(_ keyPath: String, from: CGFloat, to: CGFloat) -> CABasicAnimation {
+    let animation = CABasicAnimation(keyPath: keyPath)
+    animation.fromValue = from
+    animation.toValue = to
+    return animation
+  }
+
+  private static func prepareOutgoing(_ layers: RunLayer, string: Any?, textRect: CGRect) -> Bool {
+    guard let string else { return false }
+    layers.outgoing.string = string
+    layers.outgoing.frame = textRect
+    layers.outgoing.alignmentMode = layers.text.alignmentMode
+    layers.outgoing.fontSize = layers.text.fontSize
+    layers.outgoing.contentsScale = layers.text.contentsScale
+    layers.outgoing.setNeedsDisplay()
+    return true
+  }
+
+  /// Carousel article change: the old line lifts out of the cell while the
+  /// new one rises into place, both easing along a decelerating curve. Every
+  /// run of one carousel group shares `startedAt`, so its parts move together.
+  private static func runCycleTransition(
+    _ layers: RunLayer, outgoing: Any?, textRect: CGRect, startedAt: CFTimeInterval
+  ) {
+    let distance = textRect.height * 0.55
+    let beginTime = layers.text.convertTime(startedAt, from: nil)
+    let incoming = CAAnimationGroup()
+    incoming.animations = [
+      basic("opacity", from: 0, to: 1),
+      basic("transform.translation.y", from: -distance, to: 0),
+    ]
+    incoming.duration = 0.55
+    incoming.beginTime = beginTime
+    incoming.fillMode = .backwards
+    incoming.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
+    layers.text.add(incoming, forKey: cycleAnimationKey)
+    layers.effect.add(incoming, forKey: cycleAnimationKey)
+    guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
+    let leaving = CAAnimationGroup()
+    leaving.animations = [
+      basic("opacity", from: 1, to: 0),
+      basic("transform.translation.y", from: 0, to: distance),
+    ]
+    leaving.duration = 0.32
+    leaving.beginTime = beginTime
+    leaving.fillMode = .backwards
+    leaving.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.7, 0.2)
+    layers.outgoing.add(leaving, forKey: cycleAnimationKey)
+  }
+
+  private static func runCrossfade(_ layers: RunLayer, outgoing: Any?, textRect: CGRect) {
+    let fadeIn = basic("opacity", from: 0, to: 1)
+    fadeIn.duration = 0.22
+    fadeIn.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    layers.text.add(fadeIn, forKey: crossfadeAnimationKey)
+    guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
+    let fadeOut = basic("opacity", from: 1, to: 0)
+    fadeOut.duration = 0.22
+    fadeOut.timingFunction = CAMediaTimingFunction(name: .easeIn)
+    layers.outgoing.add(fadeOut, forKey: crossfadeAnimationKey)
   }
 
   private static func cycleTransitionIndices(

@@ -738,14 +738,17 @@ final class StatusBarTests: XCTestCase {
     XCTAssertFalse(done.reverse)
   }
 
-  func testInsertModeButtonPaletteUsesBlueBackground() {
-    XCTAssertEqual(OverlayPanel.insertPalette.topCG, OverlayPanel.nordFrost2CG)
+  func testInsertModeButtonPaletteUsesBlueBackgroundLitFromTheTop() {
+    XCTAssertEqual(
+      OverlayPanel.insertPalette.topCG, OverlayPanel.lifted(OverlayPanel.nordFrost2, by: 0.12).cgColor)
     XCTAssertEqual(OverlayPanel.insertPalette.bottomCG, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(OverlayPanel.insertPalette.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
 
-  func testCommandModeButtonPaletteUsesHighlightedBackground() {
-    XCTAssertEqual(OverlayPanel.commandPaletteValue.topCG, OverlayPanel.nordAuroraPurpleCG)
+  func testCommandModeButtonPaletteUsesHighlightedBackgroundLitFromTheTop() {
+    XCTAssertEqual(
+      OverlayPanel.commandPaletteValue.topCG,
+      OverlayPanel.lifted(OverlayPanel.nordAuroraPurple, by: 0.12).cgColor)
     XCTAssertEqual(OverlayPanel.commandPaletteValue.bottomCG, OverlayPanel.nordAuroraPurpleCG)
     XCTAssertEqual(OverlayPanel.commandPaletteValue.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
