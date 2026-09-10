@@ -228,9 +228,12 @@ async fn collect_cpu(
         return Collection::Failed;
     };
     lock_state(state).ticks = Some(current);
-    let (Some(percentages), Ok(load)) =
-        (current.percentages_since(&previous), sys::load_averages())
-    else {
+    let Some(percentages) = current.percentages_since(&previous) else {
+        // No ticks elapsed between two back-to-back samples (an event refresh
+        // right after the poll): keep the last figure without reporting a failure.
+        return Collection::Busy;
+    };
+    let Ok(load) = sys::load_averages() else {
         return Collection::Failed;
     };
     cpu_snapshot(percentages.user, percentages.system, percentages.idle, load)
