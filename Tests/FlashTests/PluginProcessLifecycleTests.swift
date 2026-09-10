@@ -490,9 +490,81 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(store.rows(for: "statusfix").map(\.title), ["row30"])
     XCTAssertEqual(store.entry(for: "statusfix")?.generation, 30)
     process.stopAndWait(reason: "test")
-    // Segments are live state (unlike catalogs): cleared on any teardown.
+    // An explicit stop clears live segments immediately.
     XCTAssertEqual(process.statusBarInfo().statusSegments, [:])
     XCTAssertEqual(store.rows(for: "statusfix").map(\.title), ["row30"])
+  }
+
+  func testResidentReloadKeepsStatusUntilReplacementAndHonorsExplicitClears() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusreload",
+      manifest: PluginFixtureKit.manifest(
+        id: "statusreload", extra: #""status": ["alpha", "beta"]"#),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait() }
+    process.start()
+    waitUntilTrue("initial startup") { process.runtimeStateSnapshot() == .running }
+    process.applyStatusSegments(["segments": ["alpha": "CPU 12%", "beta": "MEM 34%"]])
+
+    process.reload(reason: "plugin_files_changed")
+    waitUntilTrue("reload finished") {
+      fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
+    }
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments, ["alpha": "CPU 12%", "beta": "MEM 34%"])
+    process.applyStatusSegments(["segments": ["alpha": "CPU 24%", "beta": ""]])
+    XCTAssertEqual(process.statusBarInfo().statusSegments, ["alpha": "CPU 24%"])
+  }
+
+  func testResidentReloadExpiresOnlySegmentsNotRepublished() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusexpiry",
+      manifest: PluginFixtureKit.manifest(
+        id: "statusexpiry", extra: #""status": ["alpha", "beta"]"#),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let previousGrace = PluginProcess.statusReloadGraceSeconds
+    PluginProcess.statusReloadGraceSeconds = 2
+    defer { PluginProcess.statusReloadGraceSeconds = previousGrace }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait() }
+    process.start()
+    waitUntilTrue("initial startup") { process.runtimeStateSnapshot() == .running }
+    process.applyStatusSegments(["segments": ["alpha": "CPU 12%", "beta": "MEM 34%"]])
+    process.reload(reason: "plugins_reload")
+    waitUntilTrue("reload finished") {
+      fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
+    }
+    XCTAssertEqual(process.statusBarInfo().statusSegments["alpha"], "CPU 12%")
+    process.applyStatusSegments(["segments": ["beta": "MEM 56%"]])
+    waitUntilTrue("unrefreshed status expires") {
+      process.statusBarInfo().statusSegments == ["beta": "MEM 56%"]
+    }
+  }
+
+  func testRejectedReloadClearsRetainedStatusImmediately() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusfailed",
+      manifest: PluginFixtureKit.manifest(id: "statusfailed"),
+      script: PluginFixtureKit.script(
+        onInitialize: """
+          if [ "$(wc -l < "$D/spawns")" -eq 1 ]; then
+            \(PluginFixtureKit.initializeOK)
+          else
+            printf '{"id":%s,"result":{"ok":false,"protocol_version":1,"error":"unavailable"}}\\n' "$id"
+          fi
+          """))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait() }
+    process.start()
+    waitUntilTrue("initial startup") { process.runtimeStateSnapshot() == .running }
+    process.applyStatusSegments(["segments": ["state": "ready"]])
+    process.reload(reason: "plugins_reload")
+    waitUntilTrue("reload failed") { process.runtimeStateSnapshot() == .failed }
+    XCTAssertEqual(process.statusBarInfo().statusSegments, [:])
   }
 
   // MARK: 8. EOF shutdown

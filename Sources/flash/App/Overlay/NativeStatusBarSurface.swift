@@ -47,6 +47,7 @@ final class NativeStatusBarSurface {
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
     palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle
   ) {
+    let previousRuns = visibleRuns
     cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
@@ -88,6 +89,8 @@ final class NativeStatusBarSurface {
     backgroundLayer.colors = [fill, fill]
     let textHeight = font.pointSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
+    let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: visibleRuns)
+    let cycleStartedAt = CACurrentMediaTime()
     for (index, run) in visibleRuns.enumerated() {
       if index == runLayers.count {
         let layers = RunLayer()
@@ -128,18 +131,23 @@ final class NativeStatusBarSurface {
         segment.background = .defaultBackground
         segment.reverse = false
       }
+      if !segment.cycle, layers.previous?.cycle == true {
+        layers.text.removeAnimation(forKey: kCATransition)
+        layers.effect.removeAnimation(forKey: kCATransition)
+      }
       let changed =
         layers.previous != segment || layers.previousFont != font
-        || layers.previousPalette != modeStyle
+        || layers.previousPalette != modeStyle || cycling.contains(index)
       if changed {
-        if segment.cycle, layers.previous?.cycle == true, layers.previous?.text != segment.text {
+        if cycling.contains(index) {
           let animation = CATransition()
           animation.type = .push
           animation.subtype = .fromBottom
           animation.duration = 0.42
+          animation.beginTime = layers.text.convertTime(cycleStartedAt, from: nil)
           animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-          layers.text.add(animation, forKey: "cycleSlide")
-          layers.effect.add(animation, forKey: "cycleSlide")
+          layers.text.add(animation, forKey: kCATransition)
+          layers.effect.add(animation, forKey: kCATransition)
         }
         let attributed = FlashStatusBarRenderer.attributedSegment(segment, font: font)
         layers.text.string = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
@@ -210,6 +218,35 @@ final class NativeStatusBarSurface {
       layers.curlyUnderline.removeAllAnimations()
       layers.previous = nil
     }
+  }
+
+  private static func cycleTransitionIndices(
+    previous: [StatusFormatLayout.PositionedRun], next: [StatusFormatLayout.PositionedRun]
+  ) -> Set<Int> {
+    func groups(_ runs: [StatusFormatLayout.PositionedRun]) -> [Range<Int>] {
+      var result: [Range<Int>] = []
+      for index in runs.indices where runs[index].segment.cycle {
+        if let last = result.last, last.upperBound == index,
+          runs[last.lowerBound].segment.alignment == runs[index].segment.alignment
+        {
+          result[result.count - 1] = last.lowerBound..<(index + 1)
+        } else {
+          result.append(index..<(index + 1))
+        }
+      }
+      return result
+    }
+    var changed = Set<Int>()
+    for (old, new) in zip(groups(previous), groups(next)) {
+      let sameArticle = old.count == new.count && zip(old, new).allSatisfy { before, after in
+        let lhs = previous[before].segment
+        let rhs = next[after].segment
+        return lhs.text == rhs.text && lhs.link == rhs.link && lhs.popup == rhs.popup
+          && lhs.popupContent == rhs.popupContent
+      }
+      if !sameArticle { changed.formUnion(new) }
+    }
+    return changed
   }
 
   /// Native cells reserve enough room for Flash's pill, but the pill keeps its

@@ -510,10 +510,10 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
         }
     }
     let label_percent = primary
-        .map(|volume| format!("{:>3}%", volume.percent))
-        .unwrap_or_else(|| "   —".to_string());
+        .map(|volume| format!("{:>2}%", volume.percent.min(99)))
+        .unwrap_or_else(|| "  —".to_string());
     Some(RenderedStatus {
-        label: format!("#[fg=#EBCB8B]DISK#[default] #[fg=colour245]{label_percent}#[default]"),
+        label: format!("#[fg=#EBCB8B]DSK#[default] #[fg=colour245]{label_percent}#[default]"),
         summary: inline_status_popup(&visible, &details),
         details,
     })
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn label_keeps_startup_usage_width_and_excludes_popup_markup() {
-        for (percent, expected) in [(0, "  0%"), (9, "  9%"), (10, " 10%"), (100, "100%")] {
+        for (percent, expected) in [(0, " 0%"), (9, " 9%"), (10, "10%"), (100, "99%")] {
             let state = DiskState {
                 capacity: Some(CapacitySnapshot {
                     volumes: vec![
@@ -710,7 +710,7 @@ mod tests {
             let status = render_status(&state, SummaryMode::Full).unwrap();
             assert_eq!(
                 status.label,
-                format!("#[fg=#EBCB8B]DISK#[default] #[fg=colour245]{expected}#[default]")
+                format!("#[fg=#EBCB8B]DSK#[default] #[fg=colour245]{expected}#[default]")
             );
             assert!(status.summary.contains("popup="));
         }
@@ -720,7 +720,7 @@ mod tests {
         };
         assert_eq!(
             render_status(&state, SummaryMode::Compact).unwrap().label,
-            "#[fg=#EBCB8B]DISK#[default] #[fg=colour245]   —#[default]"
+            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]  —#[default]"
         );
     }
 

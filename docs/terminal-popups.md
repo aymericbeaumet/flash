@@ -26,7 +26,7 @@ template = "#[popup=system]System#[nopopup]"
 
 [terminal.system]
 persistent = true
-command = ["btm", "--read_only", "--rate", "2s"]
+command = ["/usr/bin/top", "-s", "2"]
 columns = 80
 rows = 24
 # working_directory = "~/workspace"
@@ -38,13 +38,13 @@ rows = 24
 "cmd+w" = ["flash", "terminal_dismiss"]
 ```
 
-Commands are argv arrays, with the same environment and path resolution as other Flash commands. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. The inherited `NO_COLOR` setting is removed because these children own a color-capable PTY; an explicit `[terminal.<name>] env = { NO_COLOR = "1" }` still opts that terminal out of colors. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
+Commands are argv arrays, with the same environment and path resolution as other Flash commands. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec /usr/bin/top -s 2"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. The inherited `NO_COLOR` setting is removed because these children own a color-capable PTY; an explicit `[terminal.<name>] env = { NO_COLOR = "1" }` still opts that terminal out of colors. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
 
 The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Every owned terminal restarts after any exit, including a normal quit or a killed process. The first retry waits 100 ms. Repeated exits within one second of startup back off to 1, 2, 4, 8, 16, then at most 30 seconds; running for at least one second resets the delay. Nonpersistent terminals retry only until their window or preview is dismissed. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
 
 Hover placement remains centered below the pointer and clamped to the hovered screen. Leaving the originating status segment hides an ordinary preview immediately. Left- or right-click a popup label to pin it and focus its terminal; repeated clicks keep it open. It stays anchored while the pointer moves into the popup or over other segments. Clicking another popup label switches views. Configured click actions and links retain their normal left-click action; right-click or Option-click pins their popup. Close a pinned popup with Command-W or a configured terminal exit mapping. Menu reveal, focus loss, removed anchors, and other Flash surfaces dismiss presentation without ending the child.
 
-Terminal focus has its own mode. Global mappings are suspended while local terminal mappings run before native copy/paste and terminal input. Pending sequences preserve the order of key presses, releases, and modifier changes; a matched mapping consumes its releases. Replays retain the originating session and restart generation, so a late release cannot enter a replacement child. Only effective INSERT mappings that enter NORMAL are inherited as terminal exit mappings; explicit terminal mappings override them. Plain Escape remains available to the TUI. Exiting through an inherited NORMAL mapping restores the previously focused application. Losing focus to another app does not steal focus back.
+Terminal focus has its own mode. Global mappings are suspended while local terminal mappings run before native copy/paste and terminal input. Pending sequences preserve the order of key presses, releases, and modifier changes; a matched mapping consumes its releases. Replays retain the originating session and restart generation, so a late release cannot enter a replacement child. Only effective INSERT mappings for `enter_normal_mode` or `leave_mode` are inherited as terminal exit mappings; explicit terminal mappings override them. Plain Escape remains available to the TUI. Exiting through an inherited NORMAL mapping restores the previously focused application. Losing focus to another app does not steal focus back.
 
 Command popups and document popups share the same cell renderer. Documents never spawn children: styled runs become generated VT, while literal control characters are made inert. Replacing a document clears previous content and its history. Long documents can scroll; selecting text and Command-C work in both kinds of popup. Shift-click opens HTTP(S) links, including printed URLs and terminal hyperlinks (OSC 8), without forwarding the click to the running application. Wrapped URLs remain one link. Shift-drag selects text even when a TUI requests mouse reporting; dragging never opens a link. Command-V uses Ghostty's paste encoder and respects bracketed paste mode. macOS input-method composition is local to the terminal view.
 
@@ -174,3 +174,12 @@ Use `#[align=absolute-centre]` for a label at the physical center of the screen.
 
 For separate quota and system metrics with interactive CLI popups, see the
 [ready-to-use configurations](examples/statusbar/README.md).
+
+`leave_mode` is inherited from effective INSERT-active mappings just like
+`enter_normal_mode`. It hides the popup and restores its saved mode and external
+app; an explicit terminal binding still takes precedence. For a shared exit:
+
+```toml
+[mode.all.mappings]
+"cmd+shift+[" = ["flash", "leave_mode"]
+```

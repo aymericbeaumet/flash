@@ -2,7 +2,7 @@
   "id": "feed",
   "name": "Feed",
   "version": "0.1.0",
-  "description": "Cycle recent RSS articles in the status bar with article previews. Configure url to enable fetching.",
+  "description": "Slide the latest 24 hours of RSS articles upward in a status-bar carousel with article previews; cycle_interval defaults to 10 seconds. Configure url to enable fetching.",
   "exec": ["./flash-plugin-feed"],
   "capabilities": ["network"],
   "sandbox": {},

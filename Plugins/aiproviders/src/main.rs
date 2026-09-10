@@ -415,9 +415,15 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
     let openai_week_label = usage_window_label(openai_week, "7-day");
     let astra_session_label = usage_window_label(astra_session, "5-hour");
     let astra_week_label = usage_window_label(astra_week, "7-day");
-    let heading = "#[fg=colour245]Provider  Window         Left  Reset#[default]";
+    let heading = "#[fg=colour245]Provider  Window          Remaining          Reset#[default]";
     let claude_details = [
         "#[fg=#EBCB8B]Claude quotas#[default]".to_string(),
+        quota_freshness(
+            state.anthropic.as_ref().map(|usage| usage.updated_at),
+            2 * ANTHROPIC_USAGE_TTL,
+            now,
+            "Claude Code",
+        ),
         heading.to_string(),
         popup_row("Claude", "5-hour", shared_session, None, now),
         popup_row("", "7-day", claude_week, shared_session, now),
@@ -426,6 +432,12 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
     .join("\n");
     let codex_details = [
         "#[fg=#EBCB8B]Codex quotas#[default]".to_string(),
+        quota_freshness(
+            state.openai.as_ref().map(|usage| usage.updated_at),
+            2 * OPENAI_USAGE_TTL,
+            now,
+            "Codex",
+        ),
         heading.to_string(),
         popup_row("Codex", &openai_session_label, openai_session, None, now),
         popup_row("", &openai_week_label, openai_week, openai_session, now),
@@ -442,6 +454,7 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
                     .as_ref()
                     .is_some_and(|usage| fresh(usage.updated_at, 2 * ANTHROPIC_USAGE_TTL, now))
             }),
+            now,
         ),
         claude_details,
         codex_label: quota_label(
@@ -452,22 +465,48 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
                     .as_ref()
                     .is_some_and(|usage| fresh(usage.updated_at, 2 * OPENAI_USAGE_TTL, now))
             }),
+            now,
         ),
         codex_details,
     }
 }
 
+fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, provider: &str) -> String {
+    let status = match updated_at {
+        Some(updated) if fresh(updated, ttl, now) => {
+            format!(
+                "Updated {} ago · bars show quota left",
+                relative_duration(now.saturating_sub(updated))
+            )
+        }
+        Some(updated) => format!(
+            "Cached · updated {} ago · check {provider} login/network",
+            relative_duration(now.saturating_sub(updated))
+        ),
+        None => format!("Unavailable · check {provider} login/network"),
+    };
+    format!("#[fg=colour245]{status}#[default]")
+}
+
 fn quota_label<'a>(
     label: &str,
     windows: impl IntoIterator<Item = Option<&'a WindowUsage>>,
+    now: u64,
 ) -> String {
     let metric = windows
         .into_iter()
         .flatten()
-        .map(|window| remaining_percent(window.used_percent))
-        .min()
-        .map(|remaining| format!("{remaining:>3}%"))
-        .unwrap_or_else(|| "   —".to_string());
+        .min_by_key(|window| remaining_percent(window.used_percent))
+        .map(|window| {
+            let remaining = remaining_percent(window.used_percent).min(99);
+            let mut metric = format!("{remaining}%");
+            if let Some(reset) = window.resets_at {
+                metric.push('↻');
+                metric.push_str(&relative_duration(reset.saturating_sub(now)));
+            }
+            metric
+        })
+        .unwrap_or_else(|| "—".to_string());
     format!("#[fg=#EBCB8B]{label} #[fg=colour245]{metric}#[default]")
 }
 
@@ -508,7 +547,13 @@ fn popup_row(
         .and_then(|window| window.resets_at)
         .map(|reset| relative_duration(reset.saturating_sub(now)))
         .unwrap_or_else(|| "—".to_string());
-    format!("#[fg=colour245]{provider:<8}  {window_label:<13}#[default]  {remaining}  {reset}")
+    let bar = usage
+        .map(|window| {
+            let filled = (remaining_percent(window.used_percent) as usize * 12 / 100).min(12);
+            format!("{}{}", "█".repeat(filled), "░".repeat(12 - filled))
+        })
+        .unwrap_or_else(|| "────────────".to_string());
+    format!("#[fg=colour245]{provider:<8}  {window_label:<13}#[default]  {remaining} #[fg=colour245]{bar}#[default]  {reset}")
 }
 
 fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
@@ -818,8 +863,7 @@ async fn refresh_claude_credentials(credentials: &mut ClaudeCredentials, now: u6
             json!(now.saturating_add(refresh_expires_in).saturating_mul(1_000)),
         );
     }
-    let _ = store_claude_credentials(credentials).await;
-    Some(())
+    store_claude_credentials(credentials).await.then_some(())
 }
 
 async fn store_claude_credentials(credentials: &ClaudeCredentials) -> bool {
@@ -827,24 +871,58 @@ async fn store_claude_credentials(credentials: &ClaudeCredentials) -> bool {
         return false;
     };
     match &credentials.store {
-        CredentialStore::Keychain { account, service } => capture(
-            Path::new("/usr/bin/security"),
-            &[
-                "add-generic-password",
-                "-U",
-                "-a",
-                account,
-                "-s",
-                service,
-                "-w",
-            ],
-            Some(body),
-            Duration::from_secs(3),
-        )
-        .await
-        .is_some(),
+        CredentialStore::Keychain { account, service } => {
+            let Some(command) = keychain_update_command(account, service, &body) else {
+                return false;
+            };
+            // Interactive input keeps the secret off argv. A trailing -w instead
+            // prompts on the controlling terminal and can store an empty password.
+            if capture(
+                Path::new("/usr/bin/security"),
+                &["-i"],
+                Some(command.into_bytes()),
+                Duration::from_secs(3),
+            )
+            .await
+            .is_none()
+            {
+                return false;
+            }
+            // security -i can exit successfully after a failed subcommand.
+            capture(
+                Path::new("/usr/bin/security"),
+                &["find-generic-password", "-a", account, "-s", service, "-w"],
+                None,
+                Duration::from_secs(3),
+            )
+            .await
+            .is_some_and(|stored| {
+                stored
+                    .stdout
+                    .strip_suffix('\n')
+                    .unwrap_or(&stored.stdout)
+                    .as_bytes()
+                    == body
+            })
+        }
         CredentialStore::File(path) => write_secret(path, &body).await,
     }
+}
+
+fn keychain_update_command(account: &str, service: &str, body: &[u8]) -> Option<String> {
+    if !safe_keychain_name(account)
+        || service.is_empty()
+        || body.is_empty()
+        || !service
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' '))
+    {
+        return None;
+    }
+    let hex: String = body.iter().map(|byte| format!("{byte:02x}")).collect();
+    Some(format!(
+        "add-generic-password -U -a {account} -s \"{service}\" -X {hex}\n"
+    ))
 }
 
 async fn write_secret(path: &Path, body: &[u8]) -> bool {
@@ -1242,11 +1320,11 @@ mod tests {
         let segments = render_status_segments(&state, 0);
         assert_eq!(
             segments.claude_label,
-            "#[fg=#EBCB8B]Cld #[fg=colour245] 53%#[default]"
+            "#[fg=#EBCB8B]Cld #[fg=colour245]53%↻5d#[default]"
         );
         assert_eq!(
             segments.codex_label,
-            "#[fg=#EBCB8B]Cdx #[fg=colour245] 54%#[default]"
+            "#[fg=#EBCB8B]Cdx #[fg=colour245]54%↻5d#[default]"
         );
         assert!(segments.claude_details.contains("Claude"));
         assert!(segments.claude_details.contains("Fable"));
@@ -1261,24 +1339,54 @@ mod tests {
     }
 
     #[test]
-    fn quota_labels_reserve_four_columns_including_unavailable_and_full() {
-        for (used, expected) in [(0.0, "100%"), (91.0, "  9%"), (100.0, "  0%")] {
+    fn quota_labels_cap_percent_without_padding() {
+        for (used, expected) in [(0.0, "99%"), (91.0, "9%"), (100.0, "0%")] {
             let window = WindowUsage::new(used, None, 300);
             assert_eq!(
-                quota_label("Cld", [Some(&window)]),
+                quota_label("Cld", [Some(&window)], 0),
                 format!("#[fg=#EBCB8B]Cld #[fg=colour245]{expected}#[default]")
             );
         }
         let segments = render_status_segments(&UsageState::default(), 0);
         assert_eq!(
             segments.claude_label,
-            "#[fg=#EBCB8B]Cld #[fg=colour245]   —#[default]"
+            "#[fg=#EBCB8B]Cld #[fg=colour245]—#[default]"
         );
         assert_eq!(
             segments.codex_label,
-            "#[fg=#EBCB8B]Cdx #[fg=colour245]   —#[default]"
+            "#[fg=#EBCB8B]Cdx #[fg=colour245]—#[default]"
         );
         assert!(!segments.all().iter().any(|value| value.contains("?%")));
+    }
+
+    #[test]
+    fn quota_reset_matches_the_limiting_window() {
+        let weekly = WindowUsage::new(40.0, Some(432_000), 10_080);
+        let session = WindowUsage::new(95.0, Some(3_600), 300);
+        assert_eq!(
+            quota_label("Cld", [Some(&weekly), Some(&session)], 0),
+            "#[fg=#EBCB8B]Cld #[fg=colour245]5%↻1h#[default]"
+        );
+    }
+
+    #[test]
+    fn keychain_update_uses_hex_stdin_without_interpreter_injection() {
+        let body = br#"{"token":"quotes\\and\"newlines\n"}"#;
+        let command = keychain_update_command("ab", "Claude Code-credentials", body).unwrap();
+        assert!(
+            command.starts_with("add-generic-password -U -a ab -s \"Claude Code-credentials\" -X ")
+        );
+        assert_eq!(command.lines().count(), 1);
+        assert!(command.ends_with('\n'));
+        let hex = command.split(" -X ").nth(1).unwrap().trim();
+        let decoded: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(decoded, body);
+        assert!(keychain_update_command("ab\nquit", "Claude Code-credentials", body).is_none());
+        assert!(keychain_update_command("ab", "bad\"service", body).is_none());
+        assert!(keychain_update_command("ab", "Claude Code-credentials", &[]).is_none());
     }
 
     #[test]
@@ -1299,12 +1407,17 @@ mod tests {
             }),
         };
         let current = render_status_segments(&state, 1_000);
-        assert!(current.claude_label.contains(" 75%"));
-        assert!(current.codex_label.contains(" 60%"));
+        assert!(current.claude_label.contains("75%"));
+        assert!(current.codex_label.contains("60%"));
         let old = render_status_segments(&state, 1_000 + 2 * ANTHROPIC_USAGE_TTL);
-        assert!(old.claude_label.contains("   —"));
-        assert!(old.codex_label.contains("   —"));
+        assert!(old.claude_label.contains("]—#[default]"));
+        assert!(old.codex_label.contains("]—#[default]"));
         assert!(old.claude_details.contains("75%"));
+        assert!(old.claude_details.contains("Cached"));
+        assert!(!current.claude_details.contains("Cached"));
+        assert!(render_status_segments(&UsageState::default(), 0)
+            .claude_details
+            .contains("Unavailable"));
         assert!(old.codex_details.contains("60%"));
     }
 

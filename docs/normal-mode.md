@@ -65,7 +65,7 @@ and only `[mode.terminal.mappings]` can intercept keys in the popup. The label i
 configured with `mode.labels.terminal` and defaults to `TERMINAL`.
 
 Terminal mappings inherit only the effective INSERT-active bindings whose
-winning action is `enter_normal_mode`. Scope and plugin precedence are resolved
+winning action is `enter_normal_mode` or `leave_mode`. Scope and plugin precedence are resolved
 before this inheritance; an explicit terminal mapping overrides an inherited
 binding with the same canonical key. Other all, normal, and insert bindings are
 inactive. Plugins may contribute terminal mappings using the same priority rules.
@@ -86,3 +86,25 @@ popups use the same focus mode for selection, copying, and scrolling. Leaving vi
 before NORMAL recapture. Losing popup focus restores the prior base mode without
 activating a different app. Popup focus and visibility do not determine the
 lifetime of a configured terminal process.
+
+`leave_mode` provides one configured exit across surfaces. It dismisses a terminal
+and restores its prior base mode/app, restores the saved mode from command or
+finder input, and leaves INSERT (including locked INSERT) for NORMAL. In NORMAL
+or disabled mode it only dismisses active hints. An all-scope binding to either
+`enter_normal_mode` or `leave_mode` enables advanced mode. For a shifted bracket,
+use `"cmd+shift+[" = ["flash", "leave_mode"]`; the key matcher handles the `{`
+character produced by Shift.
+
+## Rejected commands
+
+Unknown commands and unsupported subcommands use Flash’s existing error toast
+and warning log. The diagnostic names the invocation and points to the mapping
+or configuration. Invalid mapping arrays report their source location during
+configuration loading. Malformed built-in commands cannot silently become plugin
+calls, and plugin execution failures are also surfaced.
+
+The CLI accepts `--key=value` and boolean `--flag` arguments, rejects stray
+positional subcommands, and returns status 2 when parsing or resident dispatch
+rejects an invocation. Successful dispatch does not imply an asynchronous plugin
+operation completed successfully; later failures appear in the toast and logs.
+An empty command prompt remains quiet.

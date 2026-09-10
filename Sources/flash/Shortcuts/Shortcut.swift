@@ -55,7 +55,7 @@ func parseMappingCommand(argv: [String]) -> MappingCommand? {
   if mappingCommandHeadNamesFlash(first) {
     let tail = Array(argv.dropFirst())
     guard let verb = tail.first, !verb.isEmpty else { return nil }
-    let args = parseVerbArgs(tail.dropFirst())
+    guard let args = parseVerbArgs(tail.dropFirst()) else { return nil }
     guard let cmd = URLEventHandler.parse(verb: verb, args: args) else { return nil }
     return .flashCommand(cmd)
   }
@@ -72,21 +72,20 @@ func mappingCommandHeadNamesFlash(_ value: String) -> Bool {
 ///   - `--name=value` → `{ "name": "value" }`
 ///   - `--flag`       → `{ "flag": "1" }` (bare flag, value `"1"` so
 ///                       `VerbArgs.bool` reports true)
-///   - `name` / `name=value` without the leading `--` → silently dropped
-///     to avoid a stale pre-`--` config sneaking in. The verb dispatcher
-///     will fail validation if the required arg never arrives.
+///   - Positional tokens and malformed flags reject the invocation.
 ///
 /// Hyphens in the flag name are normalized to underscores so
 /// `--restore-mode` and `--restore_mode` both land in the dict as
 /// `restore_mode` — the internal key always uses snake_case.
-private func parseVerbArgs(_ entries: ArraySlice<String>) -> [String: String] {
+func parseVerbArgs(_ entries: ArraySlice<String>) -> [String: String]? {
   var out: [String: String] = [:]
   for entry in entries {
-    guard entry.hasPrefix("--") else { continue }
+    guard entry.hasPrefix("--") else { return nil }
     let body = String(entry.dropFirst(2))
-    guard !body.isEmpty else { continue }
+    guard !body.isEmpty else { return nil }
     if let eq = body.firstIndex(of: "=") {
       let key = String(body[..<eq]).replacingOccurrences(of: "-", with: "_")
+      guard !key.isEmpty else { return nil }
       let value = String(body[body.index(after: eq)...])
       out[key] = value
     } else {

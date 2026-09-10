@@ -68,6 +68,8 @@ if want lint; then
 fi
 
 if want units; then
+  echo "==> units: plugin publication"
+  python3 Scripts/test-build-plugins.py
   echo "==> units: per-crate cargo test"
   for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/; do
     [[ -f "$dir/Cargo.toml" ]] || continue

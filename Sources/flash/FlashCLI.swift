@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 // CLI half of the `flash` binary. When the executable is launched with any
-// extra argv (`flash mouse_target`, `flash app_open name=Firefox`, …), main
+// extra argv (`flash mouse_target`, `flash app_open --name=Firefox`, …), main
 // dispatches here instead of starting `NSApplication`. We then encode the
 // verb + key=value args into a custom AppleEvent and send it to the running
 // resident. The legacy `flash://` URL scheme is gone — this is the only
@@ -42,7 +42,7 @@ enum FlashCLI {
 
   static let usage = """
     Usage:
-      flash <verb> [key=value ...]
+      flash <verb> [--key=value ...]
 
     Examples:
       flash mouse_target
@@ -50,6 +50,7 @@ enum FlashCLI {
       flash mouse_target --double
       flash mouse_grid --move
       flash enter_normal_mode
+      flash leave_mode
       flash enter_locked_insert_mode
       flash app_open --name=Firefox
       flash window_move --position=lefthalf
@@ -67,32 +68,14 @@ enum FlashCLI {
       return 0
     }
     let verb = first
-    let argEntries = Array(args.dropFirst())
-    let argDict = parseLongFlagArgs(rest: argEntries)
-    return sendVerb(verb, args: argDict)
-  }
-
-  /// Parse `--name=value` / `--flag` argv into a flat dictionary. Standard
-  /// long-flag shell convention — see `parseVerbArgs` in `Shortcut.swift`
-  /// for the matching config-side parser. Anything that doesn't start with
-  /// `--` is silently dropped so the user notices their mistake at the
-  /// verb dispatcher (missing required arg) instead of having a bad token
-  /// quietly land somewhere.
-  private static func parseLongFlagArgs(rest: [String]) -> [String: String] {
-    var out: [String: String] = [:]
-    for entry in rest {
-      guard entry.hasPrefix("--") else { continue }
-      let body = String(entry.dropFirst(2))
-      guard !body.isEmpty else { continue }
-      if let eq = body.firstIndex(of: "=") {
-        let key = String(body[..<eq]).replacingOccurrences(of: "-", with: "_")
-        let value = String(body[body.index(after: eq)...])
-        out[key] = value
-      } else {
-        out[body.replacingOccurrences(of: "-", with: "_")] = "1"
-      }
+    guard let argDict = parseVerbArgs(args.dropFirst()),
+      URLEventHandler.parseOrPluginVerb(verb: verb, args: argDict) != nil
+    else {
+      let message = URLEventHandler.rejectionMessage((["flash"] + args).joined(separator: " "))
+      FileHandle.standardError.write(("flash: " + message + "\n").data(using: .utf8) ?? Data())
+      return 2
     }
-    return out
+    return sendVerb(verb, args: argDict)
   }
 
   private static func sendVerb(_ verb: String, args: [String: String]) -> Int32 {
@@ -141,8 +124,19 @@ enum FlashCLI {
     addUTF8(value: argsJSON, to: &event, key: argsKey)
 
     var reply = AppleEvent()
-    let status = AESendMessage(&event, &reply, AESendMode(kAENoReply), 5 * 60)
-    defer { AEDisposeDesc(&reply) }
+    // Quit tears down the resident before a reply can be sent.
+    let sendMode = verb == "flash_quit" ? kAENoReply : kAEWaitReply
+    let status = AESendMessage(&event, &reply, AESendMode(sendMode), 5 * 60)
+    let replyDescriptor = NSAppleEventDescriptor(aeDescNoCopy: &reply)
+    if let error = replyDescriptor.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)),
+      error.int32Value != 0
+    {
+      let message =
+        replyDescriptor.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?
+        .stringValue ?? URLEventHandler.rejectionMessage("flash \(verb)")
+      FileHandle.standardError.write(("flash: " + message + "\n").data(using: .utf8) ?? Data())
+      return 2
+    }
     if status != noErr {
       FileHandle.standardError.write(
         "flash: could not send \(verb) (OSStatus=\(status))\n".data(using: .utf8) ?? Data())

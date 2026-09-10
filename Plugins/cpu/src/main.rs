@@ -25,6 +25,7 @@ struct CpuSnapshot {
     system: f64,
     idle: f64,
     load: [f64; 3],
+    logical_cpus: Option<usize>,
 }
 
 impl CpuSnapshot {
@@ -228,7 +229,10 @@ async fn collect_cpu(
         return Collection::Failed;
     }
     parse_iostat(&output.stdout)
-        .map(Collection::Fresh)
+        .map(|mut snapshot| {
+            snapshot.logical_cpus = std::thread::available_parallelism().ok().map(usize::from);
+            Collection::Fresh(snapshot)
+        })
         .unwrap_or(Collection::Failed)
 }
 
@@ -394,6 +398,7 @@ fn parse_iostat_row(line: &str) -> Option<CpuSnapshot> {
         system: values[offset + 1],
         idle: values[offset + 2],
         load: [values[offset + 3], values[offset + 4], values[offset + 5]],
+        logical_cpus: None,
     };
     let percentages = [snapshot.user, snapshot.system, snapshot.idle];
     if percentages
@@ -540,6 +545,12 @@ Load: {:.2} · {:.2} · {:.2}",
         detail_row("System", &format!("{:>5.1} %", cpu.system)),
         detail_row("Idle", &format!("{:>5.1} %", cpu.idle)),
         detail_row(
+            "Logical CPUs",
+            &cpu.logical_cpus
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "—".into()),
+        ),
+        detail_row(
             "Load",
             &format!(
                 "{:>5.2}  {:>5.2}  {:>5.2}",
@@ -552,6 +563,9 @@ Load: {:.2} · {:.2} · {:.2}",
     ]
     .join("\n");
     let mut plain_details = format!("CPU {total:.1}%\n{body}");
+    if let Some(count) = cpu.logical_cpus {
+        plain_details.push_str(&format!("\nLogical CPUs: {count}"));
+    }
     if !history.is_empty() {
         let history = format!("\nHistory: {}", sparkline(history));
         plain_details.push_str(&history);
@@ -563,7 +577,10 @@ Load: {:.2} · {:.2} · {:.2}",
 
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
-        label: format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{total:>3.0}%#[default]"),
+        label: format!(
+            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{:>2.0}%#[default]",
+            total.min(99.0)
+        ),
         details,
         plain_details,
     }
@@ -620,17 +637,18 @@ mod tests {
     #[test]
     fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
         for (user, expected) in [
-            (0.0, "  0%"),
-            (9.0, "  9%"),
-            (10.0, " 10%"),
-            (99.6, "100%"),
-            (100.0, "100%"),
+            (0.0, " 0%"),
+            (9.0, " 9%"),
+            (10.0, "10%"),
+            (99.6, "99%"),
+            (100.0, "99%"),
         ] {
             let cpu = CpuSnapshot {
                 user,
                 system: 0.0,
                 idle: 100.0 - user,
                 load: [0.0; 3],
+                logical_cpus: None,
             };
             let status = render_status(&cpu, None, &VecDeque::from([user]), SummaryMode::Full);
             assert_eq!(
@@ -674,6 +692,7 @@ mod tests {
                 system: 0.0,
                 idle: 100.0 - user,
                 load: [0.0; 3],
+                logical_cpus: None,
             };
             assert_eq!(
                 visible_summary(&cpu, None, &VecDeque::new(), SummaryMode::Compact),
@@ -689,6 +708,7 @@ mod tests {
             system: 0.0,
             idle: 91.0,
             load: [0.0; 3],
+            logical_cpus: None,
         };
         let gpu = GpuSnapshot {
             utilization: 100.0,
@@ -784,6 +804,7 @@ mod tests {
             system: 7.25,
             idle: 80.25,
             load: [1.25, 2.5, 3.75],
+            logical_cpus: Some(16),
         };
         let gpu = GpuSnapshot {
             utilization: 59.0,
@@ -815,6 +836,7 @@ mod tests {
 #[fg=colour245]User          #[default] 12.5 %\n\
 #[fg=colour245]System        #[default]  7.2 %\n\
 #[fg=colour245]Idle          #[default] 80.2 %\n\
+#[fg=colour245]Logical CPUs  #[default]16\n\
 #[fg=colour245]Load          #[default] 1.25   2.50   3.75\n\
 #[fg=colour245]History       #[default]··················▂▂\n\
 #[fg=colour245]GPU           #[default] 59.0 %\n\
@@ -824,6 +846,7 @@ mod tests {
         assert!(!rendered.plain_details.contains("#["));
         assert!(rendered.plain_details.starts_with("CPU 19.8%\n"));
         assert!(rendered.plain_details.contains("GPU\nApple M4 Pro: 59%"));
+        assert!(rendered.plain_details.contains("Logical CPUs: 16"));
 
         let without_gpu = render_status(&cpu, None, &VecDeque::new(), SummaryMode::Compact);
         assert!(without_gpu.details.ends_with(
@@ -838,6 +861,7 @@ mod tests {
             system: 5.0,
             idle: 85.0,
             load: [1.0, 2.0, 3.0],
+            logical_cpus: None,
         };
         let gpu = GpuSnapshot {
             utilization: 20.0,

@@ -64,7 +64,8 @@ Mappings call the same actions as the CLI, so anything you can run as `flash <ve
 
 ### Normal mode
 
-Bind `enter_normal_mode` to turn macOS into a keyboard-first environment:
+Bind `enter_normal_mode` (or an all-scope `leave_mode` exit) to enable the
+keyboard-first modes:
 
 ```toml
 [mode.all.mappings]
@@ -191,7 +192,7 @@ preview, preserving paragraphs, headings, lists, and code. For AGGR:
 label = "AGGR"
 url = "https://aggr.aymericbeaumet.com/rss.xml"
 refresh_interval = 300
-cycle_interval = 60
+cycle_interval = 10
 
 [statusbar.options]
 "@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"

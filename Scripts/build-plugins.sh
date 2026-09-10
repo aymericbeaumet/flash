@@ -104,11 +104,14 @@ done
 # signature when it lands — TCC-gated plugins get re-prompted on every
 # cdhash change unless their designated-requirement clause matches the same
 # stable cert the host bundle uses.
+stage_dir="$(mktemp -d "$TARGET_DIR/plugin-stage.XXXXXX")"
+trap 'rm -rf "$stage_dir"' EXIT
 staged_paths=()
+destinations=()
 for dir in "${build_dirs[@]}"; do
   id="$(basename "$dir")"
   bin="flash-plugin-$id"
-  staged="$dir/$bin.staged"
+  staged="$stage_dir/$bin"
   if [[ "$MODE" == "release" ]]; then
     lipo -create \
       "$TARGET_DIR/x86_64-apple-darwin/release/$bin" \
@@ -119,6 +122,7 @@ for dir in "${build_dirs[@]}"; do
   fi
   chmod +x "$staged"
   staged_paths+=("$staged")
+  destinations+=("$dir/$bin")
 done
 
 if [[ "$MODE" != "release" && -n "${DEV_PLUGIN_SIGN_IDENTITY:-}" ]] &&
@@ -128,6 +132,32 @@ if [[ "$MODE" != "release" && -n "${DEV_PLUGIN_SIGN_IDENTITY:-}" ]] &&
     ${staged_paths[@]+"${staged_paths[@]}"} >/dev/null
 fi
 
-for staged in ${staged_paths[@]+"${staged_paths[@]}"}; do
-  mv -f "$staged" "${staged%.staged}"
+signature_fingerprint() {
+  local details
+  details="$(codesign -d --verbose=4 -r- "$1" 2>&1)" || return 1
+  [[ "$details" == *"CandidateCDHashFull sha256="* ]] || return 1
+  printf '%s\n' "$details" | awk \
+    '/^(CandidateCDHashFull sha256=|Authority=|TeamIdentifier=|designated =>)/'
+}
+
+same_dev_artifact() {
+  local staged_signature installed_signature
+  [[ -f "$2" ]] || return 1
+  cmp -s "$1" "$2" && return 0
+  # CMS signing timestamps change bytes on every signed build. Compare the
+  # native code directory and certificate requirement, then verify the old
+  # file still matches that signature. Universal release builds always swap.
+  staged_signature="$(signature_fingerprint "$1")" || return 1
+  installed_signature="$(signature_fingerprint "$2")" || return 1
+  [[ "$staged_signature" == "$installed_signature" ]] || return 1
+  codesign --verify --strict "$2" >/dev/null 2>&1
+}
+
+for ((i = 0; i < ${#staged_paths[@]}; i++)); do
+  staged="${staged_paths[$i]}"
+  destination="${destinations[$i]}"
+  if [[ "$MODE" != "release" ]] && same_dev_artifact "$staged" "$destination"; then
+    continue
+  fi
+  mv -f "$staged" "$destination"
 done

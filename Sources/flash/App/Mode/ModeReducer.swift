@@ -5,8 +5,8 @@ import Foundation
 // next `Mode` plus the AppKit effects to apply. No AppKit, no clock, no I/O.
 //
 // Invariants guaranteed here (and pinned by `ModeReducerTests`):
-//  - Insert stickiness: nothing leaves `.insert` except `.enterNormal`
-//    (a keyboard request) or `.advancedModeChanged(false)`.
+//  - Insert stickiness: only explicit keyboard requests and disabling
+//    advanced mode leave `.insert`.
 //  - Mouse enters only: `.clickResolved` acts only from `.normal`; it can move
 //    NORMAL→insert but can never move insert→anything.
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
@@ -31,6 +31,18 @@ enum ModeReducer {
         state.isTerminal
         ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
       return (.normal, departure + enterEffects(for: .normal, targetPID: targetPID))
+
+    case .leaveMode(let hasHints, let targetPID):
+      switch state {
+      case .terminal:
+        return reduce(state, .closeTerminal(targetPID: targetPID))
+      case .command:
+        return reduce(state, .closeCommand(reason: "leave_mode"))
+      case .insert where !hasHints:
+        return reduce(state, .enterNormal(targetPID: targetPID))
+      case .insert, .normal, .disabled:
+        return (state, enterEffects(for: state, targetPID: targetPID))
+      }
 
     case .openCommand(let scope, let restoreMode):
       let restoreTo = restoreMode ? state.asReturnMode : defaultSurfaceReturn(from: state)

@@ -2,7 +2,7 @@
   "id": "network",
   "name": "Network",
   "version": "0.1.0",
-  "description": "Publish one-second traffic snapshots with periodically refreshed network identity and structured hover details; summary_mode=full restores rates and charts inline, alongside copyable @network.addresses.",
+  "description": "Publish one-second traffic snapshots: label is download + upload on the default-route interface, in four cells using decimal bytes/second (B/K/M/G/T/P), with periodically refreshed network identity and structured hover details; summary_mode=full restores rates and charts inline, alongside copyable @network.addresses.",
   "sandbox": {
     "exec": [
       "/usr/sbin/netstat"

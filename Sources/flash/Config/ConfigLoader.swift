@@ -355,6 +355,7 @@ enum ConfigLoader {
     case invalidShape
     case invalidAction
     case invalidRepeat
+    case invalidCommand(String)
     case unknownOption(String)
 
     func message(mappingKey: String) -> String {
@@ -367,6 +368,8 @@ enum ConfigLoader {
         return
           "mapping \"\(mappingKey)\".action must be a non-empty string array — "
           + "[\"flash\", \"<verb>\", ...] or [<argv>...]"
+      case .invalidCommand(let command):
+        return "mapping \"\(mappingKey)\": " + URLEventHandler.rejectionMessage(command)
       case .invalidRepeat:
         return "mapping \"\(mappingKey)\".repeat must be true or false"
       case .unknownOption(let option):
@@ -1925,6 +1928,11 @@ enum ConfigLoader {
       guard let actionValue = table["action"],
         let action = parseMappingActionValue(actionValue, sourceURL: sourceURL)
       else {
+        if let actionValue = table["action"], let argv = stringArrayValue(actionValue),
+          !argv.isEmpty
+        {
+          return .failure(.invalidCommand(argv.joined(separator: " ")))
+        }
         return .failure(.invalidAction)
       }
       let repeatsOnFinalKey: Bool
@@ -1938,6 +1946,9 @@ enum ConfigLoader {
         ParsedModeMappingValue(action: action, repeatsOnFinalKey: repeatsOnFinalKey))
     }
     guard let action = parseMappingActionValue(value, sourceURL: sourceURL) else {
+      if let argv = stringArrayValue(value), let head = argv.first, !head.isEmpty {
+        return .failure(.invalidCommand(argv.joined(separator: " ")))
+      }
       return .failure(.invalidShape)
     }
     return .success(ParsedModeMappingValue(action: action, repeatsOnFinalKey: false))

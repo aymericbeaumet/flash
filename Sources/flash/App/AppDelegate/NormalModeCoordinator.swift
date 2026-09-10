@@ -32,6 +32,19 @@ extension AppDelegate {
     dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
   }
 
+  func leaveMode() {
+    if modeStore.mode.isTerminal {
+      dismissTerminal()
+      return
+    }
+    if overlay.statusPopupController.isVisible { dismissTerminal() }
+    overlay.resignCommandTextFieldFocus()
+    dispatchMode(
+      .leaveMode(
+        hasHints: !currentHints.isEmpty || activationInFlight,
+        targetPID: terminalReturnApplicationPID))
+  }
+
   func enterInsertMode(
     reason: InsertModeTransitionReason = .explicitCommand,
     targetPID: pid_t? = nil
@@ -1005,6 +1018,8 @@ extension AppDelegate {
       enterInsertMode(reason: .lockedNormalModeInput)
     case .normalMode:
       enterNormalMode()
+    case .leaveMode:
+      leaveMode()
     case .terminalShow(let name):
       showTerminal(named: name)
     case .terminalDismiss:
@@ -2662,7 +2677,10 @@ extension AppDelegate {
         raw: plugin.raw,
         in: pluginSelectorContext(),
         onResult: { [weak self] ok, pid, stdout, navigationURL in
-          guard ok else { return }
+          guard ok else {
+            self?.warnCommandFailure(raw)
+            return
+          }
           self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
           guard let stdout, !stdout.isEmpty else { return }
           if captureOutput {
@@ -2684,8 +2702,8 @@ extension AppDelegate {
     {
       return
     }
-    FlashLog.debug("[normal_mode] unknown command \(raw)")
     finishCommandLineInteraction(reason: "command_unknown")
+    if !NormalModeDispatcher.commandLineBodyIsEmpty(raw) { warnUnsupportedCommand(raw) }
   }
 
   /// True when the active completion list is for a **sub-command**

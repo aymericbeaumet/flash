@@ -417,7 +417,10 @@ Page size: {}",
 
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
-        label: format!("#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{percent:>3.0}%#[default]"),
+        label: format!(
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{:>2.0}%#[default]",
+            percent.min(99.0)
+        ),
         details,
         plain_details,
     }
@@ -464,11 +467,11 @@ mod tests {
     #[test]
     fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
         for (occupied, expected) in [
-            (0, "  0%"),
-            (90, "  9%"),
-            (100, " 10%"),
-            (999, "100%"),
-            (1000, "100%"),
+            (0, " 0%"),
+            (90, " 9%"),
+            (100, "10%"),
+            (999, "99%"),
+            (1000, "99%"),
         ] {
             let snapshot = MemorySnapshot {
                 total: 1000,

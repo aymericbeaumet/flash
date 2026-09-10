@@ -704,7 +704,8 @@ struct Config {
       let inherited = mappings(for: .insert).filter {
         let identity = CompiledMappings.physicalIdentity(for: $0.key)
         return insertClaimed.insert(identity).inserted
-          && $0.action.command == .normalMode && claimed.insert(identity).inserted
+          && ($0.action.command == .normalMode || $0.action.command == .leaveMode)
+          && claimed.insert(identity).inserted
       }
       return explicit + inherited
     }
@@ -730,13 +731,13 @@ struct Config {
 
     var containsNormalModeMapping: Bool {
       (all + normal + insert).contains { mapping in
-        mapping.action.command == .normalMode
+        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
 
     var containsAdvancedModeMapping: Bool {
       all.contains { mapping in
-        mapping.action.command == .normalMode
+        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
   }
@@ -994,6 +995,7 @@ extension URLCommand {
     case .mouseDock: return verb("mouse_dock")
     case .mouseStatusBar: return verb("mouse_statusbar")
     case .normalMode: return verb("enter_normal_mode")
+    case .leaveMode: return verb("leave_mode")
     case .terminalShow(let name):
       return verb("terminal_show", name.map { ["--name=\($0)"] } ?? [])
     case .terminalDismiss:

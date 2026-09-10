@@ -412,8 +412,8 @@ fn render_status(
     let charge = snapshot
         .battery
         .as_ref()
-        .map(|battery| format!("{:>3}%", battery.percent))
-        .unwrap_or_else(|| "   —".to_string());
+        .map(|battery| format!("{:>2}%", battery.percent.min(99)))
+        .unwrap_or_else(|| "  —".to_string());
     StatusSegments {
         summary: inline_status_popup(&visible, &details),
         label: format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{charge}#[default]"),
@@ -532,7 +532,7 @@ fn padded_history(history: &VecDeque<f64>) -> String {
 fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
     let (mut value, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("{:>2}%", battery.percent),
+            format!("{:>2}%", battery.percent.min(99)),
             snapshot.source == PowerSource::Adapter,
         ),
         None => ("—".to_string(), false),
@@ -661,11 +661,11 @@ mod tests {
     #[test]
     fn label_keeps_charge_width_and_leaves_popup_interactions_to_the_template() {
         for (percent, expected) in [
-            (None, "   —"),
-            (Some(0), "  0%"),
-            (Some(9), "  9%"),
-            (Some(10), " 10%"),
-            (Some(100), "100%"),
+            (None, "  —"),
+            (Some(0), " 0%"),
+            (Some(9), " 9%"),
+            (Some(10), "10%"),
+            (Some(100), "99%"),
         ] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Adapter,
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn compact_power_summary_uses_grey_two_column_percentage() {
-        for (percent, expected) in [(9, " 9%"), (10, "10%"), (100, "100%")] {
+        for (percent, expected) in [(9, " 9%"), (10, "10%"), (100, "99%")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
                 battery: Some(BatterySnapshot {

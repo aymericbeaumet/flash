@@ -158,11 +158,11 @@ startup_timeout = 5
 # label = "AGGR" # defaults to FEED
 # url = "https://aggr.aymericbeaumet.com/rss.xml"
 # refresh_interval = 300 # seconds between feed requests
-# cycle_interval = 60    # seconds per headline
+# cycle_interval = 10    # seconds per headline; slides upward
 
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
-# visibility — it is independent of advanced mode (the enter_normal_mode
+# visibility — it is independent of advanced mode (enter_normal_mode/leave_mode
 # binding). Defaults to false.
 enabled = false
 # Which displays show the bar: "all" (default, every screen's top band) or
@@ -331,6 +331,7 @@ send_key_interval_ms = 35
 # Examples:
 # "ctrl+space" = ["flash", "mouse_target"]
 # "ctrl+alt+n" = ["flash", "enter_normal_mode"] # enables advanced mode
+# "cmd+shift+[" = ["flash", "leave_mode"] # restore prior mode; INSERT exits to NORMAL
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # Percentage frames require x/y/width/height together. x and y are offsets
@@ -533,7 +534,7 @@ leader = "\\"
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
-# Advanced mode is enabled only by binding ["flash", "enter_normal_mode"] in [mode.all.mappings].
+# Advanced mode is enabled by binding enter_normal_mode or leave_mode in [mode.all.mappings].
 
 [mode.terminal.mappings]
 # Terminal input stays local to the focused window. Plain Escape goes to the TUI.
