@@ -11,9 +11,26 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   public var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular) {
     didSet {
+      cachedCellSize = nil
+      cachedFontVariants = nil
       needsDisplay = true
       updateCellGeometry()
     }
+  }
+  /// Regular / bold / italic / bold-italic, derived once per font change
+  /// (`NSFontManager.convert` per frame was a measurable share of a redraw).
+  private var cachedFontVariants: [NSFont]?
+  private var cachedCellSize: NSSize?
+  private func fontVariants() -> [NSFont] {
+    if let cachedFontVariants { return cachedFontVariants }
+    let variants = [
+      font,
+      NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
+      NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask),
+      NSFontManager.shared.convert(font, toHaveTrait: [.boldFontMask, .italicFontMask]),
+    ]
+    cachedFontVariants = variants
+    return variants
   }
   public var foreground: NSColor = .white { didSet { updateColors() } }
   public var background: NSColor = .black { didSet { updateColors() } }
@@ -25,9 +42,12 @@ public final class TerminalView: NSView, NSTextInputClient {
     }
   }
   public var cellSize: NSSize {
-    NSSize(
+    if let cachedCellSize { return cachedCellSize }
+    let size = NSSize(
       width: ceil(("M" as NSString).size(withAttributes: [.font: font]).width),
       height: ceil(font.ascender - font.descender + font.leading))
+    cachedCellSize = size
+    return size
   }
   public private(set) var terminalFrame: TerminalFrame?
   private weak var session: TerminalSession?
@@ -101,9 +121,56 @@ public final class TerminalView: NSView, NSTextInputClient {
     updateColors()
   }
   private func receive(_ frame: TerminalFrame) {
+    let previous = terminalFrame
     terminalFrame = frame
     updateBlinkTimer()
-    if isRenderingEnabled { needsDisplay = true }
+    guard isRenderingEnabled else { return }
+    invalidateChangedRows(from: previous, to: frame)
+  }
+
+  /// Damage tracking: a frame that keeps its geometry invalidates only the
+  /// rows whose cells changed plus the old and new cursor rows, so a cursor
+  /// blink or one new line of output does not repaint the whole grid.
+  private func invalidateChangedRows(from previous: TerminalFrame?, to frame: TerminalFrame) {
+    guard let previous, previous.rows == frame.rows, previous.columns == frame.columns,
+      previous.cells.count == frame.cells.count
+    else {
+      needsDisplay = true
+      return
+    }
+    let size = cellSize
+    var dirtyRows: [Int] = []
+    for row in 0..<frame.rows {
+      let range = (row * frame.columns)..<((row + 1) * frame.columns)
+      if frame.cells[range] != previous.cells[range] { dirtyRows.append(row) }
+    }
+    if previous.cursorY != frame.cursorY || previous.cursorX != frame.cursorX
+      || previous.cursorVisible != frame.cursorVisible
+      || previous.cursorStyle != frame.cursorStyle
+    {
+      dirtyRows.append(previous.cursorY)
+      dirtyRows.append(frame.cursorY)
+    }
+    guard !dirtyRows.isEmpty else { return }
+    for row in Set(dirtyRows) where row >= 0 && row < frame.rows {
+      setNeedsDisplay(rowRect(row, size: size))
+    }
+  }
+
+  private func rowRect(_ row: Int, size: NSSize) -> NSRect {
+    NSRect(x: 0, y: CGFloat(row) * size.height, width: bounds.width, height: size.height)
+  }
+
+  /// Blink toggles repaint only what blinks: the cursor cell, and every row
+  /// only when the frame carries blinking cells.
+  private func invalidateForBlink() {
+    guard let frame = terminalFrame else { return }
+    if frame.hasBlinkingCells {
+      needsDisplay = true
+      return
+    }
+    let size = cellSize
+    setNeedsDisplay(rowRect(frame.cursorY, size: size))
   }
   private func updateBlinkTimer() {
     let blinking =
@@ -120,7 +187,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
       guard let self else { return }
       self.blinkVisible.toggle()
-      self.needsDisplay = true
+      self.invalidateForBlink()
     }
     blinkTimer = timer
     RunLoop.main.add(timer, forMode: .common)
@@ -146,13 +213,31 @@ public final class TerminalView: NSView, NSTextInputClient {
     background.setFill()
     dirtyRect.fill()
     let size = cellSize
-    let fonts = [
-      font,
-      NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
-      NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask),
-      NSFontManager.shared.convert(font, toHaveTrait: [.boldFontMask, .italicFontMask]),
-    ]
+    let fonts = fontVariants()
+    // Text batching: consecutive single-width ASCII cells with the same font
+    // and colour share one CTLine, positioned at the run's first cell. The
+    // monospaced font advances ASCII by exactly one cell, so the grid holds;
+    // any other cell (wide, non-ASCII, styled differently) still draws alone
+    // in its own clipped cell so shaping can never shift its neighbours.
+    var pendingRun: (start: Int, text: String, font: NSFont, color: NSColor, rect: NSRect)?
+    func flushRun() {
+      guard let run = pendingRun else { return }
+      pendingRun = nil
+      let line = CTLineCreateWithAttributedString(
+        NSAttributedString(
+          string: run.text, attributes: [.font: run.font, .foregroundColor: run.color]))
+      context.saveGState()
+      context.clip(to: run.rect)
+      context.translateBy(x: run.rect.minX, y: run.rect.minY + font.ascender)
+      context.scaleBy(x: 1, y: -1)
+      context.textPosition = .zero
+      CTLineDraw(line, context)
+      context.restoreGState()
+    }
     for row in 0..<frame.rows {
+      let rowRect = NSRect(
+        x: 0, y: CGFloat(row) * size.height, width: bounds.width, height: size.height)
+      guard rowRect.intersects(dirtyRect) else { continue }
       for column in 0..<frame.columns {
         let index = row * frame.columns + column
         let cell = frame.cells[index]
@@ -160,7 +245,10 @@ public final class TerminalView: NSView, NSTextInputClient {
         let rect = NSRect(
           x: CGFloat(column) * size.width, y: CGFloat(row) * size.height,
           width: size.width * CGFloat(cell.width), height: size.height)
-        guard rect.intersects(dirtyRect) else { continue }
+        guard rect.intersects(dirtyRect) else {
+          flushRun()
+          continue
+        }
         let inverse = cell.flags & 16 != 0
         let selected = selection?.contains(index) == true
         let fg =
@@ -173,20 +261,44 @@ public final class TerminalView: NSView, NSTextInputClient {
           : (inverse ? cell.foreground : cell.background).nsColor
         bg.setFill()
         rect.fill()
-        guard cell.flags & 32 == 0, blinkVisible || cell.flags & 8 == 0 else { continue }
+        guard cell.flags & 32 == 0, blinkVisible || cell.flags & 8 == 0 else {
+          flushRun()
+          continue
+        }
         let cellFont = fonts[Int(cell.flags & 3)]
-        let attributes: [NSAttributedString.Key: Any] = [
-          .font: cellFont, .foregroundColor: fg.withAlphaComponent(cell.flags & 4 != 0 ? 0.6 : 1),
-        ]
-        let line = CTLineCreateWithAttributedString(
-          NSAttributedString(string: cell.text, attributes: attributes))
-        context.saveGState()
-        context.clip(to: rect)
-        context.translateBy(x: rect.minX, y: rect.minY + font.ascender)
-        context.scaleBy(x: 1, y: -1)
-        context.textPosition = .zero
-        CTLineDraw(line, context)
-        context.restoreGState()
+        let color = fg.withAlphaComponent(cell.flags & 4 != 0 ? 0.6 : 1)
+        let isBlank = cell.text.allSatisfy(\.isWhitespace)
+        let batchable =
+          cell.width == 1 && cell.text.utf8.count == 1 && cell.text.utf8.first.map { $0 < 128 }
+            == true
+        if batchable {
+          if var run = pendingRun, run.font == cellFont, run.color == color,
+            run.start + run.text.utf8.count == column
+          {
+            run.text.append(cell.text)
+            run.rect.size.width += rect.width
+            pendingRun = run
+          } else {
+            flushRun()
+            if !isBlank {
+              pendingRun = (column, cell.text, cellFont, color, rect)
+            }
+          }
+        } else {
+          flushRun()
+          if !isBlank {
+            let line = CTLineCreateWithAttributedString(
+              NSAttributedString(
+                string: cell.text, attributes: [.font: cellFont, .foregroundColor: color]))
+            context.saveGState()
+            context.clip(to: rect)
+            context.translateBy(x: rect.minX, y: rect.minY + font.ascender)
+            context.scaleBy(x: 1, y: -1)
+            context.textPosition = .zero
+            CTLineDraw(line, context)
+            context.restoreGState()
+          }
+        }
         cell.underlineColor.nsColor.setStroke()
         if cell.underline > 0 {
           context.saveGState()
@@ -210,6 +322,7 @@ public final class TerminalView: NSView, NSTextInputClient {
         if cell.flags & 64 != 0 { stroke(y: rect.midY, rect: rect, context: context) }
         if cell.flags & 128 != 0 { stroke(y: rect.minY + 1, rect: rect, context: context) }
       }
+      flushRun()
     }
     if frame.cursorVisible && session != nil && (blinkVisible || !frame.cursorBlinking) {
       var cursor = NSRect(

@@ -49,6 +49,11 @@ extension AppDelegate {
     overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
       self?.dismissTerminal(restoreApplication: restoreApplication)
     }
+    overlay.statusBarTerminalNeedsSpawnHandler = { [weak self] name in
+      guard let self else { return false }
+      return self.config.terminals[name] != nil
+        && self.overlay.statusTerminals.sessions[name] == nil
+    }
     overlay.statusBarTerminalPrepareHandler = { [weak self] name in
       guard let self else { return false }
       guard self.config.terminals[name] != nil || self.config.invalidTerminalNames.contains(name)

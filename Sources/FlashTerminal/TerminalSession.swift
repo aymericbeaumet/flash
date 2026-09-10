@@ -257,14 +257,20 @@ public final class TerminalSession {
     publishState(.running(pid: child))
     publishFrame()
   }
+  /// Reused across wakeups so a busy PTY never allocates per chunk.
+  private var readBuffer = [UInt8](repeating: 0, count: 32 * 1024)
+
   private func readAvailable() {
     guard descriptor >= 0 else { return }
-    var bytes = [UInt8](repeating: 0, count: 32 * 1024)
     var consumed = 0
     while consumed < 256 * 1024 {
-      let count = read(descriptor, &bytes, bytes.count)
+      let count = readBuffer.withUnsafeMutableBytes { bytes in
+        read(descriptor, bytes.baseAddress, bytes.count)
+      }
       if count > 0 {
-        buffer.write(Data(bytes.prefix(count)))
+        readBuffer.withUnsafeBufferPointer { bytes in
+          buffer.write(bytes.baseAddress!, count: count)
+        }
         consumed += count
       } else if count < 0 && errno == EINTR {
         continue

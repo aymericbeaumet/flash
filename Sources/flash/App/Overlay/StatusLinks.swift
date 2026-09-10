@@ -427,6 +427,31 @@ extension OverlayPanel {
     screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
     guard !statusPopupController.presentation.isFocused else { return }
+    // A terminal popup with no running session forks a PTY child on first
+    // hover. Sweeping the pointer across the bar must not spawn one child per
+    // span, so such a popup waits for a short dwell with the pointer still on
+    // it before it is prepared; document popups and running sessions show
+    // immediately as before.
+    if statusBarTerminalNeedsSpawnHandler?(popup.name) == true,
+      statusBarHoverDwellName != popup.name
+    {
+      statusBarHoverDwellWork?.cancel()
+      statusBarHoverDwellName = popup.name
+      let work = DispatchWorkItem { [weak self] in
+        guard let self, self.statusBarHoverDwellName == popup.name,
+          popup.rect.contains(NSEvent.mouseLocation)
+        else {
+          self?.statusBarHoverDwellName = nil
+          return
+        }
+        self.showStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot)
+      }
+      statusBarHoverDwellWork = work
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + .milliseconds(Self.statusBarHoverDwellMs), execute: work)
+      return
+    }
+    statusBarHoverDwellName = nil
     statusBarHoverGate = statusBarHoverGate.hovering(popup.name)
     guard statusBarHoverGate.permits(popup.name) else { return }
     guard
@@ -473,6 +498,9 @@ extension OverlayPanel {
   }
 
   func hideStatusBarPopup(reason: String = "overlay_hidden") {
+    statusBarHoverDwellWork?.cancel()
+    statusBarHoverDwellWork = nil
+    statusBarHoverDwellName = nil
     statusPopupController.dismiss(reason: reason)
     activeStatusBarPopupName = nil
   }

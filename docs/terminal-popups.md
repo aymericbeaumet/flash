@@ -8,7 +8,9 @@ the same session. `[statusbar.popup]` contains document strings only.
 `persistent = true` starts a session after the login-shell environment resolves,
 even if the status bar is disabled or no template refers to it. Hiding it keeps
 the process and history. The default, `persistent = false`, starts on an
-explicit opening or the first hover and stops when dismissed. Continued hover
+explicit opening or on hover after a 150 ms dwell with the pointer still on the
+span (so sweeping across the bar never forks one child per span) and stops
+when dismissed. Continued hover
 reuses the existing process; re-entry starts a fresh one. One named session is
 shared across displays.
 
@@ -158,6 +160,14 @@ or removal.
 ## Native status drawing
 
 The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label uses that same width, so entering terminal mode does not shift adjacent segments. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
+
+The terminal view draws from the frame with damage tracking: a new frame
+invalidates only the rows whose cells changed plus the old and new cursor rows,
+and a blink toggle repaints the cursor row alone unless the frame carries
+blinking cells. Consecutive single-width ASCII cells with the same font and
+colour draw as one Core Text line; wide, non-ASCII, or differently styled cells
+still draw alone in their own clipped cell so shaping never shifts a neighbour.
+Font variants and the cell size are cached per font change.
 
 Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects and cycle transitions use Core Animation.
 

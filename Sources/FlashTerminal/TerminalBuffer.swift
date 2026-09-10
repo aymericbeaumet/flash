@@ -170,6 +170,10 @@ final class TerminalBuffer {
       flash_vt_write(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
     }
   }
+
+  func write(_ bytes: UnsafePointer<UInt8>, count: Int) {
+    flash_vt_write(handle, bytes, count)
+  }
   func snapshot() -> TerminalFrame? {
     var frame = FlashVTFrame()
     guard flash_vt_frame(handle, &frame) else { return nil }
