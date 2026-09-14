@@ -20,7 +20,7 @@ final class PluginHostRPCArmTests: XCTestCase {
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-      .appendingPathComponent("Plugins/_flash_plugin_specs/protocol.json")
+      .appendingPathComponent("Plugins/_flash_plugin_rust/protocol.json")
     let data = try Data(contentsOf: url)
     return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
   }

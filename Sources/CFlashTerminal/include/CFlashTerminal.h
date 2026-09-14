@@ -9,12 +9,13 @@ typedef void (*FlashVTWrite)(void *, const uint8_t *, size_t);
 typedef struct {
   uint8_t r, g, b;
 } FlashRGB;
+/// One viewport cell. `text` and `hyperlink` point into an arena owned by
+/// the terminal that stays valid until the next `flash_vt_row_cells` call.
 typedef struct {
   const uint8_t *text;
   size_t length;
   const uint8_t *hyperlink;
   size_t hyperlink_length;
-  bool row_wrapped;
   FlashRGB foreground, background, underline_color;
   uint16_t flags;
   uint8_t width, underline;
@@ -23,8 +24,15 @@ typedef struct {
   uint16_t columns, rows, cursor_x, cursor_y;
   bool cursor_visible, cursor_blinking, mouse_tracking;
   uint8_t cursor_style;
+  /// 0: no row changed since the last `flash_vt_clean`; 1: the per-row
+  /// `dirty` flags identify the changed rows; 2: every row changed.
+  uint8_t dirty;
   FlashRGB foreground, background;
 } FlashVTFrame;
+typedef struct {
+  bool dirty;
+  bool wrapped;
+} FlashVTRow;
 FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, bool scrollback,
                       FlashVTWrite write, void *context);
 void flash_vt_output(FlashVT *vt, FlashVTWrite write, void *context);
@@ -34,8 +42,15 @@ void flash_vt_reset(FlashVT *vt);
 void flash_vt_resize(FlashVT *vt, uint16_t columns, uint16_t rows);
 void flash_vt_cell_size(FlashVT *vt, uint32_t width, uint32_t height);
 void flash_vt_colors(FlashVT *vt, FlashRGB foreground, FlashRGB background);
+/// Refresh the render state and describe the viewport. Rows are then read in
+/// ascending order with `flash_vt_next_row`; finish with `flash_vt_clean`.
 bool flash_vt_frame(FlashVT *vt, FlashVTFrame *frame);
-bool flash_vt_cell(FlashVT *vt, uint16_t x, uint16_t y, FlashVTCell *cell);
+/// Advance to the next viewport row. Returns false past the last row.
+bool flash_vt_next_row(FlashVT *vt, FlashVTRow *row);
+/// Fill `columns` cells for the current row.
+bool flash_vt_row_cells(FlashVT *vt, FlashVTCell *cells);
+/// Mark every dirty flag consumed after a complete frame was read.
+void flash_vt_clean(FlashVT *vt);
 void flash_vt_scroll(FlashVT *vt, int lines);
 void flash_vt_key(FlashVT *vt, uint16_t mac_key, uint16_t mods, int action,
                   const char *text, size_t length, uint32_t unshifted);

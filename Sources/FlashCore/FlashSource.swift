@@ -64,10 +64,10 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// integrations use this for app-specific motions such as Gmail's
   /// newer/older conversation buttons.
   public static let resourceNavigation = FlashSourceCapabilities(rawValue: 1 << 14)
-  /// Source handles `cmd+[`/`cmd+]` (`pane_previous`/`pane_next`): cycle the
+  /// Source handles `[p`/`]p` (`pane_previous`/`pane_next`): cycle the
   /// active split *inside* the focused window. Tmux is the canonical case
-  /// (`select-pane -t :.-`/`:.+`); no browser has an analogue, so off-terminal
-  /// apps fall back to re-emitting the native ⌘[ / ⌘] chord.
+  /// (`select-pane -t :.-`/`:.+`); a terminal without a tmux client receives
+  /// its native ⌘[ / ⌘] split chord instead, and other apps ignore the pair.
   public static let paneNavigation = FlashSourceCapabilities(rawValue: 1 << 15)
   /// Source handles `pane_split_vertical` / `pane_split_horizontal`: create a
   /// new split inside the focused window. Tmux is the canonical case; the

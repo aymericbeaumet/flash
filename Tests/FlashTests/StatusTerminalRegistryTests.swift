@@ -1,3 +1,4 @@
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -108,6 +109,54 @@ final class StatusTerminalRegistryTests: XCTestCase {
     registry.apply(config.statusBar, terminals: config.terminals)
     XCTAssertNil(registry.sessions[second])
     XCTAssertNotNil(registry.sessions[persistent])
+  }
+
+  func testWarmSpareShellIsHandedToTheNextUnnamedOpenAndReplaced() throws {
+    let registry = StatusTerminalRegistry(
+      environment: FlashProcessEnvironment(seed: [
+        "SHELL": "/bin/sh", "HOME": NSTemporaryDirectory(),
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+      ]))
+    defer { registry.shutdown() }
+    let config = Config()
+    registry.warmFreshShell(configuration: config)
+    let spare = try XCTUnwrap(registry.spareShellKey)
+    registry.warmFreshShell(configuration: config)
+    XCTAssertEqual(registry.spareShellKey, spare, "one spare at a time")
+    XCTAssertEqual(registry.definitions[spare]?.command, ["/bin/sh", "-l"])
+    XCTAssertFalse(registry.automaticallyRestarts(name: spare))
+    waitUntil {
+      if case .running = registry.sessions[spare]?.state { return true }
+      return false
+    }
+    // Opening the unnamed shell attaches to the warm process and warms another.
+    XCTAssertEqual(registry.openTerminal(name: nil, configuration: config), spare)
+    let next = try XCTUnwrap(registry.spareShellKey)
+    XCTAssertNotEqual(next, spare)
+    XCTAssertNotNil(registry.sessions[spare])
+    XCTAssertNotNil(registry.sessions[next])
+    // Releasing the opened shell leaves the spare waiting; losing the spare
+    // process forgets it so the next open spawns directly.
+    registry.releaseTerminal(name: spare)
+    XCTAssertNil(registry.sessions[spare])
+    XCTAssertEqual(registry.spareShellKey, next)
+    registry.releaseTerminal(name: next)
+    XCTAssertNil(registry.spareShellKey)
+    let direct = try XCTUnwrap(registry.openTerminal(name: nil, configuration: config))
+    XCTAssertNotEqual(direct, next)
+    XCTAssertNotNil(registry.spareShellKey)
+    XCTAssertNotEqual(registry.spareShellKey, direct)
+  }
+
+  func testFreshShellIsWarmedOnlyWhenAMappingOpensIt() {
+    var mode = Config.Mode()
+    XCTAssertFalse(AppDelegate.bindsFreshShell(mode))
+    mode.all = [
+      ModeMapping(key: "alt+space", action: .flashCommand(.terminalShow(name: "bonsai")))
+    ]
+    XCTAssertFalse(AppDelegate.bindsFreshShell(mode))
+    mode.terminal = [ModeMapping(key: "alt+space", action: .flashCommand(.terminalShow(name: nil)))]
+    XCTAssertTrue(AppDelegate.bindsFreshShell(mode))
   }
 
   func testUnnamedShellStartsInHomeAndLiteralStatusNameResolves() {

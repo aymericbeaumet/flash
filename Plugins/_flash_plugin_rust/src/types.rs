@@ -729,6 +729,11 @@ impl PerformResponse {
         self.error.as_deref()
     }
 
+    /// The toast text, when one was attached with `message`.
+    pub fn toast_message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
     pub(crate) fn to_value(&self) -> Value {
         if self.unhandled {
             // The one sanctioned errorless ok:false — subsetting keeps the

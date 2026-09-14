@@ -7,10 +7,11 @@ plugins.
 
 ## Rust (the default path)
 
-1. **Command wrapper — `Plugins/slack` (~40 LOC).** The smallest useful
-   plugin: manifest `commands` + one `on_command` hook mapping subcommands
-   to a CLI via `run_command`. Command-only plugins are on-demand: the host
-   spawns them at first use, not at startup.
+1. **Command wrapper — `Plugins/spotify` (~85 LOC + unit tests).** The
+   smallest useful plugin: manifest `commands` + one `on_command` hook mapping
+   subcommands to a CLI via `run_command`, with the argv plan kept pure and
+   unit-tested. Command-only plugins are on-demand: the host spawns them at
+   first use, not at startup.
 2. **Verbs + host RPCs + persistence — `Plugins/marks` (~200 LOC).**
    Vim-style marks: manifest `verbs`, `host.normal_mode_target` and
    `host.activate` host RPCs (the `app_control` capability), JSON state
@@ -20,22 +21,25 @@ plugins.
    `publish` from `on_start`, refreshed by events + a poll, backed by the
    SDK's libproc sampler — plus the golden-output test pattern. No readiness
    dance: initialize replies immediately and the catalog lands when ready.
-4. **Event-driven catalog + actions + mappings — `Plugins/safari`
-   (~440 LOC).** Browser tabs: polled osascript refreshes fanned out per
-   window that publish on change, manifest `actions` handled by `on_action`
-   with the performed / unhandled / error trichotomy, and a `mappings`
-   entry scoped by `only_bundle_ids`.
-5. **Query evaluator with background refresh — `Plugins/calculator`
-   (~630 LOC).** A synchronous, CPU-only `evaluate` over immutable state;
+4. **Event-driven catalog + actions + mappings — `Plugins/browsers`
+   (~640 LOC).** Browser tabs for Chromium-family browsers and Safari: one
+   shared skeleton driven by a per-bundle AppleScript dialect table, polled
+   osascript refreshes fanned out per browser that publish on change,
+   manifest `actions` handled by `on_action` with the performed / unhandled /
+   error trichotomy, and a `mappings` entry scoped by `only_bundle_ids`.
+5. **Query evaluator with background refresh — `Plugins/answers`
+   (~1270 LOC).** Three synchronous, CPU-only answer engines (calculator,
+   colors, timezones) behind one `evaluate` via an ordered engine table;
    the ECB snapshot loads from disk in `on_start` and refreshes in the
    background through `host.fetch` (the `network_fetch` capability),
-   atomically replacing state; `query.prefixes = ["="]` routing.
+   atomically replacing state; `query.prefixes = ["="]` routing sends `=`
+   input to the calculator engine alone.
 
-`Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
-the language-agnostic JSON specs in `Plugins/_flash_plugin_specs/`
-(lifecycle + wire-noise robustness always; publish/evaluate/perform gated on
-the manifest) with a PASS/FAIL exit code. CI runs the full matrix against
-every bundled plugin and the Rust SDK probe.
+Protocol conformance lives in the SDK workspace:
+`Plugins/_flash_plugin_rust/protocol.json` pins the wire constants, the
+`wire`/`runtime` test suites pin the framing and lifecycle behaviour, and the
+`probe` workspace member exercises them end to end over real stdio.
+`./Scripts/test-plugins.sh --lane all` is the one-command gate.
 
 ## The loop
 

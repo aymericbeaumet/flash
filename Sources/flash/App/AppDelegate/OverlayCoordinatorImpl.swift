@@ -370,7 +370,7 @@ extension AppDelegate {
     if let pid {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
-    // Land the click — and the cursor — on the hint chip itself, where the
+    // Land the click on the hint chip itself, where the
     // user sees the label, not the element's geometric centre. For small
     // targets `chipFrame` centres the chip on the target so the two coincide;
     // for wide/tall targets (long tmux words, big AX rows, wrapped web links)
@@ -423,7 +423,6 @@ extension AppDelegate {
       ActionDispatcher.perform(
         action, on: hint.target, clickPoint: clickPoint,
         modifiers: resolvedClickModifiers,
-        leaveCursorAtClickPoint: true,
         completion: finished)
     } completion: { [weak self] _ in
       guard let self else { return }
@@ -588,8 +587,7 @@ extension AppDelegate {
         point: point, action: action, modifiers: modifiers, pid: hintSession.sourceAppPID)
       performHintCommit(recording: committedClick) { finished in
         ActionDispatcher.synthesizeClick(
-          at: point, action: action, modifiers: modifiers,
-          preserveCursor: false, completion: finished)
+          at: point, action: action, modifiers: modifiers, completion: finished)
       } completion: { owner in
         if let initial {
           owner.hintSession.mouseGridDepth = 0
@@ -790,8 +788,7 @@ extension AppDelegate {
     applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
-        at: point, action: action, modifiers: modifiers, preserveCursor: false, completion: finished
-      )
+        at: point, action: action, modifiers: modifiers, completion: finished)
     } completion: { [weak self] _ in
       guard let self else { return }
       if action == .rightClick {
@@ -869,7 +866,6 @@ extension AppDelegate {
           at: last.point,
           action: last.action,
           modifiers: last.modifiers,
-          preserveCursor: false,
           completion: index < count ? nil : finished)
       }
     } completion: { owner in
@@ -908,8 +904,7 @@ extension AppDelegate {
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.perform(
         action, on: hint.target, clickPoint: clickPoint,
-        modifiers: resolvedClickModifiers,
-        leaveCursorAtClickPoint: true, completion: finished)
+        modifiers: resolvedClickModifiers, completion: finished)
     } completion: { owner in
       guard !owner.hintSession.hints.isEmpty else { return }
       // Re-present the surviving hint set so the panel re-keys: in

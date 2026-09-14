@@ -11,7 +11,8 @@ contracts before changing a subsystem:
   `config.default.toml` as the canonical reference.
 - [Normal mode and input latency](docs/normal-mode.md).
 - [Plugin protocol](docs/plugin-protocol.md), [Rust SDK](docs/plugin-rust-sdk.md),
-  [cookbook](docs/plugin-cookbook.md), [performance](docs/plugin-performance.md).
+  [cookbook](docs/plugin-cookbook.md), [performance](docs/plugin-performance.md),
+  [Firefox tab-bridge add-on](docs/firefox-extension.md).
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
   [status popups](docs/status-popups.md), [terminal popups](docs/terminal-popups.md),
   [help](docs/help.md).
@@ -47,9 +48,12 @@ contracts before changing a subsystem:
    Reject malformed input; do not add aliases, dual wire readers, old-name type
    aliases, deprecations or transitional accept-both paths.
 8. Providers describe target geometry and semantics; `ActionDispatcher` owns
-   every committed host mouse event. There are only two hint providers: generic
-   Accessibility and the bundled tmux plugin. Browser content comes through AX
-   web areas; do not add DOM bridges or AppleScript-based hint discovery.
+   every committed host mouse event. Hint providers are the generic
+   Accessibility walk and bundled plugins declaring manifest `hints`: tmux
+   (terminal panes) and vscode (a per-app AX enhancer scoped by
+   `only_bundle_ids` and fed only by the host AX broker). Browser content
+   comes through AX web areas; do not add DOM bridges or AppleScript-based
+   hint discovery.
 9. Default keyboard shortcuts must not enter INSERT (`a/A/i/I/o/O/gi` included);
    the exception is a command that creates or focuses a text input and hands the
    keyboard over afterwards (`tab_new`, `focus_input`).
@@ -87,10 +91,11 @@ Surface requests that would violate these constraints before implementing them.
   catalog sources. Sources return global NSScreen coordinates and canonical
   openable URLs when available. `.failed` owns a failed action and prevents a
   duplicate fallback; `.unhandled` permits the next source or host fallback.
-- Validate plugin wire changes across Swift, Rust and Python. A wire bug gets a
-  minimal shared repro in `Plugins/_flash_plugin_specs/regressions/` before its
-  fix; domain scenarios belong in `Plugins/<id>/specs/`. `overrides.json` is the
-  only skip/xfail mechanism, requires a reason, and fails on XPASS.
+- Validate plugin wire changes across Swift and Rust. The wire contract lives in
+  `Plugins/_flash_plugin_rust`: `protocol.json` pins the constants, the
+  `wire`/`runtime` suites and the `probe` workspace member pin the behaviour. A
+  wire bug gets a failing test there before its fix; domain behaviour gets a
+  unit test in `Plugins/<id>`.
 - Keep plugin stdout protocol-only and bound encoded bytes, queue admission,
   requests and shutdown. Third-party GitHub refs require a full pinned commit.
   Capabilities default-deny sensitive surfaces; explicit plugin settings carry
@@ -142,9 +147,12 @@ rtk proxy swift test
 rtk proxy ./Scripts/test-plugins.sh --lane all
 ```
 
-The plugin gate includes schema validation, Rust lint/tests, runner tests, builds
-and bundled/probe/sandbox conformance. Use targeted suites during development;
-run the full relevant gate before finishing. Status-language changes also run
+The plugin gate (`Scripts/test-plugins.sh`) has three lanes over the SDK
+workspace — including its `probe` member — and every plugin crate: `lint`
+(`cargo fmt --check` + clippy `-D warnings`), `units` (the plugin-publication
+test plus per-crate `cargo test --locked`) and `build` (a dev build of every
+executable plugin). Use targeted lanes during development; run `--lane all`
+before finishing. Status-language changes also run
 `Scripts/test-status-format-oracle.py` against the pinned tmux baseline.
 
 Every verified app-code iteration ends with `Scripts/install.sh --dev`, commit

@@ -654,8 +654,8 @@ final class PluginManager {
   ///     gated against the focused app. Used by plugins with a small fixed
   ///     set of bangs (aiproviders: chatgpt/claude/…).
   ///   * **Published dynamic bangs** — kind="bang" rows the plugin keeps in
-  ///     its pushed catalog (searchengines: ~100 DDG bangs generated from
-  ///     `bangs.tsv` at build time). Those are *not* returned here; they
+  ///     its pushed catalog (reference: the DDG bang rows embedded from
+  ///     `bangs.tsv`). Those are *not* returned here; they
   ///     reach the flashlight pool through the catalog store and are
   ///     combined with the static rows in
   ///     `NormalModeCoordinator.bangListCandidates`.

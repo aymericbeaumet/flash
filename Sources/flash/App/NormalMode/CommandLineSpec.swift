@@ -89,7 +89,9 @@ extension NormalModeDispatcher {
   }
 
   static let terminalCommandSyntax = Dictionary(
-    uniqueKeysWithValues: ["terminal_show", "terminal_dismiss", "terminal_restart", "terminal_quit"].compactMap {
+    uniqueKeysWithValues: [
+      "terminal_show", "terminal_dismiss", "terminal_restart", "terminal_quit",
+    ].compactMap {
       name in
       URLEventHandler.syntax(for: name, prefix: ":").map { (name, $0) }
     })

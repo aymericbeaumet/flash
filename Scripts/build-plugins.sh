@@ -104,25 +104,52 @@ done
 # signature when it lands — TCC-gated plugins get re-prompted on every
 # cdhash change unless their designated-requirement clause matches the same
 # stable cert the host bundle uses.
+# Every `[[bin]]` a plugin crate declares is published next to its manifest,
+# not just the one the manifest `exec`s. The firefox crate ships a second
+# binary — the Firefox-spawned native-messaging host for its tab-bridge add-on
+# — which must go through the same sign-then-atomic-rename flow as the plugin
+# itself. A crate with no explicit `[[bin]]` produces the cargo default,
+# `flash-plugin-<id>`.
+crate_binaries() {
+  local cargo="$1" fallback="$2" names
+  names="$(awk '
+    /^\[\[bin\]\]/ { in_bin = 1; next }
+    /^\[/ { in_bin = 0 }
+    in_bin && $0 ~ /^[[:space:]]*name[[:space:]]*=/ {
+      line = $0
+      sub(/^[^"]*"/, "", line)
+      sub(/".*$/, "", line)
+      if (line != "") print line
+    }
+  ' "$cargo" 2>/dev/null)"
+  if [[ -z "$names" ]]; then
+    printf '%s\n' "$fallback"
+  else
+    printf '%s\n' "$names"
+  fi
+}
+
 stage_dir="$(mktemp -d "$TARGET_DIR/plugin-stage.XXXXXX")"
 trap 'rm -rf "$stage_dir"' EXIT
 staged_paths=()
 destinations=()
 for dir in "${build_dirs[@]}"; do
   id="$(basename "$dir")"
-  bin="flash-plugin-$id"
-  staged="$stage_dir/$bin"
-  if [[ "$MODE" == "release" ]]; then
-    lipo -create \
-      "$TARGET_DIR/x86_64-apple-darwin/release/$bin" \
-      "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
-      -output "$staged"
-  else
-    cp "$TARGET_DIR/plugin-dev/$bin" "$staged"
-  fi
-  chmod +x "$staged"
-  staged_paths+=("$staged")
-  destinations+=("$dir/$bin")
+  while IFS= read -r bin; do
+    [[ -n "$bin" ]] || continue
+    staged="$stage_dir/$bin"
+    if [[ "$MODE" == "release" ]]; then
+      lipo -create \
+        "$TARGET_DIR/x86_64-apple-darwin/release/$bin" \
+        "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
+        -output "$staged"
+    else
+      cp "$TARGET_DIR/plugin-dev/$bin" "$staged"
+    fi
+    chmod +x "$staged"
+    staged_paths+=("$staged")
+    destinations+=("$dir/$bin")
+  done < <(crate_binaries "$dir/Cargo.toml" "flash-plugin-$id")
 done
 
 if [[ "$MODE" != "release" && -n "${DEV_PLUGIN_SIGN_IDENTITY:-}" ]] &&
@@ -161,3 +188,24 @@ for ((i = 0; i < ${#staged_paths[@]}; i++)); do
   fi
   mv -f "$staged" "$destination"
 done
+
+# Post-condition: a manifest that declares `exec` must be backed by a crate and
+# by a published binary. The Cargo.toml filter above exists for manifest-only
+# plugins, but it is silent — a plugin directory whose crate has not landed
+# installs a manifest whose binary nobody builds, and the host cannot tell that
+# apart from a crash loop: it spends its restart budget, parks the plugin and
+# drops its warm catalog, so the source reads empty until the next restart.
+missing=0
+for dir in "${plugin_dirs[@]}"; do
+  id="$(basename "$dir")"
+  grep -q '"exec"' "$dir/manifest.json" || continue
+  if [[ ! -f "$dir/Cargo.toml" ]]; then
+    echo "plugin $id declares exec but has no Cargo.toml — nothing builds its binary" >&2
+    missing=1
+  elif [[ ! -x "$dir/flash-plugin-$id" ]]; then
+    echo "plugin $id declares exec but $dir/flash-plugin-$id is missing after the build" >&2
+    missing=1
+  fi
+done
+((missing == 0)) || exit 1
+exit 0

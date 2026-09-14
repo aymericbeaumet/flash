@@ -5,9 +5,10 @@ import FlashCore
 
 // Scroll dispatch for normal mode: `j`/`k`/`gg`/`G`/`<c-d>`/`<c-u>` and the
 // hermetic Scroller fallback. `gg`/`G` (top/bottom) ask any registered
-// `scrollExtremes` source first (tmux runs `history-top` / `cancel`
-// instead of bashing the wheel), then fall through to the browser-edge or
-// generic wheel paths.
+// `scrollExtremes` source first (tmux runs `history-top` / `cancel` instead
+// of bashing the wheel), then fall through to the browser-edge or generic
+// wheel paths — which a terminal never reaches, because a synthesized wheel
+// there comes back as an SGR mouse report in the pty.
 
 extension AppDelegate {
   func scrollNormalMode(

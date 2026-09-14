@@ -202,11 +202,12 @@ enum HelpDocs {
       claiming inputs with regular expressions. Flash gathers them for at most
       50 ms, accepts up to 16 answers per evaluator, and places them in a fixed
       lane above fuzzy catalog matches; `!bang` and `@source` input bypasses
-      that lane. The bundled calculator handles arithmetic (`1+1`), units
-      (`2 km to m`), and currencies (`10 euros`, `10 euros + 10 euros`).
-      It loads cached rates before becoming ready and refreshes them over the
-      network only in the background. Selecting an answer with `<tab>` or
-      `<cr>` copies the exact result.
+      that lane. The bundled `answers` plugin handles arithmetic (`1+1`),
+      units (`2 km to m`), currencies (`10 euros`, `10 euros + 10 euros`),
+      color conversions (`#ff8800`, `rgb(255, 136, 0)`), and world clocks
+      (`time in tokyo`). It loads cached rates before becoming ready and
+      refreshes them over the network only in the background. Selecting an
+      answer with `<tab>` or `<cr>` copies the exact result.
 
       Location rows are final destinations: `<tab>` or `<cr>` submits the
       selected row directly, the same as `<cmd-cr>`.

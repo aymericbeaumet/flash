@@ -24,7 +24,7 @@ final class PluginBoundaryTests: XCTestCase {
       .deletingLastPathComponent().deletingLastPathComponent()
     let data = try Data(
       contentsOf: root.appendingPathComponent(
-        "Plugins/_flash_plugin_specs/fixtures/wire-values.fixture"))
+        "Plugins/_flash_plugin_rust/fixtures/wire-values.fixture"))
     let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     for group in ["protocol_version", "boolean", "pid", "perform", "hints"] {
       for item in try XCTUnwrap(corpus[group] as? [[String: Any]]) {
@@ -90,6 +90,34 @@ final class PluginBoundaryTests: XCTestCase {
     XCTAssertEqual(send(.reload(resident: true)), [.teardown, .start(3)])
     XCTAssertEqual(send(.retry(1)), [])
     XCTAssertEqual(lifecycle.generation, 3)
+  }
+
+  func testStderrFloodBeforeTheInitializeReplyNeverWedgesTheTransport() throws {
+    // stderr is diagnostics only and the host drains it on the pipe callback,
+    // so a plugin writing far more than the pipe buffer before its first reply
+    // still reaches `running`. A host that queued stderr behind the lifecycle
+    // queue, or never read it, would block the child here and time out
+    // initialize.
+    let fixture = try PluginFixtureKit.make(
+      id: "stderrflood",
+      manifest: PluginFixtureKit.manifest(id: "stderrflood"),
+      script: PluginFixtureKit.script(
+        onInitialize: """
+          head -c 262144 /dev/zero | tr '\\0' x >&2
+          \(PluginFixtureKit.initializeOK)
+          """))
+    defer { fixture.cleanup() }
+    let process = PluginProcess(
+      root: fixture.root,
+      manifest: try PluginManifest.load(from: fixture.root),
+      origin: .official,
+      baseDataDir: fixture.baseDataDir,
+      watchFiles: false)
+    process.start()
+    waitUntilTrue("running after a 256 KiB stderr flood") {
+      process.runtimeStateSnapshot() == .running
+    }
+    process.stopAndWait(reason: "test")
   }
 
   func testTransportAdmissionRecoversCapacityWithoutAcceptingStaleReleases() throws {

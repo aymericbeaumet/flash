@@ -13,8 +13,13 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual((value.text.string as? NSAttributedString)?.string, "10%")
     XCTAssertNil(value.text.animation(forKey: crossfadeKey))
     redraw(surface, "CPU #[fg=yellow]11%#[default] END", columns: 30)
-    XCTAssertNotNil(value.text.animation(forKey: crossfadeKey))
-    XCTAssertNotNil(value.outgoing.animation(forKey: crossfadeKey))
+    XCTAssertEqual(
+      value.text.animation(forKey: crossfadeKey)?.duration,
+      NativeStatusBarSurface.crossfadeDuration)
+    XCTAssertEqual(
+      value.outgoing.animation(forKey: crossfadeKey)?.duration,
+      NativeStatusBarSurface.crossfadeDuration)
+    XCTAssertLessThanOrEqual(NativeStatusBarSurface.crossfadeDuration, 0.1)
     XCTAssertEqual((value.outgoing.string as? NSAttributedString)?.string, "10%")
     XCTAssertEqual(value.outgoing.opacity, 0)
     XCTAssertNil(surface.runLayers[0].text.animation(forKey: crossfadeKey))
@@ -32,9 +37,13 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(surface.hoverHighlight.opacity, 0)
     surface.setHoverHighlight(CGRect(x: 20, y: 0, width: 30, height: 26))
     XCTAssertEqual(surface.hoverHighlight.opacity, 1)
-    XCTAssertEqual(surface.hoverHighlight.frame.minX, 16)
-    XCTAssertEqual(surface.hoverHighlight.frame.width, 38)
+    XCTAssertEqual(surface.hoverHighlight.frame.minX, 17)
+    XCTAssertEqual(surface.hoverHighlight.frame.width, 36)
     XCTAssertNotNil(surface.hoverHighlight.animation(forKey: key))
+    // A span wide enough to cover most of a lane dims instead of washing.
+    let wide = CGFloat(NativeStatusBarSurface.wideHoverCells + 1) * surface.cellWidth
+    surface.setHoverHighlight(CGRect(x: 0, y: 0, width: wide, height: 26))
+    XCTAssertEqual(surface.hoverHighlight.opacity, NativeStatusBarSurface.wideHoverOpacity)
     surface.setHoverHighlight(nil)
     XCTAssertEqual(surface.hoverHighlight.opacity, 0)
     let sublayers = surface.backgroundLayer.sublayers ?? []
@@ -322,6 +331,62 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(surface.layout.text, "HN abcdef… END")
     let native = render("abcdefghijklmnopqrstuvwxyz END", columns: 14)
     XCTAssertEqual(native.layout.text, "abcdefghijklmn")
+  }
+
+  /// The absolute centre owns its columns plus a gutter: side lanes with
+  /// nothing elastic in them lose characters rather than reaching it.
+  func testSideLanesTruncateBeforeReachingTheReservedCentre() throws {
+    let columns = 60
+    let surface = render(
+      String(repeating: "L", count: 40)
+        + "#[align=absolute-centre]CENTRE"
+        + "#[align=right]" + String(repeating: "R", count: 40),
+      columns: columns)
+    let reserve = NativeStatusBarSurface.centreReservation(
+      StatusFormatDocument.parse(
+        "L#[align=absolute-centre]CENTRE#[align=right]R"), columns: columns)
+    XCTAssertEqual(reserve.count, 6 + NativeStatusBarSurface.centreGutterColumns * 2)
+    let centre = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "CENTRE" })
+    let centreFrame = surface.runFrames[centre]
+    for (index, run) in surface.visibleRuns.enumerated() where index != centre {
+      let frame = surface.runFrames[index]
+      XCTAssertTrue(
+        frame.maxX <= centreFrame.minX || frame.minX >= centreFrame.maxX,
+        "run \(run.segment.text) overlaps the reserved centre")
+    }
+    XCTAssertTrue(surface.layout.text.contains("CENTRE"))
+  }
+
+  /// The left lane loses its tail and the right lane its head, so each keeps
+  /// the end that carries meaning.
+  func testClampedLanesTrimTheEndAwayFromTheCentre() {
+    let document = StatusFormatDocument.parse(
+      "ABCDEFGHIJ#[align=absolute-centre]C#[align=right]abcdefghij")
+    let clamped = NativeStatusBarSurface.clampedLanes(document, columns: 30, reserve: 12..<18)
+    let texts = clamped.runs.filter { !$0.isStyleBoundary }.map(\.text)
+    XCTAssertEqual(texts.first, "ABCDEFGHIJ", "a lane inside its budget is untouched")
+    let narrow = NativeStatusBarSurface.clampedLanes(document, columns: 20, reserve: 6..<14)
+    let narrowed = narrow.runs.filter { !$0.isStyleBoundary }.map(\.text)
+    XCTAssertEqual(narrowed[0], "ABCDE…")
+    XCTAssertEqual(narrowed[2], "…fghij")
+    XCTAssertEqual(narrowed[1], "C", "the centre is never trimmed")
+  }
+
+  /// A template without an absolute centre keeps the native tmux geometry.
+  func testNoAbsoluteCentreReservesNothing() {
+    let document = StatusFormatDocument.parse("LEFT#[align=centre]MID#[align=right]RIGHT")
+    XCTAssertTrue(NativeStatusBarSurface.centreReservation(document, columns: 40).isEmpty)
+    XCTAssertEqual(
+      NativeStatusBarSurface.clampedLanes(document, columns: 40, reserve: 0..<0).runs.map(\.text),
+      document.runs.map(\.text))
+  }
+
+  /// A bar too narrow for both lanes and the centre gives the centre up rather
+  /// than erasing a lane.
+  func testNarrowBarDropsTheCentreReservationInsteadOfStarvingALane() {
+    let document = StatusFormatDocument.parse("L#[align=absolute-centre]CENTRE#[align=right]R")
+    XCTAssertTrue(NativeStatusBarSurface.centreReservation(document, columns: 16).isEmpty)
+    XCTAssertFalse(NativeStatusBarSurface.centreReservation(document, columns: 60).isEmpty)
   }
 
   private func render(_ source: String, columns: Int, notch: CGRect? = nil)

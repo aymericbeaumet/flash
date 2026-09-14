@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
-/// Wire frame cap, both directions (`quotas.frame_bytes` in protocol.json).
+/// Wire frame cap, both directions (`quotas.frame_bytes` in
+/// `Plugins/_flash_plugin_rust/protocol.json`).
 pub(crate) const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 64;
 pub(crate) const OUTBOUND_QUEUE_BYTES: usize = 16 * 1024 * 1024;

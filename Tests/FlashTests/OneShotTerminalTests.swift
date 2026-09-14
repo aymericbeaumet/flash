@@ -70,13 +70,16 @@ final class OneShotTerminalTests: XCTestCase {
       XCTAssertEqual(dismissals, 1)
       XCTAssertEqual(
         focusDismissalReasons, [action == "hide" ? "terminal_closed" : "terminal_removed"])
-      XCTAssertTrue(registry.definitions.isEmpty)
-      XCTAssertTrue(registry.inputGenerations.isEmpty)
+      // Only the warm spare shell for the next open remains registered.
+      let spare = try XCTUnwrap(registry.spareShellKey)
+      XCTAssertEqual(Set(registry.definitions.keys), [spare])
+      XCTAssertEqual(Set(registry.inputGenerations.keys), [spare])
       XCTAssertTrue(controller.terminalView.terminalFrame == nil)
       registry.restart(name: name)
       registry.apply(.init())
-      XCTAssertTrue(registry.sessions.isEmpty)
+      XCTAssertEqual(Set(registry.sessions.keys), [spare])
       let next = try XCTUnwrap(registry.openTerminal(name: nil, configuration: Config()))
+      XCTAssertEqual(next, spare)
       XCTAssertNotEqual(next, name)
       show(controller, name: next)
       waitUntil("fresh frame") { controller.terminalView.terminalFrame != nil }

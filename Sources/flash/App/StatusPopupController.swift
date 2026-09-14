@@ -13,6 +13,7 @@ private final class StatusPopupPanel: NSPanel {
     isOpaque = false
     backgroundColor = .clear
     hasShadow = false
+    animationBehavior = .none
     hidesOnDeactivate = false
     acceptsMouseMovedEvents = true
     level = OverlayPanel.statusBarClickWindowLevel

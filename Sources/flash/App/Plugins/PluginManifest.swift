@@ -251,7 +251,7 @@ struct PluginCommandRegistration: Decodable, Hashable {
 /// starts with `!<token>` (e.g. `!r cat`), core routes the remainder to the
 /// owning plugin as `perform {kind: "command"}` with the bang token as the
 /// subcommand. A `token` of `"*"` is a catch-all: the plugin claims every
-/// otherwise-unclaimed bang and resolves it itself — how `searchengines`
+/// otherwise-unclaimed bang and resolves it itself — how `reference`
 /// serves the full DuckDuckGo bang table without enumerating thousands of
 /// entries in the manifest.
 struct PluginBangRegistration: Decodable, Hashable {

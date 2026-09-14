@@ -101,6 +101,16 @@ final class StatusBarClickView: NSView {
     !overLink || modifiers.contains(.option)
   }
 
+  /// The wash follows the narrowest interactive span under the pointer. A
+  /// whole-row popup — a feed row wraps its label, title, domain and arrow in
+  /// one region so they share one preview — must not wash the entire row when
+  /// the pointer sits on one of its links. The popup that opens is unaffected.
+  static func hoverWashRect(link: CGRect?, popup: CGRect?) -> CGRect? {
+    guard let popup else { return link }
+    guard let link, link.width < popup.width else { return popup }
+    return link
+  }
+
   /// Window-space location of the in-flight `mouseDown`, used to tell a click
   /// from a drag: a link opens only if the pointer comes back up within
   /// `dragSlop` of where it went down. A drag (window-drag, selection sweep,
@@ -216,7 +226,7 @@ final class StatusBarClickView: NSView {
       event: event.type == .mouseEntered ? "entered" : "moved",
       popup: popup, overLink: overLink, point: point)
     onPopupHover?(popup, point)
-    onHoverHighlight?(popup?.rect ?? link?.rect)
+    onHoverHighlight?(Self.hoverWashRect(link: link?.rect, popup: popup?.rect))
   }
 
   private func logHover(event: String, popup: StatusBarPopupRegion?, overLink: Bool, point: CGPoint)

@@ -20,7 +20,11 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flash_plugin::process;
-use flash_plugin::{run, run_osascript, CommandRequest, Context, PerformResponse, RefreshGate};
+use flash_plugin::status::{duration_compact, progress_bar};
+use flash_plugin::{
+    run, run_osascript, Color, Column, CommandRequest, Context, Markup, PerformResponse, Preview,
+    Published, RefreshGate, Table,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -142,37 +146,26 @@ struct UsageState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
-    claude_label: String,
-    claude_details: String,
-    codex_label: String,
-    codex_details: String,
+    claude_label: Markup,
+    claude_details: Markup,
+    codex_label: Markup,
+    codex_details: Markup,
 }
 
 #[derive(Debug, Default)]
 struct UsageRuntime {
     state: UsageState,
-    published: Option<StatusSegments>,
-}
-
-impl UsageRuntime {
-    fn status_update(&mut self, now: u64) -> Option<StatusSegments> {
-        let segments = render_status_segments(&self.state, now);
-        if self.published.as_ref() == Some(&segments) {
-            return None;
-        }
-        self.published = Some(segments.clone());
-        Some(segments)
-    }
+    published: Published<StatusSegments>,
 }
 
 impl StatusSegments {
     #[cfg(test)]
     fn all(&self) -> [&str; 4] {
         [
-            &self.claude_label,
-            &self.claude_details,
-            &self.codex_label,
-            &self.codex_details,
+            self.claude_label.as_str(),
+            self.claude_details.as_str(),
+            self.codex_label.as_str(),
+            self.codex_details.as_str(),
         ]
     }
 }
@@ -234,9 +227,10 @@ fn publish_status(ctx: &Context, segments: &StatusSegments) {
 }
 
 async fn publish_current_status(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
-    let segments = shared.write().await.status_update(unix_now());
-    if let Some(segments) = segments {
-        publish_status(ctx, &segments);
+    let mut runtime = shared.write().await;
+    let segments = render_status_segments(&runtime.state, unix_now());
+    if let Some(segments) = runtime.published.update(segments) {
+        publish_status(ctx, segments);
     }
 }
 
@@ -415,36 +409,35 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
     let openai_week_label = usage_window_label(openai_week, "7-day");
     let astra_session_label = usage_window_label(astra_session, "5-hour");
     let astra_week_label = usage_window_label(astra_week, "7-day");
-    let heading = "#[fg=colour245]Provider  Window          Remaining          Reset#[default]";
-    let claude_details = [
-        "#[fg=#EBCB8B]Claude quotas#[default]".to_string(),
+    let claude_details = quota_preview(
+        "Claude quotas",
         quota_freshness(
             state.anthropic.as_ref().map(|usage| usage.updated_at),
             2 * ANTHROPIC_USAGE_TTL,
             now,
             "Claude Code",
         ),
-        heading.to_string(),
-        popup_row("Claude", "5-hour", shared_session, None, now),
-        popup_row("", "7-day", claude_week, shared_session, now),
-        popup_row("  Fable", "7-day", fable_week, shared_session, now),
-    ]
-    .join("\n");
-    let codex_details = [
-        "#[fg=#EBCB8B]Codex quotas#[default]".to_string(),
+        [
+            quota_row("Claude", "5-hour", shared_session, None, now),
+            quota_row("", "7-day", claude_week, shared_session, now),
+            quota_row("  Fable", "7-day", fable_week, shared_session, now),
+        ],
+    );
+    let codex_details = quota_preview(
+        "Codex quotas",
         quota_freshness(
             state.openai.as_ref().map(|usage| usage.updated_at),
             2 * OPENAI_USAGE_TTL,
             now,
             "Codex",
         ),
-        heading.to_string(),
-        popup_row("Codex", &openai_session_label, openai_session, None, now),
-        popup_row("", &openai_week_label, openai_week, openai_session, now),
-        popup_row("  Astra", &astra_session_label, astra_session, None, now),
-        popup_row("", &astra_week_label, astra_week, astra_session, now),
-    ]
-    .join("\n");
+        [
+            quota_row("Codex", &openai_session_label, openai_session, None, now),
+            quota_row("", &openai_week_label, openai_week, openai_session, now),
+            quota_row("  Astra", &astra_session_label, astra_session, None, now),
+            quota_row("", &astra_week_label, astra_week, astra_session, now),
+        ],
+    );
     StatusSegments {
         claude_label: quota_label(
             "Cld",
@@ -471,36 +464,60 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
     }
 }
 
+fn quota_preview(
+    title: &str,
+    freshness: String,
+    rows: impl IntoIterator<Item = [Markup; 4]>,
+) -> Markup {
+    let table = rows.into_iter().fold(
+        Table::new([
+            Column::new("Provider", 8),
+            Column::new("Window", 13),
+            Column::new("Remaining", 17),
+            Column::new("Reset", 0),
+        ]),
+        Table::row,
+    );
+    Preview::new()
+        .title(title)
+        .note(freshness)
+        .table(table)
+        .render()
+}
+
 fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, provider: &str) -> String {
-    let status = match updated_at {
+    match updated_at {
         Some(updated) if fresh(updated, ttl, now) => {
             format!(
                 "Updated {} ago · bars show quota left",
-                relative_duration(now.saturating_sub(updated))
+                duration_compact(now.saturating_sub(updated))
             )
         }
         Some(updated) => format!(
             "Cached · updated {} ago · check {provider} login/network",
-            relative_duration(now.saturating_sub(updated))
+            duration_compact(now.saturating_sub(updated))
         ),
         None => format!("Unavailable · check {provider} login/network"),
-    };
-    format!("#[fg=colour245]{status}#[default]")
+    }
 }
 
-fn quota_label(label: &str, weekly: Option<&WindowUsage>, now: u64) -> String {
+fn quota_label(label: &str, weekly: Option<&WindowUsage>, now: u64) -> Markup {
     let metric = weekly
         .map(|window| {
             let remaining = remaining_percent(window.used_percent).min(99);
             let mut metric = format!("{remaining}%");
             if let Some(reset) = window.resets_at {
                 metric.push('↻');
-                metric.push_str(&relative_duration(reset.saturating_sub(now)));
+                metric.push_str(&duration_compact(reset.saturating_sub(now)));
             }
             metric
         })
         .unwrap_or_else(|| "—".to_string());
-    format!("#[fg=#EBCB8B]{label} #[fg=colour245]{metric}#[default]")
+    Markup::raw(format!(
+        "#[fg={}]{label} #[fg={}]{metric}#[default]",
+        Color::TITLE,
+        Color::MUTED
+    ))
 }
 
 fn usage_window_label(usage: Option<&WindowUsage>, fallback: &str) -> String {
@@ -513,40 +530,46 @@ fn styled_remaining(
     weekly: Option<&WindowUsage>,
     session: Option<&WindowUsage>,
     now: u64,
-) -> String {
+) -> Markup {
     let Some(weekly) = weekly else {
-        return "   —".to_string();
+        return Markup::text("   —");
     };
     let remaining = remaining_percent(weekly.used_percent);
-    let value = format!("{remaining:>3}%");
+    let value = Markup::text(format!("{remaining:>3}%"));
     if remaining < 20 || session.is_some_and(|window| remaining_percent(window.used_percent) == 0) {
-        format!("#[fg=colour196]{value}#[default]")
+        Markup::colored(value, Color::ALERT)
     } else if ahead_of_weekly_pace(weekly, now) {
-        format!("#[fg=#D08770]{value}#[default]")
+        Markup::colored(value, Color::WARN)
     } else {
         value
     }
 }
 
-fn popup_row(
+fn quota_row(
     provider: &str,
     window_label: &str,
     usage: Option<&WindowUsage>,
     pace_session: Option<&WindowUsage>,
     now: u64,
-) -> String {
-    let remaining = styled_remaining(usage, pace_session, now);
-    let reset = usage
-        .and_then(|window| window.resets_at)
-        .map(|reset| relative_duration(reset.saturating_sub(now)))
-        .unwrap_or_else(|| "—".to_string());
+) -> [Markup; 4] {
     let bar = usage
         .map(|window| {
-            let filled = (remaining_percent(window.used_percent) as usize * 12 / 100).min(12);
-            format!("{}{}", "█".repeat(filled), "░".repeat(12 - filled))
+            progress_bar(
+                f64::from(remaining_percent(window.used_percent)) / 100.0,
+                12,
+            )
         })
-        .unwrap_or_else(|| "────────────".to_string());
-    format!("#[fg=colour245]{provider:<8}  {window_label:<13}#[default]  {remaining} #[fg=colour245]{bar}#[default]  {reset}")
+        .unwrap_or_else(|| "─".repeat(12));
+    let reset = usage
+        .and_then(|window| window.resets_at)
+        .map(|reset| duration_compact(reset.saturating_sub(now)))
+        .unwrap_or_else(|| "—".to_string());
+    [
+        Markup::colored(Markup::text(provider), Color::MUTED),
+        Markup::colored(Markup::text(window_label), Color::MUTED),
+        styled_remaining(usage, pace_session, now) + " " + Markup::colored(bar, Color::MUTED),
+        Markup::text(reset),
+    ]
 }
 
 fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
@@ -568,16 +591,6 @@ fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
 
 fn remaining_percent(used: f64) -> u8 {
     (100_i64 - used.floor() as i64).clamp(0, 100) as u8
-}
-
-fn relative_duration(seconds: u64) -> String {
-    if seconds < 3_600 {
-        format!("{}min", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h", seconds / 3_600)
-    } else {
-        format!("{}d", seconds / 86_400)
-    }
 }
 
 fn window_label(minutes: u64) -> String {
@@ -1121,7 +1134,7 @@ impl FlashPlugin for AiProviders {
         let cached = load_usage_state(&ctx).await;
         *self.usage.write().await = UsageRuntime {
             state: cached,
-            published: None,
+            published: Published::new(),
         };
         publish_current_status(&ctx, &self.usage).await;
 
@@ -1312,22 +1325,24 @@ mod tests {
         };
         let segments = render_status_segments(&state, 0);
         assert_eq!(
-            segments.claude_label,
+            segments.claude_label.as_str(),
             "#[fg=#EBCB8B]Cld #[fg=colour245]53%↻5d#[default]"
         );
         assert_eq!(
-            segments.codex_label,
+            segments.codex_label.as_str(),
             "#[fg=#EBCB8B]Cdx #[fg=colour245]54%↻5d#[default]"
         );
-        assert!(segments.claude_details.contains("Claude"));
-        assert!(segments.claude_details.contains("Fable"));
-        assert!(!segments.claude_details.contains("Codex"));
-        assert!(segments.codex_details.contains("Codex"));
-        assert!(segments.codex_details.contains("Astra"));
-        assert!(!segments.codex_details.contains("Claude"));
+        let claude_details = segments.claude_details.as_str();
+        let codex_details = segments.codex_details.as_str();
+        assert!(claude_details.contains("Claude"));
+        assert!(claude_details.contains("Fable"));
+        assert!(!claude_details.contains("Codex"));
+        assert!(codex_details.contains("Codex"));
+        assert!(codex_details.contains("Astra"));
+        assert!(!codex_details.contains("Claude"));
         for label in [&segments.claude_label, &segments.codex_label] {
-            assert!(!label.contains("#[popup="));
-            assert!(!label.contains("#[link="));
+            assert!(!label.as_str().contains("#[popup="));
+            assert!(!label.as_str().contains("#[link="));
         }
     }
 
@@ -1336,17 +1351,17 @@ mod tests {
         for (used, expected) in [(0.0, "99%"), (91.0, "9%"), (100.0, "0%")] {
             let window = WindowUsage::new(used, None, 300);
             assert_eq!(
-                quota_label("Cld", Some(&window), 0),
+                quota_label("Cld", Some(&window), 0).as_str(),
                 format!("#[fg=#EBCB8B]Cld #[fg=colour245]{expected}#[default]")
             );
         }
         let segments = render_status_segments(&UsageState::default(), 0);
         assert_eq!(
-            segments.claude_label,
+            segments.claude_label.as_str(),
             "#[fg=#EBCB8B]Cld #[fg=colour245]—#[default]"
         );
         assert_eq!(
-            segments.codex_label,
+            segments.codex_label.as_str(),
             "#[fg=#EBCB8B]Cdx #[fg=colour245]—#[default]"
         );
         assert!(!segments.all().iter().any(|value| value.contains("?%")));
@@ -1364,7 +1379,7 @@ mod tests {
             ..UsageState::default()
         };
         assert_eq!(
-            render_status_segments(&state, 0).claude_label,
+            render_status_segments(&state, 0).claude_label.as_str(),
             "#[fg=#EBCB8B]Cld #[fg=colour245]60%↻5d#[default]"
         );
     }
@@ -1381,10 +1396,10 @@ mod tests {
         };
         let status = render_status_segments(&state, 0);
         assert_eq!(
-            status.claude_label,
+            status.claude_label.as_str(),
             "#[fg=#EBCB8B]Cld #[fg=colour245]—#[default]"
         );
-        assert!(status.claude_details.contains("95%"));
+        assert!(status.claude_details.as_str().contains("95%"));
     }
 
     #[test]
@@ -1425,18 +1440,19 @@ mod tests {
             }),
         };
         let current = render_status_segments(&state, 1_000);
-        assert!(current.claude_label.contains("75%"));
-        assert!(current.codex_label.contains("60%"));
+        assert!(current.claude_label.as_str().contains("75%"));
+        assert!(current.codex_label.as_str().contains("60%"));
         let old = render_status_segments(&state, 1_000 + 2 * ANTHROPIC_USAGE_TTL);
-        assert!(old.claude_label.contains("]—#[default]"));
-        assert!(old.codex_label.contains("]—#[default]"));
-        assert!(old.claude_details.contains("75%"));
-        assert!(old.claude_details.contains("Cached"));
-        assert!(!current.claude_details.contains("Cached"));
+        assert!(old.claude_label.as_str().contains("]—#[default]"));
+        assert!(old.codex_label.as_str().contains("]—#[default]"));
+        assert!(old.claude_details.as_str().contains("75%"));
+        assert!(old.claude_details.as_str().contains("Cached"));
+        assert!(!current.claude_details.as_str().contains("Cached"));
         assert!(render_status_segments(&UsageState::default(), 0)
             .claude_details
+            .as_str()
             .contains("Unavailable"));
-        assert!(old.codex_details.contains("60%"));
+        assert!(old.codex_details.as_str().contains("60%"));
     }
 
     #[test]
@@ -1453,13 +1469,19 @@ mod tests {
                 }),
                 ..UsageState::default()
             },
-            published: None,
+            published: Published::new(),
+        };
+        let mut publish = |now| {
+            runtime
+                .published
+                .update(render_status_segments(&runtime.state, now))
+                .is_some()
         };
 
-        assert!(runtime.status_update(0).is_some());
-        assert!(runtime.status_update(0).is_none());
-        assert!(runtime.status_update(60).is_some());
-        assert!(runtime.status_update(60).is_none());
+        assert!(publish(0));
+        assert!(!publish(0));
+        assert!(publish(60));
+        assert!(!publish(60));
     }
 
     #[test]

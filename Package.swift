@@ -40,11 +40,16 @@ let package = Package(
   ],
   targets: [
     .binaryTarget(name: "GhosttyVt", path: "build/ghostty/ghostty-vt.xcframework"),
+    // The terminal hot path (frame extraction, cell decoding, drawing) stays
+    // optimized in the incremental dev build too: these two small modules are
+    // exactly the per-cell loops an unoptimized build makes visibly sluggish.
     .target(
       name: "CFlashTerminal", dependencies: ["GhosttyVt"], path: "Sources/CFlashTerminal",
-      publicHeadersPath: "include"),
+      publicHeadersPath: "include",
+      cSettings: [.unsafeFlags(["-O2"], .when(configuration: .debug))]),
     .target(
-      name: "FlashTerminal", dependencies: ["CFlashTerminal"], swiftSettings: strictSwiftSettings),
+      name: "FlashTerminal", dependencies: ["CFlashTerminal"],
+      swiftSettings: strictSwiftSettings + [.unsafeFlags(["-O"], .when(configuration: .debug))]),
     .executableTarget(
       name: "flash",
       dependencies: [

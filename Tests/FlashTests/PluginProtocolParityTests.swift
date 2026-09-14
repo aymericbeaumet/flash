@@ -4,16 +4,16 @@ import XCTest
 @testable import flash
 
 /// Asserts the host's wire constants equal the machine-readable contract in
-/// `Plugins/_flash_plugin_specs/protocol.json` — the single source of truth.
+/// `Plugins/_flash_plugin_rust/protocol.json` — the single source of truth.
 /// A drift here means the host redefined the protocol without updating the
-/// spec (or vice versa), which repo rule 9 forbids shipping.
+/// contract (or vice versa), which repo rule 7 forbids shipping.
 final class PluginProtocolParityTests: XCTestCase {
   private func spec() throws -> [String: Any] {
     let url = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-      .appendingPathComponent("Plugins/_flash_plugin_specs/protocol.json")
+      .appendingPathComponent("Plugins/_flash_plugin_rust/protocol.json")
     let data = try Data(contentsOf: url)
     return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
   }

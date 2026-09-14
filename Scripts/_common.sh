@@ -247,7 +247,7 @@ assemble_app() {
     local plugins_dest="$STAGING_PATH/Contents/Resources/Plugins"
     for manifest in "$PROJECT_DIR"/Plugins/*/manifest.json; do
       [[ -e "$manifest" ]] || continue
-      local dir id bin
+      local dir id bin companion
       dir="$(dirname "$manifest")"
       id="$(basename "$dir")"
       bin="$dir/flash-plugin-$id"
@@ -260,8 +260,20 @@ assemble_app() {
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1
         fi
-        cp "$bin" "$plugins_dest/$id/flash-plugin-$id"
-        chmod +x "$plugins_dest/$id/flash-plugin-$id"
+        # Every binary the crate produced, not only the manifest `exec`: the
+        # firefox crate also ships the Firefox-spawned native-messaging host
+        # for its tab-bridge add-on. sign_app signs each of them.
+        for companion in "$dir"/flash-plugin-*; do
+          [[ -f "$companion" ]] || continue
+          cp "$companion" "$plugins_dest/$id/$(basename "$companion")"
+          chmod +x "$plugins_dest/$id/$(basename "$companion")"
+        done
+      fi
+      # Plugin-owned payloads that are not Mach-Os but must ship with the
+      # plugin: the Firefox add-on source the user loads by hand.
+      if [[ -d "$dir/extension" ]]; then
+        rm -rf "$plugins_dest/$id/extension"
+        cp -R "$dir/extension" "$plugins_dest/$id/extension"
       fi
     done
   else

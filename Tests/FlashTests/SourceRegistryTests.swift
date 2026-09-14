@@ -215,13 +215,13 @@ final class SourceRegistryTests: XCTestCase {
       pluginSourcesProvider: {
         [
           StubSource(
-            identifier: "plugin:emojis",
+            identifier: "plugin:reference",
             capabilities: [.candidates],
             candidatesHandler: { _ in
               [
                 Candidate(
                   kind: CandidateFinder.emojiKind,
-                  sourceID: "plugin:emojis",
+                  sourceID: "plugin:reference",
                   source: "emoji",
                   pid: nil,
                   title: "sparkles",
@@ -610,7 +610,7 @@ final class SourceRegistryTests: XCTestCase {
       title: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let emojiShadow = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
+      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
       source: "emoji", pid: nil,
       title: "slack key cap",
       subtitle: "emoji", bundleIdentifier: "", url: nil)
@@ -624,9 +624,9 @@ final class SourceRegistryTests: XCTestCase {
               "Slack".localizedCaseInsensitiveContains(target) ? slackApp : nil
             })
         },
-        SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:reference", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:reference", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
               emojiShadow.title.localizedCaseInsensitiveContains(target) ? emojiShadow : nil
             })
@@ -655,7 +655,7 @@ final class SourceRegistryTests: XCTestCase {
       kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
       title: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
     let emojiEntry = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
+      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
       source: "emoji", pid: nil, title: "editor pencil", subtitle: "emoji",
       bundleIdentifier: "", url: nil)
 
@@ -664,9 +664,9 @@ final class SourceRegistryTests: XCTestCase {
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
           StubSource(identifier: "core.apps", priority: 0, capabilities: [.appActivation])
         },
-        SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:reference", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:reference", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
               emojiEntry.title.localizedCaseInsensitiveContains(target) ? emojiEntry : nil
             })
@@ -764,14 +764,14 @@ final class SourceRegistryTests: XCTestCase {
   }
 
   func testNonLocationCandidateSourcesCanTargetDeclaredSourcePrefix() {
-    let emojis = StubSource(
-      identifier: "plugin:emojis",
+    let reference = StubSource(
+      identifier: "plugin:reference",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "emojis.glyphs", kind: .standard)
       ])
-    let notes = StubSource(
-      identifier: "plugin:notes",
+    let apple = StubSource(
+      identifier: "plugin:apple",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "notes.notes", kind: .standard)
@@ -786,14 +786,14 @@ final class SourceRegistryTests: XCTestCase {
       descriptors: [],
       terminalBundleIDs: [],
       runningApplications: [],
-      pluginSourcesProvider: { [notes, location, emojis] })
+      pluginSourcesProvider: { [apple, location, reference] })
 
     XCTAssertEqual(
       registry.nonLocationCandidateSources(matching: "emojis").map(\.identifier),
-      ["plugin:emojis"])
+      ["plugin:reference"])
     XCTAssertEqual(
       Set(registry.nonLocationCandidateSources().map(\.identifier)),
-      Set(["plugin:emojis", "plugin:notes"]))
+      Set(["plugin:reference", "plugin:apple"]))
   }
 
   func testWarmSnapshotIsASynchronousStoreRead() {
@@ -842,7 +842,7 @@ final class SourceRegistryTests: XCTestCase {
         ]
       })
     let nonLocation = StubSource(
-      identifier: "plugin:notes",
+      identifier: "plugin:apple",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "notes.notes")
@@ -966,8 +966,8 @@ final class SourceRegistryTests: XCTestCase {
   func testExclusiveQueryPrefixRoutesOnlyToDeclaringEvaluator() {
     let completion = expectation(description: "exclusive query evaluation")
     var genericCalls = 0
-    let calculator = StubSource(
-      identifier: "plugin:calculator",
+    let answers = StubSource(
+      identifier: "plugin:answers",
       queryEvaluationSurfaces: [.flashlight],
       queryEvaluationPrefixes: ["="],
       queryEvaluationHandler: { request, done in
@@ -985,7 +985,7 @@ final class SourceRegistryTests: XCTestCase {
       descriptors: [],
       terminalBundleIDs: [],
       runningApplications: [],
-      pluginSourcesProvider: { [calculator, generic] })
+      pluginSourcesProvider: { [answers, generic] })
 
     registry.evaluateQuery(
       QueryEvaluationRequest(
@@ -1006,7 +1006,7 @@ final class SourceRegistryTests: XCTestCase {
     let completion = expectation(description: "query evaluation")
     var evaluatorCallbackIsActive = false
     let evaluator = StubSource(
-      identifier: "plugin:calculator",
+      identifier: "plugin:answers",
       queryEvaluationSurfaces: [.flashlight],
       queryEvaluationHandler: { _, done in
         evaluatorCallbackIsActive = true

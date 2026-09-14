@@ -61,7 +61,7 @@ final class NativeStatusBarSurface {
     for layer in [hairline, hoverHighlight] { layer.actions = OverlayPanel.noActions }
     hairline.backgroundColor = OverlayPanel.statusBarHairlineCG
     hoverHighlight.backgroundColor = OverlayPanel.statusBarHoverHighlightCG
-    hoverHighlight.cornerRadius = 4
+    hoverHighlight.cornerRadius = 3
     hoverHighlight.opacity = 0
     backgroundLayer.insertSublayer(hairline, at: 0)
     backgroundLayer.insertSublayer(hoverHighlight, at: 1)
@@ -99,8 +99,14 @@ final class NativeStatusBarSurface {
     let leftColumns = notchLocal.map {
       max(0, Int(floor(($0.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth)))
     }
+    // Contraction first, then the hard clamp: the elastic span gives way
+    // before a lane loses characters outright.
+    let reserve = Self.centreReservation(prepared, columns: availableColumns)
     layout = StatusFormatLayout.layout(
-      Self.shrinkingDocument(prepared, columns: availableColumns, leftColumns: leftColumns),
+      Self.clampedLanes(
+        Self.shrinkingDocument(
+          prepared, columns: availableColumns, leftColumns: leftColumns, reserve: reserve),
+        columns: availableColumns, reserve: reserve),
       columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
     runFrames = Self.frames(
@@ -121,7 +127,8 @@ final class NativeStatusBarSurface {
     hairline.contentsScale = scale
     let textHeight = font.pointSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
-    hoverBand = CGRect(x: 0, y: textY - 1, width: barFrame.width, height: textHeight + 2)
+    // The wash is a chip hugging the glyphs, not a full-height block.
+    hoverBand = CGRect(x: 0, y: textY + 1, width: barFrame.width, height: max(1, textHeight - 2))
     hoverHighlight.contentsScale = scale
     let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: visibleRuns)
     let cycleStartedAt = CACurrentMediaTime()
@@ -268,16 +275,16 @@ final class NativeStatusBarSurface {
   /// coordinates; nil fades the wash out. Everything animates on the render
   /// server: no timers, no redraw of the text layers.
   func setHoverHighlight(_ rect: CGRect?) {
-    let target: Float = rect == nil ? 0 : 1
+    let target = Self.hoverOpacity(for: rect, cellWidth: cellWidth)
     if let rect {
       let frame = CGRect(
-        x: rect.minX - 4, y: hoverBand.minY, width: rect.width + 8, height: hoverBand.height)
+        x: rect.minX - 3, y: hoverBand.minY, width: rect.width + 6, height: hoverBand.height)
       if frame != hoverHighlight.frame {
         if hoverHighlight.opacity > 0, let presented = hoverHighlight.presentation() {
           // Sliding between neighbouring segments glides instead of jumping.
           let move = CABasicAnimation(keyPath: "position")
           move.fromValue = presented.position
-          move.duration = 0.14
+          move.duration = Self.hoverGlideDuration
           move.timingFunction = CAMediaTimingFunction(name: .easeOut)
           hoverHighlight.add(move, forKey: "\(Self.hoverAnimationKey)Move")
         }
@@ -288,8 +295,8 @@ final class NativeStatusBarSurface {
     let fade = CABasicAnimation(keyPath: "opacity")
     fade.fromValue = hoverHighlight.presentation()?.opacity ?? hoverHighlight.opacity
     fade.toValue = target
-    fade.duration = target == 1 ? 0.12 : 0.18
-    fade.timingFunction = CAMediaTimingFunction(name: target == 1 ? .easeOut : .easeIn)
+    fade.duration = target == 0 ? Self.hoverFadeOutDuration : Self.hoverFadeInDuration
+    fade.timingFunction = CAMediaTimingFunction(name: target == 0 ? .easeIn : .easeOut)
     hoverHighlight.opacity = target
     hoverHighlight.add(fade, forKey: Self.hoverAnimationKey)
   }
@@ -312,7 +319,28 @@ final class NativeStatusBarSurface {
     return true
   }
 
+  static let hoverGlideDuration: CFTimeInterval = 0.14
+  static let hoverFadeInDuration: CFTimeInterval = 0.12
+  static let hoverFadeOutDuration: CFTimeInterval = 0.18
+  /// Past this width a full-strength wash reads as a banner rather than a
+  /// hover affordance — a feed row wraps its label, title, domain and arrow in
+  /// one popup span, so it can cover most of a lane. Wide spans get a fainter
+  /// wash rather than none, so the pin affordance survives.
+  static let wideHoverCells = 24
+  static let wideHoverOpacity: Float = 0.45
+
+  /// Opacity for a hovered span: absent means faded out, a span wider than
+  /// `wideHoverCells` is dimmed, anything else is full strength.
+  static func hoverOpacity(for rect: CGRect?, cellWidth: CGFloat) -> Float {
+    guard let rect else { return 0 }
+    return rect.width > CGFloat(wideHoverCells) * cellWidth ? wideHoverOpacity : 1
+  }
+
   static let cycleTransitionDuration: CFTimeInterval = 0.45
+  /// A value ticking in place (a metric sample, the clock) crossfades just
+  /// long enough to avoid a hard flicker; anything longer keeps two digit
+  /// sets superimposed for a visible share of every second on a 1 Hz bar.
+  static let crossfadeDuration: CFTimeInterval = 0.1
 
   /// Carousel article change as one vertical push: the old line travels a
   /// full line height up and fades out while the new line rises the same
@@ -351,12 +379,12 @@ final class NativeStatusBarSurface {
 
   private static func runCrossfade(_ layers: RunLayer, outgoing: Any?, textRect: CGRect) {
     let fadeIn = basic("opacity", from: 0, to: 1)
-    fadeIn.duration = 0.22
+    fadeIn.duration = crossfadeDuration
     fadeIn.timingFunction = CAMediaTimingFunction(name: .easeOut)
     layers.text.add(fadeIn, forKey: crossfadeAnimationKey)
     guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
     let fadeOut = basic("opacity", from: 1, to: 0)
-    fadeOut.duration = 0.22
+    fadeOut.duration = crossfadeDuration
     fadeOut.timingFunction = CAMediaTimingFunction(name: .easeIn)
     layers.outgoing.add(fadeOut, forKey: crossfadeAnimationKey)
   }
@@ -462,8 +490,31 @@ final class NativeStatusBarSurface {
 
   /// Flash's opt-in elastic spans consume overflow before native alignment and
   /// list drawing. Unmarked formats pass through to tmux's clipping unchanged.
+  /// Blank columns kept between the absolute centre and either side lane, so
+  /// a growing lane stops short of the centred label instead of abutting it.
+  static let centreGutterColumns = 2
+  /// A reservation never starves a side lane below this; on a bar too narrow
+  /// for all three the centre gives ground rather than erasing a lane.
+  static let centreReservationMinimumLaneColumns = 8
+
+  /// The columns an absolute-centre run owns, gutters included. Empty when the
+  /// document has no absolute centre, which keeps every other template on the
+  /// native tmux geometry byte for byte.
+  static func centreReservation(_ document: StatusFormatDocument, columns: Int) -> Range<Int> {
+    let width = document.runs.filter {
+      !$0.isStyleBoundary && $0.alignment == .absoluteCentre
+    }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
+    guard width > 0 else { return 0..<0 }
+    let available = max(0, columns - centreReservationMinimumLaneColumns * 2)
+    let reserved = min(available, width + centreGutterColumns * 2)
+    guard reserved > 0 else { return 0..<0 }
+    let start = (columns - reserved) / 2
+    return start..<(start + reserved)
+  }
+
   static func shrinkingDocument(
-    _ document: StatusFormatDocument, columns: Int, leftColumns: Int? = nil
+    _ document: StatusFormatDocument, columns: Int, leftColumns: Int? = nil,
+    reserve: Range<Int> = 0..<0
   ) -> StatusFormatDocument {
     var runs = document.runs
     let ordinary = runs.indices.filter {
@@ -473,22 +524,25 @@ final class NativeStatusBarSurface {
     var overflow = max(
       0, ordinary.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) } - columns
     )
-    let absoluteCentreWidth = document.runs.filter {
-      !$0.isStyleBoundary && $0.alignment == .absoluteCentre
-    }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
-    let centreStart =
-      absoluteCentreWidth > 0 ? (columns - min(columns, absoluteCentreWidth)) / 2 : columns
-    let leftLimit = min(leftColumns ?? columns, centreStart)
+    let leftLimit = min(leftColumns ?? columns, reserve.isEmpty ? columns : reserve.lowerBound)
+    let rightLimit = reserve.isEmpty ? columns : columns - reserve.upperBound
     func isLeft(_ index: Int) -> Bool {
       runs[index].alignment == .left || runs[index].alignment == .default
     }
+    func isRight(_ index: Int) -> Bool { runs[index].alignment == .right }
     var leftOverflow = max(
       0,
       ordinary.filter(isLeft).reduce(0) {
         $0 + StatusFormatCells.width(runs[$1].text, styles: false)
       }
         - leftLimit)
-    guard overflow > 0 || leftOverflow > 0 else { return document }
+    var rightOverflow = max(
+      0,
+      ordinary.filter(isRight).reduce(0) {
+        $0 + StatusFormatCells.width(runs[$1].text, styles: false)
+      }
+        - rightLimit)
+    guard overflow > 0 || leftOverflow > 0 || rightOverflow > 0 else { return document }
     var groups: [[Int]] = []
     var group: [Int] = []
     for index in ordinary {
@@ -506,7 +560,8 @@ final class NativeStatusBarSurface {
     if !group.isEmpty { groups.append(group) }
     for group in groups {
       let left = isLeft(group[0])
-      let required = max(overflow, left ? leftOverflow : 0)
+      let right = isRight(group[0])
+      let required = max(overflow, left ? leftOverflow : (right ? rightOverflow : 0))
       let width = group.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) }
       let removed = min(required, max(0, width - 1))
       guard removed > 0 else { continue }
@@ -528,7 +583,57 @@ final class NativeStatusBarSurface {
       }
       overflow = max(0, overflow - removed)
       if left { leftOverflow = max(0, leftOverflow - removed) }
+      if right { rightOverflow = max(0, rightOverflow - removed) }
     }
+    return StatusFormatDocument(runs: runs)
+  }
+
+  /// Trim the side lanes to the columns the centre reservation leaves them.
+  /// Elastic `#[shrink]` contraction runs first; this is the backstop for a
+  /// lane with nothing elastic in it, so a left lane that keeps growing loses
+  /// its tail and a right lane loses its head rather than either colliding
+  /// with the centred label. Each lane keeps the end that carries meaning.
+  static func clampedLanes(
+    _ document: StatusFormatDocument, columns: Int, reserve: Range<Int>
+  ) -> StatusFormatDocument {
+    guard !reserve.isEmpty else { return document }
+    var runs = document.runs
+    func trim(_ indices: [Int], to limit: Int, fromTail: Bool) {
+      let width = indices.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) }
+      var excess = width - limit
+      guard excess > 0 else { return }
+      for index in fromTail ? indices.reversed() : indices {
+        guard excess > 0 else { break }
+        let characters = Array(runs[index].text)
+        var kept: [Character] = []
+        var dropped = 0
+        // Walk in from the end being trimmed, so `kept` accumulates the end
+        // that survives.
+        for character in fromTail ? characters.reversed() : characters {
+          let cells = StatusFormatCells.width(String(character), styles: false)
+          if dropped + cells <= excess + 1 && dropped < excess + 1 {
+            dropped += cells
+          } else {
+            kept.append(character)
+          }
+        }
+        if !kept.isEmpty || dropped > 0 {
+          let text = fromTail ? String(kept.reversed()) : String(kept)
+          runs[index].text = fromTail ? text + "…" : "…" + text
+        }
+        excess -= max(0, dropped - 1)
+      }
+    }
+    let ordinary = runs.indices.filter {
+      !runs[$0].isStyleBoundary && runs[$0].alignment != .absoluteCentre
+        && runs[$0].list != .leftMarker && runs[$0].list != .rightMarker
+    }
+    trim(
+      ordinary.filter { runs[$0].alignment == .left || runs[$0].alignment == .default },
+      to: reserve.lowerBound, fromTail: true)
+    trim(
+      ordinary.filter { runs[$0].alignment == .right },
+      to: columns - reserve.upperBound, fromTail: false)
     return StatusFormatDocument(runs: runs)
   }
 

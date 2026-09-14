@@ -1,4 +1,4 @@
-use flash_plugin::escape_status_text;
+use flash_plugin::{Color, Markup};
 use scraper::{Html, Node};
 
 const MAX_CHARS: usize = 900;
@@ -11,6 +11,23 @@ struct Style {
     italics: bool,
     heading: bool,
     code: bool,
+}
+
+impl Style {
+    fn markup(self) -> flash_plugin::Style {
+        flash_plugin::Style {
+            fg: if self.heading {
+                Some(Color::ACCENT)
+            } else if self.code {
+                Some(Color::Palette(246))
+            } else {
+                None
+            },
+            bold: self.bold,
+            italics: self.italics,
+            dim: false,
+        }
+    }
 }
 
 pub(crate) fn render(html: &str) -> String {
@@ -187,42 +204,24 @@ impl Excerpt {
             self.chars.push(('…', style));
         }
         // Serialize only the bounded excerpt, so truncation cannot split a marker.
-        let mut output = String::new();
+        let mut output = Markup::new();
+        let mut run = String::new();
         let mut current = Style::default();
         for &(ch, style) in &self.chars {
             if style != current {
-                if current != Style::default() {
-                    output.push_str("#[default]");
-                }
-                let mut attrs = Vec::new();
-                if style.bold {
-                    attrs.push("bold");
-                }
-                if style.italics {
-                    attrs.push("italics");
-                }
-                if style.heading {
-                    attrs.push("fg=colour178");
-                } else if style.code {
-                    attrs.push("fg=colour246");
-                }
-                if !attrs.is_empty() {
-                    output.push_str(&format!("#[{}]", attrs.join(",")));
-                }
+                output += Markup::styled(Markup::text(&run), current.markup());
+                run.clear();
                 current = style;
             }
-            output.push_str(&escape_status_text(&ch.to_string()));
+            run.push(ch);
         }
-        if current != Style::default() {
-            output.push_str("#[default]");
-        }
+        output += Markup::styled(Markup::text(&run), current.markup());
         // Keep percent-encoded inline bodies below the host's marker limit,
         // even when an article alternates styling on every character.
-        if output.len() > MAX_MARKUP_BYTES {
-            escape_status_text(&self.chars.iter().map(|(ch, _)| ch).collect::<String>())
-        } else {
-            output
+        if output.as_str().len() > MAX_MARKUP_BYTES {
+            output = Markup::text(self.chars.iter().map(|(ch, _)| ch).collect::<String>());
         }
+        output.into_string()
     }
 }
 

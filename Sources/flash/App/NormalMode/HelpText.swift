@@ -40,6 +40,10 @@ extension NormalModeDispatcher {
         - `[h` / `]h` walks the focused target's page history.
         - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
           to repeat (`[aaaa` / `]aaaa`).
+        - `[s` / `]s` cycles previous/next split (pane) inside the focused
+          terminal window: tmux panes, or the terminal's own ⌘[ / ⌘] splits.
+        - `[` / `]` letters never share a finger with the bracket itself,
+          which is why splits are `s` and not the right-pinky `p`.
         - `g1` ... `g9` select a numbered tab when the focused source supports it.
         - In browsers this maps to tab selection.
         - `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G.

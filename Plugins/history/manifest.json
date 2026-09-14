@@ -2,19 +2,54 @@
   "id": "history",
   "name": "History",
   "version": "0.1.0",
-  "description": "Browser history and bookmarks (Firefox, Chrome) in the flashlight via @history.",
+  "description": "Per-browser history and bookmarks (Firefox places.sqlite, Chrome History/Bookmarks) as opt-in flashlight sources.",
   "sandbox": {},
   "exec": [
     "./flash-plugin-history"
   ],
+  "bangs": {
+    "command": "history",
+    "items": [
+      {
+        "token": "fh",
+        "description": "Firefox history: !fh <query>",
+        "source": "firefox.history"
+      },
+      {
+        "token": "fb",
+        "description": "Firefox bookmarks: !fb <query>",
+        "source": "firefox.bookmarks"
+      },
+      {
+        "token": "ch",
+        "description": "Chrome history: !ch <query>",
+        "source": "chrome.history"
+      },
+      {
+        "token": "cb",
+        "description": "Chrome bookmarks: !cb <query>",
+        "source": "chrome.bookmarks"
+      }
+    ]
+  },
   "sources": [
     {
-      "name": "history.urls",
+      "name": "firefox.history",
       "kind": "default",
       "priority": "normal"
     },
     {
-      "name": "history.bookmarks",
+      "name": "firefox.bookmarks",
+      "kind": "default",
+      "priority": "normal"
+    },
+    {
+      "name": "chrome.history",
+      "kind": "default",
+      "priority": "normal"
+    },
+    {
+      "name": "chrome.bookmarks",
       "kind": "default",
       "priority": "normal"
     }

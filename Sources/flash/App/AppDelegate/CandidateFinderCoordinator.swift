@@ -850,7 +850,7 @@ extension AppDelegate {
     // counts) stay below ~5k so the synchronous path stays cheap.
     let tScoringStart = CFAbsoluteTimeGetCurrent()
     // Rewrite standalone emoticons (`:)`, `:-(`, `;)`, …) to the emoji
-    // shortcodes the `emojis` plugin indexes before normalization strips
+    // shortcodes the `reference` plugin indexes before normalization strips
     // their punctuation — otherwise `@emojis.glyphs :)` collapses to an
     // empty query and lists every glyph unranked.
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(
@@ -1029,7 +1029,7 @@ extension AppDelegate {
   }
 
   /// The bang-list pool: static manifest-declared bangs plus the dynamic
-  /// bang-kind rows from published catalogs (e.g. searchengines' DDG bangs),
+  /// bang-kind rows from published catalogs (e.g. the reference plugin's DDG bangs),
   /// which land in the session pool once the non-location sources are read on
   /// the first `@source`/`!` keystroke.
   private func bangListCandidates() -> [Candidate] {
@@ -1063,7 +1063,7 @@ extension AppDelegate {
 
   /// True when a confirmed `!token` is actually routable: an exact shebang
   /// registration, or a bang its wildcard owner has published to the pool
-  /// (searchengines' curated table rows). A wildcard registration alone
+  /// (the reference plugin's curated bang rows). A wildcard registration alone
   /// doesn't count — the owner would just reject the token at dispatch.
   /// Drives the lock-in underline color: purple for routable, red for a
   /// token nothing will answer.
@@ -1617,8 +1617,8 @@ extension AppDelegate {
     refreshCommandLine(text: buffer, cursorIndex: newCursor)
   }
 
-  /// Replace the live `:flashlight` / `:emojis` query with the
-  /// selected candidate's canonical insertion text while keeping the
+  /// Replace the live `:flashlight` query with the selected candidate's
+  /// canonical insertion text while keeping the
   /// command verb intact. Return reaches this path for non-finishers;
   /// Tab reaches it for non-final destinations. Command-Return is the
   /// explicit submit.
@@ -1634,7 +1634,7 @@ extension AppDelegate {
   /// `<cmd+cr>` in bang mode. Dispatches whatever the user typed via
   /// `PluginManager.invokeShebang`, which checks explicit-token
   /// registrations first then falls back to the catch-all (so
-  /// `!google rust` reaches searchengines even though `google` isn't
+  /// `!google rust` reaches the reference plugin even though `google` isn't
   /// declared in any plugin's manifest). If a candidate row is
   /// selected AND its token equals the typed token, we still go
   /// through `invokeShebang` — its lookup is the same — so this path

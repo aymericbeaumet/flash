@@ -11,12 +11,22 @@ Important defaults:
 - `[t` / `]t` cycle previous/next tab.
 - `[h` / `]h` navigate target page history back/forward.
 - `[a` / `]a` cycle previous/next app in MRU order.
-- `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G.
+- `[m` / `]m` (alias `[e` / `]e`) reorder the current tab.
+- `[s` / `]s` cycle previous/next split inside the focused terminal window:
+  tmux `select-pane` when a tmux client hosts the terminal, otherwise the
+  terminal's own ⌘[ / ⌘] split cycling where it binds them. Outside terminals
+  the pair is a no-op.
+- A `[` / `]` letter never shares a finger with the bracket: `[` and `]` are
+  right-pinky keys, so splits use `s` rather than the QWERTY-pinky `p`.
+- `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G. No terminal binds
+  that chord, so the pair does nothing in a terminal rather than typing a `g`.
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
 - `f`, `sf`, and `df` target discovered clickable elements. Primary hint
   clicks enter INSERT only when the target declares typing intent.
-- `mf` moves the cursor to a discovered target.
+- `mf` moves the cursor to a discovered target. Every other commit clicks
+  where the hint is and returns the pointer to where it was, so hinting never
+  relocates the mouse; `scroll_target` is the other verb that moves it.
 - `F`, `sF`, and `dF` use mouse grid mode for precise screen clicks, then enter
   insert mode.
 - `mF` moves the cursor with mouse grid mode.
@@ -32,7 +42,28 @@ including bindings that prefill the command line with `:flashlight`.
 
 NORMAL is hermetic: every unmapped key and modifier chord is swallowed, and
 only explicit mappings act. A chord the focused app should receive is bound
-to `send_key`, or the user enters INSERT first.
+to `send_key`, or the user enters INSERT first. The release of a swallowed
+key is swallowed with it, because a terminal running the Kitty keyboard
+protocol encodes key releases to its pty.
+
+Hermeticity also bounds what NORMAL synthesizes. A terminal emulator does not
+ignore a Command chord it has no binding for: its encoder falls through to the
+plain-text path and writes the chord's base character, so an unbound `cmd+g`
+types a literal `g` into the shell, hardware or synthetic. In a terminal
+Flash therefore refuses to synthesize any Command chord outside the set every
+emulator binds (copy, paste, close, new tab, new window, quit, find, the tab
+digits, and Shift-bracket tab traversal); the bare bracket chords are added
+only for the emulators whose splits live on them. A refused mapping does
+nothing and NORMAL stays.
+
+The same bound covers pointer synthesis. A terminal whose foreground program
+enabled mouse tracking does not scroll on a wheel event: it encodes an SGR
+mouse report and writes it to the pty, and an unconsumed report prints at the
+prompt as literal text. Flash cannot read that mode for a terminal it does not
+host, so NORMAL never synthesizes a wheel into one and the scroll verbs fall
+back to the Accessibility scroller there. `gg` and `G` inside tmux are the tmux
+plugin's own history-top and cancel.
+
 `/` (`app_find`) executes its command without changing mode. `t` (`tab_new`)
 enters INSERT once the tab or window is open, so the browser's address bar or
 the new tmux shell can be typed into immediately; in an unsupported app it does

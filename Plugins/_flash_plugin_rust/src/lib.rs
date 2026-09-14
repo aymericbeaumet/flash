@@ -12,6 +12,7 @@ mod events;
 mod framing;
 pub mod process;
 mod runtime;
+pub mod status;
 pub mod sys;
 pub mod testing;
 mod types;
@@ -23,12 +24,15 @@ mod wire;
 pub use flash_plugin_macros::plugin;
 
 pub use context::{
-    applescript_quote, escape_status_text, inline_status_popup, run_command,
-    run_command_with_slow_threshold, run_osascript, shorten, spawn_managed, CommandOutput, Context,
-    NormalModeTarget, RefreshGate,
+    applescript_quote, run_command, run_command_with_slow_threshold, run_osascript, shorten,
+    spawn_managed, CommandOutput, Context, NormalModeTarget, RefreshGate,
 };
 pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{run, Plugin};
+pub use status::{
+    Align, Color, Column, History, Markup, Preview, PreviewTooLarge, Published, StatusValue, Style,
+    Table, MAX_INLINE_PREVIEW_ENCODED_BYTES,
+};
 pub use types::{
     candidate_metadata, ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest,
     EvaluateRequest, EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget,

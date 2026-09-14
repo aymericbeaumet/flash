@@ -124,7 +124,7 @@ cycle_interval = 60
 
 Only evaluated source references start jobs. A source interval of zero runs
 once; `cycle_interval` rotates the latest successful nonempty lines independently
-and marks their typed runs for crossfade. Failed/empty named source output keeps
+and marks their typed runs as `#[cyc]` content for the carousel push. Failed/empty named source output keeps
 the last good value. Named sources use the configured timeout; native shell jobs
 and PTYs do not inherit that timeout. Only the executable and explicit working
 directory resolve against the defining configuration file; remaining arguments
@@ -139,17 +139,25 @@ The additional style tokens are `pill/nopill`, `shrink/noshrink`,
 `popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`.
 Native `range=user|name` selects a `[statusbar.click]` action. The status renderer
 reserves explicit mode-pill space and notch clearance, then draws the native
-cell layout. Elastic `#[shrink]` spans in the left lane reserve any fixed suffix
+cell layout. Elastic `#[shrink]` spans in either side lane reserve any fixed suffix
 and stop before the notch or an absolute-centre component. The feed uses this
-for title-only ellipsis with an always-visible outbound arrow. These host
+for title-only ellipsis with an always-visible outbound arrow. An
+absolute-centre component owns its own columns plus a small gutter: a side
+lane contracts its elastic span first and then loses characters from its far
+end rather than reaching the centred label. A bar too narrow to hold both
+lanes and that reservation drops the reservation instead of erasing a lane. These host
 surfaces do not alter format evaluation.
 
 The bar itself is a vertical gradient over the `fill` colour with a hairline
 along its bottom edge; default-background cells are transparent so both show
 through. Mode pills are lit from the top. A hovered `#[link]` or `#[popup]` run
-gets a rounded wash that fades in, glides between neighbouring runs, and fades
-out. A value changing in place (a metric tick, the clock) crossfades over
-220 ms. A carousel article change is one vertical push over 450 ms: the old
+gets a faint rounded wash, inset inside the text band, that fades in, glides
+between neighbouring runs, and fades out. The wash follows the narrowest
+interactive span under the pointer, so a whole-row popup does not wash the
+row while the pointer sits on one of its links, and a span wide enough to
+cover most of a lane is dimmed further. A value changing in place (a metric tick, the clock) crossfades over
+100 ms, short enough that a 1 Hz metric reads as a snap rather than a
+smear. A carousel article change is one vertical push over 450 ms: the old
 line moves a full line height up and fades out while the next rises the same
 distance from below and fades in, both on the standard ease-in-out curve. All
 of it runs on the render server: no host timers, no per-frame CPU work.

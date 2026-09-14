@@ -7,7 +7,7 @@ import Foundation
 /// decoders that reject a whole payload on the first malformed row, and the
 /// `perform` reply trichotomy. Pure functions over `[String: Any]` frames —
 /// no process state. Quotas live in `PluginProtocol` (parity-tested against
-/// `Plugins/_flash_plugin_specs/protocol.json`).
+/// `Plugins/_flash_plugin_rust/protocol.json`).
 enum PluginWireCodec {
 
   static func acceptsProtocolVersion(_ response: [String: Any]?) -> Bool {

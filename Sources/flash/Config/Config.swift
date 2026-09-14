@@ -484,15 +484,17 @@ struct Config {
         ("gg", .flashCommand(.scroll(.top))),
         ("G", .flashCommand(.scroll(.bottom))),
         // Vimium `H` / `L` — back / forward in history. (Lowercase
-        // `h` / `l` scroll left / right, matching Vimium too.) `[h`/`]h` alias
+        // `h` / `l` scroll left / right, matching Vimium too.) `[q`/`]q` alias
         // these below, in the bracket-pair block.
         ("H", .flashCommand(.historyBack)),
         ("L", .flashCommand(.historyForward)),
         // Bracket-pair navigation borrows tpope/vim-unimpaired's `[X` =
         // previous, `]X` = next convention so muscle memory transfers
-        // straight from Vim. Multi-letter aliases live alongside the
-        // primary binding so users coming from `vim-unimpaired` find
-        // their letters AND desktop users find an intuitive abbreviation.
+        // straight from Vim. The one constraint the desktop adds: the letter
+        // must not share a finger with the bracket itself. `[` and `]` are
+        // right-pinky keys, which rules out `p` on QWERTY and `o` on Colemak
+        // — every other letter is reachable without the pinky doing both
+        // halves of the roll.
         ("[t", .flashCommand(.tabPrev)),
         ("]t", .flashCommand(.tabNext)),
         // `[h`/`]h` — back / forward in history, the unimpaired-style alias for
@@ -520,6 +522,13 @@ struct Config {
         // wherever macOS window cycling does.
         ("[w", sendKeyMapping("cmd+shift+`")),
         ("]w", sendKeyMapping("cmd+`")),
+        // `[s`/`]s` — previous / next split: the pane inside the focused
+        // terminal window (tmux `select-pane`, else the terminal's own ⌘[ / ⌘]
+        // split cycling where it binds them). Outside terminals it is a no-op.
+        // `s` rather than the obvious `p`: `p` is the right pinky on QWERTY,
+        // the same finger that just pressed the bracket.
+        ("[s", .flashCommand(.panePrev)),
+        ("]s", .flashCommand(.paneNext)),
         // Reopen the most recently closed tab. Vimium binds this to `X`
         // ("restore"); ⌘⇧T is the cross-browser standard the host
         // keystroke fallback delivers for any non-terminal app, and

@@ -62,7 +62,7 @@ Build the native-architecture binaries, then run the report-only benchmark:
 ```bash
 ./Scripts/benchmark-plugins.py --build --samples 5
 ./Scripts/benchmark-plugins.py --samples 10 --json > plugin-benchmark.json
-./Scripts/benchmark-plugins.py --plugin firefox --plugin safari --samples 20
+./Scripts/benchmark-plugins.py --plugin firefox --plugin browsers --samples 20
 ```
 
 `Scripts/measure-footprint.sh [sample-seconds] [log-window-minutes]` is the

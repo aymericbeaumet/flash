@@ -1,0 +1,109 @@
+{
+  "id": "browsers",
+  "name": "Browsers",
+  "version": "0.1.0",
+  "description": "AppleScript tab catalogs and tab actions for Chromium-family browsers and Safari",
+  "sandbox": {
+    "exec": [
+      "/usr/bin/osascript"
+    ],
+    "appleevents": true
+  },
+  "exec": [
+    "./flash-plugin-browsers"
+  ],
+  "capabilities": [
+    "app_control"
+  ],
+  "priority": 30,
+  "mappings": [
+    {
+      "key": "R",
+      "mode": "normal",
+      "command": [
+        "flash",
+        "send_key",
+        "--keys=cmd+option+r"
+      ],
+      "only_bundle_ids": [
+        "com.apple.Safari"
+      ]
+    }
+  ],
+  "only_bundle_ids": [
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.dev",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.brave.Browser.beta",
+    "com.brave.Browser.nightly",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.Beta",
+    "com.microsoft.edgemac.Dev",
+    "com.microsoft.edgemac.Canary",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "com.operasoftware.OperaNext",
+    "com.operasoftware.OperaDeveloper",
+    "com.apple.Safari",
+    "com.apple.SafariTechnologyPreview"
+  ],
+  "listen": [
+    "core:apps.changed",
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed",
+    "core:window.focus.changed",
+    "core:session.opened"
+  ],
+  "sources": [
+    {
+      "name": "chrome.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "chromium.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "brave.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "edge.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "arc.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "vivaldi.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "opera.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "safari.tabs",
+      "kind": "locations",
+      "priority": "high"
+    }
+  ],
+  "actions": [
+    "tab_select",
+    "tab_new",
+    "tab_close"
+  ]
+}

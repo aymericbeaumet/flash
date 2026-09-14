@@ -841,26 +841,26 @@ public final class AccessibilityProvider: FlashSource {
       workerStates.withUnsafeMutableBufferPointer { buf in
         DispatchQueue.concurrentPerform(iterations: width) { worker in
           for i in stride(from: worker, to: childrenSnapshot.count, by: width) {
-          var workerState = WalkState()
-          // Encode the fan-out level into the id prefix so ids stay
-          // unique across nested fan-out points. Outer fan-out emits
-          // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
-          let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
-          self.walk(
-            childrenSnapshot[i],
-            depth: captureDepth + 1,
-            screenH: captureScreenH,
-            visible: captureVisible,
-            pid: capturePid,
-            bundleIdentifier: bundleIdentifier,
-            insideClickable: captureInsideClickable,
-            insideWebArea: captureInsideWebArea,
-            insideExtensionDocument: captureInsideExtensionDocument,
-            idPrefix: childPrefix,
-            fanoutBudget: captureNewBudget,
-            state: &workerState
-          )
-          buf[i] = workerState
+            var workerState = WalkState()
+            // Encode the fan-out level into the id prefix so ids stay
+            // unique across nested fan-out points. Outer fan-out emits
+            // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
+            let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
+            self.walk(
+              childrenSnapshot[i],
+              depth: captureDepth + 1,
+              screenH: captureScreenH,
+              visible: captureVisible,
+              pid: capturePid,
+              bundleIdentifier: bundleIdentifier,
+              insideClickable: captureInsideClickable,
+              insideWebArea: captureInsideWebArea,
+              insideExtensionDocument: captureInsideExtensionDocument,
+              idPrefix: childPrefix,
+              fanoutBudget: captureNewBudget,
+              state: &workerState
+            )
+            buf[i] = workerState
           }
         }
       }

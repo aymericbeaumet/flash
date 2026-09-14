@@ -4,7 +4,7 @@ import FlashCore
 import Foundation
 
 /// One managed plugin child process speaking the NDJSON wire protocol
-/// (protocol v1 — see Plugins/_flash_plugin_specs/protocol.json).
+/// (protocol v1 — see Plugins/_flash_plugin_rust/protocol.json).
 ///
 /// `PluginLifecycle` owns desired state, attempt generations, and retries;
 /// this object interprets effects and owns each child transport, with

@@ -940,14 +940,12 @@ extension AppDelegate {
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_Z),
         flags: .maskCommand,
-        repeatCount: repeatCount,
-        suppressInTerminalFor: command)
+        repeatCount: repeatCount)
     case .redo:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_Z),
         flags: [.maskCommand, .maskShift],
-        repeatCount: repeatCount,
-        suppressInTerminalFor: command)
+        repeatCount: repeatCount)
     case .archive:
       archiveInNormalMode(repeatCount: repeatCount)
     case .resourceNext:
@@ -1294,7 +1292,6 @@ extension AppDelegate {
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
     repeatCount: Int = 1,
-    suppressInTerminalFor command: URLCommand? = nil,
     completion: (() -> Void)? = nil
   ) {
     guard let target = normalModeKeyDispatchTarget() else {
@@ -1302,14 +1299,12 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    if let command,
-      Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        command,
-        bundleIdentifier: target.bundleIdentifier)
+    if Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
+      key: key, flags: flags, bundleIdentifier: target.bundleIdentifier)
     {
       FlashLog.debug(
-        "[normal_mode] suppress terminal shortcut command=\(command.diagnosticDescription) "
-          + "bundle=\(target.bundleIdentifier)")
+        "[normal_mode] suppress unbound terminal command chord key=\(key) "
+          + "flags=\(flags.rawValue) bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
       return
     }
@@ -1388,6 +1383,18 @@ extension AppDelegate {
       scheduleNormalModeRecapture()
       return
     }
+    // One unbound chord would type its character, so the whole sequence is
+    // refused rather than half-delivered.
+    if let unsafe = keys.first(where: {
+      Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
+        key: $0.0, flags: $0.1, bundleIdentifier: target.bundleIdentifier)
+    }) {
+      FlashLog.debug(
+        "[normal_mode] suppress unbound terminal command chord key=\(unsafe.0) "
+          + "flags=\(unsafe.1.rawValue) bundle=\(target.bundleIdentifier)")
+      applyModeOverlay()
+      return
+    }
     let count = normalizedRepeatCount(repeatCount)
     var offsetMs =
       activateNormalModeKeyTargetIfNeeded(target.processID, keys: keys)
@@ -1463,17 +1470,49 @@ extension AppDelegate {
     applicationIsActive && hasVisibleNonOverlayKeyWindow
   }
 
+  /// Command chords every macOS terminal emulator binds. A terminal that does
+  /// NOT bind a Command chord does not ignore it: its key encoder falls
+  /// through to the plain text path and writes the chord's base character to
+  /// the pty, so an unbound `cmd+g` types a literal `g` into the shell. That
+  /// is true of a hardware chord too — the emulator, not the synthesis, is
+  /// what turns it into text. NORMAL is hermetic, so a mapping that would
+  /// resolve to a chord outside this set does nothing in a terminal instead.
+  private static let terminalBoundCommandChords: Set<CGKeyCode> = [
+    CGKeyCode(kVK_ANSI_C), CGKeyCode(kVK_ANSI_V), CGKeyCode(kVK_ANSI_W),
+    CGKeyCode(kVK_ANSI_T), CGKeyCode(kVK_ANSI_N), CGKeyCode(kVK_ANSI_Q),
+    CGKeyCode(kVK_ANSI_F),
+    CGKeyCode(kVK_ANSI_1), CGKeyCode(kVK_ANSI_2), CGKeyCode(kVK_ANSI_3),
+    CGKeyCode(kVK_ANSI_4), CGKeyCode(kVK_ANSI_5), CGKeyCode(kVK_ANSI_6),
+    CGKeyCode(kVK_ANSI_7), CGKeyCode(kVK_ANSI_8), CGKeyCode(kVK_ANSI_9),
+  ]
+
+  /// Terminals whose defaults put split traversal on the bare bracket chords.
+  /// Elsewhere `cmd+[` / `cmd+]` are unbound and would type a bracket.
+  private static let splitTraversalTerminalBundles: Set<String> = [
+    "com.mitchellh.ghostty", "com.googlecode.iterm2",
+  ]
+
+  /// Whether synthesizing `key`+`flags` into `bundleIdentifier` would type a
+  /// character instead of running a shortcut. Shift-bracket is the macOS
+  /// standard tab traversal and is bound everywhere; the bare brackets are
+  /// only safe where splits live on them.
   static func normalModeCommandKeyShortcutIsUnsafeInTerminal(
-    _ command: URLCommand,
+    key: CGKeyCode,
+    flags: CGEventFlags,
     bundleIdentifier: String
   ) -> Bool {
     guard TerminalBundles.identifiers.contains(bundleIdentifier) else { return false }
-    switch command {
-    case .undo, .redo:
-      return true
-    default:
-      return false
+    let modifiers = flags.intersection(normalModeKeyModifierMask)
+    guard modifiers.contains(.maskCommand) else { return false }
+    let bracket = key == CGKeyCode(kVK_ANSI_LeftBracket) || key == CGKeyCode(kVK_ANSI_RightBracket)
+    if bracket {
+      if modifiers == [.maskCommand, .maskShift] { return false }
+      return
+        !(modifiers == [.maskCommand]
+        && splitTraversalTerminalBundles.contains(bundleIdentifier))
     }
+    guard modifiers.subtracting([.maskCommand, .maskShift]).isEmpty else { return true }
+    return !terminalBoundCommandChords.contains(key)
   }
 
   /// `y` — copy the focused app's current selection into `register`. Reads the

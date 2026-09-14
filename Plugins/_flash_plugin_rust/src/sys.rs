@@ -88,7 +88,9 @@ pub fn cpu_ticks() -> Result<CpuTicks, SysError> {
         )
     };
     if status != libc::KERN_SUCCESS || info.is_null() {
-        return Err(SysError(format!("host_processor_info failed with status {status}")));
+        return Err(SysError(format!(
+            "host_processor_info failed with status {status}"
+        )));
     }
     let states = libc::CPU_STATE_MAX as usize;
     // SAFETY: the kernel filled `info_count` integers at `info`.
@@ -183,7 +185,9 @@ pub fn memory_stats() -> Result<MemoryStats, SysError> {
         )
     };
     if status != libc::KERN_SUCCESS {
-        return Err(SysError(format!("host_statistics64 failed with status {status}")));
+        return Err(SysError(format!(
+            "host_statistics64 failed with status {status}"
+        )));
     }
     // SAFETY: plain libc query.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -307,7 +311,10 @@ mod tests {
         let sum = percentages.user + percentages.system + percentages.idle;
         assert!((sum - 100.0).abs() < 0.01, "sum {sum}");
         assert!(second.percentages_since(&second).is_none());
-        assert!(first.percentages_since(&second).is_none(), "backwards counters reject");
+        assert!(
+            first.percentages_since(&second).is_none(),
+            "backwards counters reject"
+        );
     }
 
     #[test]
@@ -328,7 +335,10 @@ mod tests {
     #[test]
     fn interface_counters_include_loopback() {
         let counters = interface_counters().expect("interfaces");
-        assert!(counters.iter().any(|entry| entry.name == "lo0"), "{counters:?}");
+        assert!(
+            counters.iter().any(|entry| entry.name == "lo0"),
+            "{counters:?}"
+        );
     }
 
     #[test]

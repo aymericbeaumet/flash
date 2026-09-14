@@ -32,7 +32,8 @@ an obsolete gesture must still post its mouse-up even though its outcome is igno
 Discovery captures focused-app context and a generation. Provider ordering is
 priority descending, with stable identity tie-breaking. A provider may fall through
 on empty output only when its policy explicitly permits it; sources are not merged.
-Accessibility is the universal provider, and tmux is the volatile terminal provider.
+Accessibility is the universal provider; tmux is the volatile terminal provider and
+vscode is the bundle-scoped AX-enhancer provider (`hints` with `fallback_on_empty`).
 
 Prepared models contain a complete finalized target set and assigned labels.
 Reads require matching PID, dirty token, configuration revision and freshness.
@@ -98,5 +99,5 @@ Plugin manifests are immutable runtime definitions. A changed manifest replaces
 its process/adapter registration; a settings-only update reconciles the existing
 definition. Host RPC replies are tied to the child generation that issued them.
 Transport queues, encoded payloads and request admission are bounded. Details,
-limits and language-neutral conformance cases live in the
+limits and the conformance suite live in the
 [protocol](plugin-protocol.md) and [Rust SDK](plugin-rust-sdk.md) documents.

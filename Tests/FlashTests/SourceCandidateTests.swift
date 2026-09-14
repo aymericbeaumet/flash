@@ -707,8 +707,8 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testBrowserTabDisplayTitleIncludesSourceTitleAndURL() throws {
-    // The browser tab discovery now lives in `Plugins/{safari,firefox,
-    // chromium}` — this test still exercises the host's candidate-prep
+    // The browser tab discovery now lives in `Plugins/{browsers,firefox}` —
+    // this test still exercises the host's candidate-prep
     // path (display title formatting, search-text normalisation) by
     // building the same `Candidate` shape the plugins emit.
     let candidate = Candidate(
@@ -1322,14 +1322,14 @@ final class SourceCandidateTests: XCTestCase {
   func testEmojiCandidatesWithoutLocalColorGlyphAreHiddenFromCommandBar() {
     let supported = Candidate(
       kind: CandidateFinder.emojiKind,
-      sourceID: "plugin:emojis",
+      sourceID: "plugin:reference",
       source: "emojis.glyphs",
       title: "🙏 person with folded hands",
       subtitle: "emoji",
       sourcePayload: "🙏")
     let unsupported = Candidate(
       kind: CandidateFinder.emojiKind,
-      sourceID: "plugin:emojis",
+      sourceID: "plugin:reference",
       source: "emojis.glyphs",
       title: "🕲 no piracy",
       subtitle: "emoji",
@@ -1498,8 +1498,8 @@ final class SourceCandidateTests: XCTestCase {
     let answer = Candidate(
       title: "2",
       metadata: [
-        CandidateMetadataKey.source: "calculator",
-        CandidateMetadataKey.sourceID: "plugin:calculator",
+        CandidateMetadataKey.source: "answers",
+        CandidateMetadataKey.sourceID: "plugin:answers",
       ],
       effect: .copyText("2"))
 

@@ -15,7 +15,9 @@ final class StatusEvaluationInputsTests: XCTestCase {
 
   func testOptionExpandedValuesAreEvaluationInputs() {
     let template = FlashStatusBarTemplate(template: "#[align=right]#{E:@right}")
-    let options = ["@right": "#{flash.plugin.cpu.summary} #{?flash.plugin.cpu.summary,on,off} %H:%M"]
+    let options = [
+      "@right": "#{flash.plugin.cpu.summary} #{?flash.plugin.cpu.summary,on,off} %H:%M"
+    ]
     let first = FlashStatusBarTemplateEngine.evaluate(
       template: template, context: context(segments: [:]), options: options)
     XCTAssertTrue(first.dependencies.values.contains("flash.plugin.cpu.summary"))

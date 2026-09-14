@@ -4,14 +4,14 @@ This is the complete, language-agnostic contract between Flash and a plugin.
 Any executable that speaks it over stdio is a valid plugin. The maintained
 Rust SDK (`docs/plugin-rust-sdk.md`) is the blessed implementation, not a wall.
 
-Normativity order: `Plugins/_flash_plugin_specs/protocol.json` (the
+Normativity order: `Plugins/_flash_plugin_rust/protocol.json` (the
 machine-readable constants: version, deadlines, quotas, error strings,
-capability registry) plus the conformance scenarios in
-`Plugins/_flash_plugin_specs/` **are** the specification. This prose explains
-them; the Rust SDK implements them; any divergence is a bug in the derived
-artifact, never in the spec. `Scripts/plugin-protocol-spec.py` runs the
-scenarios against any plugin process, host-free, and CI runs the full matrix
-against every bundled plugin and the Rust SDK conformance probe.
+capability registry, transport limits) **is** the specification, and the
+Rust SDK's wire/runtime tests plus its probe crate
+(`Plugins/_flash_plugin_rust/probe`) are the conformance authority that
+proves it. This prose explains the contract; the host asserts its constants
+against the same file; any divergence is a bug in the derived artifact, never
+in the contract.
 
 ## Process model
 
@@ -127,8 +127,8 @@ content, or config values.
 
 ## Deadlines
 
-One table, in `protocol.json`, that the host, Rust SDK, runner, and this
-doc all share:
+One table, in `protocol.json`, that the host, the Rust SDK, and this doc
+all share:
 
 | name | value | applies to |
 | --- | --- | --- |
@@ -436,21 +436,26 @@ scheduling/collision arbitration — do not confuse it with the semantic
 
 ## Conformance workflow
 
-Shared protocol scenarios live under `Plugins/_flash_plugin_specs/` and are
-selected by the capabilities declared in each manifest. Put behavior that is
-specific to one plugin process in `Plugins/<id>/specs/*.json`; put a host/Rust
-SDK wire-contract regression in `Plugins/_flash_plugin_specs/regressions/`.
-For a protocol defect, land the smallest shared reproduction before changing
-the implementation. `fixtures/wire-values.fixture` is the shared malformed and
-boundary-value corpus consumed by Swift host tests, the Rust SDK, and runner
-tests. The subprocess runner supplies a scripted host; real host generation,
-manifest reconciliation, and shutdown behavior are covered separately by the
-plugin XCTest suites.
+`Plugins/_flash_plugin_rust/protocol.json` pins the constants; the SDK's
+`cargo test` suite pins the behaviour. Wire and lifecycle rules — framing,
+ids, noise, the handshake, protocol mismatch, request decoding, notification
+shapes, shutdown draining, host-RPC correlation — are `WireHarness` tests in
+`Plugins/_flash_plugin_rust/src/runtime.rs`, driving the real serve loop over
+in-memory NDJSON streams. `Plugins/_flash_plugin_rust/fixtures/wire-values.fixture`
+is the malformed and boundary-value corpus the SDK and the host's XCTest
+suites both consume, and the probe crate `Plugins/_flash_plugin_rust/probe`
+drives a generic `plugin!`-generated plugin through every surface (catalog,
+evaluate, search, hints, the perform trichotomy, notifications, events,
+host-RPC arms) over the wire. For a protocol defect, land the failing test
+there before changing the implementation.
 
-`Plugins/_flash_plugin_specs/overrides.json` is the only skip/xfail escape
-hatch. Every entry needs a concrete reason. An expected failure that starts
-passing is reported as XPASS and fails the run, so remove the override as soon
-as the implementation catches up.
+Behaviour specific to one plugin — scripted host replies, the published
+catalog, status rows — is a `cargo test` in `Plugins/<id>` written against
+`flash_plugin::testing::Harness`. Real process spawning, manifest
+reconciliation and shutdown are the host XCTest suites' business;
+`PluginSandboxExecTests` compiles every bundled seatbelt profile and boots
+every built sandboxed plugin under its resolved profile with the scrubbed
+plugin environment.
 
 The complete gate is:
 
@@ -458,10 +463,9 @@ The complete gate is:
 ./Scripts/test-plugins.sh --lane all
 ```
 
-It validates the scenario schema, formats and lints every Rust crate, runs unit
-tests, builds all plugins and the generic Rust probe, and exercises the full
-wire matrix. Its sandbox lane separately runs the lifecycle/handshake and
-sources/publish scenarios under the real generated Seatbelt profiles.
+It formats and lints every Rust crate, runs the plugin-publication test and
+every crate's unit tests (the SDK workspace includes the probe), and builds
+all plugins.
 
 ### Seatbelt profile invariants
 
@@ -498,10 +502,9 @@ after external plugins exist is a migration, not an edit:
 9. Namespacing: row `source` names, storage keys, status segments, and log
    sources are plugin-id-scoped host-side.
 10. Content-free logging.
-11. Normativity order: `protocol.json` + conformance specs > this prose >
-    the Rust SDK.
+11. Normativity order: `protocol.json` + the SDK's conformance tests > this
+    prose > any implementation.
 
 Debugging is a first-class feature of this transport: run any plugin binary
-in a terminal and type NDJSON at it — no host required. The conformance
-runner does exactly that, and `Plugins/_flash_plugin_specs/schema.json`
-documents the scenario language for writing new specs.
+in a terminal and type NDJSON at it — no host required. The SDK's
+`WireHarness` does the same in-process from `cargo test`.

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use flash_plugin::{run, Context};
+use flash_plugin::{run, Context, StatusValue};
 use reqwest::{Client, Url};
 use serde_json::Value;
 
@@ -68,7 +68,7 @@ flash_plugin::plugin!(Feed);
 
 impl FlashPlugin for Feed {
     async fn on_start(&self, ctx: Context) {
-        ctx.status([("summary", String::new())]);
+        ctx.status([("summary", StatusValue::empty())]);
         let settings = match settings(&ctx) {
             Ok(Some(settings)) => settings,
             Ok(None) => return,
@@ -170,7 +170,7 @@ async fn cycle_articles(
     }
 }
 
-fn publish(ctx: &Context, summary: Option<String>) {
+fn publish(ctx: &Context, summary: Option<StatusValue>) {
     if let Some(summary) = summary {
         ctx.status([("summary", summary)]);
     }

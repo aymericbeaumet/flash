@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 
-/// A session-level `CGEventTap` for `keyDown` events that lets Flash capture
+/// A session-level `CGEventTap` for `keyDown` / `keyUp` events that lets Flash capture
 /// NORMAL / hints keystrokes **without** making the overlay the key window.
 ///
 /// The old model made the overlay key (and activated Flash) to receive normal-
@@ -20,6 +20,30 @@ final class KeyboardCaptureTap {
   private var runLoopSource: CFRunLoopSource?
   private let shouldSwallow: (CGEvent) -> Bool
   private let handle: (NSEvent) -> Void
+  /// Releases pair with the presses this tap swallowed. Main-thread only: the
+  /// tap source runs in the main run loop.
+  private var swallowedKeys = SwallowedKeys()
+
+  /// Which key releases must be swallowed: exactly those whose press was.
+  ///
+  /// A terminal running the Kitty keyboard protocol (any modern TUI editor
+  /// turns it on) encodes key RELEASES to the pty, so passing the release of a
+  /// key whose press NORMAL consumed leaks an escape sequence into the app.
+  /// Pairing on the press rather than the current mode means a mode change
+  /// mid-keypress can neither leak a release nor strand one an app is waiting
+  /// for. Extracted so the rule is unit-testable without a live `CGEventTap`.
+  struct SwallowedKeys {
+    private var codes: Set<Int64> = []
+    var isEmpty: Bool { codes.isEmpty }
+
+    mutating func press(_ code: Int64, swallowed: Bool) {
+      if swallowed { codes.insert(code) }
+    }
+
+    mutating func releaseIsSwallowed(_ code: Int64) -> Bool {
+      codes.remove(code) != nil
+    }
+  }
 
   init(
     shouldSwallow: @escaping (CGEvent) -> Bool,
@@ -60,7 +84,7 @@ final class KeyboardCaptureTap {
     // window (`StatusLinkCatcherPanel`) through normal Cocoa hit-testing — the
     // tap deliberately never inspects or swallows mouse events, so native menus,
     // screenshots, and drags that begin in the bar band are untouched.
-    let maskedTypes: [CGEventType] = [.keyDown]
+    let maskedTypes: [CGEventType] = [.keyDown, .keyUp]
     var mask: CGEventMask = 0
     for t in maskedTypes { mask |= CGEventMask(1) << CGEventMask(t.rawValue) }
     let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -117,7 +141,14 @@ final class KeyboardCaptureTap {
     {
       return passthrough
     }
-    guard type == .keyDown, me.shouldSwallow(event) else { return passthrough }
+    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+    if type == .keyUp {
+      return me.swallowedKeys.releaseIsSwallowed(keyCode) ? nil : passthrough
+    }
+    guard type == .keyDown else { return passthrough }
+    let swallow = me.shouldSwallow(event)
+    me.swallowedKeys.press(keyCode, swallowed: swallow)
+    guard swallow else { return passthrough }
     if let ns = NSEvent(cgEvent: event) {
       // The swallow (returning nil) is synchronous, so the key never reaches
       // the app; defer the (possibly heavy) handling so the callback returns

@@ -171,7 +171,9 @@ enum FlashLog {
     message: @autoclosure () -> String,
     fields: [String: String] = [:]
   ) {
-    emit(level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields, message)
+    emit(
+      level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields,
+      message)
   }
 
   private static func emit(

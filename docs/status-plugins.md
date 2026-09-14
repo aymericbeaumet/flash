@@ -15,15 +15,15 @@ replacement clear immediately. This avoids blinking during a normal hot reload
 without keeping failed telemetry indefinitely. Development builds stage binaries
 outside watched plugin directories and replace only changed code or signing
 identity; rebuilding unchanged plugins must not trigger resident reloads.
-Ordinary status updates render in place without animation: only `#[cyc]`
-content opts into the upward carousel transition, and a pooled layer reused
-for an ordinary metric must clear that transition first.
+Ordinary status updates render in place with only a 100 ms crossfade: only
+`#[cyc]` content opts into the upward carousel transition, and a pooled layer
+reused for an ordinary metric must clear that transition first.
 
 ## System-monitor ownership
 
 The local system-monitor suite is deliberately split by resource. Each plugin
-owns `summary` and `details`; the summary embeds the details with
-`inline_status_popup`, while the standalone details segment supports custom
+owns `summary` and `details`; every summary carries its preview through
+`StatusValue::with_preview`, while the standalone details segment supports custom
 templates. Each also publishes a popup-free `label` for a named popup: yellow section
 name plus a grey fixed-width metric. CPU/MEM/DSK/BAT percentages use two digits plus `%`, capped at 99;
 detailed reports retain the actual values. NET uses four cells for aggregate
@@ -56,7 +56,7 @@ Keep the ownership boundaries intact:
 
 - `system` owns destructive and session-level system actions, not telemetry.
 - `caffeinate` alone owns sleep-assertion lifecycle.
-- Core owns date/time rendering; `timezones` provides timezone lookup.
+- Core owns date/time rendering; `answers` provides timezone lookup.
 - Weather remains separate because it requires an explicit network/location
   policy.
 
@@ -85,8 +85,9 @@ and power/health—run concurrently so their timeouts do not stack.
 
 ## Markup and sandbox boundary
 
-Externally sourced labels must pass through `escape_status_text` before they
-enter a rich status value. Do not escape intentional `#[...]` markup. The shared format/style compiler preserves escaped literal hashes across
+Externally sourced labels enter a rich status value only through
+`Markup::text`, which doubles literal hashes; intentional `#[...]` markup uses
+`Markup::raw` and is never escaped. The shared format/style compiler preserves escaped literal hashes across
 expansion. Rendering, fitting, interactions, and terminal serialization consume
 typed styled runs; do not reinterpret literal text as markup in a later pass. Variable and alias syntax inside a plugin-published value is literal
 text, not template syntax.

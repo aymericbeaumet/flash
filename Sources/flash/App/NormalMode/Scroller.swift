@@ -18,21 +18,23 @@ extension NormalModeDispatcher {
     bundleID: String = "",
     windowFrame: CGRect? = nil
   ) -> Bool {
-    // Hermetic policy: never emit a character keystroke as part of a
-    // scroll command. The user's `h` / `j` / `k` / `l` mappings in
-    // normal mode must not surface as typed text in the focused app —
-    // not in vim, not in a shell prompt, nowhere. We try AX
-    // scroll-bar value, then a synthesised scroll wheel (which is a
-    // separate `CGEvent` type and never inserts a glyph), then AX
-    // actions (`AXScroll*`). The earlier fallback to arrow / page /
-    // letter keys was the leak path.
+    // Hermetic policy: never emit input the focused app can turn back
+    // into text. The user's `h` / `j` / `k` / `l` mappings in normal
+    // mode must not surface as typed text in the focused app — not in
+    // vim, not in a shell prompt, nowhere. We try AX scroll-bar value,
+    // then a synthesised scroll wheel, then AX actions (`AXScroll*`).
+    // The earlier fallback to arrow / page / letter keys was one leak
+    // path; the wheel is the other, because a terminal re-encodes it as
+    // an SGR mouse report, so terminals get the AX paths only.
     let pageTarget = windowFrame.flatMap { pageScrollTarget(pid: pid, visibleIn: $0) }
     if let pageTarget {
       if scrollPageInstantly(kind, element: pageTarget.element) {
         FlashLog.debug("[normal_mode] scroll method=page_ax_edge kind=\(kind) bundle=\(bundleID)")
         return true
       }
-      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: pageTarget.frame) {
+      if synthesizeScrollWheel(
+        kind, bundleID: bundleID, windowFrame: windowFrame, pageFrame: pageTarget.frame)
+      {
         FlashLog.debug("[normal_mode] scroll method=page_wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
@@ -46,16 +48,15 @@ extension NormalModeDispatcher {
       }
       // Wheel fallback for gg/G: a single huge delta sends apps that
       // honour wheel-delta proportionally (Firefox, most web/Electron
-      // apps) all the way to the edge. Terminals in tmux mouse mode
-      // typically step one line per wheel "click" so this only nudges
-      // them — full top/bottom inside tmux needs the tmux plugin to
-      // claim scroll_top/scroll_bottom (see follow-up roadmap).
-      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
+      // apps) all the way to the edge. Terminals never reach it — the
+      // wheel is refused there — so `gg`/`G` inside tmux is the tmux
+      // plugin's `scroll_top`/`scroll_bottom` source action instead.
+      if synthesizeScrollWheel(kind, bundleID: bundleID, windowFrame: windowFrame, pageFrame: nil) {
         FlashLog.debug("[normal_mode] scroll method=edge_wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
     default:
-      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
+      if synthesizeScrollWheel(kind, bundleID: bundleID, windowFrame: windowFrame, pageFrame: nil) {
         FlashLog.debug("[normal_mode] scroll method=wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
@@ -262,11 +263,32 @@ extension NormalModeDispatcher {
     }
   }
 
+  /// A terminal whose foreground program turned mouse tracking on does not
+  /// scroll on a wheel event: it encodes one SGR report per step — wheel-up is
+  /// button 64, `CSI < 64 ; col ; row M` — and writes it to the pty. When the
+  /// program that set the mode is gone, nothing consumes the report and it
+  /// prints at the shell prompt as literal `<64;50;48M`. Flash can read that
+  /// mode only for a terminal it hosts itself, never for an external emulator,
+  /// so NORMAL refuses to synthesize a wheel into one. Sibling of
+  /// `AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal`: NORMAL
+  /// never hands an app input the app will turn back into text.
+  static func wheelSynthesisIsUnsafeInTerminal(bundleIdentifier: String) -> Bool {
+    TerminalBundles.identifiers.contains(bundleIdentifier)
+  }
+
+  /// Injection seam: production posts to the HID tap.
+  static var wheelEventPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+
   private static func synthesizeScrollWheel(
     _ kind: ScrollKind,
+    bundleID: String,
     windowFrame: CGRect?,
     pageFrame: CGRect?
   ) -> Bool {
+    if wheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundleID) {
+      FlashLog.debug("[normal_mode] suppress terminal wheel kind=\(kind) bundle=\(bundleID)")
+      return false
+    }
     guard let windowFrame, !windowFrame.isNull, windowFrame.width > 0, windowFrame.height > 0,
       let delta = scrollWheelDelta(
         for: kind,
@@ -291,7 +313,7 @@ extension NormalModeDispatcher {
     event.location = CGPoint(x: point.x, y: screenH - point.y)
     event.setIntegerValueField(
       .eventSourceUserData, value: ActionDispatcher.syntheticMouseEventTag)
-    event.post(tap: .cghidEventTap)
+    wheelEventPoster(event)
     return true
   }
 

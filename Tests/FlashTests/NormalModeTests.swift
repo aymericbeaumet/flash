@@ -104,6 +104,12 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "[", chars: "t"), .tabPrev)
     XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
     XCTAssertEqual(command(pending: "]", chars: "a"), .appNext)
+    XCTAssertEqual(command(pending: "[", chars: "s"), .panePrev)
+    XCTAssertEqual(command(pending: "]", chars: "s"), .paneNext)
+    XCTAssertEqual(command(pending: "[", chars: "m"), .tabMovePrev)
+    XCTAssertEqual(command(pending: "]", chars: "m"), .tabMoveNext)
+    XCTAssertEqual(command(pending: "[", chars: "e"), .tabMovePrev)
+    XCTAssertEqual(command(pending: "]", chars: "e"), .tabMoveNext)
     XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
     assertSendKeyKeys(command(chars: "n"), "cmd+g")
     XCTAssertEqual(command(chars: "t"), .tabNew)
@@ -2210,23 +2216,41 @@ final class NormalModeTests: XCTestCase {
         normalizedCandidate: prepared.normalizedSearchText))
   }
 
-  func testTerminalTargetsSuppressUndoRedoCommandKeyShortcuts() {
-    XCTAssertTrue(
+  /// A terminal writes an unbound Command chord's base character to the pty,
+  /// so NORMAL refuses to synthesize one: `n` (find next, cmd+g) must never
+  /// type a `g` into the shell.
+  func testTerminalTargetsRefuseCommandChordsTheEmulatorWouldType() {
+    func unsafe(_ key: Int, _ flags: CGEventFlags, _ bundle: String) -> Bool {
       AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        .undo,
-        bundleIdentifier: "org.alacritty"))
-    XCTAssertTrue(
-      AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        .redo,
-        bundleIdentifier: "com.apple.Terminal"))
-    XCTAssertFalse(
-      AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        .undo,
-        bundleIdentifier: "org.mozilla.firefox"))
-    XCTAssertFalse(
-      AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        .tabNew,
-        bundleIdentifier: "org.alacritty"))
+        key: CGKeyCode(key), flags: flags, bundleIdentifier: bundle)
+    }
+    // The reported bug: `n` / `N` resolve to cmd+g / cmd+shift+g, which no
+    // terminal binds.
+    XCTAssertTrue(unsafe(kVK_ANSI_G, .maskCommand, "org.alacritty"))
+    XCTAssertTrue(unsafe(kVK_ANSI_G, [.maskCommand, .maskShift], "org.alacritty"))
+    // Undo/redo stay refused, as they were before the gate became chord-shaped.
+    XCTAssertTrue(unsafe(kVK_ANSI_Z, .maskCommand, "org.alacritty"))
+    XCTAssertTrue(unsafe(kVK_ANSI_Z, [.maskCommand, .maskShift], "com.apple.Terminal"))
+    // Cut and the window-cycle backtick are unbound in terminals too.
+    XCTAssertTrue(unsafe(kVK_ANSI_X, .maskCommand, "com.apple.Terminal"))
+    XCTAssertTrue(unsafe(kVK_ANSI_Grave, .maskCommand, "org.alacritty"))
+    // Chords every emulator binds still go through.
+    for key in [kVK_ANSI_C, kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_T, kVK_ANSI_N, kVK_ANSI_F] {
+      XCTAssertFalse(unsafe(key, .maskCommand, "org.alacritty"), "cmd chord \(key)")
+    }
+    XCTAssertFalse(unsafe(kVK_ANSI_3, .maskCommand, "com.googlecode.iterm2"))
+    // Shift-bracket is the macOS tab traversal; the bare brackets are split
+    // traversal only where the emulator binds them.
+    XCTAssertFalse(unsafe(kVK_ANSI_LeftBracket, [.maskCommand, .maskShift], "org.alacritty"))
+    XCTAssertTrue(unsafe(kVK_ANSI_RightBracket, .maskCommand, "org.alacritty"))
+    XCTAssertFalse(unsafe(kVK_ANSI_RightBracket, .maskCommand, "com.mitchellh.ghostty"))
+    XCTAssertFalse(unsafe(kVK_ANSI_LeftBracket, .maskCommand, "com.googlecode.iterm2"))
+    // Non-terminals and unmodified keys are never gated.
+    XCTAssertFalse(unsafe(kVK_ANSI_G, .maskCommand, "org.mozilla.firefox"))
+    XCTAssertFalse(unsafe(kVK_ANSI_G, [], "org.alacritty"))
+    XCTAssertFalse(unsafe(kVK_ANSI_G, .maskControl, "org.alacritty"))
+    // The Firefox reorder chord carries no Command, so the gate never sees it.
+    XCTAssertFalse(unsafe(kVK_PageDown, [.maskControl, .maskShift], "org.alacritty"))
   }
 
   func testBrowserIndexedTabSelectionUsesNativeShortcut() {
@@ -2294,6 +2318,66 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "com.example.TextEditor"))
   }
 
+  /// A terminal with mouse tracking on encodes a synthesized wheel event as an
+  /// SGR report and writes it to the pty, which lands at the shell prompt as
+  /// literal text when nothing consumes it. NORMAL cannot read that mode from
+  /// outside, so it never synthesizes a wheel into a terminal.
+  func testTerminalTargetsRefuseSynthesizedScrollWheel() {
+    for bundle in TerminalBundles.identifiers {
+      XCTAssertTrue(
+        NormalModeDispatcher.wheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle)
+    }
+    for bundle in ["org.mozilla.firefox", "com.tinyspeck.slackmacgap", ""] {
+      XCTAssertFalse(
+        NormalModeDispatcher.wheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle)
+    }
+  }
+
+  /// End to end: no scroll verb may post a wheel event into a terminal.
+  func testScrollDoesNotPostAWheelEventIntoATerminalBundle() {
+    let restore = NormalModeDispatcher.wheelEventPoster
+    defer { NormalModeDispatcher.wheelEventPoster = restore }
+    var posted = 0
+    NormalModeDispatcher.wheelEventPoster = { _ in posted += 1 }
+    let pid = ProcessInfo.processInfo.processIdentifier
+    let frame = CGRect(x: 0, y: 0, width: 1200, height: 900)
+    for kind in [
+      NormalModeDispatcher.ScrollKind.top, .bottom, .halfPageUp, .halfPageDown, .up, .down, .left,
+      .right,
+    ] {
+      _ = NormalModeDispatcher.scroll(kind, pid: pid, bundleID: "org.alacritty", windowFrame: frame)
+    }
+    XCTAssertEqual(posted, 0, "NORMAL must not synthesize a wheel into a terminal")
+    _ = NormalModeDispatcher.scroll(
+      .halfPageUp, pid: pid, bundleID: "org.mozilla.firefox", windowFrame: frame)
+    XCTAssertEqual(posted, 1, "non-terminal targets still get exactly one wheel event")
+  }
+
+  /// Firefox reorders a tab with Control-Shift-Page, never Command-Shift:
+  /// Gecko disqualifies its control-shift branch while Command is held, so
+  /// the Command form reached no handler at all and the mapping did nothing.
+  func testNativeTabMoveShortcutUsesFirefoxControlShiftPageChords() throws {
+    let next = try XCTUnwrap(
+      AppDelegate.nativeTabMoveShortcut(
+        direction: .next, bundleIdentifier: "org.mozilla.firefox"))
+    XCTAssertEqual(next.key, CGKeyCode(kVK_PageDown))
+    XCTAssertEqual(next.flags, [.maskControl, .maskShift])
+    XCTAssertFalse(next.flags.contains(.maskCommand))
+    let previous = try XCTUnwrap(
+      AppDelegate.nativeTabMoveShortcut(
+        direction: .previous, bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
+    XCTAssertEqual(previous.key, CGKeyCode(kVK_PageUp))
+    XCTAssertEqual(previous.flags, [.maskControl, .maskShift])
+    XCTAssertNotNil(
+      AppDelegate.nativeTabMoveShortcut(
+        direction: .next, bundleIdentifier: "org.mozilla.nightly"))
+    // Browsers with no portable reorder chord keep the warning branch.
+    for bundle in ["com.apple.Safari", "com.google.Chrome", "org.alacritty"] {
+      XCTAssertNil(
+        AppDelegate.nativeTabMoveShortcut(direction: .next, bundleIdentifier: bundle), bundle)
+    }
+  }
+
   func testBrowserReloadFallbackIsBrowserOnlyAndUsesSafariHardRefreshChord() {
     XCTAssertNil(
       AppDelegate.browserReloadFallbackShortcut(
@@ -2325,7 +2409,7 @@ final class NormalModeTests: XCTestCase {
       "DF", "mF", "u", "ctrl-r", "x", "n",
       "/", "r", "R", "e", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "g^", "g$", "[t", "]t", "[a",
-      "]a", "g1", "g9", "N{mapping}",
+      "]a", "[s", "]s", "flash pane_previous", "flash pane_next", "g1", "g9", "N{mapping}",
       "flash mouse_target",
       "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
       "flash mouse_target --secondary",

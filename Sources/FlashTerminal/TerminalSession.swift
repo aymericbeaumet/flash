@@ -111,6 +111,7 @@ public final class TerminalSession {
     queue.async { [self] in
       stopOnQueue()
       started = false
+      buffer.invalidate()
       flash_vt_reset(buffer.handle)
       startOnQueue()
     }
@@ -136,6 +137,7 @@ public final class TerminalSession {
       guard self.columns != columns || self.rows != rows else { return }
       self.columns = columns
       self.rows = rows
+      buffer.invalidate()
       flash_vt_resize(buffer.handle, UInt16(columns), UInt16(rows))
       if descriptor >= 0 {
         _ = flash_pty_resize_pixels(
@@ -161,6 +163,7 @@ public final class TerminalSession {
     let fg = foreground.terminalRGB
     let bg = background.terminalRGB
     queue.async { [self] in
+      buffer.invalidate()
       flash_vt_colors(buffer.handle, fg, bg)
       publishFrame()
     }
@@ -178,6 +181,7 @@ public final class TerminalSession {
   }
   public func scroll(lines: Int) {
     queue.async { [self] in
+      buffer.invalidate()
       flash_vt_scroll(buffer.handle, Int32(clamping: lines))
       publishFrame()
     }
@@ -393,10 +397,22 @@ public final class TerminalSession {
     }
   }
 
+  /// Frames publish on the leading edge: output after a quiet period is
+  /// snapshotted immediately, and only a burst inside the interval waits for
+  /// its end, so a keystroke echo never pays the coalescing window.
+  static let frameInterval: UInt64 = 16_000_000
+  private var lastFrameUptime: UInt64 = 0
+  private var publishedGeneration: UInt64 = 0
   private func scheduleFrame() {
     guard wantsFrames, !scheduledFrame else { return }
+    let elapsed = DispatchTime.now().uptimeNanoseconds &- lastFrameUptime
+    guard elapsed < Self.frameInterval else {
+      publishFrame()
+      return
+    }
     scheduledFrame = true
-    queue.asyncAfter(deadline: .now() + .milliseconds(33)) { [weak self] in
+    queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.frameInterval - elapsed))) {
+      [weak self] in
       guard let self else { return }
       self.scheduledFrame = false
       self.publishFrame()
@@ -404,6 +420,9 @@ public final class TerminalSession {
   }
   private func publishFrame() {
     guard wantsFrames, let snapshot = buffer.snapshot() else { return }
+    lastFrameUptime = DispatchTime.now().uptimeNanoseconds
+    guard snapshot.generation != publishedGeneration else { return }
+    publishedGeneration = snapshot.generation
     DispatchQueue.main.async { [weak self] in
       self?.frame = snapshot
       self?.onFrame?(snapshot)

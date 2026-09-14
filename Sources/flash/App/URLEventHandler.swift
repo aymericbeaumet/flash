@@ -86,9 +86,10 @@ enum URLCommand: Hashable {
   case tabMovePrev
   case tabMoveNext
   case tabReopen
-  /// Cycle to the next / previous split inside the focused window. Terminal
-  /// sources (tmux) claim these via the `pane_navigation` source action;
-  /// every other app falls back to the native ⌘] / ⌘[ chord.
+  /// Cycle to the next / previous split inside the focused terminal window.
+  /// Terminal sources (tmux) claim these via the `pane_navigation` source
+  /// action; a terminal without one receives the native ⌘] / ⌘[ chord, and
+  /// non-terminal apps ignore the verb.
   case paneNext
   case panePrev
   /// Create a side-by-side or stacked split inside the focused window.

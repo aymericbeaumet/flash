@@ -261,4 +261,19 @@ final class StatusBarHoverTests: XCTestCase {
       popup?.document, document,
       "Mouse-enter and stationary refresh must use the same already-compiled popup document")
   }
+
+  /// A whole-row popup (a feed row shares one preview across its label, title,
+  /// domain and arrow) must not wash the entire row when the pointer sits on
+  /// one of its links: the wash follows the narrowest interactive span.
+  func testHoverWashFollowsTheNarrowestSpanUnderThePointer() {
+    let row = CGRect(x: 0, y: 0, width: 400, height: 25)
+    let title = CGRect(x: 40, y: 0, width: 60, height: 25)
+    XCTAssertEqual(StatusBarClickView.hoverWashRect(link: title, popup: row), title)
+    XCTAssertEqual(StatusBarClickView.hoverWashRect(link: nil, popup: row), row)
+    XCTAssertEqual(StatusBarClickView.hoverWashRect(link: title, popup: nil), title)
+    XCTAssertNil(StatusBarClickView.hoverWashRect(link: nil, popup: nil))
+    // A link wider than its popup region keeps the region.
+    XCTAssertEqual(StatusBarClickView.hoverWashRect(link: row, popup: title), title)
+  }
+
 }

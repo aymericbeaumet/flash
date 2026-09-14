@@ -49,7 +49,6 @@ enum ActionDispatcher {
     on target: JumpTarget,
     clickPoint: CGPoint? = nil,
     modifiers: ClickModifiers = [],
-    leaveCursorAtClickPoint: Bool = false,
     completion: (() -> Void)? = nil
   ) {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
@@ -57,13 +56,16 @@ enum ActionDispatcher {
       at: point, action: action,
       modifiers: hintClickModifiers(
         for: target, requested: modifiers),
-      preserveCursor: !leaveCursorAtClickPoint,
+      preserveCursor: true,
       completion: completion)
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
   /// origin of primary screen). By default the cursor is hidden, warped to the
-  /// click point, clicked, then restored so fallback clicks are transparent.
+  /// click point, clicked, then put back where the user left it: a committed
+  /// hint clicks the target without ever moving the pointer. Only the verbs
+  /// whose whole purpose is moving the pointer (`--move`, `scroll_target`,
+  /// pointer mode) pass `preserveCursor: false`.
   ///
   /// Returns `true` once the click is enqueued. The blocking posting (settle +
   /// mouse-down-hold sleeps, ~40–60ms) runs on `clickQueue`, off the main run
@@ -175,16 +177,18 @@ enum ActionDispatcher {
       }
     }
 
-    if preserveCursor {
+    let restorePoint = cursorRestorePoint(
+      from: originalCursor, to: cgPoint, preserveCursor: preserveCursor)
+    if restorePoint != nil {
+      // Hide for the round trip so the pointer never visibly jumps to the
+      // target and back.
       CGDisplayHideCursor(CGMainDisplayID())
-      CGWarpMouseCursorPosition(cgPoint)
-      postMove()
-    } else {
-      // Visibly move the cursor to the click site. The warp is accompanied by a
+    }
+    if !preserveCursor || restorePoint != nil {
+      // Move the cursor to the click site. The warp is accompanied by a
       // synthetic `mouseMoved` with the actual delta so the window server
       // hit-tests it like a real hover-in.
-      CGWarpMouseCursorPosition(cgPoint)
-      CGAssociateMouseAndMouseCursorPosition(1)
+      warpCursor(to: cgPoint)
       postMove()
     }
     // Brief settle pause: gives the user a frame to register the move
@@ -205,8 +209,11 @@ enum ActionDispatcher {
       usleep(mouseDownHoldUs)
       pair.up.post(tap: .cghidEventTap)
     }
-    if preserveCursor {
-      CGWarpMouseCursorPosition(originalCursor)
+    if let restorePoint {
+      // Let the app finish handling the release before the pointer leaves: a
+      // control that reads the cursor in its mouse-up must still see the hit.
+      usleep(mouseDownHoldUs)
+      warpCursor(to: restorePoint)
       CGDisplayShowCursor(CGMainDisplayID())
     }
     FlashLog.trace(
@@ -222,12 +229,33 @@ enum ActionDispatcher {
   /// and drop them instead of recursing.
   static let syntheticMouseEventTag: Int64 = 0x46_4C_53_44  // "FLSD"
 
+  /// Where the pointer must be warped back to once the gesture has been
+  /// posted, or nil when it must stay put: the caller moves the pointer on
+  /// purpose, or the target is already under the pointer, in which case the
+  /// hide/warp round trip would only blink the cursor for nothing.
+  static func cursorRestorePoint(
+    from origin: CGPoint, to clickPoint: CGPoint, preserveCursor: Bool
+  ) -> CGPoint? {
+    guard preserveCursor else { return nil }
+    if abs(origin.x - clickPoint.x) < 0.5, abs(origin.y - clickPoint.y) < 0.5 { return nil }
+    return origin
+  }
+
+  /// Warp and immediately re-associate. A bare warp suppresses local HID
+  /// movement for the source's suppression interval (0.25 s), which would eat
+  /// the user's next physical nudge.
+  private static func warpCursor(to point: CGPoint) {
+    CGWarpMouseCursorPosition(point)
+    CGAssociateMouseAndMouseCursorPosition(1)
+  }
+
   /// Synthesize a continuous left-button drag from `from` to `to` (both
   /// NSScreen, bottom-left origin). Unlike clicks, the cursor stays visible
   /// for the whole gesture — drop targets light up from the interpolated
   /// `leftMouseDragged` stream exactly as they do for a hardware drag — and it
-  /// is left at the drop point. `modifiers` are held on every event so
-  /// option-drag copy / cmd-drag semantics reach the receiving app.
+  /// is returned to where the user left it once the drop has committed.
+  /// `modifiers` are held on every event so option-drag copy / cmd-drag
+  /// semantics reach the receiving app.
   ///
   /// `completion` runs on the main thread after the gesture has been posted.
   @discardableResult
@@ -297,6 +325,10 @@ enum ActionDispatcher {
     // pointer before the release commits the drop.
     usleep(60_000)
     post(.leftMouseUp, at: end)
+    if let restorePoint = cursorRestorePoint(from: previous, to: end, preserveCursor: true) {
+      usleep(useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000))
+      warpCursor(to: restorePoint)
+    }
     FlashLog.trace(
       "[drag] synthesize from=(\(Int(from.x)),\(Int(from.y))) "
         + "to=(\(Int(to.x)),\(Int(to.y))) flags=\(flags.rawValue)")
@@ -307,7 +339,8 @@ enum ActionDispatcher {
   /// macOS gesture, so it survives line wraps and never turns into an
   /// accidental drag of an already-selected range (which a down→dragged→up
   /// stream starting on a selection would). `modifiers` are applied to both
-  /// clicks; shift is forced onto the second. The cursor is left at `to`.
+  /// clicks; shift is forced onto the second. The pointer is returned to where
+  /// the user left it after the extension click.
   ///
   /// `completion` runs on the main thread after both clicks have been posted.
   @discardableResult
@@ -320,6 +353,7 @@ enum ActionDispatcher {
     let screenH = primaryScreenHeight()
     let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     clickQueue.async {
+      let origin = CGEvent(source: CGEventSource(stateID: .combinedSessionState))?.location
       postSynthesizedClick(
         screenPoint: from, screenH: screenH, action: .leftClick, modifiers: modifiers,
         preserveCursor: false, frontmostBundleID: frontmostBundleID)
@@ -331,6 +365,13 @@ enum ActionDispatcher {
         screenPoint: to, screenH: screenH, action: .leftClick,
         modifiers: modifiers.union(.shift),
         preserveCursor: false, frontmostBundleID: frontmostBundleID)
+      if let origin,
+        let restorePoint = cursorRestorePoint(
+          from: origin, to: CGPoint(x: to.x, y: screenH - to.y), preserveCursor: true)
+      {
+        usleep(useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000))
+        warpCursor(to: restorePoint)
+      }
       if let completion { DispatchQueue.main.async(execute: completion) }
     }
     return true

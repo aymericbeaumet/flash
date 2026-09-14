@@ -133,9 +133,9 @@ extension AppDelegate {
   }
 
   /// Reorder the focused window's current tab. Tmux runs `swap-window`
-  /// across the source action; Firefox honours ⌘⇧Page Up/Down to slide
-  /// the active tab inside its strip, so the host falls back to that
-  /// chord when the plugin layer doesn't claim the action. Browsers
+  /// across the source action; Firefox slides the active tab inside its
+  /// strip with ⌃⇧Page Up/Down, so the host falls back to that chord
+  /// when the plugin layer doesn't claim the action. Browsers
   /// without a portable shortcut (Safari, Chromium today) get a
   /// `warn`-level log naming the bundle so the user knows the mapping
   /// fired but couldn't reach the app — they can bind their own
@@ -154,12 +154,10 @@ extension AppDelegate {
       },
       fallback: { [weak self] context, count in
         guard let self else { return }
-        if Self.bundleSupportsFirefoxStyleTabMove(context.bundleIdentifier) {
-          let key: CGKeyCode =
-            direction == .next
-            ? CGKeyCode(kVK_PageDown) : CGKeyCode(kVK_PageUp)
-          self.sendNormalModeKey(
-            key, flags: [.maskCommand, .maskShift], repeatCount: count)
+        if let shortcut = Self.nativeTabMoveShortcut(
+          direction: direction, bundleIdentifier: context.bundleIdentifier)
+        {
+          self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
           return
         }
         FlashLog.warn(
@@ -170,14 +168,13 @@ extension AppDelegate {
       })
   }
 
-  /// `cmd+[` / `cmd+]`: cycle the active split inside the focused window.
+  /// `[p` / `]p`: cycle the active split inside the focused terminal window.
   /// Routed through the `pane_next`/`pane_previous` source action — only tmux
-  /// claims it today (`select-pane -t :.+`/`.-`). No browser or native window
-  /// has an in-window split to cycle, so every non-terminal app falls back to
-  /// re-emitting the native ⌘] / ⌘[ chord (history / back-forward in most
-  /// apps), keeping the binding transparent off-terminal. The tmux plugin's
-  /// manifest scopes the chords to terminal bundles, so this fallback only
-  /// fires when a terminal is focused but no tmux client hosts it.
+  /// claims it today (`select-pane -t :.+`/`.-`). When a terminal is focused
+  /// but no tmux client hosts it, the host re-emits the terminal's native
+  /// ⌘] / ⌘[ split chord (kitty, Ghostty, iTerm2). Outside terminals the pair
+  /// is a deliberate no-op: ⌘[ / ⌘] means back/forward or indent elsewhere,
+  /// and a pane mapping must never navigate a browser.
   func paneNavigateInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
     let actionName = direction == .next ? "pane_next" : "pane_previous"
     performTabSourceAction(
@@ -190,7 +187,13 @@ extension AppDelegate {
           registry.perform(.panePrev, in: context, completion: completion)
         }
       },
-      fallback: { [weak self] _, count in
+      fallback: { [weak self] context, count in
+        guard TerminalBundles.identifiers.contains(context.bundleIdentifier) else {
+          FlashLog.debug(
+            "[normal_mode] \(actionName) ignored bundle=\(context.bundleIdentifier)")
+          self?.applyModeOverlay()
+          return
+        }
         let key: CGKeyCode =
           direction == .next
           ? CGKeyCode(kVK_ANSI_RightBracket) : CGKeyCode(kVK_ANSI_LeftBracket)
@@ -239,18 +242,26 @@ extension AppDelegate {
       })
   }
 
-  /// Bundles whose tab strip honours `⌘⇧Page Up / ⌘⇧Page Down` for
-  /// moving the focused tab left / right. Firefox (release +
-  /// developer edition) is the canonical example; other Mozilla-based
-  /// browsers inherit the same chord.
+  /// Bundles that reorder the current tab with Firefox's own chord.
   private static let firefoxStyleTabMoveBundles: Set<String> = [
     "org.mozilla.firefox",
     "org.mozilla.firefoxdeveloperedition",
     "org.mozilla.nightly",
   ]
 
-  static func bundleSupportsFirefoxStyleTabMove(_ bundleID: String) -> Bool {
-    firefoxStyleTabMoveBundles.contains(bundleID)
+  /// ⌃⇧Page Up / ⌃⇧Page Down — Gecko's move-tab-backward / move-tab-forward.
+  /// The chord is Control-Shift and never Command: Gecko disqualifies its
+  /// control-shift branch outright while a Command key is held on macOS, so
+  /// the ⌘⇧Page chord this used to send reached no handler at all. Shaped
+  /// like `nativeTabTraversalShortcut` so each verb's fallback policy stays
+  /// one pure, testable function.
+  static func nativeTabMoveShortcut(
+    direction: SourceTabDirection,
+    bundleIdentifier: String
+  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
+    guard firefoxStyleTabMoveBundles.contains(bundleIdentifier) else { return nil }
+    let key: CGKeyCode = direction == .next ? CGKeyCode(kVK_PageDown) : CGKeyCode(kVK_PageUp)
+    return (key, [.maskControl, .maskShift])
   }
 
   /// Reopen the most recently closed tab. Cross-browser standard is

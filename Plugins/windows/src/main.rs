@@ -148,7 +148,10 @@ fn schedule_refresh(ctx: &Context) {
 
 /// Coalesce focus events into one pass over the apps they named.
 fn schedule_app_refresh(ctx: &Context, pid: i64) {
-    PENDING_PIDS.lock().unwrap_or_else(|e| e.into_inner()).insert(pid);
+    PENDING_PIDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(pid);
     if APP_REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -156,9 +159,10 @@ fn schedule_app_refresh(ctx: &Context, pid: i64) {
     tokio::spawn(async move {
         tokio::time::sleep(EVENT_DEBOUNCE).await;
         APP_REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
-        let pids: Vec<i64> = std::mem::take(&mut *PENDING_PIDS.lock().unwrap_or_else(|e| e.into_inner()))
-            .into_iter()
-            .collect();
+        let pids: Vec<i64> =
+            std::mem::take(&mut *PENDING_PIDS.lock().unwrap_or_else(|e| e.into_inner()))
+                .into_iter()
+                .collect();
         refresh_apps(&ctx, pids).await;
     });
 }
@@ -171,17 +175,31 @@ async fn refresh_apps(ctx: &Context, pids: Vec<i64>) {
             let started_at = Instant::now();
             for pid in pids {
                 let Some(app) = running.iter().find(|app| app.pid == pid) else {
-                    ROWS_BY_PID.lock().unwrap_or_else(|e| e.into_inner()).remove(&pid);
+                    ROWS_BY_PID
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&pid);
                     continue;
                 };
                 if let Some(rows) = window_rows(&ctx, pid).await {
                     let app_label = app_label(app);
-                    let candidates = rows.iter().map(|row| candidate(&app_label, pid, row)).collect();
-                    ROWS_BY_PID.lock().unwrap_or_else(|e| e.into_inner()).insert(pid, candidates);
+                    let candidates = rows
+                        .iter()
+                        .map(|row| candidate(&app_label, pid, row))
+                        .collect();
+                    ROWS_BY_PID
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(pid, candidates);
                 }
             }
             let count = publish_rows(&ctx);
-            log_refresh(&ctx, if count == 0 { "empty" } else { "ok" }, count, started_at);
+            log_refresh(
+                &ctx,
+                if count == 0 { "empty" } else { "ok" },
+                count,
+                started_at,
+            );
         })
         .await
 }

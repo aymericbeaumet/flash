@@ -1,12 +1,15 @@
+mod bridge_state;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use bridge_state::{state_file, BridgeState, BridgeTab, BRIDGE_DIR_NAME, MAX_STATE_BYTES};
 use flash_plugin::{
-    run, ActionRequest, Candidate, Context, Event, NavigateRequest, PerformResponse, RefreshGate,
-    RunningApplication,
+    run, ActionRequest, Candidate, CommandRequest, Context, Event, NavigateRequest,
+    PerformResponse, RefreshGate, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,6 +27,12 @@ const MAX_SESSIONSTORE_FILES: usize = 64;
 const MAX_SESSIONSTORE_COMPRESSED_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SESSIONSTORE_DECODED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SESSION_TABS: usize = 100_000;
+/// How stale a bridge state file may be and still outrank the Accessibility
+/// walk. The add-on re-publishes on every tab/window event AND on a 60 s
+/// heartbeat, so a live browser with a loaded add-on stays well inside this
+/// window; an add-on that was disabled, crashed or never installed falls out
+/// of it and the AX path takes over.
+const BRIDGE_FRESHNESS: Duration = Duration::from_secs(300);
 const FIREFOX: &str = "org.mozilla.firefox";
 const FIREFOX_DEV: &str = "org.mozilla.firefoxdeveloperedition";
 const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
@@ -47,8 +56,30 @@ fn schedule_refresh(ctx: &Context) {
 #[derive(Default)]
 struct RefreshLogState {
     outcome: String,
+    /// Which discovery path produced the rows (`bridge`, `accessibility`,
+    /// `mixed`, `none`). Part of the transition key so the switch between the
+    /// add-on mirror and the AX walk is logged exactly once, not per cycle.
+    mode: String,
     warning: bool,
     last_warning: Option<Instant>,
+}
+
+/// Where a refresh cycle's rows came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RefreshMode {
+    bridge: bool,
+    accessibility: bool,
+}
+
+impl RefreshMode {
+    fn label(self) -> &'static str {
+        match (self.bridge, self.accessibility) {
+            (true, true) => "mixed",
+            (true, false) => "bridge",
+            (false, true) => "accessibility",
+            (false, false) => "none",
+        }
+    }
 }
 
 static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
@@ -99,6 +130,25 @@ struct Tab {
     selected: bool,
 }
 
+impl Tab {
+    /// Shape one add-on mirror row as a `Tab` for candidate emission. The AX
+    /// fields stay empty on purpose: handles only ever come from a live
+    /// snapshot, and nothing downstream of `candidate` reads them — resolution
+    /// re-finds the tab in a fresh AX walk (or jumps by keystroke) rather than
+    /// trusting a handle that was minted at emit time.
+    fn from_bridge(tab: &BridgeTab) -> Self {
+        Self {
+            handle: 0,
+            parent_handle: None,
+            root: 0,
+            window_handle: None,
+            title: tab.title.clone(),
+            url: tab.url.clone(),
+            selected: tab.active,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionTab {
     title: String,
@@ -117,10 +167,16 @@ struct TabPayload {
     /// Total tabs in that window.
     #[serde(default)]
     tab_count: usize,
-    /// Firefox windows at emit time. The ⌘digit plan only addresses the
-    /// frontmost window, so the fast path requires exactly 1.
+    /// Firefox windows at emit time.
     #[serde(default)]
     window_count: usize,
+    /// Whether this tab's window was the focused one at emit time. The ⌘digit
+    /// plan only ever addresses the frontmost window, so it is the fast path's
+    /// gate. The Accessibility walk can only assert it for a single-window
+    /// browser; the add-on bridge names the focused window outright, which is
+    /// what makes the fast path usable with several windows open.
+    #[serde(default)]
+    window_focused: bool,
 }
 
 /// One synthesized chord of the tab-jump plan (exactly one modifier — the
@@ -209,7 +265,9 @@ impl FlashPlugin for Firefox {
 
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:apps.changed" | "core:focus.changed" | "core:window.focus.changed"
+            "core:apps.changed"
+            | "core:focus.changed"
+            | "core:window.focus.changed"
             | "core:session.opened" => schedule_refresh(&ctx),
             _ => {}
         }
@@ -225,6 +283,10 @@ impl FlashPlugin for Firefox {
 
     async fn on_navigate(&self, ctx: Context, request: NavigateRequest) -> PerformResponse {
         restore_navigation(&ctx, &request).await
+    }
+
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
+        run_command(&ctx, &command).await
     }
 }
 
@@ -250,65 +312,65 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, i64)>) -> 
     let started_at = Instant::now();
     if apps.is_empty() {
         let changed = publish_rows(ctx, Vec::new());
-        log_refresh(ctx, "empty", 0, started_at, changed);
+        log_refresh(ctx, "empty", RefreshMode::default(), 0, started_at, changed);
         return true;
     }
-    let session_tabs = Arc::new(firefox_session_tabs().await);
-    let mut refreshes = Vec::with_capacity(apps.len());
-    for (bundle, pid) in apps {
-        let task_ctx = ctx.clone();
-        let session_tabs = Arc::clone(&session_tabs);
-        refreshes.push((
-            pid,
-            tokio::spawn(async move {
-                let session = ax_session(pid);
-                let _ax = session.lock().await;
-                let tabs = try_collect_tabs_ax(&task_ctx, pid).await.map(|mut tabs| {
-                    merge_session_urls(&mut tabs, &session_tabs);
-                    tabs
-                });
-                (bundle, pid, tabs)
-            }),
-        ));
-    }
+    // The add-on mirror is one small disk read and carries exact per-window
+    // indices, counts and the focused window, so it is tried first for every
+    // edition. Only editions without a fresh mirror pay for an AX walk (and
+    // only those need the session-store decode).
+    let mut mode = RefreshMode::default();
     let mut candidates = Vec::new();
-    let mut failed_pids = std::collections::HashSet::new();
     let mut successful_apps = 0;
-    for (expected_pid, refresh) in refreshes {
-        let (bundle, pid, tabs) = match refresh.await {
-            Ok((bundle, pid, Some(tabs))) => (bundle, pid, tabs),
-            Ok((_, pid, None)) => {
-                failed_pids.insert(pid);
-                continue;
+    let mut ax_apps = Vec::new();
+    for (bundle, pid) in apps {
+        match read_bridge_state(ctx, pid).await {
+            Some(state) => {
+                mode.bridge = true;
+                successful_apps += 1;
+                candidates.extend(bridge_candidates(&state, &source_name(&bundle), pid));
             }
-            Err(_) => {
-                // Join failures are not expected, but preserving this pid's
-                // last-good partition is safer than clearing unknown state.
-                failed_pids.insert(expected_pid);
-                continue;
-            }
-        };
-        let source = source_name(&bundle);
-        successful_apps += 1;
-        // Strip positions for the keystroke fast path: 1-based index within
-        // each window (root), that window's tab total, and the window count.
-        let mut root_totals: BTreeMap<usize, usize> = BTreeMap::new();
-        for tab in &tabs {
-            *root_totals.entry(tab.root).or_default() += 1;
+            None => ax_apps.push((bundle, pid)),
         }
-        let window_count = root_totals.len();
-        let mut root_seen: BTreeMap<usize, usize> = BTreeMap::new();
-        candidates.extend(tabs.iter().map(|tab| {
-            let seen = root_seen.entry(tab.root).or_default();
-            *seen += 1;
-            let payload = TabPayload {
-                url: tab.url.clone(),
-                index: *seen,
-                tab_count: root_totals[&tab.root],
-                window_count,
+    }
+    let mut failed_pids = std::collections::HashSet::new();
+    if !ax_apps.is_empty() {
+        mode.accessibility = true;
+        let session_tabs = Arc::new(firefox_session_tabs().await);
+        let mut refreshes = Vec::with_capacity(ax_apps.len());
+        for (bundle, pid) in ax_apps {
+            let task_ctx = ctx.clone();
+            let session_tabs = Arc::clone(&session_tabs);
+            refreshes.push((
+                pid,
+                tokio::spawn(async move {
+                    let session = ax_session(pid);
+                    let _ax = session.lock().await;
+                    let tabs = try_collect_tabs_ax(&task_ctx, pid).await.map(|mut tabs| {
+                        merge_session_urls(&mut tabs, &session_tabs);
+                        tabs
+                    });
+                    (bundle, pid, tabs)
+                }),
+            ));
+        }
+        for (expected_pid, refresh) in refreshes {
+            let (bundle, pid, tabs) = match refresh.await {
+                Ok((bundle, pid, Some(tabs))) => (bundle, pid, tabs),
+                Ok((_, pid, None)) => {
+                    failed_pids.insert(pid);
+                    continue;
+                }
+                Err(_) => {
+                    // Join failures are not expected, but preserving this pid's
+                    // last-good partition is safer than clearing unknown state.
+                    failed_pids.insert(expected_pid);
+                    continue;
+                }
             };
-            candidate(tab, &source, pid, &payload)
-        }));
+            successful_apps += 1;
+            candidates.extend(ax_candidates(&tabs, &source_name(&bundle), pid));
+        }
     }
     // Preserve only editions whose AX snapshot failed. A successful empty
     // snapshot is authoritative, and editions absent from the current running
@@ -322,7 +384,7 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, i64)>) -> 
     }
     if successful_apps == 0 {
         // Publish nothing: the host keeps its last-good catalog.
-        log_refresh(ctx, "failed", candidates.len(), started_at, false);
+        log_refresh(ctx, "failed", mode, candidates.len(), started_at, false);
         return false;
     }
     let outcome = if !failed_pids.is_empty() {
@@ -334,8 +396,62 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, i64)>) -> 
     };
     let count = candidates.len();
     let changed = publish_rows(ctx, candidates);
-    log_refresh(ctx, outcome, count, started_at, changed);
+    log_refresh(ctx, outcome, mode, count, started_at, changed);
     true
+}
+
+/// Candidates for one edition from an Accessibility walk. Strip positions come
+/// from document order within each window root: 1-based index, that window's
+/// total, and the window count. The AX walk cannot say which window is
+/// frontmost for a multi-window browser, so `window_focused` is only asserted
+/// when there is exactly one window.
+fn ax_candidates(tabs: &[Tab], source: &str, pid: i64) -> Vec<Candidate> {
+    let mut root_totals: BTreeMap<usize, usize> = BTreeMap::new();
+    for tab in tabs {
+        *root_totals.entry(tab.root).or_default() += 1;
+    }
+    let window_count = root_totals.len();
+    let mut root_seen: BTreeMap<usize, usize> = BTreeMap::new();
+    tabs.iter()
+        .map(|tab| {
+            let seen = root_seen.entry(tab.root).or_default();
+            *seen += 1;
+            let payload = TabPayload {
+                url: tab.url.clone(),
+                index: *seen,
+                tab_count: root_totals[&tab.root],
+                window_count,
+                window_focused: window_count == 1,
+            };
+            candidate(tab, source, pid, &payload)
+        })
+        .collect()
+}
+
+/// Candidates for one edition from the add-on mirror. Every position here is
+/// authoritative: the strip index is the browser's own, and the focused window
+/// is named outright, so the keystroke fast path stays available with several
+/// windows open.
+fn bridge_candidates(state: &BridgeState, source: &str, pid: i64) -> Vec<Candidate> {
+    let mut window_totals: BTreeMap<i64, usize> = BTreeMap::new();
+    for tab in &state.tabs {
+        *window_totals.entry(tab.window_id).or_default() += 1;
+    }
+    let window_count = window_totals.len();
+    state
+        .tabs
+        .iter()
+        .map(|tab| {
+            let payload = TabPayload {
+                url: tab.url.clone(),
+                index: tab.index as usize + 1,
+                tab_count: window_totals[&tab.window_id],
+                window_count,
+                window_focused: state.focused_window_id == Some(tab.window_id),
+            };
+            candidate(&Tab::from_bridge(tab), source, pid, &payload)
+        })
+        .collect()
 }
 
 /// Last-published rows, kept so a partial cycle (one edition's AX snapshot
@@ -362,14 +478,25 @@ fn last_rows() -> Vec<Candidate> {
         .unwrap_or_default()
 }
 
-fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant, changed: bool) {
+fn log_refresh(
+    ctx: &Context,
+    outcome: &str,
+    mode: RefreshMode,
+    count: usize,
+    started_at: Instant,
+    changed: bool,
+) {
     let elapsed_ms = started_at.elapsed().as_millis();
     let warning = elapsed_ms >= 1_000 || matches!(outcome, "failed" | "partial");
     let now = Instant::now();
+    let mode_label = mode.label();
     let (should_log, recovery) = REFRESH_LOG_STATE
         .lock()
         .map(|mut state| {
-            let transition = state.outcome != outcome || state.warning != warning;
+            // The discovery path joins the transition key, so falling off the
+            // add-on mirror onto the AX walk (and back) logs once per switch.
+            let transition =
+                state.outcome != outcome || state.mode != mode_label || state.warning != warning;
             let recovery = state.warning && !warning;
             let repeat_warning = warning
                 && state
@@ -377,6 +504,7 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant, 
                     .is_none_or(|last| now.duration_since(last) >= REPEAT_WARNING_INTERVAL);
             let should_log = changed || transition || repeat_warning;
             state.outcome = outcome.to_string();
+            state.mode = mode_label.to_string();
             state.warning = warning;
             if warning && should_log {
                 state.last_warning = Some(now);
@@ -396,8 +524,8 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant, 
             "debug"
         },
         &format!(
-            "[firefox] refresh outcome={} count={} elapsed_ms={}",
-            outcome, count, elapsed_ms
+            "[firefox] refresh outcome={} mode={} count={} elapsed_ms={}",
+            outcome, mode_label, count, elapsed_ms
         ),
     );
 }
@@ -626,6 +754,76 @@ fn title_matches_window(tab_title: &str, window_title: &str) -> bool {
         || window
             .strip_suffix(" - Mozilla Firefox")
             .is_some_and(|title| title.trim() == tab)
+}
+
+// ---------------------------------------------------------------------------
+// Add-on bridge state
+// ---------------------------------------------------------------------------
+
+/// Stat key for [`BRIDGE_STATE_CACHE`]: the state file, its mtime in ms and
+/// its length. Mirrors the session-store cache's (path, mtime) key — the file
+/// is rewritten whole by a rename, so a stat match means identical bytes.
+type BridgeStateKey = (PathBuf, u128, u64);
+
+/// Parsed bridge state, keyed by the stat of the file it came from. A
+/// flashlight open plus a resolve reads the same file several times; the
+/// add-on only rewrites it when a tab actually changes.
+static BRIDGE_STATE_CACHE: Mutex<Option<(BridgeStateKey, Arc<BridgeState>)>> = Mutex::new(None);
+
+fn bridge_dir(ctx: &Context) -> PathBuf {
+    ctx.data_dir().join(BRIDGE_DIR_NAME)
+}
+
+/// Read the add-on's mirror for `pid`, or `None` when it is missing, stale,
+/// oversized, of a version this binary does not speak, or unparsable — every
+/// one of which simply hands the cycle back to the Accessibility walk.
+async fn read_bridge_state(ctx: &Context, pid: i64) -> Option<Arc<BridgeState>> {
+    let path = state_file(&bridge_dir(ctx), pid);
+    let metadata = tokio::fs::metadata(&path).await.ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_STATE_BYTES {
+        return None;
+    }
+    let modified = metadata.modified().ok()?;
+    if SystemTime::now()
+        .duration_since(modified)
+        .is_ok_and(|age| age > BRIDGE_FRESHNESS)
+    {
+        return None;
+    }
+    let key: BridgeStateKey = (
+        path.clone(),
+        modified
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|since| since.as_millis())
+            .unwrap_or(0),
+        metadata.len(),
+    );
+    if let Some((cached_key, state)) = BRIDGE_STATE_CACHE.lock().unwrap().as_ref() {
+        if *cached_key == key {
+            return Some(Arc::clone(state));
+        }
+    }
+    let bytes = tokio::fs::read(&path).await.ok()?;
+    let mut state: BridgeState = serde_json::from_slice(&bytes).ok()?;
+    if !state.is_supported() {
+        return None;
+    }
+    state.normalize();
+    let state = Arc::new(state);
+    *BRIDGE_STATE_CACHE.lock().unwrap() = Some((key, Arc::clone(&state)));
+    Some(state)
+}
+
+/// Tabs of `window_id` in strip order.
+fn bridge_window_tabs(state: &BridgeState, window_id: i64) -> Vec<&BridgeTab> {
+    let mut tabs: Vec<&BridgeTab> = state
+        .tabs
+        .iter()
+        .filter(|tab| tab.window_id == window_id)
+        .collect();
+    tabs.sort_by_key(|tab| tab.index);
+    tabs
 }
 
 /// The (path, mtime) list a session-store scan resolved; doubles as the
@@ -957,8 +1155,8 @@ async fn activate_and_find_tab(ctx: &Context, pid: i64, url: &str, name: &str) -
 }
 
 /// Resolve a flashlight pick. Fast path first: when the candidate carries a
-/// usable strip position (single window, plan within the walk budget), post
-/// Firefox's own tab shortcuts (⌘1..⌘8 / ⌘9 / ctrl+PgDn/PgUp) straight to
+/// usable strip position in the FOCUSED window (plan within the walk budget),
+/// post Firefox's own tab shortcuts (⌘1..⌘8 / ⌘9 / ctrl+PgDn/PgUp) straight to
 /// the pid in parallel with the raise — no AX read on the critical path at
 /// all — then verify and, if the strip drifted since emit, correct through
 /// the AX ladder in the background. Otherwise: re-snapshot and match by url,
@@ -985,7 +1183,11 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
     let url = url_owned.as_str();
     let name = row.title.as_str();
 
-    if let Some(payload) = payload.as_ref().filter(|payload| payload.window_count == 1) {
+    // `window_focused` is the gate, not `window_count == 1`: ⌘1..⌘8 and
+    // ctrl+PgDn/PgUp always address the frontmost window, so what matters is
+    // that the target tab lives there. A single-window browser satisfies it
+    // trivially; with several windows only the add-on mirror can assert it.
+    if let Some(payload) = payload.as_ref().filter(|payload| payload.window_focused) {
         if let Some(plan) = tab_key_plan(payload.index, payload.tab_count) {
             let plan_len = plan.len();
             let (keys_ok, _) = tokio::join!(post_keys(ctx, pid, &plan), activate_app(ctx, pid));
@@ -1181,9 +1383,17 @@ fn percent_decode(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// `tab_select` (numbered-tab jump): press the Nth tab in document order within
-/// the first window that has at least that many tabs. Ports the old
-/// `FirefoxTabsSource.tabSelect` semantics.
+/// `tab_select` (numbered-tab jump): select the Nth tab OF THE INTENDED WINDOW
+/// — the focused one. The index is a strip position, so it has to be resolved
+/// inside a single window; indexing the flattened multi-window tab list lands
+/// in whichever window happens to come first in the walk. An index past the
+/// end of that window's strip is `unhandled` rather than a jump into another
+/// window.
+///
+/// With the add-on mirror the window and its strip are known exactly, so the
+/// jump is a plain keystroke plan against the frontmost window. Without it the
+/// Accessibility walk supplies the strip, and the frontmost window is the
+/// first `AXWindows` root (front-to-back order) that actually has tabs.
 async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformResponse {
     if action.name != "tab_select" {
         return PerformResponse::unhandled();
@@ -1192,19 +1402,72 @@ async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformRespons
     let (Some(pid), true) = (action.context.pid, index > 0) else {
         return PerformResponse::unhandled();
     };
+    let index = index as usize;
+    if let Some(state) = read_bridge_state(ctx, pid).await {
+        return bridge_tab_select(ctx, pid, index, &state).await;
+    }
     let session = ax_session(pid);
     let _ax = session.lock().await;
     let tabs = activate_and_collect_tabs(ctx, pid).await;
-    let Some(target) = tabs.get((index - 1) as usize) else {
+    let Some(target) = nth_tab_in_front_window(&tabs, index) else {
         return PerformResponse::unhandled();
     };
+    let target = target.clone();
     // Firefox owns this tab_select claim either way: a successful press is
     // ok, but a failed press must be an error (not `unhandled`) so the host
     // doesn't fall back to a ⌘<digit> keystroke that switches the wrong tab.
-    if select_tab(ctx, pid, target).await {
+    if select_tab(ctx, pid, &target).await {
         PerformResponse::ok().target_pid(pid)
     } else {
         PerformResponse::fail("tab press did not stick")
+    }
+}
+
+/// The 1-based `index`th tab of the frontmost window that contributed tabs.
+/// `AXWindows` is front-to-back, so the lowest root index present is the
+/// window the user is looking at.
+fn nth_tab_in_front_window(tabs: &[Tab], index: usize) -> Option<&Tab> {
+    let front = tabs.iter().map(|tab| tab.root).min()?;
+    tabs.iter()
+        .filter(|tab| tab.root == front)
+        .nth(index.checked_sub(1)?)
+}
+
+/// `tab_select` against the add-on mirror: the focused window's strip is
+/// authoritative, so the jump is Firefox's own shortcut chain with no AX round
+/// trip. A plan the walk budget rejects falls through to the AX ladder.
+async fn bridge_tab_select(
+    ctx: &Context,
+    pid: i64,
+    index: usize,
+    state: &BridgeState,
+) -> PerformResponse {
+    let Some(window_id) = state.focused_window_id else {
+        return PerformResponse::unhandled();
+    };
+    let tabs = bridge_window_tabs(state, window_id);
+    if index > tabs.len() {
+        return PerformResponse::unhandled();
+    }
+    let Some(plan) = tab_key_plan(index, tabs.len()) else {
+        let session = ax_session(pid);
+        let _ax = session.lock().await;
+        let collected = activate_and_collect_tabs(ctx, pid).await;
+        let Some(target) = nth_tab_in_front_window(&collected, index) else {
+            return PerformResponse::unhandled();
+        };
+        let target = target.clone();
+        return if select_tab(ctx, pid, &target).await {
+            PerformResponse::ok().target_pid(pid)
+        } else {
+            PerformResponse::fail("tab press did not stick")
+        };
+    };
+    let (keys_ok, _) = tokio::join!(post_keys(ctx, pid, &plan), activate_app(ctx, pid));
+    if keys_ok {
+        PerformResponse::ok().target_pid(pid)
+    } else {
+        PerformResponse::fail("tab key plan rejected by host")
     }
 }
 
@@ -1401,6 +1664,113 @@ fn url_aliases(url: &str) -> Option<&'static str> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// `:firefox setup` / `:firefox status`
+// ---------------------------------------------------------------------------
+
+/// Sibling of the running plugin binary. Both binaries of this crate ship side
+/// by side inside the plugin directory, in the source tree and in the signed
+/// bundle alike.
+fn sibling_path(name: &str) -> Option<PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join(name))
+}
+
+/// Single-quote a path for a shell command the user is going to paste.
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+async fn run_command(ctx: &Context, command: &CommandRequest) -> PerformResponse {
+    match command.subcommand.as_str() {
+        "setup" => setup(ctx).await,
+        "status" => bridge_status(ctx).await,
+        _ => PerformResponse::unhandled(),
+    }
+}
+
+/// Tell the user how to install the add-on. The extension cannot be installed
+/// for them — Firefox only loads an add-on the user loads themselves — so this
+/// puts the one privileged step (writing the native-messaging host manifest)
+/// on the clipboard and names the directory to load.
+async fn setup(ctx: &Context) -> PerformResponse {
+    let Some(bridge) = sibling_path("flash-plugin-firefox-bridge") else {
+        return PerformResponse::fail("cannot resolve the bridge binary path");
+    };
+    let Some(extension) = sibling_path("extension") else {
+        return PerformResponse::fail("cannot resolve the extension directory");
+    };
+    let install = format!("{} install", shell_quote(&bridge));
+    let copied = ctx.clipboard_write(&install).await;
+    let message = format!(
+        "Firefox tab bridge setup\n\n1. Run this in a terminal{}:\n   {}\n\n\
+         2. In Firefox open about:debugging#/runtime/this-firefox, choose \"Load Temporary \
+         Add-on\", and pick:\n   {}/manifest.json\n\n\
+         A temporary add-on is dropped on browser restart; install a signed build for a \
+         permanent one. Flash keeps working without it — the add-on only sharpens tab \
+         indices and titles.",
+        if copied {
+            " (copied to the clipboard)"
+        } else {
+            ""
+        },
+        install,
+        extension.display()
+    );
+    PerformResponse::ok().message(message)
+}
+
+/// Content-free bridge report: counts and ages only, never a title or a URL.
+async fn bridge_status(ctx: &Context) -> PerformResponse {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let host_manifest = match home.as_deref() {
+        Some(home) => tokio::fs::metadata(bridge_state::host_manifest_path(home))
+            .await
+            .is_ok(),
+        None => false,
+    };
+    let mut lines = vec![format!(
+        "Firefox tab bridge: host manifest {}",
+        if host_manifest {
+            "installed"
+        } else {
+            "missing"
+        }
+    )];
+    let apps = firefox_apps(&ctx.running_applications());
+    if apps.is_empty() {
+        lines.push("no Firefox process is running".to_string());
+    }
+    for (bundle, pid) in apps {
+        let path = state_file(&bridge_dir(ctx), pid);
+        let Ok(metadata) = tokio::fs::metadata(&path).await else {
+            lines.push(format!(
+                "{bundle} pid={pid}: no bridge state (Accessibility walk)"
+            ));
+            continue;
+        };
+        let age_s = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .map(|age| age.as_secs())
+            .unwrap_or(0);
+        match read_bridge_state(ctx, pid).await {
+            Some(state) => lines.push(format!(
+                "{bundle} pid={pid}: bridge age={age_s}s windows={} tabs={}",
+                state.windows.len(),
+                state.tabs.len()
+            )),
+            None if age_s > BRIDGE_FRESHNESS.as_secs() => lines.push(format!(
+                "{bundle} pid={pid}: state stale age={age_s}s (Accessibility walk)"
+            )),
+            None => lines.push(format!(
+                "{bundle} pid={pid}: state unusable age={age_s}s (Accessibility walk)"
+            )),
+        }
+    }
+    PerformResponse::ok().message(lines.join("\n"))
+}
+
 fn main() {
     run(Firefox);
 }
@@ -1419,6 +1789,162 @@ mod tests {
             url: url.to_string(),
             selected: false,
         }
+    }
+
+    fn bridge_tab(id: i64, window_id: i64, index: u32, title: &str, active: bool) -> BridgeTab {
+        BridgeTab {
+            id,
+            window_id,
+            index,
+            title: title.to_string(),
+            url: format!("https://example.com/{id}"),
+            active,
+            pinned: false,
+        }
+    }
+
+    fn ax_tab(root: usize, title: &str) -> Tab {
+        Tab {
+            handle: 0,
+            parent_handle: None,
+            root,
+            window_handle: None,
+            title: title.to_string(),
+            url: String::new(),
+            selected: false,
+        }
+    }
+
+    #[test]
+    fn bridge_candidates_carry_per_window_positions_and_focus() {
+        let state = BridgeState {
+            version: bridge_state::STATE_VERSION,
+            sequence: 7,
+            timestamp_ms: 1,
+            focused_window_id: Some(2),
+            windows: vec![
+                bridge_state::BridgeWindow {
+                    id: 1,
+                    focused: false,
+                },
+                bridge_state::BridgeWindow {
+                    id: 2,
+                    focused: true,
+                },
+            ],
+            tabs: vec![
+                bridge_tab(10, 1, 0, "One", true),
+                bridge_tab(11, 1, 1, "Two", false),
+                bridge_tab(12, 1, 2, "Three", false),
+                bridge_tab(20, 2, 0, "Alpha", false),
+                bridge_tab(21, 2, 1, "Beta", true),
+            ],
+        };
+        let rows = bridge_candidates(&state, "firefox.tabs", 99);
+        let payloads: Vec<TabPayload> = rows
+            .iter()
+            .map(|row| row.payload_as::<TabPayload>().unwrap())
+            .collect();
+        // 1-based strip position within the tab's OWN window, that window's
+        // total, and focus reserved for the window the browser says is front.
+        assert_eq!(
+            payloads
+                .iter()
+                .map(|payload| (payload.index, payload.tab_count, payload.window_focused))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, 3, false),
+                (2, 3, false),
+                (3, 3, false),
+                (1, 2, true),
+                (2, 2, true)
+            ]
+        );
+        assert!(payloads.iter().all(|payload| payload.window_count == 2));
+    }
+
+    #[test]
+    fn ax_candidates_only_claim_focus_for_a_single_window() {
+        let one = ax_candidates(&[ax_tab(0, "Only")], "firefox.tabs", 1);
+        assert!(one[0].payload_as::<TabPayload>().unwrap().window_focused);
+        let two = ax_candidates(&[ax_tab(0, "Front"), ax_tab(1, "Back")], "firefox.tabs", 1);
+        assert!(two
+            .iter()
+            .all(|row| !row.payload_as::<TabPayload>().unwrap().window_focused));
+    }
+
+    #[test]
+    fn tab_select_index_stays_inside_the_front_window() {
+        let tabs = [
+            ax_tab(0, "Front 1"),
+            ax_tab(0, "Front 2"),
+            ax_tab(1, "Back 1"),
+            ax_tab(1, "Back 2"),
+            ax_tab(1, "Back 3"),
+        ];
+        assert_eq!(nth_tab_in_front_window(&tabs, 2).unwrap().title, "Front 2");
+        // The front window has 2 tabs: index 3 must NOT spill into the other
+        // window (the flat-index bug this replaces returned "Back 1").
+        assert!(nth_tab_in_front_window(&tabs, 3).is_none());
+        assert!(nth_tab_in_front_window(&tabs, 0).is_none());
+        assert!(nth_tab_in_front_window(&[], 1).is_none());
+    }
+
+    #[test]
+    fn bridge_window_tabs_are_returned_in_strip_order() {
+        let state = BridgeState {
+            version: bridge_state::STATE_VERSION,
+            focused_window_id: Some(1),
+            windows: vec![bridge_state::BridgeWindow {
+                id: 1,
+                focused: true,
+            }],
+            tabs: vec![
+                bridge_tab(3, 1, 2, "Third", false),
+                bridge_tab(1, 1, 0, "First", false),
+                bridge_tab(2, 1, 1, "Second", true),
+            ],
+            ..BridgeState::default()
+        };
+        assert_eq!(
+            bridge_window_tabs(&state, 1)
+                .iter()
+                .map(|tab| tab.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["First", "Second", "Third"]
+        );
+        assert!(bridge_window_tabs(&state, 9).is_empty());
+    }
+
+    #[test]
+    fn normalizing_bridge_state_drops_orphans_and_repairs_focus() {
+        let mut state = BridgeState {
+            version: bridge_state::STATE_VERSION,
+            focused_window_id: Some(404),
+            windows: vec![bridge_state::BridgeWindow {
+                id: 1,
+                focused: true,
+            }],
+            tabs: vec![
+                bridge_tab(1, 1, 0, "Kept", true),
+                bridge_tab(2, 77, 0, "Orphan", false),
+            ],
+            ..BridgeState::default()
+        };
+        state.normalize();
+        assert_eq!(state.tabs.len(), 1);
+        assert_eq!(state.tabs[0].title, "Kept");
+        // A focused window id no window claims is replaced by the window that
+        // reports itself focused, never left dangling.
+        assert_eq!(state.focused_window_id, Some(1));
+    }
+
+    #[test]
+    fn unsupported_bridge_state_versions_are_rejected() {
+        let mut state = BridgeState::default();
+        assert!(!state.is_supported());
+        state.version = bridge_state::STATE_VERSION;
+        assert!(state.is_supported());
     }
 
     #[test]

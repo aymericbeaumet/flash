@@ -54,11 +54,20 @@ Command popups and document popups share the same cell renderer. Documents never
 ## Shortcut terminals
 
 `flash terminal_show` opens a fresh login shell in the home directory. Each
-invocation creates a new process. `flash terminal_dismiss` closes the focused
-terminal and restores the previous application. Exiting, killing, closing, or
-hiding a fresh shell removes its session, window, and scrollback permanently.
-It never restarts automatically. Command-R can explicitly restart it while it
-is open; Command-Q ends it. Each later invocation creates a new identity.
+invocation attaches to its own process. `flash terminal_dismiss` closes the
+focused terminal and restores the previous application. Exiting, killing,
+closing, or hiding a fresh shell removes its session, window, and scrollback
+permanently. It never restarts automatically. Command-R can explicitly restart
+it while it is open; Command-Q ends it. Each later invocation creates a new
+identity.
+
+Flash keeps one spare login shell running so the window opens on a live prompt
+instead of waiting for the shell's startup files. The spare starts after the
+login environment resolves whenever a mapping binds the unnamed
+`terminal_show`, and every open consumes the spare and immediately warms the
+next one. It parses output but builds no frames until a window binds it, and
+it is an ordinary one-shot session otherwise: a spare whose process ends is
+forgotten, and the next open spawns directly.
 
 Bind a fresh shell explicitly in the desired scopes:
 
@@ -155,7 +164,7 @@ through coordinate conversion, preserving literal text and styles.
 
 `FlashTerminal` owns a serial worker queue per terminal. The queue performs PTY I/O, VT parsing, input encoding, resize, and immutable frame extraction. A C-only `forkpty`/`execve` boundary prepares the controlling terminal; Swift never runs in the post-fork child. The child resets signal dispositions and closes unrelated inherited descriptors. Flash reports executable or working-directory failures through the session state.
 
-Output is parsed while hidden, but no frame is built for it: a session only snapshots its grid and hops to the main thread while a visible view wants frames (`TerminalSession.setWantsFrames`), and re-showing publishes one frame immediately. Frame updates coalesce with one-shot work to at most about 30 Hz under continuous output, and hidden views do not draw. Automatic restarts stop after ten consecutive failed starts (a session that ran for at least a second resets the count); the session then stays exited until an explicit restart or a definition change. There is no PTY polling loop. A visible blinking cursor or blinking text uses a local half-second redraw timer, which stops when hidden. Scrollback is capped at approximately 2,000 lines and 4 MiB; libghostty applies limits at its internal page boundaries. The input queue is bounded at 4 MiB; an input batch exceeding available capacity reports rejection without recording its contents.
+Output is parsed while hidden, but no frame is built for it: a session only snapshots its grid and hops to the main thread while a visible view wants frames (`TerminalSession.setWantsFrames`), and re-showing publishes one frame immediately. Frames publish on the leading edge: output after a quiet period is snapshotted at once, and only a burst inside the 16 ms interval waits for its end, so a keystroke echo never pays a coalescing window and continuous output settles at about 60 Hz. A snapshot reads libghostty's per-row dirty flags and reuses the previous frame's cells for clean rows, so steady-state output costs one row, not the grid; the frame carries the changed row set and a generation counter, and a snapshot with nothing visible moved is not published at all. Viewport scrolls, resizes, resets, and palette changes rebuild every row. Hidden views do not draw. Automatic restarts stop after ten consecutive failed starts (a session that ran for at least a second resets the count); the session then stays exited until an explicit restart or a definition change. There is no PTY polling loop. A visible blinking cursor or blinking text uses a local half-second redraw timer, which stops when hidden. Scrollback is capped at approximately 2,000 lines and 4 MiB; libghostty applies limits at its internal page boundaries. The input queue is bounded at 4 MiB; an input batch exceeding available capacity reports rejection without recording its contents.
 
 Flash owns the child and its terminal process groups. Stop sends hangup and termination, allows a bounded grace period, escalates to kill, then closes the
 PTY before a bounded nonblocking reap. Exceptional kernel
@@ -178,7 +187,7 @@ swift test --filter TerminalTests
 
 The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap this dependency automatically. Development deployment remains `./Scripts/install.sh --dev`.
 
-`TerminalTests` exercises real PTY startup before any view exists, controlling-terminal dimensions, retained exit screens, input and resize, explicit restart with a new PID, failed spawn, and bounded shutdown/reaping. Unicode grapheme clustering is enabled as the terminal default, including after a reset. Direct VT tests cover Unicode graphemes and wide cells, styling, document replacement and control sanitization, terminal queries, application cursor input, Ctrl-C, Kitty modifier and release events, bracketed paste, alternate screens, and scrollback. Popup placement, immediate preview dismissal, pinned focus, and mapping precedence are covered by the app's separate presentation and mode tests.
+`TerminalTests` and `TerminalSnapshotTests` exercise real PTY startup before any view exists, incremental snapshots (changed rows, row reuse, generation counters, leading-edge publishing), controlling-terminal dimensions, retained exit screens, input and resize, explicit restart with a new PID, failed spawn, and bounded shutdown/reaping. Unicode grapheme clustering is enabled as the terminal default, including after a reset. Direct VT tests cover Unicode graphemes and wide cells, styling, document replacement and control sanitization, terminal queries, application cursor input, Ctrl-C, Kitty modifier and release events, bracketed paste, alternate screens, and scrollback. Popup placement, immediate preview dismissal, pinned focus, and mapping precedence are covered by the app's separate presentation and mode tests.
 
 Crash recovery tests kill real children in hover previews, pinned popups, and
 standalone windows, for both persistent and temporary sessions; the replacement
@@ -190,13 +199,21 @@ or removal.
 
 The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label uses that same width, so entering terminal mode does not shift adjacent segments. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
 
-The terminal view draws from the frame with damage tracking: a new frame
-invalidates only the rows whose cells changed plus the old and new cursor rows,
-and a blink toggle repaints the cursor row alone unless the frame carries
-blinking cells. Consecutive single-width ASCII cells with the same font and
-colour draw as one Core Text line; wide, non-ASCII, or differently styled cells
-still draw alone in their own clipped cell so shaping never shifts a neighbour.
-Font variants and the cell size are cached per font change.
+The terminal view draws from the frame with damage tracking: a frame that
+directly follows the previous one invalidates only the rows the terminal
+reported as changed plus the old and new cursor rows, and a blink toggle
+repaints the cursor row alone unless the frame carries blinking cells. The view
+is layer-backed with asynchronous drawing, so a repaint is recorded on the main
+thread and rasterised by the render server. Backgrounds paint as merged runs of
+one colour and cells on the terminal's own background need no fill at all.
+Consecutive single-width ASCII cells with the same font and colour draw as one
+Core Text line; wide, non-ASCII, or differently styled cells still draw alone in
+their own clipped cell so shaping never shifts a neighbour. Laid-out lines are
+cached by text, font variant, and colour, and colours are cached as `CGColor`
+values. Font variants and the cell size are cached per font change. The
+`FlashTerminal` and `CFlashTerminal` modules compile optimized in the
+incremental dev build too, so the daily-driver bundle runs the same per-cell
+code as a release build.
 
 Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects, carousel transitions, in-place value crossfades, and the hover wash are Core Animation only: the host adds an animation when a value changes and never redraws on a timer.
 

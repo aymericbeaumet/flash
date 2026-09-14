@@ -54,7 +54,7 @@ use std::time::{Duration, Instant};
 
 use flash_plugin::{
     run, ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame,
-    HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, Priority,
+    HintsRequest, HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, Priority,
     TERMINAL_LINK_ROLE,
 };
 use regex::Regex;
@@ -2181,8 +2181,9 @@ async fn alacritty_font() -> Option<(String, f64)> {
         let family =
             read_toml_string(&text, "font.normal", "family").unwrap_or_else(|| "Menlo".to_string());
         let font = (family, size);
-        *ALACRITTY_FONT_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((path, modified, font.clone()));
+        *ALACRITTY_FONT_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((path, modified, font.clone()));
         return Some(font);
     }
     None
@@ -3269,9 +3270,9 @@ fn publish_status_segments(
     }
     *guard = Some(current.clone());
     ctx.status([
-        ("session", current.session.as_str()),
-        ("window", current.window.as_str()),
-        ("pane", current.pane.as_str()),
+        ("session", Markup::text(&current.session)),
+        ("window", Markup::text(&current.window)),
+        ("pane", Markup::text(&current.pane)),
     ]);
 }
 
@@ -3613,7 +3614,11 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                     .lock()
                     .map(|snapshot| !snapshot.clients.is_empty())
                     .unwrap_or(true);
-                let period = if attached { POLL_INTERVAL_SECS } else { IDLE_POLL_INTERVAL_SECS };
+                let period = if attached {
+                    POLL_INTERVAL_SECS
+                } else {
+                    IDLE_POLL_INTERVAL_SECS
+                };
                 tokio::time::sleep(Duration::from_secs(period)).await;
             }
             refresh_candidate_locations_for_path(
@@ -4051,6 +4056,34 @@ async fn pane_select(plugin: &Tmux, client: &TmuxClient, direction: &str) -> boo
         .is_some()
 }
 
+/// `gg` / `G` inside a pane. The host refuses to synthesize a scroll wheel
+/// into a terminal — a terminal with mouse tracking on re-encodes the wheel as
+/// an SGR report and writes it to the pty — so the extremes are driven through
+/// tmux itself: enter copy-mode and jump to the top of the history, or cancel
+/// copy-mode to snap back to the live bottom.
+async fn scroll_extreme(plugin: &Tmux, client: &TmuxClient, top: bool) -> bool {
+    let target = format!("{}:.", client.session);
+    if !top {
+        return run_tmux_for_client(
+            plugin,
+            client,
+            &["send-keys", "-X", "-t", &target, "cancel"],
+        )
+        .await
+        .is_some();
+    }
+    run_tmux_for_client(plugin, client, &["copy-mode", "-t", &target])
+        .await
+        .is_some()
+        && run_tmux_for_client(
+            plugin,
+            client,
+            &["send-keys", "-X", "-t", &target, "history-top"],
+        )
+        .await
+        .is_some()
+}
+
 /// `[m` / `]m`: swap the focused window with its neighbour in the same
 /// session. Tmux is happy to wrap (`-d` keeps the window selected at
 /// its new position), so the user can keep tapping `]m` to bubble a
@@ -4175,6 +4208,8 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
         "pane_split_vertical" => pane_split(plugin, ctx, &client, true).await,
         "pane_split_horizontal" => pane_split(plugin, ctx, &client, false).await,
         "pane_close" => pane_close(plugin, ctx, &client).await,
+        "scroll_top" => scroll_extreme(plugin, &client, true).await,
+        "scroll_bottom" => scroll_extreme(plugin, &client, false).await,
         "app_reload" => reload_client(plugin, &client).await,
         _ => return PerformResponse::unhandled(),
     };
@@ -6054,6 +6089,26 @@ play\t3\tflash\tzsh\t/p\t1\t4\n";
             "no attached client publishes empty values, which clear the \
              segments host-side"
         );
+    }
+
+    #[test]
+    fn published_status_segments_escape_hashes_in_tmux_names() {
+        let mut harness = flash_plugin::testing::Harness::new("tmux");
+        let last_status = Mutex::new(None);
+        let segments = TmuxStatusSegments {
+            session: "work #1".to_string(),
+            window: "#[bold]logs".to_string(),
+            pane: "0".to_string(),
+        };
+
+        publish_status_segments(&harness.context(), &last_status, &segments);
+        publish_status_segments(&harness.context(), &last_status, &segments);
+
+        let frames = harness.drain_status();
+        assert_eq!(frames.len(), 1, "unchanged segments stay off the wire");
+        assert_eq!(frames[0]["session"], "work ##1");
+        assert_eq!(frames[0]["window"], "##[bold]logs");
+        assert_eq!(frames[0]["pane"], "0");
     }
 }
 

@@ -2,7 +2,7 @@
   "id": "firefox",
   "name": "firefox",
   "version": "0.1.0",
-  "description": "Surface Firefox tabs in the flashlight (AX-backed) and handle Firefox source actions (tab_select).",
+  "description": "Surface Firefox tabs in the flashlight (optional add-on bridge, Accessibility fallback) and handle Firefox source actions (tab_select).",
   "sandbox": {},
   "exec": [
     "./flash-plugin-firefox"
@@ -10,7 +10,8 @@
   "priority": 30,
   "capabilities": [
     "accessibility",
-    "app_control"
+    "app_control",
+    "clipboard"
   ],
   "navigation": [
     "flash-firefox"
@@ -24,6 +25,18 @@
     "core:focus.changed",
     "core:window.focus.changed",
     "core:session.opened"
+  ],
+  "commands": [
+    {
+      "command": "firefox",
+      "subcommand": "setup",
+      "description": "How to install the Firefox tab-bridge add-on"
+    },
+    {
+      "command": "firefox",
+      "subcommand": "status",
+      "description": "Report the Firefox tab-bridge state (counts only)"
+    }
   ],
   "sources": [
     {

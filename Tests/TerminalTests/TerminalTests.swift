@@ -326,3 +326,89 @@ final class TerminalTests: XCTestCase {
     wait(for: [failed], timeout: 5)
   }
 }
+
+final class TerminalSnapshotTests: XCTestCase {
+  func testSnapshotsReportChangedRowsAndReuseCleanOnes() throws {
+    let buffer = TerminalBuffer(columns: 10, rows: 4, scrollback: true)
+    buffer.write(Data("one\r\ntwo\r\nthree".utf8))
+    let first = try XCTUnwrap(buffer.snapshot())
+    XCTAssertNil(first.changedRows, "the first frame rebuilds every row")
+    XCTAssertEqual(first.generation, 1)
+    buffer.write(Data("\u{1B}[2;1HTWO".utf8))
+    let second = try XCTUnwrap(buffer.snapshot())
+    XCTAssertEqual(second.generation, 2)
+    // The rewritten row and the rows the cursor left and entered are dirty.
+    XCTAssertEqual(second.changedRows, [1, 2])
+    XCTAssertEqual(second.text, "one\nTWO\nthree\n")
+    XCTAssertEqual(second.cells[0..<10].map(\.text), first.cells[0..<10].map(\.text))
+    // Nothing visible moved: the buffer hands back the same frame.
+    let third = try XCTUnwrap(buffer.snapshot())
+    XCTAssertEqual(third.generation, second.generation)
+    XCTAssertEqual(third.changedRows, second.changedRows)
+    // Cursor motion alone touches only the rows it left and entered.
+    buffer.write(Data("\u{1B}[4;1H".utf8))
+    let fourth = try XCTUnwrap(buffer.snapshot())
+    XCTAssertEqual(fourth.generation, 3)
+    XCTAssertEqual(fourth.changedRows, [1, 3])
+    XCTAssertEqual(fourth.cursorY, 3)
+    // Scrolling the viewport into scrollback or an explicit invalidation
+    // rebuilds the whole grid.
+    buffer.write(Data("\r\nfour\r\nfive\r\nsix".utf8))
+    _ = buffer.snapshot()
+    flash_vt_scroll(buffer.handle, -1)
+    let scrolled = try XCTUnwrap(buffer.snapshot())
+    XCTAssertNil(scrolled.changedRows)
+    XCTAssertTrue(scrolled.text.hasPrefix("three"))
+    buffer.invalidate()
+    XCTAssertNil(try XCTUnwrap(buffer.snapshot()).changedRows)
+  }
+
+  func testWideCellsHyperlinksAndBlinkSurviveRowReuse() throws {
+    let buffer = TerminalBuffer(columns: 12, rows: 3, scrollback: false)
+    buffer.write(
+      Data(
+        ("界\u{1B}]8;;https://example.com/a\u{1B}\\A\u{1B}]8;;\u{1B}\\"
+          + "\u{1B}]8;;https://example.com/b\u{1B}\\B\u{1B}]8;;\u{1B}\\\u{1B}[5mx\u{1B}[0m").utf8))
+    let first = try XCTUnwrap(buffer.snapshot())
+    XCTAssertEqual(first.cells[0].text, "界")
+    XCTAssertEqual(first.cells[0].width, 2)
+    XCTAssertEqual(first.cells[1].width, 0)
+    XCTAssertEqual(first.cells[2].hyperlink, "https://example.com/a")
+    XCTAssertEqual(first.cells[3].hyperlink, "https://example.com/b")
+    XCTAssertTrue(first.hasBlinkingCells)
+    buffer.write(Data("\u{1B}[3;1Hlast".utf8))
+    let second = try XCTUnwrap(buffer.snapshot())
+    XCTAssertEqual(second.changedRows, [0, 2], "the cursor left row 0; row 1 is reused")
+    XCTAssertEqual(second.cells[2].hyperlink, "https://example.com/a")
+    XCTAssertEqual(second.cells[3].hyperlink, "https://example.com/b")
+    XCTAssertTrue(second.hasBlinkingCells, "blink state is carried by reused rows")
+  }
+
+  func testFirstOutputAfterIdlePublishesWithoutWaitingForTheFrameInterval() {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(
+        command: ["/bin/sh", "-c", "stty -echo; printf READY; read line; printf ECHO"],
+        columns: 20, rows: 2))
+    defer { session.shutdown() }
+    let ready = expectation(description: "ready")
+    session.onFrame = { frame in
+      if frame.text.contains("READY") { ready.fulfill() }
+    }
+    session.start()
+    wait(for: [ready], timeout: 5)
+    // Let the interval elapse so the reply is the first output after idle.
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    let echoed = expectation(description: "echo")
+    var latency: TimeInterval = .infinity
+    let sent = Date()
+    session.onFrame = { frame in
+      if frame.text.contains("ECHO"), latency == .infinity {
+        latency = Date().timeIntervalSince(sent)
+        echoed.fulfill()
+      }
+    }
+    session.send(Data("go\n".utf8))
+    wait(for: [echoed], timeout: 5)
+    XCTAssertLessThan(latency, 0.030, "a leading-edge frame must not wait a coalescing window")
+  }
+}

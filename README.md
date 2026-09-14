@@ -2,7 +2,7 @@
 
 **Click anything on macOS without reaching for the mouse.**
 
-flash puts short keyboard hints over the clickable controls in the app you are using. Trigger it, type a hint, and keep moving. The hint overlay works across native apps, browsers, and Electron apps through macOS Accessibility—without screenshots, OCR, browser extensions, or per-app setup.
+flash puts short keyboard hints over the clickable controls in the app you are using. Trigger it, type a hint, and keep moving. The hint overlay works across native apps, browsers, and Electron apps through macOS Accessibility—without screenshots, OCR, browser extensions, or per-app setup. One optional extra exists and only outside the overlay: a [Firefox add-on](docs/firefox-extension.md) that sharpens Firefox tab titles and strip positions in the flashlight. It never feeds hints, and flash falls back to Accessibility without it.
 
 Requires macOS 14 or later and the Accessibility permission.
 
@@ -77,7 +77,7 @@ keyboard-first modes:
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` mapping, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, apps, and terminal panes, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` mapping, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
 
 `leave_mode` also closes command panels using their return mode (`--restore-mode` preserves the entry mode) and only dismisses active hints in normal mode; `enter_normal_mode` explicitly selects normal mode regardless of a panel's return mode. Modified mappings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`; no mode-specific exit override is installed by default. `leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` have no default mappings in any scope: define the shortcuts you want, including any command-line or flashlight shortcut.
 
@@ -238,7 +238,7 @@ mounted-volume capacity and disk I/O, default-interface traffic plus copyable
 addresses, and battery/power health. Use `:cpu`, `:memory`, `:disks`,
 `:network`, or `:power` for the current textual report, and
 `:flashlight @network.addresses` to copy an interface address. Date/time stays
-in the core status renderer (with the `timezones` plugin for lookup), and the
+in the core status renderer (with the `answers` plugin for time-zone lookup), and the
 dedicated `caffeinate` plugin remains the sole owner of sleep assertions.
 The battery indicator shows just `BAT` when fully charged on AC power; otherwise
 it keeps the numeric charge. `:power` always shows details.
@@ -262,7 +262,18 @@ separate plugin concern.
 :flashlight @system.actions
 ```
 
-Bare arithmetic, unit conversions, and currency conversions are answered inline. Use `:plugins` to inspect bundled integrations and their status, or `:about` to open the About Flash window.
+Browser history and bookmarks are per-browser and deliberately opt-in: they
+never join the default result pool, and reach the flashlight only through an
+explicit source filter or their bang.
+
+```text
+:flashlight @firefox.history rust
+:flashlight @chrome.bookmarks docs
+!fh rust      # Firefox history      (!fb bookmarks)
+!ch docs      # Chrome history       (!cb bookmarks)
+```
+
+Bare arithmetic, unit conversions, currency conversions, color conversions, and world clocks are answered inline by the bundled `answers` plugin. Use `:plugins` to inspect bundled integrations and their status, or `:about` to open the About Flash window.
 
 The bundled tmux source automatically merges every attached local server with
 remote tmux sessions launched through SSH or Mosh. It discovers terminal apps,
@@ -391,7 +402,7 @@ Karabiner-Elements users can call `flash mouse_target` from a `shell_command` ma
 - The core app requires Accessibility, not Screen Recording or Input Monitoring. Integrations that access Notes, Reminders, Contacts, or other apps may request their own macOS grants.
 - The core never reads screen pixels, runs OCR, or stores or logs keystrokes.
 - Keyboard capture is active only while normal mode or a hint overlay owns input; modified global mappings use macOS hotkeys.
-- Hint coverage follows what an app exposes through Accessibility. The bundled tmux plugin fills the main gap for terminal panes.
+- Hint coverage follows what an app exposes through Accessibility. The bundled tmux plugin fills the main gap for terminal panes, and the vscode plugin enriches VS Code's own AX tree.
 - Plugins are child processes owned by flash and communicate only through NDJSON over stdin/stdout (one JSON object per newline-terminated line).
 
 ## Develop
@@ -403,7 +414,7 @@ mise install
 ./Scripts/build-ghostty.sh --dev
 export TMUX_ORACLE="$(./Scripts/build-tmux-oracle.sh)"
 swift test
-./Scripts/test-plugins.sh --lane all   # plugin lint + units + builds + conformance matrix
+./Scripts/test-plugins.sh --lane all   # plugin lint + units + dev builds
 ./Scripts/benchmark-plugins.py --build # report plugin startup, ping, RSS, and threads
 ./Scripts/check-guardrails.sh
 ./Scripts/install.sh --dev

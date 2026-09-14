@@ -265,7 +265,8 @@ final class ModeReducerTests: XCTestCase {
         let opened = ModeReducer.reduce(.disabled, open).0
         let closed = ModeReducer.reduce(opened, request).0
         XCTAssertEqual(closed, .disabled, "\(open), \(request)")
-        XCTAssertEqual(ModeReducer.reduce(closed, .leaveMode(hasHints: false, targetPID: nil)).0, .disabled)
+        XCTAssertEqual(
+          ModeReducer.reduce(closed, .leaveMode(hasHints: false, targetPID: nil)).0, .disabled)
       }
     }
   }
@@ -278,7 +279,8 @@ final class ModeReducerTests: XCTestCase {
     ] {
       let opened = ModeReducer.reduce(.disabled, open).0
       let enabled = ModeReducer.reduce(opened, .advancedModeChanged(enabled: true)).0
-      XCTAssertEqual(ModeReducer.reduce(enabled, .leaveMode(hasHints: false, targetPID: nil)).0, .insert)
+      XCTAssertEqual(
+        ModeReducer.reduce(enabled, .leaveMode(hasHints: false, targetPID: nil)).0, .insert)
     }
   }
 

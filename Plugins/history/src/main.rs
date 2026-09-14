@@ -1,12 +1,20 @@
-use flash_plugin::{run, Candidate, Context, RefreshGate};
+use flash_plugin::{run, Candidate, CommandRequest, Context, PerformResponse, RefreshGate};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const SOURCE_URLS: &str = "history.urls";
-const SOURCE_BOOKMARKS: &str = "history.bookmarks";
+/// Source names are plugin-declared and need not echo the plugin id: these are
+/// PER-BROWSER so `@firefox.history` and `@chrome.bookmarks` mean exactly one
+/// store. They live here — not in the `firefox` plugin — because that plugin's
+/// root `only_bundle_ids` selector would deactivate the source whenever
+/// Firefox is not running, and because warm-versus-live is a per-plugin
+/// property.
+const SOURCE_FIREFOX_HISTORY: &str = "firefox.history";
+const SOURCE_FIREFOX_BOOKMARKS: &str = "firefox.bookmarks";
+const SOURCE_CHROME_HISTORY: &str = "chrome.history";
+const SOURCE_CHROME_BOOKMARKS: &str = "chrome.bookmarks";
 const REFRESH_SECONDS: u64 = 300;
 const SLOW_REFRESH_MS: u128 = 1_000;
 
@@ -24,11 +32,37 @@ const _: () = assert!(
 const MAX_URL_BYTES: usize = 2_048;
 const MAX_TITLE_CHARS: usize = 256;
 const MAX_BOOKMARK_DEPTH: usize = 64;
+/// History rows older than this are not worth a catalog slot: a URL nobody has
+/// opened in half a year ranks below noise, and the window keeps the queries
+/// index-bounded on a years-old profile. Bookmarks are deliberate and carry no
+/// recency window — only the per-browser row cap.
+const HISTORY_RECENCY_DAYS: u64 = 180;
+/// Chrome stores visit times as microseconds since 1601-01-01; this is the
+/// offset in seconds to the Unix epoch.
+const CHROME_EPOCH_OFFSET_SECONDS: i64 = 11_644_473_600;
 
-fn firefox_history_sql() -> String {
+/// Microseconds since the Unix epoch, `days` before `now`. Saturates at 0 so a
+/// wildly skewed clock widens the window instead of inverting it.
+fn unix_micros_cutoff(now: SystemTime, days: u64) -> i64 {
+    let seconds = now
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0);
+    let cutoff = seconds.saturating_sub(days.saturating_mul(24 * 60 * 60));
+    i64::try_from(cutoff).unwrap_or(0).saturating_mul(1_000_000)
+}
+
+/// The same instant in Chrome's 1601-based microsecond clock.
+fn chrome_micros_cutoff(now: SystemTime, days: u64) -> i64 {
+    unix_micros_cutoff(now, days)
+        .saturating_add(CHROME_EPOCH_OFFSET_SECONDS.saturating_mul(1_000_000))
+}
+
+fn firefox_history_sql(cutoff_micros: i64) -> String {
     format!(
         "SELECT url, title FROM moz_places
          WHERE url NOT LIKE 'place:%' AND url <> ''
+           AND last_visit_date IS NOT NULL AND last_visit_date >= {cutoff_micros}
          ORDER BY frecency DESC
          LIMIT {FIREFOX_HISTORY_LIMIT}"
     )
@@ -43,10 +77,10 @@ fn firefox_bookmarks_sql() -> String {
     )
 }
 
-fn chrome_history_sql() -> String {
+fn chrome_history_sql(cutoff_micros: i64) -> String {
     format!(
         "SELECT url, title FROM urls
-         WHERE url <> ''
+         WHERE url <> '' AND last_visit_time >= {cutoff_micros}
          ORDER BY visit_count DESC
          LIMIT {CHROME_HISTORY_LIMIT}"
     )
@@ -71,6 +105,10 @@ struct History;
 flash_plugin::plugin!(History);
 
 impl FlashPlugin for History {
+    async fn on_command(&self, _: Context, command: CommandRequest) -> PerformResponse {
+        bang_command(&command)
+    }
+
     async fn on_start(&self, ctx: Context) {
         // Runs after the initialize reply; a failed first build publishes
         // nothing (the host keeps last-good) and retries in the background.
@@ -110,6 +148,7 @@ async fn refresh_catalog(ctx: &Context) -> bool {
             };
             let candidates = compose_candidates(firefox, chrome);
             let count = candidates.len();
+            record_source_counts(&candidates);
             ctx.publish(candidates);
             log_refresh(
                 &ctx,
@@ -134,8 +173,9 @@ async fn firefox_rows(ctx: &Context, home: &Path) -> BrowserRows {
         ctx.log("warn", "[history] copying Firefox places.sqlite failed");
         return None;
     };
+    let cutoff = unix_micros_cutoff(SystemTime::now(), HISTORY_RECENCY_DAYS);
     let queried = tokio::task::spawn_blocking(move || {
-        let history = read_url_rows(&db, &firefox_history_sql())?;
+        let history = read_url_rows(&db, &firefox_history_sql(cutoff))?;
         let bookmarks = read_url_rows(&db, &firefox_bookmarks_sql())?;
         Ok::<_, rusqlite::Error>((history, bookmarks))
     })
@@ -220,8 +260,9 @@ async fn chrome_rows(ctx: &Context, home: &Path) -> BrowserRows {
         ctx.log("warn", "[history] copying Chrome History failed");
         return None;
     };
+    let cutoff = chrome_micros_cutoff(SystemTime::now(), HISTORY_RECENCY_DAYS);
     let queried =
-        tokio::task::spawn_blocking(move || read_url_rows(&db, &chrome_history_sql())).await;
+        tokio::task::spawn_blocking(move || read_url_rows(&db, &chrome_history_sql(cutoff))).await;
     match queried {
         Ok(Ok(history)) => Some((history, bookmarks)),
         Ok(Err(error)) => {
@@ -337,31 +378,45 @@ fn read_url_rows_with(
 // Candidate shaping
 // ---------------------------------------------------------------------------
 
+/// Every row carries its own per-browser source label. Dedup by URL stays
+/// within a pool (bookmarks, then history) and is first-wins, so a URL both
+/// browsers know surfaces once, under Firefox's label.
 fn compose_candidates(
     (firefox_history, firefox_bookmarks): (Vec<UrlRow>, Vec<UrlRow>),
     (chrome_history, chrome_bookmarks): (Vec<UrlRow>, Vec<UrlRow>),
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
-    for row in firefox_bookmarks.into_iter().chain(chrome_bookmarks) {
+    let bookmarks = labelled(firefox_bookmarks, SOURCE_FIREFOX_BOOKMARKS)
+        .chain(labelled(chrome_bookmarks, SOURCE_CHROME_BOOKMARKS));
+    for (row, source) in bookmarks {
         if !acceptable_url(&row.url) || !seen.insert(row.url.clone()) {
             continue;
         }
-        candidates.push(candidate(row, SOURCE_BOOKMARKS, "bookmark"));
+        candidates.push(candidate(row, source, "bookmark"));
     }
     // History fills whatever the (small) bookmark set left of the total cap,
     // most-frecent/most-visited first.
     let mut seen = HashSet::new();
-    for row in firefox_history.into_iter().chain(chrome_history) {
+    let history = labelled(firefox_history, SOURCE_FIREFOX_HISTORY)
+        .chain(labelled(chrome_history, SOURCE_CHROME_HISTORY));
+    for (row, source) in history {
         if candidates.len() >= TOTAL_ROWS_LIMIT {
             break;
         }
         if !acceptable_url(&row.url) || !seen.insert(row.url.clone()) {
             continue;
         }
-        candidates.push(candidate(row, SOURCE_URLS, "history"));
+        candidates.push(candidate(row, source, "history"));
     }
     candidates
+}
+
+fn labelled(
+    rows: Vec<UrlRow>,
+    source: &'static str,
+) -> impl Iterator<Item = (UrlRow, &'static str)> {
+    rows.into_iter().map(move |row| (row, source))
 }
 
 /// A candidate with a `url` opens natively on selection — no resolver.
@@ -418,6 +473,58 @@ fn log_degraded_initial(ctx: &Context) {
             ("retry".to_string(), "immediate_background".to_string()),
         ]),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Bangs
+// ---------------------------------------------------------------------------
+
+/// Row count per source from the last published catalog. Bangs scope the
+/// flashlight pool to one source and the rows open natively, so a bare submit
+/// has nothing to perform — it answers with the (content-free) size of the
+/// pool the user just opened.
+static SOURCE_COUNTS: Mutex<Option<BTreeMap<String, usize>>> = Mutex::new(None);
+
+fn record_source_counts(candidates: &[Candidate]) {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for candidate in candidates {
+        *counts.entry(candidate.source.clone()).or_default() += 1;
+    }
+    if let Ok(mut slot) = SOURCE_COUNTS.lock() {
+        *slot = Some(counts);
+    }
+}
+
+fn source_count(source: &str) -> usize {
+    SOURCE_COUNTS
+        .lock()
+        .ok()
+        .and_then(|counts| counts.as_ref().map(|counts| counts.get(source).copied()))
+        .flatten()
+        .unwrap_or(0)
+}
+
+/// Map a bang token to the source it scopes the flashlight to. Kept beside the
+/// manifest `bangs` block — the host validates that every token's `source` is
+/// one this plugin declares.
+fn bang_source(token: &str) -> Option<&'static str> {
+    match token {
+        "fh" => Some(SOURCE_FIREFOX_HISTORY),
+        "fb" => Some(SOURCE_FIREFOX_BOOKMARKS),
+        "ch" => Some(SOURCE_CHROME_HISTORY),
+        "cb" => Some(SOURCE_CHROME_BOOKMARKS),
+        _ => None,
+    }
+}
+
+fn bang_command(command: &CommandRequest) -> PerformResponse {
+    let Some(source) = bang_source(command.subcommand.as_str()) else {
+        return PerformResponse::fail(format!("unknown subcommand: {}", command.subcommand));
+    };
+    PerformResponse::ok().message(format!(
+        "{} row(s) in @{source} — pick one to open",
+        source_count(source)
+    ))
 }
 
 fn main() {
@@ -510,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_labels_sources_and_deduplicates_within_each_pool() {
+    fn compose_labels_each_browser_and_deduplicates_within_each_pool() {
         let firefox = (
             vec![
                 row("https://a.example/", "A"),
@@ -526,6 +633,7 @@ mod tests {
             vec![
                 row("https://bm.example/", "Bookmark dup"),
                 row("javascript:x", "Bad"),
+                row("https://cbm.example/", "Chrome bookmark"),
             ],
         );
         let candidates = compose_candidates(firefox, chrome);
@@ -542,9 +650,18 @@ mod tests {
         assert_eq!(
             summary,
             vec![
-                ("Bookmark", "https://bm.example/", SOURCE_BOOKMARKS),
-                ("A", "https://a.example/", SOURCE_URLS),
-                ("https://b.example/", "https://b.example/", SOURCE_URLS),
+                ("Bookmark", "https://bm.example/", SOURCE_FIREFOX_BOOKMARKS),
+                (
+                    "Chrome bookmark",
+                    "https://cbm.example/",
+                    SOURCE_CHROME_BOOKMARKS
+                ),
+                ("A", "https://a.example/", SOURCE_FIREFOX_HISTORY),
+                (
+                    "https://b.example/",
+                    "https://b.example/",
+                    SOURCE_CHROME_HISTORY
+                ),
             ]
         );
     }
@@ -557,6 +674,46 @@ mod tests {
         let bookmarks = vec![row("https://bm.example/", "Bookmark")];
         let candidates = compose_candidates((history, bookmarks), (Vec::new(), Vec::new()));
         assert_eq!(candidates.len(), TOTAL_ROWS_LIMIT);
-        assert_eq!(candidates[0].source, SOURCE_BOOKMARKS);
+        assert_eq!(candidates[0].source, SOURCE_FIREFOX_BOOKMARKS);
+    }
+
+    #[test]
+    fn every_bang_token_maps_to_a_declared_source() {
+        assert_eq!(bang_source("fh"), Some(SOURCE_FIREFOX_HISTORY));
+        assert_eq!(bang_source("fb"), Some(SOURCE_FIREFOX_BOOKMARKS));
+        assert_eq!(bang_source("ch"), Some(SOURCE_CHROME_HISTORY));
+        assert_eq!(bang_source("cb"), Some(SOURCE_CHROME_BOOKMARKS));
+        assert_eq!(bang_source("nope"), None);
+    }
+
+    #[test]
+    fn recency_cutoffs_are_bounded_and_epoch_correct() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        assert_eq!(
+            unix_micros_cutoff(now, 180),
+            (1_700_000_000 - 180 * 24 * 60 * 60) * 1_000_000
+        );
+        // Chrome counts microseconds from 1601-01-01, not 1970-01-01.
+        assert_eq!(
+            chrome_micros_cutoff(now, 180) - unix_micros_cutoff(now, 180),
+            CHROME_EPOCH_OFFSET_SECONDS * 1_000_000
+        );
+        // A clock before the epoch must not produce a negative cutoff that
+        // would silently widen the window to "everything".
+        assert_eq!(unix_micros_cutoff(UNIX_EPOCH, 180), 0);
+    }
+
+    #[test]
+    fn history_queries_carry_the_recency_window_and_row_caps() {
+        let firefox = firefox_history_sql(42);
+        assert!(firefox.contains("last_visit_date >= 42"));
+        assert!(firefox.contains(&format!("LIMIT {FIREFOX_HISTORY_LIMIT}")));
+        let chrome = chrome_history_sql(42);
+        assert!(chrome.contains("last_visit_time >= 42"));
+        assert!(chrome.contains(&format!("LIMIT {CHROME_HISTORY_LIMIT}")));
+        // Bookmarks are deliberate: capped, never time-windowed.
+        let bookmarks = firefox_bookmarks_sql();
+        assert!(!bookmarks.contains("last_visit"));
+        assert!(bookmarks.contains(&format!("LIMIT {BOOKMARKS_PER_BROWSER_LIMIT}")));
     }
 }

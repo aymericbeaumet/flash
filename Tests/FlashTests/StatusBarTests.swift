@@ -740,7 +740,8 @@ final class StatusBarTests: XCTestCase {
 
   func testInsertModeButtonPaletteUsesBlueBackgroundLitFromTheTop() {
     XCTAssertEqual(
-      OverlayPanel.insertPalette.topCG, OverlayPanel.lifted(OverlayPanel.nordFrost2, by: 0.12).cgColor)
+      OverlayPanel.insertPalette.topCG,
+      OverlayPanel.lifted(OverlayPanel.nordFrost2, by: 0.12).cgColor)
     XCTAssertEqual(OverlayPanel.insertPalette.bottomCG, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(OverlayPanel.insertPalette.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }

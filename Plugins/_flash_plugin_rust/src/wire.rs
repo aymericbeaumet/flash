@@ -1,4 +1,5 @@
-//! Shared JSON boundary rules, exercised against the host's fixture corpus.
+//! Shared JSON boundary rules, exercised against the wire-values corpus the
+//! host's XCTest suites also consume.
 
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -169,10 +170,8 @@ mod tests {
 
     #[test]
     fn shared_wire_corpus_matches_the_rust_boundary() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../_flash_plugin_specs/fixtures/wire-values.fixture"
-        ))
-        .unwrap();
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/wire-values.fixture")).unwrap();
         for kind in ["protocol_version", "boolean", "pid", "perform", "hints"] {
             for case in fixture[kind].as_array().unwrap() {
                 let value = &case["value"];
@@ -201,8 +200,7 @@ mod tests {
 
     #[test]
     fn transport_limits_match_the_shared_protocol_contract() {
-        let contract: Value =
-            serde_json::from_str(include_str!("../../_flash_plugin_specs/protocol.json")).unwrap();
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
         for (key, actual) in [
             ("plugin_requests", crate::runtime::REQUEST_CAPACITY),
             ("plugin_request_bytes", crate::runtime::REQUEST_BYTES),

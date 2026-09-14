@@ -41,8 +41,10 @@ extension OverlayPanel {
   /// Hairline drawn along the bottom edge of the status bar so it separates
   /// from the window beneath without a shadow.
   static let statusBarHairlineCG = NSColor(calibratedWhite: 1, alpha: 0.07).cgColor
-  /// Wash drawn behind the hovered link or popup segment.
-  static let statusBarHoverHighlightCG = NSColor(calibratedWhite: 1, alpha: 0.08).cgColor
+  /// Wash drawn behind the hovered link or popup segment. Faint enough to
+  /// read as a hint rather than a selection: the bar is a glance surface, and
+  /// a hovered span is often most of a lane.
+  static let statusBarHoverHighlightCG = NSColor(calibratedWhite: 1, alpha: 0.045).cgColor
 
   /// A lighter tint of a palette colour for the top of a vertical gradient.
   static func lifted(_ color: NSColor, by fraction: CGFloat) -> NSColor {

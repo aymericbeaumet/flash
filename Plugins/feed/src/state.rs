@@ -1,5 +1,5 @@
 use crate::feed::{self, Article};
-use flash_plugin::{escape_status_text, inline_status_popup};
+use flash_plugin::{Color, Markup, Preview, Published, StatusValue, Style};
 use reqwest::Url;
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ pub(crate) struct State {
     label: String,
     articles: Vec<Article>,
     current_url: Option<String>,
-    published: Option<String>,
+    published: Published<StatusValue>,
 }
 
 impl State {
@@ -16,7 +16,7 @@ impl State {
             label,
             articles: Vec::new(),
             current_url: None,
-            published: None,
+            published: Published::new(),
         }
     }
 
@@ -24,18 +24,18 @@ impl State {
         &mut self,
         articles: Result<Vec<Article>, ()>,
         now: i64,
-    ) -> Option<String> {
+    ) -> Option<StatusValue> {
         if let Ok(articles) = articles {
             self.articles = articles;
         }
         self.update(now, false)
     }
 
-    pub(crate) fn cycle(&mut self, now: i64) -> Option<String> {
+    pub(crate) fn cycle(&mut self, now: i64) -> Option<StatusValue> {
         self.update(now, true)
     }
 
-    pub(crate) fn expire(&mut self, now: i64) -> Option<String> {
+    pub(crate) fn expire(&mut self, now: i64) -> Option<StatusValue> {
         self.update(now, false)
     }
 
@@ -50,7 +50,7 @@ impl State {
             })
     }
 
-    fn update(&mut self, now: i64, advance: bool) -> Option<String> {
+    fn update(&mut self, now: i64, advance: bool) -> Option<StatusValue> {
         self.articles
             .retain(|article| feed::is_recent(article.published_at, now));
         let previous = self
@@ -65,51 +65,37 @@ impl State {
         let summary = selected
             .map(|article| render(article, &self.label))
             .unwrap_or_default();
-        if self.published.as_ref() == Some(&summary) {
-            None
-        } else {
-            self.published = Some(summary.clone());
-            Some(summary)
-        }
+        self.published.update(summary).cloned()
     }
 }
 
-pub(crate) fn render(article: &Article, label: &str) -> String {
+pub(crate) fn render(article: &Article, label: &str) -> StatusValue {
     let original = Url::parse(&article.original_url).expect("validated article URL");
     let domain = original.host_str().unwrap_or_default();
-    let domain = escape_status_text(domain.strip_prefix("www.").unwrap_or(domain));
+    let domain = Markup::text(domain.strip_prefix("www.").unwrap_or(domain));
     let mut origin = original.clone();
     origin.set_path("/");
     origin.set_query(None);
     origin.set_fragment(None);
-    let title = escape_status_text(&feed::truncate(&article.title, 160));
-    let title_link = format!(
-        "#[fg=colour245]#[link={}]#[shrink]{}#[noshrink]#[nolink]",
-        marker_url(&article.url),
-        title,
-    );
-    let popup_title = title;
-    let preview = &article.preview;
-    let body = if preview.is_empty() {
-        format!("#[fg=colour178,bold]{popup_title}#[default]")
-    } else {
-        format!("#[fg=colour178,bold]{popup_title}#[default]\n\n{preview}")
-    };
-    let label = escape_status_text(label);
-    let row = format!(
-        "#[fg=#EBCB8B]{label}#[fg=colour245] #[cyc]{} #[link={}]({})#[nolink] #[fg=colour178]#[link={}]↗#[nolink]#[fg=colour245]#[nocyc]",
-        title_link,
-        marker_url(origin.as_str()),
-        domain,
-        marker_url(&article.original_url),
-    );
-    inline_status_popup(&row, &body)
-}
-
-fn marker_url(url: &str) -> String {
-    url.replace('[', "%5B")
-        .replace(']', "%5D")
-        .replace(',', "%2C")
+    let title = Markup::text(feed::truncate(&article.title, 160));
+    let mut preview = Preview::new().raw(Markup::styled(
+        title.clone(),
+        Style::fg(Color::ACCENT).bold(),
+    ));
+    if !article.preview.is_empty() {
+        preview = preview.blank().raw(&article.preview);
+    }
+    let row = Markup::raw(format!(
+        "#[fg={title_color}]{label}#[fg={muted}] #[cyc]{title} {source} #[fg={accent}]{outbound}#[fg={muted}]#[nocyc]",
+        title_color = Color::TITLE,
+        muted = Color::MUTED,
+        accent = Color::ACCENT,
+        label = Markup::text(label),
+        title = Markup::link(Markup::raw("#[shrink]") + title + "#[noshrink]", &article.url),
+        source = Markup::link(format!("({domain})"), origin.as_str()),
+        outbound = Markup::link("↗", &article.original_url),
+    ));
+    StatusValue::text(row).with_preview(preview)
 }
 
 #[cfg(test)]
@@ -154,7 +140,10 @@ mod tests {
             state.refresh(Err(()), 100 + feed::WINDOW_SECONDS),
             Some(render(&b, "AGGR"))
         );
-        assert_eq!(state.cycle(200 + feed::WINDOW_SECONDS), Some(String::new()));
+        assert_eq!(
+            state.cycle(200 + feed::WINDOW_SECONDS),
+            Some(StatusValue::empty())
+        );
         assert_eq!(state.cycle(201 + feed::WINDOW_SECONDS), None);
     }
 
@@ -162,7 +151,7 @@ mod tests {
     fn valid_empty_refresh_clears_status() {
         let mut state = State::new("AGGR".into());
         state.refresh(Ok(vec![article("A", 100)]), 101);
-        assert_eq!(state.refresh(Ok(vec![]), 102), Some(String::new()));
+        assert_eq!(state.refresh(Ok(vec![]), 102), Some(StatusValue::empty()));
     }
 
     #[test]
@@ -189,7 +178,11 @@ mod tests {
     #[test]
     fn configured_label_is_escaped_and_stays_inside_whole_row_popup() {
         let mut state = State::new("#[bold]NEWS".into());
-        let summary = state.refresh(Ok(vec![article("Title", 100)]), 101).unwrap();
+        let summary = state
+            .refresh(Ok(vec![article("Title", 100)]), 101)
+            .unwrap()
+            .render()
+            .unwrap();
         assert!(summary.starts_with("#[popup=inline:"));
         assert!(summary.contains("#[fg=#EBCB8B]##[bold]NEWS#[fg=colour245] "));
         assert!(summary.ends_with("#[nopopup]"));
@@ -201,7 +194,7 @@ mod tests {
         let mut item = article("#[fg=red]Title", 100);
         item.url = "https://aggr.example/a,b]#[bold]".into();
         item.preview = crate::preview::render("Text #[bold]injection");
-        let summary = render(&item, "AGGR");
+        let summary = render(&item, "AGGR").render().unwrap();
         assert!(summary.contains("#[link=https://aggr.example/a%2Cb%5D#%5Bbold%5D]"));
         assert!(summary.contains("#[shrink]##[fg=red]Title#[noshrink]"));
         assert!(summary.contains("(source.example)"));
@@ -216,7 +209,7 @@ mod tests {
         item.preview = crate::preview::render(
             "<h2>Opening</h2><p>First paragraph.</p><p>Second paragraph.</p>",
         );
-        let summary = render(&item, "AGGR");
+        let summary = render(&item, "AGGR").render().unwrap();
         let (row, suffix) = summary.split_once("#[nopopup]").unwrap();
         assert!(row.starts_with("#[popup=inline:"));
         assert!(row.contains("#[fg=#EBCB8B]AGGR#[fg=colour245] "));
@@ -235,7 +228,7 @@ mod tests {
         let mut item = article("Title", 100);
         item.title = "🦀".repeat(1000);
         item.preview = crate::preview::render(&format!("<p>{}</p>", "🌍".repeat(1000)));
-        let summary = render(&item, "AGGR");
+        let summary = render(&item, "AGGR").render().unwrap();
         let encoded = summary
             .split_once("#[popup=inline:")
             .unwrap()
@@ -243,7 +236,7 @@ mod tests {
             .split_once(']')
             .unwrap()
             .0;
-        assert!(encoded.len() <= 16_384);
+        assert!(encoded.len() <= flash_plugin::MAX_INLINE_PREVIEW_ENCODED_BYTES);
         assert!(summary.contains("#[nopopup]"));
     }
 
@@ -252,7 +245,11 @@ mod tests {
         let mut state = State::new("NEWS".into());
         let a = article("Latest", 200);
         let b = article("Earlier", 100);
-        let initial = state.refresh(Ok(vec![a.clone(), b.clone()]), 201).unwrap();
+        let initial = state
+            .refresh(Ok(vec![a.clone(), b.clone()]), 201)
+            .unwrap()
+            .render()
+            .unwrap();
         assert!(initial.contains("#[fg=#EBCB8B]NEWS#[fg=colour245] #[cyc]"));
         assert!(initial.ends_with("#[nocyc]#[nopopup]"));
         assert_eq!(initial.matches("#[cyc]").count(), 1);
@@ -265,7 +262,9 @@ mod tests {
 
     #[test]
     fn title_alone_is_elastic_and_outbound_arrow_remains_in_fixed_suffix() {
-        let summary = render(&article("Long title", 100), "NEWS");
+        let summary = render(&article("Long title", 100), "NEWS")
+            .render()
+            .unwrap();
         let (_, elastic) = summary.split_once("#[shrink]").unwrap();
         let (title, suffix) = elastic.split_once("#[noshrink]").unwrap();
         assert_eq!(title, "Long title");

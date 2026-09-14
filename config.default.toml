@@ -407,8 +407,8 @@ leader = "\\"
 # of gT/gt.
 "J" = ["flash", "tab_previous"]
 "K" = ["flash", "tab_next"]
-# Reorder the current tab. In tmux this swap-windows; in browsers there
-# is no portable equivalent so the mapping is a no-op.
+# Reorder the current tab. In tmux this swap-windows; in Firefox it uses the
+# native move-tab shortcut.
 "[m" = { action = ["flash", "tab_move_previous"], repeat = true }
 "]m" = { action = ["flash", "tab_move_next"], repeat = true }
 "[e" = { action = ["flash", "tab_move_previous"], repeat = true }
@@ -418,6 +418,13 @@ leader = "\\"
 # Cycle the focused app's windows with native macOS shortcuts.
 "[w" = { action = ["flash", "send_key", "--keys=cmd+shift+`"], repeat = true }
 "]w" = { action = ["flash", "send_key", "--keys=cmd+`"], repeat = true }
+# Cycle splits (panes) inside the focused terminal window: tmux select-pane
+# when a tmux client hosts the terminal, otherwise the terminal's own ⌘[ / ⌘]
+# split cycling where it binds them (Ghostty, iTerm2). A no-op elsewhere.
+# `s` rather than `p`: `p` is the right pinky on QWERTY, the same finger that
+# just pressed the bracket.
+"[s" = { action = ["flash", "pane_previous"], repeat = true }
+"]s" = { action = ["flash", "pane_next"], repeat = true }
 # Restore the most recently closed tab. Vimium binds this to X; browsers
 # receive ⌘⇧T; tmux has no closed-window history so it returns "unhandled".
 "X" = ["flash", "tab_reopen"]

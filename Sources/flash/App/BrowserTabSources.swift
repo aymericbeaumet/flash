@@ -3,8 +3,8 @@ import Foundation
 /// Browser bundle-id constants the host still consults for behavioural
 /// decisions ("is this a browser?" — e.g. force tab_last to ⌘9 instead of a
 /// plugin source action). The actual tab discovery, resolution, and tab
-/// actions now live in the per-browser plugins under `Plugins/{safari,
-/// firefox, chromium}/`, which is why the rest of this file is gone.
+/// actions now live in the browser plugins under `Plugins/{browsers,
+/// firefox}/`, which is why the rest of this file is gone.
 enum BrowserTabSources {
   static let safariBundleIdentifiers: Set<String> = [
     "com.apple.Safari",

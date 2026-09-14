@@ -47,8 +47,8 @@ final class PluginSystemTests: XCTestCase {
           "subtitle": NSNull(),
           "effect": ["type": "copy_text", "text": "2"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertEqual(answer.title, "2")
 
     // Required fields stay required: null means absent, and an absent query
@@ -56,8 +56,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(
       decodeQueryAnswer(
         from: ["title": "x", "effect": NSNull()],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testPluginRowCannotSpoofRoutingOwner() throws {
@@ -183,14 +183,14 @@ final class PluginSystemTests: XCTestCase {
           "subtitle": "1+1",
           "effect": ["type": "copy_text", "text": "2"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     guard case .copyText(let text) = candidate.effect else {
       return XCTFail("expected copy_text effect")
     }
     XCTAssertEqual(text, "2")
-    XCTAssertEqual(candidate.source, "calculator")
-    XCTAssertEqual(candidate.sourceID, "plugin:calculator")
+    XCTAssertEqual(candidate.source, "answers")
+    XCTAssertEqual(candidate.sourceID, "plugin:answers")
     XCTAssertEqual(candidate.kind, .plugin("query_answer"))
     XCTAssertEqual(candidate.priority, .urgent)
     XCTAssertTrue(candidate.finishesCommand)
@@ -202,16 +202,16 @@ final class PluginSystemTests: XCTestCase {
           "title": "unsafe",
           "effect": ["type": "unknown", "text": "unsafe"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertNil(
       decodeQueryAnswer(
         from: [
           "title": "empty",
           "effect": ["type": "copy_text", "text": ""],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertNil(
       decodeQueryAnswer(
         from: [
@@ -219,8 +219,8 @@ final class PluginSystemTests: XCTestCase {
           "url": "https://example.com",
           "effect": ["type": "copy_text", "text": "spoof"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertNil(
       decodeQueryAnswer(
         from: [
@@ -231,8 +231,8 @@ final class PluginSystemTests: XCTestCase {
             "url": "https://example.com",
           ],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testQueryEvaluatorAnswerPayloadsAreRejectedAtomicallyAboveTheCap() {
@@ -244,14 +244,14 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       PluginWireCodec.queryAnswers(
         from: Array(repeating: answer, count: 16),
-        sourceID: "plugin:calculator",
-        source: "calculator")?.count,
+        sourceID: "plugin:answers",
+        source: "answers")?.count,
       16)
     XCTAssertNil(
       PluginWireCodec.queryAnswers(
         from: Array(repeating: answer, count: 17),
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testQueryAnswerFieldAndAggregateLimitsAreStrict() {
@@ -264,8 +264,8 @@ final class PluginSystemTests: XCTestCase {
           "title": oversizedField,
           "effect": ["type": "copy_text", "text": "x"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
 
     let largeAnswer: [String: Any] = [
       "title": String(repeating: "t", count: PluginProtocol.maxAnswerFieldBytes),
@@ -280,8 +280,8 @@ final class PluginSystemTests: XCTestCase {
         from: Array(
           repeating: largeAnswer,
           count: PluginProtocol.maxAnswers),
-        sourceID: "plugin:calculator",
-        source: "calculator"),
+        sourceID: "plugin:answers",
+        source: "answers"),
       "individually valid answers must still fit the aggregate response budget")
   }
 
@@ -353,8 +353,8 @@ final class PluginSystemTests: XCTestCase {
           "title": "nav",
           "effect": ["type": "open", "url": "https://example.com"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testPluginProtocolVersionRequiresExactV1() {
@@ -892,19 +892,19 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "id": "slack",
-          "name": "Slack",
+          "id": "spotify",
+          "name": "Spotify",
           "version": "0.1.0",
-          "description": "Slack",
+          "description": "Spotify",
           "install": "true",
           "exec": ["/usr/bin/true"],
           "mappings": [
-            { "key": "q", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] },
+            { "key": "q", "command": ["flash", "plugin_command", "--command=spotify", "--subcommand=run"] },
             {
               "key": "ctrl+k",
               "mode": "insert",
               "command": ["flash", "hints_dismiss"],
-              "only_bundle_ids": ["com.tinyspeck.slackmacgap"],
+              "only_bundle_ids": ["com.spotify.client"],
               "priority": 40
             },
             {
@@ -930,7 +930,7 @@ final class PluginSystemTests: XCTestCase {
     let second = manifest.mappings[1]
     XCTAssertEqual(second.mode, "insert")
     XCTAssertEqual(second.scope, .insert)
-    XCTAssertEqual(second.selector.onlyBundleIDs, ["com.tinyspeck.slackmacgap"])
+    XCTAssertEqual(second.selector.onlyBundleIDs, ["com.spotify.client"])
     XCTAssertEqual(second.priority, 40)
     XCTAssertEqual(manifest.mappings[2].scope, .terminal)
   }
@@ -1314,13 +1314,13 @@ final class PluginSystemTests: XCTestCase {
         "SSH_AUTH_SOCK": "/tmp/agent.sock",
       ],
       overrides: [
-        "FLASH_PLUGIN_ID": "calculator",
+        "FLASH_PLUGIN_ID": "answers",
         "FLASH_PLUGIN_CONFIG": "{}",
       ])
 
     XCTAssertEqual(environment["HOME"], "/Users/demo")
     XCTAssertEqual(environment["PATH"], "/opt/homebrew/bin:/usr/bin")
-    XCTAssertEqual(environment["FLASH_PLUGIN_ID"], "calculator")
+    XCTAssertEqual(environment["FLASH_PLUGIN_ID"], "answers")
     XCTAssertNil(environment["AWS_SECRET_ACCESS_KEY"])
     XCTAssertNil(environment["SLACK_API_TOKEN"])
     XCTAssertNil(environment["SSH_AUTH_SOCK"])
@@ -1521,18 +1521,12 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - Subprocess smoke tests (wire-level, host-free)
 
-  func testOfficialPluginsRespondOverNDJSONWithMockedCLIs() throws {
-    let cases = [
-      ("slack", "slack"),
-      ("spotify", "spotify_player"),
-    ]
-    for (pluginID, binary) in cases {
-      try runPluginSmoke(pluginID: pluginID, binary: binary)
-    }
+  func testOfficialPluginRespondsOverNDJSONWithMockedCLI() throws {
+    try runPluginSmoke(pluginID: "spotify", binary: "spotify_player")
   }
 
   func testRustPluginExitsWhenHostClosesStdin() throws {
-    try runPluginStdinEOFSmoke(pluginID: "calculator")
+    try runPluginStdinEOFSmoke(pluginID: "answers")
   }
 
   func testNewPluginScaffoldIsStrictlyDecodableAndBuilds() throws {

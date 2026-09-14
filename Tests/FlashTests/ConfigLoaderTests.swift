@@ -178,16 +178,24 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("[s") })?.action.command,
+      .panePrev)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("]s") })?.action.command,
+      .paneNext)
     for rawKey in [
       "[t", "]t", "[h", "]h", "]b", "[B", "]B", "[m", "]m", "[e", "]e", "[a", "]a",
-      "[w", "]w",
+      "[w", "]w", "[s", "]s",
     ] {
       XCTAssertEqual(
         c.mode.normal.first(where: { $0.key == key(rawKey) })?.repeatsOnFinalKey,
         true,
         "expected default bracket mapping \(rawKey) to repeat")
     }
-    for rawKey in ["[[", "]]", "[b", "T"] {
+    // `[p` / `]p` would put the bracket and its letter on the same finger
+    // (right pinky on QWERTY), so splits live on `[s` / `]s` instead.
+    for rawKey in ["[[", "]]", "[b", "T", "[p", "]p"] {
       XCTAssertNil(
         c.mode.normal.first(where: { $0.key == key(rawKey) }),
         "expected removed default mapping \(rawKey) to stay unbound")
@@ -618,26 +626,27 @@ final class ConfigLoaderTests: XCTestCase {
   func testParsesPluginSettingsTables() throws {
     let c = ConfigLoader.parse(
       """
-      [plugin.slack]
-      cli = "/opt/homebrew/bin/slack"
+      [plugin.spotify]
+      cli = "/opt/homebrew/bin/spotify_player"
       retries = 3
       verbose = true
 
-      [plugin.searchengines]
+      [plugin.reference]
       engines = ["google", "ddg"]
       """)
 
-    XCTAssertEqual(c.plugins.settings["slack"]?["cli"], .string("/opt/homebrew/bin/slack"))
-    XCTAssertEqual(c.plugins.settings["slack"]?["retries"], .int(3))
-    XCTAssertEqual(c.plugins.settings["slack"]?["verbose"], .bool(true))
     XCTAssertEqual(
-      c.plugins.settings["searchengines"]?["engines"], .stringArray(["google", "ddg"]))
+      c.plugins.settings["spotify"]?["cli"], .string("/opt/homebrew/bin/spotify_player"))
+    XCTAssertEqual(c.plugins.settings["spotify"]?["retries"], .int(3))
+    XCTAssertEqual(c.plugins.settings["spotify"]?["verbose"], .bool(true))
+    XCTAssertEqual(
+      c.plugins.settings["reference"]?["engines"], .stringArray(["google", "ddg"]))
 
-    let slackJSON = c.pluginConfigJSON(for: "slack")
-    let data = try XCTUnwrap(slackJSON.data(using: .utf8))
+    let spotifyJSON = c.pluginConfigJSON(for: "spotify")
+    let data = try XCTUnwrap(spotifyJSON.data(using: .utf8))
     let object = try XCTUnwrap(
       try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(object["cli"] as? String, "/opt/homebrew/bin/slack")
+    XCTAssertEqual(object["cli"] as? String, "/opt/homebrew/bin/spotify_player")
     XCTAssertEqual(object["retries"] as? Int, 3)
     XCTAssertEqual(object["verbose"] as? Bool, true)
     XCTAssertEqual(c.pluginConfigJSON(for: "absent"), "{}")
@@ -802,7 +811,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testResolvedConfigJSONNeverIncludesPluginSettingValues() throws {
     let config = ConfigLoader.parse(
       """
-      [plugin.calculator]
+      [plugin.answers]
       target_currencies = ["USD"]
       api_token = "top-secret"
       """)
@@ -810,7 +819,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertFalse(config.resolvedConfigJSON.contains("top-secret"))
     let root = try XCTUnwrap(Self.parseJSONObject(config.resolvedConfigJSON))
     let plugins = try XCTUnwrap(root["plugins"] as? [String: Any])
-    XCTAssertEqual(plugins["configured"] as? [String], ["calculator"])
+    XCTAssertEqual(plugins["configured"] as? [String], ["answers"])
     XCTAssertNil(plugins["settings"])
   }
 

@@ -1,10 +1,10 @@
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use flash_plugin::status::{percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, sys, CommandRequest, Context,
-    PerformResponse,
+    run, run_command, sys, Color, CommandRequest, Context, History, Markup, PerformResponse,
+    Preview, Published, StatusValue,
 };
 
 // CPU load comes from `host_processor_info` tick counters sampled once per
@@ -13,8 +13,9 @@ const CPU_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 const GPU_INTERVAL: Duration = Duration::from_secs(15);
 const GPU_TIMEOUT: Duration = Duration::from_secs(4);
 const HISTORY_SAMPLES: usize = 20;
-const DETAIL_LABEL_WIDTH: usize = 14;
 const IOREG: &str = "/usr/sbin/ioreg";
+
+type CpuHistory = History<HISTORY_SAMPLES>;
 
 #[derive(Clone, Debug, PartialEq)]
 struct CpuSnapshot {
@@ -49,12 +50,26 @@ enum GatePolicy {
     SkipIfBusy,
 }
 
+/// One rendered status frame: the popup-free bar label, the visible summary
+/// and the hover preview shown behind it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct StatusSegments {
-    summary: String,
-    label: String,
-    details: String,
-    plain_details: String,
+struct Report {
+    label: Markup,
+    summary: Markup,
+    preview: Preview,
+}
+
+impl Report {
+    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+        [
+            (
+                "summary",
+                StatusValue::text(self.summary.clone()).with_preview(self.preview.clone()),
+            ),
+            ("label", StatusValue::text(self.label.clone())),
+            ("details", StatusValue::text(self.preview.render())),
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,10 +105,22 @@ struct MonitorState {
     /// Baseline for the next differential sample.
     ticks: Option<sys::CpuTicks>,
     gpu: Option<GpuSnapshot>,
-    history: VecDeque<f64>,
-    published: Option<StatusSegments>,
+    history: CpuHistory,
+    published: Published<Report>,
     cpu_failure_logged: bool,
     gpu_failure_logged: bool,
+}
+
+impl MonitorState {
+    fn report(&self, summary_mode: SummaryMode) -> Option<Report> {
+        let cpu = self.cpu.as_ref()?;
+        Some(render_report(
+            cpu,
+            self.gpu.as_ref(),
+            &self.history,
+            summary_mode,
+        ))
+    }
 }
 
 struct Cpu {
@@ -150,7 +177,7 @@ impl FlashPlugin for Cpu {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "" => details_response(current_status(&ctx, &self.state)),
+            "" => details_response(current_report(&ctx, &self.state)),
             "refresh" => {
                 refresh_all(
                     &ctx,
@@ -160,7 +187,7 @@ impl FlashPlugin for Cpu {
                     GatePolicy::SkipIfBusy,
                 )
                 .await;
-                details_response(current_status(&ctx, &self.state))
+                details_response(current_report(&ctx, &self.state))
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
@@ -302,7 +329,7 @@ fn apply_cpu_result(
     let mut state = lock_state(state);
     match result {
         Collection::Fresh(snapshot) => {
-            append_history(&mut state.history, snapshot.total());
+            state.history.push(snapshot.total());
             state.cpu = Some(snapshot);
             state.cpu_failure_logged = false;
         }
@@ -342,40 +369,20 @@ fn apply_gpu_result(
 }
 
 fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
-    let next = {
+    let segments = {
         let mut state = lock_state(state);
-        let cpu = match state.cpu.as_ref() {
-            Some(cpu) => cpu,
-            None => return,
-        };
-        let rendered = render_status(
-            cpu,
-            state.gpu.as_ref(),
-            &state.history,
-            configured_summary_mode(ctx),
-        );
-        if state.published.as_ref() == Some(&rendered) {
+        let Some(report) = state.report(configured_summary_mode(ctx)) else {
             return;
-        }
-        state.published = Some(rendered.clone());
-        rendered
+        };
+        state.published.update(report).map(Report::segments)
     };
-    ctx.status([
-        ("summary", next.summary.as_str()),
-        ("label", next.label.as_str()),
-        ("details", next.details.as_str()),
-    ]);
+    if let Some(segments) = segments {
+        ctx.status(segments);
+    }
 }
 
-fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
-    let state = lock_state(state);
-    let cpu = state.cpu.as_ref()?;
-    Some(render_status(
-        cpu,
-        state.gpu.as_ref(),
-        &state.history,
-        configured_summary_mode(ctx),
-    ))
+fn current_report(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<Report> {
+    lock_state(state).report(configured_summary_mode(ctx))
 }
 
 fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, MonitorState> {
@@ -384,9 +391,9 @@ fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, Mon
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn details_response(status: Option<StatusSegments>) -> PerformResponse {
-    status
-        .map(|status| PerformResponse::ok().message(status.plain_details))
+fn details_response(report: Option<Report>) -> PerformResponse {
+    report
+        .map(|report| PerformResponse::ok().message(report.preview.render_plain()))
         .unwrap_or_else(|| PerformResponse::fail("CPU information unavailable"))
 }
 
@@ -498,128 +505,76 @@ fn quoted_value(raw: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn append_history(history: &mut VecDeque<f64>, value: f64) {
-    history.push_back(value.clamp(0.0, 100.0));
-    while history.len() > HISTORY_SAMPLES {
-        history.pop_front();
-    }
-}
-
-fn sparkline(history: &VecDeque<f64>) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    history
-        .iter()
-        .map(|value| {
-            let index = (value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize;
-            BARS[index]
-        })
-        .collect()
-}
-
-fn render_status(
+fn render_report(
     cpu: &CpuSnapshot,
     gpu: Option<&GpuSnapshot>,
-    history: &VecDeque<f64>,
+    history: &CpuHistory,
     summary_mode: SummaryMode,
-) -> StatusSegments {
-    let total = cpu.total();
-    let visible = visible_summary(cpu, gpu, history, summary_mode);
-
-    let body = format!(
-        "User: {:.1}% · System: {:.1}% · Idle: {:.1}%\n\
-Load: {:.2} · {:.2} · {:.2}",
-        cpu.user, cpu.system, cpu.idle, cpu.load[0], cpu.load[1], cpu.load[2]
-    );
-    let (gpu_value, model) = gpu
-        .map(|gpu| {
+) -> Report {
+    let (gpu_value, model) = gpu.map_or_else(
+        || ("      —".to_string(), Markup::text("—")),
+        |gpu| {
             (
                 format!("{:>5.1} %", gpu.utilization),
-                escape_status_text(gpu.model.as_deref().unwrap_or("GPU")),
+                Markup::text(gpu.model.as_deref().unwrap_or("GPU")),
             )
-        })
-        .unwrap_or_else(|| ("      —".to_string(), "—".to_string()));
-    let details = [
-        "#[fg=#EBCB8B]CPU#[default]".to_string(),
-        detail_row("Total", &format!("{total:>5.1} %")),
-        detail_row("User", &format!("{:>5.1} %", cpu.user)),
-        detail_row("System", &format!("{:>5.1} %", cpu.system)),
-        detail_row("Idle", &format!("{:>5.1} %", cpu.idle)),
-        detail_row(
+        },
+    );
+    let preview = Preview::new()
+        .title("CPU")
+        .row("Total", format!("{:>5.1} %", cpu.total()))
+        .row("User", format!("{:>5.1} %", cpu.user))
+        .row("System", format!("{:>5.1} %", cpu.system))
+        .row("Idle", format!("{:>5.1} %", cpu.idle))
+        .row(
             "Logical CPUs",
-            &cpu.logical_cpus
-                .map(|count| count.to_string())
-                .unwrap_or_else(|| "—".into()),
-        ),
-        detail_row(
+            cpu.logical_cpus
+                .map_or_else(|| "—".to_string(), |count| count.to_string()),
+        )
+        .row(
             "Load",
-            &format!(
+            format!(
                 "{:>5.2}  {:>5.2}  {:>5.2}",
                 cpu.load[0], cpu.load[1], cpu.load[2]
             ),
-        ),
-        detail_row("History", &padded_history(history)),
-        detail_row("GPU", &gpu_value),
-        detail_row("Model", &model),
-    ]
-    .join("\n");
-    let mut plain_details = format!("CPU {total:.1}%\n{body}");
-    if let Some(count) = cpu.logical_cpus {
-        plain_details.push_str(&format!("\nLogical CPUs: {count}"));
-    }
-    if !history.is_empty() {
-        let history = format!("\nHistory: {}", sparkline(history));
-        plain_details.push_str(&history);
-    }
-    if let Some(gpu) = gpu {
-        let label = gpu.model.as_deref().unwrap_or("GPU");
-        plain_details.push_str(&format!("\n\nGPU\n{label}: {:.0}%", gpu.utilization));
-    }
-
-    StatusSegments {
-        summary: inline_status_popup(&visible, &details),
-        label: format!(
-            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{:>2.0}%#[default]",
-            total.min(99.0)
-        ),
-        details,
-        plain_details,
+        )
+        .row(
+            "History",
+            sparkline_padded(&sparkline_percent(history), CpuHistory::CAPACITY),
+        )
+        .row("GPU", gpu_value)
+        .row("Model", model);
+    Report {
+        label: metric("CPU", cpu.total()),
+        summary: visible_summary(cpu, gpu, history, summary_mode),
+        preview,
     }
 }
 
-fn detail_row(label: &str, value: &str) -> String {
-    format!(
-        "#[fg=colour245]{label:<width$}#[default]{value}",
-        width = DETAIL_LABEL_WIDTH
-    )
-}
-
-fn padded_history(history: &VecDeque<f64>) -> String {
-    let chart = sparkline(history);
-    let padding = HISTORY_SAMPLES.saturating_sub(chart.chars().count());
-    format!("{}{chart}", "·".repeat(padding))
+/// Yellow section name plus the grey two-digit percentage the monitor labels
+/// share.
+fn metric(name: &str, percent: f64) -> Markup {
+    Markup::colored(name, Color::TITLE) + " " + Markup::colored(percent2(percent), Color::MUTED)
 }
 
 fn visible_summary(
     cpu: &CpuSnapshot,
     gpu: Option<&GpuSnapshot>,
-    history: &VecDeque<f64>,
+    history: &CpuHistory,
     summary_mode: SummaryMode,
-) -> String {
-    let total = cpu.total().min(99.0);
-    let mut visible = format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{total:>2.0}%#[default]");
+) -> Markup {
+    let mut visible = metric("CPU", cpu.total());
     if summary_mode == SummaryMode::Compact {
         return visible;
     }
     if let Some(gpu) = gpu {
-        let utilization = gpu.utilization.min(99.0);
-        visible.push_str(&format!(
-            " #[fg=colour245]· #[fg=#EBCB8B]GPU#[default] #[fg=colour245]{:>2.0}%#[default]",
-            utilization,
-        ));
+        visible += " ";
+        visible += Markup::colored("· ", Color::MUTED);
+        visible += metric("GPU", gpu.utilization);
     }
     if !history.is_empty() {
-        visible.push(' ');
-        visible.push_str(&sparkline(history));
+        visible += " ";
+        visible += sparkline_percent(history);
     }
     visible
 }
@@ -630,9 +585,26 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::BTreeMap;
 
     use super::*;
+
+    /// The wire strings `Context::status` publishes for a report.
+    fn wire(report: &Report) -> BTreeMap<&'static str, String> {
+        report
+            .segments()
+            .into_iter()
+            .map(|(name, value)| (name, value.render().expect("preview fits inline")))
+            .collect()
+    }
+
+    fn history(samples: impl IntoIterator<Item = f64>) -> CpuHistory {
+        let mut history = CpuHistory::new();
+        for sample in samples {
+            history.push(sample);
+        }
+        history
+    }
 
     #[test]
     fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
@@ -650,12 +622,14 @@ mod tests {
                 load: [0.0; 3],
                 logical_cpus: None,
             };
-            let status = render_status(&cpu, None, &VecDeque::from([user]), SummaryMode::Full);
+            let report = render_report(&cpu, None, &history([user]), SummaryMode::Full);
             assert_eq!(
-                status.label,
+                report.label.as_str(),
                 format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{expected}#[default]")
             );
-            assert!(status.summary.contains("popup="));
+            let segments = wire(&report);
+            assert_eq!(segments["label"], report.label.as_str());
+            assert!(segments["summary"].contains("popup="));
         }
     }
 
@@ -695,7 +669,7 @@ mod tests {
                 logical_cpus: None,
             };
             assert_eq!(
-                visible_summary(&cpu, None, &VecDeque::new(), SummaryMode::Compact),
+                visible_summary(&cpu, None, &CpuHistory::new(), SummaryMode::Compact).as_str(),
                 expected
             );
         }
@@ -716,9 +690,9 @@ mod tests {
         };
 
         assert_eq!(
-            visible_summary(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Full),
+            visible_summary(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Full).as_str(),
             "#[fg=#EBCB8B]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
-· #[fg=#EBCB8B]GPU#[default] #[fg=colour245]99%#[default]"
+· #[default]#[fg=#EBCB8B]GPU#[default] #[fg=colour245]99%#[default]"
         );
     }
 
@@ -782,17 +756,25 @@ mod tests {
     }
 
     #[test]
-    fn history_is_bounded_and_sparkline_is_deterministic() {
-        let mut history = VecDeque::new();
-        for value in 0..25 {
-            append_history(&mut history, f64::from(value) * 4.0);
-        }
+    fn history_keeps_the_newest_twenty_samples() {
+        let history = history((0..25).map(|value| f64::from(value) * 4.0));
         assert_eq!(history.len(), HISTORY_SAMPLES);
-        assert_eq!(history.front().copied(), Some(20.0));
-        assert_eq!(
-            sparkline(&VecDeque::from([0.0, 12.5, 50.0, 87.5, 100.0])),
-            "▁▂▅▇█"
-        );
+        assert_eq!(history.iter().next(), Some(20.0));
+    }
+
+    #[test]
+    fn unchanged_reports_stay_off_the_wire() {
+        let cpu = cpu_snapshot(10.0, 5.0, 85.0, [1.0, 2.0, 3.0]).expect("CPU snapshot");
+        let mut state = MonitorState {
+            cpu: Some(cpu),
+            ..MonitorState::default()
+        };
+        let report = state.report(SummaryMode::Compact).expect("report");
+        assert!(state.published.update(report.clone()).is_some());
+        assert!(state.published.update(report).is_none());
+        state.history.push(50.0);
+        let changed = state.report(SummaryMode::Compact).expect("report");
+        assert!(state.published.update(changed).is_some());
     }
 
     #[test]
@@ -808,27 +790,27 @@ mod tests {
             utilization: 59.0,
             model: Some("Apple M4 Pro".into()),
         };
-        let history = VecDeque::from([10.0, 20.0]);
-        let rendered = render_status(&cpu, Some(&gpu), &history, SummaryMode::Compact);
-        assert!(rendered.summary.starts_with("#[popup=inline:"));
-        assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered
-            .summary
-            .contains("CPU#[default] #[fg=colour245]20%#[default]"));
-        assert!(!rendered.summary.contains("GPU#[default]"));
-        assert!(!rendered.summary.contains("▂"));
+        let history = history([10.0, 20.0]);
+        let report = render_report(&cpu, Some(&gpu), &history, SummaryMode::Compact);
+        let segments = wire(&report);
+        assert!(segments["summary"].starts_with("#[popup=inline:"));
+        assert!(segments["summary"].ends_with("#[nopopup]"));
+        assert!(segments["summary"].contains("CPU#[default] #[fg=colour245]20%#[default]"));
+        assert!(!segments["summary"].contains("GPU#[default]"));
+        assert!(!segments["summary"].contains("▂"));
         assert_eq!(
-            visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Compact),
+            report.summary.as_str(),
             "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]20%#[default]"
         );
         assert!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
+                .as_str()
                 .contains("#[fg=#EBCB8B]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
         );
         assert_eq!(CPU_SAMPLE_PERIOD, Duration::from_secs(1));
         assert_eq!(GPU_INTERVAL, Duration::from_secs(15));
         assert_eq!(
-            rendered.details,
+            segments["details"],
             "#[fg=#EBCB8B]CPU#[default]\n\
 #[fg=colour245]Total         #[default] 19.8 %\n\
 #[fg=colour245]User          #[default] 12.5 %\n\
@@ -840,14 +822,23 @@ mod tests {
 #[fg=colour245]GPU           #[default] 59.0 %\n\
 #[fg=colour245]Model         #[default]Apple M4 Pro"
         );
-        assert!(!rendered.details.ends_with('\n'));
-        assert!(!rendered.plain_details.contains("#["));
-        assert!(rendered.plain_details.starts_with("CPU 19.8%\n"));
-        assert!(rendered.plain_details.contains("GPU\nApple M4 Pro: 59%"));
-        assert!(rendered.plain_details.contains("Logical CPUs: 16"));
+        assert!(!segments["details"].ends_with('\n'));
+        assert_eq!(
+            report.preview.render_plain(),
+            "CPU\n\
+Total          19.8 %\n\
+User           12.5 %\n\
+System          7.2 %\n\
+Idle           80.2 %\n\
+Logical CPUs  16\n\
+Load           1.25   2.50   3.75\n\
+History       ··················▂▂\n\
+GPU            59.0 %\n\
+Model         Apple M4 Pro"
+        );
 
-        let without_gpu = render_status(&cpu, None, &VecDeque::new(), SummaryMode::Compact);
-        assert!(without_gpu.details.ends_with(
+        let without_gpu = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact);
+        assert!(wire(&without_gpu)["details"].ends_with(
             "#[fg=colour245]History       #[default]····················\n#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
         ));
     }
@@ -866,9 +857,15 @@ mod tests {
             model: Some("GPU #[fg=colour196] #1".into()),
         };
 
-        let details =
-            render_status(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Compact).details;
-        assert!(details.contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1"));
+        let report = render_report(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Compact);
+        let details = report.preview.render();
+        assert!(details
+            .as_str()
+            .contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1"));
+        assert!(report
+            .preview
+            .render_plain()
+            .ends_with("Model         GPU #[fg=colour196] #1"));
     }
 
     #[test]

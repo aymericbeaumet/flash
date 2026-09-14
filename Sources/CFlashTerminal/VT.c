@@ -11,13 +11,17 @@ struct FlashVT {
   GhosttyMouseEncoder mouse;
   FlashVTWrite write;
   void *context;
-  uint16_t columns, height, current_row;
+  uint16_t columns, height;
   uint32_t cell_width, cell_height;
+  // Arena for the current row's grapheme and hyperlink bytes.
   uint8_t *text;
   size_t capacity;
-  uint8_t *hyperlink;
-  size_t hyperlink_capacity;
-  bool row_wrapped;
+  // Frame-scoped state: defaults resolved once, palette loaded on demand.
+  GhosttyColorRgb default_fg, default_bg;
+  GhosttyColorRgb palette[256];
+  bool palette_loaded;
+  bool row_positioned;
+  uint16_t next_row, current_row;
 };
 static void write_pty(GhosttyTerminal terminal, void *context,
                       const uint8_t *bytes, size_t length) {
@@ -76,7 +80,6 @@ void flash_vt_free(FlashVT *vt) {
   ghostty_render_state_free(vt->render);
   ghostty_terminal_free(vt->terminal);
   free(vt->text);
-  free(vt->hyperlink);
   free(vt);
 }
 void flash_vt_write(FlashVT *vt, const uint8_t *bytes, size_t length) {
@@ -118,6 +121,11 @@ bool flash_vt_frame(FlashVT *vt, FlashVTFrame *frame) {
   memset(frame, 0, sizeof(*frame));
   frame->columns = vt->columns;
   frame->rows = vt->height;
+  GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+  ghostty_render_state_get(vt->render, GHOSTTY_RENDER_STATE_DATA_DIRTY, &dirty);
+  frame->dirty = dirty == GHOSTTY_RENDER_STATE_DIRTY_FALSE     ? 0
+                 : dirty == GHOSTTY_RENDER_STATE_DIRTY_PARTIAL ? 1
+                                                               : 2;
   GhosttyRenderStateCursor cursor =
       GHOSTTY_INIT_SIZED(GhosttyRenderStateCursor);
   ghostty_render_state_get(vt->render, GHOSTTY_RENDER_STATE_DATA_CURSOR,
@@ -129,116 +137,165 @@ bool flash_vt_frame(FlashVT *vt, FlashVTFrame *frame) {
     frame->cursor_y = cursor.viewport_y;
   }
   frame->cursor_style = cursor.visual_style;
-  GhosttyColorRgb fg = {255, 255, 255}, bg = {0, 0, 0};
+  vt->default_fg = (GhosttyColorRgb){255, 255, 255};
+  vt->default_bg = (GhosttyColorRgb){0, 0, 0};
   ghostty_render_state_get(vt->render,
-                           GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND, &fg);
+                           GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND,
+                           &vt->default_fg);
   ghostty_render_state_get(vt->render,
-                           GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND, &bg);
-  frame->foreground = rgb(fg);
-  frame->background = rgb(bg);
+                           GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND,
+                           &vt->default_bg);
+  frame->foreground = rgb(vt->default_fg);
+  frame->background = rgb(vt->default_bg);
   ghostty_terminal_get(vt->terminal, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING,
                        &frame->mouse_tracking);
   ghostty_render_state_get(vt->render, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
                            &vt->rows);
-  vt->current_row = UINT16_MAX;
+  vt->palette_loaded = false;
+  vt->row_positioned = false;
+  vt->next_row = 0;
   return true;
 }
-bool flash_vt_cell(FlashVT *vt, uint16_t x, uint16_t y, FlashVTCell *cell) {
-  while (vt->current_row == UINT16_MAX || vt->current_row < y) {
-    if (!ghostty_render_state_row_iterator_next(vt->rows))
-      return false;
-    vt->current_row = vt->current_row == UINT16_MAX ? 0 : vt->current_row + 1;
-    ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-                                 &vt->cells);
-    GhosttyRow row = 0;
-    vt->row_wrapped = false;
-    if (ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
-                                     &row) != GHOSTTY_SUCCESS)
-      return false;
-    ghostty_row_get(row, GHOSTTY_ROW_DATA_WRAP, &vt->row_wrapped);
-  }
-  if (ghostty_render_state_row_cells_select(vt->cells, x) != GHOSTTY_SUCCESS)
+bool flash_vt_next_row(FlashVT *vt, FlashVTRow *row) {
+  if (!ghostty_render_state_row_iterator_next(vt->rows)) {
+    vt->row_positioned = false;
     return false;
-  memset(cell, 0, sizeof(*cell));
-  cell->row_wrapped = vt->row_wrapped;
-  GhosttyBuffer text = {.ptr = vt->text, .cap = vt->capacity};
-  if (ghostty_render_state_row_cells_get(
-          vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
-          &text) == GHOSTTY_OUT_OF_SPACE) {
-    uint8_t *grown = realloc(vt->text, text.len);
-    if (!grown)
+  }
+  vt->row_positioned = true;
+  vt->current_row = vt->next_row++;
+  bool dirty = true;
+  ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                               &dirty);
+  bool wrapped = false;
+  GhosttyRow raw = 0;
+  if (ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
+                                   &raw) == GHOSTTY_SUCCESS)
+    ghostty_row_get(raw, GHOSTTY_ROW_DATA_WRAP, &wrapped);
+  row->dirty = dirty;
+  row->wrapped = wrapped;
+  return true;
+}
+// Grow the row arena, rebasing the pointers already handed out for this row.
+static bool arena_reserve(FlashVT *vt, size_t needed, FlashVTCell *cells,
+                          uint16_t written) {
+  if (needed <= vt->capacity)
+    return true;
+  size_t capacity = vt->capacity ? vt->capacity : 4096;
+  while (capacity < needed)
+    capacity *= 2;
+  uintptr_t previous = (uintptr_t)vt->text;
+  uint8_t *grown = realloc(vt->text, capacity);
+  if (!grown)
+    return false;
+  for (uint16_t i = 0; i < written; i++) {
+    if (cells[i].text)
+      cells[i].text = grown + ((uintptr_t)cells[i].text - previous);
+    if (cells[i].hyperlink)
+      cells[i].hyperlink = grown + ((uintptr_t)cells[i].hyperlink - previous);
+  }
+  vt->text = grown;
+  vt->capacity = capacity;
+  return true;
+}
+bool flash_vt_row_cells(FlashVT *vt, FlashVTCell *cells) {
+  if (!vt->row_positioned)
+    return false;
+  if (ghostty_render_state_row_get(vt->rows, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+                                   &vt->cells) != GHOSTTY_SUCCESS)
+    return false;
+  size_t used = 0;
+  for (uint16_t x = 0; x < vt->columns; x++) {
+    if (!ghostty_render_state_row_cells_next(vt->cells))
       return false;
-    vt->text = grown;
-    vt->capacity = text.len;
-    text.ptr = grown;
-    text.cap = vt->capacity;
-    ghostty_render_state_row_cells_get(
-        vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &text);
-  }
-  cell->text = text.ptr;
-  cell->length = text.len;
-  GhosttyColorRgb fg = {255, 255, 255}, bg = {0, 0, 0};
-  ghostty_render_state_get(vt->render,
-                           GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND, &fg);
-  ghostty_render_state_get(vt->render,
-                           GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND, &bg);
-  ghostty_render_state_row_cells_get(
-      vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &fg);
-  ghostty_render_state_row_cells_get(
-      vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg);
-  cell->foreground = rgb(fg);
-  cell->background = rgb(bg);
-  cell->underline_color = rgb(fg);
-  GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
-  ghostty_render_state_row_cells_get(
-      vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style);
-  cell->flags = style.bold | style.italic << 1 | style.faint << 2 |
-                style.blink << 3 | style.inverse << 4 | style.invisible << 5 |
-                style.strikethrough << 6 | style.overline << 7;
-  cell->underline = style.underline;
-  if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_RGB)
-    cell->underline_color = rgb(style.underline_color.value.rgb);
-  else if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_PALETTE) {
-    GhosttyColorRgb palette[256];
-    ghostty_render_state_get(vt->render,
-                             GHOSTTY_RENDER_STATE_DATA_COLOR_PALETTE, &palette);
-    cell->underline_color = rgb(palette[style.underline_color.value.palette]);
-  }
-  GhosttyCell raw;
-  GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
-  ghostty_render_state_row_cells_get(
-      vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw);
-  bool has_hyperlink = false;
-  ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_HYPERLINK, &has_hyperlink);
-  if (has_hyperlink) {
-    GhosttyPoint point = {.tag = GHOSTTY_POINT_TAG_VIEWPORT,
-                          .value.coordinate = {.x = x, .y = y}};
-    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
-    if (ghostty_terminal_grid_ref(vt->terminal, point, &ref) == GHOSTTY_SUCCESS) {
-      size_t length = 0;
-      GhosttyResult result = ghostty_grid_ref_hyperlink_uri(
-          &ref, vt->hyperlink, vt->hyperlink_capacity, &length);
-      if (result == GHOSTTY_OUT_OF_SPACE && length <= 8192) {
-        uint8_t *grown = realloc(vt->hyperlink, length);
-        if (!grown)
-          return false;
-        vt->hyperlink = grown;
-        vt->hyperlink_capacity = length;
-        result = ghostty_grid_ref_hyperlink_uri(
-            &ref, vt->hyperlink, vt->hyperlink_capacity, &length);
+    FlashVTCell *cell = &cells[x];
+    memset(cell, 0, sizeof(*cell));
+    for (;;) {
+      GhosttyBuffer text = {.ptr = vt->capacity > used ? vt->text + used : NULL,
+                            .cap = vt->capacity - used};
+      GhosttyResult result = ghostty_render_state_row_cells_get(
+          vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &text);
+      if (result == GHOSTTY_SUCCESS) {
+        cell->text = text.len ? vt->text + used : NULL;
+        cell->length = text.len;
+        used += text.len;
+        break;
       }
-      if (result == GHOSTTY_SUCCESS && length <= 8192) {
-        cell->hyperlink = vt->hyperlink;
-        cell->hyperlink_length = length;
+      if (result != GHOSTTY_OUT_OF_SPACE ||
+          !arena_reserve(vt, used + text.len, cells, x))
+        return false;
+    }
+    GhosttyColorRgb fg = vt->default_fg, bg = vt->default_bg;
+    ghostty_render_state_row_cells_get(
+        vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &fg);
+    ghostty_render_state_row_cells_get(
+        vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg);
+    cell->foreground = rgb(fg);
+    cell->background = rgb(bg);
+    cell->underline_color = rgb(fg);
+    bool styled = false;
+    ghostty_render_state_row_cells_get(
+        vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING, &styled);
+    if (styled) {
+      GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+      ghostty_render_state_row_cells_get(
+          vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style);
+      cell->flags = style.bold | style.italic << 1 | style.faint << 2 |
+                    style.blink << 3 | style.inverse << 4 |
+                    style.invisible << 5 | style.strikethrough << 6 |
+                    style.overline << 7;
+      cell->underline = style.underline;
+      if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_RGB) {
+        cell->underline_color = rgb(style.underline_color.value.rgb);
+      } else if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_PALETTE) {
+        if (!vt->palette_loaded) {
+          ghostty_render_state_get(vt->render,
+                                   GHOSTTY_RENDER_STATE_DATA_COLOR_PALETTE,
+                                   &vt->palette);
+          vt->palette_loaded = true;
+        }
+        cell->underline_color =
+            rgb(vt->palette[style.underline_color.value.palette]);
       }
     }
+    GhosttyCell raw;
+    GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+    ghostty_render_state_row_cells_get(
+        vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw);
+    bool has_hyperlink = false;
+    ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_HYPERLINK, &has_hyperlink);
+    if (has_hyperlink) {
+      GhosttyPoint point = {.tag = GHOSTTY_POINT_TAG_VIEWPORT,
+                            .value.coordinate = {.x = x, .y = vt->current_row}};
+      GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+      if (ghostty_terminal_grid_ref(vt->terminal, point, &ref) ==
+          GHOSTTY_SUCCESS) {
+        for (;;) {
+          size_t length = 0;
+          GhosttyResult result = ghostty_grid_ref_hyperlink_uri(
+              &ref, vt->capacity > used ? vt->text + used : NULL,
+              vt->capacity - used, &length);
+          if (result == GHOSTTY_SUCCESS) {
+            if (length && length <= 8192) {
+              cell->hyperlink = vt->text + used;
+              cell->hyperlink_length = length;
+              used += length;
+            }
+            break;
+          }
+          if (result != GHOSTTY_OUT_OF_SPACE || length > 8192 ||
+              !arena_reserve(vt, used + length, cells, x + 1))
+            break;
+        }
+      }
+    }
+    ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide);
+    cell->width = wide == GHOSTTY_CELL_WIDE_WIDE     ? 2
+                  : wide == GHOSTTY_CELL_WIDE_NARROW ? 1
+                                                     : 0;
   }
-  ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide);
-  cell->width = wide == GHOSTTY_CELL_WIDE_WIDE     ? 2
-                : wide == GHOSTTY_CELL_WIDE_NARROW ? 1
-                                                   : 0;
   return true;
 }
+void flash_vt_clean(FlashVT *vt) { ghostty_render_state_clean(vt->render); }
 void flash_vt_scroll(FlashVT *vt, int lines) {
   GhosttyTerminalScrollViewport scroll = {.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA,
                                           .value.delta = lines};

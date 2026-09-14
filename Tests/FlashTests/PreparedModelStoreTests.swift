@@ -56,7 +56,8 @@ final class PreparedModelStoreTests: XCTestCase {
 
   func testFreshnessDoublesOnlyForUnchangedMaintenanceWalks() {
     let now = DispatchTime(uptimeNanoseconds: 1_000)
-    let previous = model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
+    let previous = model(
+      pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
     let same = model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
     XCTAssertEqual(
       AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: "maintenance"),

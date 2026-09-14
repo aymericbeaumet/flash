@@ -1,7 +1,7 @@
 import Foundation
 
 /// The host's copy of the plugin wire-protocol constants. The single source
-/// of truth is `Plugins/_flash_plugin_specs/protocol.json`;
+/// of truth is `Plugins/_flash_plugin_rust/protocol.json`;
 /// `PluginProtocolParityTests` reads that file and asserts every value here
 /// equals it, so a drift fails the build instead of shipping a skewed host.
 enum PluginProtocol {

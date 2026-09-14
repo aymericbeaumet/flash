@@ -86,9 +86,10 @@ extension AppMonitor {
     let types: [CGEventType] = [
       .keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged,
     ]
-    let idle = types.map {
-      CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
-    }.min() ?? 0
+    let idle =
+      types.map {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
+      }.min() ?? 0
     return idle < limit
   }
 

@@ -505,6 +505,8 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "pane_split_horizontal"])?.command,
       .paneSplitHorizontal)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_close"])?.command, .paneClose)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_next"])?.command, .paneNext)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_previous"])?.command, .panePrev)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "history_back"])?.command, .historyBack)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "history_forward"])?.command, .historyForward)

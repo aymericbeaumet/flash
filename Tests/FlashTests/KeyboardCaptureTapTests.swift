@@ -62,4 +62,30 @@ final class KeyboardCaptureTapTests: XCTestCase {
         "insert mode should never swallow (inputMode=\(inputMode))")
     }
   }
+  /// A release whose press NORMAL swallowed must be swallowed too: a terminal
+  /// running the Kitty keyboard protocol encodes releases to the pty, so a
+  /// stray release types an escape sequence into whatever is running there.
+  func testSwallowedPressesSwallowTheirReleases() {
+    var keys = KeyboardCaptureTap.SwallowedKeys()
+    XCTAssertTrue(keys.isEmpty)
+    keys.press(45, swallowed: true)
+    XCTAssertTrue(keys.releaseIsSwallowed(45))
+    XCTAssertTrue(keys.isEmpty, "a release consumes its pairing")
+    XCTAssertFalse(keys.releaseIsSwallowed(45), "a second release is not ours")
+  }
+
+  /// A press that reached the app keeps its release, or the app is left with a
+  /// key it believes is still held.
+  func testPassedPressesKeepTheirReleases() {
+    var keys = KeyboardCaptureTap.SwallowedKeys()
+    keys.press(45, swallowed: false)
+    XCTAssertFalse(keys.releaseIsSwallowed(45))
+    // Mode changes mid-keypress do not re-decide: pairing follows the press.
+    keys.press(8, swallowed: true)
+    keys.press(45, swallowed: false)
+    XCTAssertFalse(keys.releaseIsSwallowed(45))
+    XCTAssertTrue(keys.releaseIsSwallowed(8))
+    XCTAssertTrue(keys.isEmpty)
+  }
+
 }

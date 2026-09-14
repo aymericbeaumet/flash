@@ -89,6 +89,17 @@ extension AppDelegate {
       overlay.statusTerminals.apply(
         config.statusBar, terminals: config.terminals,
         invalidTerminalNames: config.invalidTerminalNames)
+      if Self.bindsFreshShell(config.mode) {
+        overlay.statusTerminals.warmFreshShell(configuration: config)
+      }
+    }
+  }
+
+  /// Whether any mapping opens the unnamed shell, which is the only terminal
+  /// worth keeping warm before its first use.
+  static func bindsFreshShell(_ mode: Config.Mode) -> Bool {
+    (mode.all + mode.normal + mode.insert + mode.terminal).contains {
+      $0.action == .flashCommand(.terminalShow(name: nil))
     }
   }
 

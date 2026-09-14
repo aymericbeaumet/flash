@@ -16,6 +16,7 @@ use tokio::sync::oneshot;
 
 use crate::emit::Emitter;
 use crate::process::{self, ManagedChild, ManagedChildError};
+use crate::status::{PreviewTooLarge, StatusValue};
 use crate::types::{Candidate, PerformResponse, RunningApplication};
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
@@ -29,9 +30,9 @@ const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
 const DEFAULT_COMMAND_SLOW_THRESHOLD: Duration = Duration::from_secs(1);
 
-/// Canonical `call_host` sentinels (spec-pinned): `call_host` never errors and
-/// never returns nil — host death and the call timeout arrive as these result
-/// objects instead.
+/// Canonical `call_host` sentinels (pinned in `protocol.json`): `call_host`
+/// never errors and never returns nil — host death and the call timeout
+/// arrive as these result objects instead.
 const HOST_CLOSED_ERROR: &str = "host closed stdin";
 const HOST_TIMEOUT_ERROR: &str = "host call timed out";
 
@@ -155,20 +156,39 @@ impl Context {
     /// Publish status-bar segment values declared by this plugin's
     /// `status` manifest section (the `status` notification). The host
     /// exposes each value as `#{flash.plugin.<plugin-id>.<segment>}` in
-    /// `[statusbar].template`. An EMPTY value clears the segment host-side.
+    /// `[statusbar].template`. Every value is a [`StatusValue`] (plain
+    /// strings convert as ready-made markup); an EMPTY value clears the
+    /// segment host-side. A preview that would exceed the host's inline
+    /// limit is dropped with a content-free warning and the visible text is
+    /// published alone.
     pub fn status<I, K, V>(&self, segments: I)
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<StatusValue>,
     {
         let mut object = serde_json::Map::new();
         for (name, value) in segments {
             let name = name.as_ref().trim();
-            let value = value.as_ref().trim();
-            if !name.is_empty() {
-                object.insert(name.to_string(), json!(value));
+            if name.is_empty() {
+                continue;
             }
+            let value = value.into();
+            let rendered = match value.render() {
+                Ok(rendered) => rendered,
+                Err(PreviewTooLarge { encoded_bytes }) => {
+                    self.log_fields(
+                        "warn",
+                        "[plugin] status preview exceeds the inline limit; published without it",
+                        BTreeMap::from([
+                            ("segment".to_string(), name.to_string()),
+                            ("encoded_bytes".to_string(), encoded_bytes.to_string()),
+                        ]),
+                    );
+                    value.visible.into_string()
+                }
+            };
+            object.insert(name.to_string(), json!(rendered.trim()));
         }
         self.emit.notify("status", json!({ "segments": object }));
     }
@@ -244,6 +264,24 @@ impl Context {
                 );
                 json!({ "ok": false, "error": HOST_TIMEOUT_ERROR })
             }
+        }
+    }
+
+    /// Fulfil the in-flight host call `id` with the host's `result`; `false`
+    /// when no call awaits that id (late and unsolicited replies are dropped).
+    pub(crate) fn resolve_host_call(&self, id: u64, result: Value) -> bool {
+        self.host_pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&id))
+            .is_some_and(|tx| tx.send(result).is_ok())
+    }
+
+    /// Drop every in-flight host call so each waiter observes the closed
+    /// sentinel (a dropped sender resolves its receiver as an error).
+    pub(crate) fn abandon_host_calls(&self) {
+        if let Ok(mut pending) = self.host_pending.lock() {
+            pending.clear();
         }
     }
 
@@ -578,35 +616,40 @@ fn wifi_ssid_from_response(response: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn env_or(name: &str, fallback: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+/// The identity, data directory and settings Flash injects through the
+/// `FLASH_PLUGIN_*` environment.
+pub(crate) struct PluginEnv {
+    pub(crate) plugin_id: String,
+    pub(crate) version: String,
+    pub(crate) data_dir: Option<PathBuf>,
+    pub(crate) config: Value,
 }
 
-/// Build a [`Context`] from the `FLASH_PLUGIN_*` environment Flash injects.
-pub(crate) fn context_from_env(
-    emit: Emitter,
-    host_pending: HostPending,
-    host_counter: Arc<AtomicU64>,
-) -> Context {
-    let data_dir = std::env::var("FLASH_PLUGIN_DATA_DIR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
-    let config = std::env::var("FLASH_PLUGIN_CONFIG")
-        .ok()
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
-    Context {
-        plugin_id: env_or("FLASH_PLUGIN_ID", "plugin"),
-        version: env_or("FLASH_PLUGIN_VERSION", "0.0.0"),
-        data_dir,
-        emit,
-        config,
-        host_pending,
-        host_counter,
-        running_applications: Arc::new(Mutex::new(Vec::new())),
+impl PluginEnv {
+    pub(crate) fn from_process() -> Self {
+        let env_or = |name: &str, fallback: &str| {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        Self {
+            plugin_id: env_or("FLASH_PLUGIN_ID", "plugin"),
+            version: env_or("FLASH_PLUGIN_VERSION", "0.0.0"),
+            data_dir: std::env::var("FLASH_PLUGIN_DATA_DIR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from),
+            config: parse_config(std::env::var("FLASH_PLUGIN_CONFIG").ok().as_deref()),
+        }
     }
+}
+
+/// `FLASH_PLUGIN_CONFIG` carries the `[plugin.<id>]` settings as a JSON
+/// object. Configuration is optional at the protocol level, so an absent,
+/// empty, malformed or non-object value is an empty table — never a refusal
+/// to start.
+pub(crate) fn parse_config(raw: Option<&str>) -> Value {
+    raw.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
 }
 
 // ---------------------------------------------------------------------------
@@ -779,36 +822,6 @@ fn configure_command(ctx: &Context, command: &mut tokio::process::Command) {
         );
 }
 
-/// Escape plain text before inserting it into a rich status value.
-///
-/// The status grammar uses `#` to open markup and `##` for a literal hash.
-/// Apply this only to externally sourced text, not to intentional markup.
-pub fn escape_status_text(value: &str) -> String {
-    value.replace('#', "##")
-}
-
-/// Attach a self-contained rich popup to a visible status-bar value.
-///
-/// The popup body is encoded byte-for-byte so status markup, newlines, and
-/// non-ASCII text survive the `#[popup=inline:…]` marker without being parsed
-/// as part of the surrounding status template.
-pub fn inline_status_popup(visible: &str, body: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-    let mut encoded = String::with_capacity(body.len());
-    for byte in body.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-    }
-
-    format!("#[popup=inline:{encoded}]{visible}#[nopopup]")
-}
-
 fn command_latency_requires_warning(
     output: &CommandOutput,
     elapsed: Duration,
@@ -857,22 +870,16 @@ pub fn shorten(value: &str) -> String {
     format!("{head}...")
 }
 
-/// Assemble a [`Context`] from parts with fresh host-RPC state. Shared by the
-/// crate-internal tests and the public [`crate::testing`] harness; the
-/// production path stays [`context_from_env`].
-pub(crate) fn assemble_context(
-    plugin_id: String,
-    version: String,
-    data_dir: PathBuf,
-    emit: Emitter,
-    config: Value,
-) -> Context {
+/// Assemble a [`Context`] with fresh host-RPC state. The runtime feeds it the
+/// process environment; the [`crate::testing`] harnesses feed it a synthetic
+/// one.
+pub(crate) fn assemble_context(env: PluginEnv, emit: Emitter) -> Context {
     Context {
-        plugin_id,
-        version,
-        data_dir: Some(data_dir),
+        plugin_id: env.plugin_id,
+        version: env.version,
+        data_dir: env.data_dir,
         emit,
-        config,
+        config: env.config,
         host_pending: Arc::new(Mutex::new(HashMap::new())),
         host_counter: Arc::new(AtomicU64::new(0)),
         running_applications: Arc::new(Mutex::new(Vec::new())),
@@ -885,14 +892,13 @@ pub(crate) fn test_context_with_rx() -> (
     tokio::sync::mpsc::Receiver<crate::emit::OutboundFrame>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
-    let ctx = assemble_context(
-        "test".to_string(),
-        "0.0.0".to_string(),
-        PathBuf::from("."),
-        Emitter::new(tx),
-        json!({}),
-    );
-    (ctx, rx)
+    let env = PluginEnv {
+        plugin_id: "test".to_string(),
+        version: "0.0.0".to_string(),
+        data_dir: Some(PathBuf::from(".")),
+        config: json!({}),
+    };
+    (assemble_context(env, Emitter::new(tx)), rx)
 }
 
 #[cfg(test)]
@@ -974,33 +980,198 @@ mod tests {
         assert!(ctx.host_pending.lock().unwrap().is_empty());
     }
 
+    #[test]
+    fn config_parses_to_the_settings_object_or_an_empty_table() {
+        assert_eq!(
+            parse_config(Some(r#"{"greeting":"hi","n":3}"#)),
+            json!({ "greeting": "hi", "n": 3 })
+        );
+        for raw in [
+            None,
+            Some(""),
+            Some("{}"),
+            Some("{not json"),
+            Some("[1]"),
+            Some("\"x\""),
+        ] {
+            assert_eq!(parse_config(raw), json!({}), "{raw:?}");
+        }
+    }
+
     #[tokio::test]
-    async fn wifi_ssid_sends_explicit_authorization_intent() {
-        for request_authorization in [false, true] {
-            let (ctx, mut rx) = test_context_with_rx();
-            let pending = ctx.host_pending.clone();
-            let request = tokio::spawn(async move { ctx.wifi_ssid(request_authorization).await });
+    async fn typed_host_wrappers_emit_their_registry_method_and_pinned_params() {
+        use crate::testing::Harness;
+        use std::pin::Pin;
 
-            let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap().payload).unwrap();
-            assert_eq!(frame["method"], json!("host.wifi_info"));
-            assert_eq!(
-                frame["params"],
-                json!({ "request_authorization": request_authorization })
-            );
-            let id = frame["id"].as_u64().unwrap();
-            pending
-                .lock()
-                .unwrap()
-                .remove(&id)
-                .unwrap()
-                .send(json!({
-                    "ok": true,
-                    "present": true,
-                    "ssid": "Atelier"
-                }))
-                .unwrap();
-
-            assert_eq!(request.await.unwrap().as_deref(), Some("Atelier"));
+        type Call = Box<dyn FnOnce(Context) -> Pin<Box<dyn Future<Output = Value> + Send>>>;
+        macro_rules! call {
+            (|$ctx:ident| $body:expr) => {
+                Box::new(
+                    |$ctx: Context| -> Pin<Box<dyn Future<Output = Value> + Send>> {
+                        Box::pin(async move { json!($body) })
+                    },
+                ) as Call
+            };
+        }
+        // One permissive reply satisfies every wrapper's result decoder.
+        let host_reply = json!({
+            "ok": true, "present": true, "ssid": "Atelier", "body": "b",
+            "pid": 7, "bundle_id": "com.example.App", "value": "v"
+        });
+        let table: Vec<(&str, Value, Call, Value)> = vec![
+            (
+                "host.ping",
+                json!({}),
+                call!(|ctx| ctx.ping_host().await),
+                json!(true),
+            ),
+            (
+                "host.wifi_info",
+                json!({ "request_authorization": false }),
+                call!(|ctx| ctx.wifi_ssid(false).await),
+                json!("Atelier"),
+            ),
+            (
+                "host.wifi_info",
+                json!({ "request_authorization": true }),
+                call!(|ctx| ctx.wifi_ssid(true).await),
+                json!("Atelier"),
+            ),
+            (
+                "host.fetch",
+                json!({ "url": "https://example.com/x" }),
+                call!(|ctx| ctx.fetch("https://example.com/x").await.unwrap()),
+                json!("b"),
+            ),
+            (
+                "host.normal_mode_target",
+                json!({}),
+                call!(|ctx| ctx
+                    .normal_mode_target()
+                    .await
+                    .map(|target| (target.pid, target.bundle_id))),
+                json!([7, "com.example.App"]),
+            ),
+            (
+                "host.activate",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.activate(7).await),
+                json!(true),
+            ),
+            (
+                "host.open",
+                json!({ "url": "https://example.com/x" }),
+                call!(|ctx| ctx.open_url("https://example.com/x").await),
+                json!(true),
+            ),
+            (
+                "host.open",
+                json!({ "bundle_id": "com.example.App" }),
+                call!(|ctx| ctx.open_app("com.example.App").await),
+                json!(true),
+            ),
+            (
+                "host.post_media_key",
+                json!({ "key_code": 16 }),
+                call!(|ctx| ctx.post_media_key(16).await),
+                json!(true),
+            ),
+            (
+                "host.process_table",
+                json!({ "sample_window_ms": 150 }),
+                call!(|ctx| ctx.process_table(Some(150)).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.process_table",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.process_metrics(7, None).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.signal",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.signal(7).await.is_ok()),
+                json!(true),
+            ),
+            (
+                "host.clipboard_write",
+                json!({ "text": "copy" }),
+                call!(|ctx| ctx.clipboard_write("copy").await),
+                json!(true),
+            ),
+            (
+                "host.notify",
+                json!({ "message": "hi", "duration_ms": 900 }),
+                call!(|ctx| ctx.notify("hi", Some(900)).await),
+                json!(true),
+            ),
+            (
+                "host.storage_get",
+                json!({ "key": "k" }),
+                call!(|ctx| ctx.storage_get("k").await),
+                json!("v"),
+            ),
+            (
+                "host.storage_set",
+                json!({ "key": "k", "value": null }),
+                call!(|ctx| ctx.storage_set("k", None).await),
+                json!(true),
+            ),
+            (
+                "host.post_keys",
+                json!({ "pid": 7, "keys": [] }),
+                call!(|ctx| ctx.post_keys(json!({ "pid": 7, "keys": [] })).await),
+                json!(true),
+            ),
+            (
+                "host.post_global_key",
+                json!({ "key_code": 4, "modifiers": ["command"] }),
+                call!(|ctx| ctx.post_global_key(4, &["command"]).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_snapshot",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.ax_snapshot(json!({ "pid": 7 })).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_snapshot",
+                json!({ "pid": 8 }),
+                call!(|ctx| ctx
+                    .ax_snapshot_timeout(json!({ "pid": 8 }), Duration::from_secs(1))
+                    .await["ok"]
+                    .clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_perform",
+                json!({ "handle": 3, "action": "AXPress" }),
+                call!(|ctx| ctx.ax_perform(3, "AXPress").await),
+                json!(true),
+            ),
+            (
+                "host.ax_set",
+                json!({ "handle": 3, "attribute": "AXFocused", "value": true }),
+                call!(|ctx| ctx.ax_set(3, "AXFocused", true).await),
+                json!(true),
+            ),
+            (
+                "host.ax_select_child",
+                json!({ "parent": 3, "child": 4 }),
+                call!(|ctx| ctx.ax_select_child(3, 4).await),
+                json!(true),
+            ),
+        ];
+        let mut harness = Harness::new("host-rpc");
+        for (method, params, call, expected) in table {
+            let task = tokio::spawn(call(harness.context()));
+            let (id, actual_method, actual_params) =
+                harness.next_host_request().await.expect(method);
+            assert_eq!((actual_method.as_str(), actual_params), (method, params));
+            assert!(harness.reply_host(id, host_reply.clone()), "{method}");
+            assert_eq!(task.await.unwrap(), expected, "{method}");
         }
     }
 
@@ -1098,22 +1269,75 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inline_status_popup_percent_encodes_markup_whitespace_and_unicode() {
-        assert_eq!(
-            inline_status_popup(
-                "CPU 18%",
-                "#[fg=#EBCB8B,bold]CPU#[default]\nCafé: 18% / 82%"
-            ),
-            "#[popup=inline:%23%5Bfg%3D%23EBCB8B%2Cbold%5DCPU%23%5Bdefault%5D%0ACaf%C3%A9%3A%2018%25%20%2F%2082%25]CPU 18%#[nopopup]"
-        );
+    fn drain_frames(
+        rx: &mut tokio::sync::mpsc::Receiver<crate::emit::OutboundFrame>,
+    ) -> Vec<Value> {
+        let mut frames = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            frames.push(serde_json::from_slice(&frame.payload).unwrap());
+        }
+        frames
     }
 
     #[test]
-    fn status_text_escapes_literal_hashes_before_rich_rendering() {
+    fn status_renders_values_trims_them_and_drops_unnamed_segments() {
+        use crate::status::{Preview, StatusValue};
+
+        let (ctx, mut rx) = test_context_with_rx();
+        ctx.status([
+            (
+                " summary ",
+                StatusValue::text(" v ").with_preview(Preview::from_markup("b")),
+            ),
+            ("", StatusValue::text("ignored")),
+            ("cleared", StatusValue::empty()),
+        ]);
+        ctx.status([("raw", "#[bold]on#[default]")]);
+        ctx.status([("owned", String::from(" x "))]);
+
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 3);
         assert_eq!(
-            escape_status_text("Backup #[fg=colour196] #1"),
-            "Backup ##[fg=colour196] ##1"
+            frames[0]["params"]["segments"],
+            json!({ "summary": "#[popup=inline:b] v #[nopopup]", "cleared": "" })
+        );
+        assert_eq!(
+            frames[1]["params"]["segments"],
+            json!({ "raw": "#[bold]on#[default]" })
+        );
+        assert_eq!(frames[2]["params"]["segments"], json!({ "owned": "x" }));
+    }
+
+    #[test]
+    fn oversized_status_preview_publishes_the_visible_text_with_a_content_free_warning() {
+        use crate::status::{Preview, StatusValue, MAX_INLINE_PREVIEW_ENCODED_BYTES};
+
+        let (ctx, mut rx) = test_context_with_rx();
+        let body = "secret ".repeat(MAX_INLINE_PREVIEW_ENCODED_BYTES);
+        ctx.status([(
+            "summary",
+            StatusValue::text("CPU 18%").with_preview(Preview::from_markup(body.as_str())),
+        )]);
+
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0]["method"], json!("log"));
+        assert_eq!(frames[0]["params"]["level"], json!("warn"));
+        let fields = frames[0]["params"]["fields"].as_object().unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields["segment"], json!("summary"));
+        assert!(
+            fields["encoded_bytes"]
+                .as_str()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                > MAX_INLINE_PREVIEW_ENCODED_BYTES
+        );
+        assert!(!frames[0].to_string().contains("secret"));
+        assert_eq!(
+            frames[1]["params"]["segments"],
+            json!({ "summary": "CPU 18%" })
         );
     }
 

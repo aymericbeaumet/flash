@@ -1,11 +1,13 @@
-use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use flash_plugin::status::{
+    bytes_iec_compact, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled,
+};
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, sys, Candidate, CommandRequest,
-    Context, PerformResponse, RefreshGate,
+    run, run_command, sys, Candidate, Color, CommandRequest, Context, History, Markup,
+    PerformResponse, Preview, Published, RefreshGate, StatusValue,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
@@ -17,10 +19,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(10);
 const HISTORY_LEN: usize = 20;
-const PLAIN_HISTORY_LEN: usize = 16;
-const DETAIL_LABEL_WIDTH: usize = 14;
 const NETSTAT: &str = "/usr/sbin/netstat";
-const POPUP_TITLE: &str = "#[fg=#EBCB8B]Network#[default]";
 
 static STATE: LazyLock<Mutex<NetworkState>> = LazyLock::new(|| Mutex::new(NetworkState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -98,9 +97,22 @@ struct TransferRates {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedStatus {
-    summary: String,
-    label: String,
-    details: String,
+    summary: Markup,
+    label: Markup,
+    details: Preview,
+}
+
+impl RenderedStatus {
+    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+        [
+            (
+                "summary",
+                StatusValue::text(self.summary.clone()).with_preview(self.details.clone()),
+            ),
+            ("label", StatusValue::text(self.label.clone())),
+            ("details", StatusValue::text(self.details.render())),
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,12 +148,12 @@ struct NetworkState {
     wifi_ssid: Option<String>,
     previous: Option<TimedCounters>,
     rates: Option<TransferRates>,
-    received_history: VecDeque<f64>,
-    sent_history: VecDeque<f64>,
+    received_history: History<HISTORY_LEN>,
+    sent_history: History<HISTORY_LEN>,
     catalog: Option<CatalogSnapshot>,
     last_discovery_attempt: Option<Instant>,
     last_traffic_success: Option<Instant>,
-    last_status: Option<RenderedStatus>,
+    published: Published<RenderedStatus>,
     discovery_failure_logged: bool,
     traffic_failure_logged: bool,
 }
@@ -172,8 +184,8 @@ impl NetworkState {
             RateDecision::Rates(rates) => {
                 self.previous = Some(sample);
                 self.rates = Some(rates);
-                push_history(&mut self.received_history, rates.received);
-                push_history(&mut self.sent_history, rates.sent);
+                self.received_history.push(rates.received);
+                self.sent_history.push(rates.sent);
             }
         }
     }
@@ -353,39 +365,24 @@ async fn refresh_network_locked(
 }
 
 fn current_response() -> PerformResponse {
-    match render_details(&state()) {
-        Some(details) => PerformResponse::ok().message(details),
+    match render_preview(&state()) {
+        Some(preview) => PerformResponse::ok().message(preview.render_plain()),
         None => PerformResponse::fail("network metrics are not available yet"),
     }
 }
 
 fn emit_status_if_changed(ctx: &Context) {
-    let rendered = {
+    let segments = {
         let mut state = state();
         let Some(rendered) = render_status(&state, configured_summary_mode(ctx)) else {
             return;
         };
-        let Some(rendered) = status_update(&mut state.last_status, rendered) else {
+        let Some(rendered) = state.published.update(rendered) else {
             return;
         };
-        rendered
+        rendered.segments()
     };
-    ctx.status([
-        ("summary", rendered.summary),
-        ("label", rendered.label),
-        ("details", rendered.details),
-    ]);
-}
-
-fn status_update(
-    last: &mut Option<RenderedStatus>,
-    next: RenderedStatus,
-) -> Option<RenderedStatus> {
-    if last.as_ref() == Some(&next) {
-        return None;
-    }
-    *last = Some(next.clone());
-    Some(next)
+    ctx.status(segments);
 }
 
 fn first_failure(already_logged: &mut bool, failed: bool) -> bool {
@@ -533,247 +530,101 @@ fn calculate_rates(previous: &TimedCounters, current: &TimedCounters) -> RateDec
     })
 }
 
-fn push_history(history: &mut VecDeque<f64>, value: f64) {
-    if history.len() == HISTORY_LEN {
-        history.pop_front();
-    }
-    history.push_back(value);
-}
-
 fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
-    let details = render_popup_details(state)?;
-    let visible = visible_summary(state, summary_mode);
-    let rate = state
-        .rates
-        .map(|rates| label_rate(rates.received + rates.sent))
-        .unwrap_or_else(|| "   —".to_string());
+    let details = render_preview(state)?;
+    let rate = state.rates.map_or_else(
+        || "   —".to_string(),
+        |rates| rate_cells4(rates.received + rates.sent),
+    );
     Some(RenderedStatus {
-        label: format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{rate}#[default]"),
-        summary: inline_status_popup(&visible, &details),
+        summary: visible_summary(state, summary_mode),
+        label: Markup::colored("NET", Color::TITLE) + " " + Markup::colored(rate, Color::MUTED),
         details,
     })
 }
 
-fn render_popup_details(state: &NetworkState) -> Option<String> {
+fn render_preview(state: &NetworkState) -> Option<Preview> {
     if state.default_interface.is_none() && state.wifi_ssid.is_none() && state.catalog.is_none() {
         return None;
     }
-    let mut rows = vec![
-        POPUP_TITLE.to_string(),
-        detail_row(
-            "Wi-Fi",
-            &state
-                .wifi_ssid
-                .as_deref()
-                .map(escape_status_text)
-                .unwrap_or_else(|| "—".to_string()),
-        ),
-        detail_row(
+    let catalog = state.catalog.as_ref();
+    let mut preview = Preview::new()
+        .title("Network")
+        .row("Wi-Fi", text_or_dash(state.wifi_ssid.as_deref()))
+        .row(
             "Interface",
-            &state
-                .default_interface
-                .as_deref()
-                .map(escape_status_text)
-                .unwrap_or_else(|| "—".to_string()),
-        ),
-        detail_row(
-            "Download",
-            &state
-                .rates
-                .map(|rates| format!("{:>12}", format_rate(rates.received)))
-                .unwrap_or_else(|| "           —".to_string()),
-        ),
-        detail_row(
-            "Upload",
-            &state
-                .rates
-                .map(|rates| format!("{:>12}", format_rate(rates.sent)))
-                .unwrap_or_else(|| "           —".to_string()),
-        ),
-        detail_row("Down history", &padded_history(&state.received_history)),
-        detail_row("Up history", &padded_history(&state.sent_history)),
-        detail_row(
-            "Hostname",
-            &state
-                .catalog
-                .as_ref()
-                .and_then(|catalog| catalog.hostname.as_deref())
-                .map(escape_status_text)
-                .unwrap_or_else(|| "—".to_string()),
-        ),
-    ];
-    if let Some(catalog) = &state.catalog {
-        for (index, address) in catalog.addresses.iter().take(8).enumerate() {
-            rows.push(detail_row(
-                &format!("Address {}", index + 1),
-                &escape_status_text(&format!("{}  {}", address.interface_name, address.ip)),
-            ));
-        }
-        if catalog.addresses.len() > 8 {
-            rows.push(detail_row(
-                "More",
-                &format!("{} addresses", catalog.addresses.len() - 8),
-            ));
-        }
-    }
-    Some(rows.join("\n"))
-}
-
-fn detail_row(label: &str, value: &str) -> String {
-    format!(
-        "#[fg=colour245]{label:<width$}#[default]{value}",
-        width = DETAIL_LABEL_WIDTH
-    )
-}
-
-fn padded_history(history: &VecDeque<f64>) -> String {
-    let values: Vec<f64> = history.iter().copied().collect();
-    let chart = sparkline(&values);
-    let padding = HISTORY_LEN.saturating_sub(chart.chars().count());
-    format!("{}{chart}", "·".repeat(padding))
-}
-
-fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> String {
-    let label = "#[fg=#EBCB8B]NET#[default]";
-    if summary_mode == SummaryMode::Compact {
-        return label.to_string();
-    }
-    let (received, sent) = state
-        .rates
-        .map(|rates| (compact_rate(rates.received), compact_rate(rates.sent)))
-        .unwrap_or_else(|| ("—".to_string(), "—".to_string()));
-    let combined: Vec<f64> = state
-        .received_history
-        .iter()
-        .zip(&state.sent_history)
-        .map(|(received, sent)| received.max(*sent))
-        .collect();
-    let chart = sparkline(&combined);
-    let chart_suffix = if chart.is_empty() {
-        String::new()
-    } else {
-        format!(" {chart}")
-    };
-    format!(
-        "{label} #[fg=colour39]↓{received}#[default] #[fg=colour214]↑{sent}#[default]{chart_suffix}"
-    )
-}
-
-fn render_details(state: &NetworkState) -> Option<String> {
-    Some(format!("Network\n{}", render_details_body(state)?))
-}
-
-fn render_details_body(state: &NetworkState) -> Option<String> {
-    if state.default_interface.is_none() && state.wifi_ssid.is_none() && state.catalog.is_none() {
-        return None;
-    }
-    let mut lines = Vec::new();
-    if let Some(ssid) = &state.wifi_ssid {
-        lines.push(format!("Wi-Fi: {ssid}"));
-    }
-    lines.push(format!(
-        "Interface: {}",
-        state.default_interface.as_deref().unwrap_or("unavailable")
-    ));
-    if let Some(rates) = state.rates {
-        lines.push(format!("Download: {}", format_rate(rates.received)));
-        lines.push(format!("Upload: {}", format_rate(rates.sent)));
-    } else {
-        lines.push("Traffic: sampling…".to_string());
-    }
-    let received_history: Vec<f64> = state
-        .received_history
-        .iter()
-        .skip(
-            state
-                .received_history
-                .len()
-                .saturating_sub(PLAIN_HISTORY_LEN),
+            text_or_dash(state.default_interface.as_deref()),
         )
-        .copied()
-        .collect();
-    let sent_history: Vec<f64> = state
-        .sent_history
-        .iter()
-        .skip(state.sent_history.len().saturating_sub(PLAIN_HISTORY_LEN))
-        .copied()
-        .collect();
-    let received_chart = sparkline(&received_history);
-    let sent_chart = sparkline(&sent_history);
-    if !received_chart.is_empty() {
-        lines.push(format!("Download history: {received_chart}"));
-    }
-    if !sent_chart.is_empty() {
-        lines.push(format!("Upload history: {sent_chart}"));
-    }
-    if let Some(catalog) = &state.catalog {
-        if let Some(hostname) = &catalog.hostname {
-            lines.push(format!("Hostname: {hostname}"));
-        }
-        for address in catalog.addresses.iter().take(8) {
-            lines.push(format!("{}: {}", address.interface_name, address.ip));
+        .row(
+            "Download",
+            rate_cell(state.rates.map(|rates| rates.received)),
+        )
+        .row("Upload", rate_cell(state.rates.map(|rates| rates.sent)))
+        .row("Down history", history_chart(&state.received_history))
+        .row("Up history", history_chart(&state.sent_history))
+        .row(
+            "Hostname",
+            text_or_dash(catalog.and_then(|catalog| catalog.hostname.as_deref())),
+        );
+    if let Some(catalog) = catalog {
+        for (index, address) in catalog.addresses.iter().take(8).enumerate() {
+            preview = preview.row(
+                format!("Address {}", index + 1),
+                Markup::text(format!("{}  {}", address.interface_name, address.ip)),
+            );
         }
         if catalog.addresses.len() > 8 {
-            lines.push(format!("… and {} more", catalog.addresses.len() - 8));
+            preview = preview.row("More", format!("{} addresses", catalog.addresses.len() - 8));
         }
     }
-    Some(lines.join("\n"))
+    Some(preview)
 }
 
-fn label_rate(bytes_per_second: f64) -> String {
-    const UNITS: [char; 6] = ['B', 'K', 'M', 'G', 'T', 'P'];
-    let mut value = bytes_per_second.max(0.0);
-    let mut unit = 0;
-    while value >= 999.5 && unit < UNITS.len() - 1 {
-        value /= 1000.0;
-        unit += 1;
+fn text_or_dash(value: Option<&str>) -> Markup {
+    value.map_or_else(|| Markup::raw("—"), Markup::text)
+}
+
+fn rate_cell(bytes_per_second: Option<f64>) -> String {
+    format!(
+        "{:>12}",
+        bytes_per_second.map_or_else(|| "—".to_string(), rate_iec)
+    )
+}
+
+fn history_chart(history: &History<HISTORY_LEN>) -> String {
+    sparkline_padded(&sparkline_scaled(history), HISTORY_LEN)
+}
+
+fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> Markup {
+    let label = Markup::colored("NET", Color::TITLE);
+    if summary_mode == SummaryMode::Compact {
+        return label;
     }
-    if unit > 0 && value < 9.95 {
-        format!("{value:>3.1}{}", UNITS[unit])
-    } else {
-        format!("{:>3.0}{}", value.min(999.0), UNITS[unit])
+    let (received, sent) = state.rates.map_or_else(
+        || ("—".to_string(), "—".to_string()),
+        |rates| {
+            (
+                bytes_iec_compact(rates.received),
+                bytes_iec_compact(rates.sent),
+            )
+        },
+    );
+    let chart = sparkline_scaled(
+        state
+            .received_history
+            .iter()
+            .zip(&state.sent_history)
+            .map(|(received, sent)| received.max(sent)),
+    );
+    let mut summary = label
+        + " "
+        + Markup::colored(format!("↓{received}"), Color::INBOUND)
+        + " "
+        + Markup::colored(format!("↑{sent}"), Color::OUTBOUND);
+    if !chart.is_empty() {
+        summary += format!(" {chart}");
     }
-}
-
-fn compact_rate(bytes_per_second: f64) -> String {
-    scaled_bytes(bytes_per_second, false)
-}
-
-fn format_rate(bytes_per_second: f64) -> String {
-    format!("{}/s", scaled_bytes(bytes_per_second, true))
-}
-
-fn scaled_bytes(bytes: f64, spaced: bool) -> String {
-    let separator = if spaced { " " } else { "" };
-    let units = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes.max(0.0);
-    let mut unit = 0;
-    while value >= 1024.0 && unit < units.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    let number = if unit == 0 || value >= 10.0 {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.1}")
-    };
-    format!("{number}{separator}{}", units[unit])
-}
-
-fn sparkline(values: &[f64]) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let maximum = values.iter().copied().fold(0.0_f64, f64::max);
-    values
-        .iter()
-        .map(|value| {
-            if maximum <= f64::EPSILON {
-                BARS[0]
-            } else {
-                let index = ((*value / maximum) * (BARS.len() - 1) as f64).floor() as usize;
-                BARS[index.min(BARS.len() - 1)]
-            }
-        })
-        .collect()
+    summary
 }
 
 fn is_link_local(ip: IpAddr) -> bool {
@@ -800,11 +651,28 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
+    use flash_plugin::testing::Harness;
     use flash_plugin::CandidateEffect;
+    use serde_json::json;
 
     use super::*;
+
+    fn history(values: impl IntoIterator<Item = f64>) -> History<HISTORY_LEN> {
+        let mut history = History::new();
+        values.into_iter().for_each(|value| history.push(value));
+        history
+    }
+
+    fn wire(status: &RenderedStatus) -> BTreeMap<&'static str, String> {
+        status
+            .segments()
+            .into_iter()
+            .map(|(name, value)| (name, value.render().unwrap()))
+            .collect()
+    }
 
     #[test]
     fn label_keeps_aggregate_rate_width_across_units_and_sampling() {
@@ -829,10 +697,12 @@ mod tests {
             };
             let status = render_status(&state, SummaryMode::Full).unwrap();
             assert_eq!(
-                status.label,
+                status.label.as_str(),
                 format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{expected}#[default]")
             );
-            assert!(status.summary.contains("popup="));
+            let wire = wire(&status);
+            assert!(wire["summary"].contains("popup="));
+            assert_eq!(wire["label"], status.label.as_str());
         }
     }
 
@@ -924,8 +794,8 @@ default fe80::%utun6 UGcIg utun6\n";
                 received: 10.0,
                 sent: 20.0,
             }),
-            received_history: VecDeque::from([10.0]),
-            sent_history: VecDeque::from([20.0]),
+            received_history: history([10.0]),
+            sent_history: history([20.0]),
             catalog: Some(catalog.clone()),
             last_traffic_success: Some(sampled_at),
             ..NetworkState::default()
@@ -937,9 +807,9 @@ default fe80::%utun6 UGcIg utun6\n";
         assert!(state.received_history.is_empty());
         assert!(state.sent_history.is_empty());
         assert_eq!(state.catalog, Some(catalog));
-        assert!(render_details(&state)
-            .unwrap()
-            .contains("Traffic: sampling…"));
+        let plain = render_preview(&state).unwrap().render_plain();
+        assert!(plain.contains(&format!("Download{}—", " ".repeat(17))));
+        assert!(plain.contains("Hostname      moria"));
     }
 
     #[test]
@@ -994,32 +864,24 @@ default fe80::%utun6 UGcIg utun6\n";
     }
 
     #[test]
-    fn history_is_bounded_and_sparkline_scales() {
-        let mut history = VecDeque::new();
-        for value in 0..20 {
-            push_history(&mut history, f64::from(value));
-        }
-        assert_eq!(history.len(), HISTORY_LEN);
-        assert_eq!(history.front(), Some(&0.0));
-        assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0]), "▁▃▅█");
-    }
-
-    #[test]
-    fn plain_details_keep_the_legacy_history_width() {
-        let mut state = NetworkState {
+    fn plain_reply_is_the_preview_without_markers() {
+        let state = NetworkState {
             default_interface: Some("en0".to_string()),
+            wifi_ssid: Some("Studio #[fg=colour196]".to_string()),
+            received_history: history((0..HISTORY_LEN).map(|value| value as f64)),
             ..NetworkState::default()
         };
-        for value in 0..HISTORY_LEN {
-            push_history(&mut state.received_history, value as f64);
-        }
 
-        let details = render_details(&state).unwrap();
-        let history = details
+        let plain = render_preview(&state).unwrap().render_plain();
+        assert_eq!(plain.lines().next(), Some("Network"));
+        assert!(plain.contains("Wi-Fi         Studio #[fg=colour196]"));
+        assert!(!plain.contains("#[default]"));
+        let chart = plain
             .lines()
-            .find_map(|line| line.strip_prefix("Download history: "))
+            .find_map(|line| line.strip_prefix("Down history  "))
             .unwrap();
-        assert_eq!(history.chars().count(), 16);
+        assert_eq!(chart.chars().count(), HISTORY_LEN);
+        assert!(!chart.contains('·'));
     }
 
     #[test]
@@ -1037,26 +899,30 @@ default fe80::%utun6 UGcIg utun6\n";
             }),
             ..NetworkState::default()
         };
-        push_history(&mut state.received_history, 1.0);
-        push_history(&mut state.sent_history, 0.5);
+        state.received_history.push(1.0);
+        state.sent_history.push(0.5);
         let rendered = render_status(&state, SummaryMode::Compact).unwrap();
-        assert!(rendered.summary.starts_with("#[popup=inline:"));
-        assert!(rendered.summary.contains("NET#[default]"));
-        assert!(!rendered.summary.contains("↓1.5MiB"));
+        let wire = wire(&rendered);
+        assert!(wire["summary"].starts_with("#[popup=inline:"));
+        assert!(wire["summary"].ends_with("]#[fg=#EBCB8B]NET#[default]#[nopopup]"));
+        assert!(!wire["summary"].contains("↓1.5MiB"));
         assert_eq!(
-            visible_summary(&state, SummaryMode::Compact),
+            visible_summary(&state, SummaryMode::Compact).as_str(),
             "#[fg=#EBCB8B]NET#[default]"
         );
-        assert!(!visible_summary(&state, SummaryMode::Full).contains("Studio"));
+        assert!(!visible_summary(&state, SummaryMode::Full)
+            .as_str()
+            .contains("Studio"));
         assert_eq!(
-            visible_summary(&state, SummaryMode::Full),
+            visible_summary(&state, SummaryMode::Full).as_str(),
             "#[fg=#EBCB8B]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
-        assert!(render_details(&state)
-            .unwrap()
-            .contains("Hostname: moria #[fg=colour196]"));
+        assert!(rendered
+            .details
+            .render_plain()
+            .contains("Hostname      moria #[fg=colour196]"));
         assert_eq!(
-            rendered.details,
+            wire["details"],
             "#[fg=#EBCB8B]Network#[default]\n\
 #[fg=colour245]Wi-Fi         #[default]Studio ##[fg=colour196]\n\
 #[fg=colour245]Interface     #[default]en##0\n\
@@ -1067,7 +933,7 @@ default fe80::%utun6 UGcIg utun6\n";
 #[fg=colour245]Hostname      #[default]moria ##[fg=colour196]\n\
 #[fg=colour245]Address 1     #[default]en##0  10.0.0.2"
         );
-        assert!(!rendered.details.ends_with('\n'));
+        assert!(!wire["details"].ends_with('\n'));
     }
 
     #[test]
@@ -1079,7 +945,11 @@ default fe80::%utun6 UGcIg utun6\n";
         };
 
         assert_eq!(
-            render_status(&state, SummaryMode::Compact).unwrap().details,
+            render_status(&state, SummaryMode::Compact)
+                .unwrap()
+                .details
+                .render()
+                .as_str(),
             "#[fg=#EBCB8B]Network#[default]\n\
 #[fg=colour245]Wi-Fi         #[default]Atelier\n\
 #[fg=colour245]Interface     #[default]en0\n\
@@ -1094,19 +964,39 @@ default fe80::%utun6 UGcIg utun6\n";
         assert_eq!(HISTORY_LEN, 20);
     }
 
-    #[test]
-    fn identical_rendered_status_is_suppressed() {
-        let rendered = RenderedStatus {
-            summary: "summary".to_string(),
-            label: "label".to_string(),
-            details: "details".to_string(),
+    #[tokio::test]
+    async fn identical_rendered_status_is_suppressed() {
+        // Shares the process-wide `STATE` with the scenarios below.
+        let _guard = SCENARIO.lock().await;
+        let mut harness = Harness::new("network");
+        let ctx = harness.context();
+        *state() = NetworkState {
+            default_interface: Some("en0".to_string()),
+            ..NetworkState::default()
         };
-        let mut last = None;
+
+        emit_status_if_changed(&ctx);
+        emit_status_if_changed(&ctx);
+        let frames = harness.drain_status();
+        assert_eq!(frames.len(), 1);
         assert_eq!(
-            status_update(&mut last, rendered.clone()),
-            Some(rendered.clone())
+            frames[0]["label"],
+            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]   —#[default]"
         );
-        assert_eq!(status_update(&mut last, rendered), None);
+        assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
+        assert!(frames[0]["details"].starts_with("#[fg=#EBCB8B]Network#[default]\n"));
+
+        state().rates = Some(TransferRates {
+            received: 600_000.0,
+            sent: 600_000.0,
+        });
+        emit_status_if_changed(&ctx);
+        let frames = harness.drain_status();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            frames[0]["label"],
+            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]1.2M#[default]"
+        );
     }
 
     #[test]
@@ -1119,39 +1009,16 @@ default fe80::%utun6 UGcIg utun6\n";
     }
 
     #[test]
-    fn label_rate_uses_four_cells_at_every_decimal_unit_boundary() {
-        for (rate, expected) in [
-            (0.0, "  0B"),
-            (9.0, "  9B"),
-            (999.4, "999B"),
-            (999.5, "1.0K"),
-            (1_200.0, "1.2K"),
-            (9_950.0, " 10K"),
-            (12_000.0, " 12K"),
-            (999_499.0, "999K"),
-            (999_500.0, "1.0M"),
-            (1e9, "1.0G"),
-            (1e12, "1.0T"),
-            (1e15, "1.0P"),
-            (1e30, "999P"),
-            (f64::INFINITY, "999P"),
-            (f64::NAN, "  0B"),
-            (-1.0, "  0B"),
-        ] {
-            let rendered = label_rate(rate);
-            assert_eq!(rendered, expected, "rate {rate}");
-            assert_eq!(rendered.chars().count(), 4);
-        }
-    }
-
-    #[test]
     fn label_sums_download_and_upload_without_changing_width_while_sampling() {
         let mut state = NetworkState {
             default_interface: Some("en0".into()),
             ..NetworkState::default()
         };
         assert_eq!(
-            render_status(&state, SummaryMode::Compact).unwrap().label,
+            render_status(&state, SummaryMode::Compact)
+                .unwrap()
+                .label
+                .as_str(),
             "#[fg=#EBCB8B]NET#[default] #[fg=colour245]   —#[default]"
         );
         state.rates = Some(TransferRates {
@@ -1159,8 +1026,117 @@ default fe80::%utun6 UGcIg utun6\n";
             sent: 600_000.0,
         });
         assert_eq!(
-            render_status(&state, SummaryMode::Compact).unwrap().label,
+            render_status(&state, SummaryMode::Compact)
+                .unwrap()
+                .label
+                .as_str(),
             "#[fg=#EBCB8B]NET#[default] #[fg=colour245]1.2M#[default]"
         );
+    }
+
+    // -- Scenarios over the SDK harness with a scripted host ----------------
+
+    /// The plugin's `STATE`/`REFRESH_GATE` statics are process-wide, so the
+    /// scenarios below serialize on this lock and start from a fresh state.
+    static SCENARIO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn scenario_harness() -> (tokio::sync::MutexGuard<'static, ()>, Harness) {
+        let guard = SCENARIO.lock().await;
+        *state() = NetworkState::default();
+        let harness = Harness::new("network");
+        // run_command uses the data dir as cwd; create it like the host does.
+        tokio::fs::create_dir_all(harness.data_dir()).await.unwrap();
+        (guard, harness)
+    }
+
+    fn command(subcommand: &str) -> CommandRequest {
+        CommandRequest {
+            command: "network".to_string(),
+            subcommand: subcommand.to_string(),
+            raw: format!(":network {subcommand}"),
+            ..CommandRequest::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_reads_wifi_passively_and_the_ssid_reaches_details_and_commands() {
+        let (_guard, mut harness) = scenario_harness().await;
+        let ctx = harness.context();
+        let startup = tokio::spawn(async move { Network.on_start(ctx).await });
+
+        let (id, method, params) = harness.next_host_request().await.expect("wifi read");
+        assert_eq!(method, "host.wifi_info");
+        assert_eq!(params, json!({ "request_authorization": false }));
+        assert!(harness.reply_host(
+            id,
+            json!({ "ok": true, "present": true, "ssid": "Atelier" })
+        ));
+        startup.await.unwrap();
+
+        let status = harness.drain_status();
+        let details = &status.last().expect("initial status")["details"];
+        assert!(
+            details.contains("Wi-Fi") && details.contains("Atelier"),
+            "{details}"
+        );
+
+        let bare = Network.on_command(harness.context(), command("")).await;
+        assert!(bare.is_ok());
+        let message = bare.toast_message().expect("toast").to_string();
+        assert!(message.contains("Network"), "{message}");
+
+        // An explicit refresh asks for authorization and reflects the new SSID.
+        let ctx = harness.context();
+        let refresh =
+            tokio::spawn(async move { Network.on_command(ctx, command("refresh")).await });
+        let (id, method, params) = harness.next_host_request().await.expect("wifi read");
+        assert_eq!(
+            (method.as_str(), params),
+            ("host.wifi_info", json!({ "request_authorization": true }))
+        );
+        assert!(harness.reply_host(id, json!({ "ok": true, "present": true, "ssid": "Office" })));
+        let response = refresh.await.unwrap();
+        assert!(response.is_ok());
+        let message = response.toast_message().expect("toast").to_string();
+        assert!(message.contains("Wi-Fi         Office"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn explicit_refresh_requests_authorization_while_startup_holds_the_gate() {
+        let (_guard, mut harness) = scenario_harness().await;
+        let ctx = harness.context();
+        let startup = tokio::spawn(async move { Network.on_start(ctx).await });
+        let (startup_id, method, params) = harness.next_host_request().await.expect("wifi read");
+        assert_eq!(
+            (method.as_str(), params),
+            ("host.wifi_info", json!({ "request_authorization": false }))
+        );
+
+        // The startup refresh is still awaiting its Wi-Fi reply, so it owns
+        // the gate; the user's refresh must not queue behind it.
+        let ctx = harness.context();
+        let refresh =
+            tokio::spawn(async move { Network.on_command(ctx, command("refresh")).await });
+        let (id, method, params) = harness
+            .next_host_request()
+            .await
+            .expect("authorization read");
+        assert_eq!(
+            (method.as_str(), params),
+            ("host.wifi_info", json!({ "request_authorization": true }))
+        );
+        assert!(harness.reply_host(id, json!({ "ok": true, "present": false })));
+        // Answering at all is the contract: the user's refresh completed while
+        // the startup refresh still owned the gate. Whether anything was
+        // collectible depends on the host's interfaces, so the ok/fail shape
+        // of the reply is deliberately not pinned here.
+        refresh
+            .await
+            .expect("refresh must not queue behind the startup gate");
+
+        assert!(harness.reply_host(startup_id, json!({ "ok": true, "present": false })));
+        startup.await.unwrap();
+        let status = harness.drain_status();
+        assert!(!status.last().expect("initial status")["summary"].is_empty());
     }
 }

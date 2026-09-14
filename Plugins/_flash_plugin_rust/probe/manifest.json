@@ -1,0 +1,51 @@
+{
+  "id": "probe",
+  "name": "Wire Probe",
+  "version": "0.1.0",
+  "description": "Wire-protocol probe: a test fixture the SDK's cargo tests drive in-process over the wire, never shipped or spawned by the host.",
+  "exec": [
+    "./flash_plugin_probe"
+  ],
+  "sandbox": {},
+  "capabilities": [
+    "accessibility",
+    "app_control",
+    "clipboard",
+    "media_keys",
+    "network_fetch",
+    "notify",
+    "open",
+    "process_control"
+  ],
+  "fetch_urls": [
+    "https://example.com/"
+  ],
+  "listen": [
+    "core:*"
+  ],
+  "sources": [
+    {
+      "name": "probe.items"
+    }
+  ],
+  "query": {},
+  "commands": [
+    {
+      "command": "probe",
+      "subcommand": "*",
+      "description": "Catch-all probe dispatch; the subcommand routes the probe behavior"
+    }
+  ],
+  "actions": [
+    "probe_performed",
+    "probe_unhandled",
+    "probe_failed"
+  ],
+  "hints": {},
+  "navigation": [
+    "probe"
+  ],
+  "status": [
+    "state"
+  ]
+}

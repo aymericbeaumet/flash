@@ -1,0 +1,69 @@
+{
+  "id": "apple",
+  "name": "Apple apps",
+  "version": "0.1.0",
+  "description": "Notes, Reminders and Contacts catalogs through AppleScript",
+  "sandbox": {
+    "exec": [
+      "/usr/bin/osascript"
+    ],
+    "appleevents": true
+  },
+  "exec": [
+    "./flash-plugin-apple"
+  ],
+  "priority": 12,
+  "commands": [
+    {
+      "command": "notes",
+      "subcommand": "open",
+      "description": "Open Notes.app"
+    },
+    {
+      "command": "notes",
+      "subcommand": "refresh",
+      "description": "Refresh the cached notes list"
+    },
+    {
+      "command": "reminders",
+      "subcommand": "open",
+      "description": "Open Reminders.app"
+    },
+    {
+      "command": "reminders",
+      "subcommand": "refresh",
+      "description": "Refresh the cached reminders list"
+    },
+    {
+      "command": "contacts",
+      "subcommand": "open",
+      "description": "Open Contacts.app"
+    },
+    {
+      "command": "contacts",
+      "subcommand": "refresh",
+      "description": "Refresh the cached contacts list"
+    }
+  ],
+  "listen": [
+    "core:config.*",
+    "core:apps.*"
+  ],
+  "sources": [
+    {
+      "name": "notes.notes",
+      "priority": "normal"
+    },
+    {
+      "name": "reminders.tasks",
+      "priority": "normal"
+    },
+    {
+      "name": "contacts.cards",
+      "priority": "normal"
+    }
+  ],
+  "capabilities": [
+    "open"
+  ]
+}

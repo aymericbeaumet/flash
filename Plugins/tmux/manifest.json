@@ -63,6 +63,8 @@
     "pane_split_vertical",
     "pane_split_horizontal",
     "pane_close",
+    "scroll_top",
+    "scroll_bottom",
     "app_reload"
   ]
 }

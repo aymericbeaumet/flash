@@ -77,6 +77,11 @@ final class StatusTerminalRegistry {
   var willChange: (([StatusTerminalChange]) -> Void)?
   var didChange: (() -> Void)?
   private let processEnvironment: FlashProcessEnvironment
+  /// A fresh login shell already running so the next unnamed `terminal_show`
+  /// attaches to a live prompt instead of paying the shell's startup. Opening
+  /// consumes it and warms the next one; it is otherwise an ordinary one-shot
+  /// session (released when its process ends, stopped at shutdown).
+  private(set) var spareShellKey: String?
 
   init(environment: FlashProcessEnvironment = .shared) {
     processEnvironment = environment
@@ -152,17 +157,53 @@ final class StatusTerminalRegistry {
       }
       definition = terminal
     } else {
-      let shell = processEnvironment.environment["SHELL"] ?? "/bin/zsh"
-      definition = .init(
-        command: [shell, "-l"], workingDirectory: NSHomeDirectory(), columns: 100, rows: 28)
+      if let spare = takeSpareShell() {
+        warmFreshShell(configuration: config)
+        return spare
+      }
+      definition = freshShellDefinition()
     }
-    let key = name ?? "terminal:ephemeral:\(UUID().uuidString)"
+    let key = name ?? Self.freshShellKey()
     start(
       name: key, definition: definition, ownership: .ephemeral(template: name),
       colors: StatusPopupColors(config.statusBar.popupStyle))
     didChange?()
+    if name == nil { warmFreshShell(configuration: config) }
     return key
   }
+
+  /// Starts the spare login shell when none is waiting. Frames stay off until
+  /// a view binds it, so the idle shell costs a parsed screen and nothing more.
+  func warmFreshShell(configuration config: Config) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    guard spareShellKey == nil else { return }
+    let key = Self.freshShellKey()
+    start(
+      name: key, definition: freshShellDefinition(), ownership: .ephemeral(template: nil),
+      colors: StatusPopupColors(config.statusBar.popupStyle))
+    sessions[key]?.setWantsFrames(false)
+    spareShellKey = key
+    didChange?()
+  }
+
+  private func takeSpareShell() -> String? {
+    guard let key = spareShellKey, let session = sessions[key] else { return nil }
+    spareShellKey = nil
+    switch session.state {
+    case .idle, .running: return key
+    case .exited, .failed, .stopped:
+      remove(name: key)
+      return nil
+    }
+  }
+
+  private func freshShellDefinition() -> Config.Terminal {
+    let shell = processEnvironment.environment["SHELL"] ?? "/bin/zsh"
+    return .init(
+      command: [shell, "-l"], workingDirectory: NSHomeDirectory(), columns: 100, rows: 28)
+  }
+
+  private static func freshShellKey() -> String { "terminal:ephemeral:\(UUID().uuidString)" }
 
   func prepareTerminal(name: String, configuration config: Config) -> String? {
     guard config.terminals[name] != nil || config.invalidTerminalNames.contains(name) else {
@@ -295,6 +336,7 @@ final class StatusTerminalRegistry {
   }
 
   private func remove(name: String) {
+    if spareShellKey == name { spareShellKey = nil }
     restarts.removeValue(forKey: name)?.pending?.cancel()
     ownership.removeValue(forKey: name)
     inputGenerations.removeValue(forKey: name)
@@ -386,6 +428,7 @@ final class StatusTerminalRegistry {
     for restart in restarts.values { restart.pending?.cancel() }
     restarts.removeAll()
     ownership.removeAll()
+    spareShellKey = nil
     willChange?(sessions.keys.sorted().map(StatusTerminalChange.remove))
     for session in Array(sessions.values) + Array(retiringSessions.values) { session.shutdown() }
     sessions.removeAll()

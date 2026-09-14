@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use flash_plugin::{run, Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate};
+use flash_plugin::status::{bytes_iec, duration_uptime};
+use flash_plugin::{
+    run, Candidate, CommandRequest, Context, Event, Markup, PerformResponse, Preview, RefreshGate,
+};
 use serde_json::Value;
 
 const SOURCE_PROCESSES: &str = "processes.processes";
@@ -261,33 +264,43 @@ fn focused_process_metrics(response: &Value, pid: i64) -> Option<FocusedProcessM
     })
 }
 
+/// The `focused_app_details` segment feeds a document template, so the rows
+/// are rendered plain: the template owns colour.
 fn focused_app_details(app: &FocusedApp, metrics: &FocusedProcessMetrics) -> String {
-    [
-        format!("Bundle: {}", bundle_label(app)),
-        format!("PID: {} · Process: {}", app.pid, metrics.comm),
-        format!("CPU: {:.1}%", metrics.cpu_percent),
-        format!(
-            "Memory: {} ({:.1}%)",
-            format_bytes(metrics.memory_bytes),
-            metrics.mem_percent
-        ),
-        format!("Sockets: {}", metrics.socket_count),
-        format!(
-            "Processes: {} · Threads: {}",
-            metrics.process_count, metrics.thread_count,
-        ),
-        format!("Uptime: {}", format_duration(metrics.uptime_seconds)),
-        format!(
-            "Disk I/O: {} read · {} written",
-            format_bytes(metrics.disk_read_bytes),
-            format_bytes(metrics.disk_write_bytes)
-        ),
-    ]
-    .join("\n")
+    focused_app_identity(app)
+        .row("Process", Markup::text(&metrics.comm))
+        .row("CPU", format!("{:.1}%", metrics.cpu_percent))
+        .row(
+            "Memory",
+            format!(
+                "{} ({:.1}%)",
+                bytes_iec(metrics.memory_bytes),
+                metrics.mem_percent
+            ),
+        )
+        .row("Sockets", metrics.socket_count.to_string())
+        .row("Processes", metrics.process_count.to_string())
+        .row("Threads", metrics.thread_count.to_string())
+        .row("Uptime", duration_uptime(metrics.uptime_seconds))
+        .row(
+            "Disk I/O",
+            format!(
+                "{} read · {} written",
+                bytes_iec(metrics.disk_read_bytes),
+                bytes_iec(metrics.disk_write_bytes)
+            ),
+        )
+        .render_plain()
 }
 
 fn focused_app_placeholder(app: &FocusedApp, state: &str) -> String {
-    format!("Bundle: {}\nPID: {}\n{state}", bundle_label(app), app.pid)
+    focused_app_identity(app).note(state).render_plain()
+}
+
+fn focused_app_identity(app: &FocusedApp) -> Preview {
+    Preview::new()
+        .row("Bundle", Markup::text(bundle_label(app)))
+        .row("PID", app.pid.to_string())
 }
 
 fn bundle_label(app: &FocusedApp) -> &str {
@@ -296,39 +309,6 @@ fn bundle_label(app: &FocusedApp) -> &str {
         "Unavailable"
     } else {
         bundle
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    if bytes < 1_024 {
-        return format!("{bytes} B");
-    }
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1_024.0 && unit < UNITS.len() - 1 {
-        value /= 1_024.0;
-        unit += 1;
-    }
-    if value.fract().abs() < 0.05 || value >= 100.0 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-fn format_duration(seconds: u64) -> String {
-    let days = seconds / 86_400;
-    let hours = seconds % 86_400 / 3_600;
-    let minutes = seconds % 3_600 / 60;
-    if days > 0 {
-        format!("{days}d {hours}h")
-    } else if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else if minutes > 0 {
-        format!("{minutes}m")
-    } else {
-        format!("{seconds}s")
     }
 }
 
@@ -573,7 +553,28 @@ mod tests {
 
         assert_eq!(
             focused_app_details(&app, &metrics),
-            "Bundle: org.mozilla.firefox\nPID: 4242 · Process: firefox\nCPU: 12.5%\nMemory: 1.5 GB (6.2%)\nSockets: 7\nProcesses: 9 · Threads: 42\nUptime: 2h 3m\nDisk I/O: 512 MB read · 64 MB written"
+            "Bundle        org.mozilla.firefox\n\
+PID           4242\n\
+Process       firefox\n\
+CPU           12.5%\n\
+Memory        1.5 GiB (6.2%)\n\
+Sockets       7\n\
+Processes     9\n\
+Threads       42\n\
+Uptime        2h 3m\n\
+Disk I/O      512 MiB read · 64 MiB written"
+        );
+    }
+
+    #[test]
+    fn focused_app_details_keep_literal_hashes_from_external_names() {
+        let app = FocusedApp {
+            pid: 7,
+            bundle_id: "com.example.#[dev]".into(),
+        };
+        assert_eq!(
+            focused_app_placeholder(&app, "Metrics unavailable"),
+            "Bundle        com.example.#[dev]\nPID           7\nMetrics unavailable"
         );
     }
 
@@ -585,7 +586,7 @@ mod tests {
         };
         assert_eq!(
             focused_app_placeholder(&app, "Collecting metrics…"),
-            "Bundle: com.example.Editor\nPID: 99\nCollecting metrics…"
+            "Bundle        com.example.Editor\nPID           99\nCollecting metrics…"
         );
     }
 
@@ -661,5 +662,33 @@ mod tests {
             })
             .is_none());
         assert!(state.is_current(&current));
+    }
+
+    #[tokio::test]
+    async fn startup_publishes_the_scripted_process_table_as_titled_rows() {
+        use flash_plugin::testing::Harness;
+
+        let mut harness = Harness::new("processes");
+        let ctx = harness.context();
+        let startup = tokio::spawn(async move { Processes.on_start(ctx).await });
+
+        let (id, method, params) = harness.next_host_request().await.expect("table read");
+        assert_eq!(method, "host.process_table");
+        assert_eq!(params, serde_json::json!({ "sample_window_ms": 150 }));
+        assert!(harness.reply_host(
+            id,
+            serde_json::json!({ "ok": true, "processes": [
+                { "pid": 1, "comm": "launchd", "cpu_percent": 0.4, "mem_percent": 0.1 }
+            ]})
+        ));
+        startup.await.unwrap();
+
+        let rows = harness.drain_published_rows().expect("catalog published");
+        assert!(!rows.is_empty());
+        for row in &rows {
+            assert_eq!(row.source, SOURCE_PROCESSES);
+            assert!(!row.title.is_empty());
+        }
+        assert_eq!(rows[0].title, "launchd");
     }
 }

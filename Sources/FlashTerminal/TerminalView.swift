@@ -13,9 +13,44 @@ public final class TerminalView: NSView, NSTextInputClient {
     didSet {
       cachedCellSize = nil
       cachedFontVariants = nil
+      lineCache.removeAll(keepingCapacity: true)
       needsDisplay = true
       updateCellGeometry()
     }
+  }
+  /// Laid-out glyph runs keyed by text, font variant and colour. Rows that
+  /// scroll or repaint reuse their lines instead of re-shaping them.
+  private struct RunKey: Hashable {
+    let text: String
+    let font: Int
+    let color: UInt32
+  }
+  private var lineCache: [RunKey: CTLine] = [:]
+  private var colorCache: [UInt32: CGColor] = [:]
+  private static let selectionKey: UInt32 = 1 << 25
+  private static func colorKey(_ color: TerminalColor, faint: Bool = false) -> UInt32 {
+    UInt32(color.red) << 16 | UInt32(color.green) << 8 | UInt32(color.blue) | (faint ? 1 << 24 : 0)
+  }
+  private func cgColor(_ color: TerminalColor, faint: Bool = false) -> CGColor {
+    let key = Self.colorKey(color, faint: faint)
+    if let cached = colorCache[key] { return cached }
+    if colorCache.count >= 1024 { colorCache.removeAll(keepingCapacity: true) }
+    let value = CGColor(
+      srgbRed: CGFloat(color.red) / 255, green: CGFloat(color.green) / 255,
+      blue: CGFloat(color.blue) / 255, alpha: faint ? 0.6 : 1)
+    colorCache[key] = value
+    return value
+  }
+  private func line(_ key: RunKey, font: NSFont, color: CGColor) -> CTLine {
+    if let cached = lineCache[key] { return cached }
+    if lineCache.count >= 4096 { lineCache.removeAll(keepingCapacity: true) }
+    let line = CTLineCreateWithAttributedString(
+      NSAttributedString(
+        string: key.text,
+        attributes: [.font: font, kCTForegroundColorAttributeName as NSAttributedString.Key: color])
+    )
+    lineCache[key] = line
+    return line
   }
   /// Regular / bold / italic / bold-italic, derived once per font change
   /// (`NSFontManager.convert` per frame was a measurable share of a redraw).
@@ -70,8 +105,21 @@ public final class TerminalView: NSView, NSTextInputClient {
 
   public override var acceptsFirstResponder: Bool { true }
   public override var isFlipped: Bool { true }
-  public override init(frame frameRect: NSRect) { super.init(frame: frameRect) }
-  public required init?(coder: NSCoder) { super.init(coder: coder) }
+  public override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+  }
+  public required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    wantsLayer = true
+  }
+  /// The backing layer records drawing commands and rasterises them off the
+  /// main thread, so a repaint never blocks input handling.
+  public override func makeBackingLayer() -> CALayer {
+    let layer = super.makeBackingLayer()
+    layer.drawsAsynchronously = true
+    return layer
+  }
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
@@ -83,6 +131,7 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   public override func setFrameSize(_ newSize: NSSize) {
     super.setFrameSize(newSize)
+    needsDisplay = true
     updateCellGeometry()
   }
   private func updateCellGeometry() {
@@ -128,31 +177,26 @@ public final class TerminalView: NSView, NSTextInputClient {
     invalidateChangedRows(from: previous, to: frame)
   }
 
-  /// Damage tracking: a frame that keeps its geometry invalidates only the
-  /// rows whose cells changed plus the old and new cursor rows, so a cursor
-  /// blink or one new line of output does not repaint the whole grid.
+  /// Damage tracking: a frame that directly follows the previous one and
+  /// keeps its geometry invalidates only the rows the terminal reported as
+  /// changed plus the old and new cursor rows, so a cursor move or one new
+  /// line of output does not repaint the whole grid.
   private func invalidateChangedRows(from previous: TerminalFrame?, to frame: TerminalFrame) {
     guard let previous, previous.rows == frame.rows, previous.columns == frame.columns,
-      previous.cells.count == frame.cells.count
+      frame.generation == previous.generation + 1, var dirtyRows = frame.changedRows
     else {
       needsDisplay = true
       return
-    }
-    let size = cellSize
-    var dirtyRows: [Int] = []
-    for row in 0..<frame.rows {
-      let range = (row * frame.columns)..<((row + 1) * frame.columns)
-      if frame.cells[range] != previous.cells[range] { dirtyRows.append(row) }
     }
     if previous.cursorY != frame.cursorY || previous.cursorX != frame.cursorX
       || previous.cursorVisible != frame.cursorVisible
       || previous.cursorStyle != frame.cursorStyle
     {
-      dirtyRows.append(previous.cursorY)
-      dirtyRows.append(frame.cursorY)
+      dirtyRows.insert(previous.cursorY)
+      dirtyRows.insert(frame.cursorY)
     }
-    guard !dirtyRows.isEmpty else { return }
-    for row in Set(dirtyRows) where row >= 0 && row < frame.rows {
+    let size = cellSize
+    for row in dirtyRows where row >= 0 && row < frame.rows {
       setNeedsDisplay(rowRect(row, size: size))
     }
   }
@@ -210,119 +254,145 @@ public final class TerminalView: NSView, NSTextInputClient {
     guard isRenderingEnabled, let frame = terminalFrame,
       let context = NSGraphicsContext.current?.cgContext
     else { return }
-    background.setFill()
-    dirtyRect.fill()
+    context.setFillColor(background.cgColor)
+    context.fill(dirtyRect)
     let size = cellSize
     let fonts = fontVariants()
-    // Text batching: consecutive single-width ASCII cells with the same font
-    // and colour share one CTLine, positioned at the run's first cell. The
-    // monospaced font advances ASCII by exactly one cell, so the grid holds;
-    // any other cell (wide, non-ASCII, styled differently) still draws alone
-    // in its own clipped cell so shaping can never shift its neighbours.
-    var pendingRun: (start: Int, text: String, font: NSFont, color: NSColor, rect: NSRect)?
-    func flushRun() {
-      guard let run = pendingRun else { return }
-      pendingRun = nil
-      let line = CTLineCreateWithAttributedString(
-        NSAttributedString(
-          string: run.text, attributes: [.font: run.font, .foregroundColor: run.color]))
-      context.saveGState()
-      context.clip(to: run.rect)
-      context.translateBy(x: run.rect.minX, y: run.rect.minY + font.ascender)
-      context.scaleBy(x: 1, y: -1)
-      context.textPosition = .zero
-      CTLineDraw(line, context)
-      context.restoreGState()
-    }
-    for row in 0..<frame.rows {
-      let rowRect = NSRect(
-        x: 0, y: CGFloat(row) * size.height, width: bounds.width, height: size.height)
-      guard rowRect.intersects(dirtyRect) else { continue }
-      for column in 0..<frame.columns {
-        let index = row * frame.columns + column
-        let cell = frame.cells[index]
-        guard cell.width > 0 else { continue }
-        let rect = NSRect(
-          x: CGFloat(column) * size.width, y: CGFloat(row) * size.height,
-          width: size.width * CGFloat(cell.width), height: size.height)
-        guard rect.intersects(dirtyRect) else {
-          flushRun()
-          continue
+    let firstRow = max(0, Int((dirtyRect.minY / size.height).rounded(.down)))
+    let lastRow = min(frame.rows - 1, Int((dirtyRect.maxY / size.height).rounded(.up)) - 1)
+    if firstRow <= lastRow {
+      let selectedForeground = NSColor.selectedTextColor.cgColor
+      let selectedBackground = NSColor.selectedTextBackgroundColor.cgColor
+      // Text batching: consecutive single-width ASCII cells with the same font
+      // and colour share one CTLine, positioned at the run's first cell. The
+      // monospaced font advances ASCII by exactly one cell, so the grid holds;
+      // any other cell (wide, non-ASCII, styled differently) still draws alone
+      // in its own clipped cell so shaping can never shift its neighbours.
+      var pendingRun: (start: Int, key: RunKey, color: CGColor, rect: NSRect)?
+      func flushRun() {
+        guard let run = pendingRun else { return }
+        pendingRun = nil
+        let line = line(run.key, font: fonts[run.key.font], color: run.color)
+        context.saveGState()
+        context.clip(to: run.rect)
+        context.translateBy(x: run.rect.minX, y: run.rect.minY + font.ascender)
+        context.scaleBy(x: 1, y: -1)
+        context.textPosition = .zero
+        CTLineDraw(line, context)
+        context.restoreGState()
+      }
+      for row in firstRow...lastRow {
+        let y = CGFloat(row) * size.height
+        let base = row * frame.columns
+        // Backgrounds first, merged into runs of one colour. Cells on the
+        // terminal's own background are already painted by the fill above,
+        // so an ordinary row costs no fills at all.
+        var pendingFill: (rect: NSRect, key: UInt32, color: CGColor)?
+        for column in 0..<frame.columns {
+          let cell = frame.cells[base + column]
+          guard cell.width > 0 else { continue }
+          let selected = selection?.contains(base + column) == true
+          let inverse = cell.flags & 16 != 0
+          let cellBackground = inverse ? cell.foreground : cell.background
+          guard selected || cellBackground != frame.background else { continue }
+          let key = selected ? Self.selectionKey : Self.colorKey(cellBackground)
+          let rect = NSRect(
+            x: CGFloat(column) * size.width, y: y, width: size.width * CGFloat(cell.width),
+            height: size.height)
+          if var fill = pendingFill, fill.key == key, fill.rect.maxX == rect.minX {
+            fill.rect.size.width += rect.width
+            pendingFill = fill
+          } else {
+            if let fill = pendingFill {
+              context.setFillColor(fill.color)
+              context.fill(fill.rect)
+            }
+            pendingFill = (rect, key, selected ? selectedBackground : cgColor(cellBackground))
+          }
         }
-        let inverse = cell.flags & 16 != 0
-        let selected = selection?.contains(index) == true
-        let fg =
-          selected
-          ? NSColor.selectedTextColor
-          : (inverse ? cell.background : cell.foreground).nsColor
-        let bg =
-          selected
-          ? NSColor.selectedTextBackgroundColor
-          : (inverse ? cell.foreground : cell.background).nsColor
-        bg.setFill()
-        rect.fill()
-        guard cell.flags & 32 == 0, blinkVisible || cell.flags & 8 == 0 else {
-          flushRun()
-          continue
+        if let fill = pendingFill {
+          context.setFillColor(fill.color)
+          context.fill(fill.rect)
         }
-        let cellFont = fonts[Int(cell.flags & 3)]
-        let color = fg.withAlphaComponent(cell.flags & 4 != 0 ? 0.6 : 1)
-        let isBlank = cell.text.allSatisfy(\.isWhitespace)
-        let batchable =
-          cell.width == 1 && cell.text.utf8.count == 1 && cell.text.utf8.first.map { $0 < 128 }
-            == true
-        if batchable {
-          if var run = pendingRun, run.font == cellFont, run.color == color,
-            run.start + run.text.utf8.count == column
-          {
-            run.text.append(cell.text)
-            run.rect.size.width += rect.width
-            pendingRun = run
+        for column in 0..<frame.columns {
+          let index = base + column
+          let cell = frame.cells[index]
+          guard cell.width > 0 else { continue }
+          let rect = NSRect(
+            x: CGFloat(column) * size.width, y: y, width: size.width * CGFloat(cell.width),
+            height: size.height)
+          guard cell.flags & 32 == 0, blinkVisible || cell.flags & 8 == 0 else {
+            flushRun()
+            continue
+          }
+          let selected = selection?.contains(index) == true
+          let inverse = cell.flags & 16 != 0
+          let faint = cell.flags & 4 != 0
+          let cellForeground = inverse ? cell.background : cell.foreground
+          let colorKey = selected ? Self.selectionKey : Self.colorKey(cellForeground, faint: faint)
+          let fontIndex = Int(cell.flags & 3)
+          let isBlank = cell.text == " " || cell.text.allSatisfy(\.isWhitespace)
+          let batchable =
+            cell.width == 1 && cell.text.utf8.count == 1
+            && cell.text.utf8.first.map { $0 < 128 } == true
+          if batchable {
+            if var run = pendingRun, run.key.font == fontIndex, run.key.color == colorKey,
+              run.start + run.key.text.utf8.count == column
+            {
+              run.key = RunKey(text: run.key.text + cell.text, font: fontIndex, color: colorKey)
+              run.rect.size.width += rect.width
+              pendingRun = run
+            } else {
+              flushRun()
+              if !isBlank {
+                pendingRun = (
+                  column, RunKey(text: cell.text, font: fontIndex, color: colorKey),
+                  selected ? selectedForeground : cgColor(cellForeground, faint: faint), rect
+                )
+              }
+            }
           } else {
             flushRun()
             if !isBlank {
-              pendingRun = (column, cell.text, cellFont, color, rect)
+              let key = RunKey(text: cell.text, font: fontIndex, color: colorKey)
+              let line = line(
+                key, font: fonts[fontIndex],
+                color: selected ? selectedForeground : cgColor(cellForeground, faint: faint))
+              context.saveGState()
+              context.clip(to: rect)
+              context.translateBy(x: rect.minX, y: rect.minY + font.ascender)
+              context.scaleBy(x: 1, y: -1)
+              context.textPosition = .zero
+              CTLineDraw(line, context)
+              context.restoreGState()
             }
           }
-        } else {
-          flushRun()
-          if !isBlank {
-            let line = CTLineCreateWithAttributedString(
-              NSAttributedString(
-                string: cell.text, attributes: [.font: cellFont, .foregroundColor: color]))
+          guard cell.underline > 0 || cell.flags & (64 | 128) != 0 else { continue }
+          context.setStrokeColor(cgColor(cell.underlineColor))
+          if cell.underline > 0 {
             context.saveGState()
-            context.clip(to: rect)
-            context.translateBy(x: rect.minX, y: rect.minY + font.ascender)
-            context.scaleBy(x: 1, y: -1)
-            context.textPosition = .zero
-            CTLineDraw(line, context)
+            if cell.underline == 4 { context.setLineDash(phase: 0, lengths: [1, 2]) }
+            if cell.underline == 5 { context.setLineDash(phase: 0, lengths: [4, 2]) }
+            if cell.underline == 3 {
+              context.move(to: NSPoint(x: rect.minX, y: rect.maxY - 2))
+              var x = rect.minX
+              while x < rect.maxX {
+                context.addLine(to: NSPoint(x: x + 1, y: rect.maxY - 3))
+                context.addLine(to: NSPoint(x: x + 3, y: rect.maxY - 1))
+                x += 4
+              }
+              context.strokePath()
+            } else {
+              stroke(y: rect.maxY - 2, rect: rect, context: context)
+            }
             context.restoreGState()
           }
+          if cell.underline == 2 { stroke(y: rect.maxY - 4, rect: rect, context: context) }
+          if cell.flags & 64 != 0 { stroke(y: rect.midY, rect: rect, context: context) }
+          if cell.flags & 128 != 0 { stroke(y: rect.minY + 1, rect: rect, context: context) }
         }
-        cell.underlineColor.nsColor.setStroke()
-        if cell.underline > 0 {
-          context.saveGState()
-          if cell.underline == 4 { context.setLineDash(phase: 0, lengths: [1, 2]) }
-          if cell.underline == 5 { context.setLineDash(phase: 0, lengths: [4, 2]) }
-          if cell.underline == 3 {
-            context.move(to: NSPoint(x: rect.minX, y: rect.maxY - 2))
-            var x = rect.minX
-            while x < rect.maxX {
-              context.addLine(to: NSPoint(x: x + 1, y: rect.maxY - 3))
-              context.addLine(to: NSPoint(x: x + 3, y: rect.maxY - 1))
-              x += 4
-            }
-            context.strokePath()
-          } else {
-            stroke(y: rect.maxY - 2, rect: rect, context: context)
-          }
-          context.restoreGState()
-        }
-        if cell.underline == 2 { stroke(y: rect.maxY - 4, rect: rect, context: context) }
-        if cell.flags & 64 != 0 { stroke(y: rect.midY, rect: rect, context: context) }
-        if cell.flags & 128 != 0 { stroke(y: rect.minY + 1, rect: rect, context: context) }
+        flushRun()
       }
-      flushRun()
     }
     if frame.cursorVisible && session != nil && (blinkVisible || !frame.cursorBlinking) {
       var cursor = NSRect(

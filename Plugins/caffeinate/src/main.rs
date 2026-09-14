@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use flash_plugin::{
     run, spawn_managed, CommandRequest, Context, ManagedChild, ManagedChildError, PerformResponse,
+    StatusValue,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -212,7 +213,12 @@ fn performed(state: &AssertionState) -> PerformResponse {
 }
 
 fn emit_state(ctx: &Context, state: &AssertionState) {
-    ctx.status([("state", if state.pid().is_some() { "on" } else { "" })]);
+    let value = if state.pid().is_some() {
+        StatusValue::text("on")
+    } else {
+        StatusValue::empty()
+    };
+    ctx.status([("state", value)]);
 }
 
 fn schedule_expiry(
@@ -313,8 +319,8 @@ mod tests {
         assert!(invoke(&plugin, &harness, "on", &["0"]).await.is_ok());
         for _ in 0..50 {
             if matches!(*plugin.state.lock().await, AssertionState::Stopped) {
-                let frames = harness.drain();
-                assert_eq!(frames.last().unwrap()["params"]["segments"]["state"], "");
+                let frames = harness.drain_status();
+                assert_eq!(frames.last().unwrap()["state"], "");
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
