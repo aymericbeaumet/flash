@@ -82,7 +82,7 @@ final class NativeStatusBarSurface {
     sizingLabels.terminal = ""
     let pills = document.runs.filter { $0.pill && !$0.isStyleBoundary && !$0.text.isEmpty }
     let longestPill = pills.filter { $0.text != labels.terminal }.map { $0.text.count }.max() ?? 0
-    // Empty passthrough and named modes share the configured compact width.
+    // All mode labels, including an explicitly empty one, share the compact width.
     let compactPillWidth = max(
       OverlayPanel.modeBadgeWidth(labels: sizingLabels, currentText: "", fontSize: font.pointSize),
       CGFloat(longestPill) * font.pointSize * 0.66 + 16)
@@ -187,7 +187,7 @@ final class NativeStatusBarSurface {
         segment.text =
           pillLabels.first { $0.padded == segment.text }?.label
           ?? segment.text.trimmingCharacters(in: .whitespaces)
-        segment.bold = true
+        segment.bold = modeStyle != .passthrough
         segment.foreground = .rgb(Self.rgb(palette.foregroundCG))
         segment.background = .defaultBackground
         segment.reverse = false

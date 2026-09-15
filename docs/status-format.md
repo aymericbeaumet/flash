@@ -86,9 +86,10 @@ Flash supplies `flash.mode`, `flash.date`, `flash.active_app_name`,
 `flash.plugin.error_count`, and `flash.source.<name>`. Host/user/process values
 and the process environment are available through ordinary lookup.
 
-`flash.mode` is the mode label and is empty in PASSTHROUGH by default. Keep the
-`#[pill]` marker present even with empty content: its compact reserved width
-keeps adjacent status content steady. PASSTHROUGH shows an empty neutral pill;
+`flash.mode` is the mode label and shows INSERT in PASSTHROUGH by default.
+PASSTHROUGH uses muted, non-bold text with no pill background. Keep the `#[pill]`
+marker present even when configuring an empty label: its compact reserved width
+keeps adjacent status content steady.
 NORMAL and TERMINAL use their filled green/blue treatment and COMMAND remains
 purple. A centered active-app label outside the pill is independent of it.
 

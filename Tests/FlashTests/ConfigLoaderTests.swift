@@ -209,7 +209,7 @@ final class ConfigLoaderTests: XCTestCase {
         "expected removed default mapping \(rawKey) to stay unbound")
     }
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
-    XCTAssertEqual(c.mode.labels.passthrough, "")
+    XCTAssertEqual(c.mode.labels.passthrough, "INSERT")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
     XCTAssertTrue(c.mode.all.isEmpty)
     XCTAssertTrue(c.mode.passthrough.isEmpty)

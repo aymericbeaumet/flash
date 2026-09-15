@@ -53,10 +53,10 @@ extension OverlayPanel {
   // Pills read as slightly lit from above: the top of each gradient is a
   // lifted tint of the base colour, the bottom the base colour itself.
   static let passthroughPalette = ModeBadgePalette(
-    topCG: lifted(nordPolarNight0, by: 0.08).cgColor,
-    bottomCG: nordPolarNight0CG,
-    foregroundCG: nordSnowStorm2CG,
-    borderCG: nordAuroraYellowCG)
+    topCG: NSColor.clear.cgColor,
+    bottomCG: NSColor.clear.cgColor,
+    foregroundCG: tmuxGrey245CG,
+    borderCG: NSColor.clear.cgColor)
   static let normalPalette = ModeBadgePalette(
     topCG: lifted(nordAuroraGreen, by: 0.12).cgColor,
     bottomCG: nordAuroraGreenCG,

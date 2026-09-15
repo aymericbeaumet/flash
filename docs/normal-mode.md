@@ -6,10 +6,12 @@ NORMAL for one navigation command, then resume typing automatically. Use
 `enter_normal_mode --persistent` for repeated navigation. Focus changes never
 activate NORMAL or end PASSTHROUGH.
 
-The status pill keeps a compact, stable width in every mode. PASSTHROUGH leaves
-its neutral pill empty and has no window border. NORMAL and TERMINAL use filled
-green and blue pills with dark text;
-COMMAND stays purple. All three share the same two-point border with a soft
+The status pill keeps a compact, stable width in every mode. PASSTHROUGH shows
+INSERT in muted, non-bold text without a pill background or window border.
+Its configuration key remains `passthrough`; `mode.labels.passthrough` customizes
+the label, and an empty label still reserves its space. NORMAL and TERMINAL use
+filled green and blue pills with dark text; COMMAND stays purple.
+All three share the same two-point border with a soft
 glow, subject to configured overrides. NORMAL/COMMAND border the target app;
 TERMINAL borders its own focused popup/window. Hover previews never activate
 TERMINAL emphasis.

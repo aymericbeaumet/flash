@@ -89,7 +89,7 @@ changes never activate NORMAL.
 Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, apps, and terminal panes, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. In persistent NORMAL, every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on).
 
 The status pill keeps the same compact width in every mode.
-PASSTHROUGH leaves the neutral pill empty and has no mode border.
+PASSTHROUGH shows a discreet INSERT label with no pill background or mode border.
 NORMAL uses green, COMMAND purple,
 and TERMINAL blue, with the same two-point glowing border. The terminal border
 surrounds its own focused window; hover previews leave the current mode alone.

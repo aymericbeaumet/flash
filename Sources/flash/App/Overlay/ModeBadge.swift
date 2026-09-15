@@ -2,7 +2,7 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// The persistent status bar shows an empty neutral pill in passthrough and a
+/// The persistent status bar shows a discreet INSERT label in passthrough and a
 /// highlighted mode pill in NORMAL, COMMAND, and TERMINAL. The historical
 /// "mode badge" identifiers refer to this whole bar.
 extension OverlayPanel {

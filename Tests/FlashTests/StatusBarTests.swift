@@ -4,14 +4,17 @@ import XCTest
 @testable import flash
 
 final class StatusBarTests: XCTestCase {
-  func testDefaultPassthroughPillIsEmptyAndKeepsItsHorizontalSpace() {
-    for template in [Config.StatusBar.defaultTemplate, ConfigLoader.parse("").statusBar.template] {
+  func testDefaultPassthroughPillShowsInsertAndKeepsItsCompactWidth() {
+    for config in [Config.default, ConfigLoader.parse("")] {
       for app in ["", "Alacritty", "Google Chrome", "Visual Studio Code"] {
         let model = FlashStatusBarTemplateEngine.render(
-          template: template, context: FlashStatusBarContext(activeAppName: app))
+          template: config.statusBar.template,
+          context: FlashStatusBarContext(
+            activeAppName: app, modeLabel: config.mode.labels.passthrough))
         let pill = model.document.runs.filter(\.pill)
-        XCTAssertEqual(pill.map(\.text).joined(), "")
+        XCTAssertEqual(pill.map(\.text).joined(), "INSERT")
         let panel = OverlayPanel()
+        panel.modeBadgeStyle = .passthrough
         panel.statusBarModel = model
         renderStatusBar(panel)
         let surface = panel.primaryStatusBarSurface
@@ -20,7 +23,8 @@ final class StatusBarTests: XCTestCase {
         guard let renderedPill = rendered.first else { continue }
         XCTAssertFalse(surface.runLayers[renderedPill.offset].pill.isHidden)
         XCTAssertEqual(
-          (surface.runLayers[renderedPill.offset].text.string as? NSAttributedString)?.string, "")
+          (surface.runLayers[renderedPill.offset].text.string as? NSAttributedString)?.string,
+          "INSERT")
         XCTAssertEqual(surface.runFrames[renderedPill.offset].width, CGFloat(7) * 13 * 0.66 + 16)
       }
     }

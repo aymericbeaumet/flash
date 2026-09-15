@@ -3,9 +3,9 @@ import XCTest
 @testable import flash
 
 final class PassthroughConfigTests: XCTestCase {
-  func testPassthroughHasNoDefaultDisplayLabel() {
-    XCTAssertEqual(Config.default.mode.labels.passthrough, "")
-    XCTAssertEqual(ConfigLoader.parse("").mode.labels.passthrough, "")
+  func testPassthroughDisplaysInsertByDefault() {
+    XCTAssertEqual(Config.default.mode.labels.passthrough, "INSERT")
+    XCTAssertEqual(ConfigLoader.parse("").mode.labels.passthrough, "INSERT")
   }
 
   func testEmptyPassthroughLabelIsValid() {

@@ -292,9 +292,9 @@ precedence_alive_bonus = 10
 # "firefox.tabs" = 120
 
 [mode]
-# An empty passthrough label leaves a neutral pill with the same reserved width.
-# Its neutral styling and fixed width keep status content in place across modes.
-labels = { normal = "NORMAL", passthrough = "", command = "COMMAND", terminal = "TERMINAL" }
+# Passthrough shows INSERT in muted text without a pill background.
+# The compact reserved width stays fixed across modes, even with an empty label.
+labels = { normal = "NORMAL", passthrough = "INSERT", command = "COMMAND", terminal = "TERMINAL" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
 # sequence before resolving the longest matching prefix. Equivalent to

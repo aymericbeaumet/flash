@@ -148,30 +148,48 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     }
   }
 
-  func testModeAndEmptyPillsKeepOneFrameAcrossTransitions() {
+  func testModePillsKeepStableFramesAndOnlyHighlightActiveModes() throws {
     let surface = NativeStatusBarSurface()
     var initialFrames: [CGRect]?
     for (label, style) in [
-      ("NORMAL", OverlayModeBadgeStyle.normal), ("", .passthrough),
-      ("COMMAND", .command), ("", .passthrough), ("TERMINAL", .terminal),
+      ("INSERT", OverlayModeBadgeStyle.passthrough), ("NORMAL", .normal),
+      ("INSERT", .passthrough), ("COMMAND", .command), ("INSERT", .passthrough),
+      ("TERMINAL", .terminal), ("INSERT", .passthrough),
       ("", .passthrough), ("NORMAL", .normal),
     ] {
       redraw(
         surface, "#[pill]\(label)#[nopill]FEED#[align=absolute-centre]Firefox",
-        columns: 60, style: style)
-      XCTAssertFalse(surface.runLayers[0].pill.isHidden)
-      XCTAssertEqual((surface.runLayers[0].text.string as? NSAttributedString)?.string, label)
-      XCTAssertEqual(surface.runLayers[0].text.alignmentMode, .center)
+        columns: 60, labels: .init(), style: style)
+      let pill = surface.runLayers[0]
+      let text = try XCTUnwrap(pill.text.string as? NSAttributedString)
+      XCTAssertFalse(pill.pill.isHidden)
+      XCTAssertEqual(text.string, label)
+      XCTAssertEqual(pill.text.alignmentMode, .center)
+      XCTAssertNil(pill.container.backgroundColor)
+      XCTAssertEqual(pill.pill.borderWidth, 0)
+      let colors = try XCTUnwrap(pill.pill.colors as? [CGColor])
+      XCTAssertEqual(colors.count, 2)
+      for color in colors {
+        XCTAssertEqual(color.alpha, style == .passthrough ? 0 : 1)
+      }
+      if !label.isEmpty {
+        let font = try XCTUnwrap(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(font.fontDescriptor.symbolicTraits.contains(.bold), style != .passthrough)
+        XCTAssertNil(text.attribute(.backgroundColor, at: 0, effectiveRange: nil))
+        if style == .passthrough {
+          let foreground = try XCTUnwrap(
+            (text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?
+              .usingColorSpace(.sRGB))
+          XCTAssertGreaterThan(foreground.redComponent, 0.4)
+          XCTAssertLessThan(foreground.redComponent, 0.75)
+          XCTAssertEqual(foreground.greenComponent, foreground.redComponent, accuracy: 0.01)
+          XCTAssertEqual(foreground.blueComponent, foreground.redComponent, accuracy: 0.01)
+        }
+      }
       if let initialFrames {
         XCTAssertEqual(surface.runFrames, initialFrames, "layout moved for \(label)")
       } else {
         initialFrames = surface.runFrames
-      }
-      if style == .passthrough {
-        XCTAssertEqual(
-          surface.runLayers[0].pill.colors as? [CGColor],
-          [OverlayPanel.passthroughPalette.bottomCG, OverlayPanel.passthroughPalette.topCG])
-        XCTAssertEqual(surface.runLayers[0].pill.borderWidth, 0)
       }
     }
   }

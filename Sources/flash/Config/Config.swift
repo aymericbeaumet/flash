@@ -410,7 +410,7 @@ struct Config {
   struct Mode: Equatable {
     struct Labels: Equatable {
       var normal: String = "NORMAL"
-      var passthrough: String = ""
+      var passthrough: String = "INSERT"
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
 
