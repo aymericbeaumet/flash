@@ -356,13 +356,10 @@ struct Config {
     var notchMargin: Double = 6
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
-    /// Shared room for mode labels and the bounded passthrough app name.
-    static let modePillMinimumColumns = 14
     /// One native tmux format, with Flash presentation styles and values.
     static let defaultTemplateString = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
     static let defaultOptions = [
-      "@left":
-        "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/\(modePillMinimumColumns - 1)/…:flash.active_app_name},FLASH}}#[nopill]",
+      "@left": "#[pill]#{flash.mode}#[nopill]",
       "@right": "#[fg=#EBCB8B]#{flash.date}",
     ]
     var template: FlashStatusBarTemplate = Self.defaultTemplate
@@ -456,6 +453,7 @@ struct Config {
 
     static let defaultTerminalMappings: [ModeMapping] = {
       let bindings: [(String, URLCommand)] = [
+        ("<escape>", .terminalDismiss),
         ("cmd+q", .terminalQuit(name: nil)),
         ("cmd+r", .terminalRestart(name: nil)),
         ("cmd+w", .terminalDismiss),
@@ -473,6 +471,7 @@ struct Config {
       // concise. Use `<name>` only for keys that can't be typed bare
       // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
       var raw: [(String, MappingCommand)] = [
+        ("i", .flashCommand(.passthroughMode)),
         ("h", .flashCommand(.scroll(.left))),
         ("j", sendKeyMapping("down")),
         ("k", sendKeyMapping("up")),
@@ -711,7 +710,7 @@ struct Config {
       let inherited = mappings(for: .passthrough).filter {
         let identity = CompiledMappings.physicalIdentity(for: $0.key)
         return passthroughClaimed.insert(identity).inserted
-          && ($0.action.command == .normalMode || $0.action.command == .passthroughMode
+          && ($0.action.command?.isNormalModeEntry == true || $0.action.command == .passthroughMode
             || $0.action.command == .leaveMode)
           && claimed.insert(identity).inserted
       }
@@ -739,13 +738,13 @@ struct Config {
 
     var containsNormalModeMapping: Bool {
       (all + normal + passthrough + command + terminal).contains { mapping in
-        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
+        mapping.action.command?.isNormalModeEntry == true || mapping.action.command == .leaveMode
       }
     }
 
     var containsAdvancedModeMapping: Bool {
       all.contains { mapping in
-        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
+        mapping.action.command?.isNormalModeEntry == true || mapping.action.command == .leaveMode
       }
     }
   }
@@ -1002,7 +1001,8 @@ extension URLCommand {
     case .scrollTarget: return verb("scroll_target")
     case .mouseDock: return verb("mouse_dock")
     case .mouseStatusBar: return verb("mouse_statusbar")
-    case .normalMode: return verb("enter_normal_mode")
+    case .normalMode(let persistent):
+      return verb("enter_normal_mode", persistent ? [flag("persistent")] : [])
     case .leaveMode: return verb("leave_mode")
     case .terminalShow(let name):
       return verb("terminal_show", name.map { ["--name=\($0)"] } ?? [])

@@ -4,7 +4,7 @@ import XCTest
 
 final class ModeStoreTests: XCTestCase {
   func testNestedEventWaitsUntilCurrentEffectsFinish() {
-    let store = ModeStore(initial: .normal)
+    let store = ModeStore(initial: .normal(persistent: true))
     var observed: [Mode] = []
     store.perform = { _, _, next in
       observed.append(next)
@@ -20,7 +20,7 @@ final class ModeStoreTests: XCTestCase {
   }
 
   func testConfigReconciliationDoesNotPerformModeEntry() {
-    let store = ModeStore(initial: .normal)
+    let store = ModeStore(initial: .normal(persistent: true))
     var entries = 0
     var renders = 0
     store.perform = { effects, _, _ in
@@ -30,7 +30,7 @@ final class ModeStoreTests: XCTestCase {
     store.dispatch(.advancedModeChanged(enabled: true))
     XCTAssertEqual(entries, 0, "Refreshing labels must preserve native input ownership")
     XCTAssertEqual(renders, 1)
-    store.dispatch(.enterNormal(targetPID: nil))
+    store.dispatch(.enterNormal(persistent: true, targetPID: nil))
     XCTAssertEqual(entries, 1, "An explicit entry resets transient capture context")
   }
 }

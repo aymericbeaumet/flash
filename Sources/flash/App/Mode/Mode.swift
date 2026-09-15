@@ -25,8 +25,9 @@ enum Mode: Equatable {
   /// Keyboard is handed to the focused app until an explicit mode change.
   case passthrough
 
-  /// The overlay owns the keyboard and interprets keys as commands.
-  case normal
+  /// A one-shot entry lasts through one resolved command and its interaction.
+  /// Persistent entries retain capture until an explicit handoff or exit.
+  case normal(persistent: Bool, action: NormalActionPhase = .ready)
 
   /// Command line / flashlight surface. `restoreTo` preserves advanced-mode
   /// eligibility while every dismissal returns keyboard ownership to the app.
@@ -34,6 +35,12 @@ enum Mode: Equatable {
 
   /// A popup's local terminal view owns keyboard input; global mappings are suspended.
   case terminal(restoreTo: ReturnMode)
+}
+
+enum NormalActionPhase: Equatable {
+  case ready
+  case dispatching
+  case waitingForInteraction
 }
 
 /// Which command surface is active. `finder` is the flashlight candidate picker
@@ -73,7 +80,10 @@ extension Mode {
     return false
   }
 
-  var isNormal: Bool { self == .normal }
+  var isNormal: Bool {
+    if case .normal = self { return true }
+    return false
+  }
 
   var isTerminal: Bool {
     if case .terminal = self { return true }

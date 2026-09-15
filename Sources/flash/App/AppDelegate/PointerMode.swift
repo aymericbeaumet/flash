@@ -115,7 +115,6 @@ extension AppDelegate {
     clearHintSessionState()
     overlay.hide()
     let handoffToken = notePointerPassthroughHandoff(reason: "pointer_mode_commit")
-    applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
         at: location, action: .leftClick, modifiers: [], preserveCursor: false,
@@ -149,15 +148,14 @@ extension AppDelegate {
     let pid = context.processID
     let normalized = max(1, index)
     let generation = activationGen
+    let commandToken = normalModePendingCommandToken
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let focused = NormalModeDispatcher.focusTextInput(pid: pid, index: normalized)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.isCurrent(generation) else { return }
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
-          if self.modeStore.mode == .normal {
-            self.enterPassthroughMode(reason: .explicitCommand, targetPID: pid)
-          }
+          self.completeNormalModeHandoff(commandToken: commandToken, targetPID: pid)
         } else {
           FlashLog.debug("[focus_input] no_text_input pid=\(pid)")
           self.applyModeOverlay()

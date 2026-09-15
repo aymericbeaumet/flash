@@ -4,7 +4,7 @@ enabled = true
 template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=right]#{T:@right}"
 
 [statusbar.options]
-"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
+"@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
 "@centre" = "#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]"
 "@right" = """
 #{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}

@@ -21,13 +21,33 @@ enum ModeReducer {
       let next = Mode.passthrough
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
-    case .enterNormal(let targetPID):
+    case .enterNormal(let persistent, let targetPID):
       // The advanced gate: cannot enter NORMAL when the feature is off.
       guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: targetPID) }
       let departure: [ModeEffect] =
         state.isTerminal
         ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
-      return (.normal, departure + enterEffects(for: .normal, targetPID: targetPID))
+      let next = Mode.normal(persistent: persistent)
+      return (next, departure + enterEffects(for: next, targetPID: targetPID))
+
+    case .normalActionStarted:
+      guard case .normal(persistent: false, action: _) = state else { return (state, []) }
+      return (.normal(persistent: false, action: .dispatching), [])
+
+    case .normalActionDispatched(let hasTransientInput):
+      guard case .normal(persistent: false, action: .dispatching) = state else {
+        return (state, [])
+      }
+      if hasTransientInput {
+        return (.normal(persistent: false, action: .waitingForInteraction), [])
+      }
+      return (.passthrough, enterEffects(for: .passthrough, targetPID: nil))
+
+    case .normalInteractionChanged(let hasTransientInput):
+      guard case .normal(persistent: false, action: .waitingForInteraction) = state,
+        !hasTransientInput
+      else { return (state, []) }
+      return (.passthrough, enterEffects(for: .passthrough, targetPID: nil))
 
     case .leaveMode(let hasHints, let targetPID):
       switch state {
@@ -36,8 +56,10 @@ enum ModeReducer {
       case .command:
         return reduce(state, .closeCommand(reason: "leave_mode"))
       case .passthrough where !hasHints:
-        return reduce(state, .enterNormal(targetPID: targetPID))
+        return reduce(state, .enterNormal(persistent: false, targetPID: targetPID))
       case .normal where !hasHints:
+        return reduce(state, .enterPassthrough(targetPID: targetPID))
+      case .normal(persistent: false, action: .waitingForInteraction):
         return reduce(state, .enterPassthrough(targetPID: targetPID))
       case .passthrough, .normal, .disabled:
         // Active hints are dismissed in place; disabled idle input stays native.
@@ -75,8 +97,8 @@ enum ModeReducer {
         let next = Mode.passthrough
         return (next, enterEffects(for: next, targetPID: targetPID))
       }
-      // A non-editable click in NORMAL keeps NORMAL; just make sure the overlay
-      // keeps key focus if the click stole it.
+      // A non-editable click does not force a handoff. One-shot completion
+      // separately ends the entry once its entire interaction finishes.
       return (state, [.scheduleRecapture])
 
     case .advancedModeChanged(let enabled):

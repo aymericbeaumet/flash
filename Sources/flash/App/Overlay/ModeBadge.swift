@@ -2,7 +2,7 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// The persistent status bar shows a neutral app pill in passthrough and a
+/// The persistent status bar shows an empty neutral pill in passthrough and a
 /// highlighted mode pill in NORMAL, COMMAND, and TERMINAL. The historical
 /// "mode badge" identifiers refer to this whole bar.
 extension OverlayPanel {
@@ -370,12 +370,7 @@ extension OverlayPanel {
     currentText _: String,
     fontSize: CGFloat
   ) -> CGFloat {
-    // The default passthrough app name is bounded to the minimum pill width; compact
-    // custom mode labels must leave that room available across transitions.
-    max(
-      fontSize + 18,
-      CGFloat(max(Config.StatusBar.modePillMinimumColumns, labels.longestCount))
-        * fontSize * 0.66 + 16)
+    max(fontSize + 18, CGFloat(labels.longestCount) * fontSize * 0.66 + 16)
   }
 
   static func statusBarFontSize(overlayFontSize _: CGFloat) -> CGFloat {

@@ -26,6 +26,27 @@ final class OverlayInputTests: XCTestCase {
     }
   }
 
+  func testCommandLineEscapeCancelsWithoutSubmitting() {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .commandLine
+    panel.commandLineText = ":flashlight query"
+    panel.commandLineCursorIndex = panel.commandLineText.count
+    panel.commandTextField.stringValue = panel.commandLineText
+
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: NSTextView(),
+        doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+
+    XCTAssertEqual(coordinator.commandCancelCount, 1)
+    XCTAssertTrue(coordinator.submittedCommands.isEmpty)
+    XCTAssertEqual(panel.commandLineText, "")
+    XCTAssertEqual(panel.commandLineCursorIndex, 0)
+  }
+
   func testPresentedCommandLineUsesInPlaceRefresh() {
     XCTAssertTrue(
       OverlayPanel.commandLineCanRefreshInPlace(
@@ -686,6 +707,19 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
   }
 
+  func testKeyWindowFallbackLeavesNormalModeWithIByDefault() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let event = try keyEvent(keyCode: kVK_ANSI_I, characters: "i")
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.passthroughMode])
+  }
+
   func testKeyWindowFallbackConsumesUnmappedModifierChordByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
@@ -817,7 +851,7 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(layers[2] === panel.candidateFinderResultsLayer)
   }
 
-  func testModeBadgeWidthReservesAppFallbackAndLongLabels() {
+  func testModeBadgeWidthFitsConfiguredLabelsWithoutAppNameReservation() {
     let compact = OverlayPanel.modeBadgeWidth(
       labels: Config.Mode.Labels(normal: "N", passthrough: "", command: "C", terminal: "T"),
       currentText: "N",
@@ -831,8 +865,8 @@ final class OverlayInputTests: XCTestCase {
       currentText: "NORMAL",
       fontSize: 12)
 
-    XCTAssertEqual(compact, standard)
-    XCTAssertEqual(compact, CGFloat(14) * 12 * 0.66 + 16)
+    XCTAssertLessThan(compact, standard)
+    XCTAssertEqual(compact, 30)
     XCTAssertGreaterThan(long, standard)
   }
 
@@ -887,6 +921,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var mappingEventsToHandle = 0
   var normalModeActions: [(MappingCommand?, Int)] = []
   var cancelCount = 0
+  var commandCancelCount = 0
   var commitCenterModifiers: [ClickModifiers] = []
   /// What `overlayDidCommitCenter` reports back — `true` mimics being in
   /// mouse-grid mode (center handled), `false` mimics plain hints (the
@@ -914,7 +949,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     mappingEventsToHandle -= 1
     return true
   }
-  func overlayDidCancelCommandLine() {}
+  func overlayDidCancelCommandLine() { commandCancelCount += 1 }
   func overlayDidUpdateCommandLine(
     _ command: String,
     cursorIndex: Int,

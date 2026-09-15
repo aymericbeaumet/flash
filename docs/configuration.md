@@ -67,7 +67,12 @@ PASSTHROUGH is the default base mode. Advanced mode is opt-in: configure an
 all-scope `enter_normal_mode` mapping to enable it. For example, bind
 `cmd+ctrl+[` to `enter_normal_mode` and `cmd+ctrl+i` to
 `enter_passthrough_mode`. These are explicit entries, not a toggle, and are
-not installed as global defaults. Bare Escape and `i` do not change base mode.
+not installed as global defaults. `enter_normal_mode` handles one resolved
+command; `enter_normal_mode --persistent` keeps NORMAL active for repeated
+commands. The Boolean flag accepts the shared strict flag syntax.
+Bare `i` exits NORMAL by default, while Escape closes COMMAND and TERMINAL.
+Override `i` in `[mode.normal.mappings]` or `"<escape>"` in
+`[mode.terminal.mappings]` to change those defaults.
 Mappings for ordinary app typing belong in `[mode.passthrough.mappings]`.
 Command/finder/terminal dismissal always returns to PASSTHROUGH; command entry
 has no return-mode option. See [mode transitions](normal-mode.md#explicit-mode-shortcuts).

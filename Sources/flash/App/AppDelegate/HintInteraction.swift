@@ -67,6 +67,7 @@ extension AppDelegate {
           self.scheduleNormalModeRecapture()
         }
         if let replacement = result.replacement { self.performHintActivation(replacement) }
+        self.finishNormalModeInteractionIfIdle()
       }
     }
     if delayMs == 0 {

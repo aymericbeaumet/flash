@@ -46,7 +46,7 @@ final class ModeVisualTests: XCTestCase {
 
   func testReturningToPassthroughClearsStrokeAndInvalidatesPendingGeometry() {
     let delegate = delegate()
-    delegate.modeStore.dispatch(.enterNormal(targetPID: nil))
+    delegate.modeStore.dispatch(.enterNormal(persistent: false, targetPID: nil))
     let frame = CGRect(x: 10, y: 20, width: 300, height: 200)
     delegate.overlay.activeWindowBorderLayer.path = CGPath(rect: frame, transform: nil)
     delegate.activeWindowBorderTrackedFrame = frame

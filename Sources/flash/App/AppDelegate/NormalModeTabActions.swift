@@ -11,6 +11,7 @@ import FlashCore
 
 extension AppDelegate {
   func tabSelectInNormalMode(index: Int) {
+    let commandToken = normalModePendingCommandToken
     let index = normalizedRepeatCount(index)
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for tab_select index=\(index)")
@@ -28,7 +29,9 @@ extension AppDelegate {
       guard let self else { return }
       switch result.disposition {
       case .performed:
-        if let pid = result.targetPID {
+        if let pid = result.targetPID, self.normalModePendingCommandToken == commandToken,
+          self.modeStore.mode.isNormal
+        {
           self.normalModeTargetPID = pid
         }
         self.scheduleNormalModeRecapture()
@@ -43,7 +46,7 @@ extension AppDelegate {
           self.applyModeOverlay()
           return
         }
-        self.sendNormalModeKey(key, flags: .maskCommand)
+        self.sendNormalModeKey(key, flags: .maskCommand, contextOverride: context)
       }
     }
   }
@@ -75,7 +78,8 @@ extension AppDelegate {
           self.applyModeOverlay()
           return
         }
-        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
+        self.sendNormalModeKey(
+          shortcut.key, flags: shortcut.flags, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -106,7 +110,8 @@ extension AppDelegate {
           self.applyModeOverlay()
           return
         }
-        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
+        self.sendNormalModeKey(
+          shortcut.key, flags: shortcut.flags, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -123,7 +128,8 @@ extension AppDelegate {
       },
       fallback: { [weak self] context, _ in
         if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
-          self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_9), flags: .maskCommand)
+          self?.sendNormalModeKey(
+            CGKeyCode(kVK_ANSI_9), flags: .maskCommand, contextOverride: context)
         } else {
           FlashLog.debug(
             "[normal_mode] tab_last unsupported bundle=\(context.bundleIdentifier)")
@@ -157,7 +163,8 @@ extension AppDelegate {
         if let shortcut = Self.nativeTabMoveShortcut(
           direction: direction, bundleIdentifier: context.bundleIdentifier)
         {
-          self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
+          self.sendNormalModeKey(
+            shortcut.key, flags: shortcut.flags, repeatCount: count, contextOverride: context)
           return
         }
         FlashLog.warn(
@@ -197,7 +204,8 @@ extension AppDelegate {
         let key: CGKeyCode =
           direction == .next
           ? CGKeyCode(kVK_ANSI_RightBracket) : CGKeyCode(kVK_ANSI_LeftBracket)
-        self?.sendNormalModeKey(key, flags: .maskCommand, repeatCount: count)
+        self?.sendNormalModeKey(
+          key, flags: .maskCommand, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -281,7 +289,7 @@ extension AppDelegate {
           self?.sendNormalModeKey(
             CGKeyCode(kVK_ANSI_T),
             flags: [.maskCommand, .maskShift],
-            repeatCount: count)
+            repeatCount: count, contextOverride: context)
         } else {
           FlashLog.debug(
             "[normal_mode] tab_reopen unsupported bundle=\(context.bundleIdentifier)")
@@ -292,8 +300,10 @@ extension AppDelegate {
 
   /// A new tab or window exists to be typed into (a browser focuses its
   /// address bar, tmux a fresh shell), so a successful `tab_new` hands the
-  /// keyboard over by entering PASSTHROUGH. An unsupported app keeps NORMAL.
+  /// keyboard over by entering PASSTHROUGH. An unsupported app keeps persistent
+  /// NORMAL; one-shot completion still consumes the resolved command.
   func tabNewInNormalMode(repeatCount: Int) {
+    let commandToken = normalModePendingCommandToken
     performTabSourceAction(
       name: "tab_new",
       repeatCount: repeatCount,
@@ -309,14 +319,16 @@ extension AppDelegate {
         }
         self?.sendNormalModeKey(
           CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count,
+          contextOverride: context,
           completion: { [weak self] in
-            self?.enterPassthroughMode(reason: .explicitCommand, targetPID: context.processID)
+            self?.completeNormalModeHandoff(
+              commandToken: commandToken, targetPID: context.processID)
           })
       },
       onPerformed: { [weak self] context in
         guard let self else { return }
-        self.enterPassthroughMode(
-          reason: .explicitCommand, targetPID: self.normalModeTargetPID ?? context.processID)
+        self.completeNormalModeHandoff(
+          commandToken: commandToken, targetPID: self.normalModeTargetPID ?? context.processID)
       })
   }
 
@@ -338,7 +350,8 @@ extension AppDelegate {
           self?.applyModeOverlay()
           return
         }
-        self?.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
+        self?.sendNormalModeKey(
+          shortcut.key, flags: shortcut.flags, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -366,8 +379,8 @@ extension AppDelegate {
       action: { registry, context, completion in
         registry.perform(action, in: context, completion: completion)
       },
-      fallback: { [weak self] _, count in
-        self?.scrollNormalMode(fallbackScroll, repeatCount: count)
+      fallback: { [weak self] context, count in
+        self?.scrollNormalMode(fallbackScroll, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -378,8 +391,9 @@ extension AppDelegate {
       action: { registry, context, completion in
         registry.perform(.tabClose, in: context, completion: completion)
       },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
+      fallback: { [weak self] context, count in
+        self?.sendNormalModeKey(
+          CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -396,8 +410,9 @@ extension AppDelegate {
       action: { registry, context, completion in
         registry.perform(.tabClose, in: context, completion: completion)
       },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
+      fallback: { [weak self] context, count in
+        self?.sendNormalModeKey(
+          CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count, contextOverride: context)
       })
   }
 
@@ -425,6 +440,7 @@ extension AppDelegate {
   func performTabSourceAction(
     name: String,
     repeatCount: Int,
+    contextOverride: AppContext? = nil,
     action:
       @escaping (
         SourceRegistry,
@@ -434,12 +450,13 @@ extension AppDelegate {
     fallback: @escaping (AppContext, Int) -> Void,
     onPerformed: ((AppContext) -> Void)? = nil
   ) {
-    guard let context = normalModeDispatchContext() else {
+    guard let context = contextOverride ?? normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(name)")
       applyModeOverlay()
       return
     }
     let count = normalizedRepeatCount(repeatCount)
+    let commandToken = normalModePendingCommandToken
 
     func attempt(_ remaining: Int) {
       guard remaining > 0 else {
@@ -454,7 +471,9 @@ extension AppDelegate {
         guard let self else { return }
         switch result.disposition {
         case .performed:
-          if let pid = result.targetPID {
+          if let pid = result.targetPID, self.normalModePendingCommandToken == commandToken,
+            self.modeStore.mode.isNormal
+          {
             self.normalModeTargetPID = pid
           }
           attempt(remaining - 1)

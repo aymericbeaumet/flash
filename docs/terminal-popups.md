@@ -5,14 +5,14 @@ input mappings, exit commands, and renderer. Declare every process under
 `[terminal.<name>]`; `#[popup=<name>]` and `terminal_show --name=<name>` present
 the same session. `[statusbar.popup]` contains document strings only.
 
-The default terminal-mode shortcuts are Command-R to restart immediately,
-Command-Q to quit the child, and Command-W to hide the window. Persistent
+The default terminal-mode shortcuts are Escape or Command-W to dismiss the
+window, Command-R to restart immediately, and Command-Q to quit the child. Persistent
 sessions restart automatically after a quit or exit; every other terminal
 closes when its process ends. Hiding keeps persistent sessions running and
 stops nonpersistent sessions. Override these in `[mode.terminal.mappings]`.
 Both process commands accept an optional `--name`;
 without one they operate on the focused terminal. Document popups have no
-process, so only Command-W applies.
+process, so only Escape and Command-W apply.
 
 `persistent = true` starts a session after the login-shell environment resolves,
 even if the status bar is disabled or no template refers to it. Hiding it keeps
@@ -36,6 +36,7 @@ rows = 24
 # env = { EXAMPLE = "value" }
 
 [mode.terminal.mappings]
+"<escape>" = ["flash", "terminal_dismiss"]
 "cmd+r" = ["flash", "terminal_restart"]
 "cmd+q" = ["flash", "terminal_quit"]
 "cmd+w" = ["flash", "terminal_dismiss"]
@@ -57,10 +58,11 @@ a matched mapping consumes its releases. Replays retain the originating session
 and restart generation, so a late release cannot enter a replacement child.
 Effective PASSTHROUGH mappings for `enter_normal_mode` and
 `enter_passthrough_mode` are inherited as explicit terminal mode transitions;
-explicit terminal mappings override them. Plain Escape and Ctrl-C remain
-available to the process.
+explicit terminal mappings override them. Normal entries preserve their
+`--persistent` flag. Escape dismisses the window through the default
+`"<escape>"` mapping, which can be overridden; Ctrl-C reaches the process.
 
-Command-W, `terminal_dismiss`, `enter_passthrough_mode`, and process completion
+Escape, Command-W, `terminal_dismiss`, `enter_passthrough_mode`, and process completion
 return to PASSTHROUGH even when the terminal was opened from NORMAL. Explicit dismissal
 restores the previously focused application. Losing focus also returns to
 PASSTHROUGH, without stealing focus back from the app the user selected.
@@ -117,6 +119,7 @@ rows = 36
 "'t" = ["flash", "terminal_show"]
 
 [mode.terminal.mappings]
+"<escape>" = ["flash", "terminal_dismiss"]
 "cmd+w" = ["flash", "terminal_dismiss"]
 "cmd+r" = ["flash", "terminal_restart"]
 "cmd+q" = ["flash", "terminal_quit"]
@@ -136,8 +139,9 @@ available area. One terminal window is presented at a time; changing windows
 hides a persistent session and stops a fresh one. Status hover and article
 rotation cannot replace a standalone window. Explicitly dismissing a status
 popup suppresses reopening until the pointer leaves its segment. Clicking another app dismisses
-it without taking focus back. Plain Escape remains available to the process;
-terminal mappings and the inherited NORMAL shortcut can close the window.
+it without taking focus back. Escape dismisses the window by default, and
+configured terminal mappings can override it. The inherited NORMAL shortcut
+can also close the window and select one-shot or persistent NORMAL.
 
 The Bonsai example suppresses automatic browser opening and chooses an available
 port; the TUI runs inside Flash. Its process must remain in the foreground.
@@ -215,7 +219,7 @@ or removal.
 
 ## Native status drawing
 
-The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata and keeps fixed width, point-based padding and a centered label across modes. PASSTHROUGH uses neutral styling and an active-app fallback for its empty mode label. Keep the pill present in custom templates; see the [status-format example](status-format.md#authoring). The centered app name remains independent of that segment. NORMAL and TERMINAL use filled green and blue pills with dark text. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
+The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata and keeps compact fixed width, point-based padding and a centered label across modes. PASSTHROUGH leaves the neutral pill empty. Keep the pill present in custom templates; see the [status-format example](status-format.md#authoring). The centered app name remains independent of that segment. NORMAL and TERMINAL use filled green and blue pills with dark text. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
 
 The terminal view draws from the frame with damage tracking: a frame that
 directly follows the previous one invalidates only the rows the terminal

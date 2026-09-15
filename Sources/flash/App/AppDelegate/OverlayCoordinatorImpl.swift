@@ -187,7 +187,10 @@ extension AppDelegate {
     FlashLog.trace(
       "[input] normal dispatch reason=\(reason) action=\(action.diagnosticDescription)")
     let dispatchStartedAt = DispatchTime.now()
+    dispatchMode(.normalActionStarted)
     performMappingCommand(action, repeatCount: repeatCount)
+    dispatchMode(
+      .normalActionDispatched(hasTransientInput: hintSession.isActive || activationInFlight))
     FlashLog.debug(
       "[latency] normal_dispatch action=\(action.diagnosticDescription) sync_ms="
         + String(
@@ -289,8 +292,8 @@ extension AppDelegate {
       overlay.hide()
       clearHintSessionState()
       activationLifecycle.invalidate()
-      applyModeOverlay()
       _ = ActionDispatcher.moveCursor(to: point)
+      applyModeOverlay()
       return
     }
     if hintSession.commitBehavior == .copyURL {
@@ -636,7 +639,6 @@ extension AppDelegate {
     } else {
       handoffToken = nil
     }
-    applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
         at: point, action: clickAction, modifiers: resolvedClickModifiers, completion: finished)
@@ -771,18 +773,17 @@ extension AppDelegate {
     FlashLog.trace(
       "[commit] adjust action=\(action) point=(\(Int(point.x)),\(Int(point.y)))")
     overlay.hide()
-    clearHintSessionState()
-    activationLifecycle.invalidate()
     if let targetApp {
       RunningApplicationActivation.activate(targetApp, options: [])
     }
+    clearHintSessionState()
+    activationLifecycle.invalidate()
     let handoffToken: UInt64?
     if action != .rightClick {
       handoffToken = notePointerPassthroughHandoff(reason: "adjust_commit")
     } else {
       handoffToken = nil
     }
-    applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
         at: point, action: action, modifiers: modifiers, completion: finished)
@@ -963,11 +964,11 @@ extension AppDelegate {
   ///   - Physical and `mouse_grid` clicks are pointer simulation, so they enter
   ///     PASSTHROUGH unconditionally.
   ///   - `mouse_target` hints honor `JumpTarget.entersPassthroughMode`. A link hint
-  ///     stays in NORMAL even when its owning app (such as a terminal) already
-  ///     exposes an editable focused element.
+  ///     retains persistent NORMAL even when its owning app exposes an editable
+  ///     focused element. One-shot completion follows the whole interaction.
   ///
-  /// Right-click never reaches here — it opens a context menu and stays in
-  /// NORMAL via `suspendNormalCaptureForNativeSurface`.
+  /// Right-click never reaches here — it opens a context menu and suspends
+  /// persistent NORMAL via `suspendNormalCaptureForNativeSurface`.
   private func resolvePointerPassthroughMode(
     pid: pid_t?,
     reason: PassthroughModeTransitionReason,

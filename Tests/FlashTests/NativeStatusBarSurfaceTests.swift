@@ -108,7 +108,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(plain.layout.text.trimmingCharacters(in: .whitespaces), "N tail")
   }
 
-  func testEmptyPillDoesNotReserveCellsOrChangeOtherPills() {
+  func testEmptyPillReservesCellsWithoutChangingOtherPills() {
     var empty = FlashStatusTextSegment(text: "", foreground: .defaultForeground)
     empty.pill = true
     var other = FlashStatusTextSegment(text: "VPN", foreground: .defaultForeground)
@@ -117,15 +117,17 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let prepared = NativeStatusBarSurface.preparedDocument(
       StatusFormatDocument(runs: [empty, text, other]), pillColumns: 10, hideCentre: false)
 
-    XCTAssertEqual(prepared.runs.count, 2)
-    XCTAssertEqual(prepared.runs.first?.text, "FEED")
+    XCTAssertEqual(prepared.runs.count, 3)
+    XCTAssertEqual(prepared.runs.first?.text, String(repeating: " ", count: 10))
+    XCTAssertEqual(prepared.runs.first?.pill, true)
+    XCTAssertEqual(prepared.runs[1].text, "FEED")
     XCTAssertEqual(prepared.runs.last?.text.trimmingCharacters(in: .whitespaces), "VPN")
     XCTAssertEqual(prepared.runs.last?.pill, true)
   }
 
   func testActiveModePillsKeepConfiguredWidthAndCenteredLabelsWithoutAnOutline() {
     let labels = Config.Mode.Labels(normal: "NORMAL", passthrough: "", command: "COMMAND")
-    let expectedWidth = CGFloat(14) * 13 * 0.66 + 16
+    let expectedWidth = CGFloat(7) * 13 * 0.66 + 16
     for (label, style) in [
       ("NORMAL", OverlayModeBadgeStyle.normal), ("COMMAND", .command), ("TERMINAL", .terminal),
     ] {
@@ -146,13 +148,13 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     }
   }
 
-  func testModeAndAppPillsKeepOneFrameAcrossTransitions() {
+  func testModeAndEmptyPillsKeepOneFrameAcrossTransitions() {
     let surface = NativeStatusBarSurface()
     var initialFrames: [CGRect]?
     for (label, style) in [
-      ("NORMAL", OverlayModeBadgeStyle.normal), ("Safari", .passthrough),
-      ("COMMAND", .command), ("Google Chrome", .passthrough), ("TERMINAL", .terminal),
-      ("Visual Studio…", .passthrough), ("FLASH", .passthrough), ("NORMAL", .normal),
+      ("NORMAL", OverlayModeBadgeStyle.normal), ("", .passthrough),
+      ("COMMAND", .command), ("", .passthrough), ("TERMINAL", .terminal),
+      ("", .passthrough), ("NORMAL", .normal),
     ] {
       redraw(
         surface, "#[pill]\(label)#[nopill]FEED#[align=absolute-centre]Firefox",
@@ -174,32 +176,64 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     }
   }
 
-  func testConfiguredLongTerminalLabelReservesTheSameWidthInOtherModes() {
+  func testConfiguredLongModeLabelReservesTheSameWidthInOtherModes() {
+    let labels = Config.Mode.Labels(
+      normal: "NAVIGATION MODE", passthrough: "", command: "C", terminal: "TERMINAL")
+    let surface = NativeStatusBarSurface()
+    redraw(
+      surface, "#[pill]NAVIGATION MODE#[nopill]tail", columns: 60, labels: labels, style: .normal
+    )
+    let normalFrames = surface.runFrames
+    redraw(surface, "#[pill]TERMINAL#[nopill]tail", columns: 60, labels: labels, style: .terminal)
+    XCTAssertEqual(surface.runFrames, normalFrames)
+    redraw(surface, "#[pill]#[nopill]tail", columns: 60, labels: labels, style: .passthrough)
+    XCTAssertEqual(surface.runFrames, normalFrames)
+  }
+
+  func testConfiguredLongTerminalLabelFitsAndReservesTheSameWidthAcrossModes() throws {
     let labels = Config.Mode.Labels(
       normal: "N", passthrough: "", command: "C", terminal: "TERMINAL SESSION")
     let surface = NativeStatusBarSurface()
     redraw(
       surface, "#[pill]TERMINAL SESSION#[nopill]tail", columns: 60, labels: labels, style: .terminal
     )
+    let text = try XCTUnwrap(surface.runLayers[0].text.string as? NSAttributedString)
+    XCTAssertEqual(text.string, labels.terminal)
+    XCTAssertLessThanOrEqual(text.size().width, surface.runLayers[0].text.bounds.width)
     let terminalFrames = surface.runFrames
-    redraw(surface, "#[pill]N#[nopill]tail", columns: 60, labels: labels, style: .normal)
-    XCTAssertEqual(surface.runFrames, terminalFrames)
-    redraw(surface, "#[pill]Safari#[nopill]tail", columns: 60, labels: labels, style: .passthrough)
-    XCTAssertEqual(surface.runFrames, terminalFrames)
+    for (label, style) in [
+      ("N", OverlayModeBadgeStyle.normal), ("C", .command), ("", .passthrough),
+    ] {
+      redraw(surface, "#[pill]\(label)#[nopill]tail", columns: 60, labels: labels, style: style)
+      XCTAssertEqual(surface.runFrames, terminalFrames)
+    }
   }
 
-  func testCompactLabelsKeepRoomForTheBoundedAppName() {
+  func testCompactLabelsAndEmptyPillKeepTheSameCompactFrame() {
     let labels = Config.Mode.Labels(normal: "N", passthrough: "", command: "C", terminal: "T")
     let surface = NativeStatusBarSurface()
     redraw(
-      surface, "#[pill]Visual Studio…#[nopill]tail", columns: 60, labels: labels,
+      surface, "#[pill]#[nopill]tail", columns: 60, labels: labels,
       style: .passthrough)
-    let appFrames = surface.runFrames
+    let emptyFrames = surface.runFrames
     for (label, style) in [
       ("N", OverlayModeBadgeStyle.normal), ("C", .command), ("T", .terminal),
     ] {
       redraw(surface, "#[pill]\(label)#[nopill]tail", columns: 60, labels: labels, style: style)
-      XCTAssertEqual(surface.runFrames, appFrames)
+      XCTAssertEqual(surface.runFrames, emptyFrames)
+    }
+  }
+
+  func testEmptyPillStyleBoundariesReserveExactlyOnePill() {
+    for source in ["#[pill]", "#[pill]#[fg=red]#[bg=blue]#[nopill]tail"] {
+      let surface = render(source, columns: 40)
+      let pills = surface.visibleRuns.enumerated().filter { $0.element.segment.pill }
+      XCTAssertEqual(pills.count, 1)
+      guard let pill = pills.first else { continue }
+      XCTAssertFalse(surface.runLayers[pill.offset].pill.isHidden)
+      XCTAssertEqual(
+        (surface.runLayers[pill.offset].text.string as? NSAttributedString)?.string, "")
+      XCTAssertEqual(surface.runFrames[pill.offset].width, CGFloat(7) * 13 * 0.66 + 16)
     }
   }
 

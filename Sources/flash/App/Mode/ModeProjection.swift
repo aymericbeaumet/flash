@@ -106,7 +106,7 @@ extension Mode {
   /// `statusBarVisible` so `[statusbar] enabled` independently gates the bar.
   var badgeVisibleIntrinsic: Bool {
     // This gates the persistent bar, including the app name and status data.
-    // PASSTHROUGH and disabled mode retain the neutral app-name pill.
+    // PASSTHROUGH and disabled mode retain the empty neutral pill's space.
     true
   }
 }

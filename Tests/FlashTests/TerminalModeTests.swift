@@ -6,7 +6,9 @@ import XCTest
 
 final class TerminalModeTests: XCTestCase {
   func testTerminalOwnsNoOverlayOrGlobalMappings() {
-    for base in [Mode.disabled, .normal, .passthrough] {
+    for base in [
+      Mode.disabled, .normal(persistent: false), .normal(persistent: true), .passthrough,
+    ] {
       let (mode, effects) = ModeReducer.reduce(base, .openTerminal)
       XCTAssertEqual(mode, .terminal(restoreTo: base.asReturnMode))
       XCTAssertFalse(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
@@ -20,7 +22,9 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testFocusLossReturnsToPassthroughWithoutActivatingAnotherApp() {
-    for base in [Mode.disabled, .normal, .passthrough] {
+    for base in [
+      Mode.disabled, .normal(persistent: false), .normal(persistent: true), .passthrough,
+    ] {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: nil))
       XCTAssertEqual(mode, base.asReturnMode.mode)
@@ -34,7 +38,9 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testExplicitPopupCloseRestoresPriorAppBeforePassthroughRendering() {
-    for base in [Mode.disabled, .normal, .passthrough] {
+    for base in [
+      Mode.disabled, .normal(persistent: false), .normal(persistent: true), .passthrough,
+    ] {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: 42))
       XCTAssertEqual(mode, base.asReturnMode.mode)
@@ -47,7 +53,9 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testPopupCloseOutsideTerminalDoesNotActivateApp() {
-    for base in [Mode.disabled, .normal, .passthrough] {
+    for base in [
+      Mode.disabled, .normal(persistent: false), .normal(persistent: true), .passthrough,
+    ] {
       let (mode, effects) = ModeReducer.reduce(base, .closeTerminal(targetPID: 42))
       XCTAssertEqual(mode, base)
       XCTAssertTrue(effects.isEmpty)
@@ -56,8 +64,8 @@ final class TerminalModeTests: XCTestCase {
 
   func testTerminalExitActivatesPriorAppBeforeNormalCapture() {
     let (mode, effects) = ModeReducer.reduce(
-      .terminal(restoreTo: .passthrough), .enterNormal(targetPID: 42))
-    XCTAssertEqual(mode, .normal)
+      .terminal(restoreTo: .passthrough), .enterNormal(persistent: false, targetPID: 42))
+    XCTAssertEqual(mode, .normal(persistent: false))
     XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
     XCTAssertLessThan(
       effects.firstIndex(of: .activateFocusedApp(pid: 42))!,
@@ -66,29 +74,34 @@ final class TerminalModeTests: XCTestCase {
 
   func testTerminalInheritsOnlyWinningPassthroughExitMappings() {
     var mode = Config.Mode()
-    mode.all = [mapping("x", .commandMode), mapping("y", .normalMode)]
-    mode.passthrough = [mapping("x", .normalMode), mapping("z", .normalMode)]
+    mode.all = [mapping("x", .commandMode), mapping("y", .normalMode(persistent: true))]
+    mode.passthrough = [
+      mapping("x", .normalMode(persistent: false)), mapping("z", .normalMode(persistent: true)),
+    ]
     mode.terminal = [mapping("z", .commandMode)]
     mode.recompileMappings()
-    XCTAssertEqual(mode.compiledTerminal.mapping(for: "x")?.action.command, .normalMode)
-    XCTAssertEqual(mode.compiledTerminal.mapping(for: "y")?.action.command, .normalMode)
+    XCTAssertEqual(
+      mode.compiledTerminal.mapping(for: "x")?.action.command, .normalMode(persistent: false))
+    XCTAssertEqual(
+      mode.compiledTerminal.mapping(for: "y")?.action.command, .normalMode(persistent: true))
     XCTAssertEqual(mode.compiledTerminal.mapping(for: "z")?.action.command, .commandMode)
     XCTAssertEqual(mode.effectiveTerminalMappings.count, 3)
   }
 
   func testPluginPrecedenceIsResolvedBeforeTerminalDefaultsAreInherited() {
     var base = Config.Mode()
-    base.passthrough = [mapping("x", .normalMode), mapping("y", .commandMode)]
-    base.terminal = [mapping("z", .normalMode)]
+    base.passthrough = [mapping("x", .normalMode(persistent: false)), mapping("y", .commandMode)]
+    base.terminal = [mapping("z", .normalMode(persistent: false))]
     let merged = EffectiveMappings.merge(
       base: base,
       plugin: [
         (25, .passthrough, mapping("x", .commandMode)),
-        (25, .passthrough, mapping("y", .normalMode)),
+        (25, .passthrough, mapping("y", .normalMode(persistent: true))),
         (25, .terminal, mapping("z", .commandMode)),
       ])
     XCTAssertNil(merged.compiledTerminal.mapping(for: "x"))
-    XCTAssertEqual(merged.compiledTerminal.mapping(for: "y")?.action.command, .normalMode)
+    XCTAssertEqual(
+      merged.compiledTerminal.mapping(for: "y")?.action.command, .normalMode(persistent: true))
     XCTAssertEqual(merged.compiledTerminal.mapping(for: "z")?.action.command, .commandMode)
   }
 
@@ -96,11 +109,12 @@ final class TerminalModeTests: XCTestCase {
     var mode = Config.Mode()
     mode.terminal = []
     mode.all = [mapping("cmd+esc", .commandMode)]
-    mode.passthrough = [mapping("cmd+escape", .normalMode)]
+    mode.passthrough = [mapping("cmd+escape", .normalMode(persistent: true))]
     mode.recompileMappings()
-    XCTAssertEqual(mode.effectiveTerminalMappings, [mapping("cmd+escape", .normalMode)])
+    XCTAssertEqual(
+      mode.effectiveTerminalMappings, [mapping("cmd+escape", .normalMode(persistent: true))])
 
-    mode.all = [mapping("cmd+esc", .normalMode)]
+    mode.all = [mapping("cmd+esc", .normalMode(persistent: false))]
     mode.terminal = [mapping("cmd+escape", .commandMode)]
     mode.recompileMappings()
     XCTAssertEqual(mode.effectiveTerminalMappings, [mapping("cmd+escape", .commandMode)])
@@ -132,8 +146,10 @@ final class TerminalModeTests: XCTestCase {
     )
     XCTAssertEqual(config.mode.labels.terminal, "TTY")
     let key = NormalModeInterpreter.canonicalizeMappingKey("gg")!
-    XCTAssertEqual(config.mode.compiledTerminal.mapping(for: key)?.action.command, .normalMode)
-    XCTAssertEqual(config.mode.terminal.count, 4)
+    XCTAssertEqual(
+      config.mode.compiledTerminal.mapping(for: key)?.action.command, .normalMode(persistent: false)
+    )
+    XCTAssertEqual(config.mode.terminal.count, 5)
     XCTAssertTrue(
       config.loadingDiagnostics.contains { $0.message.contains("uses <leader> outside") })
     XCTAssertTrue(
@@ -150,13 +166,13 @@ final class TerminalModeTests: XCTestCase {
 
   func testResolvedConfigIncludesTerminalDefaultsAndLabel() throws {
     var config = Config()
-    config.mode.all = [mapping("cmd+escape", .normalMode)]
+    config.mode.all = [mapping("cmd+escape", .normalMode(persistent: false))]
     config.mode.recompileMappings()
     let data = try XCTUnwrap(config.resolvedConfigJSON.data(using: .utf8))
     let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let mappings = try XCTUnwrap(mode["terminal"] as? [[String: Any]])
-    XCTAssertEqual(mappings.count, 4)
+    XCTAssertEqual(mappings.count, 5)
     let labels = try XCTUnwrap(mode["labels"] as? [String: String])
     XCTAssertEqual(labels["terminal"], "TERMINAL")
   }
@@ -219,7 +235,7 @@ final class TerminalModeTests: XCTestCase {
       .terminalRestart(name: nil))
   }
 
-  func testDedicatedModeChordsReachTerminalWhileBareEscapeAndIRemainNative() throws {
+  func testDedicatedModeChordsAndEscapeReachTerminalWhileIRemainsNative() throws {
     let config = ConfigLoader.parse(
       """
       [mode.all.mappings]
@@ -247,8 +263,8 @@ final class TerminalModeTests: XCTestCase {
           charactersIgnoringModifiers: ignoring, isARepeat: false, keyCode: UInt16(keyCode)))
       handler.handle(event: event, origin: "popup")
     }
-    XCTAssertEqual(commands, [.normalMode, .passthroughMode])
-    XCTAssertEqual(replayed, [UInt16(kVK_Escape), UInt16(kVK_ANSI_I)])
+    XCTAssertEqual(commands, [.normalMode(persistent: false), .passthroughMode, .terminalDismiss])
+    XCTAssertEqual(replayed, [UInt16(kVK_ANSI_I)])
   }
 
   private func mapping(_ key: String, _ command: URLCommand) -> ModeMapping {

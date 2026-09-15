@@ -303,9 +303,33 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testParseFlashNormalMode() {
     let action = parseMappingCommand(argv: ["flash", "enter_normal_mode"])
-    guard case .flashCommand(.normalMode) = action else {
-      return XCTFail("expected .normalMode")
+    guard case .flashCommand(.normalMode(persistent: false)) = action else {
+      return XCTFail("expected nonpersistent .normalMode")
     }
+  }
+
+  func testPersistentNormalModeFlagIsStrictAndSurvivesDiagnostics() throws {
+    let oneShot = try XCTUnwrap(parseMappingCommand(argv: ["flash", "enter_normal_mode"]))
+    for flag in ["--persistent", "--persistent=true", "--persistent=1"] {
+      let persistent = try XCTUnwrap(
+        parseMappingCommand(argv: ["flash", "enter_normal_mode", flag]))
+      XCTAssertNotEqual(persistent, oneShot)
+      XCTAssertEqual(
+        persistent.command?.diagnosticDescription, "flash enter_normal_mode --persistent")
+      XCTAssertEqual(
+        URLEventHandler.parse(verb: "enter_normal_mode", args: ["persistent": "true"]),
+        persistent.command)
+    }
+    for flag in ["--persistent=false", "--persistent=0"] {
+      XCTAssertEqual(parseMappingCommand(argv: ["flash", "enter_normal_mode", flag]), oneShot)
+    }
+    for flag in ["--persistent=", "--persistent=2", "--persistent=always", "--persistence"] {
+      XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_normal_mode", flag]))
+    }
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "enter_normal_mode", "--persistent", "--persistent=false",
+      ]))
   }
 
   func testParseFlashOpenApp() {

@@ -4,17 +4,24 @@ import XCTest
 @testable import flash
 
 final class StatusBarTests: XCTestCase {
-  func testDefaultPassthroughPillFitsAppNamesAndBoundsLongOnes() {
+  func testDefaultPassthroughPillIsEmptyAndKeepsItsHorizontalSpace() {
     for template in [Config.StatusBar.defaultTemplate, ConfigLoader.parse("").statusBar.template] {
-      for (app, expected) in [
-        ("", "FLASH"), ("Alacritty", "Alacritty"), ("Google Chrome", "Google Chrome"),
-        ("Visual Studio Code", "Visual Studio…"),
-      ] {
+      for app in ["", "Alacritty", "Google Chrome", "Visual Studio Code"] {
         let model = FlashStatusBarTemplateEngine.render(
           template: template, context: FlashStatusBarContext(activeAppName: app))
         let pill = model.document.runs.filter(\.pill)
-        XCTAssertEqual(pill.map(\.text).joined(), expected)
-        XCTAssertLessThanOrEqual(pill.map(\.text).joined().count, 14)
+        XCTAssertEqual(pill.map(\.text).joined(), "")
+        let panel = OverlayPanel()
+        panel.statusBarModel = model
+        renderStatusBar(panel)
+        let surface = panel.primaryStatusBarSurface
+        let rendered = surface.visibleRuns.enumerated().filter { $0.element.segment.pill }
+        XCTAssertEqual(rendered.count, 1)
+        guard let renderedPill = rendered.first else { continue }
+        XCTAssertFalse(surface.runLayers[renderedPill.offset].pill.isHidden)
+        XCTAssertEqual(
+          (surface.runLayers[renderedPill.offset].text.string as? NSAttributedString)?.string, "")
+        XCTAssertEqual(surface.runFrames[renderedPill.offset].width, CGFloat(7) * 13 * 0.66 + 16)
       }
     }
   }

@@ -39,7 +39,7 @@ enum URLCommand: Hashable {
   case mouseDock
   /// Hint-label the menu-bar status items (WindowServer geometry only).
   case mouseStatusBar
-  case normalMode
+  case normalMode(persistent: Bool)
   case leaveMode
   case terminalShow(name: String?)
   case terminalDismiss
@@ -120,6 +120,11 @@ enum URLCommand: Hashable {
   /// may shortcut directly for inline-keystrokes verbs, or fan
   /// out to the owning plugin's command `perform`).
   case pluginVerb(name: String, args: [String: String])
+
+  var isNormalModeEntry: Bool {
+    if case .normalMode = self { return true }
+    return false
+  }
 }
 
 struct AlertCommand: Hashable {
@@ -422,7 +427,8 @@ final class URLEventHandler: NSObject {
 
     "mouse_statusbar": .init(parse: { a in a.args.isEmpty ? .mouseStatusBar : nil }),
 
-    "enter_normal_mode": .init(parse: { _ in .normalMode }),
+    "enter_normal_mode": .init(
+      [.flag("persistent")], parse: { a in .normalMode(persistent: a.bool("persistent")) }),
 
     "terminal_show": .init(
       [.text("name", "terminal")],

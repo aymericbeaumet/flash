@@ -77,13 +77,19 @@ final class NativeStatusBarSurface {
     cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
+    var sizingLabels = labels
+    // The default TERMINAL fits in the compact pill's padded cells.
+    sizingLabels.terminal = ""
     let pills = document.runs.filter { $0.pill && !$0.isStyleBoundary && !$0.text.isEmpty }
-    let longestPill = pills.map { $0.text.count }.max() ?? 0
-    // Reserve every configured mode label even while the pill shows the app,
-    // so transitions (including TERMINAL) do not move the rest of the bar.
-    let pillWidth = max(
-      OverlayPanel.modeBadgeWidth(labels: labels, currentText: "", fontSize: font.pointSize),
+    let longestPill = pills.filter { $0.text != labels.terminal }.map { $0.text.count }.max() ?? 0
+    // Empty passthrough and named modes share the configured compact width.
+    let compactPillWidth = max(
+      OverlayPanel.modeBadgeWidth(labels: sizingLabels, currentText: "", fontSize: font.pointSize),
       CGFloat(longestPill) * font.pointSize * 0.66 + 16)
+    let terminalColumns = StatusFormatCells.width(labels.terminal, styles: false) + 2
+    let pillWidth =
+      terminalColumns > Int(ceil(compactPillWidth / cellWidth))
+      ? CGFloat(terminalColumns) * cellWidth : compactPillWidth
     let pillColumns = Int(ceil(pillWidth / cellWidth))
     let pillLabels = pills.map {
       (padded: Self.paddedPillText($0.text, columns: pillColumns), label: $0.text)
@@ -473,17 +479,46 @@ final class NativeStatusBarSurface {
   static func preparedDocument(_ document: StatusFormatDocument, pillColumns: Int, hideCentre: Bool)
     -> StatusFormatDocument
   {
+    enum PillContent {
+      case absent
+      case empty(FlashStatusTextSegment)
+      case filled
+    }
+    var pillContent = PillContent.absent
     var result: [FlashStatusTextSegment] = []
-    for var run in document.runs {
+    func append(_ value: FlashStatusTextSegment) {
+      var run = value
       if !run.isStyleBoundary {
-        if hideCentre && (run.alignment == .centre || run.alignment == .absoluteCentre) { continue }
+        if hideCentre && (run.alignment == .centre || run.alignment == .absoluteCentre) { return }
         if run.pill {
-          guard !run.text.isEmpty else { continue }
           run.text = paddedPillText(run.text, columns: pillColumns)
         }
       }
       result.append(run)
     }
+    func finishPill() {
+      if case .empty(var run) = pillContent {
+        run.isStyleBoundary = false
+        append(run)
+      }
+      pillContent = .absent
+    }
+    for run in document.runs {
+      if !run.pill {
+        finishPill()
+      } else if run.isStyleBoundary {
+        switch pillContent {
+        case .absent, .empty: pillContent = .empty(run)
+        case .filled: break
+        }
+      } else {
+        pillContent = .filled
+      }
+      append(run)
+    }
+    // The parser retains marker-only runs. Materialize an empty pill once,
+    // including one with no closing marker, so it still owns horizontal space.
+    finishPill()
     return StatusFormatDocument(runs: result)
   }
 

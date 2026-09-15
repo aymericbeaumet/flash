@@ -193,7 +193,8 @@ Notifications have no deadlines.
   with positive width/height. One malformed target rejects the entire reply.
   `enters_passthrough_mode` is a Boolean declaring keyboard handoff after a
   NORMAL hint commit. An absent/null value derives from the text-input AX role;
-  an explicit false keeps NORMAL even for a target with a text-input role.
+  an explicit false preserves persistent NORMAL even for a text-input role.
+  One-shot NORMAL still returns to PASSTHROUGH after the hint command completes.
 - `perform` — the single effect method. Four kinds:
 
   ```json
@@ -424,7 +425,8 @@ Section semantics:
   status popup. Every global mapping registration is suspended while that view
   owns input; winning PASSTHROUGH-active `enter_normal_mode` and
   `enter_passthrough_mode` bindings are inherited as explicit terminal mode
-  transitions. Explicit terminal bindings override them.
+  transitions, preserving a normal entry's `--persistent` flag. Explicit terminal
+  bindings override them; the default `<escape>` mapping dismisses the terminal.
   Terminal sequences use the shared key syntax without `<leader>`, implicit
   counts, or register prefixes. See [terminal popup input](normal-mode.md#terminal-popup-input).
 

@@ -202,8 +202,7 @@ enum NormalModeInterpreter {
         charactersIgnoringModifiers: charactersIgnoringModifiers,
         mappings: mappings)
     }
-    // NORMAL owns every unclaimed key until an explicit exit returns input
-    // to the app.
+    // Unmapped keys stay captured without consuming a one-shot NORMAL entry.
     return .consume
   }
 

@@ -2,12 +2,13 @@
 
 PASSTHROUGH is the default: apps receive ordinary typing, Escape and native
 shortcuts, while explicitly configured Flash shortcuts remain available. Enter
-NORMAL deliberately for repeated navigation, then return to PASSTHROUGH when
-finished. Focus changes never activate NORMAL or end PASSTHROUGH.
+NORMAL for one navigation command, then resume typing automatically. Use
+`enter_normal_mode --persistent` for repeated navigation. Focus changes never
+activate NORMAL or end PASSTHROUGH.
 
-The status pill keeps a fixed width of at least 14 columns in every mode.
-PASSTHROUGH uses neutral styling and the active app name when its mode label is empty; it has no window
-border. NORMAL and TERMINAL use filled green and blue pills with dark text;
+The status pill keeps a compact, stable width in every mode. PASSTHROUGH leaves
+its neutral pill empty and has no window border. NORMAL and TERMINAL use filled
+green and blue pills with dark text;
 COMMAND stays purple. All three share the same two-point border with a soft
 glow, subject to configured overrides. NORMAL/COMMAND border the target app;
 TERMINAL borders its own focused popup/window. Hover previews never activate
@@ -19,6 +20,7 @@ default mapping list in `Sources/flash/Config/Config.swift`.
 
 Important defaults:
 
+- `i` returns to PASSTHROUGH from NORMAL.
 - `gg` scrolls to top.
 - `G` scrolls to bottom.
 - `g1` through `g9` select indexed tabs when the focused source supports it.
@@ -37,8 +39,9 @@ Important defaults:
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
 - `f`, `F`, `sf`, and `Df` target discovered clickable elements. `F` requests
-  Command-Shift for a new-context click. Primary hint
-  clicks enter PASSTHROUGH only when the target declares typing intent.
+  Command-Shift for a new-context click. One-shot NORMAL returns to PASSTHROUGH
+  after the hint command; persistent NORMAL hands input over when the target
+  declares typing intent.
 - `mf` moves the cursor to a discovered target. Every other commit clicks
   where the hint is and returns the pointer to where it was, so hinting never
   relocates the mouse; `scroll_target` is the other verb that moves it.
@@ -58,14 +61,25 @@ Mode-entry shortcuts are configured, not global defaults. For example:
 "cmd+ctrl+i" = ["flash", "enter_passthrough_mode"]
 ```
 
-Each shortcut selects its named mode every time. Bare Escape and `i` are not
-mode-entry shortcuts; Escape can still cancel an active hint or command surface.
-NORMAL stays active across scrolling, tab/app traversal and noneditable hint
-commits. A hint session opened directly from PASSTHROUGH returns there after commit or
-cancellation. Command/finder completion and dismissal return to PASSTHROUGH
-regardless of their entry mode. `enter_command_mode` has no return-mode option.
-Users choose command/finder shortcuts, including bindings that prefill the
-command line with `:flashlight`.
+Each shortcut selects its named mode every time. NORMAL returns to PASSTHROUGH
+after one resolved command, including an unsupported or failed command. Pending
+sequence prefixes and counts do not consume the entry; a completed counted or
+multikey command counts once. Hint commands finish their targeting session
+before handing input back. Unmapped keys do not consume the entry.
+
+For repeated navigation, run `flash enter_normal_mode --persistent`, or add
+`"--persistent"` to a configured entry's argv array. Persistent NORMAL stays
+active across scrolling, tab/app traversal and noneditable hint commits.
+Bare `i` exits either form of NORMAL by default; Escape cancels pending input
+or hints without selecting PASSTHROUGH from idle NORMAL.
+
+Escape closes command/finder and terminal surfaces to PASSTHROUGH. The terminal
+default is a configurable `"<escape>" = ["flash", "terminal_dismiss"]` mapping;
+the normal `i` mapping is configurable too. A hint session opened directly from
+PASSTHROUGH returns there after commit or cancellation. Command/finder completion
+and dismissal return to PASSTHROUGH regardless of entry mode.
+`enter_command_mode` has no return-mode option. Users choose command/finder
+shortcuts, including bindings that prefill the command line with `:flashlight`.
 
 NORMAL is hermetic: every unmapped key and modifier chord is swallowed, and
 only explicit mappings act. A chord the focused app should receive is bound
@@ -81,7 +95,7 @@ Flash therefore refuses to synthesize any Command chord outside the set every
 emulator binds (copy, paste, close, new tab, new window, quit, find, the tab
 digits, and Shift-bracket tab traversal); the bare bracket chords are added
 only for the emulators whose splits live on them. A refused mapping does
-nothing and NORMAL stays.
+nothing; it still consumes a one-shot entry, while persistent NORMAL stays active.
 
 The same bound covers pointer synthesis. A terminal whose foreground program
 enabled mouse tracking does not scroll on a wheel event: it encodes an SGR
@@ -91,10 +105,11 @@ host, so NORMAL never synthesizes a wheel into one and the scroll verbs fall
 back to the Accessibility scroller there. `gg` and `G` inside tmux are the tmux
 plugin's own history-top and cancel.
 
-`/` (`app_find`) executes its command without changing mode. `t` (`tab_new`)
+`/` (`app_find`) has no special keyboard handoff: one-shot NORMAL ends after
+dispatch, while persistent NORMAL stays active. `t` (`tab_new`)
 enters PASSTHROUGH once the tab or window is open, so the browser's address bar or
 the new tmux shell can be typed into immediately; in an unsupported app it does
-nothing and NORMAL stays.
+nothing, consuming a one-shot entry while persistent NORMAL stays active.
 
 An all-scope `enter_normal_mode` binding enables advanced mode, which starts in
 PASSTHROUGH. The default all-scope map is empty.
@@ -197,6 +212,10 @@ for a before/after comparison.
 
 ## Interaction ownership
 
+After one-shot NORMAL releases input, delayed provider callbacks still target
+the app captured for that command. Fallback keys and scrolls must not move to a
+newly focused app, and late completions must not change a newer mode entry.
+
 `ActivationLifecycle` distinguishes discovery, a pending commit, and an active
 gesture. A newer hint request replaces discovery or cancels a commit before its
 input starts. Once a gesture starts, it finishes its mouse release before the
@@ -236,11 +255,11 @@ Terminal mappings inherit the effective PASSTHROUGH-active bindings for explicit
 precedence are resolved first; an explicit terminal mapping overrides an
 inherited binding with the same canonical key. Other all, normal and passthrough
 bindings are inactive. Plugins may contribute terminal mappings using the same
-priority rules.
+priority rules. Both one-shot and persistent normal entries are inherited.
 
-The local sequence recognizer accepts the shared key syntax, including modified
-chords and explicit sequences, but has no implicit Escape behavior, counts,
-register prefixes, or `<leader>`. Only known sequence prefixes wait for
+The local sequence recognizer accepts shared key syntax, including modified
+chords and explicit sequences, without counts, register prefixes, or `<leader>`.
+Escape uses the configurable default dismissal mapping. Only known sequence prefixes wait for
 `mode.sequence_timeout_ms`. An exact mapping that also starts a longer sequence
 waits for that timeout; a mismatch resolves the longest completed mapping and
 reprocesses the remaining keys. Unmatched events retain their original modifiers
@@ -250,7 +269,8 @@ command. `repeat = true` retains the explicit final-key repetition behavior.
 
 Local mappings run before native copy/paste and terminal key encoding. Text-only
 popups use the same focus mode for selection, copying, and scrolling. Escape
-and Ctrl-C reach the terminal process unless explicitly mapped. Command-W,
+dismisses the terminal through its default mapping; Ctrl-C reaches its process.
+Command-W,
 `terminal_dismiss`, and `enter_passthrough_mode` dismiss to PASSTHROUGH and
 activate the captured external app. Losing popup focus also returns to PASSTHROUGH without
 activating a different app. Explicit `enter_normal_mode` selects NORMAL after
@@ -288,6 +308,6 @@ keyboard to the app through:
 
 NORMAL remains active across passive focus changes and app activation.
 PASSTHROUGH remains active when a text field loses focus; returning to NORMAL
-uses an explicit mode-entry action. Bare `a`, `A`, `i`, `I`, `o`, `O`, `gi`, and
-Escape do not provide implicit mode transitions; `/` stays in NORMAL. Escape
-keeps its native meaning in PASSTHROUGH and terminal surfaces.
+uses an explicit mode-entry action. Bare `i` exits NORMAL by default; `a`, `A`,
+`I`, `o`, `O`, and `gi` are not additional passthrough aliases. Escape keeps its
+native meaning in PASSTHROUGH and closes COMMAND/TERMINAL by default.

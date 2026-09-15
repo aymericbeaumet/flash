@@ -13,7 +13,8 @@ import FlashCore
 extension AppDelegate {
   func scrollNormalMode(
     _ kind: NormalModeDispatcher.ScrollKind,
-    repeatCount: Int = 1
+    repeatCount: Int = 1,
+    contextOverride: AppContext? = nil
   ) {
     // gg/G: try a `scrollExtremes` source first (e.g. the tmux plugin
     // runs `tmux send-keys -X history-top` / `-X cancel`, which moves
@@ -21,7 +22,7 @@ extension AppDelegate {
     // pane that's already at the bottom). Falls through to the
     // hermetic Scroller path when no source claims it.
     if kind == .top || kind == .bottom {
-      guard let context = normalModeContext() else {
+      guard let context = contextOverride ?? normalModeContext() else {
         FlashLog.debug("[normal_mode] no target app for \(kind)")
         applyModeOverlay()
         return
@@ -32,7 +33,7 @@ extension AppDelegate {
     // Identity only on main: `j`/`k` autorepeat must not pay a WindowServer
     // snapshot per press. The window frame the wheel targets is resolved on
     // the AX queue together with the scroll itself.
-    guard let context = normalModeDispatchContext() else {
+    guard let context = contextOverride ?? normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(kind)")
       applyModeOverlay()
       return

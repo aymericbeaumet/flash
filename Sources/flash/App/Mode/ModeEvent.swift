@@ -14,10 +14,21 @@ enum ModeEvent: Equatable {
   case enterPassthrough(targetPID: pid_t?)
 
   /// The user's explicit normal-mode hotkey / mapped `.normalMode`.
-  case enterNormal(targetPID: pid_t?)
+  case enterNormal(persistent: Bool, targetPID: pid_t?)
+
+  /// An interpreter or native mapping resolved one complete NORMAL command.
+  /// Prefixes and counts alone never begin an action.
+  case normalActionStarted
+
+  /// The full counted dispatch returned. A hint/pointer session keeps the
+  /// one-shot entry alive until its discovery and gesture ownership end.
+  case normalActionDispatched(hasTransientInput: Bool)
+
+  /// Reconcile completion after hint discovery, cancellation or a gesture.
+  case normalInteractionChanged(hasTransientInput: Bool)
 
   /// Close the current transient surface, or toggle PASSTHROUGH and NORMAL.
-  /// Active hints are dismissed without changing their underlying base mode.
+  /// Dismissing an interaction completes one-shot NORMAL; other bases remain.
   case leaveMode(hasHints: Bool, targetPID: pid_t?)
 
   /// Open a command surface, preserving whether advanced mode is enabled.

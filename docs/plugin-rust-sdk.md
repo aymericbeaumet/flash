@@ -174,7 +174,8 @@ only their failure outcome, even when success-only builder methods were chained.
 Optional wire fields accept null as absent. Hint targets require a nonempty
 `id`, the canonical nested frame, finite frame edges, and declared fields only.
 Use `JumpTarget::enters_passthrough_mode(true)` for a hint that hands keyboard
-input to its app after a NORMAL commit; use false for navigation targets.
+input to its app after a NORMAL commit; use false for navigation targets that
+keep persistent NORMAL active. One-shot NORMAL ends after either hint command.
 Omitting it lets the host derive intent from the target's text-input AX role.
 Perform navigation URLs must be absolute; invalid builder values become errors.
 

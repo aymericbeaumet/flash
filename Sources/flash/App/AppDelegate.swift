@@ -428,8 +428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateDockHints()
     case .mouseStatusBar:
       activateStatusItemHints()
-    case .normalMode:
-      enterNormalMode()
+    case .normalMode(let persistent):
+      enterNormalMode(persistent: persistent)
     case .leaveMode:
       leaveMode()
     case .terminalShow(let name):

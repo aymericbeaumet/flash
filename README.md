@@ -77,18 +77,19 @@ shortcuts. Advanced mode is opt-in; configure explicit mode entries, for example
 enabled = true
 ```
 
-With this configuration, Cmd-Ctrl-[ selects NORMAL and Cmd-Ctrl-i selects
-PASSTHROUGH. These shortcuts do not toggle, and bare Escape or `i` never changes
-idle NORMAL. NORMAL stays active across repeated navigation
-and noneditable hint clicks. Clicking a text field, creating a tab with `t`, or
-using a physical/grid click hands input to the app. A direct hint shortcut from
+With this configuration, Cmd-Ctrl-[ enters NORMAL for one resolved command,
+then returns to PASSTHROUGH. Cmd-Ctrl-i selects PASSTHROUGH directly; bare `i`
+also exits NORMAL by default. To keep navigating across repeated commands,
+run `flash enter_normal_mode --persistent` or add `"--persistent"` to an entry
+mapping's argv array. Clicking a text field, creating a tab with `t`, or using a
+physical/grid click still hands input to the app. A direct hint shortcut from
 PASSTHROUGH returns there after completion. App switches and text-field focus
 changes never activate NORMAL.
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, apps, and terminal panes, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on).
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, apps, and terminal panes, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. In persistent NORMAL, every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on).
 
-The status pill stays visible at a fixed width of at least 14 columns.
-PASSTHROUGH shows the active app name in a neutral pill and has no mode border.
+The status pill keeps the same compact width in every mode.
+PASSTHROUGH leaves the neutral pill empty and has no mode border.
 NORMAL uses green, COMMAND purple,
 and TERMINAL blue, with the same two-point glowing border. The terminal border
 surrounds its own focused window; hover previews leave the current mode alone.
@@ -97,10 +98,11 @@ without a notch, an `absolute-centre` section keeps a notch-sized slot for spaci
 
 Command, finder, and terminal completion or dismissal return to PASSTHROUGH.
 Explicit mode-entry shortcuts select their named mode from those surfaces.
-Escape remains native in PASSTHROUGH and terminals, where Ctrl-C also reaches
-the process. Command-W closes a
-terminal. External terminals, Vim, and tmux keep their own keyboard behavior
-until you deliberately enter NORMAL.
+Escape closes COMMAND and TERMINAL by default; Command-W also closes a
+terminal. Terminal Ctrl-C still reaches the process. Override NORMAL's `i` or
+TERMINAL's `"<escape>"` mapping to assign another action. Escape remains native
+in PASSTHROUGH. External terminals, Vim, and tmux keep their own keyboard
+behavior until you deliberately enter NORMAL.
 
 Modified mappings in `[mode.normal.mappings]`, `[mode.passthrough.mappings]`, or
 `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`.
@@ -171,7 +173,7 @@ a popup label to keep it open and use the terminal; repeated clicks keep it pinn
 Right-click a popup segment to keep it open and enter terminal mode. Links
 still open normally on left-click; Option-click also focuses their popup.
 Terminal mode defaults to Command-R to restart the process, Command-Q to quit
-it (persistent terminals restart automatically), and Command-W to hide the window.
+it (persistent terminals restart automatically), and Escape or Command-W to hide the window.
 Inside the terminal, Shift-click opens a link and Shift-drag selects text. Hiding a persistent popup
 keeps its child alive. See the [interactive status strip](docs/examples/statusbar/README.md)
 for separate Cld/Cdx quotas, compact CPU/MEM/DSK/NET/BAT metrics, native
@@ -229,7 +231,7 @@ refresh_interval = 300
 cycle_interval = 10
 
 [statusbar.options]
-"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
+"@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
 ```
 
 Use this fragment with the `#{E:@left}` template above. The title opens the
@@ -249,7 +251,7 @@ iStat-style strip:
 [statusbar]
 enabled = true
 template = """
-#[align=left]#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]
+#[align=left]#[pill]#{flash.mode}#[nopill]
 #[align=absolute-centre]#{flash.active_app_name}
 #[align=right]#{flash.plugin.cpu.summary}
 #[fg=colour245] · #{flash.plugin.memory.summary}
@@ -319,7 +321,8 @@ excluding dotted source identifiers such as `JumpTarget.entersPassthroughMode`.
 Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
 so the terminal can open it in a new context. Flash does not open the value
 itself.
-Pane hints stay in NORMAL mode and preserve the requested click modifiers.
+Pane hints preserve the requested click modifiers. They keep persistent NORMAL
+active; a one-shot NORMAL entry returns to PASSTHROUGH after the hint command.
 
 ### Useful actions
 
@@ -350,7 +353,8 @@ flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
 flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
 flash enter_command_mode                 # open the command line
-flash enter_normal_mode                  # select navigation mode
+flash enter_normal_mode                  # navigate for one resolved command
+flash enter_normal_mode --persistent     # keep navigation active across commands
 flash enter_passthrough_mode             # hand keyboard input to the focused app
 flash help_show                          # show built-in help
 flash plugins                            # inspect plugins
@@ -405,7 +409,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, unmapped keys and shortcuts are swallowed; only explicit mappings act. `/` (`app_find`) stays in NORMAL; `t` (`tab_new`) enters PASSTHROUGH once the new tab or window is open so it can be typed into. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. In persistent NORMAL, `repeat = true` repeats a completed sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, unmapped keys and shortcuts are swallowed; only explicit mappings act. `/` (`app_find`) follows the entry's one-shot/persistent lifetime; `t` (`tab_new`) enters PASSTHROUGH once the new tab or window is open so it can be typed into. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
 
 ## Use your existing hotkey tool
 

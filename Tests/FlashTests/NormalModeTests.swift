@@ -313,7 +313,7 @@ final class NormalModeTests: XCTestCase {
   func testHelpReloadAndModifiedKeyConsumption() {
     XCTAssertNil(command(chars: "a"))
     XCTAssertNil(command(chars: "A", ignoring: "a", flags: [.shift]))
-    XCTAssertNil(command(chars: "i"))
+    XCTAssertEqual(command(chars: "i"), .passthroughMode)
     XCTAssertNil(command(chars: "I", ignoring: "i", flags: [.shift]))
     XCTAssertNil(command(chars: "o"))
     XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
@@ -357,8 +357,8 @@ final class NormalModeTests: XCTestCase {
     // silently swallowing the keystroke.
     XCTAssertEqual(command(pending: "[", chars: "r"), .reload(force: false))
     XCTAssertEqual(command(pending: "]", chars: "r"), .reload(force: false))
-    // Neither `gi` nor `i` changes mode without an explicit mapping.
-    XCTAssertNil(command(pending: "g", chars: "i"))
+    // A broken `g` prefix falls back to the default `i` exit.
+    XCTAssertEqual(command(pending: "g", chars: "i"), .passthroughMode)
     assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
     XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
     // Valid sequence continuations still resolve to the mapped action.
@@ -2411,7 +2411,7 @@ final class NormalModeTests: XCTestCase {
     }
     XCTAssertFalse(help.contains("flash enter_normal_mode"))
     XCTAssertFalse(help.contains("flash leave_mode"))
-    XCTAssertFalse(help.contains("flash enter_passthrough_mode"))
+    XCTAssertTrue(help.contains("flash enter_passthrough_mode"))
     XCTAssertFalse(help.contains("flash enter_command_mode"))
     XCTAssertFalse(help.contains(":q[uit]"))
   }

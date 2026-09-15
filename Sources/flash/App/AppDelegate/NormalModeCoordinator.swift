@@ -12,7 +12,7 @@ struct ClipboardModalEntry: Decodable {
   let value: String
 }
 
-private struct NormalModeKeyDispatchTarget {
+struct NormalModeKeyDispatchTarget {
   let processID: pid_t
   let bundleIdentifier: String
 }
@@ -25,11 +25,11 @@ private struct NormalModeKeyDispatchTarget {
 extension AppDelegate {
   // MARK: Normal mode
 
-  func enterNormalMode() {
+  func enterNormalMode(persistent: Bool = false) {
     FlashLog.trace(
-      "[mode] enter_normal from=\(flashMode) hints=\(hintSession.hints.count) "
+      "[mode] enter_normal persistent=\(persistent) from=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight)")
-    dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
+    dispatchMode(.enterNormal(persistent: persistent, targetPID: terminalReturnApplicationPID))
   }
 
   func leaveMode() {
@@ -64,6 +64,22 @@ extension AppDelegate {
   /// pure reducer, then perform the effects it returns.
   func dispatchMode(_ event: ModeEvent) {
     modeStore.dispatch(event)
+  }
+
+  @discardableResult
+  func finishNormalModeInteractionIfIdle() -> Bool {
+    guard case .normal(persistent: false, action: .waitingForInteraction) = modeStore.mode,
+      !hintSession.isActive, !activationInFlight
+    else { return false }
+    dispatchMode(.normalInteractionChanged(hasTransientInput: false))
+    return true
+  }
+
+  /// A delayed tab/input callback may finish after another command or mode
+  /// entry. It still completes its app action, but cannot exit the new session.
+  func completeNormalModeHandoff(commandToken: UInt64, targetPID: pid_t?) {
+    guard normalModePendingCommandToken == commandToken, modeStore.mode.isNormal else { return }
+    enterPassthroughMode(reason: .explicitCommand, targetPID: targetPID)
   }
 
   /// Performs the effects the reducer emitted. The reducer DECIDES the
@@ -255,6 +271,7 @@ extension AppDelegate {
   }
 
   private func resetModeInputState() {
+    normalModePendingCommandToken &+= 1
     cancelCandidateFinderSessionWork()
     overlay.normalModePending = ""
     overlay.normalModeRepeatAnchor = nil
@@ -306,6 +323,7 @@ extension AppDelegate {
 
   func applyModeOverlay(captureOverride: Bool? = nil) {
     MainThreadWatchdog.note("mode_overlay")
+    if finishNormalModeInteractionIfIdle() { return }
     let mode = modeStore.mode
     // A pointer-mode session behaves exactly like a hint set being up: the
     // transient overlay owns input (`.hints`) and NORMAL's own capture is off.
@@ -857,7 +875,10 @@ extension AppDelegate {
       overlay.normalModeRepeatAnchor = nil
       normalModePendingCommandToken &+= 1
     }
+    dispatchMode(.normalActionStarted)
     performMappingCommand(action)
+    dispatchMode(
+      .normalActionDispatched(hasTransientInput: hintSession.isActive || activationInFlight))
     guard wasNormal else { return }
     let focusChanging = Self.normalModeActionMayChangeKeyboardFocus(action)
     if guardNormalModeInputAfterActionDispatch(force: focusChanging) {
@@ -905,8 +926,8 @@ extension AppDelegate {
     switch command {
     case .passthroughMode:
       enterPassthroughMode(reason: .normalModeInput)
-    case .normalMode:
-      enterNormalMode()
+    case .normalMode(let persistent):
+      enterNormalMode(persistent: persistent)
     case .leaveMode:
       leaveMode()
     case .terminalShow(let name):
@@ -1275,9 +1296,10 @@ extension AppDelegate {
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
     repeatCount: Int = 1,
+    contextOverride: AppContext? = nil,
     completion: (() -> Void)? = nil
   ) {
-    guard let target = normalModeKeyDispatchTarget() else {
+    guard let target = normalModeKeyDispatchTarget(contextOverride: contextOverride) else {
       FlashLog.debug("[normal_mode] no target app for key \(key)")
       applyModeOverlay()
       return
@@ -1425,7 +1447,14 @@ extension AppDelegate {
     return true
   }
 
-  private func normalModeKeyDispatchTarget() -> NormalModeKeyDispatchTarget? {
+  func normalModeKeyDispatchTarget(contextOverride: AppContext? = nil)
+    -> NormalModeKeyDispatchTarget?
+  {
+    if let contextOverride {
+      return NormalModeKeyDispatchTarget(
+        processID: contextOverride.processID,
+        bundleIdentifier: contextOverride.bundleIdentifier)
+    }
     let hasVisibleNonOverlayKeyWindow =
       NSApp.keyWindow.map {
         $0 !== overlay && $0.isVisible

@@ -29,7 +29,8 @@ public struct JumpTarget: @unchecked Sendable {
   /// Whether committing a click on this target should switch Flash into
   /// passthrough mode. The owning provider decides: a typing surface (text
   /// field) sets this true so the user lands ready to type; links, buttons,
-  /// and tmux pane selectors leave it false so keyboard navigation continues.
+  /// and tmux pane selectors leave it false so persistent NORMAL can continue.
+  /// One-shot NORMAL returns to passthrough after either kind of target.
   public let entersPassthroughMode: Bool
   /// Source-declared salience for this target. The renderer currently paints
   /// `.important` and `.urgent` targets in the accent style; the commit path

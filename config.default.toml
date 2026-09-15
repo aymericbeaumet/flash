@@ -212,7 +212,7 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # CPU/MEM/DISK/BAT labels carry padded percentages; NET carries a padded byte rate.
 # AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
 [statusbar.options]
-"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]"
+"@left" = "#[pill]#{flash.mode}#[nopill]"
 "@right" = "#[fg=#EBCB8B]#{flash.date}"
 # Example combined metrics:
 # "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
@@ -292,7 +292,7 @@ precedence_alive_bonus = 10
 # "firefox.tabs" = 120
 
 [mode]
-# An empty passthrough label lets the default pill show the active app name.
+# An empty passthrough label leaves a neutral pill with the same reserved width.
 # Its neutral styling and fixed width keep status content in place across modes.
 labels = { normal = "NORMAL", passthrough = "", command = "COMMAND", terminal = "TERMINAL" }
 
@@ -331,6 +331,7 @@ send_key_interval_ms = 35
 # Examples:
 # "ctrl+space" = ["flash", "mouse_target"]
 # "cmd+ctrl+[" = ["flash", "enter_normal_mode"] # enables advanced mode
+# Add "--persistent" to that argv array to keep NORMAL after repeated commands.
 # "cmd+ctrl+i" = ["flash", "enter_passthrough_mode"]
 # "cmd+ctrl+semicolon" = ["flash", "enter_command_mode"]
 # leave_mode enters NORMAL from idle PASSTHROUGH, exits idle NORMAL, and
@@ -339,7 +340,8 @@ send_key_interval_ms = 35
 # NORMAL explicitly.
 # Mode-specific mappings override the same chord here; no exit override is
 # installed by default.
-# Mode-entry shortcuts are opt-in; no bare Escape or i mode changes are installed.
+# Global mode-entry shortcuts are opt-in. NORMAL defaults to one resolved command;
+# bare i exits it early. COMMAND and TERMINAL close with Escape.
 # focus_input also has no default mapping; opt in if focusing a text input
 # should enter PASSTHROUGH (for example, "gi" = ["flash", "focus_input"]).
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
@@ -364,16 +366,19 @@ send_key_interval_ms = 35
 leader = "\\"
 
 [mode.normal.mappings]
-# Use a configured shortcut to leave NORMAL; Escape and i do not change mode.
+# NORMAL returns to PASSTHROUGH after one resolved command unless entered with
+# --persistent. Bare i exits either form; Escape only cancels pending input.
 # Clicks into text fields enter PASSTHROUGH.
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
 # that one default mapping; unrelated defaults stay available.
 # Mapped keys dispatch Flash commands; every other key or chord is swallowed.
 # Use an inline table when a mapping needs metadata. `repeat = true` lets each
-# additional press of the final key repeat the completed sequence (`[tttt`).
+# additional press of the final key repeat the completed sequence (`[tttt`)
+# while NORMAL was entered with --persistent.
 # Every built-in [ / ] sequence below enables it.
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
+"i" = ["flash", "enter_passthrough_mode"]
 "h" = ["flash", "scroll_left"]
 "j" = ["flash", "send_key", "--keys=down"]
 "k" = ["flash", "send_key", "--keys=up"]
@@ -456,7 +461,8 @@ leader = "\\"
 "ctrl+i" = ["flash", "movement_forward"]
 # `f` is a plain current-context click everywhere except terminal links, which
 # add Shift so the terminal opens the link at all. `F` sends Command-Shift to
-# every target as the global new-context gesture. Tmux hints stay in NORMAL.
+# every target as the global new-context gesture. In persistent NORMAL, tmux
+# hints keep that mode; one-shot entry returns to PASSTHROUGH after the command.
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
 # Ctrl selects the precision grid; adding Shift preserves the current/new-tab
@@ -543,9 +549,11 @@ leader = "\\"
 # surfaces own the keyboard. All-mode shortcuts remain available by default.
 
 [mode.terminal.mappings]
-# Terminal input stays local to the focused window. Plain Escape goes to the TUI.
+# Terminal input stays local to the focused window. Escape dismisses the window;
+# override <escape> here to assign another action. Ctrl-C goes to the process.
 # Winning PASSTHROUGH enter_normal_mode / enter_passthrough_mode / leave_mode bindings are inherited;
 # optional terminal mappings override them.
+"<escape>" = ["flash", "terminal_dismiss"]
 "cmd+q" = ["flash", "terminal_quit"] # stop the child; automatic restart applies
 "cmd+r" = ["flash", "terminal_restart"] # restart immediately
 "cmd+w" = ["flash", "terminal_dismiss"] # hide; persistent sessions keep running

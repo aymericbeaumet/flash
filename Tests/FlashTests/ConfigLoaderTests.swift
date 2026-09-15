@@ -7,7 +7,7 @@ import XCTest
 @testable import flash
 
 final class ConfigLoaderTests: XCTestCase {
-  func testModeTransitionsMustBeExplicitlyConfigured() {
+  func testModeEntriesRemainOptInAlongsideDefaultExits() {
     for config in [Config.default, ConfigLoader.parse("")] {
       for mappings in [
         config.mode.all, config.mode.normal, config.mode.passthrough,
@@ -15,8 +15,11 @@ final class ConfigLoaderTests: XCTestCase {
       ] {
         for mapping in mappings {
           switch mapping.action.command {
-          case .normalMode?, .leaveMode?, .passthroughMode?, .commandMode?, .enterCommand?:
+          case .normalMode?, .leaveMode?, .commandMode?, .enterCommand?:
             XCTFail("Mode transition must be explicitly configured: \(mapping.key)")
+          case .passthroughMode?:
+            XCTAssertEqual(mapping.key, "i")
+            XCTAssertTrue(config.mode.normal.contains(mapping))
           default:
             break
           }
@@ -60,7 +63,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(config.mode.command.count, 2)
     XCTAssertEqual(
       config.mode.command.first { $0.key == "cmd+ctrl+escape" }?.action.command, .passthroughMode)
-    XCTAssertEqual(config.mode.command.first { $0.key == "ctrl-j" }?.action.command, .normalMode)
+    XCTAssertEqual(
+      config.mode.command.first { $0.key == "ctrl-j" }?.action.command,
+      .normalMode(persistent: false))
     XCTAssertEqual(config.diagnostics.count, 3)
     XCTAssertTrue(
       config.diagnostics.map(\.message).contains {
@@ -125,7 +130,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
       .copyURL)
-    for entryKey in ["a", "A", "i", "I", "o", "O", "gi", "<escape>"] {
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("i") })?.action.command, .passthroughMode)
+    for entryKey in ["a", "A", "I", "o", "O", "gi", "<escape>"] {
       XCTAssertNil(c.mode.normal.first(where: { $0.key == key(entryKey) }))
     }
     for mapping in c.mode.all + c.mode.normal + c.mode.passthrough + c.mode.command
@@ -211,7 +218,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.statusBar.template.template,
       "#[align=left]#{E:@left}#[align=right]#{T:@right}")
-    XCTAssertEqual(c.statusBar.template.variables.count, 3)
+    XCTAssertEqual(Set(c.statusBar.template.variables.map(\.token)), ["flash.mode", "flash.date"])
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
     XCTAssertTrue(c.flashlight.precedence.isEmpty)
@@ -322,7 +329,7 @@ final class ConfigLoaderTests: XCTestCase {
       "#[align=left]#{flash.mode}#[align=right]#{flash.plugin.ready_count} | #{flash.date}")
     XCTAssertEqual(
       Set(t.variables.map(\.token)),
-      ["flash.mode", "flash.active_app_name", "flash.plugin.ready_count", "flash.date"])
+      ["flash.mode", "flash.plugin.ready_count", "flash.date"])
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -1060,7 +1067,7 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.passthrough.count, 1)
-    XCTAssertEqual(c.mode.passthrough[0].action.command, .normalMode)
+    XCTAssertEqual(c.mode.passthrough[0].action.command, .normalMode(persistent: false))
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
     XCTAssertTrue(c.mode.containsNormalModeMapping)
     XCTAssertFalse(c.mode.containsAdvancedModeMapping)

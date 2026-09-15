@@ -63,7 +63,9 @@ final class KeyboardCaptureTapTests: XCTestCase {
   }
 
   func testDirectHintsCaptureFromEveryBaseModeAndDismissInPlace() {
-    for origin in [Mode.normal, .passthrough, .disabled] {
+    for origin in [
+      Mode.normal(persistent: false), .normal(persistent: true), .passthrough, .disabled,
+    ] {
       XCTAssertTrue(
         KeyboardCaptureTap.shouldSwallow(
           flashMode: origin.flashMode,
@@ -77,7 +79,7 @@ final class KeyboardCaptureTapTests: XCTestCase {
         KeyboardCaptureTap.shouldSwallow(
           flashMode: closed.flashMode,
           inputMode: closed.overlayInputMode(hasHints: false, activationInFlight: false)),
-        origin == .normal)
+        origin.flashMode == .normal)
     }
   }
 

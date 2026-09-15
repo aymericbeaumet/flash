@@ -45,6 +45,9 @@ terminal-mode mappings. Configured `enter_normal_mode` and
 `enter_passthrough_mode` shortcuts select their named mode in the captured app;
 ordinary dismissal returns to PASSTHROUGH.
 
+Escape or Command-W dismisses a focused popup by default. Override
+`"<escape>"` in `[mode.terminal.mappings]` to assign another action.
+
 For persistent named terminals, Command-W hides, Command-R restarts, and
 Command-Q quits the child so automatic restart applies. Fresh shells and
 nonpersistent named terminals end permanently on quit or hide. The native

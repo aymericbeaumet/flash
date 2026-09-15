@@ -54,10 +54,12 @@ contracts before changing a subsystem:
    `only_bundle_ids` and fed only by the host AX broker). Browser content
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
-9. PASSTHROUGH is the default, with a neutral fixed-width app-name pill and no
-   mode border. Advanced mode and its entry shortcuts are opt-in. NORMAL is
-   persistent; unmapped keys/chords are swallowed and bare Escape/`i` never
-   change base mode. Use explicit configured normal/passthrough entry actions.
+9. PASSTHROUGH is the default, with an empty neutral pill of stable width and no
+   mode border. Advanced mode and its entry shortcuts are opt-in. NORMAL ends
+   after one resolved command unless entered with `--persistent`; prefixes and
+   counts do not consume it. Unmapped keys/chords are swallowed. Default `i`
+   exits NORMAL; Escape closes COMMAND/TERMINAL. Normal and terminal exit
+   mappings remain configurable; authored named keys use `<escape>` syntax.
    Command/finder/terminal dismissal returns to PASSTHROUGH. NORMAL, COMMAND
    and focused TERMINAL surfaces share a two-point glowing border; terminal
    previews never acquire keyboard ownership. See the mode document for

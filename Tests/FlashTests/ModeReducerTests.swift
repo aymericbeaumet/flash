@@ -12,7 +12,10 @@ final class ModeReducerTests: XCTestCase {
   private let allStates: [Mode] = [
     .disabled,
     .passthrough,
-    .normal,
+    .normal(persistent: true),
+    .normal(persistent: false),
+    .normal(persistent: false, action: .dispatching),
+    .normal(persistent: false, action: .waitingForInteraction),
     .command(scope: .commandLine, restoreTo: .passthrough),
     .command(scope: .finder(all: true), restoreTo: .passthrough),
     .command(scope: .finder(all: false), restoreTo: .disabled),
@@ -23,7 +26,13 @@ final class ModeReducerTests: XCTestCase {
   // Representative events covering every case.
   private let allEvents: [ModeEvent] = [
     .enterPassthrough(targetPID: 7),
-    .enterNormal(targetPID: 7),
+    .enterNormal(persistent: true, targetPID: 7),
+    .enterNormal(persistent: false, targetPID: 7),
+    .normalActionStarted,
+    .normalActionDispatched(hasTransientInput: false),
+    .normalActionDispatched(hasTransientInput: true),
+    .normalInteractionChanged(hasTransientInput: false),
+    .normalInteractionChanged(hasTransientInput: true),
     .leaveMode(hasHints: false, targetPID: nil),
     .leaveMode(hasHints: true, targetPID: 7),
     .openCommand(scope: .commandLine),
@@ -42,9 +51,90 @@ final class ModeReducerTests: XCTestCase {
 
   // MARK: Initialization
 
+  func testOneShotCompletesOnlyAfterTheWholeCommandDispatch() {
+    let ready = Mode.normal(persistent: false)
+    XCTAssertEqual(
+      ModeReducer.reduce(ready, .normalInteractionChanged(hasTransientInput: false)).0, ready)
+    let (dispatching, startedEffects) = ModeReducer.reduce(ready, .normalActionStarted)
+    XCTAssertEqual(dispatching, .normal(persistent: false, action: .dispatching))
+    XCTAssertTrue(startedEffects.isEmpty)
+    XCTAssertEqual(
+      ModeReducer.reduce(dispatching, .normalInteractionChanged(hasTransientInput: false)).0,
+      dispatching)
+
+    let (finished, effects) = ModeReducer.reduce(
+      dispatching, .normalActionDispatched(hasTransientInput: false))
+    XCTAssertEqual(finished, .passthrough)
+    XCTAssertEqual(effects, ModeReducer.enterEffects(for: .passthrough, targetPID: nil))
+  }
+
+  func testOneShotWaitsWithoutClearingNewTransientInput() {
+    let dispatching = Mode.normal(persistent: false, action: .dispatching)
+    let (waiting, effects) = ModeReducer.reduce(
+      dispatching, .normalActionDispatched(hasTransientInput: true))
+    XCTAssertEqual(waiting, .normal(persistent: false, action: .waitingForInteraction))
+    XCTAssertTrue(effects.isEmpty, "Command completion must not cancel its own hints")
+    let (stillWaiting, activeEffects) = ModeReducer.reduce(
+      waiting, .normalInteractionChanged(hasTransientInput: true))
+    XCTAssertEqual(stillWaiting, waiting)
+    XCTAssertTrue(activeEffects.isEmpty)
+    XCTAssertEqual(
+      ModeReducer.reduce(waiting, .normalInteractionChanged(hasTransientInput: false)).0,
+      .passthrough)
+    XCTAssertEqual(
+      ModeReducer.reduce(waiting, .leaveMode(hasHints: true, targetPID: 7)).0, .passthrough)
+  }
+
+  func testPersistentNormalIgnoresAutomaticCommandCompletion() {
+    let normal = Mode.normal(persistent: true)
+    for event in [
+      ModeEvent.normalActionStarted,
+      .normalActionDispatched(hasTransientInput: false),
+      .normalActionDispatched(hasTransientInput: true),
+      .normalInteractionChanged(hasTransientInput: false),
+      .normalInteractionChanged(hasTransientInput: true),
+    ] {
+      let (next, effects) = ModeReducer.reduce(normal, event)
+      XCTAssertEqual(next, normal)
+      XCTAssertTrue(effects.isEmpty)
+    }
+  }
+
+  func testExplicitReentryCannotBeConsumedByThePreviousDispatch() {
+    for persistent in [true, false] {
+      let dispatching = Mode.normal(persistent: false, action: .dispatching)
+      let entered = ModeReducer.reduce(
+        dispatching, .enterNormal(persistent: persistent, targetPID: nil)
+      ).0
+      XCTAssertEqual(entered, .normal(persistent: persistent))
+      XCTAssertEqual(
+        ModeReducer.reduce(entered, .normalActionDispatched(hasTransientInput: false)).0, entered)
+    }
+  }
+
+  func testOneShotCommandCanOpenAPersistentSurface() {
+    for open in [
+      ModeEvent.openCommand(scope: .commandLine),
+      .openCommand(scope: .finder(all: true)),
+      .openTerminal,
+    ] {
+      let dispatching = Mode.normal(persistent: false, action: .dispatching)
+      let surface = ModeReducer.reduce(dispatching, open).0
+      for event in [
+        ModeEvent.normalActionDispatched(hasTransientInput: false),
+        .normalInteractionChanged(hasTransientInput: false),
+      ] {
+        XCTAssertEqual(ModeReducer.reduce(surface, event).0, surface)
+      }
+      XCTAssertEqual(
+        ModeReducer.reduce(surface, .leaveMode(hasHints: false, targetPID: nil)).0, .passthrough)
+    }
+  }
+
   func testStartupPicksInitialMode() {
     XCTAssertEqual(ModeReducer.reduce(.disabled, .startup(advancedEnabled: true)).0, .passthrough)
-    XCTAssertEqual(ModeReducer.reduce(.normal, .startup(advancedEnabled: false)).0, .disabled)
+    XCTAssertEqual(
+      ModeReducer.reduce(.normal(persistent: true), .startup(advancedEnabled: false)).0, .disabled)
   }
 
   func testStartupResolvesCaptureBeforeAnySurfaceEffect() {
@@ -109,7 +199,8 @@ final class ModeReducerTests: XCTestCase {
 
   func testOnlyKeyboardAndConfigLeavePassthrough() {
     XCTAssertEqual(
-      ModeReducer.reduce(.passthrough, .enterNormal(targetPID: 7)).0, .normal)
+      ModeReducer.reduce(.passthrough, .enterNormal(persistent: true, targetPID: 7)).0,
+      .normal(persistent: true))
     XCTAssertEqual(
       ModeReducer.reduce(.passthrough, .advancedModeChanged(enabled: false)).0, .disabled)
   }
@@ -131,10 +222,14 @@ final class ModeReducerTests: XCTestCase {
 
   func testClickEntersPassthroughOnlyFromNormal() {
     XCTAssertEqual(
-      ModeReducer.reduce(.normal, .clickResolved(entersPassthrough: true, targetPID: 7)).0,
+      ModeReducer.reduce(
+        .normal(persistent: true), .clickResolved(entersPassthrough: true, targetPID: 7)
+      ).0,
       .passthrough)
     XCTAssertEqual(
-      ModeReducer.reduce(.normal, .clickResolved(entersPassthrough: false, targetPID: 7)).0, .normal
+      ModeReducer.reduce(
+        .normal(persistent: true), .clickResolved(entersPassthrough: false, targetPID: 7)
+      ).0, .normal(persistent: true)
     )
     // From any non-normal state, a click cannot change the mode.
     for state in allStates where !state.isNormal {
@@ -146,7 +241,8 @@ final class ModeReducerTests: XCTestCase {
   // MARK: Advanced gate
 
   func testAdvancedGateRefusesNormalWhenDisabled() {
-    XCTAssertEqual(ModeReducer.reduce(.disabled, .enterNormal(targetPID: 7)).0, .disabled)
+    XCTAssertEqual(
+      ModeReducer.reduce(.disabled, .enterNormal(persistent: true, targetPID: 7)).0, .disabled)
     XCTAssertEqual(
       ModeReducer.reduce(.disabled, .enterPassthrough(targetPID: 7)).0,
       .disabled)
@@ -158,7 +254,7 @@ final class ModeReducerTests: XCTestCase {
 
   func testEveryCommandSurfaceClosesToPassthroughOrDisabled() {
     for scope in [CommandScope.commandLine, .finder(all: true), .finder(all: false)] {
-      for origin in [Mode.normal, .passthrough, .disabled] {
+      for origin in [Mode.normal(persistent: true), .passthrough, .disabled] {
         let (mode, _) = ModeReducer.reduce(
           origin, .openCommand(scope: scope))
         let expected: Mode = origin.advancedEnabled ? .passthrough : .disabled
@@ -172,7 +268,9 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testCloseCommandFromNonCommandIsNoop() {
-    XCTAssertEqual(ModeReducer.reduce(.normal, .closeCommand(reason: "x")).0, .normal)
+    XCTAssertEqual(
+      ModeReducer.reduce(.normal(persistent: true), .closeCommand(reason: "x")).0,
+      .normal(persistent: true))
   }
 
   func testCommandDismissalReturnsNativeInputWithAdvancedModeDisabled() {
@@ -186,13 +284,14 @@ final class ModeReducerTests: XCTestCase {
   func testLeaveModeReturnsPassthroughToNormal() {
     let (next, effects) = ModeReducer.reduce(
       .passthrough, .leaveMode(hasHints: false, targetPID: nil))
-    XCTAssertEqual(next, .normal)
-    XCTAssertEqual(effects, ModeReducer.enterEffects(for: .normal, targetPID: nil))
+    XCTAssertEqual(next, .normal(persistent: false))
+    XCTAssertEqual(
+      effects, ModeReducer.enterEffects(for: .normal(persistent: false), targetPID: nil))
   }
 
   func testLeaveModeRestoresEveryCommandSurface() {
     for scope in [CommandScope.commandLine, .finder(all: true), .finder(all: false)] {
-      for origin in [Mode.normal, .passthrough, .disabled] {
+      for origin in [Mode.normal(persistent: true), .passthrough, .disabled] {
         let (opened, _) = ModeReducer.reduce(origin, .openCommand(scope: scope))
         let expected = ModeReducer.reduce(opened, .closeCommand(reason: "cancel"))
         let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: nil))
@@ -204,7 +303,8 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testLeaveModeExitsIdleNormalToPassthrough() {
-    let (next, effects) = ModeReducer.reduce(.normal, .leaveMode(hasHints: false, targetPID: 42))
+    let (next, effects) = ModeReducer.reduce(
+      .normal(persistent: true), .leaveMode(hasHints: false, targetPID: 42))
     XCTAssertEqual(next, .passthrough)
     XCTAssertEqual(effects, ModeReducer.enterEffects(for: .passthrough, targetPID: 42))
   }
@@ -216,7 +316,7 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testLeaveModeRestoresTerminalAndPreviousApplication() {
-    for origin in [Mode.normal, .passthrough, .disabled] {
+    for origin in [Mode.normal(persistent: true), .passthrough, .disabled] {
       let (opened, _) = ModeReducer.reduce(origin, .openTerminal)
       let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: 42))
       let expected = ModeReducer.reduce(opened, .closeTerminal(targetPID: 42))
@@ -228,7 +328,7 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testLeaveModeWithHintsDismissesThemAndKeepsTheBaseMode() {
-    for state in [Mode.disabled, .normal, .passthrough] {
+    for state in [Mode.disabled, .normal(persistent: true), .passthrough] {
       let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: true, targetPID: 7))
       XCTAssertEqual(next, state)
       XCTAssertEqual(effects, ModeReducer.enterEffects(for: state, targetPID: 7))
@@ -246,12 +346,13 @@ final class ModeReducerTests: XCTestCase {
       .command(scope: .commandLine, restoreTo: .passthrough),
       .command(scope: .finder(all: true), restoreTo: .passthrough),
     ]
-    let expectedEffects = ModeReducer.enterEffects(for: .normal, targetPID: nil)
+    let expectedEffects = ModeReducer.enterEffects(for: .normal(persistent: true), targetPID: nil)
     XCTAssertTrue(expectedEffects.contains(.clearTransientHintState))
 
     for state in commandStates {
-      let (next, effects) = ModeReducer.reduce(state, .enterNormal(targetPID: nil))
-      XCTAssertEqual(next, .normal)
+      let (next, effects) = ModeReducer.reduce(
+        state, .enterNormal(persistent: true, targetPID: nil))
+      XCTAssertEqual(next, .normal(persistent: true))
       XCTAssertEqual(effects, expectedEffects)
     }
   }
@@ -265,7 +366,9 @@ final class ModeReducerTests: XCTestCase {
       .openTerminal,
     ]
     for open in surfaces {
-      for request in [ModeEvent.enterNormal(targetPID: nil), .enterPassthrough(targetPID: nil)] {
+      for request in [
+        ModeEvent.enterNormal(persistent: true, targetPID: nil), .enterPassthrough(targetPID: nil),
+      ] {
         let opened = ModeReducer.reduce(.disabled, open).0
         let closed = ModeReducer.reduce(opened, request).0
         XCTAssertEqual(closed, .disabled, "\(open), \(request)")
@@ -302,7 +405,7 @@ final class ModeReducerTests: XCTestCase {
   // MARK: Effect contract
 
   func testEnterEffectsContract() {
-    let normal = ModeReducer.enterEffects(for: .normal, targetPID: nil)
+    let normal = ModeReducer.enterEffects(for: .normal(persistent: true), targetPID: nil)
     XCTAssertEqual(
       normal,
       [
@@ -333,12 +436,12 @@ final class ModeReducerTests: XCTestCase {
   func testProjectionTable() {
     XCTAssertEqual(Mode.disabled.flashMode, .passthrough)
     XCTAssertEqual(Mode.passthrough.flashMode, .passthrough)
-    XCTAssertEqual(Mode.normal.flashMode, .normal)
+    XCTAssertEqual(Mode.normal(persistent: true).flashMode, .normal)
     XCTAssertEqual(Mode.command(scope: .commandLine, restoreTo: .passthrough).flashMode, .normal)
 
     XCTAssertEqual(Mode.disabled.label, .passthrough)
     XCTAssertEqual(Mode.passthrough.label, .passthrough)
-    XCTAssertEqual(Mode.normal.label, .normal)
+    XCTAssertEqual(Mode.normal(persistent: true).label, .normal)
     XCTAssertEqual(Mode.command(scope: .commandLine, restoreTo: .passthrough).label, .command)
 
     // overlay input mode (idle, no hints / activation)
@@ -346,10 +449,15 @@ final class ModeReducerTests: XCTestCase {
       Mode.passthrough.overlayInputMode(hasHints: false, activationInFlight: false),
       .hints)
     XCTAssertEqual(
-      Mode.normal.overlayInputMode(hasHints: false, activationInFlight: false), .normal)
+      Mode.normal(persistent: true).overlayInputMode(hasHints: false, activationInFlight: false),
+      .normal)
     // normal with hints up routes hint letters, not commands
-    XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
-    XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: false, activationInFlight: true), .hints)
+    XCTAssertEqual(
+      Mode.normal(persistent: true).overlayInputMode(hasHints: true, activationInFlight: false),
+      .hints)
+    XCTAssertEqual(
+      Mode.normal(persistent: true).overlayInputMode(hasHints: false, activationInFlight: true),
+      .hints)
     XCTAssertEqual(
       Mode.command(scope: .commandLine, restoreTo: .passthrough)
         .overlayInputMode(hasHints: false, activationInFlight: false), .commandLine)
@@ -359,8 +467,10 @@ final class ModeReducerTests: XCTestCase {
 
     XCTAssertFalse(
       Mode.passthrough.ownsKeyboard(hasHints: false, activationInFlight: false))
-    XCTAssertTrue(Mode.normal.ownsKeyboard(hasHints: false, activationInFlight: false))
-    XCTAssertFalse(Mode.normal.ownsKeyboard(hasHints: true, activationInFlight: false))
+    XCTAssertTrue(
+      Mode.normal(persistent: true).ownsKeyboard(hasHints: false, activationInFlight: false))
+    XCTAssertFalse(
+      Mode.normal(persistent: true).ownsKeyboard(hasHints: true, activationInFlight: false))
     XCTAssertTrue(
       Mode.command(scope: .commandLine, restoreTo: .passthrough)
         .ownsKeyboard(hasHints: false, activationInFlight: false))
@@ -369,16 +479,16 @@ final class ModeReducerTests: XCTestCase {
     // mode; NORMAL stays `.normal`-routed so the cursor stays visible under the
     // menu (the `.hints` routing would hide it).
     XCTAssertFalse(
-      Mode.normal.ownsKeyboard(
+      Mode.normal(persistent: true).ownsKeyboard(
         hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true))
     XCTAssertFalse(
       Mode.command(scope: .commandLine, restoreTo: .passthrough)
         .ownsKeyboard(hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true))
     XCTAssertEqual(
-      Mode.normal.overlayInputMode(
+      Mode.normal(persistent: true).overlayInputMode(
         hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true), .normal)
     XCTAssertEqual(
-      Mode.normal.overlayInputMode(
+      Mode.normal(persistent: true).overlayInputMode(
         hasHints: true, activationInFlight: false, nativeSurfaceSuspended: true), .normal)
   }
 
@@ -388,7 +498,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.command(scope: .commandLine, restoreTo: .passthrough).badgeStyle, .command)
     XCTAssertEqual(
       Mode.command(scope: .finder(all: true), restoreTo: .passthrough).badgeStyle, .command)
-    XCTAssertEqual(Mode.normal.badgeStyle, .normal)
+    XCTAssertEqual(Mode.normal(persistent: true).badgeStyle, .normal)
     XCTAssertEqual(Mode.passthrough.badgeStyle, .passthrough)
     XCTAssertEqual(Mode.disabled.badgeStyle, .passthrough)
   }

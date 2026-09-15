@@ -11,7 +11,7 @@ final class ModeSurfaceLifecycleTests: XCTestCase {
   }
 
   func testFinderCancelClosesTheModeFromEveryBase() {
-    for origin in [Mode.normal, .passthrough, .disabled] {
+    for origin in [Mode.normal(persistent: true), .passthrough, .disabled] {
       let delegate = delegate(in: origin)
       defer { delegate.overlay.orderOut(nil) }
       delegate.modeStore.dispatch(.openCommand(scope: .finder(all: true)))
@@ -24,7 +24,7 @@ final class ModeSurfaceLifecycleTests: XCTestCase {
   }
 
   func testEmptyFinderSubmissionClosesTheMode() {
-    let delegate = delegate(in: .normal)
+    let delegate = delegate(in: .normal(persistent: true))
     defer { delegate.overlay.orderOut(nil) }
     delegate.modeStore.dispatch(.openCommand(scope: .finder(all: false)))
     delegate.overlay.inputMode = .candidateFinder
@@ -35,7 +35,7 @@ final class ModeSurfaceLifecycleTests: XCTestCase {
   }
 
   func testCandidateEffectClosesFinderBeforeReturningToTheApp() {
-    let delegate = delegate(in: .normal)
+    let delegate = delegate(in: .normal(persistent: true))
     defer { delegate.overlay.orderOut(nil) }
     delegate.modeStore.dispatch(.openCommand(scope: .finder(all: true)))
     delegate.overlay.inputMode = .candidateFinder
@@ -65,7 +65,7 @@ final class ModeSurfaceLifecycleTests: XCTestCase {
     delegate.overlay.statusPopupController = StatusPopupController(
       terminals: delegate.overlay.statusTerminals, windowActionsEnabled: false)
     delegate.modeStore.dispatch(.startup(advancedEnabled: mode.advancedEnabled))
-    if mode == .normal { delegate.modeStore.dispatch(.enterNormal(targetPID: nil)) }
+    if mode.isNormal { delegate.modeStore.dispatch(.enterNormal(persistent: true, targetPID: nil)) }
     return delegate
   }
 }

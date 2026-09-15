@@ -18,13 +18,49 @@ final class PassthroughConfigTests: XCTestCase {
     XCTAssertEqual(config.mode.labels.passthrough, "")
   }
 
-  func testNormalModeHasNoBarePassthroughExits() {
+  func testDefaultModeExitsAreScopedToNormalAndTerminal() throws {
+    let escapeKey = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("<escape>"))
     for config in [Config.default, ConfigLoader.parse("")] {
-      for rawKey in ["i", "<escape>"] {
-        let key = NormalModeInterpreter.canonicalizeMappingKey(rawKey)
-        XCTAssertNil(config.mode.normal.first { $0.key == key })
-      }
+      XCTAssertEqual(config.mode.normal.first { $0.key == "i" }?.action.command, .passthroughMode)
+      XCTAssertNil(config.mode.normal.first { $0.key == escapeKey })
+      XCTAssertEqual(
+        config.mode.terminal.first { $0.key == escapeKey }?.action.command, .terminalDismiss)
       XCTAssertTrue(config.mode.passthrough.isEmpty)
+      XCTAssertTrue(config.mode.all.isEmpty)
+    }
+  }
+
+  func testDefaultModeExitMappingsCanBeOverridden() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "i" = ["flash", "scroll_top"]
+      [mode.terminal.mappings]
+      "<escape>" = ["flash", "terminal_restart"]
+      """)
+    XCTAssertTrue(config.loadingDiagnostics.isEmpty)
+    let escapeKey = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("<escape>"))
+    XCTAssertEqual(config.mode.normal.filter { $0.key == "i" }.count, 1)
+    XCTAssertEqual(config.mode.compiledNormal.mapping(for: "i")?.action.command, .scroll(.top))
+    XCTAssertEqual(config.mode.terminal.filter { $0.key == escapeKey }.count, 1)
+    XCTAssertEqual(
+      config.mode.compiledTerminal.mapping(for: escapeKey)?.action.command,
+      .terminalRestart(name: nil))
+  }
+
+  func testNormalEntryVariantsEnableAdvancedModeAndReachTerminal() throws {
+    let key = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("cmd+ctrl+["))
+    for suffix in ["", ", \"--persistent\"", ", \"--persistent=false\""] {
+      let config = ConfigLoader.parse(
+        """
+        [mode.all.mappings]
+        "cmd+ctrl+[" = ["flash", "enter_normal_mode"\(suffix)]
+        """)
+      XCTAssertTrue(config.loadingDiagnostics.isEmpty, suffix)
+      let action = try XCTUnwrap(config.mode.all.first?.action, suffix)
+      XCTAssertTrue(config.mode.containsAdvancedModeMapping, suffix)
+      XCTAssertTrue(config.mode.containsNormalModeMapping, suffix)
+      XCTAssertEqual(config.mode.compiledTerminal.mapping(for: key)?.action, action, suffix)
     }
   }
 
@@ -41,10 +77,15 @@ final class PassthroughConfigTests: XCTestCase {
     for mappings in [
       config.mode.compiledNormal, config.mode.compiledPassthrough, config.mode.compiledTerminal,
     ] {
-      XCTAssertEqual(mappings.mapping(for: normalKey)?.action.command, .normalMode)
+      XCTAssertEqual(
+        mappings.mapping(for: normalKey)?.action.command, .normalMode(persistent: false))
       XCTAssertEqual(mappings.mapping(for: passthroughKey)?.action.command, .passthroughMode)
     }
-    XCTAssertEqual(ModeReducer.reduce(.normal, .enterNormal(targetPID: nil)).0, .normal)
+    XCTAssertEqual(
+      ModeReducer.reduce(
+        .normal(persistent: false), .enterNormal(persistent: false, targetPID: nil)
+      ).0,
+      .normal(persistent: false))
     XCTAssertEqual(
       ModeReducer.reduce(.passthrough, .enterPassthrough(targetPID: nil)).0, .passthrough)
   }

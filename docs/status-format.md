@@ -16,7 +16,7 @@ enabled = true
 template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
 [statusbar.options]
-"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]"
+"@left" = "#[pill]#{flash.mode}#[nopill]"
 "@right" = "#{flash.plugin.cpu.summary} · %H:%M"
 ```
 
@@ -87,13 +87,10 @@ Flash supplies `flash.mode`, `flash.date`, `flash.active_app_name`,
 and the process environment are available through ordinary lookup.
 
 `flash.mode` is the mode label and is empty in PASSTHROUGH by default. Keep the
-pill present and fall back to the active app name, then `FLASH`, as above.
-`=/13/…` limits the app name to thirteen cells plus the ellipsis. The renderer
-centers the text at the widest configured mode-label width, including TERMINAL,
-with a minimum of fourteen cells, so no format padding is needed. PASSTHROUGH
-uses neutral styling; NORMAL and TERMINAL use their filled green/blue treatment
-and COMMAND remains purple. A centered active-app label outside the pill is
-independent of it.
+`#[pill]` marker present even with empty content: its compact reserved width
+keeps adjacent status content steady. PASSTHROUGH shows an empty neutral pill;
+NORMAL and TERMINAL use their filled green/blue treatment and COMMAND remains
+purple. A centered active-app label outside the pill is independent of it.
 
 Flash has no implicit tmux session, window, pane, client, or pane-history
 inventory. Their missing values expand to empty strings, loops over absent

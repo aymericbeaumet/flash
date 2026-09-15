@@ -396,7 +396,7 @@ extension OverlayPanel: NSTextFieldDelegate {
     var raw = commandTextField.stringValue
     // The `:` is the leading character of the buffer now; erasing it
     // (an empty field, or text that no longer starts with `:`) is the
-    // gesture that drops back to NORMAL.
+    // gesture that returns to passthrough.
     guard raw.hasPrefix(":") else {
       commandLineText = ""
       commandLineCursorIndex = 0
@@ -442,7 +442,7 @@ extension OverlayPanel: NSTextFieldDelegate {
       return true
     case #selector(NSResponder.deleteBackward(_:)):
       // Backspacing the lone `:` (or an already-empty field) erases the
-      // prompt and drops back to NORMAL. With a body present, let the
+      // prompt and returns to passthrough. With a body present, let the
       // field delete normally; controlTextDidChange catches the case
       // where that delete removes the leading colon.
       let value = commandTextField.stringValue
