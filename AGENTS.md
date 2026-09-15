@@ -112,6 +112,8 @@ Surface requests that would violate these constraints before implementing them.
   lateness is — slack is what lets wake-ups coalesce — and scope every
   registration to when it can observe anything (a subscriber present, the
   pointer in the band, the log level emitted), saying so where it is armed.
+- Keep native controls outside the custom layer-hosting drawing view. AppKit owns
+  their backing layers; transient recycling may replace only Flash's subtree.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,
   subprocesses, filesystem I/O, full layout and Carbon registration churn. With
   a live tap, recapture only restores NORMAL routing. Scope-only changes call

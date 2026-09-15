@@ -209,6 +209,13 @@ restores wait for the session: a window counts as restored only once its frame
 was read back in its slot, and one whose frame was unreadable stays pending
 until the session resumes or the window is focused.
 
+The overlay's AppKit-owned content view contains a layer-hosting drawing view
+and the native command editor as siblings. Flash replaces only the drawing
+view's `contentLayer.sublayers`; replacing the native container's sublayers
+detaches AppKit's editor backing layers during transient cleanup. The drawing
+view has no native subviews and resizes with the panel. This follows AppKit's
+[layer-hosting ownership contract](https://developer.apple.com/documentation/appkit/nsview/wantslayer).
+
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.
 Transient surfaces preserve their return state and obey advanced-mode eligibility.

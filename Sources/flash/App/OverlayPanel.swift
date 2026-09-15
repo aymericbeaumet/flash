@@ -605,8 +605,13 @@ final class OverlayPanel: NSPanel {
 
     let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
     view.wantsLayer = true
-    view.layer = contentLayer
-    contentLayer.frame = view.bounds
+    // AppKit owns the editor's layers; Flash only replaces the drawing subtree.
+    let drawingView = NSView(frame: view.bounds)
+    drawingView.layer = contentLayer
+    drawingView.wantsLayer = true
+    drawingView.autoresizingMask = [.width, .height]
+    view.addSubview(drawingView)
+    contentLayer.frame = drawingView.bounds
     contentLayer.actions = OverlayPanel.noActions
 
     debugShapeLayer.fillColor = NSColor.clear.cgColor
