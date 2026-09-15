@@ -130,7 +130,7 @@ enum PluginWireCodec {
   static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
     guard
       Set(raw.keys).isSubset(of: [
-        "id", "frame", "role", "label", "url", "pid", "enters_insert_mode", "priority",
+        "id", "frame", "role", "label", "url", "pid", "enters_passthrough_mode", "priority",
       ]),
       let id = raw["id"] as? String, !id.isEmpty,
       let frameRaw = raw["frame"] as? [String: Any],
@@ -144,12 +144,12 @@ enum PluginWireCodec {
       if let value = PluginJSON.present(raw[key]), !(value is String) { return nil }
     }
     let role = PluginJSON.present(raw["role"]) as? String
-    let entersInsertMode: Bool
-    if let value = PluginJSON.present(raw["enters_insert_mode"]) {
+    let entersPassthroughMode: Bool
+    if let value = PluginJSON.present(raw["enters_passthrough_mode"]) {
       guard let decoded = PluginJSON.boolean(value) else { return nil }
-      entersInsertMode = decoded
+      entersPassthroughMode = decoded
     } else {
-      entersInsertMode = JumpTarget.textInputRoles.contains(role ?? "")
+      entersPassthroughMode = JumpTarget.textInputRoles.contains(role ?? "")
     }
     let priority: FlashPriority
     if let value = PluginJSON.present(raw["priority"]) {
@@ -171,7 +171,8 @@ enum PluginWireCodec {
       id: id, frame: CGRect(x: x, y: y, width: width, height: height), role: role,
       label: PluginJSON.present(raw["label"]) as? String,
       url: PluginJSON.present(raw["url"]) as? String,
-      pid: pid, entersInsertMode: entersInsertMode, sourceID: sourceID, priority: priority)
+      pid: pid, entersPassthroughMode: entersPassthroughMode, sourceID: sourceID, priority: priority
+    )
   }
 
   /// Decode a complete catalog payload (`publish` rows or a `search` reply).

@@ -996,9 +996,9 @@ struct PluginManifest: Decodable, Equatable {
       }
     }
     for mapping in mappings {
-      guard ["all", "normal", "insert", "terminal"].contains(mapping.mode) else {
+      guard ["all", "normal", "passthrough", "terminal"].contains(mapping.mode) else {
         throw PluginError.failure(
-          "plugin mapping mode \(mapping.mode) must be all, normal, insert, or terminal")
+          "plugin mapping mode \(mapping.mode) must be all, normal, passthrough, or terminal")
       }
     }
     for prefix in query?.prefixes ?? [] {

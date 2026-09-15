@@ -112,7 +112,7 @@ enum PointerModeCommand: Equatable {
   case clickLeft
   case clickMiddle
   case clickRight
-  /// Return / space: left click, then exit pointer mode with the same INSERT
+  /// Return / space: left click, then exit pointer mode with the same PASSTHROUGH
   /// handoff as a mouse-grid commit.
   case commitClick
   /// `v`: press the primary button in place; the next toggle releases it —

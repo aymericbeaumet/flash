@@ -20,7 +20,7 @@ extension AppDelegate {
     case .terminal: dismissTerminal(restoreApplication: false)
     default: break
     }
-    cancelPointerInsertHandoff(reason: "hint_replaced")
+    cancelPointerPassthroughHandoff(reason: "hint_replaced")
     overlay.hide()
     clearHintSessionState()
     return true

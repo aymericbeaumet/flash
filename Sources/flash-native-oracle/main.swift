@@ -45,7 +45,7 @@ private func parseArgs() -> Args {
         Launches the Flash native AppKit fixture, compares Flash's generic
         AX targets against expected native controls, verifies AXPress state,
         and drives the installed Flash resident through real pointer
-        interactions to guard normal/insert mode handoff behavior.
+        interactions to guard normal/passthrough mode handoff behavior.
         """)
       exit(0)
     default:
@@ -576,14 +576,15 @@ private func runResidentModeProbe(
     postMouseClick(
       at: try targetCenter(label: "Primary Action", targets: targets), action: .leftClick)
     try waitForState(path: args.statePath, key: "primary", value: primaryBefore + 1, timeout: 4)
-    assertFlashMode("normal", args: args, recorder: recorder, label: "native button left click")
+    assertFlashMode(
+      "passthrough", args: args, recorder: recorder, label: "native button left click")
 
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
     postMouseClick(
       at: try targetCenter(label: "Native Search Field", targets: targets),
       action: .leftClick)
-    assertFlashMode("insert", args: args, recorder: recorder, label: "native text field click")
+    assertFlashMode("passthrough", args: args, recorder: recorder, label: "native text field click")
 
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)

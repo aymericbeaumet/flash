@@ -68,7 +68,7 @@ const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
 const SOURCE_WINDOWS: &str = "tmux.windows";
 const NAV_SCHEME: &str = "tmux";
 const PANE_TARGET_ROLE: &str = "tmux-pane";
-const TMUX_TARGET_ENTERS_INSERT_MODE: bool = false;
+const TMUX_TARGET_ENTERS_PASSTHROUGH_MODE: bool = false;
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 const ENV_PATH: &str = "/usr/bin/env";
@@ -2256,13 +2256,13 @@ fn build_target(
     role: &str,
     label: &str,
     pid: i64,
-    enters_insert_mode: bool,
+    enters_passthrough_mode: bool,
     priority: Priority,
 ) -> JumpTarget {
     JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
         .label(label)
-        .enters_insert_mode(enters_insert_mode)
+        .enters_passthrough_mode(enters_passthrough_mode)
         .pid(pid)
         .priority(priority)
 }
@@ -2420,7 +2420,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             PANE_TARGET_ROLE,
             &pane.id,
             pid,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
+            TMUX_TARGET_ENTERS_PASSTHROUGH_MODE,
             // Pane chips are the structural anchors of a tmux window, so the
             // renderer paints them in the accent style. Link chips below are
             // everyday clutter and stay in the default yellow.
@@ -2483,7 +2483,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             TERMINAL_LINK_ROLE,
             &link.text,
             pid,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
+            TMUX_TARGET_ENTERS_PASSTHROUGH_MODE,
             Priority::Normal,
         ));
     }
@@ -4720,7 +4720,7 @@ mod tests {
 
     #[test]
     fn extract_links_drops_dotted_code_identifiers() {
-        assert!(extract_links("JumpTarget.entersInsertMode", 1000).is_empty());
+        assert!(extract_links("JumpTarget.entersPassthroughMode", 1000).is_empty());
         assert!(extract_links("SomeType.someHTTPHandler", 1000).is_empty());
 
         assert_eq!(
@@ -4740,7 +4740,7 @@ mod tests {
             PANE_TARGET_ROLE,
             "%1",
             42,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
+            TMUX_TARGET_ENTERS_PASSTHROUGH_MODE,
             Priority::Urgent,
         );
         let link = build_target(
@@ -4752,14 +4752,14 @@ mod tests {
             TERMINAL_LINK_ROLE,
             "example.com",
             42,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
+            TMUX_TARGET_ENTERS_PASSTHROUGH_MODE,
             Priority::Normal,
         );
 
         assert_eq!(pane.role.as_deref(), Some("tmux-pane"));
-        assert_eq!(pane.enters_insert_mode, Some(false));
+        assert_eq!(pane.enters_passthrough_mode, Some(false));
         assert_eq!(link.role.as_deref(), Some("FlashTerminalLink"));
-        assert_eq!(link.enters_insert_mode, Some(false));
+        assert_eq!(link.enters_passthrough_mode, Some(false));
     }
 
     #[test]

@@ -21,7 +21,7 @@ enum EffectiveMappings {
     var effective = base
     effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)
     effective.normal = mergeScope(base: base.normal, plugin: plugin, scope: .normal)
-    effective.insert = mergeScope(base: base.insert, plugin: plugin, scope: .insert)
+    effective.passthrough = mergeScope(base: base.passthrough, plugin: plugin, scope: .passthrough)
     effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
     effective.recompileMappings()
     return effective

@@ -41,11 +41,13 @@ Hover previews a popup. Either unbound mouse button pins it open; repeated click
 keep it pinned. Existing left-click actions and links win, with right-click or
 Option-left-click available to pin. The configuration has no separate right-click
 binding. Focused documents support selection, copying, scrolling, and the shared
-terminal-mode mappings. `leave_mode` restores the prior mode and app.
+terminal-mode mappings. Configured `enter_normal_mode` and
+`enter_passthrough_mode` shortcuts select their named mode in the captured app;
+ordinary dismissal returns to PASSTHROUGH.
 
-For named process-backed terminals, Command-W hides, Command-R restarts, and
-Command-Q quits the child so automatic restart applies. Unnamed fresh shells
-end permanently on quit or hide. The native
+For persistent named terminals, Command-W hides, Command-R restarts, and
+Command-Q quits the child so automatic restart applies. Fresh shells and
+nonpersistent named terminals end permanently on quit or hide. The native
 metric documents have no process to restart.
 
 Feed headlines rotate newest first through the last 24 hours, sliding upward

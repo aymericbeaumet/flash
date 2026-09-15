@@ -17,19 +17,19 @@ import Foundation
 // what makes the state machine exhaustively unit-testable.
 enum Mode: Equatable {
   /// Advanced mode is OFF (the user has not bound a normal-mode hotkey).
-  /// Behaves like a non-capturing insert; the only way out is the config
+  /// Behaves like a non-capturing passthrough; the only way out is the config
   /// enabling advanced mode. Keeping this as its own case makes the illegal
   /// "advanced-off but in NORMAL" combination unrepresentable.
   case disabled
 
   /// Keyboard is handed to the focused app until an explicit mode change.
-  case insert
+  case passthrough
 
   /// The overlay owns the keyboard and interprets keys as commands.
   case normal
 
-  /// Command line / flashlight surface. `restoreTo` records where to land when
-  /// the surface closes.
+  /// Command line / flashlight surface. `restoreTo` preserves advanced-mode
+  /// eligibility while every dismissal returns keyboard ownership to the app.
   case command(scope: CommandScope, restoreTo: ReturnMode)
 
   /// A popup's local terminal view owns keyboard input; global mappings are suspended.
@@ -43,18 +43,15 @@ enum CommandScope: Equatable {
   case finder(all: Bool)
 }
 
-/// Where a transient surface (command / modal) returns to when it closes.
-/// A restricted projection of `Mode` — you can only return to a base mode.
+/// Surfaces always return input to the app; advanced eligibility remains explicit.
 enum ReturnMode: Equatable {
   case disabled
-  case insert
-  case normal
+  case passthrough
 
   var mode: Mode {
     switch self {
     case .disabled: return .disabled
-    case .insert: return .insert
-    case .normal: return .normal
+    case .passthrough: return .passthrough
     }
   }
 }
@@ -65,15 +62,14 @@ extension Mode {
   var asReturnMode: ReturnMode {
     switch self {
     case .disabled: return .disabled
-    case .insert: return .insert
-    case .normal: return .normal
+    case .passthrough, .normal: return .passthrough
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(_, let restoreTo), .terminal(let restoreTo): return restoreTo
     }
   }
 
-  var isInsert: Bool {
-    if case .insert = self { return true }
+  var isPassthrough: Bool {
+    if case .passthrough = self { return true }
     return false
   }
 

@@ -1,8 +1,8 @@
 import AppKit
 import FlashCore
 
-private enum PointerInsertHandoffOutcome {
-  case enteredInsert
+private enum PointerPassthroughHandoffOutcome {
+  case enteredPassthrough
   case recaptureNormal
 }
 
@@ -17,7 +17,7 @@ extension AppDelegate {
   }
 
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
-    cancelPointerInsertHandoff(reason: "new_pointer_interaction")
+    cancelPointerPassthroughHandoff(reason: "new_pointer_interaction")
     let pointIsInMenuBar: Bool
     let pointerClick: OverlayPointerClick?
     if case .click(let click) = intent {
@@ -64,12 +64,8 @@ extension AppDelegate {
     _ decision: NormalModePointerPolicy.AppClickDecision,
     click: OverlayPointerClick?
   ) {
-    // `finishCommandLineInteraction` (called via `cancelOverlay`) already
-    // restores the prior mode (the one that was active when the command
-    // line was entered), so forcing `enterInsertMode` there would clobber
-    // that restoration. Plain app clicks while NORMAL is capturing are
-    // different: the user deliberately chose the app with the pointer, so
-    // Flash releases keyboard capture and hands input to that app.
+    // Command dismissal already returns input to the app. A physical click
+    // while NORMAL captures also hands input to the clicked application.
     let clickedContext = click.flatMap { currentNonFlashContext(at: $0.location) }
     let targetPID =
       clickedContext?.processID ?? currentDirectNonFlashContext()?.processID
@@ -85,8 +81,8 @@ extension AppDelegate {
       return
     }
     let handoffToken: UInt64?
-    if decision.enterInsert {
-      handoffToken = notePointerInsertHandoff(reason: "physical_pointer_click")
+    if decision.enterPassthrough {
+      handoffToken = notePointerPassthroughHandoff(reason: "physical_pointer_click")
     } else {
       handoffToken = nil
     }
@@ -95,13 +91,13 @@ extension AppDelegate {
     } else {
       cancelOverlay()
     }
-    if decision.enterInsert {
+    if decision.enterPassthrough {
       // A physical left / double click ALWAYS hands the keyboard to the app and
-      // enters INSERT — no editability probe. The user clicked with the mouse to
+      // enters PASSTHROUGH — no editability probe. The user clicked with the mouse to
       // work in that app, so that intent is unconditional (unlike the `f`/`F`
       // keyboard-driven commits, which still gate on the target's role).
       // Right-click never reaches here; it suspends above.
-      resolvePointerInsertMode(
+      resolvePointerPassthroughMode(
         pid: targetPID,
         reason: .pointerClick,
         handoffToken: handoffToken,
@@ -110,16 +106,16 @@ extension AppDelegate {
         [weak self] outcome in
         guard let self else { return }
         switch outcome {
-        case .enteredInsert:
-          self.clearPointerInsertHandoff(
-            reason: "physical_pointer_entered_insert",
+        case .enteredPassthrough:
+          self.clearPointerPassthroughHandoff(
+            reason: "physical_pointer_entered_passthrough",
             token: handoffToken)
           // Deliver the click to the app too. When Flash was the active app
           // the original physical click is consumed by macOS as a focus
           // transfer and never reaches the control under the cursor, so the
           // target (e.g. a tmux status-bar tab in a terminal) sees the mode
-          // flip to INSERT but no actual click — the window/tab never
-          // switches. Re-synthesise it so entering INSERT *and* acting on the
+          // flip to PASSTHROUGH but no actual click — the window/tab never
+          // switches. Re-synthesise it so entering PASSTHROUGH *and* acting on the
           // click happen together. The forward guard already no-ops when Flash
           // wasn't active (the click reached the app on its own then), so this
           // can't double-deliver.
@@ -128,7 +124,7 @@ extension AppDelegate {
             click: click,
             targetPID: targetPID)
         case .recaptureNormal:
-          self.clearPointerInsertHandoff(
+          self.clearPointerPassthroughHandoff(
             reason: "physical_pointer_stayed_normal", token: handoffToken)
           self.forwardPhysicalPointerClickIfNeeded(
             decision: decision,
@@ -366,7 +362,7 @@ extension AppDelegate {
       for: hint.target,
       requested: hintSession.presetClickModifiers.union(clickModifiers))
     let wasNormalMode = flashMode == .normal
-    let actionMayEnterInsert = Self.pointerActionMayEnterInsert(action)
+    let actionMayEnterPassthrough = Self.pointerActionMayEnterPassthrough(action)
     if let pid {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
@@ -391,12 +387,12 @@ extension AppDelegate {
         + "shift:\(resolvedClickModifiers.contains(.shift)) "
         + "ctrl:\(resolvedClickModifiers.contains(.control)) "
         + "alt:\(resolvedClickModifiers.contains(.option)) "
-        + "enters_insert=\(hint.target.entersInsertMode)")
+        + "enters_passthrough=\(hint.target.entersPassthroughMode)")
 
-    let mayResolveInsert = wasNormalMode && actionMayEnterInsert
+    let mayResolvePassthrough = wasNormalMode && actionMayEnterPassthrough
     let handoffToken: UInt64?
-    if mayResolveInsert {
-      handoffToken = notePointerInsertHandoff(reason: "hint_commit")
+    if mayResolvePassthrough {
+      handoffToken = notePointerPassthroughHandoff(reason: "hint_commit")
     } else {
       handoffToken = nil
     }
@@ -426,22 +422,22 @@ extension AppDelegate {
         completion: finished)
     } completion: { [weak self] _ in
       guard let self else { return }
-      if mayResolveInsert {
-        self.resolvePointerInsertMode(
+      if mayResolvePassthrough {
+        self.resolvePointerPassthroughMode(
           pid: pid,
           reason: .hintCommit,
           handoffToken: handoffToken,
-          intent: .hintTarget(entersInsertMode: hint.target.entersInsertMode)
+          intent: .hintTarget(entersPassthroughMode: hint.target.entersPassthroughMode)
         ) {
           [weak self] outcome in
           guard let self else { return }
           switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(
-              reason: "hint_commit_entered_insert",
+          case .enteredPassthrough:
+            self.clearPointerPassthroughHandoff(
+              reason: "hint_commit_entered_passthrough",
               token: handoffToken)
           case .recaptureNormal:
-            self.clearPointerInsertHandoff(
+            self.clearPointerPassthroughHandoff(
               reason: "hint_commit_stayed_normal", token: handoffToken)
             guard self.flashMode == .normal else { return }
             self.restoreNormalModeAfterCommit(action: action)
@@ -469,7 +465,7 @@ extension AppDelegate {
   /// to route normal-mode keys after the menu dismisses, so we just
   /// refresh the badge + inputMode without poking the panel.
   private func restoreNormalModeAfterCommit(action: JumpAction) {
-    clearPointerInsertHandoff(reason: "restore_normal_after_commit")
+    clearPointerPassthroughHandoff(reason: "restore_normal_after_commit")
     if action == .rightClick {
       suspendNormalCaptureForNativeSurface(reason: "hint_right_click")
       return
@@ -636,7 +632,7 @@ extension AppDelegate {
       point: point, action: clickAction, modifiers: resolvedClickModifiers, pid: priorPID)
     let handoffToken: UInt64?
     if clickAction != .rightClick {
-      handoffToken = notePointerInsertHandoff(reason: "mouse_grid_commit")
+      handoffToken = notePointerPassthroughHandoff(reason: "mouse_grid_commit")
     } else {
       handoffToken = nil
     }
@@ -652,7 +648,7 @@ extension AppDelegate {
         // session the same instant it appears.
         self.suspendNormalCaptureForNativeSurface(reason: "mouse_grid_right_click")
       } else {
-        self.resolvePointerInsertMode(
+        self.resolvePointerPassthroughMode(
           pid: priorPID,
           reason: .pointerClick,
           handoffToken: handoffToken,
@@ -661,12 +657,13 @@ extension AppDelegate {
           [weak self] outcome in
           guard let self else { return }
           switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(
-              reason: "mouse_grid_entered_insert",
+          case .enteredPassthrough:
+            self.clearPointerPassthroughHandoff(
+              reason: "mouse_grid_entered_passthrough",
               token: handoffToken)
           case .recaptureNormal:
-            self.clearPointerInsertHandoff(reason: "mouse_grid_stayed_normal", token: handoffToken)
+            self.clearPointerPassthroughHandoff(
+              reason: "mouse_grid_stayed_normal", token: handoffToken)
             guard self.flashMode == .normal else { return }
             self.scheduleNormalModeRecapture()
           }
@@ -758,7 +755,7 @@ extension AppDelegate {
   }
 
   /// Fire the adjusted click. Mirrors the mouse-grid commit tail: the refined
-  /// point is pointer simulation, so a primary click enters INSERT
+  /// point is pointer simulation, so a primary click enters PASSTHROUGH
   /// unconditionally and a right-click suspends for the context menu.
   private func performAdjustedCommit(
     hint: AssignedHint,
@@ -781,7 +778,7 @@ extension AppDelegate {
     }
     let handoffToken: UInt64?
     if action != .rightClick {
-      handoffToken = notePointerInsertHandoff(reason: "adjust_commit")
+      handoffToken = notePointerPassthroughHandoff(reason: "adjust_commit")
     } else {
       handoffToken = nil
     }
@@ -794,7 +791,7 @@ extension AppDelegate {
       if action == .rightClick {
         self.suspendNormalCaptureForNativeSurface(reason: "adjust_right_click")
       } else {
-        self.resolvePointerInsertMode(
+        self.resolvePointerPassthroughMode(
           pid: pid,
           reason: .pointerClick,
           handoffToken: handoffToken,
@@ -802,10 +799,11 @@ extension AppDelegate {
         ) { [weak self] outcome in
           guard let self else { return }
           switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(reason: "adjust_entered_insert", token: handoffToken)
+          case .enteredPassthrough:
+            self.clearPointerPassthroughHandoff(
+              reason: "adjust_entered_passthrough", token: handoffToken)
           case .recaptureNormal:
-            self.clearPointerInsertHandoff(reason: "adjust_stayed_normal", token: handoffToken)
+            self.clearPointerPassthroughHandoff(reason: "adjust_stayed_normal", token: handoffToken)
             guard self.flashMode == .normal else { return }
             self.scheduleNormalModeRecapture()
           }
@@ -814,10 +812,10 @@ extension AppDelegate {
     }
   }
 
-  /// Insert-handoff tail for a pointer-mode committing click — identical to
+  /// Passthrough-handoff tail for a pointer-mode committing click — identical to
   /// the mouse-grid commit outcome handling.
-  func resolvePointerModeInsert(pid: pid_t?, handoffToken: UInt64?) {
-    resolvePointerInsertMode(
+  func resolvePointerModePassthrough(pid: pid_t?, handoffToken: UInt64?) {
+    resolvePointerPassthroughMode(
       pid: pid,
       reason: .pointerClick,
       handoffToken: handoffToken,
@@ -825,11 +823,11 @@ extension AppDelegate {
     ) { [weak self] outcome in
       guard let self else { return }
       switch outcome {
-      case .enteredInsert:
-        self.clearPointerInsertHandoff(
-          reason: "pointer_mode_entered_insert", token: handoffToken)
+      case .enteredPassthrough:
+        self.clearPointerPassthroughHandoff(
+          reason: "pointer_mode_entered_passthrough", token: handoffToken)
       case .recaptureNormal:
-        self.clearPointerInsertHandoff(
+        self.clearPointerPassthroughHandoff(
           reason: "pointer_mode_stayed_normal", token: handoffToken)
         guard self.flashMode == .normal else { return }
         self.scheduleNormalModeRecapture()
@@ -877,7 +875,7 @@ extension AppDelegate {
 
   /// One commit of a `--multi` session: perform the pending action on the
   /// selected target, then re-arm the same hint set for the next selection
-  /// instead of tearing the session down. The session never enters INSERT —
+  /// instead of tearing the session down. The session never enters PASSTHROUGH —
   /// multi-clicking is target manipulation, and a mode flip would end it.
   /// Escape (cancelOverlay) finishes the session.
   private func commitMultiClick(hint: AssignedHint, clickModifiers: ClickModifiers) {
@@ -917,7 +915,7 @@ extension AppDelegate {
   /// Phase 2 of a `--drag` / `--select` commit: both points are known, so tear
   /// the session down and synthesize the gesture — a continuous drag, or a
   /// click + shift-click selection. Both manipulate the pointer without typing
-  /// intent, so they never enter INSERT — NORMAL just recaptures once the
+  /// intent, so they never enter PASSTHROUGH — NORMAL just recaptures once the
   /// gesture has been posted.
   private func performTwoPhaseCommit(
     from source: CGPoint,
@@ -960,35 +958,35 @@ extension AppDelegate {
   }
 
   /// Resolve whether a primary pointer commit hands the keyboard to the focused
-  /// app (INSERT) or keeps NORMAL:
+  /// app (PASSTHROUGH) or keeps NORMAL:
   ///
   ///   - Physical and `mouse_grid` clicks are pointer simulation, so they enter
-  ///     INSERT unconditionally.
-  ///   - `mouse_target` hints honor `JumpTarget.entersInsertMode`. A link hint
+  ///     PASSTHROUGH unconditionally.
+  ///   - `mouse_target` hints honor `JumpTarget.entersPassthroughMode`. A link hint
   ///     stays in NORMAL even when its owning app (such as a terminal) already
   ///     exposes an editable focused element.
   ///
   /// Right-click never reaches here — it opens a context menu and stays in
   /// NORMAL via `suspendNormalCaptureForNativeSurface`.
-  private func resolvePointerInsertMode(
+  private func resolvePointerPassthroughMode(
     pid: pid_t?,
-    reason: InsertModeTransitionReason,
+    reason: PassthroughModeTransitionReason,
     handoffToken: UInt64? = nil,
-    intent: PointerInsertIntent,
-    completion: ((PointerInsertHandoffOutcome) -> Void)? = nil
+    intent: PointerPassthroughIntent,
+    completion: ((PointerPassthroughHandoffOutcome) -> Void)? = nil
   ) {
-    guard pointerInsertHandoffIsCurrent(handoffToken) else { return }
+    guard pointerPassthroughHandoffIsCurrent(handoffToken) else { return }
     guard flashMode == .normal else {
       completion?(.recaptureNormal)
       return
     }
-    guard intent.shouldEnterInsertMode else {
+    guard intent.shouldEnterPassthroughMode else {
       completion?(.recaptureNormal)
       return
     }
     let targetPID = pid ?? currentNonFlashContext()?.processID
-    enterInsertMode(reason: reason, targetPID: targetPID)
-    completion?(.enteredInsert)
+    enterPassthroughMode(reason: reason, targetPID: targetPID)
+    completion?(.enteredPassthrough)
   }
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
@@ -1181,9 +1179,7 @@ extension AppDelegate {
   }
 
   func overlayDidCancelCandidateFinder() {
-    clearCandidateFinderState()
-    overlay.hide()
-    applyModeOverlay()
+    finishCommandLineInteraction(reason: "finder_cancel")
   }
 
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {
@@ -1219,9 +1215,7 @@ extension AppDelegate {
     // wins, so arrowing onto a non-bang result opens it even when the query
     // still starts with `!`.
     if dispatchBangCandidate(candidate, query: finder.currentQuery) {
-      clearCandidateFinderState()
-      overlay.hide()
-      applyModeOverlay()
+      finishCommandLineInteraction(reason: "finder_bang_submit")
       return
     }
     openSourceItem(candidate)
@@ -1241,11 +1235,14 @@ extension AppDelegate {
   }
 
   func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
+    if case .command = modeStore.mode {
+      finishCommandLineInteraction(reason: "source_open")
+    }
     switch candidate.effect {
     case .copyText(let text):
       overlay.hide()
       resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      applyModeOverlay()
       NormalModeDispatcher.copy(text)
       return
     case .insertText(let text):
@@ -1254,7 +1251,7 @@ extension AppDelegate {
     case .openURL(let raw):
       overlay.hide()
       resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      applyModeOverlay()
       if let url = URL(string: raw), url.scheme != nil {
         NSWorkspace.shared.open(url)
       }
@@ -1262,7 +1259,7 @@ extension AppDelegate {
     case .openApplication(let bundleID):
       overlay.hide()
       resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      applyModeOverlay()
       if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
         NSWorkspace.shared.openApplication(
           at: appURL, configuration: NSWorkspace.OpenConfiguration())
@@ -1293,7 +1290,7 @@ extension AppDelegate {
     }
     overlay.hide()
     resetCommandLineState()
-    applyModeOverlay(captureOverride: true)
+    applyModeOverlay()
 
     registry.resolveCandidate(candidate) { [weak self] result in
       guard let self else { return }

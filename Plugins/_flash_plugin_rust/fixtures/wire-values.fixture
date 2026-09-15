@@ -376,11 +376,59 @@
             "url": null,
             "pid": null,
             "priority": null,
-            "enters_insert_mode": null
+            "enters_passthrough_mode": null
           }
         ]
       },
       "valid": true
+    },
+    {
+      "name": "passthrough-handoff",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "editable",
+            "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+            "enters_passthrough_mode": true
+          },
+          {
+            "id": "navigation",
+            "frame": { "x": 5, "y": 6, "width": 3, "height": 4 },
+            "role": "AXTextField",
+            "enters_passthrough_mode": false
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "nonboolean-passthrough-handoff",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "target",
+            "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+            "enters_passthrough_mode": 1
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "legacy-insert-handoff",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "target",
+            "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+            "enters_insert_mode": true
+          }
+        ]
+      },
+      "valid": false
     },
     {
       "name": "missing-id",

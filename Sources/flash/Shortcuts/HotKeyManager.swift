@@ -71,7 +71,7 @@ final class HotKeyManager {
   }
 
   /// Bring the registration set to exactly `desired` with the minimum Carbon
-  /// churn: chords that stay registered are untouched, so a NORMAL↔INSERT
+  /// churn: chords that stay registered are untouched, so a NORMAL↔PASSTHROUGH
   /// scope change or a config reload only touches the chords that actually
   /// differ. `onFire` receives the chord so callbacks stay mapping-independent
   /// and a kept registration dispatches whatever the current scope resolves.

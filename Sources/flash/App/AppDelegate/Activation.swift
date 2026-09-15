@@ -270,7 +270,7 @@ extension AppDelegate {
           frame: frame,
           role: "AXLink",
           url: url.absoluteString,
-          entersInsertMode: false,
+          entersPassthroughMode: false,
           providerID: "statusbar")
       case .hover(let name):
         return JumpTarget(
@@ -278,7 +278,7 @@ extension AppDelegate {
           frame: frame,
           role: Self.statusBarHoverHintRole,
           url: nil,
-          entersInsertMode: false,
+          entersPassthroughMode: false,
           providerID: "statusbar")
       }
     }
@@ -366,7 +366,7 @@ extension AppDelegate {
             frame: frame,
             role: "FlashScrollArea",
             url: nil,
-            entersInsertMode: false,
+            entersPassthroughMode: false,
             providerID: "scroll_target")
         }
         self.hintSession.sourceAppPID = pid
@@ -397,7 +397,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[overlay] cancel hints=\(hintSession.hints.count) in_flight=\(activationInFlight) "
         + "mode=\(flashMode) gen=\(activationGen) input=\(overlay.inputMode)")
-    if overlay.inputMode == .commandLine {
+    if case .command = modeStore.mode {
       finishCommandLineInteraction(reason: "cancel_overlay")
       return
     }
@@ -407,8 +407,8 @@ extension AppDelegate {
     if !hintSession.isActive && !activationInFlight {
       overlay.hide()
       let captureOverride =
-        Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-          until: pointerInsertHandoffRecaptureSuppressedUntil)
+        Self.pointerPassthroughHandoffRecaptureSuppressionIsActive(
+          until: pointerPassthroughHandoffRecaptureSuppressedUntil)
         ? false : nil
       applyModeOverlay(captureOverride: captureOverride)
       return

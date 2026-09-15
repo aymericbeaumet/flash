@@ -67,7 +67,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(pill.container.superlayer === surface.backgroundLayer)
     XCTAssertFalse(pill.container.isHidden)
     XCTAssertFalse(pill.pill.isHidden)
-    XCTAssertEqual(pill.pill.borderWidth, 1)
+    XCTAssertEqual(pill.pill.borderWidth, 0)
   }
 
   func testPooledLayersDrawNativeListsFillAndAbsoluteCentreAtCellPositions() {
@@ -108,11 +108,26 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(plain.layout.text.trimmingCharacters(in: .whitespaces), "N tail")
   }
 
-  func testModePillKeepsLegacyPointWidthCenteredLabelAndRetinaOutline() {
-    let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    let expectedWidth = CGFloat(7) * 13 * 0.66 + 16
+  func testEmptyPillDoesNotReserveCellsOrChangeOtherPills() {
+    var empty = FlashStatusTextSegment(text: "", foreground: .defaultForeground)
+    empty.pill = true
+    var other = FlashStatusTextSegment(text: "VPN", foreground: .defaultForeground)
+    other.pill = true
+    let text = FlashStatusTextSegment(text: "FEED", foreground: .defaultForeground)
+    let prepared = NativeStatusBarSurface.preparedDocument(
+      StatusFormatDocument(runs: [empty, text, other]), pillColumns: 10, hideCentre: false)
+
+    XCTAssertEqual(prepared.runs.count, 2)
+    XCTAssertEqual(prepared.runs.first?.text, "FEED")
+    XCTAssertEqual(prepared.runs.last?.text.trimmingCharacters(in: .whitespaces), "VPN")
+    XCTAssertEqual(prepared.runs.last?.pill, true)
+  }
+
+  func testActiveModePillsKeepConfiguredWidthAndCenteredLabelsWithoutAnOutline() {
+    let labels = Config.Mode.Labels(normal: "NORMAL", passthrough: "", command: "COMMAND")
+    let expectedWidth = CGFloat(14) * 13 * 0.66 + 16
     for (label, style) in [
-      ("NORMAL", OverlayModeBadgeStyle.normal), ("INSERT", .insert), ("TERMINAL", .normal),
+      ("NORMAL", OverlayModeBadgeStyle.normal), ("COMMAND", .command), ("TERMINAL", .terminal),
     ] {
       let surface = NativeStatusBarSurface()
       redraw(surface, "#[pill]\(label)#[nopill] tail", columns: 40, labels: labels, style: style)
@@ -121,7 +136,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       XCTAssertEqual(pill.pill.frame.width, expectedWidth, accuracy: 0.001)
       XCTAssertEqual(pill.pill.cornerRadius, 4)
       XCTAssertEqual(pill.pill.contentsScale, 2)
-      XCTAssertEqual(pill.pill.borderWidth, style == .normal ? 1 : 0)
+      XCTAssertEqual(pill.pill.borderWidth, 0)
       XCTAssertEqual(pill.text.alignmentMode, .center)
       XCTAssertEqual((pill.text.string as? NSAttributedString)?.string, label)
       XCTAssertEqual(pill.text.frame.midX, expectedWidth / 2, accuracy: 0.001)
@@ -129,6 +144,70 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
         surface.runLayers[1].container.frame.minX,
         OverlayPanel.statusBarEdgePadding + expectedWidth, accuracy: 0.001)
     }
+  }
+
+  func testModeAndAppPillsKeepOneFrameAcrossTransitions() {
+    let surface = NativeStatusBarSurface()
+    var initialFrames: [CGRect]?
+    for (label, style) in [
+      ("NORMAL", OverlayModeBadgeStyle.normal), ("Safari", .passthrough),
+      ("COMMAND", .command), ("Google Chrome", .passthrough), ("TERMINAL", .terminal),
+      ("Visual Studio…", .passthrough), ("FLASH", .passthrough), ("NORMAL", .normal),
+    ] {
+      redraw(
+        surface, "#[pill]\(label)#[nopill]FEED#[align=absolute-centre]Firefox",
+        columns: 60, style: style)
+      XCTAssertFalse(surface.runLayers[0].pill.isHidden)
+      XCTAssertEqual((surface.runLayers[0].text.string as? NSAttributedString)?.string, label)
+      XCTAssertEqual(surface.runLayers[0].text.alignmentMode, .center)
+      if let initialFrames {
+        XCTAssertEqual(surface.runFrames, initialFrames, "layout moved for \(label)")
+      } else {
+        initialFrames = surface.runFrames
+      }
+      if style == .passthrough {
+        XCTAssertEqual(
+          surface.runLayers[0].pill.colors as? [CGColor],
+          [OverlayPanel.passthroughPalette.bottomCG, OverlayPanel.passthroughPalette.topCG])
+        XCTAssertEqual(surface.runLayers[0].pill.borderWidth, 0)
+      }
+    }
+  }
+
+  func testConfiguredLongTerminalLabelReservesTheSameWidthInOtherModes() {
+    let labels = Config.Mode.Labels(
+      normal: "N", passthrough: "", command: "C", terminal: "TERMINAL SESSION")
+    let surface = NativeStatusBarSurface()
+    redraw(
+      surface, "#[pill]TERMINAL SESSION#[nopill]tail", columns: 60, labels: labels, style: .terminal
+    )
+    let terminalFrames = surface.runFrames
+    redraw(surface, "#[pill]N#[nopill]tail", columns: 60, labels: labels, style: .normal)
+    XCTAssertEqual(surface.runFrames, terminalFrames)
+    redraw(surface, "#[pill]Safari#[nopill]tail", columns: 60, labels: labels, style: .passthrough)
+    XCTAssertEqual(surface.runFrames, terminalFrames)
+  }
+
+  func testCompactLabelsKeepRoomForTheBoundedAppName() {
+    let labels = Config.Mode.Labels(normal: "N", passthrough: "", command: "C", terminal: "T")
+    let surface = NativeStatusBarSurface()
+    redraw(
+      surface, "#[pill]Visual Studio…#[nopill]tail", columns: 60, labels: labels,
+      style: .passthrough)
+    let appFrames = surface.runFrames
+    for (label, style) in [
+      ("N", OverlayModeBadgeStyle.normal), ("C", .command), ("T", .terminal),
+    ] {
+      redraw(surface, "#[pill]\(label)#[nopill]tail", columns: 60, labels: labels, style: style)
+      XCTAssertEqual(surface.runFrames, appFrames)
+    }
+  }
+
+  func testPassthroughKeepsUnrelatedNonemptyPillSpans() {
+    let surface = NativeStatusBarSurface()
+    redraw(surface, "#[pill]VPN#[nopill] online", columns: 40, style: .passthrough)
+    XCTAssertFalse(surface.runLayers[0].pill.isHidden)
+    XCTAssertEqual((surface.runLayers[0].text.string as? NSAttributedString)?.string, "VPN")
   }
 
   func testPillInteractionBoundsUseTheSamePointSpacingAsDrawnText() {
@@ -174,6 +253,24 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let hits = surface.interactionRects(panelFrame: .zero, popupTexts: [:], popupDocuments: [:])
     XCTAssertFalse(hits.links.isEmpty)
     XCTAssertTrue(hits.links.allSatisfy { !$0.rect.intersects(excluded) })
+  }
+
+  func testPhysicalNotchKeepsEachSideLaneOnItsOwnSide() {
+    let notch = CGRect(x: 330, y: 0, width: 150, height: 30)
+    let surface = render(
+      String(repeating: "L", count: 65)
+        + "#[align=absolute-centre]HIDDEN#[align=right]" + String(repeating: "R", count: 45),
+      columns: 100, notch: notch)
+    let excluded = notch.insetBy(dx: -OverlayPanel.statusBarNotchMargin, dy: 0)
+    for (index, run) in surface.visibleRuns.enumerated() {
+      if run.segment.text.contains("L") {
+        XCTAssertLessThanOrEqual(surface.runFrames[index].maxX, excluded.minX)
+      }
+      if run.segment.text.contains("R") {
+        XCTAssertGreaterThanOrEqual(surface.runFrames[index].minX, excluded.maxX)
+      }
+    }
+    XCTAssertFalse(surface.visibleRuns.map(\.segment.text).joined().contains("HIDDEN"))
   }
 
   func testOnlyClosedNativeRangesCreateActionsAndExplicitLinksHavePriority() {
@@ -357,6 +454,64 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(surface.layout.text.contains("CENTRE"))
   }
 
+  func testCenterSlotUsesConnectedNotchWidthOrFallbackAndBothMargins() {
+    XCTAssertEqual(NativeStatusBarSurface.minimumCentreWidth(notchWidths: [], margin: 6), 192)
+    XCTAssertEqual(
+      NativeStatusBarSurface.minimumCentreWidth(notchWidths: [180, 220], margin: 6), 232)
+    XCTAssertEqual(NativeStatusBarSurface.minimumCentreWidth(notchWidths: [220], margin: 10), 240)
+  }
+
+  func testCentreReservationHonorsMinimumAndKeepsWiderContent() {
+    let short = StatusFormatDocument.parse("L#[align=absolute-centre]APP#[align=right]R")
+    XCTAssertEqual(
+      NativeStatusBarSurface.centreReservation(short, columns: 80, minimumColumns: 24),
+      28..<52)
+    let wide = StatusFormatDocument.parse(
+      "L#[align=absolute-centre]" + String(repeating: "C", count: 30) + "#[align=right]R")
+    XCTAssertEqual(
+      NativeStatusBarSurface.centreReservation(wide, columns: 80, minimumColumns: 24).count,
+      30 + NativeStatusBarSurface.centreGutterColumns * 2)
+    let absent = StatusFormatDocument.parse("LEFT#[align=right]RIGHT")
+    XCTAssertTrue(
+      NativeStatusBarSurface.centreReservation(absent, columns: 80, minimumColumns: 24).isEmpty)
+  }
+
+  func testNotchSizedVirtualSlotKeepsSideLanesAwayWithoutStretchingCenterText() throws {
+    let minimumWidth: CGFloat = 200
+    let surface = render(
+      String(repeating: "L", count: 50)
+        + "#[align=absolute-centre]APP#[align=right]" + String(repeating: "R", count: 50),
+      columns: 80, minimumCentreWidth: minimumWidth)
+    let minimumColumns = Int(ceil(minimumWidth / surface.cellWidth))
+    let firstReservedColumn = (surface.availableColumns - minimumColumns) / 2
+    let lastReservedColumn = firstReservedColumn + minimumColumns
+    let centre = try XCTUnwrap(surface.visibleRuns.first { $0.segment.text == "APP" })
+    XCTAssertEqual(centre.columns, 3)
+    XCTAssertEqual(centre.column, (surface.availableColumns - 3) / 2)
+    for run in surface.visibleRuns {
+      if run.segment.text.contains("L") {
+        XCTAssertLessThanOrEqual(run.column + run.columns, firstReservedColumn)
+      }
+      if run.segment.text.contains("R") {
+        XCTAssertGreaterThanOrEqual(run.column, lastReservedColumn)
+      }
+    }
+  }
+
+  func testOrdinaryCentreRetainsItsPositionBetweenTheRemainingLanes() throws {
+    let source = "LLLL#[align=centre]APP#[align=right]" + String(repeating: "R", count: 40)
+    let surface = render(
+      source,
+      columns: 80, minimumCentreWidth: 200)
+    XCTAssertEqual(
+      surface.layout, StatusFormatLayout.layout(StatusFormatDocument.parse(source), columns: 80))
+    let left = try XCTUnwrap(surface.visibleRuns.first { $0.segment.text == "LLLL" })
+    let right = try XCTUnwrap(surface.visibleRuns.first { $0.segment.text.contains("R") })
+    let centre = try XCTUnwrap(surface.visibleRuns.first { $0.segment.text == "APP" })
+    let leftEnd = left.column + left.columns
+    XCTAssertEqual(centre.column, leftEnd + (right.column - leftEnd) / 2 - centre.columns / 2)
+  }
+
   /// The left lane loses its tail and the right lane its head, so each keeps
   /// the end that carries meaning.
   func testClampedLanesTrimTheEndAwayFromTheCentre() {
@@ -387,32 +542,46 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let document = StatusFormatDocument.parse("L#[align=absolute-centre]CENTRE#[align=right]R")
     XCTAssertTrue(NativeStatusBarSurface.centreReservation(document, columns: 16).isEmpty)
     XCTAssertFalse(NativeStatusBarSurface.centreReservation(document, columns: 60).isEmpty)
+    XCTAssertTrue(
+      NativeStatusBarSurface.centreReservation(document, columns: 16, minimumColumns: 24).isEmpty)
+    XCTAssertEqual(
+      NativeStatusBarSurface.centreReservation(document, columns: 20, minimumColumns: 24).count,
+      4)
   }
 
-  private func render(_ source: String, columns: Int, notch: CGRect? = nil)
+  private func render(
+    _ source: String, columns: Int, notch: CGRect? = nil, minimumCentreWidth: CGFloat = 0
+  )
     -> NativeStatusBarSurface
   {
     let surface = NativeStatusBarSurface()
-    redraw(surface, source, columns: columns, notch: notch)
+    redraw(surface, source, columns: columns, notch: notch, minimumCentreWidth: minimumCentreWidth)
     return surface
   }
 
   private func redraw(
     _ surface: NativeStatusBarSurface, _ source: String, columns: Int, notch: CGRect? = nil,
-    labels: Config.Mode.Labels = .init(normal: "N", insert: "INSERT", command: "COMMAND"),
-    style: OverlayModeBadgeStyle = .normal
+    labels: Config.Mode.Labels = .init(normal: "N", passthrough: "", command: "COMMAND"),
+    style: OverlayModeBadgeStyle = .normal, minimumCentreWidth: CGFloat = 0
   ) {
     let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
     let width =
       ("M" as NSString).size(withAttributes: [.font: font]).width * CGFloat(columns)
       + OverlayPanel.statusBarEdgePadding * 2 + 0.001
+    let palette: OverlayPanel.ModeBadgePalette
+    switch style {
+    case .normal: palette = OverlayPanel.normalPalette
+    case .passthrough: palette = OverlayPanel.passthroughPalette
+    case .terminal: palette = OverlayPanel.terminalPalette
+    case .command: palette = OverlayPanel.commandPaletteValue
+    }
     surface.render(
       document: StatusFormatDocument.parse(source),
       barFrame: CGRect(x: 0, y: 0, width: width, height: 26),
       screenFrame: CGRect(x: 0, y: 0, width: width, height: 900),
       scale: 2, notch: notch, font: font,
       labels: labels,
-      palette: style == .insert ? OverlayPanel.insertPalette : OverlayPanel.normalPalette,
-      modeStyle: style)
+      palette: palette,
+      modeStyle: style, minimumCentreWidth: minimumCentreWidth)
   }
 }

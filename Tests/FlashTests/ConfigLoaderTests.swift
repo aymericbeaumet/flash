@@ -7,15 +7,15 @@ import XCTest
 @testable import flash
 
 final class ConfigLoaderTests: XCTestCase {
-  func testModeTransitionsHaveNoDefaultMappings() {
+  func testModeTransitionsMustBeExplicitlyConfigured() {
     for config in [Config.default, ConfigLoader.parse("")] {
       for mappings in [
-        config.mode.all, config.mode.normal, config.mode.insert,
+        config.mode.all, config.mode.normal, config.mode.passthrough,
         config.mode.command, config.mode.terminal,
       ] {
         for mapping in mappings {
           switch mapping.action.command {
-          case .leaveMode?, .insertMode?, .commandMode?, .enterCommand?:
+          case .normalMode?, .leaveMode?, .passthroughMode?, .commandMode?, .enterCommand?:
             XCTFail("Mode transition must be explicitly configured: \(mapping.key)")
           default:
             break
@@ -31,18 +31,18 @@ final class ConfigLoaderTests: XCTestCase {
       [mode.all.mappings]
       "cmd+ctrl+<escape>" = ["flash", "leave_mode"]
       [mode.normal.mappings]
-      "i" = ["flash", "enter_insert_mode"]
+      "i" = ["flash", "enter_passthrough_mode"]
       ":" = ["flash", "enter_command_mode"]
       "<leader><space>" = ["flash", "enter_command_mode", "--input=flashlight "]
       """
     )
     XCTAssertTrue(config.diagnostics.isEmpty)
     XCTAssertEqual(config.mode.all.first?.action.command, .leaveMode)
-    XCTAssertEqual(config.mode.normal.first { $0.key == "i" }?.action.command, .insertMode)
+    XCTAssertEqual(config.mode.normal.first { $0.key == "i" }?.action.command, .passthroughMode)
     XCTAssertEqual(config.mode.normal.first { $0.key == key(":") }?.action.command, .commandMode)
     XCTAssertEqual(
       config.mode.normal.first { $0.key == key("\\<space>") }?.action.command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+      .enterCommand(input: "flashlight "))
   }
 
   func testCommandMappingsOverrideAllWithoutReplacingCommandTyping() {
@@ -51,7 +51,7 @@ final class ConfigLoaderTests: XCTestCase {
       [mode.all.mappings]
       "cmd+ctrl+<escape>" = ["flash", "leave_mode"]
       [mode.command.mappings]
-      "cmd+ctrl+<escape>" = ["flash", "enter_insert_mode"]
+      "cmd+ctrl+<escape>" = ["flash", "enter_passthrough_mode"]
       "ctrl+j" = ["flash", "enter_normal_mode"]
       "x" = ["flash", "leave_mode"]
       "gg" = ["flash", "leave_mode"]
@@ -59,7 +59,7 @@ final class ConfigLoaderTests: XCTestCase {
       """)
     XCTAssertEqual(config.mode.command.count, 2)
     XCTAssertEqual(
-      config.mode.command.first { $0.key == "cmd+ctrl+escape" }?.action.command, .insertMode)
+      config.mode.command.first { $0.key == "cmd+ctrl+escape" }?.action.command, .passthroughMode)
     XCTAssertEqual(config.mode.command.first { $0.key == "ctrl-j" }?.action.command, .normalMode)
     XCTAssertEqual(config.diagnostics.count, 3)
     XCTAssertTrue(
@@ -125,11 +125,12 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
       .copyURL)
-    for insertKey in ["a", "A", "i", "I", "o", "O", "gi"] {
-      XCTAssertNil(c.mode.normal.first(where: { $0.key == key(insertKey) }))
+    for entryKey in ["a", "A", "i", "I", "o", "O", "gi", "<escape>"] {
+      XCTAssertNil(c.mode.normal.first(where: { $0.key == key(entryKey) }))
     }
-    for mapping in c.mode.all + c.mode.normal + c.mode.insert + c.mode.command + c.mode.terminal {
-      XCTAssertNotEqual(mapping.action.command, .insertMode, mapping.key)
+    for mapping in c.mode.all + c.mode.normal + c.mode.passthrough + c.mode.command
+      + c.mode.terminal
+    {
       XCTAssertNotEqual(mapping.action.command, .focusInput, mapping.key)
     }
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
@@ -201,16 +202,16 @@ final class ConfigLoaderTests: XCTestCase {
         "expected removed default mapping \(rawKey) to stay unbound")
     }
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
-    XCTAssertEqual(c.mode.labels.insert, "INSERT")
+    XCTAssertEqual(c.mode.labels.passthrough, "")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
     XCTAssertTrue(c.mode.all.isEmpty)
-    XCTAssertTrue(c.mode.insert.isEmpty)
+    XCTAssertTrue(c.mode.passthrough.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
     XCTAssertEqual(
       c.statusBar.template.template,
       "#[align=left]#{E:@left}#[align=right]#{T:@right}")
-    XCTAssertEqual(c.statusBar.template.variables.count, 2)
+    XCTAssertEqual(c.statusBar.template.variables.count, 3)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
     XCTAssertTrue(c.flashlight.precedence.isEmpty)
@@ -320,7 +321,8 @@ final class ConfigLoaderTests: XCTestCase {
       t.template.trimmingCharacters(in: .whitespacesAndNewlines),
       "#[align=left]#{flash.mode}#[align=right]#{flash.plugin.ready_count} | #{flash.date}")
     XCTAssertEqual(
-      Set(t.variables.map(\.token)), ["flash.mode", "flash.plugin.ready_count", "flash.date"])
+      Set(t.variables.map(\.token)),
+      ["flash.mode", "flash.active_app_name", "flash.plugin.ready_count", "flash.date"])
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -430,11 +432,11 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [mode]
-      labels = { normal = "N", insert = "I", command = "C" }
+      labels = { normal = "N", passthrough = "I", command = "C" }
       """)
 
     XCTAssertEqual(c.mode.labels.normal, "N")
-    XCTAssertEqual(c.mode.labels.insert, "I")
+    XCTAssertEqual(c.mode.labels.passthrough, "I")
     XCTAssertEqual(c.mode.labels.command, "C")
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
@@ -443,7 +445,7 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [mode]
-      labels = { normal = "N", insert = "I" }
+      labels = { normal = "N", passthrough = "I" }
       """)
 
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
@@ -1051,14 +1053,14 @@ final class ConfigLoaderTests: XCTestCase {
 
   func testParsesModeMappings() {
     let toml = """
-      [mode.insert.mappings]
+      [mode.passthrough.mappings]
       "ctrl+alt+n" = [\"flash\", \"enter_normal_mode\"]
       [mode.normal.mappings]
       "j" = [\"flash\", \"scroll_up\"]
       """
     let c = ConfigLoader.parse(toml)
-    XCTAssertEqual(c.mode.insert.count, 1)
-    XCTAssertEqual(c.mode.insert[0].action.command, .normalMode)
+    XCTAssertEqual(c.mode.passthrough.count, 1)
+    XCTAssertEqual(c.mode.passthrough[0].action.command, .normalMode)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
     XCTAssertTrue(c.mode.containsNormalModeMapping)
     XCTAssertFalse(c.mode.containsAdvancedModeMapping)
@@ -1108,12 +1110,12 @@ final class ConfigLoaderTests: XCTestCase {
       """)
     XCTAssertTrue(inAll.mode.containsAdvancedModeMapping)
 
-    let inInsert = ConfigLoader.parse(
+    let inPassthrough = ConfigLoader.parse(
       """
-      [mode.insert.mappings]
+      [mode.passthrough.mappings]
       "cmd+ctrl+n" = [\"flash\", \"enter_normal_mode\"]
       """)
-    XCTAssertFalse(inInsert.mode.containsAdvancedModeMapping)
+    XCTAssertFalse(inPassthrough.mode.containsAdvancedModeMapping)
 
     let inNormalOnly = ConfigLoader.parse(
       """
@@ -1151,11 +1153,11 @@ final class ConfigLoaderTests: XCTestCase {
       .reload(force: false))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("<space><space>") })?.action.command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+      .enterCommand(input: "flashlight "))
     XCTAssertNil(
       c.mode.normal.first(where: {
         $0.key == key("\\<space>")
-          && $0.action.command == .enterCommand(input: "flashlight ", restoreMode: false)
+          && $0.action.command == .enterCommand(input: "flashlight ")
       }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
     XCTAssertTrue(c.warnings.isEmpty)
@@ -1172,7 +1174,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.normalLeader, "<backslash>")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+      .enterCommand(input: "flashlight "))
     XCTAssertTrue(c.warnings.isEmpty)
   }
 
@@ -1510,7 +1512,7 @@ final class ConfigLoaderTests: XCTestCase {
     let oversize = ConfigLoader.parse(
       """
       [mode]
-      labels = { normal = "\(String(repeating: "N", count: 40))", insert = "I", command = "C" }
+      labels = { normal = "\(String(repeating: "N", count: 40))", passthrough = "I", command = "C" }
       """)
     XCTAssertEqual(oversize.mode.labels, Config().mode.labels)
     XCTAssertTrue(
@@ -1519,7 +1521,7 @@ final class ConfigLoaderTests: XCTestCase {
     let unknown = ConfigLoader.parse(
       """
       [mode]
-      labels = { normal = "N", insert = "I", command = "C", foo = "X" }
+      labels = { normal = "N", passthrough = "I", command = "C", foo = "X" }
       """)
     XCTAssertEqual(unknown.mode.labels.normal, "N")
     XCTAssertTrue(

@@ -253,7 +253,7 @@ struct FlashStatusBarContext {
   init(
     activeAppName: String = "",
     activeBundleIdentifier: String = "",
-    modeLabel: String = "INSERT",
+    modeLabel: String = "",
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),

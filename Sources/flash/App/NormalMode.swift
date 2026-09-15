@@ -5,7 +5,7 @@ import FlashCore
 import FlashProviders
 
 enum FlashMode: Equatable {
-  case insert
+  case passthrough
   case normal
 }
 
@@ -119,8 +119,8 @@ enum NormalModeInterpreter {
     // A repeatable mapping keeps only its completed key sequence as an anchor.
     // Pressing the same final atom dispatches it again; any other key drops the
     // anchor and is interpreted normally from scratch. The overlay expires the
-    // anchor with `sequence_timeout_ms`, so a later standalone `a` remains the
-    // regular insert-mode mapping after `[a`.
+    // anchor with `sequence_timeout_ms`, so a later standalone final atom
+    // follows its own mapping.
     if pending.isEmpty,
       let repeatAnchor,
       let mapping = mappings.mapping(for: repeatAnchor),
@@ -187,11 +187,9 @@ enum NormalModeInterpreter {
     // The new key can't extend the pending sequence to anything
     // mapped. If we have a pending prefix, drop it and re-interpret
     // the key from scratch — matches Vim's fallback when a multi-key
-    // sequence is broken by an unmappable continuation. Without this,
-    // pressing `g` and then `i` would silently swallow the `i`
-    // instead of entering insert mode (no `gi` mapping, no `gi…`
-    // extension, so the for-loop falls through and the new key is
-    // lost). The recursion bottoms out immediately: the recursive
+    // sequence is broken by an unmappable continuation. For example,
+    // `[r` is unmapped, but the standalone `r` still reloads.
+    // The recursion bottoms out immediately: the recursive
     // call passes an empty `pending`, so it can't re-enter this
     // branch.
     if !state.prefix.isEmpty {
@@ -204,10 +202,8 @@ enum NormalModeInterpreter {
         charactersIgnoringModifiers: charactersIgnoringModifiers,
         mappings: mappings)
     }
-    // The interpreter's fallback is always consume. The keyboard tap decides
-    // before this point whether an unmapped modified chord should instead pass
-    // through and move Flash to INSERT; when that config is disabled, this
-    // keeps NORMAL hermetic.
+    // NORMAL owns every unclaimed key until an explicit exit returns input
+    // to the app.
     return .consume
   }
 

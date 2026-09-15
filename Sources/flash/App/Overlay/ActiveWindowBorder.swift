@@ -2,7 +2,7 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// Insert-mode active-window border ("we're focused here"). The frame
+/// Active-mode window border ("Flash owns input here"). The frame
 /// is supplied by `AppDelegate` from `AppMonitor`'s focused-window
 /// frame and re-painted whenever AX fires a window-move/resize.
 extension OverlayPanel {
@@ -44,7 +44,7 @@ extension OverlayPanel {
     activeWindowBorderLayer.strokeColor = color
     activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
     activeWindowBorderLayer.lineWidth = lineWidth
-    // Soft, static glow (insert mode): a zero-offset shadow tinted with the
+    // Soft, static glow: a zero-offset shadow tinted with the
     // stroke color makes the border read as gently lit, without animating.
     if glow {
       activeWindowBorderLayer.shadowColor = color
@@ -86,7 +86,7 @@ extension OverlayPanel {
   ///
   /// The stroke is centered on the path, so the OUTER edge sits at
   /// `pathInset − lineWidth/2`. To keep that outer edge at a fixed `outerInset`
-  /// inside the window edge — identical in normal (1px) and insert (3px) — while
+  /// inside the window edge for every mode and configured width, while
   /// only the INNER edge grows with `lineWidth`, the path inset is
   /// `outerInset + lineWidth/2`. (For the historical 2px width this equals the
   /// old `inset = lineWidth`.) The outer inset also keeps the border from

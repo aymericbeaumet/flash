@@ -6,7 +6,7 @@ import XCTest
 
 final class TerminalModeTests: XCTestCase {
   func testTerminalOwnsNoOverlayOrGlobalMappings() {
-    for base in [Mode.disabled, .normal, .insert] {
+    for base in [Mode.disabled, .normal, .passthrough] {
       let (mode, effects) = ModeReducer.reduce(base, .openTerminal)
       XCTAssertEqual(mode, .terminal(restoreTo: base.asReturnMode))
       XCTAssertFalse(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
@@ -19,11 +19,11 @@ final class TerminalModeTests: XCTestCase {
     }
   }
 
-  func testFocusLossRestoresBaseWithoutActivatingAnotherApp() {
-    for base in [Mode.disabled, .normal, .insert] {
+  func testFocusLossReturnsToPassthroughWithoutActivatingAnotherApp() {
+    for base in [Mode.disabled, .normal, .passthrough] {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: nil))
-      XCTAssertEqual(mode, base)
+      XCTAssertEqual(mode, base.asReturnMode.mode)
       XCTAssertTrue(effects.contains(.hideTerminalPopup))
       XCTAssertFalse(
         effects.contains {
@@ -33,11 +33,11 @@ final class TerminalModeTests: XCTestCase {
     }
   }
 
-  func testExplicitPopupCloseRestoresPriorAppBeforeBaseModeRendering() {
-    for base in [Mode.disabled, .normal, .insert] {
+  func testExplicitPopupCloseRestoresPriorAppBeforePassthroughRendering() {
+    for base in [Mode.disabled, .normal, .passthrough] {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode), .closeTerminal(targetPID: 42))
-      XCTAssertEqual(mode, base)
+      XCTAssertEqual(mode, base.asReturnMode.mode)
       XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
       XCTAssertEqual(effects.filter { $0 == .activateFocusedApp(pid: 42) }.count, 1)
       XCTAssertLessThan(
@@ -47,7 +47,7 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testPopupCloseOutsideTerminalDoesNotActivateApp() {
-    for base in [Mode.disabled, .normal, .insert] {
+    for base in [Mode.disabled, .normal, .passthrough] {
       let (mode, effects) = ModeReducer.reduce(base, .closeTerminal(targetPID: 42))
       XCTAssertEqual(mode, base)
       XCTAssertTrue(effects.isEmpty)
@@ -56,7 +56,7 @@ final class TerminalModeTests: XCTestCase {
 
   func testTerminalExitActivatesPriorAppBeforeNormalCapture() {
     let (mode, effects) = ModeReducer.reduce(
-      .terminal(restoreTo: .insert), .enterNormal(targetPID: 42))
+      .terminal(restoreTo: .passthrough), .enterNormal(targetPID: 42))
     XCTAssertEqual(mode, .normal)
     XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
     XCTAssertLessThan(
@@ -64,10 +64,10 @@ final class TerminalModeTests: XCTestCase {
       effects.firstIndex(of: .renderSurface)!)
   }
 
-  func testTerminalInheritsOnlyWinningInsertExitMappings() {
+  func testTerminalInheritsOnlyWinningPassthroughExitMappings() {
     var mode = Config.Mode()
     mode.all = [mapping("x", .commandMode), mapping("y", .normalMode)]
-    mode.insert = [mapping("x", .normalMode), mapping("z", .normalMode)]
+    mode.passthrough = [mapping("x", .normalMode), mapping("z", .normalMode)]
     mode.terminal = [mapping("z", .commandMode)]
     mode.recompileMappings()
     XCTAssertEqual(mode.compiledTerminal.mapping(for: "x")?.action.command, .normalMode)
@@ -78,13 +78,13 @@ final class TerminalModeTests: XCTestCase {
 
   func testPluginPrecedenceIsResolvedBeforeTerminalDefaultsAreInherited() {
     var base = Config.Mode()
-    base.insert = [mapping("x", .normalMode), mapping("y", .commandMode)]
+    base.passthrough = [mapping("x", .normalMode), mapping("y", .commandMode)]
     base.terminal = [mapping("z", .normalMode)]
     let merged = EffectiveMappings.merge(
       base: base,
       plugin: [
-        (25, .insert, mapping("x", .commandMode)),
-        (25, .insert, mapping("y", .normalMode)),
+        (25, .passthrough, mapping("x", .commandMode)),
+        (25, .passthrough, mapping("y", .normalMode)),
         (25, .terminal, mapping("z", .commandMode)),
       ])
     XCTAssertNil(merged.compiledTerminal.mapping(for: "x"))
@@ -92,11 +92,11 @@ final class TerminalModeTests: XCTestCase {
     XCTAssertEqual(merged.compiledTerminal.mapping(for: "z")?.action.command, .commandMode)
   }
 
-  func testPhysicalChordAliasesCannotBypassInsertPrecedence() {
+  func testPhysicalChordAliasesCannotBypassPassthroughPrecedence() {
     var mode = Config.Mode()
     mode.terminal = []
     mode.all = [mapping("cmd+esc", .commandMode)]
-    mode.insert = [mapping("cmd+escape", .normalMode)]
+    mode.passthrough = [mapping("cmd+escape", .normalMode)]
     mode.recompileMappings()
     XCTAssertEqual(mode.effectiveTerminalMappings, [mapping("cmd+escape", .normalMode)])
 
@@ -124,7 +124,7 @@ final class TerminalModeTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [mode]
-      labels = { normal = "N", insert = "I", command = "C", terminal = "TTY" }
+      labels = { normal = "N", passthrough = "I", command = "C", terminal = "TTY" }
       [mode.terminal.mappings]
       "gg" = ["flash", "enter_normal_mode"]
       "<leader>x" = ["flash", "enter_normal_mode"]
@@ -141,7 +141,7 @@ final class TerminalModeTests: XCTestCase {
   }
 
   func testConfigReloadKeepsTerminalInputAndUpdatesItsReturnMode() {
-    let initial = Mode.terminal(restoreTo: .normal)
+    let initial = Mode.terminal(restoreTo: .passthrough)
     let (disabled, effects) = ModeReducer.reduce(initial, .advancedModeChanged(enabled: false))
     XCTAssertEqual(disabled, .terminal(restoreTo: .disabled))
     XCTAssertEqual(effects, [.renderSurface])
@@ -217,6 +217,38 @@ final class TerminalModeTests: XCTestCase {
     XCTAssertEqual(
       config.mode.compiledTerminal.mapping(for: key)?.action.command,
       .terminalRestart(name: nil))
+  }
+
+  func testDedicatedModeChordsReachTerminalWhileBareEscapeAndIRemainNative() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+ctrl+[" = ["flash", "enter_normal_mode"]
+      "cmd+ctrl+i" = ["flash", "enter_passthrough_mode"]
+      """)
+    var commands: [URLCommand] = []
+    var replayed: [UInt16] = []
+    let handler = TerminalInputMappingHandler<String>(
+      mappings: config.mode.compiledTerminal, timeoutMs: 1000,
+      replay: { event, _ in replayed.append(event.keyCode) },
+      dispatch: { mapping, _ in
+        if let command = mapping.action.command { commands.append(command) }
+      })
+    for (keyCode, characters, ignoring, modifiers) in [
+      (kVK_ANSI_LeftBracket, "\u{1b}", "[", NSEvent.ModifierFlags([.command, .control])),
+      (kVK_ANSI_I, "\t", "i", [.command, .control]),
+      (kVK_Escape, "\u{1b}", "\u{1b}", []),
+      (kVK_ANSI_I, "i", "i", []),
+    ] {
+      let event = try XCTUnwrap(
+        NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: modifiers,
+          timestamp: 0, windowNumber: 0, context: nil, characters: characters,
+          charactersIgnoringModifiers: ignoring, isARepeat: false, keyCode: UInt16(keyCode)))
+      handler.handle(event: event, origin: "popup")
+    }
+    XCTAssertEqual(commands, [.normalMode, .passthroughMode])
+    XCTAssertEqual(replayed, [UInt16(kVK_Escape), UInt16(kVK_ANSI_I)])
   }
 
   private func mapping(_ key: String, _ command: URLCommand) -> ModeMapping {

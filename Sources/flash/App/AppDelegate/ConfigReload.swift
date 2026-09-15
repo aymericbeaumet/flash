@@ -208,7 +208,7 @@ extension AppDelegate {
       statusBarController?.stop()
     }
     // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
-    // off drops to a non-capturing insert; the reducer re-renders either way.
+    // off drops to a non-capturing passthrough; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
     applyModeOverlay()
     // Recompute the effective mappings (config defaults + plugin mappings)

@@ -2,10 +2,9 @@ import AppKit
 import ApplicationServices
 import FlashCore
 
-// Active-window border: paints a colored stroke around the focused app's
-// frontmost window so the user always knows which window is active — a thin
-// green stroke in normal mode, a thicker blue one in insert. Especially useful
-// for apps with several windows. Focused-window AX and workspace lifecycle
+// Active modes paint a colored stroke around their input target: the focused
+// app in NORMAL/COMMAND, or the popup itself in TERMINAL. PASSTHROUGH is quiet.
+// Focused-window AX and workspace lifecycle
 // notifications drive immediate updates; bounded one-shot WindowServer checks
 // after those events absorb delayed state propagation without a resident poll.
 // The static helpers below are pure decision functions so NormalModeTests can
@@ -24,12 +23,21 @@ extension AppDelegate {
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
+        modeStyle: modeStore.mode.badgeStyle,
         hasHints: hintSession.isActive,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
     else {
       hideActiveWindowBorder(reason: "hidden_\(reason)")
       return
     }
+    if modeStore.mode.isTerminal {
+      hideActiveWindowBorder(reason: "terminal_\(reason)")
+      let style = resolvedActiveWindowBorderStyle()
+      overlay.statusPopupController.setActiveModeBorder(
+        color: style.color, lineWidth: style.lineWidth, glow: style.glow)
+      return
+    }
+    overlay.statusPopupController.setActiveModeBorder()
     FlashLog.trace("[mode] active_border_update reason=\(reason) mode=\(flashMode)")
     // Identity resolves on main; the WindowServer frame lookup is a
     // synchronous round trip, so it runs on the geometry queue and the stroke
@@ -63,6 +71,7 @@ extension AppDelegate {
   func hideActiveWindowBorder(reason: String) {
     activeWindowBorderUpdateGeneration &+= 1
     overlay.setActiveWindowBorder(around: nil)
+    overlay.statusPopupController.setActiveModeBorder()
     activeWindowBorderTrackedFrame = nil
     cancelActiveWindowBorderReconciliations(reason: reason)
   }
@@ -73,10 +82,11 @@ extension AppDelegate {
   }
 
   func scheduleActiveWindowBorderReconciliation(delaysMs: [Int], reason: String) {
-    guard !delaysMs.isEmpty,
+    guard !delaysMs.isEmpty, !modeStore.mode.isTerminal,
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
+        modeStyle: modeStore.mode.badgeStyle,
         hasHints: hintSession.isActive,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
     else { return }
@@ -97,10 +107,15 @@ extension AppDelegate {
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
+        modeStyle: modeStore.mode.badgeStyle,
         hasHints: hintSession.isActive,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
     else {
       hideActiveWindowBorder(reason: "reconcile_state")
+      return
+    }
+    if modeStore.mode.isTerminal {
+      updateActiveWindowBorder(reason: reason)
       return
     }
 
@@ -152,19 +167,15 @@ extension AppDelegate {
   static func activeWindowBorderShouldBeVisible(
     configEnabled: Bool,
     modeBadgeEnabled: Bool,
+    modeStyle: OverlayModeBadgeStyle,
     hasHints: Bool,
     sessionActive: Bool
   ) -> Bool {
-    // The active window carries a frame in BOTH modes — a thin green stroke in
-    // normal, a thicker blue one in insert — so the focused window stays
-    // identifiable (most useful for apps with several windows). The user can
-    // opt out wholesale (`[overlay] window_border = false`). Advanced mode
-    // (an all-mode `leave_mode` or `enter_normal_mode` binding) is the gate: without it
-    // there's no normal/insert distinction to visualise. Suspended while hints
-    // are up (chips aren't double-framed) and whenever the user session or
-    // displays are inactive, so Flash never survives over the lock surface.
+    // Only active Flash modes draw emphasis. Hints and inactive user sessions
+    // suppress it; the configured window-border switch remains the opt-out.
     guard configEnabled else { return false }
-    guard modeBadgeEnabled else { return false }
+    guard modeBadgeEnabled || modeStyle == .terminal else { return false }
+    guard modeStyle != .passthrough else { return false }
     if hasHints { return false }
     if !sessionActive { return false }
     return true
@@ -192,10 +203,8 @@ extension AppDelegate {
       || bundleIdentifier.hasPrefix("com.apple.ScreenSaver")
   }
 
-  /// Border stroke style per badge style: a thin green stroke in normal, a thin
-  /// purple one in command (the mode-badge accents), and a thicker,
-  /// softly-glowing blue one in insert. Normal and command share insert's outer
-  /// edge — only insert grows inward (see `activeWindowBorderLocalRect`).
+  /// Active modes share the same stroke weight and focus glow; their colors
+  /// match the mode pills.
   static func activeWindowBorderStyle(
     for badgeStyle: OverlayModeBadgeStyle,
     sizeOverride: Double = 0,
@@ -205,9 +214,10 @@ extension AppDelegate {
   {
     var style: (color: CGColor, lineWidth: CGFloat, glow: Bool)
     switch badgeStyle {
-    case .normal: style = (OverlayPanel.nordAuroraGreenCG, 1, false)
-    case .insert: style = (OverlayPanel.nordFrost2CG, 2, true)
-    case .command: style = (OverlayPanel.nordAuroraPurpleCG, 1, false)
+    case .normal: style = (OverlayPanel.nordAuroraGreenCG, 2, true)
+    case .terminal: style = (OverlayPanel.nordFrost2CG, 2, true)
+    case .passthrough: return (NSColor.clear.cgColor, 0, false)
+    case .command: style = (OverlayPanel.nordAuroraPurpleCG, 2, true)
     }
     // `[overlay] window_border_size` / `window_border_color` apply across
     // every mode; the defaults (0 / nil) keep the per-mode identity above.
@@ -248,7 +258,7 @@ extension AppDelegate {
   }
 
   /// Mode is global/sticky, so the border target is simply the currently
-  /// focused non-Flash app (the old per-insert "owner pid" is gone). Identity
+  /// focused non-Flash app. Identity
   /// only — no WindowServer geometry.
   private func activeWindowBorderApplication() -> NSRunningApplication? {
     guard let app = currentNonFlashRunningApplication(),

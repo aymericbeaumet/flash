@@ -8,15 +8,15 @@ final class ModeStoreTests: XCTestCase {
     var observed: [Mode] = []
     store.perform = { _, _, next in
       observed.append(next)
-      if next == .insert {
+      if next == .passthrough {
         store.dispatch(.openTerminal)
-        XCTAssertEqual(store.mode, .insert)
+        XCTAssertEqual(store.mode, .passthrough)
         observed.append(store.mode)
       }
     }
-    store.dispatch(.enterInsert(targetPID: nil))
-    XCTAssertEqual(observed, [.insert, .insert, .terminal(restoreTo: .insert)])
-    XCTAssertEqual(store.mode, .terminal(restoreTo: .insert))
+    store.dispatch(.enterPassthrough(targetPID: nil))
+    XCTAssertEqual(observed, [.passthrough, .passthrough, .terminal(restoreTo: .passthrough)])
+    XCTAssertEqual(store.mode, .terminal(restoreTo: .passthrough))
   }
 
   func testConfigReconciliationDoesNotPerformModeEntry() {

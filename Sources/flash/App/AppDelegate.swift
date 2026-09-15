@@ -3,7 +3,7 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 
-enum InsertModeTransitionReason: Equatable {
+enum PassthroughModeTransitionReason: Equatable {
   case explicitCommand
   case normalModeInput
   case pointerClick
@@ -138,9 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
   /// projection of `modeStore.mode`; transitions go through `dispatchMode`.
   let modeStore = ModeStore()
-  /// The coarse insert/normal axis, projected from the unified mode.
+  /// The coarse passthrough/normal axis, projected from the unified mode.
   var flashMode: FlashMode { modeStore.mode.flashMode }
-  /// Advanced mode (the normal/insert system) is configured — true unless the
+  /// Advanced mode (the normal/passthrough system) is configured — true unless the
   /// mode is `.disabled`, i.e. the user has an all-mode `leave_mode` or `enter_normal_mode` binding.
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
@@ -221,11 +221,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     get { recaptureSuppression.contextMenuUntil }
     set { recaptureSuppression.contextMenuUntil = newValue }
   }
-  var pointerInsertHandoffRecaptureSuppressedUntil: Date? {
-    get { recaptureSuppression.pointerInsertHandoffUntil }
-    set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
+  var pointerPassthroughHandoffRecaptureSuppressedUntil: Date? {
+    get { recaptureSuppression.pointerPassthroughHandoffUntil }
+    set { recaptureSuppression.pointerPassthroughHandoffUntil = newValue }
   }
-  var pointerInsertHandoffToken: UInt64 = 0
+  var pointerPassthroughHandoffToken: UInt64 = 0
   /// True while a native surface (context menu / OS popup) owns the keyboard.
   /// The sole non-base-mode input to the capture projection — set by
   /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
@@ -440,8 +440,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       restartStatusTerminal(named: name)
     case .terminalQuit(let name):
       quitStatusTerminal(named: name)
-    case .insertMode:
-      enterInsertMode()
+    case .passthroughMode:
+      enterPassthroughMode()
     case .commandMode:
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
@@ -898,29 +898,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
-  /// thread. INSERT is never touched (keys flow straight to the focused app);
-  /// NORMAL is hermetic and captures every key, modified chords included:
+  /// thread. Idle PASSTHROUGH leaves native typing untouched; active hint
+  /// sessions and NORMAL capture keys, modified chords included:
   /// `normalModeMappings` carries the same compiled set the Carbon registry does,
   /// and the session tap swallows the event before Carbon dispatch, so there's no
   /// double-fire. Command-line / modal / candidate-finder own the key window and
   /// type into their own fields, so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
     if case .terminal = modeStore.mode { return false }
-    // INSERT is transparent so typing flows to the focused app. But a modified
-    // chord bound to an active mapping (`[mode.all]` / `[mode.insert]`) must
-    // still fire Flash's action. Historically that went only through a Carbon
-    // hotkey — a slower keypress→dispatch route than this session tap — which
-    // is why *leaving* insert (⌘⌃[ → NORMAL) lagged while *entering* it (`i`,
-    // swallowed right here) was instant, and why the app also saw the chord.
-    // Handle mapped chords on the same fast tap path instead: swallow (so the
-    // app never receives the chord) and let `routeTapCapturedKey` fire the
-    // mapping. Only *mapped* chords are swallowed — ordinary typing and
-    // unmapped chords (⌘C, ⌘Tab, …) pass straight through, and `hasMapping`
-    // matches only modified chords so a bare key can never match. This is the
-    // highest-rate branch (every keystroke while typing), so it is ordered
-    // cheapest-first: raw flag test, O(1) table lookup, and only for a mapped
-    // chord the frontmost reconcile and the secure-input syscall.
-    if flashMode == .insert, !(aboutWindowVisible || nativeSurfaceSuspended) {
+    let hasTransientInput = hintSession.isActive || activationInFlight
+    // Only configured modified chords interrupt idle passthrough. Direct hint
+    // sessions own their letters without changing the underlying base mode.
+    if flashMode == .passthrough, !hasTransientInput,
+      !(aboutWindowVisible || nativeSurfaceSuspended)
+    {
       let flags = event.flags
       guard
         flags.contains(.maskCommand) || flags.contains(.maskControl)
@@ -937,12 +928,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // A focused secure text field (password) turns on secure event input.
     // Never intercept keystrokes bound for it — they must reach the field, and
     // a keyboard tap swallowing secure input is exactly what that mechanism
-    // exists to prevent. Reflect it as INSERT (like focusing any text input) so
+    // exists to prevent. Reflect it as PASSTHROUGH (like focusing any text input) so
     // the badge/state match. Checked first, so even the first keystroke isn't
     // swallowed before the mode transition lands.
     if IsSecureEventInputEnabled() {
       if flashMode == .normal, overlay.inputMode == .normal {
-        enterInsertMode(reason: .secureInput, targetPID: currentNonFlashContext()?.processID)
+        enterPassthroughMode(reason: .secureInput, targetPID: currentNonFlashContext()?.processID)
       }
       return false
     }
@@ -960,12 +951,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         hasMapping: hasMapping,
         nativeSurfaceOwnsKeyboard: true)
     }
-    // INSERT under a native surface (About window / suspended session) was
-    // handled above; a bare INSERT never reaches here. NORMAL swallows every
-    // keypress; `routeTapCapturedKey` fires mappings and the interpreter
-    // consumes the rest. Runs synchronously on every keystroke, so nothing here
-    // resolves the keyboard layout or touches AppKit.
-    return KeyboardCaptureTap.shouldSwallow(flashMode: flashMode, inputMode: overlay.inputMode)
+    return KeyboardCaptureTap.shouldSwallow(
+      flashMode: flashMode, inputMode: overlay.inputMode, hasTransientInput: hasTransientInput)
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {
@@ -990,10 +977,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashLog.debug(
       "[latency] tap_to_route key=\(event.keyCode) ms="
         + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
-    // A chord the tap swallowed in INSERT is an active mapping (see
+    if overlay.inputMode == .hints, hintSession.isActive || activationInFlight {
+      overlay.handleTapCapturedKey(event)
+      return
+    }
+    // A chord the tap swallowed in idle PASSTHROUGH is an active mapping (see
     // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
     // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.
-    if flashMode == .insert {
+    if flashMode == .passthrough {
       _ = mappings.handle(event: event)
       return
     }

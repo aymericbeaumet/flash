@@ -4,7 +4,7 @@ import XCTest
 
 /// The keyboard tap's swallow decision is the single most security-sensitive
 /// branch in the input path: get it wrong in one direction and NORMAL leaks
-/// keys to the focused app; wrong in the other and INSERT (or a command-line
+/// keys to the focused app; wrong in the other and PASSTHROUGH (or a command-line
 /// field) goes deaf. These pin the full mode × input-mode matrix.
 final class KeyboardCaptureTapTests: XCTestCase {
   func testNormalModeSwallowsBareAndHintInput() {
@@ -47,21 +47,62 @@ final class KeyboardCaptureTapTests: XCTestCase {
         nativeSurfaceOwnsKeyboard: true))
     XCTAssertTrue(
       KeyboardCaptureTap.shouldSwallow(
-        flashMode: .insert,
+        flashMode: .passthrough,
         inputMode: .normal,
         hasMapping: true,
         nativeSurfaceOwnsKeyboard: true))
   }
 
-  func testInsertModeNeverSwallows() {
-    // INSERT is invisible to the tap regardless of overlay input mode — keys
-    // flow straight to the focused app.
+  func testIdlePassthroughModeNeverSwallows() {
+    // An idle overlay cannot claim native typing, including Escape or Ctrl-C.
     for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .candidateFinder] {
       XCTAssertFalse(
-        KeyboardCaptureTap.shouldSwallow(flashMode: .insert, inputMode: inputMode),
-        "insert mode should never swallow (inputMode=\(inputMode))")
+        KeyboardCaptureTap.shouldSwallow(flashMode: .passthrough, inputMode: inputMode),
+        "passthrough mode should never swallow (inputMode=\(inputMode))")
     }
   }
+
+  func testDirectHintsCaptureFromEveryBaseModeAndDismissInPlace() {
+    for origin in [Mode.normal, .passthrough, .disabled] {
+      XCTAssertTrue(
+        KeyboardCaptureTap.shouldSwallow(
+          flashMode: origin.flashMode,
+          inputMode: origin.overlayInputMode(hasHints: true, activationInFlight: false),
+          hasTransientInput: true),
+        "A direct hint session must own labels and Escape from \(origin)")
+      let (closed, _) = ModeReducer.reduce(
+        origin, .leaveMode(hasHints: true, targetPID: nil))
+      XCTAssertEqual(closed, origin)
+      XCTAssertEqual(
+        KeyboardCaptureTap.shouldSwallow(
+          flashMode: closed.flashMode,
+          inputMode: closed.overlayInputMode(hasHints: false, activationInFlight: false)),
+        origin == .normal)
+    }
+  }
+
+  func testDirectHintActivationCapturesBeforeTheLabelsArrive() {
+    for origin in [Mode.passthrough, .disabled] {
+      XCTAssertTrue(
+        KeyboardCaptureTap.shouldSwallow(
+          flashMode: origin.flashMode,
+          inputMode: origin.overlayInputMode(hasHints: false, activationInFlight: true),
+          hasTransientInput: true))
+    }
+  }
+
+  func testTransientInputCannotCaptureCommandOrNativeSurfaces() {
+    for inputMode: OverlayInputMode in [.commandLine, .candidateFinder] {
+      XCTAssertFalse(
+        KeyboardCaptureTap.shouldSwallow(
+          flashMode: .normal, inputMode: inputMode, hasTransientInput: true))
+    }
+    XCTAssertFalse(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .passthrough, inputMode: .hints, hasTransientInput: true,
+        nativeSurfaceOwnsKeyboard: true))
+  }
+
   /// A release whose press NORMAL swallowed must be swallowed too: a terminal
   /// running the Kitty keyboard protocol encodes releases to the pty, so a
   /// stray release types an escape sequence into whatever is running there.

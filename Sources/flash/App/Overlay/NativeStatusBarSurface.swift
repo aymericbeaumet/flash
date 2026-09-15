@@ -70,23 +70,22 @@ final class NativeStatusBarSurface {
   func render(
     document: StatusFormatDocument, barFrame: CGRect, screenFrame: CGRect,
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
-    palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle
+    palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle,
+    minimumCentreWidth: CGFloat = 0
   ) {
     let previousRuns = visibleRuns
     cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
-    var sizingLabels = labels
-    // A transient TERMINAL label must not widen the persistent base-mode pill.
-    sizingLabels.terminal = ""
-    let longestPill =
-      document.runs.filter { $0.pill && !$0.isStyleBoundary && $0.text != labels.terminal }
-      .map { $0.text.count }.max() ?? 0
+    let pills = document.runs.filter { $0.pill && !$0.isStyleBoundary && !$0.text.isEmpty }
+    let longestPill = pills.map { $0.text.count }.max() ?? 0
+    // Reserve every configured mode label even while the pill shows the app,
+    // so transitions (including TERMINAL) do not move the rest of the bar.
     let pillWidth = max(
-      OverlayPanel.modeBadgeWidth(labels: sizingLabels, currentText: "", fontSize: font.pointSize),
+      OverlayPanel.modeBadgeWidth(labels: labels, currentText: "", fontSize: font.pointSize),
       CGFloat(longestPill) * font.pointSize * 0.66 + 16)
     let pillColumns = Int(ceil(pillWidth / cellWidth))
-    let pillLabels = document.runs.filter { $0.pill && !$0.isStyleBoundary }.map {
+    let pillLabels = pills.map {
       (padded: Self.paddedPillText($0.text, columns: pillColumns), label: $0.text)
     }
     let prepared = Self.preparedDocument(
@@ -96,16 +95,30 @@ final class NativeStatusBarSurface {
       let end = $0.maxX - screenFrame.minX + OverlayPanel.statusBarNotchMargin
       return start..<end
     }
-    let leftColumns = notchLocal.map {
-      max(0, Int(floor(($0.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth)))
-    }
     // Contraction first, then the hard clamp: the elastic span gives way
     // before a lane loses characters outright.
-    let reserve = Self.centreReservation(prepared, columns: availableColumns)
+    let reserve: Range<Int>
+    if let notchLocal {
+      let start = max(
+        0,
+        min(
+          availableColumns,
+          Int(floor((notchLocal.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth))))
+      let end = max(
+        start,
+        min(
+          availableColumns,
+          Int(ceil((notchLocal.upperBound - OverlayPanel.statusBarEdgePadding) / cellWidth))))
+      reserve = start..<end
+    } else {
+      reserve = Self.centreReservation(
+        prepared, columns: availableColumns,
+        minimumColumns: Int(ceil(minimumCentreWidth / cellWidth)))
+    }
     layout = StatusFormatLayout.layout(
       Self.clampedLanes(
         Self.shrinkingDocument(
-          prepared, columns: availableColumns, leftColumns: leftColumns, reserve: reserve),
+          prepared, columns: availableColumns, reserve: reserve),
         columns: availableColumns, reserve: reserve),
       columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
@@ -153,9 +166,8 @@ final class NativeStatusBarSurface {
       layers.pill.contentsScale = scale
       layers.pill.isHidden = !run.segment.pill
       layers.pill.colors = [palette.bottomCG, palette.topCG]
-      layers.pill.borderWidth = run.segment.pill && modeStyle == .normal ? 1 : 0
-      layers.pill.borderColor =
-        modeStyle == .normal ? OverlayPanel.statusModeNormalBorderCG : palette.borderCG
+      layers.pill.borderWidth = 0
+      layers.pill.borderColor = palette.borderCG
       layers.text.frame = textRect
       layers.effect.frame = textRect
       layers.text.alignmentMode = run.segment.pill ? .center : .left
@@ -466,6 +478,7 @@ final class NativeStatusBarSurface {
       if !run.isStyleBoundary {
         if hideCentre && (run.alignment == .centre || run.alignment == .absoluteCentre) { continue }
         if run.pill {
+          guard !run.text.isEmpty else { continue }
           run.text = paddedPillText(run.text, columns: pillColumns)
         }
       }
@@ -497,16 +510,22 @@ final class NativeStatusBarSurface {
   /// for all three the centre gives ground rather than erasing a lane.
   static let centreReservationMinimumLaneColumns = 8
 
-  /// The columns an absolute-centre run owns, gutters included. Empty when the
-  /// document has no absolute centre, which keeps every other template on the
-  /// native tmux geometry byte for byte.
-  static func centreReservation(_ document: StatusFormatDocument, columns: Int) -> Range<Int> {
+  static func minimumCentreWidth(notchWidths: [CGFloat], margin: CGFloat) -> CGFloat {
+    (notchWidths.max() ?? 180) + margin * 2
+  }
+
+  /// The columns an absolute-centre run owns: its text and gutters, or the
+  /// notch-sized minimum, whichever is wider. Ordinary centre alignment keeps
+  /// native between-lanes geometry and does not request a fixed screen slot.
+  static func centreReservation(
+    _ document: StatusFormatDocument, columns: Int, minimumColumns: Int = 0
+  ) -> Range<Int> {
     let width = document.runs.filter {
       !$0.isStyleBoundary && $0.alignment == .absoluteCentre
     }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
     guard width > 0 else { return 0..<0 }
     let available = max(0, columns - centreReservationMinimumLaneColumns * 2)
-    let reserved = min(available, width + centreGutterColumns * 2)
+    let reserved = min(available, max(minimumColumns, width + centreGutterColumns * 2))
     guard reserved > 0 else { return 0..<0 }
     let start = (columns - reserved) / 2
     return start..<(start + reserved)

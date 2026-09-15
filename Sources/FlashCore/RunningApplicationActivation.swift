@@ -5,7 +5,7 @@ public enum RunningApplicationActivation {
   /// `restoringMinimizedWindows` costs one `kAXWindows` read plus one
   /// `kAXMinimized` read per window — synchronous AX IPC on the calling
   /// thread. Pass `false` when the target's window is known to be on screen
-  /// (a hint commit, an INSERT hand-off to the focused app).
+  /// (a hint commit, a PASSTHROUGH hand-off to the focused app).
   @discardableResult
   public static func activate(
     _ app: NSRunningApplication,

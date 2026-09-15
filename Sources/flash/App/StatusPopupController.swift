@@ -34,6 +34,8 @@ final class StatusPopupController {
   private let panel = StatusPopupPanel()
   private let windowActionsEnabled: Bool
   private let container = NSView(frame: .zero)
+  let modeBorderLayer = CAShapeLayer()
+  private var activeModeBorder: (color: CGColor, lineWidth: CGFloat, glow: Bool)?
   let terminalView = TerminalView(frame: .zero)
   private var documents: [String: TerminalDocument] = [:]
   private struct DocumentRevision: Equatable {
@@ -69,6 +71,10 @@ final class StatusPopupController {
     container.layer?.masksToBounds = true
     container.addSubview(terminalView)
     container.addSubview(exitLabel)
+    modeBorderLayer.actions = OverlayPanel.noActions
+    modeBorderLayer.fillColor = NSColor.clear.cgColor
+    modeBorderLayer.isHidden = true
+    container.layer?.addSublayer(modeBorderLayer)
     panel.contentView = container
     panel.focusLost = { [weak self] in
       guard let self, self.presentation.isFocused else { return }
@@ -158,6 +164,43 @@ final class StatusPopupController {
     if isVisible, let region { layout(region: region) }
   }
 
+  func setActiveModeBorder(color: CGColor? = nil, lineWidth: CGFloat = 2, glow: Bool = true) {
+    activeModeBorder = color.map { ($0, lineWidth, glow) }
+    updateActiveModeBorder()
+  }
+
+  private func updateActiveModeBorder() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+
+    guard presentation.isFocused, let activeModeBorder else {
+      modeBorderLayer.path = nil
+      modeBorderLayer.isHidden = true
+      return
+    }
+    let bounds = CGRect(origin: .zero, size: panel.frame.size)
+    let local = OverlayPanel.activeWindowBorderLocalRect(
+      targetFrame: bounds, panelFrame: bounds, lineWidth: activeModeBorder.lineWidth)
+    let path = CGMutablePath()
+    path.addRoundedRect(
+      in: OverlayPanel.snap(local, scale: panel.backingScaleFactor),
+      cornerWidth: 4, cornerHeight: 4)
+    modeBorderLayer.frame = bounds
+    modeBorderLayer.path = path
+    modeBorderLayer.strokeColor = activeModeBorder.color
+    modeBorderLayer.lineWidth = activeModeBorder.lineWidth
+    modeBorderLayer.shadowColor = activeModeBorder.color
+    modeBorderLayer.shadowOffset = .zero
+    modeBorderLayer.shadowRadius = 2
+    modeBorderLayer.shadowOpacity = activeModeBorder.glow ? 0.3 : 0
+    modeBorderLayer.isHidden = false
+    // AppKit owns the terminal and footer sublayers; keep the focus stroke
+    // above them after every panel layout without affecting its input region.
+    modeBorderLayer.removeFromSuperlayer()
+    container.layer?.addSublayer(modeBorderLayer)
+  }
+
   func leaveAnchor() {
     guard presentation.applying(.leaveAnchor) != presentation else { return }
     dismiss(reason: "anchor_left")
@@ -230,9 +273,11 @@ final class StatusPopupController {
     guard next != presentation else { return }
     presentation = next
     if next == .hidden {
+      activeModeBorder = nil
       terminalView.isRenderingEnabled = false
       if windowActionsEnabled { panel.orderOut(nil) }
     }
+    updateActiveModeBorder()
   }
 
   private func layout(region: StatusBarPopupRegion) {
@@ -334,6 +379,7 @@ final class StatusPopupController {
     exitLabel.frame = CGRect(
       x: layout.labelFrame.minX, y: layout.labelFrame.minY,
       width: layout.labelFrame.width, height: footerHeight)
+    updateActiveModeBorder()
     CATransaction.commit()
     let fields = [
       "source_kind": sourceKind,

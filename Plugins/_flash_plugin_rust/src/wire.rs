@@ -108,7 +108,7 @@ fn valid_target(target: &Value) -> bool {
             "label",
             "url",
             "pid",
-            "enters_insert_mode",
+            "enters_passthrough_mode",
             "priority",
         ],
     ) || target
@@ -150,7 +150,7 @@ fn valid_target(target: &Value) -> bool {
     {
         return false;
     }
-    if present(target, "enters_insert_mode").is_some_and(|value| !value.is_boolean()) {
+    if present(target, "enters_passthrough_mode").is_some_and(|value| !value.is_boolean()) {
         return false;
     }
     if present(target, "priority").is_some_and(|value| {

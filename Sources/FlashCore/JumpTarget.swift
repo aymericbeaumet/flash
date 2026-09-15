@@ -27,10 +27,10 @@ public struct JumpTarget: @unchecked Sendable {
   public let resolveClickPoint: (() -> CGPoint?)?
   public let providerID: String
   /// Whether committing a click on this target should switch Flash into
-  /// insert mode. The owning provider decides: a typing surface (text
+  /// passthrough mode. The owning provider decides: a typing surface (text
   /// field) sets this true so the user lands ready to type; links, buttons,
   /// and tmux pane selectors leave it false so keyboard navigation continues.
-  public let entersInsertMode: Bool
+  public let entersPassthroughMode: Bool
   /// Source-declared salience for this target. The renderer currently paints
   /// `.important` and `.urgent` targets in the accent style; the commit path
   /// is unchanged.
@@ -44,7 +44,7 @@ public struct JumpTarget: @unchecked Sendable {
     url: String? = nil,
     pid: pid_t? = nil,
     resolveClickPoint: (() -> CGPoint?)? = nil,
-    entersInsertMode: Bool = false,
+    entersPassthroughMode: Bool = false,
     priority: FlashPriority = .normal,
     providerID: String
   ) {
@@ -55,13 +55,13 @@ public struct JumpTarget: @unchecked Sendable {
     self.url = url
     self.pid = pid
     self.resolveClickPoint = resolveClickPoint
-    self.entersInsertMode = entersInsertMode
+    self.entersPassthroughMode = entersPassthroughMode
     self.priority = priority
     self.providerID = providerID
   }
 
   /// AX roles that represent a typing surface. Committing a click on a
-  /// target with one of these roles puts the user in insert mode.
+  /// target with one of these roles puts the user in passthrough mode.
   public static let textInputRoles: Set<String> = [
     "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
   ]

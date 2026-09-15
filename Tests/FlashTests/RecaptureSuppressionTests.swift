@@ -26,19 +26,19 @@ final class RecaptureSuppressionTests: XCTestCase {
     s = RecaptureSuppression(
       menuBarUntil: nil,
       contextMenuUntil: nil,
-      pointerInsertHandoffUntil: now.addingTimeInterval(1))
+      pointerPassthroughHandoffUntil: now.addingTimeInterval(1))
     XCTAssertTrue(s.anyActive(now: now))
-    XCTAssertTrue(s.pointerInsertHandoffActive(now: now))
+    XCTAssertTrue(s.pointerPassthroughHandoffActive(now: now))
   }
 
   func testPruneExpiredClearsOnlyElapsedWindows() {
     var s = RecaptureSuppression(
       menuBarUntil: now.addingTimeInterval(-1),  // elapsed
       contextMenuUntil: now.addingTimeInterval(1),  // still active
-      pointerInsertHandoffUntil: now)  // exactly now → elapsed (<=)
+      pointerPassthroughHandoffUntil: now)  // exactly now → elapsed (<=)
     s.pruneExpired(now: now)
     XCTAssertNil(s.menuBarUntil)
     XCTAssertEqual(s.contextMenuUntil, now.addingTimeInterval(1))
-    XCTAssertNil(s.pointerInsertHandoffUntil)
+    XCTAssertNil(s.pointerPassthroughHandoffUntil)
   }
 }

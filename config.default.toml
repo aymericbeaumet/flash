@@ -64,13 +64,12 @@ important_hint_fg = "#ECEFF4"
 important_hint_bg_top = "#BF616A"
 important_hint_bg_bottom = "#5C3940"
 important_hint_border = "#BF616A"
-# Colored stroke around the focused app's frontmost window while advanced
-# mode is on — green in normal, glowing blue in insert, purple in command —
-# so the active window is always identifiable (most useful for apps with
-# several windows). Set to false to turn it off entirely.
+# NORMAL emphasizes the focused app's window with a glowing green border.
+# TERMINAL uses a glowing blue border around its popup; COMMAND uses purple.
+# PASSTHROUGH has no mode border. Set to false to turn borders off entirely.
 window_border = true
 # Stroke width in points, applied to every mode. 0 (the default) keeps the
-# per-mode widths: 1 in normal/command, 2 in insert.
+# shared 2-point width in normal/command/terminal.
 window_border_size = 0
 # Stroke color (#RRGGBB or #RRGGBBAA), applied to every mode. Empty (the
 # default) keeps the per-mode colors above.
@@ -213,7 +212,7 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # CPU/MEM/DISK/BAT labels carry padded percentages; NET carries a padded byte rate.
 # AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
 [statusbar.options]
-"@left" = "#[pill]#{flash.mode}#[nopill]"
+"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]"
 "@right" = "#[fg=#EBCB8B]#{flash.date}"
 # Example combined metrics:
 # "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
@@ -293,9 +292,9 @@ precedence_alive_bonus = 10
 # "firefox.tabs" = 120
 
 [mode]
-# Mode labels shown after the active app name in the persistent status bar
-# when advanced mode is enabled.
-labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
+# An empty passthrough label lets the default pill show the active app name.
+# Its neutral styling and fixed width keep status content in place across modes.
+labels = { normal = "NORMAL", passthrough = "", command = "COMMAND", terminal = "TERMINAL" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
 # sequence before resolving the longest matching prefix. Equivalent to
@@ -331,18 +330,18 @@ send_key_interval_ms = 35
 #
 # Examples:
 # "ctrl+space" = ["flash", "mouse_target"]
-# "ctrl+alt+n" = ["flash", "leave_mode"] # enables advanced mode; shared exit shortcut
-# "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+# "cmd+ctrl+[" = ["flash", "enter_normal_mode"] # enables advanced mode
+# "cmd+ctrl+i" = ["flash", "enter_passthrough_mode"]
 # "cmd+ctrl+semicolon" = ["flash", "enter_command_mode"]
-# leave_mode returns INSERT to NORMAL and closes command panels, respecting
-# --restore-mode. It does nothing in NORMAL. enter_normal_mode explicitly
-# selects NORMAL regardless of a command panel's recorded return mode.
+# leave_mode enters NORMAL from idle PASSTHROUGH, exits idle NORMAL, and
+# dismisses command/finder/terminal surfaces to PASSTHROUGH. With hints showing
+# it dismisses the hints while keeping the base mode. enter_normal_mode selects
+# NORMAL explicitly.
 # Mode-specific mappings override the same chord here; no exit override is
 # installed by default.
-# leave_mode, enter_insert_mode, and enter_command_mode have no default
-# mappings in any scope. Define their shortcuts explicitly.
+# Mode-entry shortcuts are opt-in; no bare Escape or i mode changes are installed.
 # focus_input also has no default mapping; opt in if focusing a text input
-# should enter INSERT (for example, "gi" = ["flash", "focus_input"]).
+# should enter PASSTHROUGH (for example, "gi" = ["flash", "focus_input"]).
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # Percentage frames require x/y/width/height together. x and y are offsets
@@ -356,18 +355,17 @@ send_key_interval_ms = 35
 # prepended for the visible prefix; the rest is passed through verbatim,
 # so trailing spaces are meaningful — `--input=:flashlight ` opens the
 # verb with an empty query while `--input=:flashlight` lists completions
-# for verbs starting with `flashlight`. `--restore-mode` restores whichever
-# mode was active when the mapping fired. An emoji picker you can trigger
-# from INSERT and resume typing afterward:
-# "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
+# for verbs starting with `flashlight`. Closing the surface returns to
+# PASSTHROUGH. An emoji picker you can trigger and resume typing afterward:
+# "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs "]
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
 leader = "\\"
 
 [mode.normal.mappings]
-# No key here enters INSERT by default; bind enter_insert_mode yourself.
-# Clicks into text fields still switch to INSERT.
+# Use a configured shortcut to leave NORMAL; Escape and i do not change mode.
+# Clicks into text fields enter PASSTHROUGH.
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
 # that one default mapping; unrelated defaults stay available.
 # Mapped keys dispatch Flash commands; every other key or chord is swallowed.
@@ -511,7 +509,7 @@ leader = "\\"
 "n" = ["flash", "send_key", "--keys=cmd+g"]
 "N" = ["flash", "send_key", "--keys=cmd+shift+g"]
 # Context-aware new: opens a new tmux window when a tmux client is focused
-# or a new browser tab in browsers, then enters INSERT so the new tab can be
+# or a new browser tab in browsers, then enters PASSTHROUGH so the new tab can be
 # typed into. Other apps do nothing.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
@@ -536,8 +534,8 @@ leader = "\\"
 # "'b" = ["flash", "terminal_show", "--name=bonsai"]
 # "'t" = ["flash", "terminal_show"] # fresh login shell in the home directory
 
-[mode.insert.mappings]
-# Mappings here apply only after insert mode is already active.
+[mode.passthrough.mappings]
+# Mappings here apply only after passthrough mode is already active.
 # Binding leave_mode or enter_normal_mode in [mode.all.mappings] enables advanced mode.
 
 [mode.command.mappings]
@@ -546,7 +544,7 @@ leader = "\\"
 
 [mode.terminal.mappings]
 # Terminal input stays local to the focused window. Plain Escape goes to the TUI.
-# Winning INSERT leave_mode / enter_normal_mode bindings are inherited;
+# Winning PASSTHROUGH enter_normal_mode / enter_passthrough_mode / leave_mode bindings are inherited;
 # optional terminal mappings override them.
 "cmd+q" = ["flash", "terminal_quit"] # stop the child; automatic restart applies
 "cmd+r" = ["flash", "terminal_restart"] # restart immediately

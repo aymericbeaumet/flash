@@ -43,11 +43,29 @@ rows = 24
 
 Commands are argv arrays, with the shared [environment and path resolution](configuration.md#executables-and-opaque-arguments). Only the executable and explicit working directory resolve against the defining configuration file; remaining arguments stay opaque. Set `working_directory = "."` for arguments relative to that directory. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. The inherited `NO_COLOR` setting is removed because these children own a color-capable PTY; an explicit `[terminal.<name>] env = { NO_COLOR = "1" }` still opts that terminal out of colors. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
 
-The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Named terminal processes restart after any exit, including a normal quit or a killed process. Unnamed fresh shells are one-shot and are permanently removed when they exit or are hidden. The first retry waits 100 ms. Repeated exits within one second of startup back off to 1, 2, 4, 8, 16, then at most 30 seconds; running for at least one second resets the delay. Nonpersistent terminals retry only until their window or preview is dismissed. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
+The terminal starts at its configured grid, defaulting to 100 columns by 28 rows. Presentation clamps it to the available screen and sends a real PTY resize. Hiding it preserves the last nonzero grid. Font, colors, placement, and size changes preserve the child; changing command, working directory, or environment replaces only that named session. Removing a declaration stops it. Persistent terminal processes restart after any exit, including a normal quit or a killed process. Fresh shells and nonpersistent named terminals are one-shot and are permanently removed when they exit or are hidden. The first retry waits 100 ms. Repeated exits within one second of startup back off to 1, 2, 4, 8, 16, then at most 30 seconds; running for at least one second resets the delay. The final screen remains visible while waiting. `terminal_restart` restarts immediately (optionally `--name=system`). Removing or replacing a declaration and quitting Flash cancel pending retries. State lasts until Flash quits.
 
 Hover placement remains centered below the pointer and clamped to the hovered screen. Leaving the originating status segment hides an ordinary preview immediately. Left- or right-click a popup label to pin it and focus its terminal; repeated clicks keep it open. It stays anchored while the pointer moves into the popup or over other segments. Clicking another popup label switches views. Configured click actions and links retain their normal left-click action; right-click or Option-click pins their popup. Close a pinned popup with Command-W or a configured terminal exit mapping. Menu reveal, focus loss, removed anchors, and other Flash surfaces dismiss presentation. Persistent children keep running; nonpersistent children stop.
 
-Terminal focus has its own mode. Global mappings are suspended while local terminal mappings run before native copy/paste and terminal input. Pending sequences preserve the order of key presses, releases, and modifier changes; a matched mapping consumes its releases. Replays retain the originating session and restart generation, so a late release cannot enter a replacement child. Only effective INSERT mappings for `enter_normal_mode` or `leave_mode` are inherited as terminal exit mappings; explicit terminal mappings override them. Plain Escape remains available to the TUI. Exiting through an inherited NORMAL mapping restores the previously focused application. Losing focus to another app does not steal focus back.
+Terminal focus has its own mode, shown by a filled blue pill and the same
+two-point glowing border as NORMAL and COMMAND, around the terminal's own
+window. Hover previews do not enter TERMINAL or change the current mode border.
+Global mappings are suspended while local
+terminal mappings run before native copy/paste and terminal input. Pending
+sequences preserve the order of key presses, releases, and modifier changes;
+a matched mapping consumes its releases. Replays retain the originating session
+and restart generation, so a late release cannot enter a replacement child.
+Effective PASSTHROUGH mappings for `enter_normal_mode` and
+`enter_passthrough_mode` are inherited as explicit terminal mode transitions;
+explicit terminal mappings override them. Plain Escape and Ctrl-C remain
+available to the process.
+
+Command-W, `terminal_dismiss`, `enter_passthrough_mode`, and process completion
+return to PASSTHROUGH even when the terminal was opened from NORMAL. Explicit dismissal
+restores the previously focused application. Losing focus also returns to
+PASSTHROUGH, without stealing focus back from the app the user selected.
+`enter_normal_mode` remains an explicit NORMAL entry. Dismissal clears terminal
+emphasis immediately; persistent processes keep running and fresh ones stop.
 
 Command popups and document popups share the same cell renderer. Documents never spawn children: styled runs become generated VT, while literal control characters are made inert. Replacing a document clears previous content and its history. Long documents can scroll; selecting text and Command-C work in both kinds of popup. Shift-click opens HTTP(S) links, including printed URLs and terminal hyperlinks (OSC 8), without forwarding the click to the running application. Wrapped URLs remain one link. Shift-drag selects text even when a TUI requests mouse reporting; dragging never opens a link. Command-V uses Ghostty's paste encoder and respects bracketed paste mode. macOS input-method composition is local to the terminal view.
 
@@ -55,7 +73,7 @@ Command popups and document popups share the same cell renderer. Documents never
 
 `flash terminal_show` opens a fresh login shell in the home directory. Each
 invocation attaches to its own process. `flash terminal_dismiss` closes the
-focused terminal and restores the previous application. Exiting, killing,
+focused terminal, restores the previous application, and returns to PASSTHROUGH. Exiting, killing,
 closing, or hiding a fresh shell removes its session, window, and scrollback
 permanently. It never restarts automatically. Command-R can explicitly restart
 it while it is open; Command-Q ends it. Each later invocation creates a new
@@ -197,7 +215,7 @@ or removal.
 
 ## Native status drawing
 
-The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label uses that same width, so entering terminal mode does not shift adjacent segments. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
+The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata and keeps fixed width, point-based padding and a centered label across modes. PASSTHROUGH uses neutral styling and an active-app fallback for its empty mode label. Keep the pill present in custom templates; see the [status-format example](status-format.md#authoring). The centered app name remains independent of that segment. NORMAL and TERMINAL use filled green and blue pills with dark text. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
 
 The terminal view draws from the frame with damage tracking: a frame that
 directly follows the previous one invalidates only the rows the terminal
@@ -223,14 +241,21 @@ space there. `monitor = "all"` draws a bar on every display.
 
 Use `#[align=absolute-centre]` for a label at the physical center of the screen. Native tmux `#[align=centre]` instead centers the space remaining between the left and right content, so unequal side widths shift that label.
 
+On displays without a notch, `absolute-centre` sections reserve a notch-sized slot for
+spacing. Its minimum uses the widest connected notch or a 180-point fallback,
+plus the configured notch margins; wider text expands it. Other templates retain
+their native layout. See [center layout](status-format.md#jobs-sources-and-flash-styles)
+for mixed-display and narrow-bar behavior.
+
 For separate quota and system metrics with native detail popups, see the
 [ready-to-use configurations](examples/statusbar/README.md).
 
-`leave_mode` is inherited from effective INSERT-active mappings just like
-`enter_normal_mode`. It hides the popup and restores its saved mode and external
-app; an explicit terminal binding still takes precedence. For a shared exit:
+Configured mode entries apply inside the terminal too. Each hides the popup and
+selects its named mode in the captured external app; an explicit terminal
+binding still takes precedence. For example:
 
 ```toml
 [mode.all.mappings]
-"cmd+ctrl+[" = ["flash", "leave_mode"]
+"cmd+ctrl+[" = ["flash", "enter_normal_mode"]
+"cmd+ctrl+i" = ["flash", "enter_passthrough_mode"]
 ```

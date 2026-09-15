@@ -50,22 +50,22 @@ extension OverlayPanel {
   static func lifted(_ color: NSColor, by fraction: CGFloat) -> NSColor {
     color.blended(withFraction: fraction, of: .white) ?? color
   }
-  /// Faint outline for the NORMAL-mode pill. The normal pill is dark-on-dark
-  /// (same fill as the bar) so without a border it has no visible edge — a
-  /// 1px, low-alpha white hairline reads as a subtle frame around it.
-  static let statusModeNormalBorderCG = NSColor(calibratedWhite: 1, alpha: 0.08).cgColor
-
   // Pills read as slightly lit from above: the top of each gradient is a
   // lifted tint of the base colour, the bottom the base colour itself.
-  static let insertPalette = ModeBadgePalette(
+  static let passthroughPalette = ModeBadgePalette(
+    topCG: lifted(nordPolarNight0, by: 0.08).cgColor,
+    bottomCG: nordPolarNight0CG,
+    foregroundCG: nordSnowStorm2CG,
+    borderCG: nordAuroraYellowCG)
+  static let normalPalette = ModeBadgePalette(
+    topCG: lifted(nordAuroraGreen, by: 0.12).cgColor,
+    bottomCG: nordAuroraGreenCG,
+    foregroundCG: nordPolarNight0CG,
+    borderCG: nordAuroraYellowCG)
+  static let terminalPalette = ModeBadgePalette(
     topCG: lifted(nordFrost2, by: 0.12).cgColor,
     bottomCG: nordFrost2CG,
     foregroundCG: nordPolarNight0CG,
-    borderCG: nordAuroraYellowCG)
-  static let normalPalette = ModeBadgePalette(
-    topCG: lifted(nordPolarNight0, by: 0.08).cgColor,
-    bottomCG: nordPolarNight0CG,
-    foregroundCG: nordAuroraGreenCG,
     borderCG: nordAuroraYellowCG)
   static let commandPaletteValue = ModeBadgePalette(
     topCG: lifted(nordAuroraPurple, by: 0.12).cgColor,
@@ -80,9 +80,10 @@ extension OverlayPanel {
 
   func modeBadgePalette() -> ModeBadgePalette {
     switch modeBadgeStyle {
-    case .insert: return Self.insertPalette
+    case .passthrough: return Self.passthroughPalette
     case .normal: return Self.normalPalette
     case .command: return Self.commandPaletteValue
+    case .terminal: return Self.terminalPalette
     }
   }
 

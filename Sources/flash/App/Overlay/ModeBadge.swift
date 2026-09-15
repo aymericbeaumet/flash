@@ -2,10 +2,9 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// The advanced-mode status bar (NORMAL / INSERT / COMMAND). When advanced
-/// mode is configured it stays on screen continuously; otherwise it's
-/// hidden. The historical "mode badge" identifiers now refer to this
-/// status-bar layer to keep the surrounding overlay code stable.
+/// The persistent status bar shows a neutral app pill in passthrough and a
+/// highlighted mode pill in NORMAL, COMMAND, and TERMINAL. The historical
+/// "mode badge" identifiers refer to this whole bar.
 extension OverlayPanel {
   static let statusBarEdgePadding: CGFloat = 13
 
@@ -307,6 +306,9 @@ extension OverlayPanel {
     let visible = snapshot.mainVisibleFrame
     let mainFrame = snapshot.mainFrame ?? visible
     let mainNotch = snapshot.screens.first(where: { $0.frame == snapshot.mainFrame })?.notch ?? nil
+    let minimumCentreWidth = NativeStatusBarSurface.minimumCentreWidth(
+      notchWidths: snapshot.screens.compactMap { $0.notch?.width },
+      margin: Self.statusBarNotchMargin)
     let extras =
       statusBarMonitor == .primary ? [] : snapshot.screens.filter { $0.frame != snapshot.mainFrame }
     while secondaryStatusBars.count > extras.count {
@@ -326,7 +328,8 @@ extension OverlayPanel {
         barFrame: Self.statusBarFrame(
           screenFrame: screen, visibleFrame: visible, panelFrame: panelFrame, fontSize: fontSize),
         screenFrame: screen, scale: scale, notch: notch, font: font, labels: modeLabels,
-        palette: modeBadgePalette(), modeStyle: modeBadgeStyle)
+        palette: modeBadgePalette(), modeStyle: modeBadgeStyle,
+        minimumCentreWidth: minimumCentreWidth)
       let hits = surface.interactionRects(
         panelFrame: panelFrame, popupTexts: statusBarPopupTexts,
         popupDocuments: statusBarPopupDocuments)
@@ -367,7 +370,12 @@ extension OverlayPanel {
     currentText _: String,
     fontSize: CGFloat
   ) -> CGFloat {
-    max(fontSize + 18, CGFloat(labels.longestCount) * fontSize * 0.66 + 16)
+    // The default passthrough app name is bounded to the minimum pill width; compact
+    // custom mode labels must leave that room available across transitions.
+    max(
+      fontSize + 18,
+      CGFloat(max(Config.StatusBar.modePillMinimumColumns, labels.longestCount))
+        * fontSize * 0.66 + 16)
   }
 
   static func statusBarFontSize(overlayFontSize _: CGFloat) -> CGFloat {

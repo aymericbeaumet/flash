@@ -78,7 +78,7 @@ transactions. An empty discovery result stays silent.
 
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.
-Transient surfaces preserve their return state and obey advanced-mode eligibility.
+Transient surfaces return native input while preserving advanced-mode eligibility.
 See [normal mode](normal-mode.md) for the input latency and transition contracts.
 
 ## Other lifecycles

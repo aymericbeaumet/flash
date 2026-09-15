@@ -95,20 +95,20 @@ final class HotkeySyntaxTests: XCTestCase {
   func testScopeIsActiveGovernsCarbonRegistration() {
     // The mapping scope filters Carbon registrations through
     // `scopeIsActive`. A `.normal`-scope mapping (e.g. `cmd+tab`) must
-    // be **unregistered** in insert mode so the Dock app switcher gets
+    // be **unregistered** in passthrough mode so the Dock app switcher gets
     // the key combo. `.all` mappings stay registered in every mode, including
     // command-line and candidate-finder surfaces.
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .normal))
-    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .insert))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .passthrough))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .command))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.normal, for: .normal))
-    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.normal, for: .insert))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.normal, for: .passthrough))
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.normal, for: .command))
-    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .normal))
-    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.insert, for: .insert))
-    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .command))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.passthrough, for: .normal))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.passthrough, for: .passthrough))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.passthrough, for: .command))
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .normal))
-    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .insert))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .passthrough))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.command, for: .command))
   }
 
@@ -257,28 +257,21 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "mouse_statusbar"])?.command, .mouseStatusBar)
   }
 
-  func testParseEnterCommandRestoreMode() {
-    // `enter_command_mode --input='emojis '` is the replacement for the
-    // old `emojis` verb. `--restore-mode` is the mode-preserve flag —
-    // internally the dict key is still `restore_mode` because flag names
-    // are normalized hyphen → underscore.
+  func testParseEnterCommandRejectsRestoreMode() {
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=flashlight "])?.command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+      .enterCommand(input: "flashlight "))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=emojis "])?.command,
-      .enterCommand(input: "emojis ", restoreMode: false))
-    // Bare flag (no `=`) and `--restore-mode=1` both turn the bool on.
-    XCTAssertEqual(
+      .enterCommand(input: "emojis "))
+    XCTAssertNil(
       parseMappingCommand(
         argv: ["flash", "enter_command_mode", "--input=emojis ", "--restore-mode"]
-      )?.command,
-      .enterCommand(input: "emojis ", restoreMode: true))
-    XCTAssertEqual(
+      ))
+    XCTAssertNil(
       parseMappingCommand(
         argv: ["flash", "enter_command_mode", "--input=flashlight ", "--restore-mode=1"]
-      )?.command,
-      .enterCommand(input: "flashlight ", restoreMode: true))
+      ))
     // Leading colons are stripped (one `:` is later prepended for display);
     // everything after the last leading `:` is passed through verbatim. Trailing
     // whitespace is meaningful and never trimmed — the user controls whether
@@ -286,10 +279,10 @@ final class HotkeySyntaxTests: XCTestCase {
     // of the verb (`--input=:open `).
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=:open"])?.command,
-      .enterCommand(input: "open", restoreMode: false))
+      .enterCommand(input: "open"))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=::: open"])?.command,
-      .enterCommand(input: " open", restoreMode: false))
+      .enterCommand(input: " open"))
     // `--input` is optional only for the plain command-mode switch.
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
@@ -299,7 +292,7 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_command"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_command", "--input=flashlight "]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mode_normal"]))
-    XCTAssertNil(parseMappingCommand(argv: ["flash", "mode_insert"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mode_passthrough"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mode_command"]))
     // The old dedicated verbs are gone — the parser must reject them so
     // a stale config surfaces a clear failure instead of silently doing
@@ -423,7 +416,7 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(
         argv: ["~/.local/bin/flash", "enter_command_mode", "--input=flashlight "]
       )?.command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+      .enterCommand(input: "flashlight "))
     XCTAssertNil(
       parseMappingCommand(
         argv: ["/Applications/Flash.app/Contents/MacOS/flash", "unknown_command"]))
@@ -465,8 +458,9 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashModeActions() {
-    XCTAssertEqual(parseMappingCommand(argv: ["flash", "enter_insert_mode"])?.command, .insertMode)
-    XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_locked_insert_mode"]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "enter_passthrough_mode"])?.command, .passthroughMode)
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_locked_passthrough_mode"]))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "url_copy"])?.command, .copyURL)
@@ -488,7 +482,7 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "resource_previous"])?.command, .resourcePrevious)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=flashlight "])?.command,
-      .enterCommand(input: "flashlight ", restoreMode: false))
+      .enterCommand(input: "flashlight "))
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_next"])?.command, .tabNext)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_previous"])?.command, .tabPrev)
     XCTAssertEqual(

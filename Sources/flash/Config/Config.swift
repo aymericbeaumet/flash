@@ -163,13 +163,13 @@ struct Config {
     var importantHintBGTop: String = "#BF616A"
     var importantHintBGBottom: String = "#5C3940"
     var importantHintBorder: String = "#BF616A"
-    /// Colored stroke around the focused app's frontmost window while
-    /// advanced mode is on — green in normal, glowing blue in insert,
-    /// purple in command — so the active window is always identifiable.
+    /// Colored stroke around the focused app's frontmost window in NORMAL
+    /// (glowing green) or COMMAND (purple), and around a focused terminal
+    /// popup in TERMINAL (glowing blue). PASSTHROUGH has no mode border.
     /// `[overlay] window_border = false` turns it off entirely.
     var windowBorder: Bool = true
     /// Stroke width in points, applied to every mode. `0` (default) keeps
-    /// the per-mode widths: 1 in normal/command, 2 in insert.
+    /// the shared 2-point width in normal/command/terminal.
     var windowBorderSize: Double = 0
     /// Stroke color (`#RRGGBB` / `#RRGGBBAA`), applied to every mode.
     /// Empty (default) keeps the per-mode Nord colors.
@@ -356,10 +356,13 @@ struct Config {
     var notchMargin: Double = 6
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
+    /// Shared room for mode labels and the bounded passthrough app name.
+    static let modePillMinimumColumns = 14
     /// One native tmux format, with Flash presentation styles and values.
     static let defaultTemplateString = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
     static let defaultOptions = [
-      "@left": "#[pill]#{flash.mode}#[nopill]",
+      "@left":
+        "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/\(modePillMinimumColumns - 1)/…:flash.active_app_name},FLASH}}#[nopill]",
       "@right": "#[fg=#EBCB8B]#{flash.date}",
     ]
     var template: FlashStatusBarTemplate = Self.defaultTemplate
@@ -398,6 +401,10 @@ struct Config {
           token: "flash.mode",
           source: .sdk(.modeLabel)),
         FlashStatusBarTemplateVariable(
+          id: "statusbar.template.active_app_name",
+          token: "flash.active_app_name",
+          source: .sdk(.activeAppName)),
+        FlashStatusBarTemplateVariable(
           id: "statusbar.template.date",
           token: "flash.date",
           source: .sdk(.date)),
@@ -406,18 +413,18 @@ struct Config {
   struct Mode: Equatable {
     struct Labels: Equatable {
       var normal: String = "NORMAL"
-      var insert: String = "INSERT"
+      var passthrough: String = ""
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count, terminal.count)
+        max(normal.count, passthrough.count, command.count, terminal.count)
       }
     }
 
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
-    var insert: [ModeMapping] = []
+    var passthrough: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
@@ -534,14 +541,14 @@ struct Config {
         // keystroke fallback delivers for any non-terminal app, and
         // terminals (no close-tab history) return `.unhandled`.
         ("X", .flashCommand(.tabReopen)),
-        // No default ⌘-based bindings. These chords reach the app in INSERT;
+        // No default ⌘-based bindings. These chords reach the app in PASSTHROUGH;
         // NORMAL swallows them.
         // Their vim-style siblings cover the same actions in
         // normal mode (`gt`/`gT`, `g1`–`g9`, `r`/`R`, `H`/`L`, `[t`/`]t`, `t`,
         // `x`, `/`, `[a`/`]a`).
         //
         // ⌃Tab / ⌃⇧Tab → next / previous tab — browser-native chords shadowed
-        // in normal mode (scope-bound Carbon; insert mode releases them so the
+        // in normal mode (scope-bound Carbon; passthrough mode releases them so the
         // focused app sees the native chord again).
         ("ctrl+tab", .flashCommand(.tabNext)),
         ("ctrl+shift+tab", .flashCommand(.tabPrev)),
@@ -563,7 +570,6 @@ struct Config {
         ("g7", .flashCommand(.tabSelect(index: 7))),
         ("g8", .flashCommand(.tabSelect(index: 8))),
         ("g9", .flashCommand(.tabSelect(index: 9))),
-        // Vimium `gi` — focus the first text input and enter INSERT.
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
         ("gt", .flashCommand(.tabNext)),
@@ -600,7 +606,7 @@ struct Config {
         ("mF", .flashCommand(.mouseGrid(.move))),
         // Undo lives on `u` in Vim, but Vimium reuses `u` for half-page
         // scroll-up (mapped above). Undo stays reachable via `:undo` /
-        // `:u` and the app's native ⌘Z in insert mode.
+        // `:u` and the app's native ⌘Z in passthrough mode.
         ("ctrl+r", .flashCommand(.redo)),
         ("e", .flashCommand(.archive)),
         // `x` sends the app's own close chord instead of a Flash-side
@@ -612,7 +618,7 @@ struct Config {
         ("x", sendKeyMapping("cmd+w")),
         // Vimium `n` / `N` cycle find matches. Flash drives the focused
         // app's native find-again (⌘G / ⌘⇧G) after `/` opens find. New
-        // windows use native ⌘N in INSERT — `n` is needed for find parity.
+        // windows use native ⌘N in PASSTHROUGH — `n` is needed for find parity.
         ("n", sendKeyMapping("cmd+g")),
         ("N", sendKeyMapping("cmd+shift+g")),
         // `y` yanks (copies) the current selection; `p` pastes it back.
@@ -673,8 +679,8 @@ struct Config {
       switch mode {
       case .normal:
         return Self.resolveMappings(normal + all)
-      case .insert:
-        return Self.resolveMappings(insert + all)
+      case .passthrough:
+        return Self.resolveMappings(passthrough + all)
       }
     }
 
@@ -693,7 +699,7 @@ struct Config {
     /// O(1)-lookup view used on every keystroke. Refreshed by
     /// `prepareDerivedValues()` after every config load / reload.
     private(set) var compiledNormal = CompiledMappings()
-    private(set) var compiledInsert = CompiledMappings()
+    private(set) var compiledPassthrough = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
 
     var effectiveTerminalMappings: [ModeMapping] {
@@ -701,11 +707,12 @@ struct Config {
       let explicit = terminal.filter {
         claimed.insert(CompiledMappings.physicalIdentity(for: $0.key)).inserted
       }
-      var insertClaimed = Set<String>()
-      let inherited = mappings(for: .insert).filter {
+      var passthroughClaimed = Set<String>()
+      let inherited = mappings(for: .passthrough).filter {
         let identity = CompiledMappings.physicalIdentity(for: $0.key)
-        return insertClaimed.insert(identity).inserted
-          && ($0.action.command == .normalMode || $0.action.command == .leaveMode)
+        return passthroughClaimed.insert(identity).inserted
+          && ($0.action.command == .normalMode || $0.action.command == .passthroughMode
+            || $0.action.command == .leaveMode)
           && claimed.insert(identity).inserted
       }
       return explicit + inherited
@@ -713,7 +720,7 @@ struct Config {
 
     mutating func recompileMappings() {
       compiledNormal = CompiledMappings(mappings(for: .normal))
-      compiledInsert = CompiledMappings(mappings(for: .insert))
+      compiledPassthrough = CompiledMappings(mappings(for: .passthrough))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
     }
 
@@ -731,7 +738,7 @@ struct Config {
     }
 
     var containsNormalModeMapping: Bool {
-      (all + normal + insert + command + terminal).contains { mapping in
+      (all + normal + passthrough + command + terminal).contains { mapping in
         mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
@@ -832,11 +839,11 @@ struct Config {
     let modeJSON: [String: Any] = [
       "all": mode.all.map(Self.mappingJSONValue),
       "command": mode.command.map(Self.mappingJSONValue),
-      "insert": mode.insert.map(Self.mappingJSONValue),
+      "passthrough": mode.passthrough.map(Self.mappingJSONValue),
       "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
       "labels": [
         "command": mode.labels.command,
-        "insert": mode.labels.insert,
+        "passthrough": mode.labels.passthrough,
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
       ],
@@ -1005,7 +1012,7 @@ extension URLCommand {
       return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
     case .terminalQuit(let name):
       return verb("terminal_quit", name.map { ["--name=\($0)"] } ?? [])
-    case .insertMode: return verb("enter_insert_mode")
+    case .passthroughMode: return verb("enter_passthrough_mode")
     case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):
       switch kind {
@@ -1030,10 +1037,8 @@ extension URLCommand {
     case .find: return verb("app_find")
     case .candidateFinder(let all):
       return all ? verb("app_open_finder", [flag("all")]) : verb("app_open_finder")
-    case .enterCommand(let input, let restoreMode):
-      var args = [kv("input", input)]
-      if restoreMode { args.append(flag("restore-mode")) }
-      return verb("enter_command_mode", args)
+    case .enterCommand(let input):
+      return verb("enter_command_mode", [kv("input", input)])
     case .copyURL: return verb("url_copy")
     case .yankSelection(let register):
       if let register { return verb("yank_selection", [kv("register", register)]) }
@@ -1189,7 +1194,7 @@ extension Config {
       - `[mode.all.mappings]`
       - `[mode.normal]`
       - `[mode.normal.mappings]`
-      - `[mode.insert.mappings]`
+      - `[mode.passthrough.mappings]`
       - `[mode.terminal.mappings]`
       - `[mode.command.mappings]`
       - `[debug]`

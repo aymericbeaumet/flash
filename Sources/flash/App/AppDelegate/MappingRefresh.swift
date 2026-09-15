@@ -58,7 +58,7 @@ extension AppDelegate {
 
   private func mappingModeChanged(from old: Config.Mode?, to new: Config.Mode) -> Bool {
     guard let old else { return true }
-    return old.all != new.all || old.normal != new.normal || old.insert != new.insert
+    return old.all != new.all || old.normal != new.normal || old.passthrough != new.passthrough
       || old.command != new.command || old.terminal != new.terminal
   }
 }

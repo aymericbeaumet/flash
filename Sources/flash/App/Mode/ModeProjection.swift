@@ -8,21 +8,21 @@ import Foundation
 /// Which configured label string to show. The executor maps this to the
 /// user-configured `Config.Mode.Labels` text, keeping config out of the core.
 enum ModeLabel: Equatable {
-  case insert
+  case passthrough
   case normal
   case command
   case terminal
 }
 
 extension Mode {
-  /// The coarse insert/normal axis used by consumers that only care about that
+  /// The coarse passthrough/normal axis used by consumers that only care about that
   /// distinction and the pointer interaction policy. Command surfaces have a
   /// separate mapping scope effect that selects all-mode and command-specific
   /// Carbon mappings while the field editor owns the keyboard.
   /// Terminal input uses the non-capturing axis and its local mapping scope.
   var flashMode: FlashMode {
     switch self {
-    case .disabled, .insert, .terminal: return .insert
+    case .disabled, .passthrough, .terminal: return .passthrough
     case .normal, .command: return .normal
     }
   }
@@ -42,7 +42,7 @@ extension Mode {
     // sets a flag and re-renders instead of poking `overlay` fields directly.
     if nativeSurfaceSuspended { return false }
     switch self {
-    case .disabled, .insert, .terminal:
+    case .disabled, .passthrough, .terminal:
       return false
     case .normal:
       return !hasHints && !activationInFlight
@@ -65,7 +65,7 @@ extension Mode {
     // only governs cursor visibility / routing for when capture later resumes.
     if nativeSurfaceSuspended, case .normal = self { return .normal }
     switch self {
-    case .disabled, .insert:
+    case .disabled, .passthrough:
       return .hints
     case .terminal:
       return .normal
@@ -83,7 +83,7 @@ extension Mode {
   /// Which label string the status bar / badge shows.
   var label: ModeLabel {
     switch self {
-    case .disabled, .insert: return .insert
+    case .disabled, .passthrough: return .passthrough
     case .normal: return .normal
     case .command: return .command
     case .terminal: return .terminal
@@ -95,18 +95,18 @@ extension Mode {
   /// painting over a badge while the mode stays `.normal`.
   var badgeStyle: OverlayModeBadgeStyle {
     switch self {
-    case .disabled, .insert: return .insert
+    case .disabled, .passthrough: return .passthrough
     case .normal: return .normal
     case .command: return .command
-    case .terminal: return .command
+    case .terminal: return .terminal
     }
   }
 
   /// Whether the mode badge is intrinsically shown. The executor ANDs this with
   /// `statusBarVisible` so `[statusbar] enabled` independently gates the bar.
   var badgeVisibleIntrinsic: Bool {
-    // Advanced mode keeps the badge in both NORMAL and INSERT; with advanced
-    // off the bar still shows "INSERT" when the status bar is enabled.
+    // This gates the persistent bar, including the app name and status data.
+    // PASSTHROUGH and disabled mode retain the neutral app-name pill.
     true
   }
 }

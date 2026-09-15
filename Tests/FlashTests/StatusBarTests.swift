@@ -4,6 +4,44 @@ import XCTest
 @testable import flash
 
 final class StatusBarTests: XCTestCase {
+  func testDefaultPassthroughPillFitsAppNamesAndBoundsLongOnes() {
+    for template in [Config.StatusBar.defaultTemplate, ConfigLoader.parse("").statusBar.template] {
+      for (app, expected) in [
+        ("", "FLASH"), ("Alacritty", "Alacritty"), ("Google Chrome", "Google Chrome"),
+        ("Visual Studio Code", "Visual Studio…"),
+      ] {
+        let model = FlashStatusBarTemplateEngine.render(
+          template: template, context: FlashStatusBarContext(activeAppName: app))
+        let pill = model.document.runs.filter(\.pill)
+        XCTAssertEqual(pill.map(\.text).joined(), expected)
+        XCTAssertLessThanOrEqual(pill.map(\.text).joined().count, 14)
+      }
+    }
+  }
+
+  func testConfiguredStatusBarReservesNotchSizedCentreOnPlainDisplay() throws {
+    let panel = OverlayPanel()
+    let template = FlashStatusBarTemplate(
+      template:
+        "#[align=left]\(String(repeating: "L", count: 200))"
+        + "#[align=absolute-centre]App"
+        + "#[align=right]\(String(repeating: "R", count: 200))")
+    panel.statusBarModel = FlashStatusBarTemplateEngine.render(
+      template: template, context: FlashStatusBarContext())
+    renderStatusBar(panel)
+    let surface = panel.primaryStatusBarSurface
+    let left = try XCTUnwrap(
+      surface.visibleRuns.firstIndex { $0.segment.alignment == .left })
+    let right = try XCTUnwrap(
+      surface.visibleRuns.firstIndex { $0.segment.alignment == .right })
+    let halfReservation = 90 + OverlayPanel.statusBarNotchMargin
+    XCTAssertLessThanOrEqual(
+      surface.runFrames[left].maxX, 720 - halfReservation + surface.cellWidth)
+    XCTAssertGreaterThanOrEqual(
+      surface.runFrames[right].minX, 720 + halfReservation - surface.cellWidth)
+    XCTAssertTrue(surface.layout.text.contains("App"))
+  }
+
   private func renderStatusBar(
     _ panel: OverlayPanel,
     width: CGFloat = 1_440,
@@ -738,12 +776,12 @@ final class StatusBarTests: XCTestCase {
     XCTAssertFalse(done.reverse)
   }
 
-  func testInsertModeButtonPaletteUsesBlueBackgroundLitFromTheTop() {
+  func testTerminalModeButtonPaletteUsesBlueBackgroundLitFromTheTop() {
     XCTAssertEqual(
-      OverlayPanel.insertPalette.topCG,
+      OverlayPanel.terminalPalette.topCG,
       OverlayPanel.lifted(OverlayPanel.nordFrost2, by: 0.12).cgColor)
-    XCTAssertEqual(OverlayPanel.insertPalette.bottomCG, OverlayPanel.nordFrost2CG)
-    XCTAssertEqual(OverlayPanel.insertPalette.foregroundCG, OverlayPanel.nordPolarNight0CG)
+    XCTAssertEqual(OverlayPanel.terminalPalette.bottomCG, OverlayPanel.nordFrost2CG)
+    XCTAssertEqual(OverlayPanel.terminalPalette.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
 
   func testCommandModeButtonPaletteUsesHighlightedBackgroundLitFromTheTop() {
@@ -788,8 +826,8 @@ final class StatusBarTests: XCTestCase {
       accuracy: 0.001)
   }
 
-  func testModePillWidthIsOwnedOnlyByConfiguredLabels() {
-    let labels = Config.Mode.Labels(normal: "N", insert: "INSERT", command: "COMMAND")
+  func testModePillWidthIgnoresTransientUnconfiguredText() {
+    let labels = Config.Mode.Labels(normal: "N", passthrough: "", command: "COMMAND")
     let configuredWidth = OverlayPanel.modeBadgeWidth(
       labels: labels,
       currentText: labels.normal,
@@ -813,7 +851,8 @@ final class StatusBarTests: XCTestCase {
     // it was left stranded on the old (larger) union's coordinates. The
     // re-anchor must snap the panel back onto the current union frame.
     let panel = OverlayPanel()
-    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    panel.modeLabels = Config.Mode.Labels(
+      normal: "NORMAL", passthrough: "PASSTHROUGH", command: "COMMAND")
     panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
 
     // Strand the panel on a stale, wrong frame (as if a monitor it spanned was

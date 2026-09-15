@@ -1,6 +1,6 @@
 # Flash contributor guide
 
-Flash is a resident macOS app for keyboard-driven hints, normal/insert/command
+Flash is a resident macOS app for keyboard-driven hints, normal/passthrough/command
 modes, a configurable status bar, terminal popups and managed stdio plugins.
 The `flash` executable is both CLI and resident. Read the relevant maintained
 contracts before changing a subsystem:
@@ -54,12 +54,14 @@ contracts before changing a subsystem:
    `only_bundle_ids` and fed only by the host AX broker). Browser content
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
-9. Default keyboard shortcuts must not enter INSERT (`a/A/i/I/o/O/gi` included);
-   the exception is a command that creates or focuses a text input and hands the
-   keyboard over afterwards (`tab_new`, `focus_input`).
-   `enter_insert_mode` and `focus_input` are explicit configuration choices.
-   NORMAL is hermetic: unmapped keys and chords are swallowed, never forwarded.
-   App activation or editable focus alone never changes NORMAL. See the mode document for deliberate pointer/target commits.
+9. PASSTHROUGH is the default, with a neutral fixed-width app-name pill and no
+   mode border. Advanced mode and its entry shortcuts are opt-in. NORMAL is
+   persistent; unmapped keys/chords are swallowed and bare Escape/`i` never
+   change base mode. Use explicit configured normal/passthrough entry actions.
+   Command/finder/terminal dismissal returns to PASSTHROUGH. NORMAL, COMMAND
+   and focused TERMINAL surfaces share a two-point glowing border; terminal
+   previews never acquire keyboard ownership. See the mode document for
+   deliberate pointer/target handoffs.
 10. Dev deployment must use `Scripts/install.sh --dev`, which owns build,
     signing, replacement and restart order. Do not hand-copy/sign/kill the app.
     The dev bundle is `/Applications/Flash 🧪.app`; release is

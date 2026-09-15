@@ -30,7 +30,7 @@ enum URLCommand: Hashable {
   /// Freestyle keyboard cursor control (pointer mode).
   case mousePointer
   /// Focus the first (or count-th) editable text input in the focused window
-  /// and enter INSERT — Vimium's `gi`.
+  /// and enter PASSTHROUGH — Vimium's `gi`.
   case focusInput
   /// Hint-label the focused window's scroll areas; committing moves the
   /// pointer into the chosen one so subsequent scroll verbs land there.
@@ -45,7 +45,7 @@ enum URLCommand: Hashable {
   case terminalDismiss
   case terminalRestart(name: String?)
   case terminalQuit(name: String?)
-  case insertMode
+  case passthroughMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
   case reload(force: Bool)
@@ -58,15 +58,8 @@ enum URLCommand: Hashable {
   case tabClose
   case find
   case candidateFinder(all: Bool)
-  /// Open command-line mode pre-seeded with `input`. `restoreMode` is set
-  /// when the mapping carries `--restore-mode`; on exit (submit or cancel)
-  /// the command-line dismiss restores whichever mode was active when the
-  /// verb fired instead of bouncing the user to normal. Use case:
-  /// `["flash", "enter_command_mode", "--input=:flashlight @source:emojis.glyphs",
-  /// "--restore-mode"]` fired from insert mode opens the flashlight scoped
-  /// to the emoji source and returns the user to insert after the chosen
-  /// glyph lands.
-  case enterCommand(input: String, restoreMode: Bool)
+  /// Open a prefilled command surface. Closing it returns to passthrough.
+  case enterCommand(input: String)
   case copyURL
   /// Yank (copy) the focused app's current selection into a register.
   /// `register == nil` (and the synonyms `+` / `*` / `"`) targets the system
@@ -461,10 +454,10 @@ final class URLEventHandler: NSObject {
 
     "leave_mode": .init(parse: { a in a.args.isEmpty ? .leaveMode : nil }),
 
-    "enter_insert_mode": .init(parse: { _ in .insertMode }),
+    "enter_passthrough_mode": .init(parse: { _ in .passthroughMode }),
 
     "enter_command_mode": .init(
-      [.text("input", "text"), .flag("restore_mode")],
+      [.text("input", "text")],
       parse: { a in
         guard let raw = a.value("input") else {
           return a.args.isEmpty ? .commandMode : nil
@@ -478,7 +471,7 @@ final class URLEventHandler: NSObject {
         // start with `flashlight`. The user gets full control over which
         // behaviour they want.
         let normalized = String(raw.drop(while: { $0 == ":" }))
-        return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
+        return .enterCommand(input: normalized)
       }),
 
     "scroll_left": .init(parse: { _ in .scroll(.left) }),

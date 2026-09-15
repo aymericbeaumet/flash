@@ -81,9 +81,9 @@ extension NormalModeDispatcher {
 
   static func helpText(config: Config, showModes: Bool) -> String {
     let normal = groupedKeys(config.mode.mappings(for: .normal))
-    let insert = groupedKeys(config.mode.mappings(for: .insert))
+    let passthrough = groupedKeys(config.mode.mappings(for: .passthrough))
     let terminal = groupedKeys(config.mode.effectiveTerminalMappings)
-    let commands = Array(Set(normal.keys).union(insert.keys).union(terminal.keys))
+    let commands = Array(Set(normal.keys).union(passthrough.keys).union(terminal.keys))
       .sorted { lhs, rhs in
         lhs.diagnosticDescription.localizedCaseInsensitiveCompare(rhs.diagnosticDescription)
           == .orderedAscending
@@ -92,17 +92,17 @@ extension NormalModeDispatcher {
       (
         command.diagnosticDescription,
         joined(normal[command] ?? []),
-        joined(insert[command] ?? []),
+        joined(passthrough[command] ?? []),
         joined(terminal[command] ?? [])
       )
     }
 
     let actionWidth = max("ACTION".count, rows.map(\.0.count).max() ?? 0)
     let normalWidth = max("NORMAL".count, rows.map(\.1.count).max() ?? 0)
-    let insertWidth = max("INSERT".count, rows.map(\.2.count).max() ?? 0)
+    let passthroughWidth = max("PASSTHROUGH".count, rows.map(\.2.count).max() ?? 0)
     let commandLineVisible =
       !(normal[.flashCommand(.commandMode)] ?? []).isEmpty
-      || !(insert[.flashCommand(.commandMode)] ?? []).isEmpty
+      || !(passthrough[.flashCommand(.commandMode)] ?? []).isEmpty
     var lines: [String] = []
     if !showModes {
       let mappingWidth = max("MAPPING".count, rows.map(\.1.count).max() ?? 0)
@@ -127,12 +127,12 @@ extension NormalModeDispatcher {
     lines.append(
       padded("ACTION", width: actionWidth)
         + "  " + padded("NORMAL", width: normalWidth)
-        + "  " + padded("INSERT", width: insertWidth) + "  TERMINAL")
+        + "  " + padded("PASSTHROUGH", width: passthroughWidth) + "  TERMINAL")
     for row in rows where !row.1.isEmpty || !row.2.isEmpty || showModes {
       lines.append(
         padded(row.0, width: actionWidth)
           + "  " + padded(row.1, width: normalWidth)
-          + "  " + padded(row.2, width: insertWidth) + "  " + row.3)
+          + "  " + padded(row.2, width: passthroughWidth) + "  " + row.3)
     }
     lines.append("")
     lines.append("Counts: N{mapping}, e.g. 10u or 3]t")
@@ -144,7 +144,7 @@ extension NormalModeDispatcher {
     let rows =
       mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
-      + mappingRows(scope: "insert", mappings: config.mode.insert)
+      + mappingRows(scope: "passthrough", mappings: config.mode.passthrough)
       + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
       + mappingRows(scope: "command", mappings: config.mode.command)
     let scopeWidth = max("SCOPE".count, rows.map(\.scope.count).max() ?? 0)
@@ -179,7 +179,7 @@ extension NormalModeDispatcher {
   static func mappingsJSON(config: Config) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
-      + mappingRows(scope: "insert", mappings: config.mode.insert)
+      + mappingRows(scope: "passthrough", mappings: config.mode.passthrough)
       + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
       + mappingRows(scope: "command", mappings: config.mode.command))
       .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
@@ -285,7 +285,8 @@ extension NormalModeDispatcher {
     for line in commandLineHelpLines {
       lines.append(line)
     }
-    lines.append("Command mode exits with the leave_mode mapping, Esc, ctrl-c, or empty backspace.")
+    lines.append(
+      "Command mode exits with a configured mode shortcut, Esc, ctrl-c, or empty backspace.")
   }
 
   private static var commandLineHelpLines: [String] {

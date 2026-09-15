@@ -3,13 +3,13 @@ import Foundation
 enum ModeScope: String, CaseIterable, Hashable {
   case all
   case normal
-  case insert
+  case passthrough
   case terminal
   case command
 }
 
 /// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`, or
-/// `[mode.insert.mappings]`, `[mode.command.mappings]`, or `[mode.terminal.mappings]`.
+/// `[mode.passthrough.mappings]`, `[mode.command.mappings]`, or `[mode.terminal.mappings]`.
 /// Terminal mappings are evaluated locally by the focused terminal popup.
 /// The key is the mapping lhs and the action is resolved at config load.
 /// `repeatsOnFinalKey` keeps a completed normal-mode sequence armed so each

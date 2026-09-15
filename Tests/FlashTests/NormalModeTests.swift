@@ -310,10 +310,6 @@ final class NormalModeTests: XCTestCase {
       .mouseGrid(.click(.doubleClick, modifiers: [])))
   }
 
-  // `f` and `F` clicks no longer auto-enter insert from generic provider
-  // metadata. Virtual and physical primary clicks use the same post-click
-  // terminal/input handoff check.
-
   func testHelpReloadAndModifiedKeyConsumption() {
     XCTAssertNil(command(chars: "a"))
     XCTAssertNil(command(chars: "A", ignoring: "a", flags: [.shift]))
@@ -361,7 +357,7 @@ final class NormalModeTests: XCTestCase {
     // silently swallowing the keystroke.
     XCTAssertEqual(command(pending: "[", chars: "r"), .reload(force: false))
     XCTAssertEqual(command(pending: "]", chars: "r"), .reload(force: false))
-    // Text-entry shortcuts are opt-in, including the former gi sequence.
+    // Neither `gi` nor `i` changes mode without an explicit mapping.
     XCTAssertNil(command(pending: "g", chars: "i"))
     assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
     XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
@@ -436,23 +432,23 @@ final class NormalModeTests: XCTestCase {
       [outer])
   }
 
-  func testInsertEntryCarriesNormalModeTargetUnlessExplicitTargetIsProvided() {
+  func testPassthroughEntryCarriesNormalModeTargetUnlessExplicitTargetIsProvided() {
     XCTAssertEqual(
-      AppDelegate.insertEntryTargetPID(
+      AppDelegate.passthroughEntryTargetPID(
         explicitTargetPID: nil,
         currentMode: .normal,
         normalModeTargetPID: pid_t(42)),
       pid_t(42))
     XCTAssertEqual(
-      AppDelegate.insertEntryTargetPID(
+      AppDelegate.passthroughEntryTargetPID(
         explicitTargetPID: pid_t(7),
         currentMode: .normal,
         normalModeTargetPID: pid_t(42)),
       pid_t(7))
     XCTAssertNil(
-      AppDelegate.insertEntryTargetPID(
+      AppDelegate.passthroughEntryTargetPID(
         explicitTargetPID: nil,
-        currentMode: .insert,
+        currentMode: .passthrough,
         normalModeTargetPID: pid_t(42)))
   }
 
@@ -466,7 +462,7 @@ final class NormalModeTests: XCTestCase {
         normalModeTargetPID: pid_t(42)))
     XCTAssertFalse(
       AppDelegate.normalModeShouldPreferCapturedContext(
-        mode: .insert,
+        mode: .passthrough,
         overlayInputMode: .normal,
         hasHints: false,
         activationInFlight: false,
@@ -501,7 +497,7 @@ final class NormalModeTests: XCTestCase {
         normalModeTargetPID: nil))
   }
 
-  func testInsertFocusExitOnlyProbesFocusChangingAXNotifications() {
+  func testPassthroughFocusExitOnlyProbesFocusChangingAXNotifications() {
     XCTAssertTrue(
       AppMonitor.notificationMayChangeFocusedElement(
         kAXFocusedUIElementChangedNotification as String))
@@ -611,7 +607,7 @@ final class NormalModeTests: XCTestCase {
   func testPointerScrollPassesThroughInIdleNormalMode() {
     // Wheel ticks in normal mode always pass through to the focused app
     // (the overlay panel `ignoresMouseEvents`) and must never flip
-    // Flash into insert or re-key normal capture. Hints visible is the
+    // Flash into passthrough or re-key normal capture. Hints visible is the
     // one exception — there the scroll dismisses the picker.
     XCTAssertTrue(
       AppDelegate.pointerScrollShouldPassThrough(
@@ -623,7 +619,7 @@ final class NormalModeTests: XCTestCase {
         hasHints: true))
     XCTAssertFalse(
       AppDelegate.pointerScrollShouldPassThrough(
-        mode: .insert,
+        mode: .passthrough,
         hasHints: false))
   }
 
@@ -684,10 +680,10 @@ final class NormalModeTests: XCTestCase {
         modeBadgeCapturesInput: true))
   }
 
-  func testCommandLineEntryIsAllowedFromInsertAndNormalModeEvenWithTransientHints() {
+  func testCommandLineEntryIsAllowedFromPassthroughAndNormalModeEvenWithTransientHints() {
     XCTAssertTrue(
       AppDelegate.commandLineEntryIsAllowed(
-        mode: .insert,
+        mode: .passthrough,
         hasHints: false,
         activationInFlight: false))
     XCTAssertTrue(
@@ -697,7 +693,7 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: false))
     XCTAssertTrue(
       AppDelegate.commandLineEntryIsAllowed(
-        mode: .insert,
+        mode: .passthrough,
         hasHints: true,
         activationInFlight: false))
     XCTAssertTrue(
@@ -705,15 +701,6 @@ final class NormalModeTests: XCTestCase {
         mode: .normal,
         hasHints: false,
         activationInFlight: true))
-  }
-
-  func testCommandLineExitAlwaysReturnsToNormalMode() {
-    XCTAssertEqual(
-      AppDelegate.commandLineExitMode(currentMode: .insert),
-      .normal)
-    XCTAssertEqual(
-      AppDelegate.commandLineExitMode(currentMode: .normal),
-      .normal)
   }
 
   func testNormalModeInputCaptureStaysOwnedDuringSourceResolution() {
@@ -725,20 +712,19 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: false))
     XCTAssertFalse(
       AppDelegate.normalModeShouldOwnKeyboardInput(
-        mode: .insert,
+        mode: .passthrough,
         overlayInputMode: .hints,
         hasHints: false,
         activationInFlight: false))
   }
 
   func testActiveWindowBorderVisibility() {
-    // The border shows in BOTH modes (thin green normal / thicker blue insert)
-    // when advanced mode is on, no hints are up, and the desktop session is
-    // active — so the active window is always identifiable.
+    // NORMAL emphasizes the target window only while the desktop session is active.
     XCTAssertTrue(
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: true,
+        modeStyle: .normal,
         hasHints: false,
         sessionActive: true))
     // `[overlay] window_border = false` opts out wholesale.
@@ -746,13 +732,15 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: false,
         modeBadgeEnabled: true,
+        modeStyle: .normal,
         hasHints: false,
         sessionActive: true))
-    // No advanced mode → no normal/insert distinction to draw.
+    // No advanced mode → no NORMAL target window to emphasize.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: false,
+        modeStyle: .normal,
         hasHints: false,
         sessionActive: true))
     // Lock/session switch/sleep hides the border immediately.
@@ -760,6 +748,7 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: true,
+        modeStyle: .normal,
         hasHints: false,
         sessionActive: false))
     // Hints suppress the border so chips aren't double-framed.
@@ -767,47 +756,45 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: true,
+        modeStyle: .normal,
         hasHints: true,
         sessionActive: true))
   }
 
-  func testActiveWindowBorderStyleIsGreenInNormalAndBlueInInsert() {
-    // Normal = thin green (no glow); insert = thicker, glowing blue. Both share
-    // the same outer edge — insert grows inward.
+  func testActiveWindowBorderStyleIsGreenInNormalAndBlueInTerminal() {
     let normal = AppDelegate.activeWindowBorderStyle(for: .normal)
-    let insert = AppDelegate.activeWindowBorderStyle(for: .insert)
+    let terminal = AppDelegate.activeWindowBorderStyle(for: .terminal)
     XCTAssertEqual(normal.color, OverlayPanel.nordAuroraGreenCG)
-    XCTAssertEqual(normal.lineWidth, 1)
-    XCTAssertFalse(normal.glow)
-    XCTAssertEqual(insert.color, OverlayPanel.nordFrost2CG)
-    XCTAssertEqual(insert.lineWidth, 2)
-    XCTAssertTrue(insert.glow)
-    XCTAssertGreaterThan(insert.lineWidth, normal.lineWidth)
+    XCTAssertEqual(normal.lineWidth, 2)
+    XCTAssertTrue(normal.glow)
+    XCTAssertEqual(terminal.color, OverlayPanel.nordFrost2CG)
+    XCTAssertEqual(terminal.lineWidth, 2)
+    XCTAssertTrue(terminal.glow)
 
-    // Command = thin purple (1px like normal), no glow.
+    // Command shares the same emphasis with its own purple color.
     let command = AppDelegate.activeWindowBorderStyle(for: .command)
     XCTAssertEqual(command.color, OverlayPanel.nordAuroraPurpleCG)
-    XCTAssertEqual(command.lineWidth, 1)
-    XCTAssertFalse(command.glow)
+    XCTAssertEqual(command.lineWidth, normal.lineWidth)
+    XCTAssertEqual(command.glow, normal.glow)
   }
 
   func testActiveWindowBorderStyleConfigOverrides() {
     // `[overlay] window_border_size` / `window_border_color` apply across
-    // every mode; glow (insert's identity) is untouched.
+    // every active mode; emphasis remains enabled.
     let red = NSColor.systemRed.cgColor
     let normal = AppDelegate.activeWindowBorderStyle(
       for: .normal, sizeOverride: 4, colorOverride: red)
     XCTAssertEqual(normal.color, red)
     XCTAssertEqual(normal.lineWidth, 4)
-    XCTAssertFalse(normal.glow)
-    let insert = AppDelegate.activeWindowBorderStyle(
-      for: .insert, sizeOverride: 4, colorOverride: red)
-    XCTAssertEqual(insert.color, red)
-    XCTAssertEqual(insert.lineWidth, 4)
-    XCTAssertTrue(insert.glow)
+    XCTAssertTrue(normal.glow)
+    let terminal = AppDelegate.activeWindowBorderStyle(
+      for: .terminal, sizeOverride: 4, colorOverride: red)
+    XCTAssertEqual(terminal.color, red)
+    XCTAssertEqual(terminal.lineWidth, 4)
+    XCTAssertTrue(terminal.glow)
     // Zero size / nil color = keep the per-mode defaults.
     let untouched = AppDelegate.activeWindowBorderStyle(
-      for: .insert, sizeOverride: 0, colorOverride: nil)
+      for: .terminal, sizeOverride: 0, colorOverride: nil)
     XCTAssertEqual(untouched.color, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(untouched.lineWidth, 2)
   }
@@ -908,7 +895,7 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testCommandSurfacesPublishCommandStatusLabel() {
-    let labels = Config.Mode.Labels(normal: "N", insert: "I", command: "C")
+    let labels = Config.Mode.Labels(normal: "N", passthrough: "I", command: "C")
     XCTAssertEqual(AppDelegate.commandSurfaceModeLabel(labels: labels), "C")
   }
 
@@ -1002,7 +989,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertTrue(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1013,18 +1000,18 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .insert,
+        mode: .passthrough,
         overlayInputMode: .hints,
         hasHints: false,
         activationInFlight: false,
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1035,7 +1022,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1046,7 +1033,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1057,7 +1044,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1068,7 +1055,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: true,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
   }
 
@@ -1086,7 +1073,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: activeSuppression,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1097,7 +1084,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: activeSuppression,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1108,7 +1095,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertTrue(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
@@ -1119,7 +1106,7 @@ final class NormalModeTests: XCTestCase {
         keyboardCaptureIsActive: false,
         menuBarInteractionRecaptureSuppressedUntil: expiredSuppression,
         contextMenuInteractionRecaptureSuppressedUntil: expiredSuppression,
-        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
   }
 
@@ -1145,12 +1132,12 @@ final class NormalModeTests: XCTestCase {
         now: now))
     XCTAssertFalse(
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
-        mode: .insert,
+        mode: .passthrough,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         now: now))
   }
 
-  func testMenuBarPointerClicksSuspendNativeSurfacesWithoutInsert() {
+  func testMenuBarPointerClicksSuspendNativeSurfacesWithoutPassthrough() {
     for action in [JumpAction.leftClick, .rightClick, .doubleClick] {
       let decision = NormalModePointerPolicy.pointerDecision(
         mode: .normal,
@@ -1181,7 +1168,7 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: true,
-        enterInsert: true,
+        enterPassthrough: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1192,7 +1179,7 @@ final class NormalModeTests: XCTestCase {
         action: .doubleClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: true,
-        enterInsert: true,
+        enterPassthrough: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     // Right-click never flips the mode: it suspends normal capture so the
@@ -1206,7 +1193,7 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        enterInsert: false,
+        enterPassthrough: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: true))
     XCTAssertEqual(
@@ -1217,18 +1204,18 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        enterInsert: false,
+        enterPassthrough: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
-        mode: .insert,
+        mode: .passthrough,
         wasCommandLine: false,
         hasHints: false,
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        enterInsert: false,
+        enterPassthrough: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1239,44 +1226,44 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        enterInsert: false,
+        enterPassthrough: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
   }
 
-  func testPointerActionMayEnterInsertExcludesRightClick() {
+  func testPointerActionMayEnterPassthroughExcludesRightClick() {
     // Left / double click can hand the keyboard to the app; right-click only
     // ever opens a context menu and must keep the current mode, so it is
     // excluded here. This keeps hint/grid right-click commits on the suspend
-    // path instead of insert.
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.leftClick))
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.doubleClick))
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.tripleClick))
-    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.rightClick))
+    // path instead of passthrough.
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterPassthrough(.leftClick))
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterPassthrough(.doubleClick))
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterPassthrough(.tripleClick))
+    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterPassthrough(.rightClick))
     // Middle-click gestures act on the target without moving keyboard focus
     // into a text surface, so they stay in NORMAL like right-click.
-    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.middleClick))
+    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterPassthrough(.middleClick))
   }
 
-  func testPointerInsertIntentSeparatesSemanticHintsFromMouseSimulation() {
+  func testPointerPassthroughIntentSeparatesSemanticHintsFromMouseSimulation() {
     // A provider's `false` is authoritative even when the host app (such as
     // Alacritty) already exposes editable focus. This pins tmux pane/link hints
-    // to NORMAL while preserving INSERT for real text-input hints.
+    // to NORMAL while preserving PASSTHROUGH for real text-input hints.
     XCTAssertFalse(
-      PointerInsertIntent.hintTarget(entersInsertMode: false).shouldEnterInsertMode)
+      PointerPassthroughIntent.hintTarget(entersPassthroughMode: false).shouldEnterPassthroughMode)
     XCTAssertTrue(
-      PointerInsertIntent.hintTarget(entersInsertMode: true).shouldEnterInsertMode)
+      PointerPassthroughIntent.hintTarget(entersPassthroughMode: true).shouldEnterPassthroughMode)
 
     // The grid synthesizes a real pointer click, so it follows the same
     // unconditional handoff rule as a physical primary click.
-    XCTAssertTrue(PointerInsertIntent.mouseGridClick.shouldEnterInsertMode)
-    XCTAssertTrue(PointerInsertIntent.physicalClick.shouldEnterInsertMode)
+    XCTAssertTrue(PointerPassthroughIntent.mouseGridClick.shouldEnterPassthroughMode)
+    XCTAssertTrue(PointerPassthroughIntent.physicalClick.shouldEnterPassthroughMode)
   }
 
-  func testNormalAppRightClickSuspendsForContextMenuInsteadOfInsert() {
+  func testNormalAppRightClickSuspendsForContextMenuInsteadOfPassthrough() {
     // Top-level decision: a physical right-click on the app body resolves to an
     // app decision that suspends for the native surface (the context menu) and
-    // never releases capture into an insert handoff — uniform with the `f`/`F`
+    // never releases capture into a passthrough handoff — uniform with the `f`/`F`
     // right-click commits.
     let decision = NormalModePointerPolicy.pointerDecision(
       mode: .normal,
@@ -1294,7 +1281,7 @@ final class NormalModeTests: XCTestCase {
       .app(
         NormalModePointerPolicy.AppClickDecision(
           releaseCapture: false,
-          enterInsert: false,
+          enterPassthrough: false,
           suspendForNativeSurface: true,
           dismissTransientHintsWithoutRekey: false)))
   }
@@ -1302,12 +1289,12 @@ final class NormalModeTests: XCTestCase {
   func testPhysicalPointerClickForwardingOnlyCoversActivationOnlyPrimaryClicks() {
     let released = NormalModePointerPolicy.AppClickDecision(
       releaseCapture: true,
-      enterInsert: true,
+      enterPassthrough: true,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
     let notReleased = NormalModePointerPolicy.AppClickDecision(
       releaseCapture: false,
-      enterInsert: false,
+      enterPassthrough: false,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
 
@@ -1407,7 +1394,7 @@ final class NormalModeTests: XCTestCase {
           dismissTransientHintsWithoutRekey: true)))
   }
 
-  func testWorkspaceActivationRecaptureSkipsPointerInsertHandoff() {
+  func testWorkspaceActivationRecaptureSkipsPointerPassthroughHandoff() {
     let now = Date(timeIntervalSince1970: 1_000)
     let activeSuppression = now.addingTimeInterval(0.5)
     let expiredSuppression = now.addingTimeInterval(-0.1)
@@ -1416,55 +1403,55 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
         mode: .normal,
         menuBarInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertTrue(
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
         mode: .normal,
         menuBarInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
   }
 
   func testPointerFocusLossDeferralIsBriefSoNormalModeReclaimsFocus() {
     // The deferral only needs to outlast the pointer monitor turning a click
-    // into INSERT; it must be far shorter than the suppression windows so an
+    // into PASSTHROUGH; it must be far shorter than the suppression windows so an
     // app that spontaneously steals focus in NORMAL is reclaimed almost
     // immediately instead of sitting there while the badge still reads NORMAL.
     XCTAssertEqual(AppDelegate.pointerFocusLossRecaptureDeferralMs, 120)
     XCTAssertLessThan(
       AppDelegate.pointerFocusLossRecaptureDeferralMs,
-      AppDelegate.pointerInsertHandoffRecaptureSuppressionMs)
+      AppDelegate.pointerPassthroughHandoffRecaptureSuppressionMs)
   }
 
-  func testPointerInsertHandoffTokenRejectsStaleAndExpiredProbes() {
+  func testPointerPassthroughHandoffTokenRejectsStaleAndExpiredProbes() {
     let now = Date(timeIntervalSince1970: 1_000)
     let activeSuppression = now.addingTimeInterval(0.5)
     let expiredSuppression = now.addingTimeInterval(-0.1)
 
     XCTAssertTrue(
-      AppDelegate.pointerInsertHandoffIsCurrent(
+      AppDelegate.pointerPassthroughHandoffIsCurrent(
         token: 7,
         currentToken: 7,
-        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertFalse(
-      AppDelegate.pointerInsertHandoffIsCurrent(
+      AppDelegate.pointerPassthroughHandoffIsCurrent(
         token: 6,
         currentToken: 7,
-        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: activeSuppression,
         now: now))
     XCTAssertFalse(
-      AppDelegate.pointerInsertHandoffIsCurrent(
+      AppDelegate.pointerPassthroughHandoffIsCurrent(
         token: 7,
         currentToken: 7,
-        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
     XCTAssertTrue(
-      AppDelegate.pointerInsertHandoffIsCurrent(
+      AppDelegate.pointerPassthroughHandoffIsCurrent(
         token: nil,
         currentToken: 7,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        pointerPassthroughHandoffRecaptureSuppressedUntil: nil,
         now: now))
   }
 
@@ -2408,7 +2395,7 @@ final class NormalModeTests: XCTestCase {
       "gg", "G", "H", "L", "f", "F", "ctrl-f", "ctrl+shift+f", "sf", "Df", "mf", "sF",
       "DF", "mF", "u", "ctrl-r", "x", "n",
       "/", "r", "R", "e", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "g^", "g$", "[t", "]t", "[a",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "PASSTHROUGH", "g^", "g$", "[t", "]t", "[a",
       "]a", "[s", "]s", "flash pane_previous", "flash pane_next", "g1", "g9", "N{mapping}",
       "flash mouse_target",
       "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
@@ -2424,7 +2411,7 @@ final class NormalModeTests: XCTestCase {
     }
     XCTAssertFalse(help.contains("flash enter_normal_mode"))
     XCTAssertFalse(help.contains("flash leave_mode"))
-    XCTAssertFalse(help.contains("flash enter_insert_mode"))
+    XCTAssertFalse(help.contains("flash enter_passthrough_mode"))
     XCTAssertFalse(help.contains("flash enter_command_mode"))
     XCTAssertFalse(help.contains(":q[uit]"))
   }
@@ -2482,7 +2469,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(help.contains("flash mouse_target"))
     XCTAssertTrue(help.contains("f"))
     XCTAssertFalse(help.contains("NORMAL"))
-    XCTAssertFalse(help.contains("INSERT"))
+    XCTAssertFalse(help.contains("PASSTHROUGH"))
   }
 
   func testMappingsTextListsResolvedScopesAndLeaderMappings() {
@@ -2490,12 +2477,12 @@ final class NormalModeTests: XCTestCase {
     config.mode.all = [
       ModeMapping(
         key: "cmd+space",
-        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false)))
+        action: .flashCommand(.enterCommand(input: "flashlight ")))
     ]
     config.mode.normal = [
       ModeMapping(key: "\\c", action: .shellCommand(["sh", "/tmp/toggle_caffeinate.sh"]))
     ]
-    config.mode.insert = [
+    config.mode.passthrough = [
       ModeMapping(
         key: "ctrl+space",
         action: .flashCommand(.mouseTarget(.click(.leftClick, modifiers: []))))
@@ -2505,7 +2492,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(text.contains("Normal leader: `\\`"))
     XCTAssertTrue(text.contains("all"))
     XCTAssertTrue(text.contains("normal"))
-    XCTAssertTrue(text.contains("insert"))
+    XCTAssertTrue(text.contains("passthrough"))
     XCTAssertTrue(text.contains("cmd+<space>"))
     XCTAssertTrue(text.contains("\\c"))
     XCTAssertTrue(text.contains("[\"sh\", \"/tmp/toggle_caffeinate.sh\"]"))
@@ -2517,7 +2504,7 @@ final class NormalModeTests: XCTestCase {
     config.mode.all = [
       ModeMapping(
         key: "cmd+space",
-        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false)))
+        action: .flashCommand(.enterCommand(input: "flashlight ")))
     ]
     config.mode.normal = [
       ModeMapping(key: "cmd+right", action: .flashCommand(.scroll(.down))),
@@ -2526,7 +2513,7 @@ final class NormalModeTests: XCTestCase {
       ModeMapping(key: key("<space>w"), action: .shellCommand(["sh", "/tmp/toggle_wifi.sh"])),
       ModeMapping(
         key: key("\\<space>"),
-        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
+        action: .flashCommand(.enterCommand(input: "flashlight "))),
       ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
     ]
     let text = NormalModeDispatcher.mappingsText(config: config)
@@ -2810,7 +2797,7 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: false))
     XCTAssertFalse(
       AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
-        mode: .insert,
+        mode: .passthrough,
         overlayInputMode: .normal,
         hasHints: false,
         activationInFlight: false))
@@ -2851,7 +2838,7 @@ final class NormalModeTests: XCTestCase {
       ModeMapping(key: key("<space>s"), action: action),
       ModeMapping(
         key: key("<space><space>"),
-        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
+        action: .flashCommand(.enterCommand(input: "flashlight "))),
     ]
 
     let first = transition(keyCode: kVK_Space, chars: " ", mappings: mappings)
@@ -2867,7 +2854,7 @@ final class NormalModeTests: XCTestCase {
       ModeMapping(key: key("\\c"), action: action),
       ModeMapping(
         key: key("\\<space>"),
-        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
+        action: .flashCommand(.enterCommand(input: "flashlight "))),
     ]
     let first = transition(chars: "\\", mappings: mappings)
     XCTAssertEqual(first.pending, "\\")
@@ -2875,7 +2862,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(second.action, action)
   }
 
-  func testEscapeConsumesWithoutLeavingNormalMode() {
+  func testEscapeDoesNotLeaveNormalModeByDefault() {
     let t = NormalModeInterpreter.interpret(
       pending: "",
       keyCode: 53,
@@ -2887,7 +2874,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(t.pending, "")
   }
 
-  func testEscapeClearsPendingSequence() {
+  func testEscapeClearsPendingSequenceWithoutLeavingNormalMode() {
     let t = NormalModeInterpreter.interpret(
       pending: "2g",
       keyCode: 53,

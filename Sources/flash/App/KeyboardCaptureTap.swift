@@ -14,7 +14,7 @@ import CoreGraphics
 /// `shouldSwallow` decides per event (on the main thread — the tap source runs
 /// in the main run loop). Returning true consumes the event and schedules
 /// `handle`; returning false passes it through untouched (modified chords →
-/// Carbon, INSERT → the focused app, command-line/modal → the key-window path).
+/// Carbon, PASSTHROUGH → the focused app, command-line/modal → the key-window path).
 final class KeyboardCaptureTap {
   private var tap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
@@ -53,19 +53,20 @@ final class KeyboardCaptureTap {
     self.handle = handle
   }
 
-  /// Pure swallow decision. NORMAL and hints capture every key; INSERT and
-  /// key-window surfaces are left untouched unless a native surface owns the
-  /// keyboard and an explicit mapping claims the key.
+  /// Pure swallow decision. NORMAL and active hint sessions capture keys;
+  /// idle PASSTHROUGH and key-window surfaces retain native typing.
   ///
   /// Extracted as a static, side-effect-free function so the tap's single most
   /// security-sensitive decision is unit-testable without a live `CGEventTap`.
   static func shouldSwallow(
     flashMode: FlashMode,
     inputMode: OverlayInputMode,
+    hasTransientInput: Bool = false,
     hasMapping: Bool = false,
     nativeSurfaceOwnsKeyboard: Bool = false
   ) -> Bool {
     if nativeSurfaceOwnsKeyboard { return hasMapping }
+    if hasTransientInput, inputMode == .hints { return true }
     guard flashMode == .normal else { return false }
     switch inputMode {
     case .normal, .hints:

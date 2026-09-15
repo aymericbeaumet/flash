@@ -4,9 +4,10 @@ import QuartzCore
 import os
 
 enum OverlayModeBadgeStyle {
-  case insert
+  case passthrough
   case normal
   case command
+  case terminal
 }
 
 struct CandidateDisplayItem: Equatable {
@@ -160,8 +161,8 @@ final class OverlayPanel: NSPanel {
   var searchModeActive = false
   var modeBadgeVisible = false
   var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
-  var modeBadgeText = "INSERT"
-  var modeBadgeStyle: OverlayModeBadgeStyle = .insert
+  var modeBadgeText = ""
+  var modeBadgeStyle: OverlayModeBadgeStyle = .passthrough
   var modeBadgeCapturesInput = false
   var commandPromptVisible = false
   var commandPromptPrefix = ":"

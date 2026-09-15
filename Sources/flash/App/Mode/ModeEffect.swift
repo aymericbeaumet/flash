@@ -4,7 +4,7 @@ import Foundation
 /// global registration so only the popup's local mappings can intercept keys.
 enum MappingScope: Equatable {
   case normal
-  case insert
+  case passthrough
   case command
   case terminal
 }
@@ -29,7 +29,7 @@ enum ModeEffect: Equatable {
 
   /// Recompute and push everything derived from `Mode`: `overlay.inputMode`,
   /// the badge (text/style/visibility/capture), the status-bar label, and the
-  /// INSERT active-window border. This is the single write path for all of
+  /// PASSTHROUGH active-window border. This is the single write path for all of
   /// those — they cannot drift.
   case renderSurface
 
@@ -37,14 +37,14 @@ enum ModeEffect: Equatable {
   /// capture works. Replaces the old multi-stage recapture ramp + recovery.
   case scheduleRecapture
 
-  /// Re-activate the focused app on INSERT entry so its window reclaims key
+  /// Re-activate the focused app on PASSTHROUGH entry so its window reclaims key
   /// status from the panel (the Messages "first keystroke dropped" fix).
   case activateFocusedApp(pid: pid_t?)
 
   /// Drop any in-flight hints / activation when leaving to a base mode.
   case clearTransientHintState
 
-  /// Hide the overlay on INSERT entry when no hints are showing.
+  /// Hide the overlay on PASSTHROUGH entry when no hints are showing.
   case hideOverlayIfIdle
 
   /// Flush pending local input and dismiss the popup before restoring capture.

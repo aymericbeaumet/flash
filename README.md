@@ -10,7 +10,7 @@ Requires macOS 14 or later and the Accessibility permission.
 
 - Jump directly to visible controls with a few keystrokes.
 - Reach any screen position with a keyboard-driven precision grid.
-- Add a Vim-like normal mode across macOS, with counts, sequences, and custom mappings.
+- Enter a navigation mode when needed, with counts, sequences, and custom mappings.
 - Search apps, browser tabs, tmux windows, notes, emoji, and more from one command bar.
 - Extend it with managed plugins and app-aware actions.
 - Keep the desktop clean: no Dock icon, menu bar item, or preferences window.
@@ -55,7 +55,7 @@ Add a precision grid and the command bar with two more mappings:
 [mode.all.mappings]
 "ctrl+space" = ["flash", "mouse_target"]
 "ctrl+shift+space" = ["flash", "mouse_grid"]
-"ctrl+alt+space" = ["flash", "enter_command_mode", "--input=:flashlight", "--restore-mode"]
+"ctrl+alt+space" = ["flash", "enter_command_mode", "--input=:flashlight"]
 ```
 
 Mappings call the same actions as the CLI, so anything you can run as `flash <verb>` can also be bound in config.
@@ -64,22 +64,49 @@ Mappings call the same actions as the CLI, so anything you can run as `flash <ve
 
 ### Normal mode
 
-Bind `enter_normal_mode` (or an all-scope `leave_mode` exit) to enable the
-keyboard-first modes:
+Flash starts in PASSTHROUGH, so apps receive ordinary typing and native
+shortcuts. Advanced mode is opt-in; configure explicit mode entries, for example:
 
 ```toml
 [mode.all.mappings]
-"cmd+ctrl+i" = ["flash", "enter_insert_mode"]
-"cmd+ctrl+[" = ["flash", "leave_mode"]
+"cmd+ctrl+[" = ["flash", "enter_normal_mode"]
+"cmd+ctrl+i" = ["flash", "enter_passthrough_mode"]
 "alt+space" = ["flash", "terminal_show"]
 
 [statusbar]
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, apps, and terminal panes, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). INSERT has no built-in letter shortcuts. Enter it through an explicit `enter_insert_mode` mapping, or by clicking into a text field with the mouse, `f` hints, or the mouse grid; use `leave_mode` to exit.
+With this configuration, Cmd-Ctrl-[ selects NORMAL and Cmd-Ctrl-i selects
+PASSTHROUGH. These shortcuts do not toggle, and bare Escape or `i` never changes
+idle NORMAL. NORMAL stays active across repeated navigation
+and noneditable hint clicks. Clicking a text field, creating a tab with `t`, or
+using a physical/grid click hands input to the app. A direct hint shortcut from
+PASSTHROUGH returns there after completion. App switches and text-field focus
+changes never activate NORMAL.
 
-`leave_mode` also closes command panels using their return mode (`--restore-mode` preserves the entry mode) and only dismisses active hints in normal mode; `enter_normal_mode` explicitly selects normal mode regardless of a panel's return mode. Modified mappings in `[mode.normal.mappings]`, `[mode.insert.mappings]`, or `[mode.command.mappings]` override the same chord in `[mode.all.mappings]`; no mode-specific exit override is installed by default. `leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` have no default mappings in any scope: define the shortcuts you want, including any command-line or flashlight shortcut.
+Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, apps, and terminal panes, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on).
+
+The status pill stays visible at a fixed width of at least 14 columns.
+PASSTHROUGH shows the active app name in a neutral pill and has no mode border.
+NORMAL uses green, COMMAND purple,
+and TERMINAL blue, with the same two-point glowing border. The terminal border
+surrounds its own focused window; hover previews leave the current mode alone.
+The centered app name and other configured status content remain. On displays
+without a notch, an `absolute-centre` section keeps a notch-sized slot for spacing.
+
+Command, finder, and terminal completion or dismissal return to PASSTHROUGH.
+Explicit mode-entry shortcuts select their named mode from those surfaces.
+Escape remains native in PASSTHROUGH and terminals, where Ctrl-C also reaches
+the process. Command-W closes a
+terminal. External terminals, Vim, and tmux keep their own keyboard behavior
+until you deliberately enter NORMAL.
+
+Modified mappings in `[mode.normal.mappings]`, `[mode.passthrough.mappings]`, or
+`[mode.command.mappings]` override the same chord in `[mode.all.mappings]`.
+`enter_normal_mode` explicitly selects NORMAL and `enter_passthrough_mode`
+selects PASSTHROUGH. Configure command-line/finder shortcuts as desired; see
+[mode and input behavior](docs/normal-mode.md).
 
 ### Status-bar hover popups
 
@@ -202,7 +229,7 @@ refresh_interval = 300
 cycle_interval = 10
 
 [statusbar.options]
-"@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
+"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
 ```
 
 Use this fragment with the `#{E:@left}` template above. The title opens the
@@ -222,7 +249,7 @@ iStat-style strip:
 [statusbar]
 enabled = true
 template = """
-#[align=left]#[pill]#{flash.mode}#[nopill]
+#[align=left]#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]
 #[align=absolute-centre]#{flash.active_app_name}
 #[align=right]#{flash.plugin.cpu.summary}
 #[fg=colour245] · #{flash.plugin.memory.summary}
@@ -288,7 +315,7 @@ can send the user's normal tmux prefix bindings with zero Flash round trips.
 Flash still resolves any discovered local or remote window from the finder.
 Tmux hint discovery recognizes quoted absolute paths (including spaces and
 Unicode), slash-separated relative paths, URLs, and ordinary filenames while
-excluding dotted source identifiers such as `JumpTarget.entersInsertMode`.
+excluding dotted source identifiers such as `JumpTarget.entersPassthroughMode`.
 Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
 so the terminal can open it in a new context. Flash does not open the value
 itself.
@@ -323,14 +350,15 @@ flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
 flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
 flash enter_command_mode                 # open the command line
-flash leave_mode                         # leave insert or close the command panel
+flash enter_normal_mode                  # select navigation mode
+flash enter_passthrough_mode             # hand keyboard input to the focused app
 flash help_show                          # show built-in help
 flash plugins                            # inspect plugins
 flash about                              # open the About Flash window
 flash quit                               # stop the resident app
 ```
 
-Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
+Arguments use `--name=value` for values and bare flags such as `--secondary` or `--double` for booleans.
 
 `window_move` accepts named positions (`topleft`, `topright`, `bottomleft`,
 `bottomright`, `lefthalf`, `righthalf`, `tophalf`, `bottomhalf`, `maximized`,
@@ -377,7 +405,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, unmapped keys and shortcuts are swallowed; only explicit mappings act. `/` (`app_find`) stays in NORMAL; `t` (`tab_new`) enters INSERT once the new tab or window is open so it can be typed into. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, unmapped keys and shortcuts are swallowed; only explicit mappings act. `/` (`app_find`) stays in NORMAL; `t` (`tab_new`) enters PASSTHROUGH once the new tab or window is open so it can be typed into. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
 
 ## Use your existing hotkey tool
 

@@ -40,7 +40,7 @@ extension AppDelegate {
             role: "AXDockItem",
             accessibilityLabel: item.title,
             pid: pid,
-            entersInsertMode: false,
+            entersPassthroughMode: false,
             providerID: "mouse_dock")
         }
         self.presentSystemSurfaceHints(targets, pid: pid, surface: "mouse_dock")
@@ -77,7 +77,7 @@ extension AppDelegate {
           role: Self.statusItemHintRole,
           accessibilityLabel: ownerName,
           pid: pid_t(ownerPID),
-          entersInsertMode: false,
+          entersPassthroughMode: false,
           providerID: "mouse_statusbar"))
     }
     guard !targets.isEmpty else {

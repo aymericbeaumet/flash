@@ -46,18 +46,18 @@ extension AppDelegate {
         targetPID: terminalReturnApplicationPID))
   }
 
-  func enterInsertMode(
-    reason: InsertModeTransitionReason = .explicitCommand,
+  func enterPassthroughMode(
+    reason: PassthroughModeTransitionReason = .explicitCommand,
     targetPID: pid_t? = nil
   ) {
-    let pid = Self.insertEntryTargetPID(
+    let pid = Self.passthroughEntryTargetPID(
       explicitTargetPID: targetPID,
       currentMode: flashMode,
       normalModeTargetPID: normalModeTargetPID)
     FlashLog.trace(
-      "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(hintSession.hints.count) "
+      "[mode] enter_passthrough reason=\(reason.logValue) from=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight)")
-    dispatchMode(.enterInsert(targetPID: pid))
+    dispatchMode(.enterPassthrough(targetPID: pid))
   }
 
   /// The single mutation entry point for the mode: feed the event through the
@@ -93,7 +93,7 @@ extension AppDelegate {
       case .scheduleRecapture:
         scheduleNormalModeRecapture()
       case .activateFocusedApp(let pid):
-        activateInsertTargetApp(pid)
+        activatePassthroughTargetApp(pid)
       case .hideOverlayIfIdle:
         if hintSession.hints.isEmpty { overlay.hide() }
       }
@@ -111,16 +111,16 @@ extension AppDelegate {
       if let context = normalModeDispatchContext() {
         normalModeTargetPID = context.processID
       }
-    case .insert, .disabled:
+    case .passthrough, .disabled:
       normalModeTargetPID = nil
     case .command, .terminal:
       break
     }
   }
 
-  /// Re-activate the focused app on INSERT entry so its window reclaims key
+  /// Re-activate the focused app on PASSTHROUGH entry so its window reclaims key
   /// status from the panel (the Messages "first keystroke dropped" fix).
-  private func activateInsertTargetApp(_ pid: pid_t?) {
+  private func activatePassthroughTargetApp(_ pid: pid_t?) {
     // Identity only: activation needs the app, never its window frame, so this
     // never takes a WindowServer snapshot on the mode-transition path.
     guard
@@ -148,7 +148,7 @@ extension AppDelegate {
   /// Map a projected mode label to the user-configured string.
   func modeLabelText(_ label: ModeLabel) -> String {
     switch label {
-    case .insert: return config.mode.labels.insert
+    case .passthrough: return config.mode.labels.passthrough
     case .normal: return config.mode.labels.normal
     case .command: return config.mode.labels.command
     case .terminal: return config.mode.labels.terminal
@@ -183,7 +183,7 @@ extension AppDelegate {
   }
 
   func refreshCurrentModeSideEffects(reason: String) {
-    // Both modes paint the active-window border (thin green normal / blue insert).
+    // Reconcile highlighted modes and clear the stroke for passthrough.
     updateActiveWindowBorder(reason: reason)
   }
 
@@ -244,11 +244,6 @@ extension AppDelegate {
           pid: pid))
     }
     if isFocusChange {
-      // A window FOCUS change (switching windows/apps) is not a move — redraw
-      // the insert border at the newly-focused window in place. Routing focus
-      // changes through the move/resize "hide during change" path is what made
-      // the border flicker off (appear-then-vanish) on every app switch and on
-      // insert entry.
       scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
     }
     // Window AX notifications are delivered after the operation. Resolve the
@@ -289,7 +284,7 @@ extension AppDelegate {
     }
   }
 
-  static func insertEntryTargetPID(
+  static func passthroughEntryTargetPID(
     explicitTargetPID: pid_t?,
     currentMode: FlashMode,
     normalModeTargetPID: pid_t?
@@ -300,7 +295,7 @@ extension AppDelegate {
   /// Scroll wheel events in idle normal mode are passive: the overlay
   /// panel has `ignoresMouseEvents=true` so the scroll already reaches the
   /// focused app, and we never want a wheel tick to silently flip Flash
-  /// into insert mode or re-key normal capture. (Hints visible → still
+  /// into passthrough mode or re-key normal capture. (Hints visible → still
   /// cancel: the user is scrolling away from the picker.)
   static func pointerScrollShouldPassThrough(
     mode: FlashMode,
@@ -336,6 +331,7 @@ extension AppDelegate {
         + "visible=\(statusBarVisible) hints=\(hintSession.hints.count) in_flight=\(inFlight)")
     statusBarController?.updateModeLabel(text)
     overlay.inputMode = inputMode
+    updateActiveWindowBorder(reason: "apply_mode_overlay")
     // Command entry paints its text and suggestions immediately after the mode
     // transition. Avoid laying out an empty command surface here only to replace
     // it in the same event-handler turn; `displayCommandLine` performs the one
@@ -343,7 +339,6 @@ extension AppDelegate {
     if case .command = mode, !overlay.commandPromptVisible {
       return
     }
-    updateActiveWindowBorder(reason: "apply_mode_overlay")
     overlay.setModeBadge(
       text: text,
       visible: mode.badgeVisibleIntrinsic && statusBarVisible,
@@ -366,10 +361,10 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
       return
     }
-    if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-      until: pointerInsertHandoffRecaptureSuppressedUntil)
+    if Self.pointerPassthroughHandoffRecaptureSuppressionIsActive(
+      until: pointerPassthroughHandoffRecaptureSuppressedUntil)
     {
-      FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
+      FlashLog.trace("[mode] recapture_skip reason=pointer_passthrough_handoff_pending")
       return
     }
     // Reaching here means no suppression is active — any native surface (context
@@ -457,61 +452,61 @@ extension AppDelegate {
   }
 
   @discardableResult
-  func notePointerInsertHandoff(reason: String, now: Date = Date()) -> UInt64 {
-    pointerInsertHandoffToken &+= 1
-    pointerInsertHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
-      Double(Self.pointerInsertHandoffRecaptureSuppressionMs) / 1_000.0)
+  func notePointerPassthroughHandoff(reason: String, now: Date = Date()) -> UInt64 {
+    pointerPassthroughHandoffToken &+= 1
+    pointerPassthroughHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
+      Double(Self.pointerPassthroughHandoffRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "pointer_insert_handoff")
+    cancelNormalModeCaptureRecovery(reason: "pointer_passthrough_handoff")
     FlashLog.trace(
-      "[mode] pointer_insert_handoff reason=\(reason) token=\(pointerInsertHandoffToken) "
+      "[mode] pointer_passthrough_handoff reason=\(reason) token=\(pointerPassthroughHandoffToken) "
         + "recapture_suppressed=true")
-    return pointerInsertHandoffToken
+    return pointerPassthroughHandoffToken
   }
 
-  func clearPointerInsertHandoff(reason: String, token: UInt64? = nil) {
-    if let token, token != pointerInsertHandoffToken {
+  func clearPointerPassthroughHandoff(reason: String, token: UInt64? = nil) {
+    if let token, token != pointerPassthroughHandoffToken {
       FlashLog.trace(
-        "[mode] pointer_insert_handoff_clear_skip reason=\(reason) token=\(token) "
-          + "current=\(pointerInsertHandoffToken)")
+        "[mode] pointer_passthrough_handoff_clear_skip reason=\(reason) token=\(token) "
+          + "current=\(pointerPassthroughHandoffToken)")
       return
     }
-    if pointerInsertHandoffRecaptureSuppressedUntil != nil {
-      FlashLog.trace("[mode] pointer_insert_handoff_clear reason=\(reason)")
+    if pointerPassthroughHandoffRecaptureSuppressedUntil != nil {
+      FlashLog.trace("[mode] pointer_passthrough_handoff_clear reason=\(reason)")
     }
-    pointerInsertHandoffRecaptureSuppressedUntil = nil
-    pointerInsertHandoffToken &+= 1
+    pointerPassthroughHandoffRecaptureSuppressedUntil = nil
+    pointerPassthroughHandoffToken &+= 1
   }
 
-  func cancelPointerInsertHandoff(reason: String) {
-    let hadSuppression = pointerInsertHandoffRecaptureSuppressedUntil != nil
-    pointerInsertHandoffRecaptureSuppressedUntil = nil
-    pointerInsertHandoffToken &+= 1
+  func cancelPointerPassthroughHandoff(reason: String) {
+    let hadSuppression = pointerPassthroughHandoffRecaptureSuppressedUntil != nil
+    pointerPassthroughHandoffRecaptureSuppressedUntil = nil
+    pointerPassthroughHandoffToken &+= 1
     if hadSuppression {
       normalModeRecaptureToken &+= 1
-      FlashLog.trace("[mode] pointer_insert_handoff_cancel reason=\(reason)")
+      FlashLog.trace("[mode] pointer_passthrough_handoff_cancel reason=\(reason)")
     }
   }
 
-  func pointerInsertHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
-    Self.pointerInsertHandoffIsCurrent(
+  func pointerPassthroughHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
+    Self.pointerPassthroughHandoffIsCurrent(
       token: token,
-      currentToken: pointerInsertHandoffToken,
-      pointerInsertHandoffRecaptureSuppressedUntil:
-        pointerInsertHandoffRecaptureSuppressedUntil,
+      currentToken: pointerPassthroughHandoffToken,
+      pointerPassthroughHandoffRecaptureSuppressedUntil:
+        pointerPassthroughHandoffRecaptureSuppressedUntil,
       now: now)
   }
 
-  static func pointerInsertHandoffIsCurrent(
+  static func pointerPassthroughHandoffIsCurrent(
     token: UInt64?,
     currentToken: UInt64,
-    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
+    pointerPassthroughHandoffRecaptureSuppressedUntil: Date?,
     now: Date
   ) -> Bool {
     guard let token else { return true }
     guard token == currentToken else { return false }
-    return pointerInsertHandoffRecaptureSuppressionIsActive(
-      until: pointerInsertHandoffRecaptureSuppressedUntil,
+    return pointerPassthroughHandoffRecaptureSuppressionIsActive(
+      until: pointerPassthroughHandoffRecaptureSuppressedUntil,
       now: now)
   }
 
@@ -521,8 +516,8 @@ extension AppDelegate {
       menuBarInteractionRecaptureSuppressedUntil: menuBarInteractionRecaptureSuppressedUntil,
       contextMenuInteractionRecaptureSuppressedUntil:
         contextMenuInteractionRecaptureSuppressedUntil,
-      pointerInsertHandoffRecaptureSuppressedUntil:
-        pointerInsertHandoffRecaptureSuppressedUntil,
+      pointerPassthroughHandoffRecaptureSuppressedUntil:
+        pointerPassthroughHandoffRecaptureSuppressedUntil,
       now: now)
     if !shouldRecapture,
       Self.menuBarInteractionRecaptureSuppressionIsActive(
@@ -539,11 +534,11 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
     }
     if !shouldRecapture,
-      Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-        until: pointerInsertHandoffRecaptureSuppressedUntil,
+      Self.pointerPassthroughHandoffRecaptureSuppressionIsActive(
+        until: pointerPassthroughHandoffRecaptureSuppressedUntil,
         now: now)
     {
-      FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
+      FlashLog.trace("[mode] recapture_skip reason=pointer_passthrough_handoff_pending")
     }
     recaptureSuppression.pruneExpired(now: now)
     return shouldRecapture
@@ -553,7 +548,7 @@ extension AppDelegate {
     mode: FlashMode,
     menuBarInteractionRecaptureSuppressedUntil: Date?,
     contextMenuInteractionRecaptureSuppressedUntil: Date? = nil,
-    pointerInsertHandoffRecaptureSuppressedUntil: Date? = nil,
+    pointerPassthroughHandoffRecaptureSuppressedUntil: Date? = nil,
     now: Date
   ) -> Bool {
     mode == .normal
@@ -563,8 +558,8 @@ extension AppDelegate {
       && !contextMenuInteractionRecaptureSuppressionIsActive(
         until: contextMenuInteractionRecaptureSuppressedUntil,
         now: now)
-      && !pointerInsertHandoffRecaptureSuppressionIsActive(
-        until: pointerInsertHandoffRecaptureSuppressedUntil,
+      && !pointerPassthroughHandoffRecaptureSuppressionIsActive(
+        until: pointerPassthroughHandoffRecaptureSuppressedUntil,
         now: now)
   }
 
@@ -582,8 +577,8 @@ extension AppDelegate {
     RecaptureSuppression.active(until, now: now)
   }
 
-  static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
-    NormalModePointerPolicy.pointerActionMayEnterInsert(action)
+  static func pointerActionMayEnterPassthrough(_ action: JumpAction) -> Bool {
+    NormalModePointerPolicy.pointerActionMayEnterPassthrough(action)
   }
 
   private func cancelNormalModeCaptureRecovery(reason: String) {
@@ -600,10 +595,10 @@ extension AppDelegate {
       FlashLog.trace("[mode] pointer_recapture_skip reason=context_menu_interaction")
       return
     }
-    if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-      until: pointerInsertHandoffRecaptureSuppressedUntil)
+    if Self.pointerPassthroughHandoffRecaptureSuppressionIsActive(
+      until: pointerPassthroughHandoffRecaptureSuppressedUntil)
     {
-      FlashLog.trace("[mode] pointer_recapture_skip reason=pointer_insert_handoff_pending")
+      FlashLog.trace("[mode] pointer_recapture_skip reason=pointer_passthrough_handoff_pending")
       return
     }
     if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
@@ -619,7 +614,7 @@ extension AppDelegate {
       currentEventType: NSApp.currentEvent?.type,
       location: NSEvent.mouseLocation)
     {
-      cancelPointerInsertHandoff(reason: "pointer_focus_loss")
+      cancelPointerPassthroughHandoff(reason: "pointer_focus_loss")
       FlashLog.trace(
         "[mode] pointer_focus_loss_handoff action=\(click.action) "
           + "buttons=\(NSEvent.pressedMouseButtons)")
@@ -674,12 +669,12 @@ extension AppDelegate {
         return
       }
       guard
-        !Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-          until: self.pointerInsertHandoffRecaptureSuppressedUntil)
+        !Self.pointerPassthroughHandoffRecaptureSuppressionIsActive(
+          until: self.pointerPassthroughHandoffRecaptureSuppressedUntil)
       else {
         FlashLog.trace(
           "[mode] pointer_recapture_defer_skip token=\(token) "
-            + "reason=pointer_insert_handoff_pending")
+            + "reason=pointer_passthrough_handoff_pending")
         return
       }
       if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
@@ -706,8 +701,8 @@ extension AppDelegate {
   static let normalModeCaptureRecoveryDelaysMs = [250, 750, 1_500, 3_000]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
-  static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
-  // Brief: just long enough for the pointer monitor to turn a click into INSERT
+  static let pointerPassthroughHandoffRecaptureSuppressionMs = 1_500
+  // Brief: just long enough for the pointer monitor to turn a click into PASSTHROUGH
   // before we reclaim key. Any longer and an app that spontaneously steals
   // focus would sit on it while the badge still reads NORMAL — the exact
   // "shown but not capturing" inconsistency we want to make impossible.
@@ -761,7 +756,7 @@ extension AppDelegate {
     return false
   }
 
-  static func pointerInsertHandoffRecaptureSuppressionIsActive(
+  static func pointerPassthroughHandoffRecaptureSuppressionIsActive(
     until: Date?,
     now: Date = Date()
   ) -> Bool {
@@ -776,7 +771,7 @@ extension AppDelegate {
     keyboardCaptureIsActive: Bool,
     menuBarInteractionRecaptureSuppressedUntil: Date?,
     contextMenuInteractionRecaptureSuppressedUntil: Date?,
-    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
+    pointerPassthroughHandoffRecaptureSuppressedUntil: Date?,
     now: Date = Date()
   ) -> Bool {
     guard mode == .normal, !hasHints, !activationInFlight, !keyboardCaptureIsActive else {
@@ -794,8 +789,8 @@ extension AppDelegate {
       && !contextMenuInteractionRecaptureSuppressionIsActive(
         until: contextMenuInteractionRecaptureSuppressedUntil,
         now: now)
-      && !pointerInsertHandoffRecaptureSuppressionIsActive(
-        until: pointerInsertHandoffRecaptureSuppressedUntil,
+      && !pointerPassthroughHandoffRecaptureSuppressionIsActive(
+        until: pointerPassthroughHandoffRecaptureSuppressedUntil,
         now: now)
   }
 
@@ -908,8 +903,8 @@ extension AppDelegate {
     FlashLog.debug(
       "[mappings] action=\(command.diagnosticDescription) repeat=\(repeatCount)")
     switch command {
-    case .insertMode:
-      enterInsertMode(reason: .normalModeInput)
+    case .passthroughMode:
+      enterPassthroughMode(reason: .normalModeInput)
     case .normalMode:
       enterNormalMode()
     case .leaveMode:
@@ -962,12 +957,9 @@ extension AppDelegate {
         flags: .maskCommand,
         repeatCount: repeatCount)
     case .candidateFinder(let all):
-      enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
-    case .enterCommand(let input, let restoreMode):
-      enterCommandLineMode(
-        initialText: input,
-        candidateFinderScope: .all,
-        restoreMode: restoreMode)
+      enterCommandLineMode(input: "flashlight ", candidateFinderScope: all ? .all : .running)
+    case .enterCommand(let input):
+      enterCommandLineMode(input: input, candidateFinderScope: .all)
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: normalModeContext())
     case .mouseTargetScreen(let command):
@@ -1071,9 +1063,8 @@ extension AppDelegate {
   }
 
   func enterCommandLineMode(
-    initialText: String = "",
-    candidateFinderScope: CandidateScope? = nil,
-    restoreMode: Bool = false
+    input: String = "",
+    candidateFinderScope: CandidateScope? = nil
   ) {
     guard
       Self.commandLineEntryIsAllowed(
@@ -1081,10 +1072,6 @@ extension AppDelegate {
         hasHints: hintSession.isActive,
         activationInFlight: activationInFlight)
     else { return }
-    // Snapshot the entry mode *before* `transitionMode` runs anywhere
-    // below so `finishCommandLineInteraction` can put the user back where
-    // they were. Verbs that don't ask for this clear the slot so a stale
-    // value from a prior open doesn't leak.
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     overlay.normalModeRepeatAnchor = nil
@@ -1098,7 +1085,7 @@ extension AppDelegate {
       clearCandidateFinderState()
     }
     overlay.setActiveWindowBorder(around: nil)
-    let command = Self.commandLineBuffer(from: initialText)
+    let command = Self.commandLineBuffer(from: input)
     // The flashlight is just the command line pre-filled with `:flashlight ` —
     // render it on the native command-line surface (native editing + a blinking
     // caret + arrow/Ctrl-N-P candidate navigation) instead of the bespoke
@@ -1106,7 +1093,7 @@ extension AppDelegate {
     // separately via `self.finder.scope` / `openCandidateFinderSession`,
     // so the suggestion pool is unaffected.
     let scope: CommandScope = .commandLine
-    dispatchMode(.openCommand(scope: scope, restoreMode: restoreMode))
+    dispatchMode(.openCommand(scope: scope))
     if let candidateFinderScope {
       openCandidateFinderSession(scope: candidateFinderScope)
       if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
@@ -1122,13 +1109,9 @@ extension AppDelegate {
     activationInFlight: Bool
   ) -> Bool {
     switch mode {
-    case .normal, .insert:
+    case .normal, .passthrough:
       return true
     }
-  }
-
-  static func commandLineExitMode(currentMode: FlashMode) -> FlashMode {
-    .normal
   }
 
   /// `:help [topic]` — docs live in the HTTP dashboard's Docs tab, so open the
@@ -1287,7 +1270,7 @@ extension AppDelegate {
 
   /// `completion` runs once the last chord has been posted, in place of the
   /// default NORMAL recapture; a command that hands the keyboard to the app
-  /// afterwards (`tab_new`) enters INSERT there.
+  /// afterwards (`tab_new`) enters PASSTHROUGH there.
   func sendNormalModeKey(
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
@@ -1336,14 +1319,12 @@ extension AppDelegate {
 
   /// Insert text into the focused app: stash it on the pasteboard and
   /// synthesize Cmd+V into the app that owned focus when the picker was
-  /// invoked (an emoji glyph, a clipboard-history entry, …). The overlay
-  /// never takes key focus, so the app's text field is still first
-  /// responder once we dismiss.
+  /// invoked (an emoji glyph, a clipboard-history entry, …).
   func insertText(_ text: String, viaClipboard: Bool = true) {
     let pid = normalModeContext()?.processID
     overlay.hide()
     resetCommandLineState()
-    applyModeOverlay(captureOverride: true)
+    applyModeOverlay()
     guard !text.isEmpty, let pid else { return }
     if viaClipboard { NormalModeDispatcher.copy(text) }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in

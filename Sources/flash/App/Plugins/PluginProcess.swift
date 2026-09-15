@@ -697,7 +697,7 @@ final class PluginProcess {
       accessibilityLabel: wire.label,
       url: wire.url,
       pid: wire.pid ?? contextPID,
-      entersInsertMode: wire.entersInsertMode,
+      entersPassthroughMode: wire.entersPassthroughMode,
       priority: wire.priority,
       providerID: wire.sourceID)
   }

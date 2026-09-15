@@ -63,6 +63,11 @@ Colon-command descriptions live beside their command specifications. When adding
 a command, update its definition, canonical configuration examples and contract
 tests together rather than adding a second parser or help inventory.
 
-Mode-entry shortcuts are opt-in. No default
-`a/A/i/I/o/O/gi` binding enters INSERT; users can explicitly bind
-`enter_insert_mode` or `focus_input` when desired.
+PASSTHROUGH is the default base mode. Advanced mode is opt-in: configure an
+all-scope `enter_normal_mode` mapping to enable it. For example, bind
+`cmd+ctrl+[` to `enter_normal_mode` and `cmd+ctrl+i` to
+`enter_passthrough_mode`. These are explicit entries, not a toggle, and are
+not installed as global defaults. Bare Escape and `i` do not change base mode.
+Mappings for ordinary app typing belong in `[mode.passthrough.mappings]`.
+Command/finder/terminal dismissal always returns to PASSTHROUGH; command entry
+has no return-mode option. See [mode transitions](normal-mode.md#explicit-mode-shortcuts).

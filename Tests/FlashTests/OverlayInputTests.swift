@@ -546,7 +546,7 @@ final class OverlayInputTests: XCTestCase {
         modeBadgeVisible: false,
         modeBadgeCapturesInput: true))
     // Idle NORMAL runs the monitor even when keyboard capture is temporarily
-    // suppressed, so a click on the focused app can still enter insert.
+    // suppressed, so a click on the focused app can still enter passthrough.
     XCTAssertTrue(
       OverlayPanel.pointerIntentMonitorShouldRun(
         inputMode: .normal,
@@ -673,7 +673,7 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.scroll(.top)])
   }
 
-  func testKeyWindowFallbackConsumesEscapeByDefault() throws {
+  func testKeyWindowFallbackConsumesEscapeWithoutChangingModeByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
@@ -720,7 +720,7 @@ final class OverlayInputTests: XCTestCase {
       ConfigLoader.parse(
         """
         [mode.normal.mappings]
-        "A" = ["flash", "enter_insert_mode"]
+        "A" = ["flash", "enter_passthrough_mode"]
         """
       ).mode.compiledNormal
 
@@ -731,7 +731,7 @@ final class OverlayInputTests: XCTestCase {
       modifierFlags: [.shift])
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.insertMode])
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.passthroughMode])
   }
 
   func testNormalModeConsumesDeadKeyEventWithoutCharacters() throws {
@@ -790,7 +790,7 @@ final class OverlayInputTests: XCTestCase {
 
   func testActiveWindowBorderSharesOuterEdgeRegardlessOfWidth() {
     // The stroke's OUTER edge must sit at the same position whether the border
-    // is 1px (normal) or 3px (insert) — only the inner edge grows. The stroke is
+    // is 1px or 3px — only the inner edge grows. The stroke is
     // centered on the path, so the outer edge is `path-inset − lineWidth/2`.
     let target = CGRect(x: 100, y: 80, width: 500, height: 300)
     let panel = CGRect(x: 40, y: 20, width: 800, height: 600)
@@ -817,17 +817,23 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(layers[2] === panel.candidateFinderResultsLayer)
   }
 
-  func testModeBadgeWidthUsesLongestConfiguredLabel() {
+  func testModeBadgeWidthReservesAppFallbackAndLongLabels() {
     let compact = OverlayPanel.modeBadgeWidth(
-      labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C", terminal: "T"),
+      labels: Config.Mode.Labels(normal: "N", passthrough: "", command: "C", terminal: "T"),
       currentText: "N",
       fontSize: 12)
-    let full = OverlayPanel.modeBadgeWidth(
-      labels: Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND"),
+    let standard = OverlayPanel.modeBadgeWidth(
+      labels: Config.Mode.Labels(),
+      currentText: "NORMAL",
+      fontSize: 12)
+    let long = OverlayPanel.modeBadgeWidth(
+      labels: Config.Mode.Labels(terminal: "INTERACTIVE TERMINAL"),
       currentText: "NORMAL",
       fontSize: 12)
 
-    XCTAssertLessThan(compact, full)
+    XCTAssertEqual(compact, standard)
+    XCTAssertEqual(compact, CGFloat(14) * 12 * 0.66 + 16)
+    XCTAssertGreaterThan(long, standard)
   }
 
   func testCandidateFinderResultsHeightHugsLineCount() {

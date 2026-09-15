@@ -719,7 +719,7 @@ public final class AccessibilityProvider: FlashSource {
         url: url,
         pid: pid,
         resolveClickPoint: resolveClickPoint,
-        entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
+        entersPassthroughMode: JumpTarget.textInputRoles.contains(capturedRole),
         priority: isTabAnchor ? .urgent : .normal,
         providerID: identifier
       )

@@ -8,13 +8,13 @@ final class EffectiveMappingsTests: XCTestCase {
   private func mode(
     all: [ModeMapping] = [],
     normal: [ModeMapping] = [],
-    insert: [ModeMapping] = [],
+    passthrough: [ModeMapping] = [],
     command: [ModeMapping] = []
   ) -> Config.Mode {
     var mode = Config().mode
     mode.all = all
     mode.normal = normal
-    mode.insert = insert
+    mode.passthrough = passthrough
     mode.command = command
     mode.recompileMappings()
     return mode
@@ -44,11 +44,11 @@ final class EffectiveMappingsTests: XCTestCase {
     let base = mode(
       all: [ModeMapping(key: "x", action: .flashCommand(.close))],
       normal: [ModeMapping(key: "q", action: .flashCommand(.undo))],
-      insert: [ModeMapping(key: "z", action: .flashCommand(.insertMode))])
+      passthrough: [ModeMapping(key: "z", action: .flashCommand(.passthroughMode))])
     let effective = EffectiveMappings.merge(base: base, plugin: [])
     XCTAssertEqual(effective.all, base.all)
     XCTAssertEqual(effective.normal, base.normal)
-    XCTAssertEqual(effective.insert, base.insert)
+    XCTAssertEqual(effective.passthrough, base.passthrough)
   }
 
   func testConfigNormalOverridesAllAmongPriorityZeroEntries() {
@@ -62,20 +62,20 @@ final class EffectiveMappingsTests: XCTestCase {
       plugin: [
         (
           priority: 25, scope: .normal,
-          mapping: ModeMapping(key: "z", action: .flashCommand(.insertMode))
+          mapping: ModeMapping(key: "z", action: .flashCommand(.passthroughMode))
         )
       ])
     // A mode-specific binding overrides the all-mode fallback.
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
-    XCTAssertEqual(effective.compiledNormal.mapping(for: "z")?.action.command, .insertMode)
+    XCTAssertEqual(effective.compiledNormal.mapping(for: "z")?.action.command, .passthroughMode)
   }
 
-  func testInsertOverridesAllWhileNormalInheritsFallback() {
+  func testPassthroughOverridesAllWhileNormalInheritsFallback() {
     let config = mode(
       all: [ModeMapping(key: "q", action: .flashCommand(.undo))],
-      insert: [ModeMapping(key: "q", action: .flashCommand(.redo))])
+      passthrough: [ModeMapping(key: "q", action: .flashCommand(.redo))])
     XCTAssertEqual(config.compiledNormal.mapping(for: "q")?.action.command, .undo)
-    XCTAssertEqual(config.compiledInsert.mapping(for: "q")?.action.command, .redo)
+    XCTAssertEqual(config.compiledPassthrough.mapping(for: "q")?.action.command, .redo)
   }
 
   func testEqualPriorityTieFavorsPlugin() {
@@ -95,17 +95,18 @@ final class EffectiveMappingsTests: XCTestCase {
     let config = mode(
       all: [ModeMapping(key: "cmd+shift+]", action: .flashCommand(.undo))],
       normal: [ModeMapping(key: "cmd+shift+}", action: .flashCommand(.redo))],
-      command: [ModeMapping(key: "cmd+shift+]", action: .flashCommand(.insertMode))])
+      command: [ModeMapping(key: "cmd+shift+]", action: .flashCommand(.passthroughMode))])
     XCTAssertEqual(
       MappingsCoordinator.nativeMappings(in: config, scope: .normal).map(\.action.command), [.redo])
     XCTAssertEqual(
-      MappingsCoordinator.nativeMappings(in: config, scope: .insert).map(\.action.command), [.undo])
+      MappingsCoordinator.nativeMappings(in: config, scope: .passthrough).map(\.action.command),
+      [.undo])
     XCTAssertEqual(
       MappingsCoordinator.nativeMappings(in: config, scope: .command).map(\.action.command),
-      [.insertMode])
+      [.passthroughMode])
     XCTAssertEqual(config.compiledNormal.ordered.count, 1)
     XCTAssertEqual(config.compiledNormal.ordered.first?.action.command, .redo)
-    for scope in [MappingScope.normal, .insert, .command] {
+    for scope in [MappingScope.normal, .passthrough, .command] {
       XCTAssertTrue(
         MappingsCoordinator.scopedNativeMappings(in: config, scope: scope).isEmpty,
         "The existing all-mode registration serves every scoped override")
@@ -113,11 +114,11 @@ final class EffectiveMappingsTests: XCTestCase {
   }
 
   func testCommandOnlyChordIsRegisteredOnlyForCommandScope() {
-    let mapping = ModeMapping(key: "cmd+ctrl+i", action: .flashCommand(.insertMode))
+    let mapping = ModeMapping(key: "cmd+ctrl+i", action: .flashCommand(.passthroughMode))
     let config = mode(command: [mapping])
     XCTAssertEqual(MappingsCoordinator.scopedNativeMappings(in: config, scope: .command), [mapping])
     XCTAssertTrue(MappingsCoordinator.nativeMappings(in: config, scope: .normal).isEmpty)
-    XCTAssertTrue(MappingsCoordinator.nativeMappings(in: config, scope: .insert).isEmpty)
+    XCTAssertTrue(MappingsCoordinator.nativeMappings(in: config, scope: .passthrough).isEmpty)
   }
 
 }

@@ -175,6 +175,36 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(target, "routing ownership never crosses the wire")
   }
 
+  func testPluginHintTargetPassthroughHandoffUsesExplicitIntentBeforeRole() throws {
+    var raw: [String: Any] = [
+      "id": "hint",
+      "frame": ["x": 10, "y": 20, "width": 30, "height": 40],
+      "role": "AXTextField",
+    ]
+    XCTAssertTrue(
+      try XCTUnwrap(PluginWireCodec.target(from: raw, sourceID: "plugin:safe"))
+        .entersPassthroughMode)
+
+    raw["enters_passthrough_mode"] = false
+    XCTAssertFalse(
+      try XCTUnwrap(PluginWireCodec.target(from: raw, sourceID: "plugin:safe"))
+        .entersPassthroughMode)
+
+    raw["role"] = "AXButton"
+    raw["enters_passthrough_mode"] = true
+    XCTAssertTrue(
+      try XCTUnwrap(PluginWireCodec.target(from: raw, sourceID: "plugin:safe"))
+        .entersPassthroughMode)
+
+    for malformed in [1, "true"] as [Any] {
+      raw["enters_passthrough_mode"] = malformed
+      XCTAssertNil(PluginWireCodec.target(from: raw, sourceID: "plugin:safe"))
+    }
+    raw.removeValue(forKey: "enters_passthrough_mode")
+    raw["enters_insert_mode"] = true
+    XCTAssertNil(PluginWireCodec.target(from: raw, sourceID: "plugin:safe"))
+  }
+
   func testQueryAnswerHasANarrowShapeAndGetsHostOwnedSemantics() throws {
     let candidate = try XCTUnwrap(
       decodeQueryAnswer(
@@ -902,7 +932,7 @@ final class PluginSystemTests: XCTestCase {
             { "key": "q", "command": ["flash", "plugin_command", "--command=spotify", "--subcommand=run"] },
             {
               "key": "ctrl+k",
-              "mode": "insert",
+              "mode": "passthrough",
               "command": ["flash", "hints_dismiss"],
               "only_bundle_ids": ["com.spotify.client"],
               "priority": 40
@@ -928,34 +958,36 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(first.priority, "priority is optional")
 
     let second = manifest.mappings[1]
-    XCTAssertEqual(second.mode, "insert")
-    XCTAssertEqual(second.scope, .insert)
+    XCTAssertEqual(second.mode, "passthrough")
+    XCTAssertEqual(second.scope, .passthrough)
     XCTAssertEqual(second.selector.onlyBundleIDs, ["com.spotify.client"])
     XCTAssertEqual(second.priority, 40)
     XCTAssertEqual(manifest.mappings[2].scope, .terminal)
   }
 
   func testManifestRejectsInvalidMappingMode() throws {
-    let root = try temporaryPluginRoot(
-      manifest: """
-        {
-          "id": "bad-mode",
-          "name": "Bad mode",
-          "version": "1.0.0",
-          "description": "Invalid mapping scope",
-          "install": "true",
-          "exec": ["/usr/bin/true"],
-          "mappings": [
-            { "key": "x", "mode": "command", "command": ["true"] }
-          ]
-        }
-        """)
-    defer { try? FileManager.default.removeItem(at: root) }
+    for mode in ["command", "insert"] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "bad-mode",
+            "name": "Bad mode",
+            "version": "1.0.0",
+            "description": "Invalid mapping scope",
+            "install": "true",
+            "exec": ["/usr/bin/true"],
+            "mappings": [
+              { "key": "x", "mode": "\(mode)", "command": ["true"] }
+            ]
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
 
-    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue(
-        String(describing: error).contains(
-          "plugin mapping mode command must be all, normal, insert, or terminal"))
+      XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+        XCTAssertTrue(
+          String(describing: error).contains(
+            "plugin mapping mode \(mode) must be all, normal, passthrough, or terminal"))
+      }
     }
   }
 

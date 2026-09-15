@@ -5,20 +5,20 @@ import Foundation
 // next `Mode` plus the AppKit effects to apply. No AppKit, no clock, no I/O.
 //
 // Invariants guaranteed here (and pinned by `ModeReducerTests`):
-//  - Insert stickiness: only explicit keyboard requests and disabling
-//    advanced mode leave `.insert`.
+//  - Passthrough stickiness: only explicit keyboard requests and disabling
+//    advanced mode leave `.passthrough`.
 //  - Mouse enters only: `.clickResolved` acts only from `.normal`; it can move
-//    NORMAL→insert but can never move insert→anything.
-//  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
+//    NORMAL→passthrough but can never move passthrough→anything.
+//  - Global/sticky: `.focusedAppChanged` never flips passthrough↔normal.
 //  - Advanced gate: `.enterNormal` is refused while `.disabled`.
 enum ModeReducer {
   static func reduce(_ state: Mode, _ event: ModeEvent) -> (Mode, [ModeEffect]) {
     switch event {
-    case .enterInsert(let targetPID):
+    case .enterPassthrough(let targetPID):
       // Advanced mode off → no normal mode exists, so there is nothing to
-      // enter insert *from*; stay put.
+      // enter passthrough *from*; stay put.
       guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: targetPID) }
-      let next = Mode.insert
+      let next = Mode.passthrough
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
     case .enterNormal(let targetPID):
@@ -35,18 +35,18 @@ enum ModeReducer {
         return reduce(state, .closeTerminal(targetPID: targetPID))
       case .command:
         return reduce(state, .closeCommand(reason: "leave_mode"))
-      case .insert where !hasHints:
+      case .passthrough where !hasHints:
         return reduce(state, .enterNormal(targetPID: targetPID))
-      case .insert, .normal, .disabled:
-        // Active hints are dismissed in place; without hints there is no
-        // enclosing mode to leave, so nothing re-renders.
+      case .normal where !hasHints:
+        return reduce(state, .enterPassthrough(targetPID: targetPID))
+      case .passthrough, .normal, .disabled:
+        // Active hints are dismissed in place; disabled idle input stays native.
         guard hasHints else { return (state, []) }
         return (state, enterEffects(for: state, targetPID: targetPID))
       }
 
-    case .openCommand(let scope, let restoreMode):
-      let restoreTo = restoreMode ? state.asReturnMode : defaultSurfaceReturn(from: state)
-      let next = Mode.command(scope: scope, restoreTo: restoreTo)
+    case .openCommand(let scope):
+      let next = Mode.command(scope: scope, restoreTo: state.asReturnMode)
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: nil))
 
     case .openTerminal:
@@ -68,11 +68,11 @@ enum ModeReducer {
       let next = restoreTo.mode
       return (next, enterEffects(for: next, targetPID: nil))
 
-    case .clickResolved(let entersInsert, let targetPID):
-      // The mouse only acts in NORMAL and can never leave INSERT.
+    case .clickResolved(let entersPassthrough, let targetPID):
+      // The mouse only acts in NORMAL and can never leave PASSTHROUGH.
       guard case .normal = state else { return (state, []) }
-      if entersInsert {
-        let next = Mode.insert
+      if entersPassthrough {
+        let next = Mode.passthrough
         return (next, enterEffects(for: next, targetPID: targetPID))
       }
       // A non-editable click in NORMAL keeps NORMAL; just make sure the overlay
@@ -80,22 +80,20 @@ enum ModeReducer {
       return (state, [.scheduleRecapture])
 
     case .advancedModeChanged(let enabled):
-      if case .command(let scope, let restoreTo) = state {
-        let base: ReturnMode = enabled ? (restoreTo == .disabled ? .insert : restoreTo) : .disabled
+      if case .command(let scope, _) = state {
+        let base: ReturnMode = enabled ? .passthrough : .disabled
         return (.command(scope: scope, restoreTo: base), [.renderSurface])
       }
-      if case .terminal(let restoreTo) = state {
-        let base: ReturnMode =
-          enabled
-          ? (restoreTo == .disabled ? .insert : restoreTo) : .disabled
+      if case .terminal = state {
+        let base: ReturnMode = enabled ? .passthrough : .disabled
         return (.terminal(restoreTo: base), [.renderSurface])
       }
       if enabled {
-        // Hot-enabling advanced mode lands in INSERT; the user opts into NORMAL
+        // Hot-enabling advanced mode lands in PASSTHROUGH; the user opts into NORMAL
         // with their hotkey. If it was already on, just refresh the badge/label
         // (labels may have changed in the reload).
         if case .disabled = state {
-          let next = Mode.insert
+          let next = Mode.passthrough
           return (next, enterEffects(for: next, targetPID: nil))
         }
         return (state, [.renderSurface])
@@ -103,7 +101,7 @@ enum ModeReducer {
       return (.disabled, enterEffects(for: .disabled, targetPID: nil))
 
     case .startup(let advancedEnabled):
-      let next: Mode = advancedEnabled ? .normal : .disabled
+      let next: Mode = advancedEnabled ? .passthrough : .disabled
       return (next, [.prepareKeyboardCapture] + enterEffects(for: next, targetPID: nil))
 
     case .focusedAppChanged:
@@ -112,7 +110,7 @@ enum ModeReducer {
       switch state {
       case .normal, .command:
         return (state, [.scheduleRecapture])
-      case .insert, .disabled, .terminal:
+      case .passthrough, .disabled, .terminal:
         return (state, [])
       }
     }
@@ -128,18 +126,13 @@ enum ModeReducer {
         .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
         .scheduleRecapture,
       ]
-    case .insert:
-      // Hide transient hint content BEFORE rendering so the surface (badge +
-      // active-window border) is drawn last and survives the hide.
+    case .passthrough, .disabled:
+      // Hide transient content before restoring the quiet status bar.
       return [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .setMappingScope(.passthrough), .clearTransientHintState,
+        .hideOverlayIfIdle,
         .renderSurface,
         .activateFocusedApp(pid: targetPID),
-      ]
-    case .disabled:
-      return [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
-        .renderSurface,
       ]
     case .command:
       // Command surfaces keep all-mode and command-specific modified mappings.
@@ -153,14 +146,6 @@ enum ModeReducer {
     }
   }
 
-  /// Default close target for a surface opened without `restoreMode`: NORMAL,
-  /// or disabled when advanced mode is off (so flashlight works without a
-  /// normal-mode binding and never strands the user in a phantom NORMAL).
-  private static func defaultSurfaceReturn(from state: Mode) -> ReturnMode {
-    if state.asReturnMode == .disabled { return .disabled }
-    return .normal
-  }
-
   private static func terminalDeparture(_ state: Mode) -> [ModeEffect] {
     state.isTerminal ? [.hideTerminalPopup] : []
   }
@@ -171,7 +156,7 @@ enum ModeReducer {
     case .terminal: return reduce(state, .closeTerminal(targetPID: targetPID))
     case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
     case .disabled: return (state, [])
-    case .normal, .insert: preconditionFailure("Enabled mode has disabled eligibility")
+    case .normal, .passthrough: preconditionFailure("Enabled mode has disabled eligibility")
     }
   }
 }

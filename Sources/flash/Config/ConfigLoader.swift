@@ -453,7 +453,7 @@ enum ConfigLoader {
         "live_query_timeout_ms",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
+        "labels", "sequence_timeout_ms", "normal", "all", "passthrough", "command", "terminal",
         "scroll_step",
         "scroll_page_fraction", "click_hold_ms", "send_key_interval_ms",
       ],
@@ -1218,28 +1218,29 @@ enum ConfigLoader {
       // length; unknown sub-keys are typos worth naming.
       if let parsed = stringTableValue(value),
         let normal = parsed["normal"],
-        let insert = parsed["insert"],
+        let passthrough = parsed["passthrough"],
         let command = parsed["command"],
         (1...32).contains(normal.count),
-        (1...32).contains(insert.count),
+        (0...32).contains(passthrough.count),
         (1...32).contains(command.count),
         (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count)
       {
-        for key in parsed.keys where !["normal", "insert", "command", "terminal"].contains(key) {
+        for key in parsed.keys
+        where !["normal", "passthrough", "command", "terminal"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, passthrough, command, terminal)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
           normal: normal,
-          insert: insert,
+          passthrough: passthrough,
           command: command,
           terminal: parsed["terminal"] ?? config.mode.labels.terminal)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
-          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\" } "
-            + "with each label 1-32 characters",
+          "mode.labels must be { normal = \"...\", passthrough = \"...\", command = \"...\", terminal = \"...\" } "
+            + "with normal/command/terminal labels 1-32 characters and passthrough 0-32 characters",
           location: location)
       }
     }
@@ -1333,7 +1334,7 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal] {
+    for scope in [ModeScope.passthrough, .terminal] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1748,9 +1749,9 @@ enum ConfigLoader {
     case .normal:
       config.mode.normal.removeAll { $0.key == key }
       config.mode.normal.append(mapping)
-    case .insert:
-      config.mode.insert.removeAll { $0.key == key }
-      config.mode.insert.append(mapping)
+    case .passthrough:
+      config.mode.passthrough.removeAll { $0.key == key }
+      config.mode.passthrough.append(mapping)
     case .terminal:
       config.mode.terminal.removeAll { $0.key == key }
       config.mode.terminal.append(mapping)

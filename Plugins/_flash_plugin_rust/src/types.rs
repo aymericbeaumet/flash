@@ -86,7 +86,7 @@ pub struct JumpTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enters_insert_mode: Option<bool>,
+    pub enters_passthrough_mode: Option<bool>,
     /// Source-declared salience. `Important` and `Urgent` render with the
     /// host's accent hint style.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,7 +102,7 @@ impl JumpTarget {
             label: None,
             url: None,
             pid: None,
-            enters_insert_mode: None,
+            enters_passthrough_mode: None,
             priority: None,
         }
     }
@@ -127,8 +127,8 @@ impl JumpTarget {
         self
     }
 
-    pub fn enters_insert_mode(mut self, enters: bool) -> Self {
-        self.enters_insert_mode = Some(enters);
+    pub fn enters_passthrough_mode(mut self, enters: bool) -> Self {
+        self.enters_passthrough_mode = Some(enters);
         self
     }
 
@@ -813,6 +813,22 @@ impl HintsResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn hint_targets_serialize_passthrough_handoff() {
+        for enters in [true, false] {
+            let target = JumpTarget::new("target", Frame::new(1.0, 2.0, 3.0, 4.0))
+                .enters_passthrough_mode(enters);
+            assert_eq!(
+                serde_json::to_value(&target).unwrap(),
+                json!({
+                    "id": "target",
+                    "frame": { "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0 },
+                    "enters_passthrough_mode": enters,
+                })
+            );
+        }
+    }
 
     #[test]
     fn failure_builders_cannot_emit_success_fields() {

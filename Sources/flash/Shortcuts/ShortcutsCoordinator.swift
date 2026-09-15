@@ -23,7 +23,7 @@ final class MappingsCoordinator {
   private var mappingDispatch: ((MappingCommand) -> Void)?
   private var activeMappings: [ParsedHotkey: ModeMapping] = [:]
   private var configuredMode: Config.Mode = .init()
-  private var lastAppliedScope: MappingScope = .insert
+  private var lastAppliedScope: MappingScope = .passthrough
   private var lastFireDiagnostic: String?
   private var lastFireAt: Date = .distantPast
   /// Chords Flash just synthesized into the focused app (e.g. the `⌘⇧]`
@@ -107,13 +107,14 @@ final class MappingsCoordinator {
     case .terminal: return false
     case .command: return scope == .all || scope == .command
     case .normal: return scope == .all || scope == .normal
-    case .insert: return scope == .all || scope == .insert
+    case .passthrough: return scope == .all || scope == .passthrough
     }
   }
 
   static func nativeMappings(in mode: Config.Mode, scope: MappingScope) -> [ModeMapping] {
     let scopes: [(ModeScope, [ModeMapping])] = [
-      (.normal, mode.normal), (.insert, mode.insert), (.command, mode.command), (.all, mode.all),
+      (.normal, mode.normal), (.passthrough, mode.passthrough), (.command, mode.command),
+      (.all, mode.all),
     ]
     let mappings = scopes.filter { scopeIsActive($0.0, for: scope) }.flatMap(\.1)
     return Config.Mode.resolveMappings(mappings).filter { $0.nativeHotkey != nil }

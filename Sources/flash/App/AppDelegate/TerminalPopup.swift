@@ -98,7 +98,7 @@ extension AppDelegate {
   /// Whether any mapping opens the unnamed shell, which is the only terminal
   /// worth keeping warm before its first use.
   static func bindsFreshShell(_ mode: Config.Mode) -> Bool {
-    (mode.all + mode.normal + mode.insert + mode.terminal).contains {
+    (mode.all + mode.normal + mode.passthrough + mode.terminal).contains {
       $0.action == .flashCommand(.terminalShow(name: nil))
     }
   }

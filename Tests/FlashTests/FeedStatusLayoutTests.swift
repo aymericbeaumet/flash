@@ -63,7 +63,7 @@ final class FeedStatusLayoutTests: XCTestCase {
       document: StatusFormatDocument.parse(source), barFrame: frame,
       screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 900), scale: 2, notch: notch,
       font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
-      labels: .init(normal: "N", insert: "INSERT", command: "COMMAND"),
+      labels: .init(normal: "N", passthrough: "", command: "COMMAND"),
       palette: OverlayPanel.normalPalette, modeStyle: .normal)
     return surface
   }

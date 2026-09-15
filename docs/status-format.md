@@ -16,7 +16,7 @@ enabled = true
 template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
 [statusbar.options]
-"@left" = "#[pill]#{flash.mode}#[nopill] · #{flash.active_app_name}"
+"@left" = "#[pill]#{?flash.mode,#{flash.mode},#{?flash.active_app_name,#{=/13/…:flash.active_app_name},FLASH}}#[nopill]"
 "@right" = "#{flash.plugin.cpu.summary} · %H:%M"
 ```
 
@@ -86,6 +86,15 @@ Flash supplies `flash.mode`, `flash.date`, `flash.active_app_name`,
 `flash.plugin.error_count`, and `flash.source.<name>`. Host/user/process values
 and the process environment are available through ordinary lookup.
 
+`flash.mode` is the mode label and is empty in PASSTHROUGH by default. Keep the
+pill present and fall back to the active app name, then `FLASH`, as above.
+`=/13/…` limits the app name to thirteen cells plus the ellipsis. The renderer
+centers the text at the widest configured mode-label width, including TERMINAL,
+with a minimum of fourteen cells, so no format padding is needed. PASSTHROUGH
+uses neutral styling; NORMAL and TERMINAL use their filled green/blue treatment
+and COMMAND remains purple. A centered active-app label outside the pill is
+independent of it.
+
 Flash has no implicit tmux session, window, pane, client, or pane-history
 inventory. Their missing values expand to empty strings, loops over absent
 collections produce no text, and name/pane searches return `0`. The pure
@@ -138,15 +147,23 @@ The additional style tokens are `pill/nopill`, `shrink/noshrink`,
 `cyc/nocyc`, `breathing/nobreathing`, `link=URL/nolink`, and
 `popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`.
 Native `range=user|name` selects a `[statusbar.click]` action. The status renderer
-reserves explicit mode-pill space and notch clearance, then draws the native
+reserves explicit visible mode-pill space and notch clearance, then draws the native
 cell layout. Elastic `#[shrink]` spans in either side lane reserve any fixed suffix
-and stop before the notch or an absolute-centre component. The feed uses this
-for title-only ellipsis with an always-visible outbound arrow. An
-absolute-centre component owns its own columns plus a small gutter: a side
-lane contracts its elastic span first and then loses characters from its far
-end rather than reaching the centred label. A bar too narrow to hold both
-lanes and that reservation drops the reservation instead of erasing a lane. These host
-surfaces do not alter format evaluation.
+and stop before the notch or an absolute-centre component. The feed uses this for
+title-only ellipsis with an always-visible outbound arrow. A side lane shortens
+its elastic span first, then clips its far end before reaching the center slot.
+
+On a display without a notch, a declared `absolute-centre` section
+reserves at least the widest connected physical notch, or 180 points when none
+is connected, plus `notch_margin` on both sides (192 points with default margins
+and no connected notch). The slot grows for wider text plus a two-cell gutter
+on each side. All connected screens contribute the reference notch, even with
+`monitor = "primary"`. Displays with a physical notch hide center content and
+keep the actual notch clearance. Without an `absolute-centre` section there is
+no extra reservation; ordinary `centre` retains its native placement between
+the side lanes. On very narrow bars, the virtual reservation shrinks to preserve
+at least eight cells per side lane. These host surfaces do not alter format
+evaluation.
 
 The bar itself is a vertical gradient over the `fill` colour with a hairline
 along its bottom edge; default-background cells are transparent so both show

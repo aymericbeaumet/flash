@@ -45,7 +45,7 @@ final class FlashStatusBarController {
   private var lastJobPublish: TimeInterval = -.infinity
   private var activeAppName = ""
   private var activeBundleIdentifier = ""
-  private var modeLabel = "INSERT"
+  private var modeLabel = ""
   private(set) var lastPublishedModel: FlashStatusBarModel?
   /// Inputs of the last evaluation; an identical capture skips the evaluation.
   private var lastEvaluation:

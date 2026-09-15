@@ -33,7 +33,7 @@ extension OverlayPanel {
     guard pointerMonitorShouldDispatch() else { return }
     // Drop our own synthesized scroll/click events (keyboard-driven
     // normal-mode scrolling, hint clicks) so they don't bounce back
-    // through this monitor and flip Flash into insert mode.
+    // through this monitor and flip Flash into passthrough mode.
     if event.cgEvent?.getIntegerValueField(.eventSourceUserData)
       == ActionDispatcher.syntheticMouseEventTag
     {
@@ -42,7 +42,7 @@ extension OverlayPanel {
     // A click on any of Flash's OWN windows (the status-bar click band, the
     // About window, …) is Flash UI, not an app interaction — the local
     // monitor sees it because the window is in this process. Never treat it
-    // as a "clicked the app" intent: that flipped NORMAL → INSERT and
+    // as a "clicked the app" intent: that flipped NORMAL → PASSTHROUGH and
     // re-synthesized the click as a host-app click, which activated other
     // windows over the About window (it looked "closed") and ate the
     // button's click. Only the overlay panel itself stays in the dispatch
@@ -99,7 +99,7 @@ extension OverlayPanel {
       return true
     }
     // Idle NORMAL must run the monitor so a click on the focused app (e.g. a
-    // website text field) is recognised and enters insert. It is intentionally
+    // website text field) is recognised and enters passthrough. It is intentionally
     // NOT gated on `modeBadgeCapturesInput` because capture can be temporarily
     // suppressed while the mode surface still needs click-intent classification.
     _ = modeBadgeCapturesInput

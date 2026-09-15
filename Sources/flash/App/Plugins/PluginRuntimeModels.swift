@@ -164,7 +164,7 @@ struct PluginWireTarget {
   var label: String?
   var url: String?
   var pid: pid_t?
-  var entersInsertMode: Bool
+  var entersPassthroughMode: Bool
   var sourceID: String
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.

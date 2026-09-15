@@ -5,7 +5,7 @@ import Foundation
 /// a member here. Mirrors the runtime modes the host exposes.
 public enum ProviderMode: String, Codable, Sendable, CaseIterable {
   case normal
-  case insert
+  case passthrough
 }
 
 /// Optional activation gates shared by plugin manifest provider sections. Both

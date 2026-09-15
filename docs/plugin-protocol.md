@@ -188,9 +188,12 @@ Notifications have no deadlines.
   `FlashTerminalLink` for links inside terminal content (`f` Shift, `F`
   Command-Shift). Every target preserves the requested click modifiers. Targets:
   `{id, frame{x,y,width,height}, role?, label?, url?, pid?,
-  enters_insert_mode?, priority?}`. The nested `frame` is required; flat
+  enters_passthrough_mode?, priority?}`. The nested `frame` is required; flat
   coordinates and unknown target fields are rejected. Geometry must be finite
   with positive width/height. One malformed target rejects the entire reply.
+  `enters_passthrough_mode` is a Boolean declaring keyboard handoff after a
+  NORMAL hint commit. An absent/null value derives from the text-input AX role;
+  an explicit false keeps NORMAL even for a target with a text-input role.
 - `perform` — the single effect method. Four kinds:
 
   ```json
@@ -415,12 +418,13 @@ Section semantics:
 - **`status`** — status-bar segment names fed by the `status` notification.
 - **`verbs`** — CLI/mapping verbs; `keystrokes` lets the host handle fixed
   keystroke verbs without any plugin RPC.
-- **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
+- **`mappings`** — key bindings scoped `all | normal | passthrough | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`. Terminal mappings are local to a focused
   status popup. Every global mapping registration is suspended while that view
-  owns input; only winning INSERT-active `enter_normal_mode` bindings are
-  inherited as terminal defaults, and explicit terminal bindings override them.
+  owns input; winning PASSTHROUGH-active `enter_normal_mode` and
+  `enter_passthrough_mode` bindings are inherited as explicit terminal mode
+  transitions. Explicit terminal bindings override them.
   Terminal sequences use the shared key syntax without `<leader>`, implicit
   counts, or register prefixes. See [terminal popup input](normal-mode.md#terminal-popup-input).
 
