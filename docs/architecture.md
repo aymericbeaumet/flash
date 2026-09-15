@@ -76,6 +76,13 @@ All overlay layer mutations disable implicit Core Animation actions. Add new
 animated properties to `OverlayPanel.noActions` as well as using disabled-action
 transactions. An empty discovery result stays silent.
 
+The overlay's AppKit-owned content view contains a layer-hosting drawing view
+and the native command editor as siblings. Flash replaces only the drawing
+view's `contentLayer.sublayers`; replacing the native container's sublayers
+detaches AppKit's editor backing layers during transient cleanup. The drawing
+view has no native subviews and resizes with the panel. This follows AppKit's
+[layer-hosting ownership contract](https://developer.apple.com/documentation/appkit/nsview/wantslayer).
+
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.
 Transient surfaces return native input while preserving advanced-mode eligibility.

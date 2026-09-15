@@ -86,6 +86,8 @@ Surface requests that would violate these constraints before implementing them.
 - Use primary-screen height for AX/CGEvent versus NSScreen Y conversion. Screen
   unions start at `.null`. Layer changes disable implicit animation and new layer
   properties join `OverlayPanel.noActions`.
+- Keep native controls outside the custom layer-hosting drawing view. AppKit owns
+  their backing layers; transient recycling may replace only Flash's subtree.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,
   subprocesses, filesystem I/O, full layout and Carbon registration churn. With
   a live tap, recapture only restores NORMAL routing. Scope-only changes call
