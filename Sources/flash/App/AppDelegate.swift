@@ -8,8 +8,6 @@ enum InsertModeTransitionReason: Equatable {
   case normalModeInput
   case pointerClick
   case hintCommit
-  case advancedModeDisabled
-  case secureInput
 
   var logValue: String {
     switch self {
@@ -21,10 +19,6 @@ enum InsertModeTransitionReason: Equatable {
       return "pointer_click"
     case .hintCommit:
       return "hint_commit"
-    case .advancedModeDisabled:
-      return "advanced_mode_disabled"
-    case .secureInput:
-      return "secure_input"
     }
   }
 }
@@ -339,7 +333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     pluginManager.cacheRunningApplicationsSnapshot(runningApplicationsSnapshot())
     pluginManager.start(config: config)
-    configureDebugServer(for: config)
 
     overlay = OverlayPanel()
     overlay.coordinator = self
@@ -394,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     watchConfigFile()
     selectInitialModeIfNeeded()
+    configureDebugServer(for: config)
     logPermissionState()
     installDismissObservers()
     startClipboardMonitor()
@@ -935,15 +929,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return !IsSecureEventInputEnabled()
     }
     // A focused secure text field (password) turns on secure event input.
-    // Never intercept keystrokes bound for it — they must reach the field, and
-    // a keyboard tap swallowing secure input is exactly what that mechanism
-    // exists to prevent. Reflect it as INSERT (like focusing any text input) so
-    // the badge/state match. Checked first, so even the first keystroke isn't
-    // swallowed before the mode transition lands.
+    // Let its keystrokes through without changing the user's selected mode.
     if IsSecureEventInputEnabled() {
-      if flashMode == .normal, overlay.inputMode == .normal {
-        enterInsertMode(reason: .secureInput, targetPID: currentNonFlashContext()?.processID)
-      }
       return false
     }
     let aboutOwnsNativeKeyboard = Self.aboutWindowShouldOwnNativeKeyboard(

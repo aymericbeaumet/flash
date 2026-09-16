@@ -98,14 +98,11 @@ extension AppDelegate {
     if decision.enterInsert {
       // A physical left / double click ALWAYS hands the keyboard to the app and
       // enters INSERT — no editability probe. The user clicked with the mouse to
-      // work in that app, so that intent is unconditional (unlike the `f`/`F`
-      // keyboard-driven commits, which still gate on the target's role).
+      // work in that app. Hint commits additionally require an input target.
       // Right-click never reaches here; it suspends above.
-      resolvePointerInsertMode(
+      resolvePhysicalPointerInsertMode(
         pid: targetPID,
-        reason: .pointerClick,
-        handoffToken: handoffToken,
-        intent: .physicalClick
+        handoffToken: handoffToken
       ) {
         [weak self] outcome in
         guard let self else { return }
@@ -366,7 +363,6 @@ extension AppDelegate {
       for: hint.target,
       requested: hintSession.presetClickModifiers.union(clickModifiers))
     let wasNormalMode = flashMode == .normal
-    let actionMayEnterInsert = Self.pointerActionMayEnterInsert(action)
     if let pid {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
@@ -390,16 +386,8 @@ extension AppDelegate {
         + "modifiers=cmd:\(resolvedClickModifiers.contains(.command)) "
         + "shift:\(resolvedClickModifiers.contains(.shift)) "
         + "ctrl:\(resolvedClickModifiers.contains(.control)) "
-        + "alt:\(resolvedClickModifiers.contains(.option)) "
-        + "enters_insert=\(hint.target.entersInsertMode)")
+        + "alt:\(resolvedClickModifiers.contains(.option))")
 
-    let mayResolveInsert = wasNormalMode && actionMayEnterInsert
-    let handoffToken: UInt64?
-    if mayResolveInsert {
-      handoffToken = notePointerInsertHandoff(reason: "hint_commit")
-    } else {
-      handoffToken = nil
-    }
     if wasNormalMode {
       applyModeOverlay(captureOverride: false)
     }
@@ -424,38 +412,34 @@ extension AppDelegate {
         action, on: hint.target, clickPoint: clickPoint,
         modifiers: resolvedClickModifiers,
         completion: finished)
-    } completion: { [weak self] _ in
-      guard let self else { return }
-      if mayResolveInsert {
-        self.resolvePointerInsertMode(
-          pid: pid,
-          reason: .hintCommit,
-          handoffToken: handoffToken,
-          intent: .hintTarget(entersInsertMode: hint.target.entersInsertMode)
-        ) {
-          [weak self] outcome in
-          guard let self else { return }
-          switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(
-              reason: "hint_commit_entered_insert",
-              token: handoffToken)
-          case .recaptureNormal:
-            self.clearPointerInsertHandoff(
-              reason: "hint_commit_stayed_normal", token: handoffToken)
-            guard self.flashMode == .normal else { return }
-            self.restoreNormalModeAfterCommit(action: action)
-          }
-        }
-      } else if wasNormalMode {
-        if hint.target.role == AppDelegate.statusItemHintRole {
-          // The click just opened a status-item menu — a modal native
-          // surface, same rule as right-click context menus.
-          self.suspendNormalCaptureForNativeSurface(reason: "status_item_menu")
-        } else {
-          self.restoreNormalModeAfterCommit(action: action)
-        }
+    } completion: { owner in
+      guard wasNormalMode, owner.flashMode == .normal else { return }
+      if hint.target.role == AppDelegate.statusItemHintRole {
+        owner.suspendNormalCaptureForNativeSurface(reason: "status_item_menu")
+      } else {
+        owner.completeHintClick(
+          target: .hint(entersInsertMode: hint.target.entersInsertMode),
+          action: action, at: clickPoint, pid: pid)
       }
+    }
+  }
+
+  private func completeHintClick(
+    target: NormalModePointerPolicy.ClickTarget,
+    action: JumpAction,
+    at point: CGPoint,
+    pid: pid_t?
+  ) {
+    guard flashMode == .normal else { return }
+    if NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action) {
+      let targetPID: pid_t?
+      switch target {
+      case .hint: targetPID = pid
+      case .grid: targetPID = currentNonFlashRunningApplication()?.processIdentifier
+      }
+      enterInsertMode(reason: .hintCommit, targetPID: targetPID)
+    } else {
+      restoreNormalModeAfterCommit(action: action, at: point)
     }
   }
 
@@ -468,10 +452,13 @@ extension AppDelegate {
   /// opened owns its own modal keyboard session; the tap continues
   /// to route normal-mode keys after the menu dismisses, so we just
   /// refresh the badge + inputMode without poking the panel.
-  private func restoreNormalModeAfterCommit(action: JumpAction) {
+  func restoreNormalModeAfterCommit(action: JumpAction, at point: CGPoint) {
     clearPointerInsertHandoff(reason: "restore_normal_after_commit")
-    if action == .rightClick {
-      suspendNormalCaptureForNativeSurface(reason: "hint_right_click")
+    let hitsFlashStatusBar = overlay.statusBarClickWindows.contains {
+      $0.isVisible && !$0.ignoresMouseEvents && $0.frame.contains(point)
+    }
+    if action == .rightClick || (Self.pointIsInMenuBar(point) && !hitsFlashStatusBar) {
+      suspendNormalCaptureForNativeSurface(reason: "command_native_menu")
       return
     }
     scheduleNormalModeRecapture()
@@ -589,6 +576,10 @@ extension AppDelegate {
         ActionDispatcher.synthesizeClick(
           at: point, action: action, modifiers: modifiers, completion: finished)
       } completion: { owner in
+        if owner.flashMode == .normal {
+          owner.completeHintClick(target: .grid, action: action, at: point, pid: nil)
+          return
+        }
         if let initial {
           owner.hintSession.mouseGridDepth = 0
           owner.hintSession.prefix = ""
@@ -634,44 +625,12 @@ extension AppDelegate {
     }
     let committedClick = LastCommittedClick(
       point: point, action: clickAction, modifiers: resolvedClickModifiers, pid: priorPID)
-    let handoffToken: UInt64?
-    if clickAction != .rightClick {
-      handoffToken = notePointerInsertHandoff(reason: "mouse_grid_commit")
-    } else {
-      handoffToken = nil
-    }
     applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
         at: point, action: clickAction, modifiers: resolvedClickModifiers, completion: finished)
-    } completion: { [weak self] _ in
-      guard let self else { return }
-      if clickAction == .rightClick {
-        // Right-click opened a context menu — same rule as `commit()`:
-        // do not render or re-key the panel, or the menu loses its modal
-        // session the same instant it appears.
-        self.suspendNormalCaptureForNativeSurface(reason: "mouse_grid_right_click")
-      } else {
-        self.resolvePointerInsertMode(
-          pid: priorPID,
-          reason: .pointerClick,
-          handoffToken: handoffToken,
-          intent: .mouseGridClick
-        ) {
-          [weak self] outcome in
-          guard let self else { return }
-          switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(
-              reason: "mouse_grid_entered_insert",
-              token: handoffToken)
-          case .recaptureNormal:
-            self.clearPointerInsertHandoff(reason: "mouse_grid_stayed_normal", token: handoffToken)
-            guard self.flashMode == .normal else { return }
-            self.scheduleNormalModeRecapture()
-          }
-        }
-      }
+    } completion: { owner in
+      owner.completeHintClick(target: .grid, action: clickAction, at: point, pid: priorPID)
     }
   }
 
@@ -757,9 +716,7 @@ extension AppDelegate {
     }
   }
 
-  /// Fire the adjusted click. Mirrors the mouse-grid commit tail: the refined
-  /// point is pointer simulation, so a primary click enters INSERT
-  /// unconditionally and a right-click suspends for the context menu.
+  /// Fire the adjusted hint click with the selected target's input intent.
   private func performAdjustedCommit(
     hint: AssignedHint,
     at point: CGPoint,
@@ -779,61 +736,14 @@ extension AppDelegate {
     if let targetApp {
       RunningApplicationActivation.activate(targetApp, options: [])
     }
-    let handoffToken: UInt64?
-    if action != .rightClick {
-      handoffToken = notePointerInsertHandoff(reason: "adjust_commit")
-    } else {
-      handoffToken = nil
-    }
     applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
         at: point, action: action, modifiers: modifiers, completion: finished)
-    } completion: { [weak self] _ in
-      guard let self else { return }
-      if action == .rightClick {
-        self.suspendNormalCaptureForNativeSurface(reason: "adjust_right_click")
-      } else {
-        self.resolvePointerInsertMode(
-          pid: pid,
-          reason: .pointerClick,
-          handoffToken: handoffToken,
-          intent: .mouseGridClick
-        ) { [weak self] outcome in
-          guard let self else { return }
-          switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(reason: "adjust_entered_insert", token: handoffToken)
-          case .recaptureNormal:
-            self.clearPointerInsertHandoff(reason: "adjust_stayed_normal", token: handoffToken)
-            guard self.flashMode == .normal else { return }
-            self.scheduleNormalModeRecapture()
-          }
-        }
-      }
-    }
-  }
-
-  /// Insert-handoff tail for a pointer-mode committing click — identical to
-  /// the mouse-grid commit outcome handling.
-  func resolvePointerModeInsert(pid: pid_t?, handoffToken: UInt64?) {
-    resolvePointerInsertMode(
-      pid: pid,
-      reason: .pointerClick,
-      handoffToken: handoffToken,
-      intent: .mouseGridClick
-    ) { [weak self] outcome in
-      guard let self else { return }
-      switch outcome {
-      case .enteredInsert:
-        self.clearPointerInsertHandoff(
-          reason: "pointer_mode_entered_insert", token: handoffToken)
-      case .recaptureNormal:
-        self.clearPointerInsertHandoff(
-          reason: "pointer_mode_stayed_normal", token: handoffToken)
-        guard self.flashMode == .normal else { return }
-        self.scheduleNormalModeRecapture()
-      }
+    } completion: { owner in
+      owner.completeHintClick(
+        target: .hint(entersInsertMode: hint.target.entersInsertMode),
+        action: action, at: point, pid: pid)
     }
   }
 
@@ -877,9 +787,7 @@ extension AppDelegate {
 
   /// One commit of a `--multi` session: perform the pending action on the
   /// selected target, then re-arm the same hint set for the next selection
-  /// instead of tearing the session down. The session never enters INSERT —
-  /// multi-clicking is target manipulation, and a mode flip would end it.
-  /// Escape (cancelOverlay) finishes the session.
+  /// unless this click enters INSERT. Escape finishes the remaining session.
   private func commitMultiClick(hint: AssignedHint, clickModifiers: ClickModifiers) {
     let action = hintSession.action
     let pid = hint.target.pid ?? hintSession.sourceAppPID
@@ -906,6 +814,14 @@ extension AppDelegate {
         action, on: hint.target, clickPoint: clickPoint,
         modifiers: resolvedClickModifiers, completion: finished)
     } completion: { owner in
+      let target = NormalModePointerPolicy.ClickTarget.hint(
+        entersInsertMode: hint.target.entersInsertMode)
+      if owner.flashMode == .normal,
+        NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
+      {
+        owner.completeHintClick(target: target, action: action, at: clickPoint, pid: pid)
+        return
+      }
       guard !owner.hintSession.hints.isEmpty else { return }
       // Re-present the surviving hint set so the panel re-keys: in
       // non-advanced mode capture rides on panel key status, and the app
@@ -959,36 +875,20 @@ extension AppDelegate {
     }
   }
 
-  /// Resolve whether a primary pointer commit hands the keyboard to the focused
-  /// app (INSERT) or keeps NORMAL:
-  ///
-  ///   - Physical and `mouse_grid` clicks are pointer simulation, so they enter
-  ///     INSERT unconditionally.
-  ///   - `mouse_target` hints honor `JumpTarget.entersInsertMode`. A link hint
-  ///     stays in NORMAL even when its owning app (such as a terminal) already
-  ///     exposes an editable focused element.
-  ///
-  /// Right-click never reaches here — it opens a context menu and stays in
-  /// NORMAL via `suspendNormalCaptureForNativeSurface`.
-  private func resolvePointerInsertMode(
+  /// Physical app clicks release NORMAL capture without an editability probe.
+  private func resolvePhysicalPointerInsertMode(
     pid: pid_t?,
-    reason: InsertModeTransitionReason,
-    handoffToken: UInt64? = nil,
-    intent: PointerInsertIntent,
-    completion: ((PointerInsertHandoffOutcome) -> Void)? = nil
+    handoffToken: UInt64?,
+    completion: (PointerInsertHandoffOutcome) -> Void
   ) {
     guard pointerInsertHandoffIsCurrent(handoffToken) else { return }
     guard flashMode == .normal else {
-      completion?(.recaptureNormal)
-      return
-    }
-    guard intent.shouldEnterInsertMode else {
-      completion?(.recaptureNormal)
+      completion(.recaptureNormal)
       return
     }
     let targetPID = pid ?? currentNonFlashContext()?.processID
-    enterInsertMode(reason: reason, targetPID: targetPID)
-    completion?(.enteredInsert)
+    enterInsertMode(reason: .pointerClick, targetPID: targetPID)
+    completion(.enteredInsert)
   }
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {

@@ -30,7 +30,7 @@ enum URLCommand: Hashable {
   /// Freestyle keyboard cursor control (pointer mode).
   case mousePointer
   /// Focus the first (or count-th) editable text input in the focused window
-  /// and enter INSERT — Vimium's `gi`.
+  /// while preserving the current mode.
   case focusInput
   /// Hint-label the focused window's scroll areas; committing moves the
   /// pointer into the chosen one so subsequent scroll verbs land there.

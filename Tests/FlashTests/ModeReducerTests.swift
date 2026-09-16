@@ -128,6 +128,36 @@ final class ModeReducerTests: XCTestCase {
     }
   }
 
+  func testEnteredNormalPersistsAcrossFocusHintsAndCommandSubmissions() {
+    var mode = ModeReducer.reduce(.insert, .enterNormal(targetPID: 7)).0
+    XCTAssertEqual(mode, .normal)
+
+    for event in [
+      ModeEvent.focusedAppChanged(pid: 42),
+      .focusedAppChanged(pid: 7),
+      .leaveMode(hasHints: true, targetPID: 42),
+      .advancedModeChanged(enabled: true),
+      .leaveMode(hasHints: false, targetPID: 42),
+    ] {
+      let (next, effects) = ModeReducer.reduce(mode, event)
+      XCTAssertEqual(next, .normal, "\(event) must preserve explicit NORMAL")
+      XCTAssertFalse(effects.contains(.setMappingScope(.insert)))
+      mode = next
+    }
+
+    for restoreMode in [false, true] {
+      mode = ModeReducer.reduce(mode, .openCommand(scope: .commandLine, restoreMode: restoreMode)).0
+      mode = ModeReducer.reduce(mode, .focusedAppChanged(pid: 7)).0
+      mode = ModeReducer.reduce(mode, .closeCommand(reason: "submit")).0
+      XCTAssertEqual(mode, .normal)
+    }
+
+    mode = ModeReducer.reduce(mode, .enterInsert(targetPID: 7)).0
+    XCTAssertEqual(mode, .insert)
+    mode = ModeReducer.reduce(mode, .leaveMode(hasHints: false, targetPID: 7)).0
+    XCTAssertEqual(mode, .normal)
+  }
+
   // MARK: Mouse enters only from normal
 
   func testClickEntersInsertOnlyFromNormal() {
@@ -150,8 +180,13 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       ModeReducer.reduce(.disabled, .enterInsert(targetPID: 7)).0,
       .disabled)
-    XCTAssertEqual(
-      ModeReducer.reduce(.disabled, .advancedModeChanged(enabled: true)).0, .insert)
+  }
+
+  func testEnablingAdvancedModeStartsPersistentNormal() {
+    let (mode, effects) = ModeReducer.reduce(.disabled, .advancedModeChanged(enabled: true))
+    XCTAssertEqual(mode, .normal)
+    XCTAssertEqual(effects, ModeReducer.enterEffects(for: .normal, targetPID: nil))
+    XCTAssertEqual(ModeReducer.reduce(mode, .focusedAppChanged(pid: 42)).0, .normal)
   }
 
   // MARK: Command / modal lifecycle + restore fidelity
@@ -280,7 +315,25 @@ final class ModeReducerTests: XCTestCase {
       let opened = ModeReducer.reduce(.disabled, open).0
       let enabled = ModeReducer.reduce(opened, .advancedModeChanged(enabled: true)).0
       XCTAssertEqual(
-        ModeReducer.reduce(enabled, .leaveMode(hasHints: false, targetPID: nil)).0, .insert)
+        ModeReducer.reduce(enabled, .leaveMode(hasHints: false, targetPID: nil)).0, .normal)
+    }
+  }
+
+  func testConfigRefreshPreservesExplicitInsertAndItsTransientReturn() {
+    let states: [Mode] = [
+      .insert,
+      .command(scope: .commandLine, restoreTo: .insert),
+      .command(scope: .finder(all: true), restoreTo: .insert),
+      .terminal(restoreTo: .insert),
+    ]
+    for state in states {
+      let (refreshed, effects) = ModeReducer.reduce(state, .advancedModeChanged(enabled: true))
+      XCTAssertEqual(refreshed, state)
+      XCTAssertEqual(effects, [.renderSurface])
+      if !state.isInsert {
+        XCTAssertEqual(
+          ModeReducer.reduce(refreshed, .leaveMode(hasHints: false, targetPID: nil)).0, .insert)
+      }
     }
   }
 

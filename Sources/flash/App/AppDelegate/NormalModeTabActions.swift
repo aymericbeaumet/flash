@@ -307,16 +307,7 @@ extension AppDelegate {
           self?.applyModeOverlay()
           return
         }
-        self?.sendNormalModeKey(
-          CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count,
-          completion: { [weak self] in
-            self?.enterInsertMode(reason: .explicitCommand, targetPID: context.processID)
-          })
-      },
-      onPerformed: { [weak self] context in
-        guard let self else { return }
-        self.enterInsertMode(
-          reason: .explicitCommand, targetPID: self.normalModeTargetPID ?? context.processID)
+        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count)
       })
   }
 
@@ -420,8 +411,6 @@ extension AppDelegate {
     )
   }
 
-  /// `onPerformed` runs after every repeat succeeded through a source, in
-  /// place of the default NORMAL recapture.
   func performTabSourceAction(
     name: String,
     repeatCount: Int,
@@ -431,8 +420,7 @@ extension AppDelegate {
         AppContext,
         @escaping (SourceActionResult) -> Void
       ) -> Void,
-    fallback: @escaping (AppContext, Int) -> Void,
-    onPerformed: ((AppContext) -> Void)? = nil
+    fallback: @escaping (AppContext, Int) -> Void
   ) {
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(name)")
@@ -443,11 +431,7 @@ extension AppDelegate {
 
     func attempt(_ remaining: Int) {
       guard remaining > 0 else {
-        if let onPerformed {
-          onPerformed(context)
-        } else {
-          scheduleNormalModeRecapture()
-        }
+        scheduleNormalModeRecapture()
         return
       }
       action(registry, context) { [weak self] result in

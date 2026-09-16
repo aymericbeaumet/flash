@@ -36,6 +36,9 @@ The optional date example retains the existing calcurse calendar. Copy only
 `calcurse/` to `~/.config/flash/status/` and create `status/calcurse/notes/` there
 if using it. Other sections require no companion files. Paths resolve relative
 to the Flash configuration file; `$XDG_CONFIG_HOME/flash` takes precedence.
+The calendar uses a 100-column, 28-row terminal so its panels and command bar
+fit comfortably. Process popups use their terminal's `columns` and `rows`;
+`statusbar.popup_max_width` only limits document popups.
 
 Hover previews a popup. Either unbound mouse button pins it open; repeated clicks
 keep it pinned. Existing left-click actions and links win, with right-click or

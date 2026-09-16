@@ -54,12 +54,13 @@ contracts before changing a subsystem:
    `only_bundle_ids` and fed only by the host AX broker). Browser content
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
-9. Default keyboard shortcuts must not enter INSERT (`a/A/i/I/o/O/gi` included);
-   the exception is a command that creates or focuses a text input and hands the
-   keyboard over afterwards (`tab_new`, `focus_input`).
-   `enter_insert_mode` and `focus_input` are explicit configuration choices.
-   NORMAL is hermetic: unmapped keys and chords are swallowed, never forwarded.
-   App activation or editable focus alone never changes NORMAL. See the mode document for deliberate pointer/target commits.
+9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
+   app clicks, primary hint clicks on input targets, or mouse-grid clicks. Other
+   commands, including tabs, Find and `focus_input`, preserve NORMAL; never add
+   editable-focus follow-up or mode changes on app activation. Hint input intent
+   comes from target metadata, not whichever field is focused after the click.
+   Unmapped NORMAL keys and chords are swallowed, and synthesized input must
+   never become stray terminal text. See the mode guide.
 10. Dev deployment must use `Scripts/install.sh --dev`, which owns build,
     signing, replacement and restart order. Do not hand-copy/sign/kill the app.
     The dev bundle is `/Applications/Flash 🧪.app`; release is
@@ -107,6 +108,11 @@ Surface requests that would violate these constraints before implementing them.
 - Config validation is shared by all layers; preserve authored values and derive
   only after overrides. Only executable/working-directory fields receive path
   resolution; argv tails stay opaque. Update whole-section default parity tests.
+- Keep NORMAL defaults consistent across apps: Flash-owned actions, standard
+  editing/scrolling. `t` / `[t` / `]t` send Cmd-T / Cmd-Shift-[ / Cmd-Shift-]
+  directly in every app, including terminals. Vertical scroll bindings send
+  configurable line-based wheel events system-wide, without AX fallback.
+  Additional app-specific actions remain explicit choices; keep guides in sync.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.
 - Keep this guide actionable and concise; explanations belong in `docs/`.

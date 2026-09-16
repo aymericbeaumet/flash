@@ -21,53 +21,142 @@ final class NormalModeTests: XCTestCase {
 
   func testDirectionalScrollKeys() {
     XCTAssertEqual(command(chars: "h"), .scroll(.left))
-    assertSendKey(command(chars: "j"), keys: "down", keyCode: CGKeyCode(kVK_DownArrow))
-    assertSendKey(command(chars: "k"), keys: "up", keyCode: CGKeyCode(kVK_UpArrow))
+    XCTAssertNil(command(chars: "j"))
+    XCTAssertNil(command(chars: "k"))
     XCTAssertEqual(command(chars: "l"), .scroll(.right))
     XCTAssertEqual(command(chars: "e", flags: [.control]), .scroll(.down))
     XCTAssertEqual(command(chars: "y", flags: [.control]), .scroll(.up))
   }
 
-  func testHalfPageKeysUseBareAndControlForms() {
-    // Vimium parity: bare `d` / `u` scroll a half page; the `ctrl+`
-    // forms remain as vim-style aliases.
-    XCTAssertEqual(command(chars: "d"), .scroll(.halfPageDown))
-    XCTAssertEqual(command(chars: "u"), .scroll(.halfPageUp))
+  func testHalfPageKeysUseControlForms() {
+    XCTAssertNil(command(chars: "d"))
     XCTAssertEqual(command(chars: "u", flags: [.control]), .scroll(.halfPageUp))
     XCTAssertEqual(command(chars: "d", flags: [.control]), .scroll(.halfPageDown))
   }
 
-  func testRedoKey() {
-    // Undo is no longer bound to bare `u` — Vimium reuses it for
-    // half-page scroll-up — but stays reachable via `:undo`. Redo
-    // keeps `ctrl+r`.
+  func testUndoAndRedoKeysResolveImmediately() {
+    let undo = transition(chars: "u")
+    XCTAssertEqual(undo.command, .undo)
+    XCTAssertEqual(undo.pending, "")
     XCTAssertEqual(command(chars: "r", flags: [.control]), .redo)
   }
 
-  func testScrollWheelDeltasUseExpectedJumpSizes() {
-    let down = NormalModeDispatcher.scrollWheelDelta(
-      for: .down,
-      viewportSize: CGSize(width: 1200, height: 900))
-    XCTAssertEqual(down?.vertical, -60)
-    XCTAssertEqual(down?.horizontal, 0)
+  func testApplicationSpecificActionsHaveNoDefaultMappings() {
+    let mappingKeys = Set(Config.Mode.defaultNormalMappings.map(\.key))
+    let removedKeys = [
+      "d", "j", "k", "H", "L", "[h", "]h", "]b", "[B", "]B",
+      "[m", "]m", "[e", "]e", "[s", "]s", "[w", "]w", "X", "ctrl+tab", "ctrl+shift+tab",
+      "g^", "g$", "g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8", "g9",
+      "gt", "gT", "J", "K", "e", "n", "N", "yy", "r", "R",
+    ]
+    for removedKey in removedKeys {
+      XCTAssertFalse(
+        mappingKeys.contains(key(removedKey)), "unexpected default mapping: \(removedKey)")
+    }
+    for letter in "abcdefghijklmnopqrstuvwxyz" {
+      if letter != "f" {
+        XCTAssertFalse(mappingKeys.contains(key("m\(letter)")))
+      }
+      XCTAssertFalse(mappingKeys.contains(key("`\(letter)")))
+    }
+  }
 
-    let up = NormalModeDispatcher.scrollWheelDelta(
-      for: .up,
-      viewportSize: CGSize(width: 1200, height: 900))
-    XCTAssertEqual(up?.vertical, 60)
-    XCTAssertEqual(up?.horizontal, 0)
+  func testDefaultTabMappingsAndExplicitInsertMappingKeepDistinctActions() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "i" = ["flash", "enter_insert_mode"]
+      """
+    )
+    XCTAssertTrue(config.diagnostics.isEmpty)
+    assertSendKeyKeys(
+      command(pending: "[", chars: "t", mappings: config.mode.normal), "cmd+shift+[")
+    assertSendKeyKeys(
+      command(pending: "]", chars: "t", mappings: config.mode.normal), "cmd+shift+]")
+    let newTab = transition(chars: "t", mappings: config.mode.normal)
+    assertSendKeyKeys(newTab.command, "cmd+t")
+    XCTAssertEqual(newTab.pending, "")
+    XCTAssertNil(newTab.repeatAnchor)
+    XCTAssertEqual(command(chars: "i", mappings: config.mode.normal), .insertMode)
+    XCTAssertNil(command(chars: "i"))
+  }
 
-    let halfDown = NormalModeDispatcher.scrollWheelDelta(
-      for: .halfPageDown,
-      viewportSize: CGSize(width: 1200, height: 900))
-    XCTAssertEqual(halfDown?.vertical, -450)
-    XCTAssertEqual(halfDown?.horizontal, 0)
+  func testDefaultTabChordsAreAllowedInEveryTerminal() throws {
+    let commands = [
+      command(pending: "[", chars: "t"), command(pending: "]", chars: "t"), command(chars: "t"),
+    ]
+    for command in commands {
+      guard case .sendKey(_, let keyCode, let flags) = command else {
+        return XCTFail("Tab defaults must send the standard app shortcut directly")
+      }
+      for bundle in TerminalBundles.identifiers {
+        XCTAssertFalse(
+          AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
+            key: keyCode, flags: CGEventFlags(rawValue: flags), bundleIdentifier: bundle), bundle)
+      }
+    }
+  }
 
-    let halfUp = NormalModeDispatcher.scrollWheelDelta(
-      for: .halfPageUp,
-      viewportSize: CGSize(width: 1200, height: 900))
-    XCTAssertEqual(halfUp?.vertical, 450)
-    XCTAssertEqual(halfUp?.horizontal, 0)
+  func testVerticalScrollPostsLineEventsInEveryAppWithoutWindowGeometry() throws {
+    let restore = NormalModeDispatcher.wheelEventPoster
+    defer { NormalModeDispatcher.wheelEventPoster = restore }
+    var events: [CGEvent] = []
+    NormalModeDispatcher.wheelEventPoster = { events.append($0) }
+    let cases: [(NormalModeDispatcher.ScrollKind, Int64)] = [
+      (.down, -3), (.up, 3), (.halfPageDown, -20), (.halfPageUp, 20),
+    ]
+    for bundle in ["org.alacritty", "com.apple.Terminal", "org.mozilla.firefox"] {
+      for (kind, lines) in cases {
+        events.removeAll()
+        XCTAssertTrue(
+          NormalModeDispatcher.scroll(kind, pid: -1, bundleID: bundle, windowFrame: nil))
+        XCTAssertEqual(events.count, 1, "\(kind) in \(bundle)")
+        let event = try XCTUnwrap(events.first)
+        XCTAssertEqual(event.type, .scrollWheel)
+        XCTAssertEqual(event.flags, [])
+        XCTAssertEqual(event.getIntegerValueField(.scrollWheelEventIsContinuous), 0)
+        XCTAssertEqual(event.getIntegerValueField(.scrollWheelEventDeltaAxis1), lines)
+        XCTAssertEqual(event.getIntegerValueField(.scrollWheelEventDeltaAxis2), 0)
+        XCTAssertEqual(
+          event.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
+      }
+    }
+  }
+
+  func testVerticalScrollUsesConfiguredLineCounts() throws {
+    let restore = NormalModeDispatcher.wheelEventPoster
+    defer {
+      NormalModeDispatcher.wheelEventPoster = restore
+      FlashTunables.apply(.default)
+    }
+    let config = ConfigLoader.parse(
+      """
+      [mode]
+      scroll_step_lines = 7
+      scroll_page_lines = 31
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty)
+    FlashTunables.apply(config)
+    var lines: [Int64] = []
+    NormalModeDispatcher.wheelEventPoster = {
+      lines.append($0.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+    }
+    for kind in [NormalModeDispatcher.ScrollKind.up, .down, .halfPageUp, .halfPageDown] {
+      XCTAssertTrue(NormalModeDispatcher.scroll(kind, pid: -1, bundleID: "org.alacritty"))
+    }
+    XCTAssertEqual(lines, [7, -7, 31, -31])
+  }
+
+  func testLineScrollCountsMultiplyStepAndPageLines() {
+    XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .down, repeatCount: 4), -12)
+    XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .up, repeatCount: 4), 12)
+    XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .halfPageDown, repeatCount: 2), -40)
+    XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .halfPageUp, repeatCount: 2), 40)
+    XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .up, repeatCount: 0), 3)
+    XCTAssertEqual(
+      NormalModeDispatcher.scrollLineDelta(for: .halfPageUp, repeatCount: 1000), 19_980)
+    XCTAssertNil(NormalModeDispatcher.scrollLineDelta(for: .left))
+    XCTAssertNil(NormalModeDispatcher.scrollLineDelta(for: .top))
   }
 
   func testTopBottomUseExtremeWheelDeltasForWheelFallback() {
@@ -76,16 +165,12 @@ final class NormalModeTests: XCTestCase {
     // ignore the AX-set). For those apps the dispatcher falls back to
     // a synthetic wheel event with a huge delta — large enough to
     // exceed any realistic document height while still fitting Int32.
-    let top = NormalModeDispatcher.scrollWheelDelta(
-      for: .top,
-      viewportSize: CGSize(width: 1200, height: 900))
+    let top = NormalModeDispatcher.pixelScrollWheelDelta(for: .top)
     XCTAssertNotNil(top)
     XCTAssertGreaterThanOrEqual(top?.vertical ?? 0, 100_000)
     XCTAssertEqual(top?.horizontal, 0)
 
-    let bottom = NormalModeDispatcher.scrollWheelDelta(
-      for: .bottom,
-      viewportSize: CGSize(width: 1200, height: 900))
+    let bottom = NormalModeDispatcher.pixelScrollWheelDelta(for: .bottom)
     XCTAssertNotNil(bottom)
     XCTAssertLessThanOrEqual(bottom?.vertical ?? 0, -100_000)
     XCTAssertEqual(bottom?.horizontal, 0)
@@ -95,46 +180,31 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
-    // History: `H`/`L`, with `[h`/`]h` as unimpaired-style aliases.
-    XCTAssertEqual(command(chars: "H", ignoring: "h", flags: [.shift]), .historyBack)
-    XCTAssertEqual(command(chars: "L", ignoring: "l", flags: [.shift]), .historyForward)
-    XCTAssertEqual(command(pending: "[", chars: "h"), .historyBack)
-    XCTAssertEqual(command(pending: "]", chars: "h"), .historyForward)
-    XCTAssertEqual(command(pending: "]", chars: "t"), .tabNext)
-    XCTAssertEqual(command(pending: "[", chars: "t"), .tabPrev)
     XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
     XCTAssertEqual(command(pending: "]", chars: "a"), .appNext)
-    XCTAssertEqual(command(pending: "[", chars: "s"), .panePrev)
-    XCTAssertEqual(command(pending: "]", chars: "s"), .paneNext)
-    XCTAssertEqual(command(pending: "[", chars: "m"), .tabMovePrev)
-    XCTAssertEqual(command(pending: "]", chars: "m"), .tabMoveNext)
-    XCTAssertEqual(command(pending: "[", chars: "e"), .tabMovePrev)
-    XCTAssertEqual(command(pending: "]", chars: "e"), .tabMoveNext)
-    XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
-    assertSendKeyKeys(command(chars: "n"), "cmd+g")
-    XCTAssertEqual(command(chars: "t"), .tabNew)
-    XCTAssertEqual(command(chars: "e"), .archive)
+    XCTAssertEqual(command(chars: "o", flags: [.control]), .movementBack)
+    XCTAssertEqual(command(chars: "i", flags: [.control]), .movementForward)
   }
 
   func testRepeatCountsApplyToSingleAndMultiKeyCommands() {
     XCTAssertEqual(transition(chars: "1").pending, "1")
     XCTAssertEqual(transition(pending: "1", chars: "0").pending, "10")
 
-    let halfPageUp = transition(pending: "10", chars: "u")
+    let halfPageUp = transition(pending: "10", chars: "u", flags: [.control])
     XCTAssertEqual(halfPageUp.command, .scroll(.halfPageUp))
     XCTAssertEqual(halfPageUp.repeatCount, 10)
 
-    let previousTab = transition(pending: "2[", chars: "t")
-    XCTAssertEqual(previousTab.command, .tabPrev)
-    XCTAssertEqual(previousTab.repeatCount, 2)
+    let previousApp = transition(pending: "2[", chars: "a")
+    XCTAssertEqual(previousApp.command, .appPrev)
+    XCTAssertEqual(previousApp.repeatCount, 2)
 
-    let nextTab = transition(pending: "2]", chars: "t")
-    XCTAssertEqual(nextTab.command, .tabNext)
-    XCTAssertEqual(nextTab.repeatCount, 2)
+    let nextApp = transition(pending: "2]", chars: "a")
+    XCTAssertEqual(nextApp.command, .appNext)
+    XCTAssertEqual(nextApp.repeatCount, 2)
 
-    let selectTab = transition(pending: "g", chars: "3")
-    XCTAssertEqual(selectTab.command, .tabSelect(index: 3))
-    XCTAssertEqual(selectTab.repeatCount, 1)
+    let undo = transition(pending: "3", chars: "u")
+    XCTAssertEqual(undo.command, .undo)
+    XCTAssertEqual(undo.repeatCount, 3)
 
     let leadingZero = transition(chars: "0")
     XCTAssertNil(leadingZero.command)
@@ -154,8 +224,8 @@ final class NormalModeTests: XCTestCase {
       anchor = repeated.repeatAnchor
     }
 
-    let different = transition(repeatAnchor: anchor, chars: "r")
-    XCTAssertEqual(different.command, .reload(force: false))
+    let different = transition(repeatAnchor: anchor, chars: "u")
+    XCTAssertEqual(different.command, .undo)
     XCTAssertNil(different.repeatAnchor)
 
     let next = transition(pending: "]", chars: "a")
@@ -210,19 +280,31 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(wrapped.target, 30)
   }
 
-  func testBracketTabMappingsRepeatOnFinalKey() {
-    let cases: [(prefix: String, command: URLCommand)] = [
-      ("[", .tabPrev),
-      ("]", .tabNext),
+  func testBracketNavigationMappingsRepeatOnFinalKey() {
+    let cases: [(prefix: String, letter: String, command: URLCommand)] = [
+      ("[", "a", .appPrev),
+      ("]", "a", .appNext),
+      (
+        "[", "t",
+        .sendKey(
+          keys: "cmd+shift+[", keyCode: CGKeyCode(kVK_ANSI_LeftBracket),
+          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
+      ),
+      (
+        "]", "t",
+        .sendKey(
+          keys: "cmd+shift+]", keyCode: CGKeyCode(kVK_ANSI_RightBracket),
+          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
+      ),
     ]
     for testCase in cases {
-      let first = transition(pending: testCase.prefix, chars: "t")
+      let first = transition(pending: testCase.prefix, chars: testCase.letter)
       XCTAssertEqual(first.command, testCase.command)
-      XCTAssertEqual(first.repeatAnchor, key("\(testCase.prefix)t"))
+      XCTAssertEqual(first.repeatAnchor, key("\(testCase.prefix)\(testCase.letter)"))
 
-      let repeated = transition(repeatAnchor: first.repeatAnchor, chars: "t")
+      let repeated = transition(repeatAnchor: first.repeatAnchor, chars: testCase.letter)
       XCTAssertEqual(repeated.command, testCase.command)
-      XCTAssertEqual(repeated.repeatAnchor, key("\(testCase.prefix)t"))
+      XCTAssertEqual(repeated.repeatAnchor, key("\(testCase.prefix)\(testCase.letter)"))
     }
   }
 
@@ -247,9 +329,10 @@ final class NormalModeTests: XCTestCase {
         now: start.addingTimeInterval(1.001)))
   }
 
-  func testCopySequences() {
-    XCTAssertNil(command(chars: "y"))
-    XCTAssertEqual(command(pending: "y", chars: "y"), .copyURL)
+  func testCopyDoesNotWaitForAnApplicationSpecificSequence() {
+    let copy = transition(chars: "y")
+    XCTAssertEqual(copy.command, .yankSelection(register: nil))
+    XCTAssertEqual(copy.pending, "")
   }
 
   func testMoveMouseSequence() {
@@ -257,14 +340,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
     XCTAssertEqual(
       command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
-    // `m<letter>` / `` `<letter> `` route to the marks plugin via the
-    // `set_mark` / `jump_to_mark` plugin verbs.
-    XCTAssertEqual(
-      command(pending: "m", chars: "x"),
-      .pluginVerb(name: "set_mark", args: ["letter": "x"]))
-    XCTAssertEqual(
-      command(pending: "`", chars: "x"),
-      .pluginVerb(name: "jump_to_mark", args: ["letter": "x"]))
   }
 
   func testMouseTargetAndGridCurrentAndNewTabMappings() {
@@ -286,11 +361,6 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testSecondaryAndDoubleClickHintModeSequences() {
-    // `r` stays bound to `reload`; the secondary-click prefix is `s`
-    // (renamed from the old `r*` to drop the sequence-timeout delay on
-    // a bare `r`).
-    XCTAssertEqual(command(chars: "r"), .reload(force: false))
-    XCTAssertEqual(command(chars: "R", ignoring: "r", flags: [.shift]), .reload(force: true))
     XCTAssertEqual(transition(chars: "s").pending, "s")
     XCTAssertEqual(
       command(pending: "s", chars: "f"),
@@ -298,9 +368,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.click(.rightClick, modifiers: [])))
-    // Bare `d` is half-page scroll; double-click hints moved to the
-    // `D` prefix so `d` fires instantly without a sequence-timeout wait.
-    XCTAssertEqual(command(chars: "d"), .scroll(.halfPageDown))
+    XCTAssertNil(command(chars: "d"))
     XCTAssertEqual(transition(chars: "D", ignoring: "d", flags: [.shift]).pending, "D")
     XCTAssertEqual(
       command(pending: "D", chars: "f"),
@@ -310,11 +378,7 @@ final class NormalModeTests: XCTestCase {
       .mouseGrid(.click(.doubleClick, modifiers: [])))
   }
 
-  // `f` and `F` clicks no longer auto-enter insert from generic provider
-  // metadata. Virtual and physical primary clicks use the same post-click
-  // terminal/input handoff check.
-
-  func testHelpReloadAndModifiedKeyConsumption() {
+  func testHelpAndModifiedKeyConsumption() {
     XCTAssertNil(command(chars: "a"))
     XCTAssertNil(command(chars: "A", ignoring: "a", flags: [.shift]))
     XCTAssertNil(command(chars: "i"))
@@ -332,10 +396,7 @@ final class NormalModeTests: XCTestCase {
         charactersIgnoringModifiers: " ",
         mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
       ).command)
-    // With right-click hints moved to the `s` prefix, `r` no longer prefixes
-    // any pending sequence — it resolves to reload on the first keystroke (no
-    // sequence-timeout delay).
-    XCTAssertEqual(command(chars: "r"), .reload(force: false))
+    XCTAssertNil(command(chars: "r"))
     XCTAssertNil(command(chars: ":"))
     assertSendKeyKeys(command(chars: "x"), "cmd+w")
     XCTAssertTrue(
@@ -356,20 +417,16 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testPendingPrefixBrokenByUnmappableKeyFallsBackToFreshInterpretation() {
-    // `[` / `]` are prefixes but `[r` / `]r` are unmapped — falling back
-    // to interpreting `r` from scratch reloads the app instead of
-    // silently swallowing the keystroke.
-    XCTAssertEqual(command(pending: "[", chars: "r"), .reload(force: false))
-    XCTAssertEqual(command(pending: "]", chars: "r"), .reload(force: false))
+    // An invalid continuation is interpreted as a fresh key.
+    XCTAssertEqual(command(pending: "[", chars: "u"), .undo)
+    XCTAssertEqual(command(pending: "]", chars: "u"), .undo)
     // Text-entry shortcuts are opt-in, including the former gi sequence.
     XCTAssertNil(command(pending: "g", chars: "i"))
-    assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
-    XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
+    XCTAssertNil(command(pending: "g", chars: "n"))
+    XCTAssertEqual(command(pending: "g", chars: "u"), .undo)
     // Valid sequence continuations still resolve to the mapped action.
-    XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
-    XCTAssertEqual(
-      command(pending: "m", chars: "i"),
-      .pluginVerb(name: "set_mark", args: ["letter": "i"]))
+    XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
+    XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
     // No mapping at any depth — the prefix is dropped and the fresh
     // key is also unmapped, so the result is a clean consume (no
     // command, no carried-over pending).
@@ -1172,6 +1229,29 @@ final class NormalModeTests: XCTestCase {
     }
   }
 
+  func testHintClicksEnterInsertOnlyForPrimaryInputTargets() {
+    for action in [JumpAction.leftClick, .doubleClick, .tripleClick] {
+      XCTAssertTrue(
+        NormalModePointerPolicy.clickShouldEnterInsert(
+          target: .hint(entersInsertMode: true), action: action))
+      XCTAssertFalse(
+        NormalModePointerPolicy.clickShouldEnterInsert(
+          target: .hint(entersInsertMode: false), action: action))
+    }
+    for action in [JumpAction.rightClick, .middleClick] {
+      XCTAssertFalse(
+        NormalModePointerPolicy.clickShouldEnterInsert(
+          target: .hint(entersInsertMode: true), action: action))
+    }
+  }
+
+  func testGridClicksAlwaysEnterInsert() {
+    for action in [JumpAction.leftClick, .doubleClick, .tripleClick, .rightClick, .middleClick] {
+      XCTAssertTrue(
+        NormalModePointerPolicy.clickShouldEnterInsert(target: .grid, action: action))
+    }
+  }
+
   func testNormalModePointerPolicyMatrixForAppClicks() {
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
@@ -1242,35 +1322,6 @@ final class NormalModeTests: XCTestCase {
         enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
-  }
-
-  func testPointerActionMayEnterInsertExcludesRightClick() {
-    // Left / double click can hand the keyboard to the app; right-click only
-    // ever opens a context menu and must keep the current mode, so it is
-    // excluded here. This keeps hint/grid right-click commits on the suspend
-    // path instead of insert.
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.leftClick))
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.doubleClick))
-    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.tripleClick))
-    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.rightClick))
-    // Middle-click gestures act on the target without moving keyboard focus
-    // into a text surface, so they stay in NORMAL like right-click.
-    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.middleClick))
-  }
-
-  func testPointerInsertIntentSeparatesSemanticHintsFromMouseSimulation() {
-    // A provider's `false` is authoritative even when the host app (such as
-    // Alacritty) already exposes editable focus. This pins tmux pane/link hints
-    // to NORMAL while preserving INSERT for real text-input hints.
-    XCTAssertFalse(
-      PointerInsertIntent.hintTarget(entersInsertMode: false).shouldEnterInsertMode)
-    XCTAssertTrue(
-      PointerInsertIntent.hintTarget(entersInsertMode: true).shouldEnterInsertMode)
-
-    // The grid synthesizes a real pointer click, so it follows the same
-    // unconditional handoff rule as a physical primary click.
-    XCTAssertTrue(PointerInsertIntent.mouseGridClick.shouldEnterInsertMode)
-    XCTAssertTrue(PointerInsertIntent.physicalClick.shouldEnterInsertMode)
   }
 
   func testNormalAppRightClickSuspendsForContextMenuInsteadOfInsert() {
@@ -2318,23 +2369,20 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "com.example.TextEditor"))
   }
 
-  /// A terminal with mouse tracking on encodes a synthesized wheel event as an
-  /// SGR report and writes it to the pty, which lands at the shell prompt as
-  /// literal text when nothing consumes it. NORMAL cannot read that mode from
-  /// outside, so it never synthesizes a wheel into a terminal.
-  func testTerminalTargetsRefuseSynthesizedScrollWheel() {
+  func testTerminalTargetsKeepTheirExistingPixelWheelFallbackPolicy() {
     for bundle in TerminalBundles.identifiers {
       XCTAssertTrue(
-        NormalModeDispatcher.wheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle)
+        NormalModeDispatcher.pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle
+      )
     }
     for bundle in ["org.mozilla.firefox", "com.tinyspeck.slackmacgap", ""] {
       XCTAssertFalse(
-        NormalModeDispatcher.wheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle)
+        NormalModeDispatcher.pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle
+      )
     }
   }
 
-  /// End to end: no scroll verb may post a wheel event into a terminal.
-  func testScrollDoesNotPostAWheelEventIntoATerminalBundle() {
+  func testHorizontalAndEdgeScrollsDoNotPostPixelWheelEventsIntoTerminals() {
     let restore = NormalModeDispatcher.wheelEventPoster
     defer { NormalModeDispatcher.wheelEventPoster = restore }
     var posted = 0
@@ -2342,15 +2390,11 @@ final class NormalModeTests: XCTestCase {
     let pid = ProcessInfo.processInfo.processIdentifier
     let frame = CGRect(x: 0, y: 0, width: 1200, height: 900)
     for kind in [
-      NormalModeDispatcher.ScrollKind.top, .bottom, .halfPageUp, .halfPageDown, .up, .down, .left,
-      .right,
+      NormalModeDispatcher.ScrollKind.top, .bottom, .left, .right,
     ] {
       _ = NormalModeDispatcher.scroll(kind, pid: pid, bundleID: "org.alacritty", windowFrame: frame)
     }
-    XCTAssertEqual(posted, 0, "NORMAL must not synthesize a wheel into a terminal")
-    _ = NormalModeDispatcher.scroll(
-      .halfPageUp, pid: pid, bundleID: "org.mozilla.firefox", windowFrame: frame)
-    XCTAssertEqual(posted, 1, "non-terminal targets still get exactly one wheel event")
+    XCTAssertEqual(posted, 0)
   }
 
   /// Firefox reorders a tab with Control-Shift-Page, never Command-Shift:
@@ -2404,19 +2448,17 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in [
-      "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "F", "ctrl-f", "ctrl+shift+f", "sf", "Df", "mf", "sF",
-      "DF", "mF", "u", "ctrl-r", "x", "n",
-      "/", "r", "R", "e", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "g^", "g$", "[t", "]t", "[a",
-      "]a", "[s", "]s", "flash pane_previous", "flash pane_next", "g1", "g9", "N{mapping}",
+      "h", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
+      "gg", "G", "f", "F", "ctrl-f", "ctrl+shift+f", "sf", "Df", "mf", "sF",
+      "DF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "[a", "]a", "[t", "]t", "N{mapping}",
       "flash mouse_target",
       "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
       "flash mouse_target --secondary",
-      "flash mouse_target --double", "flash mouse_grid", "flash history_back",
-      "flash history_forward",
-      "flash app_previous", "flash app_next",
-      "flash app_reload --force", "flash tab_select --index=1", "flash tab_new", "?",
+      "flash mouse_target --double", "flash mouse_grid",
+      "flash app_previous", "flash app_next", "flash app_undo", "flash app_redo", "?",
+      "flash send_key --keys=cmd+shift+[", "flash send_key --keys=cmd+shift+]",
+      "flash send_key --keys=cmd+t",
     ] {
       XCTAssertTrue(
         help.contains(mapping),
@@ -2426,6 +2468,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(help.contains("flash leave_mode"))
     XCTAssertFalse(help.contains("flash enter_insert_mode"))
     XCTAssertFalse(help.contains("flash enter_command_mode"))
+    XCTAssertFalse(help.contains("flash app_reload"))
     XCTAssertFalse(help.contains(":q[uit]"))
   }
 
@@ -2564,16 +2607,10 @@ final class NormalModeTests: XCTestCase {
   // MARK: - Yank / paste registers
 
   func testBareYankAndPasteUseTheUnnamedRegister() {
-    // `p` has no longer mapping, so it commits immediately with no register.
     XCTAssertEqual(command(chars: "p"), .paste(register: nil))
-    // `y` is a one-key prefix of `yy`, so it pends and resolves on timeout.
     let yanked = transition(chars: "y")
-    XCTAssertNil(yanked.command)
-    XCTAssertEqual(yanked.pending, "y")
-    XCTAssertEqual(
-      NormalModeInterpreter.pendingCommand(
-        pending: yanked.pending, mappings: defaultMappings)?.action.command,
-      .yankSelection(register: nil))
+    XCTAssertEqual(yanked.command, .yankSelection(register: nil))
+    XCTAssertEqual(yanked.pending, "")
   }
 
   func testRegisterPrefixRoutesPasteToANamedRegister() {
@@ -2587,15 +2624,11 @@ final class NormalModeTests: XCTestCase {
       .paste(register: "a"))
   }
 
-  func testRegisterPrefixRoutesYankToANamedRegisterOnTimeout() {
+  func testRegisterPrefixRoutesYankToANamedRegisterImmediately() {
     let named = transition(pending: "\"", chars: "a")
     let yanked = transition(pending: named.pending, chars: "y")
-    XCTAssertNil(yanked.command)
-    XCTAssertEqual(yanked.pending, "\"ay")
-    XCTAssertEqual(
-      NormalModeInterpreter.pendingCommand(
-        pending: yanked.pending, mappings: defaultMappings)?.action.command,
-      .yankSelection(register: "a"))
+    XCTAssertEqual(yanked.command, .yankSelection(register: "a"))
+    XCTAssertEqual(yanked.pending, "")
   }
 
   func testRegisterNameDigitIsNotMistakenForACount() {

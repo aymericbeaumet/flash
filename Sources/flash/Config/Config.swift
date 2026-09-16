@@ -427,10 +427,12 @@ struct Config {
     /// Vim's `timeoutlen`. Lower → faster commits, more two-key
     /// collisions; higher → slower commits, fewer surprises.
     var sequenceTimeoutMs: Int = Self.defaultSequenceTimeoutMs
-    /// Pixels per h/j/k/l (and ctrl+e/ctrl+y) scroll step.
+    /// Pixels per horizontal h/l scroll step.
     var scrollStep: Int = 60
-    /// Fraction of the scrollable range moved by d/u (Vim's `scroll`).
-    var scrollPageFraction: Double = 0.5
+    /// Mouse-wheel lines per ctrl+e/ctrl+y scroll step.
+    var scrollStepLines: Int = 3
+    /// Mouse-wheel lines per ctrl+d/ctrl+u scroll step.
+    var scrollPageLines: Int = 20
     /// Mouse-down→up hold on synthesized clicks; some apps need a
     /// non-zero press to register.
     var clickHoldMs: Int = 18
@@ -462,191 +464,43 @@ struct Config {
     }()
 
     private static func makeDefaultNormalMappings() -> [ModeMapping] {
-      // Bare punctuation is allowed by the parser; defaults stay
-      // concise. Use `<name>` only for keys that can't be typed bare
-      // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
-      var raw: [(String, MappingCommand)] = [
+      let raw: [(String, MappingCommand)] = [
         ("h", .flashCommand(.scroll(.left))),
-        ("j", sendKeyMapping("down")),
-        ("k", sendKeyMapping("up")),
         ("l", .flashCommand(.scroll(.right))),
         ("ctrl+e", .flashCommand(.scroll(.down))),
         ("ctrl+y", .flashCommand(.scroll(.up))),
         ("ctrl+d", .flashCommand(.scroll(.halfPageDown))),
         ("ctrl+u", .flashCommand(.scroll(.halfPageUp))),
-        // Vimium parity: bare `d` / `u` scroll a half page (the `ctrl+`
-        // forms above stay as vim-style aliases). `d` is kept free of any
-        // hint-mode prefix — double-click hints live on the `D` prefix
-        // below — so the bare keystroke resolves instantly with no
-        // sequence-timeout wait, the same reason right-click moved `r`→`s`.
-        ("d", .flashCommand(.scroll(.halfPageDown))),
-        ("u", .flashCommand(.scroll(.halfPageUp))),
         ("gg", .flashCommand(.scroll(.top))),
         ("G", .flashCommand(.scroll(.bottom))),
-        // Vimium `H` / `L` — back / forward in history. (Lowercase
-        // `h` / `l` scroll left / right, matching Vimium too.) `[q`/`]q` alias
-        // these below, in the bracket-pair block.
-        ("H", .flashCommand(.historyBack)),
-        ("L", .flashCommand(.historyForward)),
-        // Bracket-pair navigation borrows tpope/vim-unimpaired's `[X` =
-        // previous, `]X` = next convention so muscle memory transfers
-        // straight from Vim. The one constraint the desktop adds: the letter
-        // must not share a finger with the bracket itself. `[` and `]` are
-        // right-pinky keys, which rules out `p` on QWERTY and `o` on Colemak
-        // — every other letter is reachable without the pinky doing both
-        // halves of the roll.
-        ("[t", .flashCommand(.tabPrev)),
-        ("]t", .flashCommand(.tabNext)),
-        // `[h`/`]h` — back / forward in history, the unimpaired-style alias for
-        // `H`/`L`.
-        ("[h", .flashCommand(.historyBack)),
-        ("]h", .flashCommand(.historyForward)),
-        // `]b` — Vim "buffer next". In a desktop context the closest
-        // analogue is the next browser/terminal tab, so this aliases `]t`.
-        ("]b", .flashCommand(.tabNext)),
-        // `[B`/`]B` — Vim first/last buffer. Aliases `g^`/`g$` (tab
-        // first/last).
-        ("[B", .flashCommand(.tabFirst)),
-        ("]B", .flashCommand(.tabLast)),
-        // Move (reorder) the current tab. `m` for "move" stays as the
-        // primary form because it's the desktop-intuitive abbreviation;
-        // `[e`/`]e` (Vim "exchange") is the unimpaired-style alias.
-        ("[m", .flashCommand(.tabMovePrev)),
-        ("]m", .flashCommand(.tabMoveNext)),
-        ("[e", .flashCommand(.tabMovePrev)),
-        ("]e", .flashCommand(.tabMoveNext)),
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
-        // `[w`/`]w` — Vim's `:wprev`/`:wnext`: cycle the FOCUSED APP's windows
-        // via the native macOS ⌘` / ⌘⇧` shortcuts, sent to the app so it works
-        // wherever macOS window cycling does.
-        ("[w", sendKeyMapping("cmd+shift+`")),
-        ("]w", sendKeyMapping("cmd+`")),
-        // `[s`/`]s` — previous / next split: the pane inside the focused
-        // terminal window (tmux `select-pane`, else the terminal's own ⌘[ / ⌘]
-        // split cycling where it binds them). Outside terminals it is a no-op.
-        // `s` rather than the obvious `p`: `p` is the right pinky on QWERTY,
-        // the same finger that just pressed the bracket.
-        ("[s", .flashCommand(.panePrev)),
-        ("]s", .flashCommand(.paneNext)),
-        // Reopen the most recently closed tab. Vimium binds this to `X`
-        // ("restore"); ⌘⇧T is the cross-browser standard the host
-        // keystroke fallback delivers for any non-terminal app, and
-        // terminals (no close-tab history) return `.unhandled`.
-        ("X", .flashCommand(.tabReopen)),
-        // No default ⌘-based bindings. These chords reach the app in INSERT;
-        // NORMAL swallows them.
-        // Their vim-style siblings cover the same actions in
-        // normal mode (`gt`/`gT`, `g1`–`g9`, `r`/`R`, `H`/`L`, `[t`/`]t`, `t`,
-        // `x`, `/`, `[a`/`]a`).
-        //
-        // ⌃Tab / ⌃⇧Tab → next / previous tab — browser-native chords shadowed
-        // in normal mode (scope-bound Carbon; insert mode releases them so the
-        // focused app sees the native chord again).
-        ("ctrl+tab", .flashCommand(.tabNext)),
-        ("ctrl+shift+tab", .flashCommand(.tabPrev)),
-        // First / last tab. Vim-style `g^` / `g$` borrowed from
-        // line-extreme motions: `^` is the first non-blank, `$` is the
-        // end of line. Browsers translate to ⌘1 / ⌘9 (the cross-vendor
-        // convention for first / last tab); plugin sources receive the
-        // `tab_first` / `tab_last` source action.
-        ("g^", .flashCommand(.tabFirst)),
-        ("g$", .flashCommand(.tabLast)),
-        // Vimium `g0` — first tab (alias of `g^`).
-        ("g0", .flashCommand(.tabFirst)),
-        ("g1", .flashCommand(.tabSelect(index: 1))),
-        ("g2", .flashCommand(.tabSelect(index: 2))),
-        ("g3", .flashCommand(.tabSelect(index: 3))),
-        ("g4", .flashCommand(.tabSelect(index: 4))),
-        ("g5", .flashCommand(.tabSelect(index: 5))),
-        ("g6", .flashCommand(.tabSelect(index: 6))),
-        ("g7", .flashCommand(.tabSelect(index: 7))),
-        ("g8", .flashCommand(.tabSelect(index: 8))),
-        ("g9", .flashCommand(.tabSelect(index: 9))),
-        // Vimium `gi` — focus the first text input and enter INSERT.
+        ("[t", sendKeyMapping("cmd+shift+[")),
+        ("]t", sendKeyMapping("cmd+shift+]")),
+        ("t", sendKeyMapping("cmd+t")),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
-        ("gt", .flashCommand(.tabNext)),
-        ("gT", .flashCommand(.tabPrev)),
-        // Vimium `J` / `K` — one tab left (prev) / right (next), the
-        // capital-letter siblings of `gT` / `gt`.
-        ("J", .flashCommand(.tabPrev)),
-        ("K", .flashCommand(.tabNext)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        // `F` requests the global Command-Shift new-context gesture. `f` stays
-        // plain except for the Shift transport modifier terminal links require.
-        (
-          "F",
-          .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
-        ),
-        // Ctrl moves the same current/new-tab pair onto the precision grid.
+        ("F", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))),
         ("ctrl+f", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
         (
           "ctrl+shift+f",
           .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
         ),
-        // `s` for "secondary click" (right-click). `r` was the old
-        // prefix but it collided with the `r`→`R` reload pair: typing
-        // `r` waited the full sequence-timeout before resolving as
-        // reload, because right-click hint sequences also began with `r`.
-        // `s` has no such pair so the keystroke fires instantly.
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
-        // Double-click hints. `D` ("Double") rather than the natural `d`
-        // prefix so the bare `d` half-page scroll above stays instant.
         ("Df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("sF", .flashCommand(.mouseGrid(.click(.rightClick, modifiers: [])))),
         ("DF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
         ("mF", .flashCommand(.mouseGrid(.move))),
-        // Undo lives on `u` in Vim, but Vimium reuses `u` for half-page
-        // scroll-up (mapped above). Undo stays reachable via `:undo` /
-        // `:u` and the app's native ⌘Z in insert mode.
+        ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
-        ("e", .flashCommand(.archive)),
-        // `x` sends the app's own close chord instead of a Flash-side
-        // "smart close": every app already decides what ⌘W means (a
-        // browser closes the tab, a terminal's own keybinding can route
-        // it to a confirmed tmux kill-pane, …). Avoiding behavior
-        // overrides keeps Flash predictable — the user's per-app
-        // configuration stays the authority.
         ("x", sendKeyMapping("cmd+w")),
-        // Vimium `n` / `N` cycle find matches. Flash drives the focused
-        // app's native find-again (⌘G / ⌘⇧G) after `/` opens find. New
-        // windows use native ⌘N in INSERT — `n` is needed for find parity.
-        ("n", sendKeyMapping("cmd+g")),
-        ("N", sendKeyMapping("cmd+shift+g")),
-        // `y` yanks (copies) the current selection; `p` pastes it back.
-        // With no register prefix these use the system clipboard — `"ay` /
-        // `"ap` route through the named register `a` instead (a-z, 0-9; an
-        // uppercase name appends). `y` is a one-key prefix of `yy` below, so a
-        // bare `y` commits after the sequence timeout — `yy` (yank URL) fires
-        // immediately on the second key.
         ("y", .flashCommand(.yankSelection(register: nil))),
         ("p", .flashCommand(.paste(register: nil))),
-        // `yy` yanks the current URL/location (Vimium `yy`).
-        ("yy", .flashCommand(.copyURL)),
-        ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
-        ("r", .flashCommand(.reload(force: false))),
-        ("R", .flashCommand(.reload(force: true))),
         ("?", .flashCommand(.showUsage(topic: nil))),
       ]
-      // Vim-style marks: `m<letter>` sets, `` `<letter> `` jumps.
-      // Generated rather than hand-listed so the 52 mappings (26+26)
-      // stay in sync if more letter ranges are added later.
-      for letter in "abcdefghijklmnopqrstuvwxyz" {
-        let l = String(letter)
-        raw.append(
-          (
-            "m\(l)",
-            .flashCommand(.pluginVerb(name: "set_mark", args: ["letter": l]))
-          ))
-        raw.append(
-          (
-            "`\(l)",
-            .flashCommand(.pluginVerb(name: "jump_to_mark", args: ["letter": l]))
-          ))
-      }
       // Every built-in bracket-pair mapping follows vim-unimpaired repetition:
       // after `[x` or `]x`, additional presses of `x` repeat the action.
       let repeatableKeys = Set(

@@ -151,11 +151,13 @@ surfaces do not alter format evaluation.
 The bar itself is a vertical gradient over the `fill` colour with a hairline
 along its bottom edge; default-background cells are transparent so both show
 through. Mode pills are lit from the top. A hovered `#[link]` or `#[popup]` run
-gets a faint rounded wash, inset inside the text band, that fades in, glides
-between neighbouring runs, and fades out. The wash follows the narrowest
-interactive span under the pointer, so a whole-row popup does not wash the
-row while the pointer sits on one of its links, and a span wide enough to
-cover most of a lane is dimmed further. A value changing in place (a metric tick, the clock) crossfades over
+gets a faint rounded wash that appears, moves, and disappears immediately.
+It fits the visible text inside the narrowest interactive span, excluding
+outer separator spaces while preserving the span's click and popup targets.
+A whole-row popup does not wash the row while the pointer sits on one of its
+links, and a span wide enough to cover most of a lane is dimmed further.
+Status updates refresh the wash under a stationary pointer using the new
+layout. A value changing in place (a metric tick, the clock) crossfades over
 100 ms, short enough that a 1 Hz metric reads as a snap rather than a
 smear. A carousel article change is one vertical push over 450 ms: the old
 line moves a full line height up and fades out while the next rises the same

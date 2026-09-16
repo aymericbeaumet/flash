@@ -454,8 +454,8 @@ enum ConfigLoader {
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
-        "scroll_step",
-        "scroll_page_fraction", "click_hold_ms", "send_key_interval_ms",
+        "scroll_step", "scroll_step_lines", "scroll_page_lines", "click_hold_ms",
+        "send_key_interval_ms",
       ],
       "overlay": [
         "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
@@ -1259,12 +1259,19 @@ enum ConfigLoader {
       assign: { value, config in
         config.mode.scrollStep = value
       })
-    applyDouble(
-      table["scroll_page_fraction"], path: ["mode", "scroll_page_fraction"],
-      message: "mode.scroll_page_fraction must be a number between 0.05 and 1.0",
-      locations: locations, into: &config, validate: { (0.05...1.0).contains($0) },
+    applyInt(
+      table["scroll_step_lines"], path: ["mode", "scroll_step_lines"],
+      message: "mode.scroll_step_lines must be an integer between 1 and 1000 (lines)",
+      locations: locations, into: &config, validate: { (1...1000).contains($0) },
       assign: { value, config in
-        config.mode.scrollPageFraction = value
+        config.mode.scrollStepLines = value
+      })
+    applyInt(
+      table["scroll_page_lines"], path: ["mode", "scroll_page_lines"],
+      message: "mode.scroll_page_lines must be an integer between 1 and 1000 (lines)",
+      locations: locations, into: &config, validate: { (1...1000).contains($0) },
+      assign: { value, config in
+        config.mode.scrollPageLines = value
       })
     applyInt(
       table["click_hold_ms"], path: ["mode", "click_hold_ms"],

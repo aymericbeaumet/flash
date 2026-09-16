@@ -272,6 +272,93 @@ private func waitForFlashMode(_ expected: String, args: Args, timeout: TimeInter
   throw OracleError.flashModeTimedOut(expected)
 }
 
+private struct ResidentHint: Equatable {
+  let label: String
+  let accessibilityLabel: String?
+  let role: String?
+  let frame: CGRect
+
+  init(_ value: [String: Any]) throws {
+    guard let label = value["label"] as? String, !label.isEmpty,
+      let frame = value["frame"] as? [String: NSNumber],
+      let x = frame["x"], let y = frame["y"],
+      let width = frame["width"], let height = frame["height"]
+    else { throw OracleError.flashStateUnavailable("invalid hint label or frame") }
+    self.label = label
+    accessibilityLabel = value["accessibility_label"] as? String
+    role = value["role"] as? String
+    self.frame = CGRect(
+      x: x.doubleValue, y: y.doubleValue, width: width.doubleValue, height: height.doubleValue)
+  }
+}
+
+private func waitForResidentHints(
+  behavior: String, after previous: [ResidentHint] = [], allowInsert: Bool = false, args: Args
+) throws -> [ResidentHint] {
+  let deadline = Date().addingTimeInterval(4)
+  while Date() < deadline {
+    let state = try fetchFlashState(args: args, timeout: 1)
+    if allowInsert, state["mode"] as? String == "insert" { return [] }
+    if state["hint_behavior"] as? String == behavior,
+      state["activation_in_flight"] as? Bool == false,
+      let values = state["hints"] as? [[String: Any]]
+    {
+      let hints = try values.map(ResidentHint.init)
+      if !hints.isEmpty, hints != previous { return hints }
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  throw OracleError.flashStateUnavailable("timed out waiting for \(behavior) hint layout")
+}
+
+private func commitResidentHint(label: String, args: Args) throws {
+  try runFlash("mouse_target", args: args)
+  let hints = try waitForResidentHints(behavior: "click", args: args)
+  guard let hint = hints.first(where: { $0.accessibilityLabel == label }) else {
+    throw OracleError.targetMissing("resident hint for \(label)")
+  }
+  try postHintLabel(hint.label)
+}
+
+private func commitResidentGrid(
+  app: NSRunningApplication, targets: [JumpTarget], args: Args
+) throws {
+  let window = AXIntegrationHarness.makeContext(for: app).frontWindowFrame.insetBy(dx: 32, dy: 48)
+  guard !window.isEmpty, !window.isNull else { throw OracleError.axWindowTimedOut }
+  let point = CGPoint(x: window.midX, y: window.midY)
+  let excluded = targets.filter {
+    $0.entersInsertMode || $0.role == "AXPopUpButton" || $0.role == "AXMenuButton"
+      || $0.accessibilityLabel == "Open Fixture Menu"
+  }.map(\.frame)
+  func safeClick(_ hint: ResidentHint) -> Bool {
+    let center = CGPoint(x: hint.frame.midX, y: hint.frame.midY)
+    return window.contains(center) && !excluded.contains { $0.contains(center) }
+  }
+  func distance(_ hint: ResidentHint) -> CGFloat {
+    hypot(hint.frame.midX - point.x, hint.frame.midY - point.y)
+  }
+  try runFlash("mouse_grid", args: args)
+  var hints = try waitForResidentHints(behavior: "mouseGridClick", args: args)
+  // Configuration allows at most six steps. Read each new layout before the
+  // next key, and only let the final click land inside this fixture's window.
+  for _ in 0..<6 {
+    let candidates = hints.filter { hint in
+      let commits =
+        hint.role == "FlashMouseGridFinalChip"
+        || min(hint.frame.width, hint.frame.height) <= 18
+      return !commits || safeClick(hint)
+    }
+    guard let selected = candidates.min(by: { distance($0) < distance($1) }) else {
+      throw OracleError.targetMissing("safe non-input fixture grid cell")
+    }
+    try postHintLabel(selected.label)
+    hints = try waitForResidentHints(
+      behavior: "mouseGridClick", after: hints, allowInsert: true, args: args)
+    if hints.isEmpty { return }
+  }
+  throw OracleError.flashModeTimedOut("insert after final mouse_grid cell")
+}
+
 private func flashMode(args: Args) throws -> String {
   let state = try fetchFlashState(args: args, timeout: 1)
   guard let mode = state["mode"] as? String else {
@@ -363,13 +450,32 @@ private func postMouseClick(at nsScreenPoint: CGPoint, action: JumpAction) {
   }
 }
 
-private func postEscapeKey() {
+private func postKey(_ key: CGKeyCode) {
   let source = CGEventSource(stateID: .hidSystemState)
-  CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Escape), keyDown: true)?
+  CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)?
     .post(tap: .cghidEventTap)
   Thread.sleep(forTimeInterval: 0.02)
-  CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Escape), keyDown: false)?
+  CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)?
     .post(tap: .cghidEventTap)
+}
+
+private func postHintLabel(_ label: String) throws {
+  let source = CGEventSource(stateID: .hidSystemState)
+  for character in label.lowercased() {
+    guard
+      let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+    else { throw OracleError.flashCommandFailed("could not create hint key events") }
+    let units = Array(String(character).utf16)
+    units.withUnsafeBufferPointer { buffer in
+      guard let baseAddress = buffer.baseAddress else { return }
+      down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
+      up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
+    }
+    down.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.02)
+    up.post(tap: .cghidEventTap)
+  }
 }
 
 private func reportDiff(
@@ -572,11 +678,36 @@ private func runResidentModeProbe(
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
 
+    let hintButtonBefore = readState(args.statePath)["primary", default: 0]
+    try commitResidentHint(label: "Primary Action", args: args)
+    try waitForState(
+      path: args.statePath, key: "primary", value: hintButtonBefore + 1, timeout: 4)
+    assertFlashMode("normal", args: args, recorder: recorder, label: "non-input hint commit")
+
+    try commitResidentHint(label: "Native Search Field", args: args)
+    assertFlashMode("insert", args: args, recorder: recorder, label: "input hint commit")
+
+    try runFlash("enter_normal_mode", args: args)
+    try waitForFlashMode("normal", args: args, timeout: 4)
+    try commitResidentGrid(app: app, targets: targets, args: args)
+    assertFlashMode("insert", args: args, recorder: recorder, label: "non-input mouse_grid commit")
+
+    try runFlash("enter_normal_mode", args: args)
+    try waitForFlashMode("normal", args: args, timeout: 4)
+    let pointerCommandBefore = readState(args.statePath)["primary", default: 0]
+    let primaryPoint = try targetCenter(label: "Primary Action", targets: targets)
+    CGWarpMouseCursorPosition(cgScreenPoint(from: primaryPoint))
+    try runFlash("mouse_pointer", args: args)
+    postKey(CGKeyCode(kVK_Return))
+    try waitForState(
+      path: args.statePath, key: "primary", value: pointerCommandBefore + 1, timeout: 4)
+    assertFlashMode("normal", args: args, recorder: recorder, label: "pointer command button click")
+
     let primaryBefore = readState(args.statePath)["primary", default: 0]
     postMouseClick(
       at: try targetCenter(label: "Primary Action", targets: targets), action: .leftClick)
     try waitForState(path: args.statePath, key: "primary", value: primaryBefore + 1, timeout: 4)
-    assertFlashMode("normal", args: args, recorder: recorder, label: "native button left click")
+    assertFlashMode("insert", args: args, recorder: recorder, label: "native button left click")
 
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
@@ -596,7 +727,7 @@ private func runResidentModeProbe(
       value: contextBefore + 1,
       timeout: 4)
     assertFlashMode("normal", args: args, recorder: recorder, label: "native context right click")
-    postEscapeKey()
+    postKey(CGKeyCode(kVK_Escape))
 
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
@@ -632,7 +763,7 @@ private func runResidentModeProbe(
     } else {
       recorder.fail("resident status item popover closed during normal-mode handoff")
     }
-    postEscapeKey()
+    postKey(CGKeyCode(kVK_Escape))
   } catch {
     recorder.fail("resident mode probe failed: \(error)")
   }

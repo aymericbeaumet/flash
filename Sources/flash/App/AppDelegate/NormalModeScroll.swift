@@ -3,18 +3,22 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 
-// Scroll dispatch for normal mode: `j`/`k`/`gg`/`G`/`<c-d>`/`<c-u>` and the
-// hermetic Scroller fallback. `gg`/`G` (top/bottom) ask any registered
-// `scrollExtremes` source first (tmux runs `history-top` / `cancel` instead
-// of bashing the wheel), then fall through to the browser-edge or generic
-// wheel paths — which a terminal never reaches, because a synthesized wheel
-// there comes back as an SGR mouse report in the pty.
+// Vertical step/page keys post mouse-wheel lines directly. Horizontal and edge
+// commands keep their focused-window scroller and source-specific behavior.
 
 extension AppDelegate {
   func scrollNormalMode(
     _ kind: NormalModeDispatcher.ScrollKind,
     repeatCount: Int = 1
   ) {
+    if let lines = NormalModeDispatcher.scrollLineDelta(for: kind, repeatCount: repeatCount) {
+      if NormalModeDispatcher.synthesizeLineScroll(lines: lines),
+        let pid = observedFocusedAppPID ?? normalModeTargetPID
+      {
+        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
+      }
+      return
+    }
     // gg/G: try a `scrollExtremes` source first (e.g. the tmux plugin
     // runs `tmux send-keys -X history-top` / `-X cancel`, which moves
     // *inside* the live buffer rather than blasting wheel ticks at a
@@ -29,9 +33,7 @@ extension AppDelegate {
       performScrollExtreme(kind, context: context, repeatCount: repeatCount)
       return
     }
-    // Identity only on main: `j`/`k` autorepeat must not pay a WindowServer
-    // snapshot per press. The window frame the wheel targets is resolved on
-    // the AX queue together with the scroll itself.
+    // Horizontal scrolling resolves its target window off the main thread.
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(kind)")
       applyModeOverlay()
@@ -40,7 +42,7 @@ extension AppDelegate {
     // Run the scroll off the main thread: `NormalModeDispatcher.scroll` walks the
     // AX tree (up to ~600 nodes) to find the scrollable pane before synthesizing
     // a wheel event, and main hosts the keyboard-capture tap — doing it inline
-    // stalled input for a whole `j`/`k` on a slow app. The scroll only touches
+    // stalled input on a slow app. The scroll only touches
     // thread-safe AX + CGEvent APIs, so hop to `axQueue`. Rapid repeats
     // serialize on the queue instead of blocking main. The mode surface is
     // untouched by a scroll, so nothing re-renders afterwards.

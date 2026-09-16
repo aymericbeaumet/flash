@@ -38,8 +38,8 @@ battery = "#{flash.plugin.power.details}"
 working_directory = "."
 persistent = true
 command = ["calcurse", "--read-only", "--quiet", "-D", "status/calcurse", "-C", "status/calcurse"]
-columns = 74
-rows = 22
+columns = 100
+rows = 28
 
 [plugin.feed]
 label = "AGGR"

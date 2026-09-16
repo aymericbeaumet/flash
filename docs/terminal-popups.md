@@ -215,7 +215,7 @@ values. Font variants and the cell size are cached per font change. The
 incremental dev build too, so the daily-driver bundle runs the same per-cell
 code as a release build.
 
-Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects, carousel transitions, in-place value crossfades, and the hover wash are Core Animation only: the host adds an animation when a value changes and never redraws on a timer.
+Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects, carousel transitions, and in-place value crossfades run on Core Animation without a redraw timer. The hover wash updates immediately, follows the visible text rather than outer separator spaces, and refreshes when the layout changes under a stationary pointer.
 
 `monitor = "primary"` selects the display at desktop origin `(0, 0)`. Moving
 keyboard focus to another display does not move the bar or reserve status-bar

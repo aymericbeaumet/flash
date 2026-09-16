@@ -81,21 +81,20 @@ enum ModeReducer {
 
     case .advancedModeChanged(let enabled):
       if case .command(let scope, let restoreTo) = state {
-        let base: ReturnMode = enabled ? (restoreTo == .disabled ? .insert : restoreTo) : .disabled
+        let base: ReturnMode = enabled ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
         return (.command(scope: scope, restoreTo: base), [.renderSurface])
       }
       if case .terminal(let restoreTo) = state {
         let base: ReturnMode =
           enabled
-          ? (restoreTo == .disabled ? .insert : restoreTo) : .disabled
+          ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
         return (.terminal(restoreTo: base), [.renderSurface])
       }
       if enabled {
-        // Hot-enabling advanced mode lands in INSERT; the user opts into NORMAL
-        // with their hotkey. If it was already on, just refresh the badge/label
-        // (labels may have changed in the reload).
+        // Enabling advanced mode starts persistent NORMAL, as startup does.
+        // An existing mode survives label/config refreshes.
         if case .disabled = state {
-          let next = Mode.insert
+          let next = Mode.normal
           return (next, enterEffects(for: next, targetPID: nil))
         }
         return (state, [.renderSurface])

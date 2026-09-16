@@ -539,7 +539,7 @@ extension OverlayPanel {
   }
 
   /// Route a hovered segment (screen coordinates) to the surface drawing it;
-  /// every other surface fades its wash out.
+  /// every other surface hides its wash.
   func setStatusBarHoverHighlight(_ screenRect: CGRect?) {
     for surface in [primaryStatusBarSurface] + secondaryStatusBars {
       let bar = surface.backgroundLayer.frame.offsetBy(dx: frame.minX, dy: frame.minY)
@@ -625,28 +625,31 @@ extension OverlayPanel {
     }
     // A content/config refresh does not generate mouseMoved for a stationary
     // pointer. Re-hit-test now so an open popup updates immediately.
-    refreshStatusBarPopup(popups: popups, at: NSEvent.mouseLocation)
+    refreshStatusBarPopup(popups: popups, links: links, at: NSEvent.mouseLocation)
     // The probe normally arms on hover, but if the pointer is already parked
     // in the band when the windows (re)appear no `mouseEntered` will fire —
     // catch that case here.
     if Self.pointerIsInMenuBarBand() { startMenuBarRevealTracking() }
   }
 
-  /// Re-hit-test the current popup regions after live status content changes.
-  /// The existing popup layer is updated and moved directly, so a stationary
-  /// hover never flashes closed and a moving pointer keeps its latest anchor.
+  /// Re-hit-test live status content, including the wash under a stationary
+  /// pointer. An open popup updates in place and keeps its latest anchor.
   func refreshStatusBarPopup(
     popups: [StatusBarPopupRegion],
+    links: [(rect: CGRect, url: URL)] = [],
     at pointer: CGPoint,
     screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
     statusPopupController.refresh(popups)
     activeStatusBarPopupName = statusPopupController.presentation.identity?.name
     activeStatusBarPopupContent = statusPopupController.content
+    let acceptsPointer = !statusBarClickWindows.contains(where: \.ignoresMouseEvents)
+    let popup = acceptsPointer ? popups.first(where: { $0.rect.contains(pointer) }) : nil
+    let link = acceptsPointer ? links.first(where: { $0.rect.contains(pointer) }) : nil
+    setStatusBarHoverHighlight(
+      StatusBarClickView.hoverWashRect(link: link?.rect, popup: popup?.rect))
     guard !statusPopupController.presentation.isFocused else { return }
-    if !statusBarClickWindows.contains(where: \.ignoresMouseEvents),
-      let popup = popups.first(where: { $0.rect.contains(pointer) })
-    {
+    if let popup {
       showStatusBarPopup(popup, at: pointer, screenSnapshot: screenSnapshot)
     } else {
       statusBarHoverGate = .ready

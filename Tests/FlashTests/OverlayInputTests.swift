@@ -600,7 +600,13 @@ final class OverlayInputTests: XCTestCase {
     panel.processNormalModeKey(
       try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
     XCTAssertEqual(panel.normalModePending, "")
-    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabPrev])
+    XCTAssertEqual(
+      coordinator.normalModeActions.map(\.0?.command),
+      [
+        .sendKey(
+          keys: "cmd+shift+[", keyCode: CGKeyCode(kVK_ANSI_LeftBracket),
+          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
+      ])
   }
 
   func testConfiguredModifiedNormalMappingDoesNotLockOutRightBracketTabSequence() throws {
@@ -633,7 +639,13 @@ final class OverlayInputTests: XCTestCase {
     panel.processNormalModeKey(
       try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
     XCTAssertEqual(panel.normalModePending, "")
-    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
+    XCTAssertEqual(
+      coordinator.normalModeActions.map(\.0?.command),
+      [
+        .sendKey(
+          keys: "cmd+shift+]", keyCode: CGKeyCode(kVK_ANSI_RightBracket),
+          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
+      ])
   }
 
   func testRepeatableBracketAppMappingRepeatsOnFinalKey() throws {

@@ -7,6 +7,42 @@ import XCTest
 @testable import flash
 
 final class ConfigLoaderTests: XCTestCase {
+  func testModeScrollLineDefaultsAndOverrides() {
+    let defaults = ConfigLoader.parse("")
+    XCTAssertEqual(defaults.mode.scrollStep, 60)
+    XCTAssertEqual(defaults.mode.scrollStepLines, 3)
+    XCTAssertEqual(defaults.mode.scrollPageLines, 20)
+    let configured = ConfigLoader.parse(
+      """
+      [mode]
+      scroll_step = 90
+      scroll_step_lines = 1
+      scroll_page_lines = 1000
+      """)
+    XCTAssertTrue(configured.diagnostics.isEmpty)
+    XCTAssertEqual(configured.mode.scrollStep, 90)
+    XCTAssertEqual(configured.mode.scrollStepLines, 1)
+    XCTAssertEqual(configured.mode.scrollPageLines, 1000)
+  }
+
+  func testModeScrollLineCountsRejectOutOfRangeAndNonIntegerValues() {
+    for field in ["scroll_step_lines", "scroll_page_lines"] {
+      for invalid in ["0", "-1", "1001", "1.5", "\"3\""] {
+        let config = ConfigLoader.parse("[mode]\n\(field) = \(invalid)")
+        XCTAssertEqual(config.diagnostics.count, 1, "\(field) = \(invalid)")
+        XCTAssertEqual(config.mode.scrollStepLines, 3)
+        XCTAssertEqual(config.mode.scrollPageLines, 20)
+      }
+    }
+  }
+
+  func testModeRejectsObsoleteScrollPageFraction() {
+    let config = ConfigLoader.parse("[mode]\nscroll_page_fraction = 0.5")
+    XCTAssertEqual(config.diagnostics.count, 1)
+    XCTAssertTrue(config.diagnostics[0].message.contains("scroll_page_fraction"))
+    XCTAssertEqual(config.mode.scrollPageLines, 20)
+  }
+
   func testModeTransitionsHaveNoDefaultMappings() {
     for config in [Config.default, ConfigLoader.parse("")] {
       for mappings in [
@@ -91,14 +127,11 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
     XCTAssertEqual(c.overlay.hintBGBottom, "#FFC542")
     XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
-    assertSendKey(
-      c.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      keys: "down",
-      keyCode: CGKeyCode(kVK_DownArrow))
-    assertSendKey(
-      c.mode.normal.first(where: { $0.key == "k" })?.action.command,
-      keys: "up",
-      keyCode: CGKeyCode(kVK_UpArrow))
+    for rawKey in ["d", "j", "k"] {
+      XCTAssertNil(c.mode.normal.first { $0.key == key(rawKey) })
+    }
+    XCTAssertEqual(c.mode.normal.first { $0.key == "u" }?.action.command, .undo)
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("ctrl+r") }?.action.command, .redo)
     XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("\\<space>") }))
     XCTAssertEqual(
@@ -123,8 +156,8 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.move))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
-      .copyURL)
+      c.mode.normal.first(where: { $0.key == "y" })?.action.command,
+      .yankSelection(register: nil))
     for insertKey in ["a", "A", "i", "I", "o", "O", "gi"] {
       XCTAssertNil(c.mode.normal.first(where: { $0.key == key(insertKey) }))
     }
@@ -133,69 +166,42 @@ final class ConfigLoaderTests: XCTestCase {
       XCTAssertNotEqual(mapping.action.command, .focusInput, mapping.key)
     }
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("g4") })?.action.command,
-      .tabSelect(index: 4))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("gN") }))
-    // Vimium `n` cycles find matches — Flash drives the app's native
-    // find-again (⌘G). New windows stay on ⌘N.
-    guard
-      case .sendKey(let nKeys, _, _) =
-        c.mode.normal.first(where: { $0.key == "n" })?.action.command
-    else { return XCTFail("expected send_key for n") }
-    XCTAssertEqual(nKeys, "cmd+g")
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "t" })?.action.command,
-      .tabNew)
+    for rawKey in ["g4", "gN", "n", "N", "yy", "r", "R", "e"] {
+      XCTAssertNil(c.mode.normal.first { $0.key == key(rawKey) })
+    }
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
       .movementBack)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
       .movementForward)
-    // History: `H`/`L` with `[h`/`]h` as unimpaired-style aliases.
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("[h") })?.action.command,
-      .historyBack)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("]h") })?.action.command,
-      .historyForward)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "H" })?.action.command,
-      .historyBack)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "L" })?.action.command,
-      .historyForward)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("[t") })?.action.command,
-      .tabPrev)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("]t") })?.action.command,
-      .tabNext)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("[a") })?.action.command,
       .appPrev)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("[s") })?.action.command,
-      .panePrev)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("]s") })?.action.command,
-      .paneNext)
-    for rawKey in [
-      "[t", "]t", "[h", "]h", "]b", "[B", "]B", "[m", "]m", "[e", "]e", "[a", "]a",
-      "[w", "]w", "[s", "]s",
-    ] {
+    assertSendKey(
+      c.mode.normal.first(where: { $0.key == key("[t") })?.action.command,
+      keys: "cmd+shift+[", keyCode: CGKeyCode(kVK_ANSI_LeftBracket),
+      flags: [.maskCommand, .maskShift])
+    assertSendKey(
+      c.mode.normal.first(where: { $0.key == key("]t") })?.action.command,
+      keys: "cmd+shift+]", keyCode: CGKeyCode(kVK_ANSI_RightBracket),
+      flags: [.maskCommand, .maskShift])
+    assertSendKey(
+      c.mode.normal.first(where: { $0.key == "t" })?.action.command,
+      keys: "cmd+t", keyCode: CGKeyCode(kVK_ANSI_T), flags: .maskCommand)
+    for rawKey in ["[a", "]a", "[t", "]t"] {
       XCTAssertEqual(
         c.mode.normal.first(where: { $0.key == key(rawKey) })?.repeatsOnFinalKey,
         true,
         "expected default bracket mapping \(rawKey) to repeat")
     }
-    // `[p` / `]p` would put the bracket and its letter on the same finger
-    // (right pinky on QWERTY), so splits live on `[s` / `]s` instead.
-    for rawKey in ["[[", "]]", "[b", "T", "[p", "]p"] {
+    for rawKey in [
+      "[[", "]]", "[b", "T", "[p", "]p", "[h", "]h", "]b", "[B", "]B",
+      "[m", "]m", "[e", "]e", "[w", "]w", "[s", "]s", "H", "L",
+    ] {
       XCTAssertNil(
         c.mode.normal.first(where: { $0.key == key(rawKey) }),
         "expected removed default mapping \(rawKey) to stay unbound")
@@ -221,9 +227,6 @@ final class ConfigLoaderTests: XCTestCase {
   }
 
   func testDefaultNormalModeOmitsCmdChords() {
-    // The ⌘-based system/browser chords are intentionally NOT bound in normal
-    // mode — they belong to the OS / focused app. Only their vim-style siblings
-    // and the ⌃Tab pair are bound.
     let c = ConfigLoader.parse("")
     func command(_ raw: String) -> URLCommand? {
       c.mode.normal.first(where: { $0.key == key(raw) })?.action.command
@@ -235,8 +238,8 @@ final class ConfigLoaderTests: XCTestCase {
     ] {
       XCTAssertNil(command(chord), "expected no default ⌘ binding for \(chord)")
     }
-    XCTAssertEqual(command("ctrl+tab"), .tabNext)
-    XCTAssertEqual(command("ctrl+shift+tab"), .tabPrev)
+    XCTAssertNil(command("ctrl+tab"))
+    XCTAssertNil(command("ctrl+shift+tab"))
   }
 
   func testParsesStatusBarTemplateOptionsAndExplicitSources() {
@@ -1041,12 +1044,7 @@ final class ConfigLoaderTests: XCTestCase {
       """)
     XCTAssertEqual(bareVerb.warnings.count, 1)
     XCTAssertTrue(bareVerb.warnings[0].contains("\"j\""))
-    // The built-in default for `j` survives because the user's invalid
-    // override never installs.
-    assertSendKey(
-      bareVerb.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      keys: "down",
-      keyCode: CGKeyCode(kVK_DownArrow))
+    XCTAssertNil(bareVerb.mode.normal.first(where: { $0.key == "j" }))
   }
 
   func testParsesModeMappings() {
@@ -1127,13 +1125,16 @@ final class ConfigLoaderTests: XCTestCase {
     let toml = """
       [mode.normal.mappings]
       "j" = [\"flash\", \"scroll_up\"]
+      "h" = [\"flash\", \"scroll_right\"]
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "h" })?.action.command, .scroll(.right))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "r" })?.action.command, .reload(force: false))
+      c.mode.normal.first(where: { $0.key == "u" })?.action.command, .undo)
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "I" }))
     XCTAssertEqual(c.mode.normal.filter { $0.key == "j" }.count, 1)
+    XCTAssertEqual(c.mode.normal.filter { $0.key == "h" }.count, 1)
   }
 
   func testNormalLeaderExpandsMappingsAfterParsingAllTables() {
@@ -1193,10 +1194,7 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("[mode.normal.mappings]") })
-    assertSendKey(
-      c.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      keys: "down",
-      keyCode: CGKeyCode(kVK_DownArrow))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "j" }))
   }
 
   func testEnvBeatsTOML() {
@@ -1350,6 +1348,7 @@ final class ConfigLoaderTests: XCTestCase {
     _ command: URLCommand?,
     keys: String,
     keyCode: CGKeyCode,
+    flags: CGEventFlags = [],
     file: StaticString = #filePath,
     line: UInt = #line
   ) {
@@ -1358,7 +1357,7 @@ final class ConfigLoaderTests: XCTestCase {
     }
     XCTAssertEqual(actualKeys, keys, file: file, line: line)
     XCTAssertEqual(actualKeyCode, keyCode, file: file, line: line)
-    XCTAssertEqual(flagsRawValue, 0, file: file, line: line)
+    XCTAssertEqual(flagsRawValue, flags.rawValue, file: file, line: line)
   }
 
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {

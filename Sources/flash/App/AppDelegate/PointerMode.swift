@@ -4,8 +4,8 @@ import FlashCore
 /// Pointer mode (`mouse_pointer`): freestyle keyboard cursor control.
 /// h/j/k/l or arrows move with autorepeat acceleration (shift = 2px fine),
 /// `m` / `,` / `.` click left/middle/right in place, `v` toggles a drag,
-/// Return or space clicks and exits with the same INSERT handoff as a
-/// mouse-grid commit, Escape (or `q`) exits. Runs as a hint-session variant:
+/// Return or space clicks and returns to NORMAL; Escape (or `q`) exits.
+/// Runs as a hint-session variant:
 /// `inputMode` stays `.hints` so the capture policy is untouched, and the
 /// panel's `pointerModeActive` flag routes keys to `PointerModeInterpreter`.
 extension AppDelegate {
@@ -100,8 +100,8 @@ extension AppDelegate {
   }
 
   /// Return / space: finish the session. With the drag toggle held this
-  /// releases the button (completing the drag); otherwise it left-clicks with
-  /// the same INSERT handoff as a mouse-grid commit.
+  /// releases the button (completing the drag); otherwise it left-clicks and
+  /// restores NORMAL capture.
   private func commitPointerModeClick(at location: CGPoint) {
     if hintSession.pointerDragActive {
       _ = hintSession.releasePrimaryButton()
@@ -114,14 +114,14 @@ extension AppDelegate {
       point: location, action: .leftClick, modifiers: [], pid: pid)
     clearHintSessionState()
     overlay.hide()
-    let handoffToken = notePointerInsertHandoff(reason: "pointer_mode_commit")
     applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
         at: location, action: .leftClick, modifiers: [], preserveCursor: false,
         completion: finished)
     } completion: { owner in
-      owner.resolvePointerModeInsert(pid: pid, handoffToken: handoffToken)
+      guard owner.flashMode == .normal else { return }
+      owner.restoreNormalModeAfterCommit(action: .leftClick, at: location)
     }
   }
 
@@ -139,8 +139,8 @@ extension AppDelegate {
   }
 
   /// `focus_input`: focus the count-th editable text input of
-  /// the focused window via the AX focused attribute, then enter INSERT so
-  /// typing flows immediately. The bounded AX walk runs off the main thread.
+  /// the focused window via the AX focused attribute, preserving the mode.
+  /// The bounded AX walk runs off the main thread.
   func focusTextInputInNormalMode(index: Int) {
     guard let context = normalModeContext() ?? currentNonFlashContext() else {
       applyModeOverlay()
@@ -155,13 +155,10 @@ extension AppDelegate {
         guard let self, self.activationLifecycle.isCurrent(generation) else { return }
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
-          if self.modeStore.mode == .normal {
-            self.enterInsertMode(reason: .explicitCommand, targetPID: pid)
-          }
         } else {
           FlashLog.debug("[focus_input] no_text_input pid=\(pid)")
-          self.applyModeOverlay()
         }
+        self.applyModeOverlay()
       }
     }
   }

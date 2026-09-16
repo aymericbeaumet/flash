@@ -31,27 +31,63 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertNil(value.outgoing.animation(forKey: crossfadeKey))
   }
 
-  func testHoverWashFollowsSegmentsAndBarDrawsHairlineUnderTransparentRuns() {
+  func testHoverWashUpdatesImmediatelyAndBarDrawsHairlineUnderTransparentRuns() throws {
     let surface = render("A #[fg=red]B#[default] C", columns: 10)
-    let key = NativeStatusBarSurface.hoverAnimationKey
+    let first = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "A " })
+    let second = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "B" })
     XCTAssertEqual(surface.hoverHighlight.opacity, 0)
-    surface.setHoverHighlight(CGRect(x: 20, y: 0, width: 30, height: 26))
+    surface.setHoverHighlight(surface.runFrames[first])
     XCTAssertEqual(surface.hoverHighlight.opacity, 1)
-    XCTAssertEqual(surface.hoverHighlight.frame.minX, 17)
-    XCTAssertEqual(surface.hoverHighlight.frame.width, 36)
-    XCTAssertNotNil(surface.hoverHighlight.animation(forKey: key))
-    // A span wide enough to cover most of a lane dims instead of washing.
-    let wide = CGFloat(NativeStatusBarSurface.wideHoverCells + 1) * surface.cellWidth
-    surface.setHoverHighlight(CGRect(x: 0, y: 0, width: wide, height: 26))
-    XCTAssertEqual(surface.hoverHighlight.opacity, NativeStatusBarSurface.wideHoverOpacity)
+    XCTAssertTrue(surface.hoverHighlight.animationKeys()?.isEmpty != false)
+    surface.setHoverHighlight(surface.runFrames[second])
+    XCTAssertEqual(surface.hoverHighlight.frame.minX, surface.runFrames[second].minX - 3)
+    XCTAssertEqual(surface.hoverHighlight.frame.width, surface.runFrames[second].width + 6)
+    XCTAssertTrue(surface.hoverHighlight.animationKeys()?.isEmpty != false)
     surface.setHoverHighlight(nil)
     XCTAssertEqual(surface.hoverHighlight.opacity, 0)
+    XCTAssertTrue(surface.hoverHighlight.animationKeys()?.isEmpty != false)
     let sublayers = surface.backgroundLayer.sublayers ?? []
     XCTAssertTrue(sublayers.first === surface.hairline)
     XCTAssertTrue(sublayers.dropFirst().first === surface.hoverHighlight)
     XCTAssertTrue(surface.runLayers.allSatisfy { $0.container.backgroundColor == nil })
     XCTAssertEqual(surface.hairline.frame.height, 0.5)
     XCTAssertEqual(surface.backgroundLayer.colors?.count, 2)
+  }
+
+  func testHoverWashFitsFeedLabelWithoutItsLinkedSeparatorSpace() throws {
+    let archive = "https://aggr.example"
+    let surface = render(
+      "#[pill]NORMAL#[nopill] · #[link=\(archive),popup=feed,fg=yellow]AGGR"
+        + "#[fg=white] #[link=https://article.example]Article#[nolink,nopopup]",
+      columns: 50)
+    let label = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "AGGR" })
+    let link = try XCTUnwrap(
+      surface.interactionRects(panelFrame: .zero, popupTexts: [:], popupDocuments: [:])
+        .links.first { $0.url.absoluteString == archive })
+    XCTAssertEqual(link.rect.minX, surface.runFrames[label].minX, accuracy: 0.001)
+    XCTAssertEqual(link.rect.width, surface.cellWidth * 5, accuracy: 0.001)
+    surface.setHoverHighlight(link.rect)
+    XCTAssertEqual(surface.hoverHighlight.frame.minX, surface.runFrames[label].minX - 3)
+    XCTAssertEqual(
+      surface.hoverHighlight.frame.maxX, surface.runFrames[label].maxX + 3, accuracy: 0.001)
+  }
+
+  func testWideHoverWashRemainsSubtle() {
+    let title = String(repeating: "a", count: NativeStatusBarSurface.wideHoverCells + 1)
+    let surface = render(title, columns: 40)
+    surface.setHoverHighlight(surface.runFrames[0])
+    XCTAssertEqual(surface.hoverHighlight.opacity, NativeStatusBarSurface.wideHoverOpacity)
+  }
+
+  func testHoverWashTrimsOnlyOuterWhitespaceAndPreservesUnicodeCellGeometry() throws {
+    let surface = render("L#[link=https://example.com]  A界 B  #[nolink]R", columns: 20)
+    let link = try XCTUnwrap(
+      surface.interactionRects(panelFrame: .zero, popupTexts: [:], popupDocuments: [:]).links.first)
+    surface.setHoverHighlight(link.rect)
+    XCTAssertEqual(
+      surface.hoverHighlight.frame.minX, link.rect.minX + 2 * surface.cellWidth - 3,
+      accuracy: 0.001)
+    XCTAssertEqual(surface.hoverHighlight.frame.width, 5 * surface.cellWidth + 6, accuracy: 0.001)
   }
 
   func testFirstModelPopulatesPreviouslyEmptySurfaceWithoutFocusOrModeChange() {

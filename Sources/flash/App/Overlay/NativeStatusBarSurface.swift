@@ -52,7 +52,6 @@ final class NativeStatusBarSurface {
 
   static let cycleAnimationKey = "flashCycle"
   static let crossfadeAnimationKey = "flashCrossfade"
-  static let hoverAnimationKey = "flashHover"
 
   init(backgroundLayer: CAGradientLayer = CAGradientLayer()) {
     self.backgroundLayer = backgroundLayer
@@ -271,34 +270,39 @@ final class NativeStatusBarSurface {
     }
   }
 
-  /// Show or hide the wash behind a hovered segment. `rect` is in this bar's
-  /// coordinates; nil fades the wash out. Everything animates on the render
-  /// server: no timers, no redraw of the text layers.
+  /// Hover feedback follows the visible text immediately. A link can include
+  /// its following separator space without widening the wash by a whole cell.
   func setHoverHighlight(_ rect: CGRect?) {
-    let target = Self.hoverOpacity(for: rect, cellWidth: cellWidth)
-    if let rect {
-      let frame = CGRect(
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+    let bounds = rect.flatMap(hoverTextBounds)
+    if let rect = bounds {
+      hoverHighlight.frame = CGRect(
         x: rect.minX - 3, y: hoverBand.minY, width: rect.width + 6, height: hoverBand.height)
-      if frame != hoverHighlight.frame {
-        if hoverHighlight.opacity > 0, let presented = hoverHighlight.presentation() {
-          // Sliding between neighbouring segments glides instead of jumping.
-          let move = CABasicAnimation(keyPath: "position")
-          move.fromValue = presented.position
-          move.duration = Self.hoverGlideDuration
-          move.timingFunction = CAMediaTimingFunction(name: .easeOut)
-          hoverHighlight.add(move, forKey: "\(Self.hoverAnimationKey)Move")
-        }
-        hoverHighlight.frame = frame
-      }
     }
-    guard hoverHighlight.opacity != target else { return }
-    let fade = CABasicAnimation(keyPath: "opacity")
-    fade.fromValue = hoverHighlight.presentation()?.opacity ?? hoverHighlight.opacity
-    fade.toValue = target
-    fade.duration = target == 0 ? Self.hoverFadeOutDuration : Self.hoverFadeInDuration
-    fade.timingFunction = CAMediaTimingFunction(name: target == 0 ? .easeIn : .easeOut)
-    hoverHighlight.opacity = target
-    hoverHighlight.add(fade, forKey: Self.hoverAnimationKey)
+    hoverHighlight.opacity = Self.hoverOpacity(for: bounds, cellWidth: cellWidth)
+  }
+
+  private func hoverTextBounds(in rect: CGRect) -> CGRect? {
+    var bounds = CGRect.null
+    for (index, run) in visibleRuns.enumerated() {
+      var frame = runFrames[index]
+      guard !run.segment.hidden, frame.intersects(rect) else { continue }
+      if !run.segment.pill {
+        let text = run.segment.text
+        guard let start = text.firstIndex(where: { !$0.isWhitespace }),
+          let end = text.lastIndex(where: { !$0.isWhitespace })
+        else { continue }
+        let leading = StatusFormatCells.width(String(text[..<start]), styles: false)
+        let columns = StatusFormatCells.width(String(text[start...end]), styles: false)
+        frame.origin.x += CGFloat(leading) * cellWidth
+        frame.size.width = CGFloat(columns) * cellWidth
+      }
+      let intersection = frame.intersection(rect)
+      if !intersection.isEmpty { bounds = bounds.union(intersection) }
+    }
+    return bounds.isNull ? nil : bounds
   }
 
   private static func basic(_ keyPath: String, from: CGFloat, to: CGFloat) -> CABasicAnimation {
@@ -319,9 +323,6 @@ final class NativeStatusBarSurface {
     return true
   }
 
-  static let hoverGlideDuration: CFTimeInterval = 0.14
-  static let hoverFadeInDuration: CFTimeInterval = 0.12
-  static let hoverFadeOutDuration: CFTimeInterval = 0.18
   /// Past this width a full-strength wash reads as a banner rather than a
   /// hover affordance — a feed row wraps its label, title, domain and arrow in
   /// one popup span, so it can cover most of a lane. Wide spans get a fainter
@@ -329,7 +330,7 @@ final class NativeStatusBarSurface {
   static let wideHoverCells = 24
   static let wideHoverOpacity: Float = 0.45
 
-  /// Opacity for a hovered span: absent means faded out, a span wider than
+  /// Opacity for a hovered span: absent means hidden, a span wider than
   /// `wideHoverCells` is dimmed, anything else is full strength.
   static func hoverOpacity(for rect: CGRect?, cellWidth: CGFloat) -> Float {
     guard let rect else { return 0 }

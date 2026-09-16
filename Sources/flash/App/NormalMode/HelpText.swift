@@ -28,28 +28,27 @@ extension NormalModeDispatcher {
 
         ## Core Motion
 
-        - `h` / `j` / `k` / `l` scroll left, down, up, and right.
-        - `ctrl-d` / `ctrl-u` scroll by half a page.
+        - `h` / `l` scroll left/right.
+        - `ctrl-e` / `ctrl-y` wheel down/up by `mode.scroll_step_lines` (default 3).
+        - `ctrl-d` / `ctrl-u` wheel down/up by `mode.scroll_page_lines` (default 20).
+        - Vertical wheel events act at the mouse cursor in every app, including terminals.
         - `gg` scrolls to the top.
         - `G` scrolls to the bottom.
-        - Counts prefix actions: `10u`, `2[t`, and similar forms repeat the action.
+        - Counts prefix actions: `10u`, `2[a`, and similar forms repeat the action.
 
-        ## Tabs And Windows
+        ## Editing And Navigation
 
-        - `[t` / `]t` moves to the previous or next tab.
-        - `[h` / `]h` walks the focused target's page history.
+        - `u` undoes; `ctrl-r` redoes.
+        - `y` copies the selection; `p` pastes.
+        - `/` opens Find; `x` closes the current view.
         - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
           to repeat (`[aaaa` / `]aaaa`).
-        - `[s` / `]s` cycles previous/next split (pane) inside the focused
-          terminal window: tmux panes, or the terminal's own ⌘[ / ⌘] splits.
-        - `[` / `]` letters never share a finger with the bracket itself,
-          which is why splits are `s` and not the right-pinky `p`.
-        - `g1` ... `g9` select a numbered tab when the focused source supports it.
-        - In browsers this maps to tab selection.
-        - `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G.
-        - `t` opens a browser tab or tmux window when the focused source supports it.
-        - `r` reloads browsers or refreshes the focused tmux client.
-        - `e` archives the focused resource when a website source supports it.
+        - `[t` / `]t` sends Cmd-Shift-[ / Cmd-Shift-] in every app;
+          keep pressing `t` to repeat while staying in NORMAL.
+        - `t` sends Cmd-T to open a new tab and stays in NORMAL.
+        - `ctrl-o` / `ctrl-i` traverse Flash's movement history.
+        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, history,
+          reload, archive, find-match, URL-copy and mark shortcuts are opt-in.
 
         ## Mouse Targets
 

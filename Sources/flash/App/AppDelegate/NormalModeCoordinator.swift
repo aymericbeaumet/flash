@@ -582,10 +582,6 @@ extension AppDelegate {
     RecaptureSuppression.active(until, now: now)
   }
 
-  static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
-    NormalModePointerPolicy.pointerActionMayEnterInsert(action)
-  }
-
   private func cancelNormalModeCaptureRecovery(reason: String) {
     guard normalModeCaptureRecoveryRecaptureToken != nil else { return }
     normalModeCaptureRecoveryToken &+= 1
@@ -1285,14 +1281,10 @@ extension AppDelegate {
     applyModeOverlay()
   }
 
-  /// `completion` runs once the last chord has been posted, in place of the
-  /// default NORMAL recapture; a command that hands the keyboard to the app
-  /// afterwards (`tab_new`) enters INSERT there.
   func sendNormalModeKey(
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
-    repeatCount: Int = 1,
-    completion: (() -> Void)? = nil
+    repeatCount: Int = 1
   ) {
     guard let target = normalModeKeyDispatchTarget() else {
       FlashLog.debug("[normal_mode] no target app for key \(key)")
@@ -1325,12 +1317,7 @@ extension AppDelegate {
     }
     let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)
     DispatchQueue.main.asyncAfter(deadline: .now() + finalDelay) { [weak self] in
-      guard let self else { return }
-      if let completion {
-        completion()
-      } else {
-        self.scheduleNormalModeRecapture()
-      }
+      self?.scheduleNormalModeRecapture()
     }
   }
 

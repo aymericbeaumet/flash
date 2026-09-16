@@ -6,10 +6,12 @@ import Foundation
 /// during config application; reads are scalar loads from various queues,
 /// which is benign for these advisory knobs.
 enum FlashTunables {
-  /// `[mode] scroll_step` — pixels per h/j/k/l (and ctrl+e/y) step.
+  /// `[mode] scroll_step` — pixels per horizontal h/l step.
   static var scrollStepPixels: Int32 = 60
-  /// `[mode] scroll_page_fraction` — d/u fraction of the scroll range.
-  static var scrollPageFraction: Double = 0.5
+  /// `[mode] scroll_step_lines` — wheel lines per ctrl+e/y step.
+  static var scrollStepLines: Int32 = 3
+  /// `[mode] scroll_page_lines` — wheel lines per ctrl+d/u step.
+  static var scrollPageLines: Int32 = 20
   /// `[mode] click_hold_ms` — synthesized mouse-down→up hold.
   static var clickHoldMs: Int = 18
   /// `[mode] send_key_interval_ms` — spacing between send_key chords.
@@ -38,7 +40,8 @@ enum FlashTunables {
 
   static func apply(_ config: Config) {
     scrollStepPixels = Int32(config.mode.scrollStep)
-    scrollPageFraction = config.mode.scrollPageFraction
+    scrollStepLines = Int32(config.mode.scrollStepLines)
+    scrollPageLines = Int32(config.mode.scrollPageLines)
     clickHoldMs = config.mode.clickHoldMs
     sendKeyIntervalMs = config.mode.sendKeyIntervalMs
     alertDuration = config.overlay.alertDuration

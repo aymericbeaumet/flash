@@ -3,32 +3,29 @@
 Normal mode mappings are owned by `Sources/flash/App/NormalMode.swift` and the
 default mapping list in `Sources/flash/Config/Config.swift`.
 
-Important defaults:
+Defaults use Flash-owned actions, standard macOS editing commands and basic tab
+actions. Other tab, pane, page-history, reload, archive, find-match,
+document-URL and mark commands remain available for explicit mappings.
 
-- `gg` scrolls to top.
-- `G` scrolls to bottom.
-- `g1` through `g9` select indexed tabs when the focused source supports it.
-- `[t` / `]t` cycle previous/next tab.
-- `[h` / `]h` navigate target page history back/forward.
+- `h` / `l` scroll left/right. `ctrl+e` / `ctrl+y` send a mouse-wheel scroll
+  down/up by 3 lines; `ctrl+d` / `ctrl+u` send 20 lines down/up. Configure these
+  amounts with `[mode] scroll_step_lines` and `scroll_page_lines`.
+- `gg` / `G` go to the top/bottom.
+- `u` undoes and `ctrl+r` redoes. Bare `d`, `j` and `k` are unbound.
+- `y` copies immediately, `p` pastes, `/` opens Find and `x` closes the current view.
 - `[a` / `]a` cycle previous/next app in MRU order.
-- `[m` / `]m` (alias `[e` / `]e`) reorder the current tab.
-- `[s` / `]s` cycle previous/next split inside the focused terminal window:
-  tmux `select-pane` when a tmux client hosts the terminal, otherwise the
-  terminal's own ⌘[ / ⌘] split cycling where it binds them. Outside terminals
-  the pair is a no-op.
-- A `[` / `]` letter never shares a finger with the bracket: `[` and `]` are
-  right-pinky keys, so splits use `s` rather than the QWERTY-pinky `p`.
-- `n` / `N` cycles find matches with Cmd-G / Cmd-Shift-G. No terminal binds
-  that chord, so the pair does nothing in a terminal rather than typing a `g`.
-- `r` reloads the current app view with Cmd-R.
-- `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
-- `f`, `sf`, and `df` target discovered clickable elements. Primary hint
-  clicks enter INSERT only when the target declares typing intent.
+- `[t` / `]t` send Cmd-Shift-[ / Cmd-Shift-] directly in every app, including
+  terminals. Repeat the final `t` to keep switching tabs.
+- `t` sends Cmd-T directly. All three shortcuts preserve NORMAL.
+- `ctrl+o` / `ctrl+i` traverse Flash's movement history.
+- `f`, `sf`, and `Df` target discovered clickable elements. Primary clicks
+  enter INSERT only on input targets; secondary clicks preserve NORMAL.
 - `mf` moves the cursor to a discovered target. Every other commit clicks
   where the hint is and returns the pointer to where it was, so hinting never
   relocates the mouse; `scroll_target` is the other verb that moves it.
-- `F`, `sF`, and `dF` use mouse grid mode for precise screen clicks, then enter
-  insert mode.
+- `F` applies a Command-Shift hint click. `ctrl+f` / `ctrl+shift+f` apply the
+  same plain/modified clicks through mouse grid mode.
+- `sF` / `DF` use mouse grid mode for secondary/double clicks.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.
@@ -56,18 +53,20 @@ digits, and Shift-bracket tab traversal); the bare bracket chords are added
 only for the emulators whose splits live on them. A refused mapping does
 nothing and NORMAL stays.
 
-The same bound covers pointer synthesis. A terminal whose foreground program
-enabled mouse tracking does not scroll on a wheel event: it encodes an SGR
-mouse report and writes it to the pty, and an unconsumed report prints at the
-prompt as literal text. Flash cannot read that mode for a terminal it does not
-host, so NORMAL never synthesizes a wheel into one and the scroll verbs fall
-back to the Accessibility scroller there. `gg` and `G` inside tmux are the tmux
-plugin's own history-top and cancel.
+The four vertical scroll bindings synthesize line-based mouse-wheel events
+in every app, including terminals, at the current pointer position. They use
+no app-specific scrolling action or Accessibility scroll fallback. The receiving
+app handles the event just as it handles a physical wheel. `[mode] scroll_step`
+continues to set horizontal movement in pixels. `gg` and `G` retain their
+source-aware edge behavior; inside tmux they use history-top and cancel.
 
-`/` (`app_find`) executes its command without changing mode. `t` (`tab_new`)
-enters INSERT once the tab or window is open, so the browser's address bar or
-the new tmux shell can be typed into immediately; in an unsupported app it does
-nothing and NORMAL stays.
+NORMAL is persistent by default; `enter_normal_mode` takes no persistence
+option. Opening Find, creating or switching tabs, and `focus_input` preserve
+NORMAL even when the app focuses an editable field. Accessibility focus
+notifications never change the mode. A primary `f` hint click enters INSERT
+only when its selected target is an input; other hint targets keep NORMAL.
+A mouse-grid click always enters INSERT. Physical app clicks and an explicit
+`enter_insert_mode` mapping also hand typing to the app.
 
 Bind `["flash", "leave_mode"]` in `[mode.all.mappings]` to enable advanced
 mode with one exit shortcut. It returns INSERT to
@@ -79,8 +78,8 @@ a command panel was opened with `--restore-mode`.
 Advanced-mode eligibility follows the base mode through command, finder, and
 terminal surfaces. Opening a surface while disabled cannot enable NORMAL.
 Changing the enabling binding while a surface is open updates its return mode:
-enabling returns to INSERT, and disabling returns to the disabled base mode. A label or
-configuration refresh preserves native-menu capture suspension; only an explicit
+enabling returns to NORMAL, and disabling returns to the disabled base mode.
+A label or configuration refresh preserves native-menu capture suspension; only an explicit
 mode entry resets that interaction context. Reentrant events wait until the
 current mode effect batch finishes, preserving transition order.
 
@@ -252,19 +251,18 @@ An empty command prompt remains quiet.
 
 ## Explicit INSERT entry
 
-The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases,
-and `/` does not enter INSERT after its action. INSERT is entered by:
+The default mapping set has no `i`, `I`, `a`, `A`, `o`, or `O` insert aliases.
+INSERT is entered by:
 
 - a configured `enter_insert_mode` mapping;
-- `t` (`tab_new`) once the new tab or window exists, and `focus_input` once a
-  text input is focused;
-- a physical click or a mouse-grid / pointer-mode / adjust commit while NORMAL
-  is capturing (pointer simulation always hands the keyboard to the app);
-- an `f` / `F` hint whose target is editable (`JumpTarget.entersInsertMode`).
+- a physical primary click while NORMAL is capturing;
+- a primary hint click on an input target;
+- a mouse-grid click, regardless of the target.
 
-Focus changes, app activation, and unrelated key sequences never enter INSERT.
-INSERT exits automatically when the focused element stops being editable, as
-before, or explicitly through `leave_mode` / `enter_normal_mode`.
+Other normal commands, focus changes and app activation preserve NORMAL.
+Moving the pointer, dragging, or selecting with the grid does not request INSERT.
+A multi-click session ends when its click enters INSERT.
+Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 
 ```toml
 [mode.all.mappings]

@@ -1,24 +1,25 @@
 import FlashCore
 
-/// The user intent behind a primary pointer commit. Semantic hints honor the
-/// provider's target metadata; physical and grid clicks are pointer simulation
-/// and therefore hand the keyboard to the app unconditionally.
-enum PointerInsertIntent: Equatable {
-  case physicalClick
-  case mouseGridClick
-  case hintTarget(entersInsertMode: Bool)
+enum NormalModePointerPolicy {
+  enum ClickTarget {
+    case hint(entersInsertMode: Bool)
+    case grid
+  }
 
-  var shouldEnterInsertMode: Bool {
-    switch self {
-    case .physicalClick, .mouseGridClick:
+  static func clickShouldEnterInsert(target: ClickTarget, action: JumpAction) -> Bool {
+    switch target {
+    case .grid:
       return true
-    case .hintTarget(let entersInsertMode):
-      return entersInsertMode
+    case .hint(let entersInsertMode):
+      switch action {
+      case .leftClick, .doubleClick, .tripleClick:
+        return entersInsertMode
+      case .rightClick, .middleClick:
+        return false
+      }
     }
   }
-}
 
-enum NormalModePointerPolicy {
   struct AppClickDecision: Equatable {
     var releaseCapture: Bool
     var enterInsert: Bool
@@ -105,30 +106,12 @@ enum NormalModePointerPolicy {
         dismissTransientHintsWithoutRekey: hasHints)
     }
     // A physical left / double click always hands the keyboard to the app and
-    // enters INSERT. Semantic `mouse_target` hints make their own decision from
-    // `JumpTarget.entersInsertMode`; a `mouse_grid` click shares this physical
-    // pointer intent because it synthesizes the same mouse action.
+    // enters INSERT. Hint clicks additionally require an input target.
     return AppClickDecision(
       releaseCapture: true,
       enterInsert: true,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
-  }
-
-  static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
-    switch action {
-    case .leftClick, .doubleClick, .tripleClick:
-      return true
-    case .rightClick:
-      // Right-click only ever opens a context menu; it never hands the keyboard
-      // to the app, so a committed right-click stays in NORMAL (the menu takes
-      // its own modal session via `suspendNormalCaptureForNativeSurface`).
-      return false
-    case .middleClick:
-      // Middle-click gestures (open-in-background-tab, close-tab, autoscroll)
-      // act on the target without moving keyboard focus into a text surface.
-      return false
-    }
   }
 
   static func pointerScrollShouldPassThrough(

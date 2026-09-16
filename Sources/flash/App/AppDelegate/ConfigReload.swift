@@ -208,7 +208,7 @@ extension AppDelegate {
       statusBarController?.stop()
     }
     // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
-    // off drops to a non-capturing insert; the reducer re-renders either way.
+    // off disables capture; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
     applyModeOverlay()
     // Recompute the effective mappings (config defaults + plugin mappings)
@@ -315,6 +315,22 @@ extension AppDelegate {
         "pid": focusedPID,
       ],
       "mode": String(describing: modeStore.mode.label),
+      "hints": hintSession.hints.map { hint -> [String: Any] in
+        [
+          "label": hint.label,
+          "accessibility_label": hint.target.accessibilityLabel ?? "",
+          "role": hint.target.role ?? "",
+          "enters_insert_mode": hint.target.entersInsertMode,
+          "frame": [
+            "x": hint.target.frame.origin.x,
+            "y": hint.target.frame.origin.y,
+            "width": hint.target.frame.width,
+            "height": hint.target.frame.height,
+          ],
+        ]
+      },
+      "hint_behavior": String(describing: hintSession.commitBehavior),
+      "activation_in_flight": activationInFlight,
       "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),
       "plugins": statuses.map(\.jsonObject),

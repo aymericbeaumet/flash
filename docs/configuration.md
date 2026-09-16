@@ -65,4 +65,10 @@ tests together rather than adding a second parser or help inventory.
 
 Mode-entry shortcuts are opt-in. No default
 `a/A/i/I/o/O/gi` binding enters INSERT; users can explicitly bind
-`enter_insert_mode` or `focus_input` when desired.
+`enter_insert_mode` when desired. NORMAL persists across commands and focus
+changes; `focus_input` only focuses an input without changing mode.
+
+Vertical NORMAL scrolling sends mouse-wheel events at the pointer in every app.
+`[mode] scroll_step_lines = 3` controls Ctrl-E/Y and `scroll_page_lines = 20`
+controls Ctrl-D/U; both accept integers from 1 to 1000. `scroll_step = 60`
+continues to control horizontal scroll distance in pixels.

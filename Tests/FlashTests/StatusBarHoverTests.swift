@@ -262,6 +262,44 @@ final class StatusBarHoverTests: XCTestCase {
       "Mouse-enter and stationary refresh must use the same already-compiled popup document")
   }
 
+  func testStatusRefreshKeepsHoverWashAlignedUnderStationaryPointer() throws {
+    let panel = OverlayPanel()
+    panel.statusPopupController = StatusPopupController(
+      terminals: panel.statusTerminals, windowActionsEnabled: false)
+    defer { panel.hideStatusBarPopup() }
+    let screen = CGRect(x: -900, y: 0, width: 900, height: 800)
+    panel.setFrame(screen, display: false)
+    let snapshot = OverlayPanel.ScreenSnapshot(
+      screens: [(scale: 2, frame: screen, visibleFrame: screen, notch: nil)],
+      unionFrame: screen, mainFrame: screen, mainScale: 2, mainVisibleFrame: screen,
+      nativeStatusBarFallbackHeight: 0)
+    let surface = panel.primaryStatusBarSurface
+    func redraw(_ prefix: String) throws -> StatusBarPopupRegion {
+      surface.render(
+        document: StatusFormatDocument.parse(prefix + "#[popup=feed]AGGR#[nopopup]"),
+        barFrame: CGRect(x: 0, y: 774, width: 900, height: 26), screenFrame: screen,
+        scale: 2, notch: nil, font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
+        labels: .init(), palette: OverlayPanel.normalPalette, modeStyle: .normal)
+      return try XCTUnwrap(
+        surface.interactionRects(
+          panelFrame: screen, popupTexts: ["feed": "Preview"], popupDocuments: [:]
+        ).popups.first)
+    }
+    let initial = try redraw("")
+    let pointer = CGPoint(x: initial.rect.midX, y: initial.rect.midY)
+    panel.setStatusBarHoverHighlight(initial.rect)
+    let moved = try redraw(" ")
+    panel.refreshStatusBarPopup(popups: [moved], at: pointer, screenSnapshot: snapshot)
+    XCTAssertEqual(
+      surface.hoverHighlight.frame.minX, moved.rect.minX - screen.minX - 3, accuracy: 0.001)
+    panel.refreshStatusBarPopup(
+      popups: [], links: [(moved.rect, URL(string: "https://example.com")!)], at: pointer,
+      screenSnapshot: snapshot)
+    XCTAssertEqual(surface.hoverHighlight.opacity, 1)
+    panel.refreshStatusBarPopup(popups: [], at: pointer, screenSnapshot: snapshot)
+    XCTAssertEqual(surface.hoverHighlight.opacity, 0)
+  }
+
   /// A whole-row popup (a feed row shares one preview across its label, title,
   /// domain and arrow) must not wash the entire row when the pointer sits on
   /// one of its links: the wash follows the narrowest interactive span.
