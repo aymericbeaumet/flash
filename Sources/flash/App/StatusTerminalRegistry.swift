@@ -64,6 +64,7 @@ final class StatusTerminalRegistry {
   private(set) var inputGenerations: [String: UInt64] = [:]
   private var nextInputGeneration: UInt64 = 0
   private var retiringSessions: [ObjectIdentifier: TerminalSession] = [:]
+  private var popupSnapshots: [String: StatusPopupSnapshot] = [:]
   private enum Ownership {
     case persistent
     case ephemeral(template: String?)
@@ -101,6 +102,7 @@ final class StatusTerminalRegistry {
       guard case .ephemeral(let template) = owner, let definition = definitions[key] else {
         continue
       }
+      if popupSnapshots[key] != nil, terminals[key]?.persistent == true { continue }
       if let template {
         if invalidTerminalNames.contains(template) {
           desired[key] = definition
@@ -181,7 +183,6 @@ final class StatusTerminalRegistry {
     start(
       name: key, definition: freshShellDefinition(), ownership: .ephemeral(template: nil),
       colors: StatusPopupColors(config.statusBar.popupStyle))
-    sessions[key]?.setWantsFrames(false)
     spareShellKey = key
     didChange?()
   }
@@ -209,8 +210,74 @@ final class StatusTerminalRegistry {
     guard config.terminals[name] != nil || config.invalidTerminalNames.contains(name) else {
       return nil
     }
+    if config.terminals[name] != nil, popupSnapshots[name] != nil { releaseTerminal(name: name) }
     if sessions[name] != nil { return name }
     return openTerminal(name: name, configuration: config)
+  }
+
+  func isPopupPager(name: String) -> Bool { popupSnapshots[name] != nil }
+
+  func preparePopup(
+    name: String, data: Data, columns: Int, rows: Int, colors: StatusPopupColors
+  ) -> TerminalSession {
+    if let snapshot = popupSnapshots[name], let session = sessions[name] {
+      definitions[name]?.columns = columns
+      definitions[name]?.rows = rows
+      guard snapshot.data != data else { return session }
+      snapshot.data = data
+      snapshot.allowsRefresh = true
+      publishPopup(name: name, snapshot: snapshot, session: session)
+      return session
+    }
+    let snapshot = StatusPopupSnapshot(data: data)
+    let definition = Config.Terminal(
+      command: [
+        "/usr/bin/less", "-R", "--mouse", "--wheel-lines=3", "-~", "-Ps ", snapshot.fileURL.path,
+      ],
+      environment: ["LESS": "", "LESSOPEN": "", "LESSHISTFILE": "-", "LESSSECURE": "1"],
+      columns: columns, rows: rows)
+    start(
+      name: name, definition: definition, ownership: .ephemeral(template: nil),
+      colors: colors, startImmediately: false)
+    popupSnapshots[name] = snapshot
+    let session = sessions[name]!
+    publishPopup(name: name, snapshot: snapshot, session: session)
+    return session
+  }
+
+  func freezePopup(name: String, completion: @escaping () -> Void) {
+    guard let snapshot = popupSnapshots[name], let session = sessions[name] else {
+      completion()
+      return
+    }
+    snapshot.freeze { [weak self, weak session] repaint in
+      guard let self, let session, self.sessions[name] === session,
+        self.popupSnapshots[name] === snapshot
+      else { return }
+      if repaint { session.send(Data("gR".utf8)) }
+      completion()
+    }
+  }
+
+  func stagePopup(name: String, data: Data) { popupSnapshots[name]?.data = data }
+
+  private func publishPopup(
+    name: String, snapshot: StatusPopupSnapshot, session: TerminalSession
+  ) {
+    snapshot.publish { [weak self, weak session] result in
+      guard let self, let session, self.sessions[name] === session else { return }
+      switch result {
+      case .success(let changed):
+        if case .idle = session.state {
+          session.start()
+        } else if changed, snapshot.allowsRefresh {
+          session.send(Data("gR".utf8))
+        }
+      case .failure(let error):
+        FlashLog.warn("Status popup snapshot failed: \(error.localizedDescription)")
+        self.releaseTerminal(name: name)
+      }
+    }
   }
 
   func terminalKey(named name: String, focusedName: String?) -> String? {
@@ -230,7 +297,7 @@ final class StatusTerminalRegistry {
 
   private func start(
     name: String, definition: Config.Terminal, ownership owner: Ownership,
-    colors: StatusPopupColors
+    colors: StatusPopupColors, startImmediately: Bool = true
   ) {
     remove(name: name)
     advanceInputGeneration(for: name)
@@ -275,8 +342,9 @@ final class StatusTerminalRegistry {
         fields: ["popup_id": popupID, "child_pid": String(pid), "phase": phase],
         source: "core:StatusTerminalRegistry.process")
     }
+    session.setWantsFrames(false)
     session.setColors(foreground: colors.foreground, background: colors.background)
-    session.start()
+    if startImmediately { session.start() }
   }
 
   private func observe(state: TerminalSessionState, name: String, session: TerminalSession) {
@@ -339,6 +407,7 @@ final class StatusTerminalRegistry {
     if spareShellKey == name { spareShellKey = nil }
     restarts.removeValue(forKey: name)?.pending?.cancel()
     ownership.removeValue(forKey: name)
+    popupSnapshots.removeValue(forKey: name)?.close()
     inputGenerations.removeValue(forKey: name)
     retire(sessions.removeValue(forKey: name))
     definitions.removeValue(forKey: name)
@@ -409,7 +478,17 @@ final class StatusTerminalRegistry {
     if resetBackoff { restarts[name] = nil }
     willChange?([.replace(name)])
     advanceInputGeneration(for: name)
-    session.restart()
+    if let snapshot = popupSnapshots[name] {
+      let generation = inputGenerations[name]
+      snapshot.write { [weak self, weak session] result in
+        guard let self, let session, self.sessions[name] === session,
+          self.inputGenerations[name] == generation
+        else { return }
+        if case .success = result { session.restart() }
+      }
+    } else {
+      session.restart()
+    }
   }
 
   private func advanceInputGeneration(for name: String) {
@@ -425,6 +504,8 @@ final class StatusTerminalRegistry {
   }
 
   func shutdown() {
+    for snapshot in popupSnapshots.values { snapshot.close() }
+    popupSnapshots.removeAll()
     for restart in restarts.values { restart.pending?.cancel() }
     restarts.removeAll()
     ownership.removeAll()

@@ -204,6 +204,7 @@ extension AppDelegate {
         : self.assignHints(hints.map(\.target) + statusBarTargets)
       self.hintSession.hints = displayHints
       self.hintSession.prefix = ""
+      if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
       self.overlay.display(hints: displayHints)
       if commitBehavior == .searchClick {
         // Seek & click: the panel routes subsequent keys to the search
@@ -272,9 +273,11 @@ extension AppDelegate {
           url: url.absoluteString,
           entersInsertMode: false,
           providerID: "statusbar")
-      case .hover(let name):
+      case .hover(let popup):
+        let id = "statusbar_hover_\(idx)_\(popup.name)"
+        hintSession.statusBarPopupSnapshots[id] = popup
         return JumpTarget(
-          id: "statusbar_hover_\(idx)_\(name)",
+          id: id,
           frame: frame,
           role: Self.statusBarHoverHintRole,
           url: nil,
@@ -339,35 +342,24 @@ extension AppDelegate {
     let token = activationLifecycle.begin()
     applyModeOverlay()
     let pid = context.processID
+    let screenH = ActionDispatcher.primaryScreenHeight()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let axFrames = NormalModeDispatcher.scrollAreaFrames(pid: pid)
+      let targets = NormalModeDispatcher.scrollAreaTargets(
+        pid: pid, screenH: screenH, bundleIdentifier: context.bundleIdentifier)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
-        let screenH = ActionDispatcher.primaryScreenHeight()
-        let frames = axFrames.map { frame in
-          CGRect(
-            x: frame.minX, y: screenH - frame.maxY,
-            width: frame.width, height: frame.height)
-        }
-        guard !frames.isEmpty else {
+        guard !targets.isEmpty else {
           FlashLog.debug("[scroll_target] no_scroll_areas pid=\(pid)")
           self.applyModeOverlay()
           return
         }
-        if frames.count == 1 {
-          _ = ActionDispatcher.moveCursor(
-            to: CGPoint(x: frames[0].midX, y: frames[0].midY))
-          self.applyModeOverlay()
+        if targets.count == 1, let target = targets.first {
+          let point = CGPoint(x: target.frame.midX, y: target.frame.midY)
+          self.resolveHintPoints([(target, point)]) { owner, points in
+            _ = ActionDispatcher.moveCursor(to: points[0])
+            owner.applyModeOverlay()
+          }
           return
-        }
-        let targets = frames.enumerated().map { index, frame in
-          JumpTarget(
-            id: "scroll_area_\(index)",
-            frame: frame,
-            role: "FlashScrollArea",
-            url: nil,
-            entersInsertMode: false,
-            providerID: "scroll_target")
         }
         self.hintSession.sourceAppPID = pid
         self.hintSession.action = .leftClick
@@ -413,9 +405,9 @@ extension AppDelegate {
       applyModeOverlay(captureOverride: captureOverride)
       return
     }
+    invalidateActivation(reason: "cancel_overlay")
     overlay.hide()
     clearHintSessionState()
-    invalidateActivation(reason: "cancel_overlay")
     applyModeOverlay()
   }
 

@@ -271,16 +271,28 @@ fn render_status(
         summary += sparkline_percent(history);
     }
     let bytes = |value: u64| format!("{:>10}", bytes_iec(value));
+    let composition = |value: u64| {
+        format!(
+            "{} · {:>5.1} %",
+            bytes(value),
+            value as f64 / snapshot.total as f64 * 100.0
+        )
+    };
     let preview = Preview::new()
         .title("Memory")
+        .note("Used includes cached and reclaimable pages")
         .row("Usage", format!("{percent:>5.1} %"))
         .row("Used", bytes(snapshot.occupied))
         .row("Total", bytes(snapshot.total))
-        .row("Free", bytes(snapshot.free))
-        .row("Wired", bytes(snapshot.wired))
-        .row("Compressed", bytes(snapshot.compressed))
+        .row("Free", composition(snapshot.free))
+        .row("Wired", composition(snapshot.wired))
+        .row("Compressed", composition(snapshot.compressed))
         .row("Swap used", bytes(snapshot.swap_used))
         .row("Swap total", bytes(snapshot.swap_total))
+        .row(
+            "Swap free",
+            bytes_iec(snapshot.swap_total.saturating_sub(snapshot.swap_used)),
+        )
         .row("Page size", bytes(snapshot.page_size))
         .row(
             "History",
@@ -322,6 +334,28 @@ mod tests {
             swap_used: 0,
             page_size: 4096,
         }
+    }
+
+    #[test]
+    fn details_explain_composition_and_remaining_swap() {
+        let snapshot = MemorySnapshot {
+            total: 16 * GIB,
+            occupied: 12 * GIB,
+            free: 4 * GIB,
+            wired: 2 * GIB,
+            compressed: GIB,
+            swap_total: 4 * GIB,
+            swap_used: GIB,
+            page_size: 16_384,
+        };
+        let details = render_status(&snapshot, &history(&[]), SummaryMode::Compact)
+            .preview
+            .render_plain();
+        assert!(details.contains("25.0 %"), "{details}");
+        assert!(details.contains("12.5 %"), "{details}");
+        assert!(details.contains("6.2 %"), "{details}");
+        assert!(details.contains("Swap free     3.0 GiB"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
     }
 
     #[test]
@@ -470,28 +504,32 @@ mod tests {
         assert_eq!(
             details.render().unwrap(),
             "#[fg=#EBCB8B]Memory#[default]\n\
+#[fg=colour245]Used includes cached and reclaimable pages#[default]\n\
 #[fg=colour245]Usage         #[default] 75.0 %\n\
 #[fg=colour245]Used          #[default]    12 GiB\n\
 #[fg=colour245]Total         #[default]    16 GiB\n\
-#[fg=colour245]Free          #[default]   4.0 GiB\n\
-#[fg=colour245]Wired         #[default]   2.0 GiB\n\
-#[fg=colour245]Compressed    #[default]   512 MiB\n\
+#[fg=colour245]Free          #[default]   4.0 GiB ·  25.0 %\n\
+#[fg=colour245]Wired         #[default]   2.0 GiB ·  12.5 %\n\
+#[fg=colour245]Compressed    #[default]   512 MiB ·   3.1 %\n\
 #[fg=colour245]Swap used     #[default]   1.0 GiB\n\
 #[fg=colour245]Swap total    #[default]   4.0 GiB\n\
+#[fg=colour245]Swap free     #[default]3.0 GiB\n\
 #[fg=colour245]Page size     #[default]    16 KiB\n\
 #[fg=colour245]History       #[default]··················▅▆"
         );
         assert_eq!(
             rendered.preview.render_plain(),
             "Memory\n\
+Used includes cached and reclaimable pages\n\
 Usage          75.0 %\n\
 Used              12 GiB\n\
 Total             16 GiB\n\
-Free             4.0 GiB\n\
-Wired            2.0 GiB\n\
-Compressed       512 MiB\n\
+Free             4.0 GiB ·  25.0 %\n\
+Wired            2.0 GiB ·  12.5 %\n\
+Compressed       512 MiB ·   3.1 %\n\
 Swap used        1.0 GiB\n\
 Swap total       4.0 GiB\n\
+Swap free     3.0 GiB\n\
 Page size         16 KiB\n\
 History       ··················▅▆"
         );

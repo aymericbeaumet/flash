@@ -166,7 +166,7 @@ final class ConfigLoaderTests: XCTestCase {
       XCTAssertNotEqual(mapping.action.command, .focusInput, mapping.key)
     }
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
-    for rawKey in ["g4", "gN", "n", "N", "yy", "r", "R", "e"] {
+    for rawKey in ["gN", "n", "N", "yy", "r", "R", "e"] {
       XCTAssertNil(c.mode.normal.first { $0.key == key(rawKey) })
     }
     XCTAssertEqual(
@@ -192,7 +192,9 @@ final class ConfigLoaderTests: XCTestCase {
     assertSendKey(
       c.mode.normal.first(where: { $0.key == "t" })?.action.command,
       keys: "cmd+t", keyCode: CGKeyCode(kVK_ANSI_T), flags: .maskCommand)
-    for rawKey in ["[a", "]a", "[t", "]t"] {
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("[m") }?.action.command, .tabMovePrev)
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("]m") }?.action.command, .tabMoveNext)
+    for rawKey in ["[a", "]a", "[t", "]t", "[m", "]m"] {
       XCTAssertEqual(
         c.mode.normal.first(where: { $0.key == key(rawKey) })?.repeatsOnFinalKey,
         true,
@@ -200,7 +202,7 @@ final class ConfigLoaderTests: XCTestCase {
     }
     for rawKey in [
       "[[", "]]", "[b", "T", "[p", "]p", "[h", "]h", "]b", "[B", "]B",
-      "[m", "]m", "[e", "]e", "[w", "]w", "[s", "]s", "H", "L",
+      "[e", "]e", "[w", "]w", "[s", "]s", "H", "L",
     ] {
       XCTAssertNil(
         c.mode.normal.first(where: { $0.key == key(rawKey) }),
@@ -801,7 +803,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
     XCTAssertEqual(
-      allMappings.first?["action"] as? [String],
+      allMappings.first?["command"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(allMappings.first?["repeat"] as? Bool, false)
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
@@ -1066,8 +1068,8 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "[a" = { action = ["flash", "app_previous"], repeat = true }
-      "zz" = { action = ["sh", "-c", "echo ok"] }
+      "[a" = { command = ["flash", "app_previous"], repeat = true }
+      "zz" = { command = ["sh", "-c", "echo ok"] }
       """)
 
     let previous = c.mode.normal.first(where: { $0.key == key("[a") })
@@ -1083,19 +1085,33 @@ final class ConfigLoaderTests: XCTestCase {
     let invalidRepeat = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "[a" = { action = ["flash", "app_previous"], repeat = "yes" }
+      "[a" = { command = ["flash", "app_previous"], repeat = "yes" }
       """)
     XCTAssertTrue(invalidRepeat.warnings.contains { $0.contains(".repeat must be true or false") })
 
     let unknownOption = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "[a" = { action = ["flash", "app_previous"], repeats = true }
+      "[a" = { command = ["flash", "app_previous"], repeats = true }
       """)
     XCTAssertTrue(
       unknownOption.warnings.contains {
-        $0.contains("unknown option 'repeats'") && $0.contains("action and repeat")
+        $0.contains("unknown option 'repeats'") && $0.contains("command and repeat")
       })
+  }
+
+  func testRejectsOldOrMalformedVerboseMappingCommands() {
+    for (value, message) in [
+      ("{ action = [\"flash\", \"mouse_grid\"] }", "unknown option 'action'"),
+      ("{ repeat = true }", ".command must be a non-empty string array"),
+      ("{ command = [] }", ".command must be a non-empty string array"),
+      ("{ command = \"flash mouse_grid\" }", ".command must be a non-empty string array"),
+    ] {
+      let config = ConfigLoader.parse("[mode.normal.mappings]\n\"zz\" = \(value)")
+      XCTAssertNil(config.mode.normal.first { $0.key == key("zz") }, value)
+      XCTAssertEqual(config.warnings.count, 1, value)
+      XCTAssertTrue(config.warnings.first?.contains(message) == true, value)
+    }
   }
 
   func testAdvancedModeMappingIsDetectedOnlyFromAllScope() {

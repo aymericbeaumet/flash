@@ -20,10 +20,10 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flash_plugin::process;
-use flash_plugin::status::{duration_compact, progress_bar};
+use flash_plugin::status::{duration_compact, duration_uptime, progress_bar};
 use flash_plugin::{
-    run, run_osascript, Color, Column, CommandRequest, Context, Markup, PerformResponse, Preview,
-    Published, RefreshGate, Table,
+    run, run_osascript, Color, CommandRequest, Context, Markup, PerformResponse, Preview,
+    Published, RefreshGate,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,6 @@ const AUTOSEND_DELAY: Duration = Duration::from_millis(2_500);
 const AUTOSEND_SCRIPT: &str = r#"tell application "System Events" to key code 36"#;
 
 const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
-const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const ANTHROPIC_USAGE_TTL: u64 = 600;
 const ANTHROPIC_RETRY_SECONDS: u64 = 300;
 const OPENAI_USAGE_TTL: u64 = 120;
@@ -419,8 +418,8 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
         ),
         [
             quota_row("Claude", "5-hour", shared_session, None, now),
-            quota_row("", "7-day", claude_week, shared_session, now),
-            quota_row("  Fable", "7-day", fable_week, shared_session, now),
+            quota_row("Claude", "7-day", claude_week, shared_session, now),
+            quota_row("Fable", "7-day", fable_week, shared_session, now),
         ],
     );
     let codex_details = quota_preview(
@@ -433,9 +432,15 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
         ),
         [
             quota_row("Codex", &openai_session_label, openai_session, None, now),
-            quota_row("", &openai_week_label, openai_week, openai_session, now),
-            quota_row("  Astra", &astra_session_label, astra_session, None, now),
-            quota_row("", &astra_week_label, astra_week, astra_session, now),
+            quota_row(
+                "Codex",
+                &openai_week_label,
+                openai_week,
+                openai_session,
+                now,
+            ),
+            quota_row("Astra", &astra_session_label, astra_session, None, now),
+            quota_row("Astra", &astra_week_label, astra_week, astra_session, now),
         ],
     );
     StatusSegments {
@@ -467,21 +472,13 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
 fn quota_preview(
     title: &str,
     freshness: String,
-    rows: impl IntoIterator<Item = [Markup; 4]>,
+    rows: impl IntoIterator<Item = Preview>,
 ) -> Markup {
-    let table = rows.into_iter().fold(
-        Table::new([
-            Column::new("Provider", 8),
-            Column::new("Window", 13),
-            Column::new("Remaining", 17),
-            Column::new("Reset", 0),
-        ]),
-        Table::row,
-    );
-    Preview::new()
-        .title(title)
-        .note(freshness)
-        .table(table)
+    rows.into_iter()
+        .fold(
+            Preview::new().title(title).note(freshness),
+            |preview, row| preview.blank().raw(row.render()),
+        )
         .render()
 }
 
@@ -489,12 +486,12 @@ fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, provider: &str) 
     match updated_at {
         Some(updated) if fresh(updated, ttl, now) => {
             format!(
-                "Updated {} ago · bars show quota left",
+                "Updated {} ago · pace = used vs elapsed",
                 duration_compact(now.saturating_sub(updated))
             )
         }
         Some(updated) => format!(
-            "Cached · updated {} ago · check {provider} login/network",
+            "Cached · updated {} ago\nCheck {provider} login/network",
             duration_compact(now.saturating_sub(updated))
         ),
         None => format!("Unavailable · check {provider} login/network"),
@@ -551,7 +548,7 @@ fn quota_row(
     usage: Option<&WindowUsage>,
     pace_session: Option<&WindowUsage>,
     now: u64,
-) -> [Markup; 4] {
+) -> Preview {
     let bar = usage
         .map(|window| {
             progress_bar(
@@ -562,14 +559,62 @@ fn quota_row(
         .unwrap_or_else(|| "─".repeat(12));
     let reset = usage
         .and_then(|window| window.resets_at)
-        .map(|reset| duration_compact(reset.saturating_sub(now)))
-        .unwrap_or_else(|| "—".to_string());
-    [
-        Markup::colored(Markup::text(provider), Color::MUTED),
-        Markup::colored(Markup::text(window_label), Color::MUTED),
-        styled_remaining(usage, pace_session, now) + " " + Markup::colored(bar, Color::MUTED),
-        Markup::text(reset),
-    ]
+        .map(|reset| {
+            if reset <= now {
+                "Awaiting refresh".to_string()
+            } else {
+                duration_uptime(reset - now)
+            }
+        })
+        .unwrap_or_else(|| "Unavailable".to_string());
+    Preview::new()
+        .section(Markup::text(format!("{provider} · {window_label}")))
+        .row(
+            "Remaining",
+            styled_remaining(usage, pace_session, now) + " " + Markup::colored(bar, Color::MUTED),
+        )
+        .row(
+            "Used",
+            usage.map_or_else(
+                || "Unavailable".to_string(),
+                |window| format!("{:.1}%", window.used_percent),
+            ),
+        )
+        .row("Reset", reset)
+        .row(
+            "Pace",
+            usage.map_or_else(
+                || "Unavailable".to_string(),
+                |window| quota_pace(window, now),
+            ),
+        )
+}
+
+fn quota_pace(window: &WindowUsage, now: u64) -> String {
+    let Some(reset) = window.resets_at else {
+        return "Unavailable".to_string();
+    };
+    let Some(duration) = window.window_minutes.checked_mul(60) else {
+        return "Unavailable".to_string();
+    };
+    let remaining = reset.saturating_sub(now);
+    if remaining == 0 {
+        return "Awaiting refresh".to_string();
+    }
+    if remaining > duration || duration == 0 {
+        return "Unavailable".to_string();
+    }
+    let elapsed_percent = (duration - remaining) as f64 / duration as f64 * 100.0;
+    let difference = window.used_percent - elapsed_percent;
+    if difference.abs() < 0.05 {
+        "On pace".to_string()
+    } else {
+        format!(
+            "{:.1} pts {} elapsed",
+            difference.abs(),
+            if difference > 0.0 { "above" } else { "below" }
+        )
+    }
 }
 
 fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
@@ -1143,15 +1188,8 @@ impl FlashPlugin for AiProviders {
         tokio::spawn(async move {
             refresh_usage(&refresh_ctx, &refresh_usage_state).await;
         });
-        let publish_usage_state = Arc::clone(&self.usage);
-        drop(ctx.interval(STATUS_PUBLISH_INTERVAL, move |ctx| {
-            let usage = Arc::clone(&publish_usage_state);
-            async move {
-                publish_current_status(&ctx, &usage).await;
-            }
-        }));
         let refresh_usage_state = Arc::clone(&self.usage);
-        drop(ctx.interval(USAGE_REFRESH_INTERVAL, move |ctx| {
+        drop(ctx.interval(STATUS_PUBLISH_INTERVAL, move |ctx| {
             let usage = Arc::clone(&refresh_usage_state);
             async move {
                 refresh_usage(&ctx, &usage).await;
@@ -1485,11 +1523,85 @@ mod tests {
     }
 
     #[test]
-    fn publishing_and_provider_fetching_have_independent_cadences() {
+    fn one_minute_tick_keeps_provider_fetch_ttls_independent() {
         assert_eq!(STATUS_PUBLISH_INTERVAL, Duration::from_secs(60));
-        assert_eq!(USAGE_REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(ANTHROPIC_USAGE_TTL, 600);
         assert_eq!(OPENAI_USAGE_TTL, 120);
+    }
+
+    #[test]
+    fn provider_details_share_a_compact_quota_contract() {
+        let window = WindowUsage::new(25.0, Some(302_400), 10_080);
+        let state = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 0,
+                shared_session: Some(window.clone()),
+                claude_week: Some(window.clone()),
+                fable_week: Some(window.clone()),
+            }),
+            openai: Some(OpenAIUsage {
+                updated_at: 0,
+                openai: UsageWindows {
+                    session: Some(window.clone()),
+                    weekly: Some(window.clone()),
+                },
+                astra: UsageWindows {
+                    session: Some(window.clone()),
+                    weekly: Some(window),
+                },
+            }),
+        };
+        let segments = render_status_segments(&state, 0);
+        for details in [segments.claude_details, segments.codex_details] {
+            let plain = details.plain();
+            for label in ["Remaining", "Used", "Reset", "Pace"] {
+                assert!(plain.contains(label), "missing {label}: {plain}");
+            }
+            assert!(plain.contains("75%"));
+            assert!(plain.contains("25.0%"));
+            assert!(plain.contains("25.0 pts below elapsed"));
+            assert!(
+                plain.lines().all(|line| line.chars().count() <= 50),
+                "{plain}"
+            );
+        }
+    }
+
+    #[test]
+    fn quota_detail_keeps_reset_minutes_and_handles_missing_pace() {
+        let window = WindowUsage::new(20.0, Some(5_400), 300);
+        let details = quota_row("Claude", "5-hour", Some(&window), None, 0).render_plain();
+        assert!(details.contains("Reset         1h 30m"), "{details}");
+        for (used, reset, minutes, expected) in [
+            (50.0, Some(9_000), 300, "On pace"),
+            (75.0, Some(9_000), 300, "25.0 pts above elapsed"),
+            (25.0, Some(9_000), 300, "25.0 pts below elapsed"),
+            (0.0, Some(18_001), 300, "Unavailable"),
+            (0.0, None, 300, "Unavailable"),
+            (0.0, Some(1), u64::MAX, "Unavailable"),
+        ] {
+            assert_eq!(
+                quota_pace(&WindowUsage::new(used, reset, minutes), 0),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn provider_details_distinguish_missing_reset_and_expired_window() {
+        let state = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 0,
+                shared_session: Some(WindowUsage::new(100.0, Some(60), 300)),
+                claude_week: Some(WindowUsage::new(0.0, None, 10_080)),
+                ..AnthropicUsage::default()
+            }),
+            ..UsageState::default()
+        };
+        let details = render_status_segments(&state, 61).claude_details.plain();
+        assert!(details.contains("Awaiting refresh"), "{details}");
+        assert!(details.contains("Unavailable"), "{details}");
+        assert!(!details.contains("NaN"));
     }
 
     #[test]

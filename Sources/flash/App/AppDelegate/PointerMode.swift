@@ -62,7 +62,7 @@ extension AppDelegate {
         point: location, action: .rightClick, modifiers: [], pid: nil)
       performHintCommit(recording: committedClick) { finished in
         ActionDispatcher.synthesizeClick(
-          at: location, action: .rightClick, modifiers: [], preserveCursor: false,
+          at: location, action: .rightClick, modifiers: [],
           completion: finished)
       } completion: { owner in
         owner.pointerModeSuspendForContextMenu()
@@ -92,7 +92,7 @@ extension AppDelegate {
       point: location, action: action, modifiers: [], pid: nil)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
-        at: location, action: action, modifiers: [], preserveCursor: false,
+        at: location, action: action, modifiers: [],
         completion: finished)
     } completion: { owner in
       owner.applyModeOverlay()
@@ -117,7 +117,7 @@ extension AppDelegate {
     applyModeOverlay(captureOverride: false)
     performHintCommit(recording: committedClick) { finished in
       ActionDispatcher.synthesizeClick(
-        at: location, action: .leftClick, modifiers: [], preserveCursor: false,
+        at: location, action: .leftClick, modifiers: [],
         completion: finished)
     } completion: { owner in
       guard owner.flashMode == .normal else { return }

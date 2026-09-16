@@ -1077,6 +1077,7 @@ extension AppDelegate {
         hasHints: hintSession.isActive,
         activationInFlight: activationInFlight)
     else { return }
+    let invocationTargetPID = finder.invocationTargetPID ?? normalModeDispatchContext()?.processID
     // Snapshot the entry mode *before* `transitionMode` runs anywhere
     // below so `finishCommandLineInteraction` can put the user back where
     // they were. Verbs that don't ask for this clear the slot so a stale
@@ -1087,6 +1088,7 @@ extension AppDelegate {
     closeModalStateForModeExit(reason: "enter_command_mode")
     clearTransientHintState(reason: "enter_command_mode")
     resetCommandLineState()
+    finder.invocationTargetPID = invocationTargetPID
     if let candidateFinderScope {
       self.finder.scope = candidateFinderScope
     } else {
@@ -1321,20 +1323,28 @@ extension AppDelegate {
     }
   }
 
-  /// Insert text into the focused app: stash it on the pasteboard and
-  /// synthesize Cmd+V into the app that owned focus when the picker was
-  /// invoked (an emoji glyph, a clipboard-history entry, …). The overlay
-  /// never takes key focus, so the app's text field is still first
-  /// responder once we dismiss.
-  func insertText(_ text: String, viaClipboard: Bool = true) {
-    let pid = normalModeContext()?.processID
+  /// The command field owns keyboard focus while the picker is open. Return it
+  /// to the originating app before delivering text, without changing base mode.
+  func insertText(_ text: String, viaClipboard: Bool = true, targetPID: pid_t? = nil) {
+    let pid = targetPID ?? finder.invocationTargetPID ?? normalModeDispatchContext()?.processID
+    overlay.resignCommandTextFieldFocus()
     overlay.hide()
     resetCommandLineState()
-    applyModeOverlay(captureOverride: true)
-    guard !text.isEmpty, let pid else { return }
-    if viaClipboard { NormalModeDispatcher.copy(text) }
+    applyModeOverlay()
+    guard !text.isEmpty, let pid,
+      pid != ProcessInfo.processInfo.processIdentifier,
+      let target = NSRunningApplication(processIdentifier: pid), !target.isTerminated
+    else { return }
+    normalModeTargetPID = pid
+    RunningApplicationActivation.activate(target, options: [], restoringMinimizedWindows: false)
+    let token = normalModePendingCommandToken
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+      guard let self, self.normalModePendingCommandToken == token,
+        !target.isTerminated, target.isActive
+      else { return }
       if viaClipboard {
+        NormalModeDispatcher.copy(text)
+        self.mappings.noteSyntheticKey(virtualKey: UInt32(kVK_ANSI_V), flags: .maskCommand)
         NormalModeDispatcher.sendKey(
           virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand, to: pid)
       } else {
@@ -1342,7 +1352,7 @@ extension AppDelegate {
         // it doesn't clobber the user's clipboard.
         NormalModeDispatcher.insertUnicode(text, to: pid)
       }
-      self?.scheduleNormalModeRecapture()
+      self.scheduleNormalModeRecapture()
     }
   }
 

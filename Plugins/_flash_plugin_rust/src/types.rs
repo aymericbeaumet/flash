@@ -83,6 +83,9 @@ pub struct JumpTarget {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Opaque identity of the live source context containing this target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,6 +104,7 @@ impl JumpTarget {
             role: None,
             label: None,
             url: None,
+            context_id: None,
             pid: None,
             enters_insert_mode: None,
             priority: None,
@@ -119,6 +123,11 @@ impl JumpTarget {
 
     pub fn url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    pub fn context_id(mut self, context_id: impl Into<String>) -> Self {
+        self.context_id = Some(context_id.into());
         self
     }
 
@@ -813,6 +822,22 @@ impl HintsResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn hint_context_is_omitted_when_unknown_and_preserved_when_set() {
+        let target = JumpTarget::new("target", Frame::new(1.0, 2.0, 3.0, 4.0));
+        assert!(serde_json::to_value(&target)
+            .unwrap()
+            .get("context_id")
+            .is_none());
+        let target = target.context_id("server/session/window/pane");
+        let value = serde_json::to_value(&target).unwrap();
+        assert_eq!(value["context_id"], "server/session/window/pane");
+        assert!(crate::wire::valid_result(
+            "hints",
+            &json!({"ok": true, "targets": [value]})
+        ));
+    }
 
     #[test]
     fn failure_builders_cannot_emit_success_fields() {

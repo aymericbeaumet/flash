@@ -343,7 +343,7 @@ enum ConfigLoader {
 
   private enum ModeMappingValueError: Error {
     case invalidShape
-    case invalidAction
+    case invalidCommandValue
     case invalidRepeat
     case invalidCommand(String)
     case unknownOption(String)
@@ -353,10 +353,10 @@ enum ConfigLoader {
       case .invalidShape:
         return
           "mapping \"\(mappingKey)\" must be a non-empty string array or "
-          + "{ action = [\"flash\", \"<verb>\", ...], repeat = true }"
-      case .invalidAction:
+          + "{ command = [\"flash\", \"<verb>\", ...], repeat = true }"
+      case .invalidCommandValue:
         return
-          "mapping \"\(mappingKey)\".action must be a non-empty string array — "
+          "mapping \"\(mappingKey)\".command must be a non-empty string array — "
           + "[\"flash\", \"<verb>\", ...] or [<argv>...]"
       case .invalidCommand(let command):
         return "mapping \"\(mappingKey)\": " + URLEventHandler.rejectionMessage(command)
@@ -365,7 +365,7 @@ enum ConfigLoader {
       case .unknownOption(let option):
         return
           "mapping \"\(mappingKey)\": unknown option '\(option)' — "
-          + "valid options are action and repeat"
+          + "valid options are command and repeat"
       }
     }
   }
@@ -920,7 +920,7 @@ enum ConfigLoader {
               "statusbar.click.\(name) must be a valid URL or a [\"flash\", \"<verb>\", …] action array",
               location: location)
           }
-        } else if let action = parseMappingActionValue(value, sourceURL: sourceURL) {
+        } else if let action = parseMappingCommandValue(value, sourceURL: sourceURL) {
           config.statusBar.clickActions[trimmedName] = .command(action)
           config.recordLocation(path: "statusbar.click.\(trimmedName)", location: location)
         } else {
@@ -1915,18 +1915,18 @@ enum ConfigLoader {
     sourceURL: URL?
   ) -> Result<ParsedModeMappingValue, ModeMappingValueError> {
     if let table = value.table {
-      if let unknown = table.keys.sorted().first(where: { $0 != "action" && $0 != "repeat" }) {
+      if let unknown = table.keys.sorted().first(where: { $0 != "command" && $0 != "repeat" }) {
         return .failure(.unknownOption(unknown))
       }
-      guard let actionValue = table["action"],
-        let action = parseMappingActionValue(actionValue, sourceURL: sourceURL)
+      guard let commandValue = table["command"],
+        let action = parseMappingCommandValue(commandValue, sourceURL: sourceURL)
       else {
-        if let actionValue = table["action"], let argv = stringArrayValue(actionValue),
+        if let commandValue = table["command"], let argv = stringArrayValue(commandValue),
           !argv.isEmpty
         {
           return .failure(.invalidCommand(argv.joined(separator: " ")))
         }
-        return .failure(.invalidAction)
+        return .failure(.invalidCommandValue)
       }
       let repeatsOnFinalKey: Bool
       if let repeatValue = table["repeat"] {
@@ -1938,7 +1938,7 @@ enum ConfigLoader {
       return .success(
         ParsedModeMappingValue(action: action, repeatsOnFinalKey: repeatsOnFinalKey))
     }
-    guard let action = parseMappingActionValue(value, sourceURL: sourceURL) else {
+    guard let action = parseMappingCommandValue(value, sourceURL: sourceURL) else {
       if let argv = stringArrayValue(value), let head = argv.first, !head.isEmpty {
         return .failure(.invalidCommand(argv.joined(separator: " ")))
       }
@@ -1947,7 +1947,7 @@ enum ConfigLoader {
     return .success(ParsedModeMappingValue(action: action, repeatsOnFinalKey: false))
   }
 
-  private static func parseMappingActionValue(
+  private static func parseMappingCommandValue(
     _ value: any TOMLValueConvertible,
     sourceURL: URL?
   ) -> MappingCommand? {
@@ -1960,9 +1960,6 @@ enum ConfigLoader {
     // Flash verb args may legitimately contain slashes (`--input=...`,
     // `--name=/Applications/...`) and must not be path-resolved.
     let resolvedHead = resolveCommandArgument(head, sourceURL: sourceURL)
-    if mappingCommandHeadNamesFlash(head) || mappingCommandHeadNamesFlash(resolvedHead) {
-      return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
-    }
     return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
   }
 

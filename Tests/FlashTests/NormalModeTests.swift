@@ -45,8 +45,8 @@ final class NormalModeTests: XCTestCase {
     let mappingKeys = Set(Config.Mode.defaultNormalMappings.map(\.key))
     let removedKeys = [
       "d", "j", "k", "H", "L", "[h", "]h", "]b", "[B", "]B",
-      "[m", "]m", "[e", "]e", "[s", "]s", "[w", "]w", "X", "ctrl+tab", "ctrl+shift+tab",
-      "g^", "g$", "g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8", "g9",
+      "[e", "]e", "[s", "]s", "[w", "]w", "ctrl+tab", "ctrl+shift+tab",
+      "g^", "g$", "g0",
       "gt", "gT", "J", "K", "e", "n", "N", "yy", "r", "R",
     ]
     for removedKey in removedKeys {
@@ -77,6 +77,9 @@ final class NormalModeTests: XCTestCase {
     assertSendKeyKeys(newTab.command, "cmd+t")
     XCTAssertEqual(newTab.pending, "")
     XCTAssertNil(newTab.repeatAnchor)
+    assertSendKeyKeys(command(chars: "x", mappings: config.mode.normal), "cmd+w")
+    assertSendKeyKeys(
+      command(chars: "X", flags: [.shift], mappings: config.mode.normal), "cmd+shift+t")
     XCTAssertEqual(command(chars: "i", mappings: config.mode.normal), .insertMode)
     XCTAssertNil(command(chars: "i"))
   }
@@ -84,6 +87,7 @@ final class NormalModeTests: XCTestCase {
   func testDefaultTabChordsAreAllowedInEveryTerminal() throws {
     let commands = [
       command(pending: "[", chars: "t"), command(pending: "]", chars: "t"), command(chars: "t"),
+      command(chars: "x"), command(chars: "X", flags: [.shift]),
     ]
     for command in commands {
       guard case .sendKey(_, let keyCode, let flags) = command else {

@@ -72,3 +72,62 @@ Vertical NORMAL scrolling sends mouse-wheel events at the pointer in every app.
 `[mode] scroll_step_lines = 3` controls Ctrl-E/Y and `scroll_page_lines = 20`
 controls Ctrl-D/U; both accept integers from 1 to 1000. `scroll_step = 60`
 continues to control horizontal scroll distance in pixels.
+
+## Mapping examples
+
+```toml
+[hints]
+keys = "<qwerty_homerow+qwerty_toprow>"
+min_length = 1
+
+[plugins]
+disabled = []
+third_party = []
+
+[flashlight]
+suggestion_count = 10
+
+[mode.normal]
+leader = "\\"
+
+[mode.normal.mappings]
+"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight"]
+"[a" = { command = ["flash", "app_previous"], repeat = true }
+"f" = ["flash", "mouse_target"]
+"F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
+"ctrl+f" = ["flash", "mouse_grid"]
+"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
+```
+
+Mapping values are argv arrays, or inline tables with a `command` argv array and
+optional `repeat` metadata. `repeat = true` repeats a completed normal-mode
+sequence whenever its final key is pressed again. Arrays beginning with `"flash"`
+dispatch in-process; any other executable launches directly. Arguments receive
+home/environment expansion, with no implicit shell.
+
+NORMAL persists across commands and focus changes. Its unmapped keys are swallowed;
+use `send_key` to pass a chosen chord to the app. INSERT entry rules and complete
+defaults live in [normal mode](normal-mode.md).
+
+Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured
+magic modifiers held on the final hint key. The complete set reaches every target.
+Terminal links additionally require Shift, so `f` is a plain current-context click
+(Shift-click for terminal links), while `F` sends Command-Shift everywhere.
+
+## Existing hotkey tools
+
+Native mappings are the simplest option, but any launcher that can execute a command can trigger flash:
+
+```lua
+-- Hammerspoon
+hs.hotkey.bind({"ctrl", "alt"}, "f", function()
+  hs.execute("flash mouse_target")
+end)
+```
+
+```text
+# skhd
+ctrl + alt - f : flash mouse_target
+```
+
+Karabiner-Elements users can call `flash mouse_target` from a `shell_command` manipulator.

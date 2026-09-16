@@ -5,9 +5,7 @@ import XCTest
 
 final class TerminalLinkTests: XCTestCase {
   private func frame(_ text: String, columns: Int = 80, rows: Int = 5) throws -> TerminalFrame {
-    let buffer = TerminalBuffer(columns: columns, rows: rows, scrollback: true)
-    buffer.write(Data(text.utf8))
-    return try XCTUnwrap(buffer.snapshot())
+    try frameFromPTY(text, columns: columns, rows: rows)
   }
 
   func testPlainLinksRespectCellHitAndTrailingPunctuation() throws {
@@ -65,17 +63,26 @@ final class TerminalLinkTests: XCTestCase {
       "https://short.example")
   }
 
-  private func view(_ text: String) throws -> (TerminalView, TerminalDocument) {
-    let document = TerminalDocument(columns: 80, rows: 3)
-    let ready = expectation(description: "document frame")
-    document.onFrame = { _ in ready.fulfill() }
-    document.replace(data: Data(text.utf8))
-    wait(for: [ready], timeout: 2)
-    document.onFrame = nil
+  private func view(mouseTracking: Bool = false) throws -> (TerminalView, TerminalSession) {
+    let text = (mouseTracking ? "\u{1B}[?1000h" : "") + "https://example.com/path"
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(
+        command: [
+          "/bin/sh", "-c", "stty -echo; printf '%s' \"$1\"; read -r line", "terminal-link-fixture",
+          text,
+        ], columns: 80, rows: 3))
     let view = TerminalView(frame: .zero)
     view.frame.size = NSSize(width: view.cellSize.width * 80, height: view.cellSize.height * 3)
-    view.bind(document: document)
-    return (view, document)
+    view.isRenderingEnabled = true
+    view.bind(session: session)
+    let ready = expectation(
+      for: NSPredicate { _, _ in
+        view.terminalFrame?.text.contains("https://example.com/path") == true
+      }, evaluatedWith: nil)
+    session.start()
+    wait(for: [ready], timeout: 5)
+    XCTAssertEqual(try XCTUnwrap(view.terminalFrame).mouseTracking, mouseTracking)
+    return (view, session)
   }
 
   private func event(_ type: NSEvent.EventType, view: TerminalView, column: Int, shift: Bool = true)
@@ -91,9 +98,9 @@ final class TerminalLinkTests: XCTestCase {
         eventNumber: 0, clickCount: 1, pressure: 1))
   }
 
-  func testShiftClickOpensDocumentLinkEvenWithApplicationMouseTracking() throws {
-    let (view, document) = try view("\u{1B}[?1000hhttps://example.com/path")
-    defer { withExtendedLifetime(document) {} }
+  func testShiftClickOpensPTYLinkEvenWithApplicationMouseTracking() throws {
+    let (view, session) = try view(mouseTracking: true)
+    defer { session.shutdown() }
     var opened: [URL] = []
     view.openURL = { opened.append($0) }
     view.mouseDown(with: try event(.leftMouseDown, view: view, column: 5))
@@ -103,8 +110,8 @@ final class TerminalLinkTests: XCTestCase {
   }
 
   func testNormalClickAndShiftDragDoNotOpenLinks() throws {
-    let (view, document) = try view("https://example.com/path")
-    defer { withExtendedLifetime(document) {} }
+    let (view, session) = try view()
+    defer { session.shutdown() }
     var opened: [URL] = []
     view.openURL = { opened.append($0) }
     view.mouseDown(with: try event(.leftMouseDown, view: view, column: 5, shift: false))

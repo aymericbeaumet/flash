@@ -218,14 +218,14 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # Example combined metrics:
 # "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
 
-# Named documents preserve newlines. Source/plugin values refresh independently
-# of hover; document popups run no processes and use the same terminal renderer.
+# Named text preserves newlines and opens in a real terminal pager. Source/plugin
+# collectors stay shared; focused pagers keep their snapshot until explicit refresh.
 [statusbar.popup]
 # quota = "#[fg=#EBCB8B,bold]Quota#[default]\n5-hour: 53% remaining"
 
 # A persistent command popup owns a PTY from Flash startup until removal/shutdown,
 # even with the status bar hidden. Hover previews hide on leaving the segment;
-# right-click any popup segment to pin/focus, including links. Left-click toggles
+# right-click any popup segment to pin/focus, including links. Left-click focuses
 # unlinked labels; Option-click focuses linked segments.
 # Terminal bindings live in [mode.terminal.mappings].
 # Exited processes restart after 100ms; repeated immediate exits back off to 30s.
@@ -369,8 +369,10 @@ leader = "\\"
 
 [mode.normal.mappings]
 # Defaults use Flash-owned actions and standard macOS editing/scrolling.
-# Tabs use [t / ]t to switch and t to open. Other tab, split, history, reload, archive, URL
-# and mark commands remain available for explicit mappings. Bare d, j and k are unbound.
+# Tabs use [t / ]t to switch, t to open, g1–g9 to send Cmd-1…Cmd-9,
+# and [m / ]m to reorder through the source or supported native shortcut.
+# Other tab, split, browser-history, reload, archive, URL and mark commands remain
+# available for explicit mappings. Bare d, j and k are unbound.
 # Entries extend the defaults; reusing a key overrides that mapping.
 # Every unmapped key or chord is swallowed in NORMAL.
 # Use repeat = true to repeat a sequence by pressing its final key again.
@@ -384,11 +386,22 @@ leader = "\\"
 "ctrl+u" = ["flash", "scroll_half_page_up"]
 "gg" = ["flash", "scroll_top"]
 "G" = ["flash", "scroll_bottom"]
-"[a" = { action = ["flash", "app_previous"], repeat = true }
-"]a" = { action = ["flash", "app_next"], repeat = true }
-"[t" = { action = ["flash", "send_key", "--keys=cmd+shift+["], repeat = true }
-"]t" = { action = ["flash", "send_key", "--keys=cmd+shift+]"], repeat = true }
+"[a" = { command = ["flash", "app_previous"], repeat = true }
+"]a" = { command = ["flash", "app_next"], repeat = true }
+"[t" = { command = ["flash", "send_key", "--keys=cmd+shift+["], repeat = true }
+"]t" = { command = ["flash", "send_key", "--keys=cmd+shift+]"], repeat = true }
 "t" = ["flash", "send_key", "--keys=cmd+t"]
+"g1" = ["flash", "send_key", "--keys=cmd+1"]
+"g2" = ["flash", "send_key", "--keys=cmd+2"]
+"g3" = ["flash", "send_key", "--keys=cmd+3"]
+"g4" = ["flash", "send_key", "--keys=cmd+4"]
+"g5" = ["flash", "send_key", "--keys=cmd+5"]
+"g6" = ["flash", "send_key", "--keys=cmd+6"]
+"g7" = ["flash", "send_key", "--keys=cmd+7"]
+"g8" = ["flash", "send_key", "--keys=cmd+8"]
+"g9" = ["flash", "send_key", "--keys=cmd+9"]
+"[m" = { command = ["flash", "tab_move_previous"], repeat = true }
+"]m" = { command = ["flash", "tab_move_next"], repeat = true }
 "ctrl+o" = ["flash", "movement_back"]
 "ctrl+i" = ["flash", "movement_forward"]
 # f clicks normally; F applies the same Command-Shift gesture in every app.
@@ -408,6 +421,7 @@ leader = "\\"
 # x uses the app's native close chord. y/p use the system clipboard unless
 # prefixed with a register, e.g. "ay / "ap for register a. y resolves immediately.
 "x" = ["flash", "send_key", "--keys=cmd+w"]
+"X" = ["flash", "send_key", "--keys=cmd+shift+t"]
 "y" = ["flash", "yank_selection"]
 "p" = ["flash", "paste"]
 "/" = ["flash", "app_find"]

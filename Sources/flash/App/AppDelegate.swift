@@ -188,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
   var movementNavigationTargetKey: String?
+  var movementCatalogSnapshot: (pid: pid_t, keys: Set<String>)?
   var ambientLocationRecordToken: UInt64 = 0
   var movementLocationResolutionGeneration: UInt64 = 0
   var sourceItemResolutionGeneration: UInt64 = 0
@@ -314,6 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.wifiInfoProvider = wifiInfoProvider
     pluginManager.onCatalogsChanged = { [weak self] in
       self?.handlePluginCatalogsChanged()
+      self?.recordPublishedLocations()
     }
     pluginManager.onSyntheticKeysRequested = { [weak self] pid, chords, intervalMs in
       for (index, chord) in chords.enumerated() {

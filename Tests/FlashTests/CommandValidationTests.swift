@@ -22,7 +22,7 @@ final class CommandValidationTests: XCTestCase {
 
   func testConfigWarningNamesTheInvalidCommandAndMapping() {
     for action in [
-      "[\"flash\", \"does_not_exist\"]", "{ action = [\"flash\", \"does_not_exist\"] }",
+      "[\"flash\", \"does_not_exist\"]", "{ command = [\"flash\", \"does_not_exist\"] }",
     ] {
       let config = ConfigLoader.parse("[mode.all.mappings]\n\"cmd+shift+[\" = \(action)")
       XCTAssertTrue(

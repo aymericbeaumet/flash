@@ -299,11 +299,36 @@
               "height": 4
             },
             "id": "target",
+            "context_id": "server/session/window/pane",
             "label": "target"
           }
         ]
       },
       "valid": true
+    },
+    {
+      "name": "empty-target-context",
+      "value": {
+        "ok": true,
+        "targets": [{
+          "id": "target",
+          "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+          "context_id": ""
+        }]
+      },
+      "valid": false
+    },
+    {
+      "name": "numeric-target-context",
+      "value": {
+        "ok": true,
+        "targets": [{
+          "id": "target",
+          "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+          "context_id": 1
+        }]
+      },
+      "valid": false
     },
     {
       "name": "flat-legacy",
@@ -373,6 +398,7 @@
             },
             "role": null,
             "label": null,
+            "context_id": null,
             "url": null,
             "pid": null,
             "priority": null,

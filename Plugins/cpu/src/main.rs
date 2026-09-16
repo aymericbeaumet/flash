@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use flash_plugin::status::{percent2, sparkline_padded, sparkline_percent};
@@ -14,6 +14,8 @@ const GPU_INTERVAL: Duration = Duration::from_secs(15);
 const GPU_TIMEOUT: Duration = Duration::from_secs(4);
 const HISTORY_SAMPLES: usize = 20;
 const IOREG: &str = "/usr/sbin/ioreg";
+static LOGICAL_CPU_COUNT: LazyLock<Option<usize>> =
+    LazyLock::new(|| std::thread::available_parallelism().ok().map(usize::from));
 
 type CpuHistory = History<HISTORY_SAMPLES>;
 
@@ -265,7 +267,7 @@ async fn collect_cpu(
     };
     cpu_snapshot(percentages.user, percentages.system, percentages.idle, load)
         .map(|mut snapshot| {
-            snapshot.logical_cpus = std::thread::available_parallelism().ok().map(usize::from);
+            snapshot.logical_cpus = *LOGICAL_CPU_COUNT;
             Collection::Fresh(snapshot)
         })
         .unwrap_or(Collection::Failed)
@@ -542,6 +544,39 @@ fn render_report(
             "History",
             sparkline_padded(&sparkline_percent(history), CpuHistory::CAPACITY),
         )
+        .row(
+            "Recent avg",
+            if history.is_empty() {
+                "—".to_string()
+            } else {
+                format!(
+                    "{:.1} %",
+                    history.iter().sum::<f64>() / history.len() as f64
+                )
+            },
+        )
+        .row(
+            "Recent peak",
+            history
+                .iter()
+                .reduce(f64::max)
+                .map_or_else(|| "—".to_string(), |value| format!("{value:.1} %")),
+        )
+        .row(
+            "Load / CPU",
+            cpu.logical_cpus.filter(|count| *count > 0).map_or_else(
+                || "—".to_string(),
+                |count| {
+                    format!(
+                        "{:.2}  {:.2}  {:.2}",
+                        cpu.load[0] / count as f64,
+                        cpu.load[1] / count as f64,
+                        cpu.load[2] / count as f64
+                    )
+                },
+            ),
+        )
+        .note("Load: 1 / 5 / 15 min · recent: last 20 samples")
         .row("GPU", gpu_value)
         .row("Model", model);
     Report {
@@ -819,6 +854,10 @@ mod tests {
 #[fg=colour245]Logical CPUs  #[default]16\n\
 #[fg=colour245]Load          #[default] 1.25   2.50   3.75\n\
 #[fg=colour245]History       #[default]··················▂▂\n\
+#[fg=colour245]Recent avg    #[default]15.0 %\n\
+#[fg=colour245]Recent peak   #[default]20.0 %\n\
+#[fg=colour245]Load / CPU    #[default]0.08  0.16  0.23\n\
+#[fg=colour245]Load: 1 / 5 / 15 min · recent: last 20 samples#[default]\n\
 #[fg=colour245]GPU           #[default] 59.0 %\n\
 #[fg=colour245]Model         #[default]Apple M4 Pro"
         );
@@ -833,13 +872,17 @@ Idle           80.2 %\n\
 Logical CPUs  16\n\
 Load           1.25   2.50   3.75\n\
 History       ··················▂▂\n\
+Recent avg    15.0 %\n\
+Recent peak   20.0 %\n\
+Load / CPU    0.08  0.16  0.23\n\
+Load: 1 / 5 / 15 min · recent: last 20 samples\n\
 GPU            59.0 %\n\
 Model         Apple M4 Pro"
         );
 
         let without_gpu = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact);
         assert!(wire(&without_gpu)["details"].ends_with(
-            "#[fg=colour245]History       #[default]····················\n#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
+            "#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
         ));
     }
 
@@ -866,6 +909,38 @@ Model         Apple M4 Pro"
             .preview
             .render_plain()
             .ends_with("Model         GPU #[fg=colour196] #1"));
+    }
+
+    #[test]
+    fn detail_statistics_describe_the_sampled_cpu_window() {
+        let cpu = CpuSnapshot {
+            user: 20.0,
+            system: 5.0,
+            idle: 75.0,
+            load: [4.0, 3.0, 2.0],
+            logical_cpus: Some(8),
+        };
+        let details = render_report(
+            &cpu,
+            None,
+            &history([10.0, 20.0, 60.0]),
+            SummaryMode::Compact,
+        )
+        .preview
+        .render_plain();
+        assert!(details.contains("Recent avg    30.0 %"), "{details}");
+        assert!(details.contains("Recent peak   60.0 %"), "{details}");
+        assert!(
+            details.contains("Load / CPU    0.50  0.38  0.25"),
+            "{details}"
+        );
+        assert!(details.contains("1 / 5 / 15 min"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
+        let empty = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact)
+            .preview
+            .render_plain();
+        assert!(empty.contains("Recent avg    —"), "{empty}");
+        assert!(empty.contains("Recent peak   —"), "{empty}");
     }
 
     #[test]

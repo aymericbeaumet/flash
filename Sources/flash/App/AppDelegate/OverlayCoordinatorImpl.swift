@@ -276,8 +276,10 @@ extension AppDelegate {
     }
   }
 
-  private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
-    guard !activationLifecycle.isCommitting else { return }
+  private func commit(
+    hint: AssignedHint, clickModifiers: ClickModifiers, resolvedPoint: CGPoint? = nil
+  ) {
+    guard !activationLifecycle.inFlight else { return }
     switch hintSession.commitBehavior {
     case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect, .mouseGridMulti:
       commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
@@ -287,11 +289,14 @@ extension AppDelegate {
     }
     if hint.target.role == AppDelegate.statusBarHoverHintRole {
       let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
+      let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
       overlay.hide()
-      clearHintSessionState()
+      clearHintSessionState(preservingStatusBarSnapshot: true)
       activationLifecycle.invalidate()
       applyModeOverlay()
       _ = ActionDispatcher.moveCursor(to: point)
+      if let popup { overlay.showStatusBarPopup(popup, at: point, preservingContent: true) }
+      overlay.releaseStatusBarHintSnapshot()
       return
     }
     if hintSession.commitBehavior == .copyURL {
@@ -304,11 +309,39 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
+    let chipRect = OverlayPanel.chipFrame(
+      for: hint, fontSize: CGFloat(config.overlay.fontSize))
+    let preferredPoint = CGPoint(x: chipRect.midX, y: chipRect.midY)
+    if hintSession.commitBehavior == .adjustClick {
+      guard hintSession.adjustingHint == nil else { return }
+      hintSession.adjustingHint = hint
+      hintSession.adjustPoint = preferredPoint
+      overlay.showAdjustment(markerAt: preferredPoint, targetFrame: hint.target.frame)
+      return
+    }
+    if hintSession.commitBehavior == .drag || hintSession.commitBehavior == .select {
+      if let source = hintSession.dragSourcePoint, let sourceHint = hintSession.dragSourceHint {
+        resolveHintPoints([(sourceHint.target, source), (hint.target, preferredPoint)]) {
+          owner, points in
+          owner.performTwoPhaseCommit(
+            from: points[0], to: points[1], clickModifiers: clickModifiers)
+        }
+      } else {
+        hintSession.dragSourcePoint = preferredPoint
+        hintSession.dragSourceHint = hint
+        hintSession.prefix = ""
+        overlay.filter(prefix: "", hints: hintSession.hints)
+      }
+      return
+    }
+    guard let clickPoint = resolvedPoint else {
+      resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
+        owner.commit(hint: hint, clickModifiers: clickModifiers, resolvedPoint: points[0])
+      }
+      return
+    }
     if hintSession.commitBehavior == .moveMouse {
-      let chipRect = OverlayPanel.chipFrame(
-        for: hint, fontSize: CGFloat(config.overlay.fontSize))
-      let point = CGPoint(x: chipRect.midX, y: chipRect.midY)
-      _ = ActionDispatcher.moveCursor(to: point)
+      _ = ActionDispatcher.moveCursor(to: clickPoint)
       overlay.hide()
       clearHintSessionState()
       activationLifecycle.invalidate()
@@ -316,40 +349,7 @@ extension AppDelegate {
       return
     }
     if hintSession.commitBehavior == .multiClick {
-      commitMultiClick(hint: hint, clickModifiers: clickModifiers)
-      return
-    }
-    if hintSession.commitBehavior == .adjustClick {
-      guard hintSession.adjustingHint == nil else { return }
-      let chipRect = OverlayPanel.chipFrame(
-        for: hint, fontSize: CGFloat(config.overlay.fontSize))
-      let start =
-        hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
-      hintSession.adjustingHint = hint
-      hintSession.adjustPoint = start
-      overlay.showAdjustment(markerAt: start, targetFrame: hint.target.frame)
-      FlashLog.trace(
-        "[commit] adjust_enter point=(\(Int(start.x)),\(Int(start.y))) "
-          + "frame=\(hint.target.frame.debugDescription)")
-      return
-    }
-    if hintSession.commitBehavior == .drag || hintSession.commitBehavior == .select {
-      let chipRect = OverlayPanel.chipFrame(
-        for: hint, fontSize: CGFloat(config.overlay.fontSize))
-      let point =
-        hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
-      if let source = hintSession.dragSourcePoint {
-        performTwoPhaseCommit(from: source, to: point, clickModifiers: clickModifiers)
-      } else {
-        // Phase 1: remember the anchor point and keep the same hint set up for
-        // the second point — no re-walk, no overlay teardown, just an un-filter.
-        hintSession.dragSourcePoint = point
-        hintSession.prefix = ""
-        overlay.filter(prefix: "", hints: hintSession.hints)
-        FlashLog.trace(
-          "[commit] two_phase_anchor=(\(Int(point.x)),\(Int(point.y))) "
-            + "behavior=\(hintSession.commitBehavior) awaiting_second_point")
-      }
+      commitMultiClick(hint: hint, clickPoint: clickPoint, clickModifiers: clickModifiers)
       return
     }
 
@@ -366,17 +366,6 @@ extension AppDelegate {
     if let pid {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
-    // Land the click on the hint chip itself, where the
-    // user sees the label, not the element's geometric centre. For small
-    // targets `chipFrame` centres the chip on the target so the two coincide;
-    // for wide/tall targets (long tmux words, big AX rows, wrapped web links)
-    // the chip anchors near the leading edge, which also keeps the click off a
-    // wrapped link's empty inter-line gap. A provider-resolved point (e.g. a
-    // browser DOM first-character) still wins when present.
-    let chipRect = OverlayPanel.chipFrame(
-      for: hint, fontSize: CGFloat(config.overlay.fontSize))
-    let chipCenter = CGPoint(x: chipRect.midX, y: chipRect.midY)
-    let clickPoint = hint.target.resolveClickPoint?() ?? chipCenter
     let committedClick = LastCommittedClick(
       point: clickPoint, action: action, modifiers: resolvedClickModifiers, pid: pid)
     FlashLog.trace(
@@ -405,7 +394,8 @@ extension AppDelegate {
       RunningApplicationActivation.activate(
         targetApp, options: [], restoringMinimizedWindows: false)
     }
-    clearHintSessionState()
+    guard prepareCapturedStatusBarClick(hint.target, at: clickPoint) else { return }
+    clearHintSessionState(preservingStatusBarSnapshot: true)
     performHintCommit(delayMs: targetAlreadyFrontmost ? 0 : 20, recording: committedClick) {
       finished in
       ActionDispatcher.perform(
@@ -422,6 +412,17 @@ extension AppDelegate {
           action: action, at: clickPoint, pid: pid)
       }
     }
+  }
+
+  private func prepareCapturedStatusBarClick(_ target: JumpTarget, at point: CGPoint) -> Bool {
+    guard target.providerID == "statusbar" else { return true }
+    guard let rawURL = target.url, let url = URL(string: rawURL),
+      overlay.prepareStatusBarHintClick(url: url, at: point)
+    else {
+      cancelOverlay()
+      return false
+    }
+    return true
   }
 
   private func completeHintClick(
@@ -708,7 +709,9 @@ extension AppDelegate {
     case .cancel:
       cancelOverlay()
     case .commit:
-      performAdjustedCommit(hint: hint, at: point, clickModifiers: clickModifiers)
+      resolveHintPoints([(hint.target, point)]) { owner, points in
+        owner.performAdjustedCommit(hint: hint, at: points[0], clickModifiers: clickModifiers)
+      }
     case .snapLeft, .snapRight, .snapTop, .snapBottom, .interpolate, .reset:
       let updated = HintAdjustmentInterpreter.apply(command, to: point, in: hint.target.frame)
       hintSession.adjustPoint = updated
@@ -725,13 +728,15 @@ extension AppDelegate {
     let action = hintSession.action
     let pid = hint.target.pid ?? hintSession.sourceAppPID
     let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let modifiers = hintSession.presetClickModifiers.union(clickModifiers)
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: hint.target, requested: hintSession.presetClickModifiers.union(clickModifiers))
     let committedClick = LastCommittedClick(
       point: point, action: action, modifiers: modifiers, pid: pid)
     FlashLog.trace(
       "[commit] adjust action=\(action) point=(\(Int(point.x)),\(Int(point.y)))")
     overlay.hide()
-    clearHintSessionState()
+    guard prepareCapturedStatusBarClick(hint.target, at: point) else { return }
+    clearHintSessionState(preservingStatusBarSnapshot: true)
     activationLifecycle.invalidate()
     if let targetApp {
       RunningApplicationActivation.activate(targetApp, options: [])
@@ -788,22 +793,21 @@ extension AppDelegate {
   /// One commit of a `--multi` session: perform the pending action on the
   /// selected target, then re-arm the same hint set for the next selection
   /// unless this click enters INSERT. Escape finishes the remaining session.
-  private func commitMultiClick(hint: AssignedHint, clickModifiers: ClickModifiers) {
+  private func commitMultiClick(
+    hint: AssignedHint, clickPoint: CGPoint, clickModifiers: ClickModifiers
+  ) {
     let action = hintSession.action
     let pid = hint.target.pid ?? hintSession.sourceAppPID
     let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
     let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
       for: hint.target,
       requested: hintSession.presetClickModifiers.union(clickModifiers))
-    let chipRect = OverlayPanel.chipFrame(
-      for: hint, fontSize: CGFloat(config.overlay.fontSize))
-    let clickPoint =
-      hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
     FlashLog.trace(
       "[commit] multi action=\(action) role=\(hint.target.role ?? "?") "
         + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y)))")
     let committedClick = LastCommittedClick(
       point: clickPoint, action: action, modifiers: resolvedClickModifiers, pid: pid)
+    guard prepareCapturedStatusBarClick(hint.target, at: clickPoint) else { return }
     if let targetApp {
       RunningApplicationActivation.activate(targetApp, options: [])
     }
@@ -859,7 +863,7 @@ extension AppDelegate {
     if let targetApp {
       RunningApplicationActivation.activate(targetApp, options: [])
     }
-    clearHintSessionState()
+    clearHintSessionState(preservingStatusBarSnapshot: true)
     performHintCommit(delayMs: 20) { finished in
       if isSelect {
         ActionDispatcher.synthesizeSelection(
@@ -1124,7 +1128,7 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    openSourceItem(candidate)
+    openSourceItem(candidate, insertionTargetPID: finder.invocationTargetPID)
   }
 
   func openSourceItem(matching target: String) {
@@ -1140,7 +1144,10 @@ extension AppDelegate {
     }
   }
 
-  func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
+  func openSourceItem(
+    _ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true,
+    insertionTargetPID: pid_t? = nil, movementGeneration: UInt64? = nil
+  ) {
     switch candidate.effect {
     case .copyText(let text):
       overlay.hide()
@@ -1149,7 +1156,7 @@ extension AppDelegate {
       NormalModeDispatcher.copy(text)
       return
     case .insertText(let text):
-      insertText(text, viaClipboard: true)
+      insertText(text, viaClipboard: true, targetPID: insertionTargetPID)
       return
     case .openURL(let raw):
       overlay.hide()
@@ -1179,7 +1186,8 @@ extension AppDelegate {
       // copy + paste.
       insertText(
         candidate.sourcePayload ?? "",
-        viaClipboard: candidate.kind != CandidateFinder.emojiKind)
+        viaClipboard: candidate.kind != CandidateFinder.emojiKind,
+        targetPID: insertionTargetPID)
       return
     }
     if shouldRecordMovement {
@@ -1197,6 +1205,10 @@ extension AppDelegate {
 
     registry.resolveCandidate(candidate) { [weak self] result in
       guard let self else { return }
+      if let movementGeneration {
+        guard movementGeneration == self.movementLocationResolutionGeneration else { return }
+        if !result.didResolve { self.movementNavigationTargetKey = nil }
+      }
       if let pid = result.targetPID {
         // Plugin candidates (e.g. a tmux window) run their side effect
         // inside the plugin process and hand back a `target_pid` for the

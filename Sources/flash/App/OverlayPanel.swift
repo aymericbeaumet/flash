@@ -160,6 +160,7 @@ final class OverlayPanel: NSPanel {
   var searchModeActive = false
   var modeBadgeVisible = false
   var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
+  var statusBarHintSnapshot = StatusBarHintSnapshot.live
   var modeBadgeText = "INSERT"
   var modeBadgeStyle: OverlayModeBadgeStyle = .insert
   var modeBadgeCapturesInput = false

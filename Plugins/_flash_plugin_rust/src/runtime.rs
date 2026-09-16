@@ -580,6 +580,7 @@ mod tests {
                 Frame::new(-10.5, 20.0, 30.0, 40.0),
             )
             .role("AXLink")
+            .context_id("surface-1")
             .label("one")])
             .context_pid(77)
         }
@@ -944,7 +945,7 @@ mod tests {
         assert_eq!(
             wire.recv_response(2).await,
             json!({ "ok": true, "context_pid": 77, "targets": [
-                { "id": "t1", "frame": { "x": -10.5, "y": 20.0, "width": 30.0, "height": 40.0 }, "role": "AXLink", "label": "one" }
+                { "id": "t1", "frame": { "x": -10.5, "y": 20.0, "width": 30.0, "height": 40.0 }, "role": "AXLink", "label": "one", "context_id": "surface-1" }
             ]})
         );
         wire.send(json!({ "id": 3, "method": "hints", "params": { "bundle_id": "invalid" } }))

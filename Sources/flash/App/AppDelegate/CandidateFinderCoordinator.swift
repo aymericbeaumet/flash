@@ -1544,8 +1544,9 @@ extension AppDelegate {
       allowFinisher: allowFinisher,
       submitFinalDestinations: submitFinalDestinations)
     {
+      let insertionTargetPID = finder.invocationTargetPID
       finishCommandLineInteraction(reason: "command_open")
-      openSourceItem(candidate)
+      openSourceItem(candidate, insertionTargetPID: insertionTargetPID)
       return
     }
     replaceCommandLineCandidateQuery(with: CandidateFinder.commandInsertionText(candidate))
@@ -1669,6 +1670,7 @@ extension AppDelegate {
   }
 
   func resetCommandLineState() {
+    finder.invocationTargetPID = nil
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     overlay.candidateFinderQuery = ""

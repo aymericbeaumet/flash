@@ -2243,6 +2243,62 @@ struct Pane {
     rows: i64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct HintContext {
+    server_pid: i64,
+    session_id: String,
+    window_id: String,
+}
+
+impl HintContext {
+    fn parse(raw: &str) -> Option<Self> {
+        let fields: Vec<_> = raw.split_whitespace().collect();
+        if fields.len() != 3 {
+            return None;
+        }
+        let server_pid = fields[0].parse::<i64>().ok().filter(|pid| *pid > 0)?;
+        for (value, marker) in [(fields[1], '$'), (fields[2], '@')] {
+            value.strip_prefix(marker)?.parse::<u64>().ok()?;
+        }
+        Some(Self {
+            server_pid,
+            session_id: fields[1].to_string(),
+            window_id: fields[2].to_string(),
+        })
+    }
+
+    fn target_id(&self, client: &TmuxClient, pane_id: &str) -> String {
+        serde_json::json!([
+            client.backend_id,
+            client.tty,
+            self.server_pid,
+            self.session_id,
+            self.window_id,
+            pane_id,
+        ])
+        .to_string()
+    }
+}
+
+fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
+    let (geometry, raw_context) = line.split_once(TMUX_FIELD_SEP)?;
+    if HintContext::parse(raw_context).as_ref() != Some(context) {
+        return None;
+    }
+    let fields: Vec<_> = geometry.split_whitespace().collect();
+    if fields.len() != 5 {
+        return None;
+    }
+    fields[0].strip_prefix('%')?.parse::<u64>().ok()?;
+    Some(Pane {
+        id: fields[0].to_string(),
+        left: fields[1].parse::<i64>().ok().filter(|value| *value >= 0)?,
+        top: fields[2].parse::<i64>().ok().filter(|value| *value >= 0)?,
+        cols: fields[3].parse::<i64>().ok().filter(|value| *value > 0)?,
+        rows: fields[4].parse::<i64>().ok().filter(|value| *value > 0)?,
+    })
+}
+
 // Ten positional args is on the high side, but `JumpTarget` itself is the
 // shape — collapsing this into a `BuildTargetArgs` struct would just rename
 // the same data without making the call sites clearer.
@@ -2259,12 +2315,17 @@ fn build_target(
     enters_insert_mode: bool,
     priority: Priority,
 ) -> JumpTarget {
-    JumpTarget::new(target_id, Frame::new(x, y, width, height))
+    let target = JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
         .label(label)
         .enters_insert_mode(enters_insert_mode)
         .pid(pid)
-        .priority(priority)
+        .priority(priority);
+    if role == TERMINAL_LINK_ROLE && is_url(label) {
+        target.url(label)
+    } else {
+        target
+    }
 }
 
 async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> HintsResponse {
@@ -2295,7 +2356,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     // literal text the server always emits verbatim (the same separator
     // `list-clients`/`list-windows` rely on), so the split is deterministic.
     let combined_format = format!(
-        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}}"
+        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"
     );
     let combined = run_tmux_for_client(
         plugin,
@@ -2307,9 +2368,12 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
     let combined_lines: Vec<&str> = combined.split(TMUX_FIELD_SEP).collect();
-    if combined_lines.len() < 2 {
+    if combined_lines.len() != 3 {
         return HintsResponse::targets(vec![]).context_pid(pid);
     }
+    let Some(hint_context) = HintContext::parse(combined_lines[2]) else {
+        return HintsResponse::targets(vec![]).context_pid(pid);
+    };
     let Some((client_cols, client_rows)) = parse_two_ints(combined_lines[0]) else {
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
@@ -2334,7 +2398,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             "-t",
             &client.tty,
             "-F",
-            "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}",
+            &format!("#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"),
         ],
     )
     .await;
@@ -2342,27 +2406,14 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
 
-    let mut panes: Vec<Pane> = Vec::new();
-    for line in pane_list.split('\n') {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() != 5 {
-            continue;
-        }
-        if let (Ok(left), Ok(top), Ok(cols), Ok(rows)) = (
-            parts[1].parse::<i64>(),
-            parts[2].parse::<i64>(),
-            parts[3].parse::<i64>(),
-            parts[4].parse::<i64>(),
-        ) {
-            panes.push(Pane {
-                id: parts[0].to_string(),
-                left,
-                top,
-                cols,
-                rows,
-            });
-        }
-    }
+    let Some(panes): Option<Vec<_>> = pane_list
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| parse_hint_pane(line, &hint_context))
+        .collect()
+    else {
+        return HintsResponse::targets(vec![]).context_pid(pid);
+    };
     if panes.is_empty() {
         return HintsResponse::targets(vec![]).context_pid(pid);
     }
@@ -2378,6 +2429,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         screen_row: i64,
         screen_col: i64,
         text: String,
+        context_id: String,
     }
     let mut raw_links: Vec<RawLink> = Vec::new();
 
@@ -2403,6 +2455,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     }
 
     for (i, pane) in panes.iter().enumerate() {
+        let context_id = hint_context.target_id(&client, &pane.id);
         let center_col = pane.left + pane.cols / 2;
         let center_row = top_offset + pane.top + pane.rows / 2;
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
@@ -2411,21 +2464,24 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         // A pane target delegates a plain click to the terminal. It stays in
         // NORMAL after the click; only mouse-grid and physical mouse clicks
         // express the separate "start typing" intent.
-        pane_targets.push(build_target(
-            &target_id,
-            chip_x,
-            chip_y,
-            pane_chip_cells as f64 * cell_w,
-            cell_h,
-            PANE_TARGET_ROLE,
-            &pane.id,
-            pid,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
-            // Pane chips are the structural anchors of a tmux window, so the
-            // renderer paints them in the accent style. Link chips below are
-            // everyday clutter and stay in the default yellow.
-            Priority::Urgent,
-        ));
+        pane_targets.push(
+            build_target(
+                &target_id,
+                chip_x,
+                chip_y,
+                pane_chip_cells as f64 * cell_w,
+                cell_h,
+                PANE_TARGET_ROLE,
+                &pane.id,
+                pid,
+                TMUX_TARGET_ENTERS_INSERT_MODE,
+                // Pane chips are the structural anchors of a tmux window, so the
+                // renderer paints them in the accent style. Link chips below are
+                // everyday clutter and stay in the default yellow.
+                Priority::Urgent,
+            )
+            .context_id(&context_id),
+        );
 
         let Some(raw) = captures[i].take() else {
             continue;
@@ -2445,6 +2501,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
                     screen_row: top_offset + pane.top + row_idx as i64,
                     screen_col: pane.left + col as i64,
                     text,
+                    context_id: context_id.clone(),
                 });
             }
         }
@@ -2474,18 +2531,21 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         // sends `f` as Shift-click and `F` as Command-Shift-click so Alacritty
         // handles the link instead of forwarding a pane click to tmux. Link
         // commits stay in NORMAL.
-        targets.push(build_target(
-            &target_id,
-            x,
-            y,
-            cell_w,
-            cell_h,
-            TERMINAL_LINK_ROLE,
-            &link.text,
-            pid,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
-            Priority::Normal,
-        ));
+        targets.push(
+            build_target(
+                &target_id,
+                x,
+                y,
+                cell_w,
+                cell_h,
+                TERMINAL_LINK_ROLE,
+                &link.text,
+                pid,
+                TMUX_TARGET_ENTERS_INSERT_MODE,
+                Priority::Normal,
+            )
+            .context_id(link.context_id),
+        );
     }
 
     HintsResponse::targets(targets).context_pid(pid)
@@ -2656,8 +2716,8 @@ fn build_candidates_from_window_list(
         if line.is_empty() {
             continue;
         }
-        let parts = split_tmux_fields(line, 7);
-        if parts.len() < 3 {
+        let parts = split_tmux_fields(line, 8);
+        if parts.len() != 8 || !parts[7].starts_with('@') {
             continue;
         }
         let session = parts[0];
@@ -2687,9 +2747,10 @@ fn build_candidates_from_window_list(
             .copied()
             .or(backend.terminal_window_handle);
 
-        let target = format!("{session}:{index}");
+        let display_target = format!("{session}:{index}");
+        let target = format!("{session}:{}", parts[7].trim());
         let window_name = if name.is_empty() {
-            target.clone()
+            display_target.clone()
         } else {
             name.to_string()
         };
@@ -2700,7 +2761,7 @@ fn build_candidates_from_window_list(
         };
         let mut secondary_parts: Vec<&str> = Vec::new();
         if !name.is_empty() {
-            secondary_parts.push(target.as_str());
+            secondary_parts.push(display_target.as_str());
         }
         for value in [command, cwd.as_str()] {
             if !value.is_empty() {
@@ -2774,7 +2835,7 @@ fn status_segments(clients: &[TmuxClient], raw_windows: &str) -> TmuxStatusSegme
         ..TmuxStatusSegments::default()
     };
     for line in raw_windows.lines() {
-        let parts = split_tmux_fields(line, 7);
+        let parts = split_tmux_fields(line, 8);
         if parts.len() < 3 || parts[0] != client.session {
             continue;
         }
@@ -2848,11 +2909,11 @@ async fn build_candidates(
     let client_format = format!(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
-    // The trailing `pane_index` (the window's active pane, per tmux
+    // `pane_index` (the window's active pane, per tmux
     // list-windows semantics) feeds the `#{flash.plugin.tmux.pane}` status
     // segment; candidates themselves ignore it.
     let window_format = format!(
-        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}{TMUX_FIELD_SEP}#{{window_id}}"
     );
     // A single tmux process per socket emits both inventories. Polling the two
     // commands separately doubled process creation and socket discovery for
@@ -2968,7 +3029,7 @@ async fn build_remote_candidates(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
     let window_format = format!(
-        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}{TMUX_FIELD_SEP}#{{window_id}}"
     );
     let result = run_remote_tmux(
         config,
@@ -4089,11 +4150,21 @@ async fn scroll_extreme(plugin: &Tmux, client: &TmuxClient, top: bool) -> bool {
 /// its new position), so the user can keep tapping `]m` to bubble a
 /// window to the end without rebinding.
 async fn tab_move(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
+    let args = tab_move_args(&client.session, direction);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    run_tmux_for_client(plugin, client, &args).await.is_some()
+}
+
+fn tab_move_args(session: &str, direction: &str) -> Vec<String> {
     let neighbour = if direction == "next" { "+1" } else { "-1" };
-    let target = format!("{}:{}", client.session, neighbour);
-    run_tmux_for_client(plugin, client, &["swap-window", "-d", "-t", &target])
-        .await
-        .is_some()
+    vec![
+        "swap-window".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        format!("{session}:"),
+        "-t".to_string(),
+        format!("{session}:{neighbour}"),
+    ]
 }
 
 async fn reload_client(plugin: &Tmux, client: &TmuxClient) -> bool {
@@ -4763,6 +4834,59 @@ mod tests {
     }
 
     #[test]
+    fn tmux_http_links_publish_their_click_url() {
+        for label in [
+            "https://example.com/page",
+            "http://example.com/page",
+            "src/main.rs",
+        ] {
+            let target = build_target(
+                "link",
+                0.0,
+                0.0,
+                10.0,
+                10.0,
+                TERMINAL_LINK_ROLE,
+                label,
+                42,
+                TMUX_TARGET_ENTERS_INSERT_MODE,
+                Priority::Normal,
+            );
+            assert_eq!(target.url.as_deref(), is_url(label).then_some(label));
+        }
+    }
+
+    #[test]
+    fn hint_context_separates_reused_pane_ids_across_live_contexts() {
+        let mut client = client("/dev/ttys000", "work", 42, 0);
+        let initial = HintContext::parse("123 $0 @1").unwrap();
+        let original = initial.target_id(&client, "%1");
+        for raw in ["124 $0 @1", "123 $1 @1", "123 $0 @2"] {
+            assert_ne!(
+                original,
+                HintContext::parse(raw).unwrap().target_id(&client, "%1")
+            );
+        }
+        assert_ne!(original, initial.target_id(&client, "%2"));
+        client.tty = "/dev/ttys001".to_string();
+        assert_ne!(original, initial.target_id(&client, "%1"));
+        client.tty = "/dev/ttys000".to_string();
+        client.backend_id = "remote:work".to_string();
+        assert_ne!(original, initial.target_id(&client, "%1"));
+    }
+
+    #[test]
+    fn hint_context_rejects_a_window_switch_between_geometry_and_pane_replies() {
+        let context = HintContext::parse("123 $0 @1").unwrap();
+        let pane = parse_hint_pane("%1 0 0 80 24|||123 $0 @1", &context).unwrap();
+        assert_eq!(pane.id, "%1");
+        assert!(parse_hint_pane("%1 0 0 80 24|||123 $0 @2", &context).is_none());
+        for invalid in ["", "0 $0 @1", "123 work @1", "123 $0 1", "123 $0 @1 extra"] {
+            assert!(HintContext::parse(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn extract_links_drops_size_abbrev_version_noise() {
         let has = |line: &str, want: &str| extract_links(line, 1000).iter().any(|(_, t)| t == want);
         // Real filenames / domains / URLs are kept.
@@ -4837,6 +4961,53 @@ mod tests {
         for action in ["tab_select", "tab_new", "tab_close", "pane_close"] {
             assert!(!source_action_prefers_warm_client(action), "{action}");
         }
+    }
+
+    #[test]
+    fn tab_move_pins_the_source_session_instead_of_a_marked_pane() {
+        for (direction, target) in [("next", "work:+1"), ("previous", "work:-1")] {
+            assert_eq!(
+                tab_move_args("work", direction),
+                ["swap-window", "-d", "-s", "work:", "-t", target]
+            );
+        }
+    }
+
+    #[test]
+    fn window_location_keeps_its_identity_when_reordered() {
+        let clients = [client("/dev/ttys000", "work", 1443, 30)];
+        let before = "work\t1\teditor\tnvim\t/work\t1\t0\t@17";
+        let after = "work\t3\teditor\tnvim\t/work\t1\t0\t@17";
+        let rows: Vec<_> = [before, after]
+            .iter()
+            .map(|raw| {
+                build_candidates_from_window_list(
+                    raw,
+                    &clients,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    "",
+                    &local_backend(),
+                )
+                .remove(0)
+            })
+            .collect();
+        use flash_plugin::candidate_metadata as meta;
+        assert_eq!(
+            rows[0].meta(meta::NAVIGATION_URL),
+            rows[1].meta(meta::NAVIGATION_URL)
+        );
+        assert_eq!(
+            rows[0].payload_as::<TmuxPayload>().unwrap().tmux_target,
+            "work:@17"
+        );
+        assert_eq!(
+            rows[1].payload_as::<TmuxPayload>().unwrap().tmux_target,
+            "work:@17"
+        );
+        assert!(rows[0].meta(meta::SUBTITLE).unwrap().starts_with("work:1"));
+        assert!(rows[1].meta(meta::SUBTITLE).unwrap().starts_with("work:3"));
     }
 
     #[test]
@@ -5025,7 +5196,7 @@ mod tests {
             backend_id: "remote:moria".to_string(),
             remote: true,
         }];
-        let raw = "scratch\t1\tcode\tzsh\t/home/ab/workspace\t1";
+        let raw = "scratch\t1\tcode\tzsh\t/home/ab/workspace\t1\t0\t@11";
         let local_backend = CandidateBackend {
             id: "local".to_string(),
             label: "macbook".to_string(),
@@ -5067,11 +5238,11 @@ mod tests {
         assert_eq!(remote[0].title, "moria · code");
         assert_eq!(
             local[0].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/local%7Cscratch:1")
+            Some("tmux://window/local%7Cscratch:%4011")
         );
         assert_eq!(
             remote[0].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/remote:moria%7Cscratch:1")
+            Some("tmux://window/remote:moria%7Cscratch:%4011")
         );
         let local_payload = local[0].payload_as::<TmuxPayload>().unwrap();
         let remote_payload = remote[0].payload_as::<TmuxPayload>().unwrap();
@@ -5217,7 +5388,7 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
     fn candidate_payload_uses_the_window_discovered_for_its_tmux_client() {
         let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
         let candidates = build_candidates_from_window_list(
-            "scratch\t1\tcode\tzsh\t/Users/ab/work\t1",
+            "scratch\t1\tcode\tzsh\t/Users/ab/work\t1\t0\t@11",
             &clients,
             &HashMap::from([("scratch".to_string(), Some(1356))]),
             &HashMap::from([(1443, "scratch@macbook".to_string())]),
@@ -5235,8 +5406,8 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
     fn window_candidate_builder_emits_windows_from_all_sessions() {
         let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
         let terminal_pid_by_session = HashMap::from([("scratch".to_string(), Some(1356))]);
-        let raw = "beside\t1\tbeside-agentic\tclaude\t/Users/ab/workspace/beside\n\
-scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
+        let raw = "beside\t1\tbeside-agentic\tclaude\t/Users/ab/workspace/beside\t1\t0\t@11\n\
+scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\t1\t0\t@12\n";
 
         let candidates = build_candidates_from_window_list(
             raw,
@@ -5263,7 +5434,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         assert_eq!(candidates[1].source, SOURCE_WINDOWS);
         assert_eq!(
             candidates[1].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/local%7Cscratch:2")
+            Some("tmux://window/local%7Cscratch:%4012")
         );
         assert_eq!(candidates[1].pid_value(), Some(1356));
     }
@@ -5289,8 +5460,8 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 
         // Socket A reports its sessions; socket B reports its own. Each
         // socket's `list-windows -a` only sees its own server.
-        let socket_a_out = "work\t1\teditor\tnvim\t/Users/ab/work";
-        let socket_b_out = "play\t1\tshell\tzsh\t/Users/ab/play";
+        let socket_a_out = "work\t1\teditor\tnvim\t/Users/ab/work\t1\t0\t@11";
+        let socket_b_out = "play\t1\tshell\tzsh\t/Users/ab/play\t1\t0\t@12";
 
         // Merging is what `run_tmux_aggregate` does before handing the
         // blob off to the candidate builder. Dedup is exercised by
@@ -5316,13 +5487,13 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             .iter()
             .map(|c| c.meta(meta::NAVIGATION_URL).unwrap_or(""))
             .collect();
-        assert!(sessions.contains(&"tmux://window/local%7Cwork:1"));
-        assert!(sessions.contains(&"tmux://window/local%7Cplay:1"));
+        assert!(sessions.contains(&"tmux://window/local%7Cwork:%4011"));
+        assert!(sessions.contains(&"tmux://window/local%7Cplay:%4012"));
         // The `play` session lives on the second socket — it would
         // have been entirely missing before the fix.
         let play = candidates
             .iter()
-            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/local%7Cplay:1"))
+            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/local%7Cplay:%4012"))
             .expect("play session candidate present");
         assert_eq!(play.pid_value(), Some(1444));
     }

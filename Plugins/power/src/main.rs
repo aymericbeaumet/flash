@@ -125,7 +125,7 @@ impl FlashPlugin for Power {
 
     async fn on_event(&self, ctx: Context, event: Event) {
         if event.name == "core:power.changed" {
-            let _ = refresh_and_publish(&ctx, true).await;
+            let _ = refresh_and_publish(&ctx, false).await;
         }
     }
 
@@ -326,8 +326,7 @@ fn parse_ioreg_health(raw: &str) -> Option<BatteryHealth> {
         cycle_count: ioreg_u64(raw, "CycleCount"),
         design_capacity: ioreg_u64(raw, "DesignCapacity"),
         maximum_capacity: ioreg_u64(raw, "AppleRawMaxCapacity")
-            .or_else(|| ioreg_u64(raw, "NominalChargeCapacity"))
-            .or_else(|| ioreg_u64(raw, "MaxCapacity")),
+            .or_else(|| ioreg_u64(raw, "NominalChargeCapacity")),
         temperature_centi_celsius: ioreg_u64(raw, "Temperature")
             .filter(|temperature| *temperature <= 10_000),
         adapter_watts: ioreg_u64(raw, "Watts"),
@@ -412,6 +411,18 @@ fn preview(
         .row(
             "Health",
             health_percent.map_or_else(|| "    —".to_string(), |percent| format!("{percent:>3} %")),
+        )
+        .row(
+            "Design",
+            health
+                .and_then(|health| health.design_capacity)
+                .map_or_else(|| "—".to_string(), |capacity| format!("{capacity} mAh")),
+        )
+        .row(
+            "Full charge",
+            health
+                .and_then(|health| health.maximum_capacity)
+                .map_or_else(|| "—".to_string(), |capacity| format!("{capacity} mAh")),
         )
         .row(
             "Condition",
@@ -788,6 +799,8 @@ mod tests {
 #[fg=colour245]Source        #[default]AC adapter\n\
 #[fg=colour245]Estimate      #[default]Full in 1h 24m\n\
 #[fg=colour245]Health        #[default] 91 %\n\
+#[fg=colour245]Design        #[default]6075 mAh\n\
+#[fg=colour245]Full charge   #[default]5528 mAh\n\
 #[fg=colour245]Condition     #[default]Good ##[fg=colour196] ##1\n\
 #[fg=colour245]Cycles        #[default]       187\n\
 #[fg=colour245]Temperature   #[default] 30.3 °C\n\
@@ -805,6 +818,8 @@ State         Charging\n\
 Source        AC adapter\n\
 Estimate      Full in 1h 24m\n\
 Health         91 %\n\
+Design        6075 mAh\n\
+Full charge   5528 mAh\n\
 Condition     Good #[fg=colour196] #1\n\
 Cycles               187\n\
 Temperature    30.3 °C\n\
@@ -908,6 +923,8 @@ History       ····················"
 #[fg=colour245]Source        #[default]Battery\n\
 #[fg=colour245]Estimate      #[default]Unavailable\n\
 #[fg=colour245]Health        #[default]    —\n\
+#[fg=colour245]Design        #[default]—\n\
+#[fg=colour245]Full charge   #[default]—\n\
 #[fg=colour245]Condition     #[default]—\n\
 #[fg=colour245]Cycles        #[default]         —\n\
 #[fg=colour245]Temperature   #[default]    — °C\n\
@@ -937,6 +954,34 @@ History       ····················"
         assert!(details
             .as_str()
             .ends_with("#[fg=colour245]History       #[default]··················▁█"));
+    }
+
+    #[test]
+    fn details_show_original_and_current_battery_capacity() {
+        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
+        let health = BatteryHealth {
+            design_capacity: Some(5_000),
+            maximum_capacity: Some(4_000),
+            ..BatteryHealth::default()
+        };
+        let details = preview(&snapshot, Some(&health), &ChargeHistory::new()).render_plain();
+        assert!(details.contains("Design        5000 mAh"), "{details}");
+        assert!(details.contains("Full charge   4000 mAh"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
+    }
+
+    #[test]
+    fn battery_percentage_capacity_is_never_interpreted_as_milliamphours() {
+        let health = parse_ioreg_health(
+            r#""DesignCapacity" = 5000
+"MaxCapacity" = 100"#,
+        )
+        .unwrap();
+        assert_eq!(health.maximum_capacity, None);
+        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
+        let details = preview(&snapshot, Some(&health), &ChargeHistory::new()).render_plain();
+        assert!(!details.contains("100 mAh"));
+        assert!(details.contains("Health            —"), "{details}");
     }
 
     #[test]

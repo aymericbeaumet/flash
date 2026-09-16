@@ -33,7 +33,7 @@ final class StatusPopupControllerTests: XCTestCase {
       style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
   }
 
-  func testTypedDocumentPreservesExtendedStylesAndSanitizesContent() {
+  func testTypedPopupPreservesExtendedStylesAndSanitizesContent() throws {
     var segment = FlashStatusTextSegment(
       text: "界\u{1B}[2J", foreground: .rgb(0x010203),
       bold: true, italics: true, underline: true, dim: true, reverse: true, blink: true)
@@ -41,22 +41,25 @@ final class StatusPopupControllerTests: XCTestCase {
     segment.underlineColor = .rgb(0x040506)
     segment.strikethrough = true
     segment.overline = true
-    let document = TerminalDocument(columns: 20, rows: 2)
-    let ready = expectation(description: "styled frame")
-    document.onFrame = { frame in
-      let cell = frame.cells[0]
-      XCTAssertEqual(cell.text, "界")
-      XCTAssertEqual(cell.width, 2)
-      XCTAssertEqual(cell.flags, 1 | 2 | 4 | 8 | 16 | 64 | 128)
-      XCTAssertEqual(cell.underline, 3)
-      XCTAssertEqual(cell.underlineColor.red, 4)
-      XCTAssertEqual(cell.underlineColor.green, 5)
-      XCTAssertEqual(cell.underlineColor.blue, 6)
-      XCTAssertTrue(frame.text.contains("界�[2J"))
-      ready.fulfill()
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    var popup = region(text: segment.text)
+    popup.document = [segment]
+    preview(controller, region: popup)
+    waitUntil("styled pager frame") {
+      controller.terminalView.terminalFrame?.text.contains("界�[2J") == true
     }
-    document.replace(data: StatusPopupController.documentVT([segment]))
-    wait(for: [ready], timeout: 5)
+    let frame = try XCTUnwrap(controller.terminalView.terminalFrame)
+    let cell = frame.cells[0]
+    XCTAssertEqual(cell.text, "界")
+    XCTAssertEqual(cell.width, 2)
+    XCTAssertEqual(cell.flags, 1 | 2 | 4 | 8 | 16 | 64 | 128)
+    XCTAssertEqual(cell.underline, 3)
+    XCTAssertEqual(cell.underlineColor.red, 4)
+    XCTAssertEqual(cell.underlineColor.green, 5)
+    XCTAssertEqual(cell.underlineColor.blue, 6)
+    controller.dismiss()
   }
 
   func testDocumentGridUsesTerminalWidthsAndWideCharacterWrap() {
@@ -70,21 +73,24 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(emoji.rows, 1)
   }
 
-  func testDocumentLinkLabelsReachTerminalFramesWithoutControlInjection() {
+  func testPopupLinkLabelsReachTerminalFramesWithoutControlInjection() throws {
     var linked = FlashStatusTextSegment(text: "Read", foreground: .defaultForeground)
     linked.link = "https://example.com/article"
     var invalid = FlashStatusTextSegment(text: " Plain", foreground: .defaultForeground)
     invalid.link = "https://example.com/\u{1B}[2J"
-    let document = TerminalDocument(columns: 20, rows: 1)
-    let ready = expectation(description: "document hyperlinks")
-    document.onFrame = { frame in
-      XCTAssertTrue(frame.text.hasPrefix("Read Plain"))
-      XCTAssertTrue(frame.cells.prefix(4).allSatisfy { $0.hyperlink == linked.link })
-      XCTAssertTrue(frame.cells.dropFirst(4).allSatisfy { $0.hyperlink == nil })
-      ready.fulfill()
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    var popup = region(text: "Read Plain")
+    popup.document = [linked, invalid]
+    preview(controller, region: popup)
+    waitUntil("pager hyperlinks") {
+      controller.terminalView.terminalFrame?.text.hasPrefix("Read Plain") == true
     }
-    document.replace(data: StatusPopupController.documentVT([linked, invalid]))
-    wait(for: [ready], timeout: 5)
+    let frame = try XCTUnwrap(controller.terminalView.terminalFrame)
+    XCTAssertTrue(frame.cells.prefix(4).allSatisfy { $0.hyperlink == linked.link })
+    XCTAssertTrue(frame.cells.dropFirst(4).allSatisfy { $0.hyperlink == nil })
+    controller.dismiss()
   }
 
   func testSameDocumentRefreshPreservesScrollAndChangedTextClearsOldTail() {
@@ -97,7 +103,7 @@ final class StatusPopupControllerTests: XCTestCase {
     waitUntil("document starts at top") {
       controller.terminalView.terminalFrame?.text.hasPrefix("row1\n") == true
     }
-    controller.terminalView.scroll(lines: 8)
+    registry.sessions["details"]?.send(Data("8j".utf8))
     waitUntil("document scrolled") {
       controller.terminalView.terminalFrame?.text.hasPrefix("row9\n") == true
     }
@@ -105,11 +111,71 @@ final class StatusPopupControllerTests: XCTestCase {
     RunLoop.current.run(until: Date().addingTimeInterval(0.08))
     XCTAssertTrue(controller.terminalView.terminalFrame?.text.hasPrefix("row9\n") == true)
     controller.refresh([region(text: "x")])
-    waitUntil("old document tail cleared") { controller.terminalView.terminalFrame?.text == "x" }
+    waitUntil("old document tail cleared") {
+      let text = controller.terminalView.terminalFrame?.text ?? ""
+      return text.hasPrefix("x") && !text.contains("row")
+    }
     XCTAssertGreaterThanOrEqual(controller.frame.minX, screen.minX)
     XCTAssertLessThanOrEqual(controller.frame.maxX, screen.maxX)
     controller.dismiss()
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
+  }
+
+  func testTextPopupRunsAPTYChildAndDismissalReleasesItsSnapshot() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    preview(controller, region: region(text: "CPU\nTotal 42 %"))
+    let session = try XCTUnwrap(registry.sessions["details"])
+    waitUntil("popup child running") {
+      if case .running = session.state { return true }
+      return false
+    }
+    guard case .running(let pid) = session.state else { return XCTFail("Missing popup child") }
+    waitUntil("popup terminal painted") {
+      controller.terminalView.terminalFrame?.text.contains("Total 42 %") == true
+    }
+    let snapshotPath = try XCTUnwrap(registry.definitions["details"]?.command.last)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath))
+    controller.dismiss()
+    waitUntil("popup resources released") {
+      registry.sessions["details"] == nil && kill(pid, 0) == -1 && errno == ESRCH
+        && !FileManager.default.fileExists(atPath: snapshotPath)
+    }
+  }
+
+  func testFocusedPagerKeepsSearchStableAndExplicitRestartShowsLatestData() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let screen = CGRect(x: 0, y: 0, width: 600, height: 90)
+    let original = (1...20).map { "row\($0)" }.joined(separator: "\n")
+    preview(controller, region: region(text: original), screen: screen)
+    waitUntil("initial pager") {
+      controller.terminalView.terminalFrame?.text.hasPrefix("row1\n") == true
+    }
+    controller.focus()
+    registry.sessions["details"]?.send(Data("/row17".utf8))
+    waitUntil("pager search prompt") {
+      controller.terminalView.terminalFrame?.text.contains("/row17") == true
+    }
+    let updated = (1...20).map { "new\($0)" }.joined(separator: "\n")
+    controller.refresh([region(text: updated)])
+    registry.sessions["details"]?.send(Data("\n".utf8))
+    waitUntil("search survived data publication") {
+      controller.terminalView.terminalFrame?.text.contains("row17") == true
+    }
+    XCTAssertFalse(controller.terminalView.terminalFrame?.text.contains("new") == true)
+    registry.restart(name: "details")
+    waitUntil("explicit refresh uses latest collected data") {
+      controller.terminalView.terminalFrame?.text.hasPrefix("new1\n") == true
+    }
+    controller.dismiss()
+    preview(controller, region: region("another", text: original), screen: screen)
+    waitUntil("different popup starts at top") {
+      controller.terminalView.terminalFrame?.text.hasPrefix("row1\n") == true
+    }
+    controller.dismiss()
   }
 
   func testLeavingAnchorHidesPreviewAndPreservesFocusedTerminal() {
@@ -148,7 +214,30 @@ final class StatusPopupControllerTests: XCTestCase {
     }
   }
 
-  func testFocusedPopupIgnoresOtherHoverAndKeepsAnchorWhenContentRefreshes() {
+  func testCapturedPopupKeepsItsSnapshotUntilExplicitRestart() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    controller.preview(
+      region(text: "Captured article"), pointer: CGPoint(x: 300, y: 400),
+      visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400), style: .init(),
+      font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+      preservingContent: true)
+    waitUntil("captured pager frame") {
+      controller.terminalView.terminalFrame?.text.contains("Captured article") == true
+    }
+    controller.focus()
+    controller.refresh([region(text: "Latest article")])
+    controller.updateStyle(.init())
+    XCTAssertEqual(controller.content, "Captured article")
+    registry.restart(name: "details")
+    waitUntil("explicit refresh leaves the captured publication") {
+      controller.terminalView.terminalFrame?.text.contains("Latest article") == true
+    }
+    controller.dismiss()
+  }
+
+  func testFocusedPopupKeepsItsSnapshotAndAnchorDuringUpdates() {
     let controller = StatusPopupController(
       terminals: StatusTerminalRegistry(), windowActionsEnabled: false)
     let popup = region("article", text: "Original article")
@@ -166,11 +255,12 @@ final class StatusPopupControllerTests: XCTestCase {
     controller.refresh([
       region("other", text: "Other content"), region("article", text: "Updated article"),
     ])
-    waitUntil("focused document refreshes") {
-      controller.terminalView.terminalFrame?.text == "Updated article"
+    waitUntil("focused pager keeps its snapshot") {
+      controller.terminalView.terminalFrame?.text.trimmingCharacters(in: .newlines)
+        == "Original article"
     }
     XCTAssertEqual(controller.presentation, focused)
-    XCTAssertEqual(controller.content, "Updated article")
+    XCTAssertEqual(controller.content, "Original article")
     XCTAssertTrue(controller.terminalView.isRenderingEnabled)
   }
 
@@ -188,7 +278,7 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(callbacks, ["flush", "restore"])
   }
 
-  func testRepeatedHoverRestoresCachedDocumentAndPreservesItsRenderedFrame() {
+  func testRepeatedHoverStartsFreshPagerAtTheSameSize() {
     let controller = StatusPopupController(
       terminals: StatusTerminalRegistry(), windowActionsEnabled: false)
     let popup = region(text: "Article title\nFirst paragraph\nSecond paragraph")
@@ -206,7 +296,9 @@ final class StatusPopupControllerTests: XCTestCase {
       preview(controller, region: popup)
       XCTAssertTrue(controller.isVisible)
       XCTAssertTrue(controller.terminalView.isRenderingEnabled)
-      XCTAssertEqual(controller.terminalView.terminalFrame?.text, renderedText)
+      waitUntil("reopened pager rendered") {
+        controller.terminalView.terminalFrame?.text == renderedText
+      }
       XCTAssertEqual(controller.terminalView.frame, renderedFrame)
       XCTAssertEqual(controller.frame, panelFrame)
     }
@@ -223,7 +315,8 @@ final class StatusPopupControllerTests: XCTestCase {
     ] {
       preview(controller, region: popup)
       waitUntil("current article rendered") {
-        controller.terminalView.terminalFrame?.text == popup.content
+        controller.terminalView.terminalFrame?.text.trimmingCharacters(in: .newlines)
+          == popup.content
       }
       XCTAssertTrue(controller.isVisible)
       XCTAssertTrue(controller.terminalView.isRenderingEnabled)
@@ -242,7 +335,7 @@ final class StatusPopupControllerTests: XCTestCase {
     let popup = region("inline:private-encoded-body", text: "Private article text")
     preview(controller, region: popup)
     waitUntil("article frame ready") {
-      controller.terminalView.terminalFrame?.text == popup.content
+      controller.terminalView.terminalFrame?.text.trimmingCharacters(in: .newlines) == popup.content
     }
     preview(controller, region: popup)
     let settledRecordCount = records.count
@@ -262,7 +355,7 @@ final class StatusPopupControllerTests: XCTestCase {
         $0.fields["state"] == "hidden" && $0.fields["reason"] == "explicit_dismiss"
           && $0.fields["rendering_enabled"] == "false"
       })
-    XCTAssertTrue(records.contains { $0.fields["document_cache"] == "reused" })
+    XCTAssertTrue(records.contains { $0.fields["source_kind"] == "pager" })
     XCTAssertTrue(records.contains { $0.fields["frame_ready"] == "true" })
     for record in records {
       let diagnostic = record.message + record.fields.values.joined()

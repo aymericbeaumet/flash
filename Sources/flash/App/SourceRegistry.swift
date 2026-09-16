@@ -542,8 +542,9 @@ final class SourceRegistry {
       candidates
       .filter { $0.isLocation && $0.kind != CandidateFinder.sourceKind }
     let samePID = locationCandidates.filter { $0.pid == context.processID }
-    if let current = samePID.first(where: \.isCurrentLocation) {
-      return current
+    let selected = samePID.filter(\.isCurrentLocation)
+    if selected.count == 1 {
+      return selected[0]
     }
     // Zero or one same-process locations are already unambiguous. Do not ask
     // the Accessibility source for a document URL: its native-app fallback may

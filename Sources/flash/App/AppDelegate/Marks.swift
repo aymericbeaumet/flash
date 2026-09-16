@@ -112,8 +112,17 @@ extension AppDelegate {
     )
   }
 
-  func recordMovement(_ entry: MovementEntry, source: String) {
+  func recordMovement(_ entry: MovementEntry, source: String, isAmbient: Bool = false) {
     guard let identity = movementIdentity(entry) else { return }
+    if isAmbient, let target = movementNavigationTargetKey, target != identity.key {
+      guard let current = movementCurrent, movementEntryIsApp(current),
+        current.pid != nil, current.pid == entry.pid
+      else { return }
+    }
+    if !isAmbient {
+      movementLocationResolutionGeneration &+= 1
+      movementNavigationTargetKey = nil
+    }
     if movementNavigationTargetKey == identity.key {
       movementNavigationTargetKey = nil
       movementCurrent = entry
@@ -136,6 +145,7 @@ extension AppDelegate {
     if let current = movementCurrent,
       movementEntriesShareActivation(current, entry)
     {
+      if movementEntryIsApp(current) { movementCurrent = entry }
       movementNavigationTargetKey = nil
       pruneMovementStacks()
       FlashLog.trace(
@@ -151,6 +161,38 @@ extension AppDelegate {
     FlashLog.trace(
       "[movement] record source=\(source) current=\(identity.key) raw=\(entry.key) back=\(movementBackStack.count) "
         + "forward=\(movementForwardStack.count)")
+  }
+
+  func recordPublishedLocations() {
+    guard let app = currentNonFlashRunningApplication(), !app.isTerminated else { return }
+    let candidates = registry.locationSnapshotCandidates(scope: .all)
+    if !recordPublishedLocations(candidates, processID: app.processIdentifier) {
+      scheduleAmbientLocationRecord(pid: app.processIdentifier, reason: "location_catalog")
+    }
+  }
+
+  /// Only a changed selection can add a stop. Other catalog publications must
+  /// not replay an old selected tab while a direct navigation is settling.
+  @discardableResult
+  func recordPublishedLocations(_ candidates: [Candidate], processID: pid_t) -> Bool {
+    let selected = candidates.filter {
+      $0.pid == processID && $0.isLocation && $0.isCurrentLocation && $0.kind != .app
+    }
+    let keyed = selected.compactMap { candidate -> (String, Candidate)? in
+      guard let identity = movementIdentity(.candidate(candidate)) else { return nil }
+      return (identity.key, candidate)
+    }
+    let keys = Set(keyed.map(\.0))
+    let previous = movementCatalogSnapshot.flatMap { $0.pid == processID ? $0.keys : nil }
+    guard previous != keys else { return true }
+    movementCatalogSnapshot = (processID, keys)
+    let added = keys.subtracting(previous ?? [])
+    let choice = added.count == 1 ? added.first : keys.count == 1 ? keys.first : nil
+    guard let choice, let candidate = keyed.first(where: { $0.0 == choice })?.1 else {
+      return false
+    }
+    recordAmbientLocation(candidate, processID: processID, source: "location_catalog")
+    return true
   }
 
   func scheduleAmbientLocationRecord(pid: pid_t, reason: String) {
@@ -222,23 +264,28 @@ extension AppDelegate {
   }
 
   @discardableResult
-  private func recordAmbientLocation(
+  func recordAmbientLocation(
     _ location: Candidate?,
     processID: pid_t,
     source: String
   ) -> Bool {
     if let location {
-      recordMovement(.candidate(location), source: source)
+      recordMovement(.candidate(location), source: source, isAmbient: true)
       return location.kind != .app
     } else {
-      recordMovement(.app(pid: processID), source: source)
+      recordMovement(.app(pid: processID), source: source, isAmbient: true)
       return false
     }
   }
 
   func navigateMovementHistory(direction: NavigationDirection) {
+    ambientLocationRecordToken &+= 1
     movementLocationResolutionGeneration &+= 1
     let generation = movementLocationResolutionGeneration
+    if movementNavigationTargetKey != nil {
+      finishNavigateMovementHistory(direction: direction, current: movementCurrent)
+      return
+    }
     currentMovementEntry { [weak self] current in
       guard let self, generation == self.movementLocationResolutionGeneration else { return }
       self.finishNavigateMovementHistory(direction: direction, current: current)
@@ -249,7 +296,19 @@ extension AppDelegate {
     direction: NavigationDirection,
     current: MovementEntry?
   ) {
-    if let current { movementCurrent = current }
+    guard let target = takeMovementHistoryTarget(direction: direction, current: current) else {
+      applyModeOverlay()
+      return
+    }
+    restoreMovement(target)
+  }
+
+  func takeMovementHistoryTarget(
+    direction: NavigationDirection,
+    current: MovementEntry?
+  ) -> MovementEntry? {
+    if let current { recordMovement(current, source: "navigation_origin", isAmbient: true) }
+    let current = movementCurrent
 
     var sourceStack: [MovementEntry]
     var destinationStack: [MovementEntry]
@@ -270,6 +329,7 @@ extension AppDelegate {
         continue
       }
       let targetIdentity = movementIdentity(target)
+      if let current, movementIdentity(current) == targetIdentity { continue }
       if let current,
         let currentIdentity = movementIdentity(current),
         currentIdentity.key != targetIdentity?.key
@@ -280,14 +340,13 @@ extension AppDelegate {
       movementNavigationTargetKey = targetIdentity?.key
       storeMovementStacks(source: sourceStack, destination: destinationStack, direction: direction)
       FlashLog.debug("[movement] navigate \(label) target=\(targetIdentity?.key ?? target.key)")
-      restoreMovement(target)
-      return
+      return target
     }
 
     storeMovementStacks(source: sourceStack, destination: destinationStack, direction: direction)
     pruneMovementStacks()
     FlashLog.debug("[movement] no \(label) target")
-    applyModeOverlay()
+    return nil
   }
 
   private func currentMovementEntry(completion: @escaping (MovementEntry?) -> Void) {
@@ -322,12 +381,15 @@ extension AppDelegate {
     switch entry.kind {
     case .app:
       guard let pid = entry.pid, let item = registry.candidate(forProcessID: pid) else {
+        movementNavigationTargetKey = nil
         applyModeOverlay()
         return
       }
-      openSourceItem(item, recordMovement: false)
+      openSourceItem(
+        item, recordMovement: false, movementGeneration: movementLocationResolutionGeneration)
     case .candidate:
       guard let candidate = entry.candidate else {
+        movementNavigationTargetKey = nil
         applyModeOverlay()
         return
       }
@@ -336,10 +398,13 @@ extension AppDelegate {
       {
         restoreNavigation(navigationURL, fallback: candidate, pid: candidate.pid)
       } else {
-        openSourceItem(candidate, recordMovement: false)
+        openSourceItem(
+          candidate, recordMovement: false, movementGeneration: movementLocationResolutionGeneration
+        )
       }
     case .route:
       guard let navigationURL = entry.navigationURL else {
+        movementNavigationTargetKey = nil
         applyModeOverlay()
         return
       }
@@ -348,8 +413,9 @@ extension AppDelegate {
   }
 
   private func restoreNavigation(_ url: URL, fallback: Candidate?, pid: pid_t?) {
+    let generation = movementLocationResolutionGeneration
     registry.restoreNavigation(to: url) { [weak self] result in
-      guard let self else { return }
+      guard let self, self.movementLocationResolutionGeneration == generation else { return }
       switch result.disposition {
       case .performed:
         let targetPID = result.targetPID ?? pid
@@ -362,15 +428,20 @@ extension AppDelegate {
         }
         if let route = result.navigationURL {
           self.movementCurrent = .route(route, pid: targetPID)
+          self.movementNavigationTargetKey =
+            self.movementCurrent.flatMap(self.movementIdentity)?.key
         }
         self.scheduleNormalModeRecapture()
       case .failed:
+        self.movementNavigationTargetKey = nil
         FlashLog.warn("[movement] route restore failed scheme=\(url.scheme ?? "nil")")
         self.scheduleNormalModeRecapture()
       case .unhandled:
         if let fallback {
-          self.openSourceItem(fallback, recordMovement: false)
+          self.openSourceItem(
+            fallback, recordMovement: false, movementGeneration: generation)
         } else {
+          self.movementNavigationTargetKey = nil
           FlashLog.debug("[movement] route restore unhandled scheme=\(url.scheme ?? "nil")")
           self.applyModeOverlay()
         }
@@ -380,10 +451,7 @@ extension AppDelegate {
 
   private func appendMovementEntry(_ entry: MovementEntry, to stack: inout [MovementEntry]) {
     guard let identity = movementIdentity(entry) else { return }
-    stack.removeAll { existing in
-      guard let existingIdentity = movementIdentity(existing) else { return true }
-      return existingIdentity.key == identity.key
-    }
+    if let last = stack.last, movementIdentity(last) == identity { return }
     stack.append(entry)
     if stack.count > 20 {
       stack.removeFirst(stack.count - 20)
@@ -394,10 +462,13 @@ extension AppDelegate {
     _ current: MovementEntry,
     _ next: MovementEntry
   ) -> Bool {
-    current.kind != .app
-      && next.kind == .app
+    (movementEntryIsApp(current) || movementEntryIsApp(next))
       && current.pid != nil
       && current.pid == next.pid
+  }
+
+  private func movementEntryIsApp(_ entry: MovementEntry) -> Bool {
+    entry.kind == .app || entry.candidate?.kind == .app
   }
 
   private func movementIdentity(_ entry: MovementEntry) -> MovementIdentity? {

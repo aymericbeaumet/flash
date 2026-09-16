@@ -10,7 +10,7 @@ use flash_plugin::{
     Published, RefreshGate, StatusValue,
 };
 
-const ACTIVITY_POLL: Duration = Duration::from_secs(1);
+const ACTIVITY_POLL: Duration = Duration::from_secs(3);
 const CAPACITY_POLL: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MIN_RATE_INTERVAL: Duration = Duration::from_secs(1);
@@ -531,11 +531,30 @@ fn render_preview(state: &DiskState) -> Option<Preview> {
         .rates
         .map(|rates| (rate_iec(rates.read), rate_iec(rates.written)))
         .unwrap_or_else(|| ("—".to_string(), "—".to_string()));
+    let totals = state.previous_io.as_ref().map(|sample| {
+        sample
+            .snapshot
+            .devices
+            .values()
+            .fold(IoCounters::default(), |total, next| IoCounters {
+                read: total.read.saturating_add(next.read),
+                written: total.written.saturating_add(next.written),
+            })
+    });
     let mut preview = Preview::new()
         .title("Disks")
         .row("Capacity", format!("{capacity:>5}"))
         .row("Read", format!("{read:>12}"))
         .row("Write", format!("{written:>12}"))
+        .row(
+            "Read total",
+            totals.map_or_else(|| "—".to_string(), |totals| bytes_iec(totals.read)),
+        )
+        .row(
+            "Write total",
+            totals.map_or_else(|| "—".to_string(), |totals| bytes_iec(totals.written)),
+        )
+        .note("Totals since device reset · rates sampled every 3s")
         .row(
             "Read history",
             sparkline_padded(&sparkline_scaled(&state.read_history), HISTORY_LEN),
@@ -546,10 +565,8 @@ fn render_preview(state: &DiskState) -> Option<Preview> {
         );
     for volume in state.capacity.iter().flat_map(|capacity| &capacity.volumes) {
         preview = preview
-            .row(
-                "Volume",
-                Markup::text(format!("{} ({})", volume.name, volume.mount)),
-            )
+            .row("Volume", Markup::text(&volume.name))
+            .row("Mount", Markup::text(&volume.mount))
             .row(
                 "Space",
                 format!(
@@ -558,7 +575,8 @@ fn render_preview(state: &DiskState) -> Option<Preview> {
                     bytes_iec(volume.used),
                     bytes_iec(volume.total)
                 ),
-            );
+            )
+            .row("Free", bytes_iec(volume.total.saturating_sub(volume.used)));
     }
     Some(preview)
 }
@@ -609,6 +627,40 @@ mod tests {
             }),
             ..DiskState::default()
         }
+    }
+
+    #[test]
+    fn details_include_free_capacity_and_sampled_transfer_totals() {
+        let mut state = activity_state();
+        state.previous_io = Some(TimedIoSnapshot {
+            sampled_at: Instant::now(),
+            snapshot: IoSnapshot {
+                devices: BTreeMap::from([
+                    (
+                        "disk0".to_string(),
+                        IoCounters {
+                            read: 1 << 30,
+                            written: 2 << 30,
+                        },
+                    ),
+                    (
+                        "disk1".to_string(),
+                        IoCounters {
+                            read: 2 << 30,
+                            written: 1 << 30,
+                        },
+                    ),
+                ]),
+            },
+        });
+        let details = render_preview(&state).unwrap().render_plain();
+        assert!(details.contains("Free          100 KiB"), "{details}");
+        assert!(details.contains("Read total    3.0 GiB"), "{details}");
+        assert!(details.contains("Write total   3.0 GiB"), "{details}");
+        assert!(
+            details.lines().all(|line| line.chars().count() <= 50),
+            "{details}"
+        );
     }
 
     #[test]
@@ -821,7 +873,7 @@ mod tests {
             .contains("#[fg=colour245]Read          #[default]           —"));
         assert!(preview
             .as_str()
-            .contains("#[fg=colour245]Volume        #[default]Startup (/)"));
+            .contains("#[fg=colour245]Volume        #[default]Startup"));
     }
 
     #[test]
@@ -869,10 +921,15 @@ mod tests {
 Capacity       90 %\n\
 Read             1.5 MiB/s\n\
 Write            2.0 KiB/s\n\
+Read total    —\n\
+Write total   —\n\
+Totals since device reset · rates sampled every 3s\n\
 Read history  ···················█\n\
 Write history ···················█\n\
-Volume        Startup (/)\n\
-Space          90 % ·    900 KiB /   1000 KiB"
+Volume        Startup\n\
+Mount         /\n\
+Space          90 % ·    900 KiB /   1000 KiB\n\
+Free          100 KiB"
         );
         assert!(render_preview(&DiskState::default()).is_none());
     }
@@ -895,7 +952,7 @@ Space          90 % ·    900 KiB /   1000 KiB"
             render_status(&state, SummaryMode::Full).unwrap().visible.as_str(),
             "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
-        assert_eq!(ACTIVITY_POLL, Duration::from_secs(1));
+        assert_eq!(ACTIVITY_POLL, Duration::from_secs(3));
         assert_eq!(CAPACITY_POLL, Duration::from_secs(30));
         assert_eq!(HISTORY_LEN, 20);
         assert_eq!(
@@ -904,10 +961,15 @@ Space          90 % ·    900 KiB /   1000 KiB"
 #[fg=colour245]Capacity      #[default] 90 %\n\
 #[fg=colour245]Read          #[default]   1.5 MiB/s\n\
 #[fg=colour245]Write         #[default]   2.0 KiB/s\n\
+#[fg=colour245]Read total    #[default]—\n\
+#[fg=colour245]Write total   #[default]—\n\
+#[fg=colour245]Totals since device reset · rates sampled every 3s#[default]\n\
 #[fg=colour245]Read history  #[default]···················█\n\
 #[fg=colour245]Write history #[default]···················█\n\
-#[fg=colour245]Volume        #[default]Startup (/)\n\
-#[fg=colour245]Space         #[default] 90 % ·    900 KiB /   1000 KiB"
+#[fg=colour245]Volume        #[default]Startup\n\
+#[fg=colour245]Mount         #[default]/\n\
+#[fg=colour245]Space         #[default] 90 % ·    900 KiB /   1000 KiB\n\
+#[fg=colour245]Free          #[default]100 KiB"
         );
     }
 
@@ -966,9 +1028,9 @@ Space          90 % ·    900 KiB /   1000 KiB"
         let preview = render_preview(&state).unwrap();
         assert!(preview
             .render_plain()
-            .contains("Backup #[fg=colour196] (/Volumes/#1)"));
+            .contains("Volume        Backup #[fg=colour196]\nMount         /Volumes/#1"));
         assert!(preview.render().as_str().contains(
-            "#[fg=colour245]Volume        #[default]Backup ##[fg=colour196] (/Volumes/##1)"
+            "#[fg=colour245]Volume        #[default]Backup ##[fg=colour196]\n#[fg=colour245]Mount         #[default]/Volumes/##1"
         ));
     }
 

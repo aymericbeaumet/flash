@@ -2,6 +2,7 @@ import FlashCore
 import Foundation
 
 final class CandidateFinderSession {
+  var invocationTargetPID: pid_t?
   var indexGenerationCounter: UInt64 = 0
   var candidates: [Candidate] = [] {
     didSet {

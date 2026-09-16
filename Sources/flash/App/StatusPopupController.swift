@@ -31,17 +31,11 @@ final class StatusPopupController {
   let terminals: StatusTerminalRegistry
   private(set) var presentation: StatusPopupPresentation = .hidden
   private(set) var content: String = ""
+  private(set) var isContentSnapshot = false
   private let panel = StatusPopupPanel()
   private let windowActionsEnabled: Bool
   private let container = NSView(frame: .zero)
   let terminalView = TerminalView(frame: .zero)
-  private var documents: [String: TerminalDocument] = [:]
-  private struct DocumentRevision: Equatable {
-    var segments: [FlashStatusTextSegment]
-    var columns: Int
-    var rows: Int
-  }
-  private var documentRevisions: [String: DocumentRevision] = [:]
   private var lastLifecycleName: String?
   private var lastLifecycleFields: [String: String] = [:]
   private var lastLayoutName: String?
@@ -61,6 +55,10 @@ final class StatusPopupController {
   var exitStatusText: String { exitLabel.stringValue }
   var isVisible: Bool { presentation.identity != nil }
   var focusedName: String? { presentation.isFocused ? presentation.identity?.name : nil }
+
+  func containsSnapshotAnchor(_ point: CGPoint) -> Bool {
+    isContentSnapshot && region?.rect.contains(point) == true
+  }
 
   init(terminals: StatusTerminalRegistry, windowActionsEnabled: Bool = true) {
     self.terminals = terminals
@@ -92,11 +90,14 @@ final class StatusPopupController {
 
   func preview(
     _ region: StatusBarPopupRegion, pointer: CGPoint,
-    visibleFrame: CGRect, style: Config.StatusBar.PopupStyle, font: NSFont
+    visibleFrame: CGRect, style: Config.StatusBar.PopupStyle, font: NSFont,
+    preservingContent: Bool = false
   ) {
     guard !presentation.isStandalone else { return }
+    guard !isContentSnapshot || preservingContent else { return }
     if presentation.isFocused {
       if presentation.identity?.name == region.name {
+        if terminals.isPopupPager(name: region.name) { return }
         self.region = region
         self.style = style
         self.font = font
@@ -106,6 +107,12 @@ final class StatusPopupController {
       }
       return
     }
+    if let previous = presentation.identity?.name, previous != region.name,
+      terminals.isPopupPager(name: previous)
+    {
+      dismiss(reason: "popup_changed")
+    }
+    isContentSnapshot = preservingContent
     self.region = region
     self.visibleFrame = visibleFrame
     self.style = style
@@ -146,9 +153,16 @@ final class StatusPopupController {
     guard !presentation.isStandalone else { return }
     guard let name = presentation.identity?.name else { return }
     guard let updated = regions.first(where: { $0.name == name }) else {
+      if isContentSnapshot { return }
       dismiss(reason: "region_removed")
       return
     }
+    if terminals.isPopupPager(name: name), presentation.isFocused || isContentSnapshot {
+      let segments = updated.document ?? FlashStatusBarRenderer.segments(from: updated.content)
+      terminals.stagePopup(name: name, data: Self.documentVT(segments))
+      return
+    }
+    if isContentSnapshot { return }
     region = updated
     layout(region: updated)
   }
@@ -173,16 +187,25 @@ final class StatusPopupController {
     if windowActionsEnabled { panel.orderOut(nil) }
     logLifecycle(reason: reason)
     region = nil
+    isContentSnapshot = false
     if wasFocused { didDismissFocus?(reason) }
     if let previousName { didDismiss?(previousName) }
+    if let previousName, terminals.isPopupPager(name: previousName) {
+      terminals.releaseTerminal(name: previousName)
+    }
   }
 
   func focus() {
-    guard isVisible, !presentation.isFocused else { return }
+    guard isVisible, !presentation.isFocused, let name = presentation.identity?.name else { return }
     transition(.focus)
-    willFocus?()
-    activateTerminalInput()
-    logLifecycle(reason: "focus")
+    terminals.freezePopup(name: name) { [weak self] in
+      guard let self, self.presentation.isFocused, self.presentation.identity?.name == name else {
+        return
+      }
+      self.willFocus?()
+      self.activateTerminalInput()
+      self.logLifecycle(reason: "focus")
+    }
   }
 
   private func activateTerminalInput() {
@@ -252,9 +275,9 @@ final class StatusPopupController {
     var exitText = ""
     var footerHeight: CGFloat = 0
     var sourceKind = "terminal"
-    var documentCache = "none"
     if let session = terminals.sessions[region.name],
-      let definition = terminals.definitions[region.name]
+      let definition = terminals.definitions[region.name],
+      !terminals.isPopupPager(name: region.name)
     {
       switch session.state {
       case .exited(let code):
@@ -275,31 +298,27 @@ final class StatusPopupController {
       terminalView.bind(session: session)
       session.resize(columns: columns, rows: rows)
     } else {
-      sourceKind = "document"
+      sourceKind = "pager"
       let segments = region.document ?? FlashStatusBarRenderer.segments(from: region.content)
       let text = segments.filter { !$0.ignore }.map(\.text).joined()
       let available = min(
         maximumColumns,
         max(1, Int((CGFloat(style.maxWidth) - inset * 2) / max(1, cell.width))))
       let grid = Self.documentGrid(
-        text: text, availableColumns: available, maximumRows: maximumRows)
-      columns = grid.columns
-      rows = grid.rows
-      let document = documents[region.name] ?? TerminalDocument(columns: columns, rows: rows)
-      documents[region.name] = document
-      let revision = DocumentRevision(segments: segments, columns: columns, rows: rows)
-      documentCache = documentRevisions[region.name] == revision ? "reused" : "replaced"
-      if documentRevisions[region.name] != revision {
-        document.replace(data: Self.documentVT(segments), columns: columns, rows: rows)
-        documentRevisions[region.name] = revision
-      }
-      if documents.count > 32,
-        let stale = documents.keys.sorted().first(where: { $0 != region.name })
+        text: text, availableColumns: available, maximumRows: max(1, maximumRows - 1))
+      columns = available
+      rows = min(maximumRows, grid.rows + 1)
+      let session: TerminalSession
+      if let existing = terminals.sessions[region.name], presentation.isFocused || isContentSnapshot
       {
-        documents.removeValue(forKey: stale)
-        documentRevisions.removeValue(forKey: stale)
+        session = existing
+      } else {
+        session = terminals.preparePopup(
+          name: region.name, data: Self.documentVT(segments), columns: columns, rows: rows,
+          colors: colors)
       }
-      terminalView.bind(document: document)
+      terminalView.bind(session: session)
+      session.resize(columns: columns, rows: rows)
     }
     content = region.content
     let layout = OverlayPanel.statusBarPopupLayout(
@@ -340,7 +359,6 @@ final class StatusPopupController {
       "columns": String(columns),
       "rows": String(rows),
       "content_bytes": String(region.content.utf8.count),
-      "document_cache": documentCache,
       "width": String(Double(target.width)),
       "height": String(Double(target.height)),
       "footer_visible": String(!exitText.isEmpty),
@@ -391,7 +409,7 @@ final class StatusPopupController {
         return target
       }
       if let hyperlink { result += "\u{1B}]8;;" + hyperlink + "\u{1B}\\" }
-      result += TerminalDocument.sanitize(text: segment.text).replacingOccurrences(
+      result += TerminalText.sanitize(text: segment.text).replacingOccurrences(
         of: "\n", with: "\r\n")
       if hyperlink != nil { result += "\u{1B}]8;;\u{1B}\\" }
     }
@@ -402,13 +420,13 @@ final class StatusPopupController {
   static func documentGrid(text: String, availableColumns: Int, maximumRows: Int) -> (
     columns: Int, rows: Int
   ) {
-    let lines = TerminalDocument.sanitize(text: text).split(
+    let lines = TerminalText.sanitize(text: text).split(
       separator: "\n", omittingEmptySubsequences: false)
     let widths = lines.map { line -> Int in
       var width = 0
       for character in line {
         width +=
-          character == "\t" ? 8 - width % 8 : TerminalDocument.cellWidth(of: String(character))
+          character == "\t" ? 8 - width % 8 : TerminalText.cellWidth(of: String(character))
       }
       return width
     }
@@ -421,7 +439,7 @@ final class StatusPopupController {
         let width =
           character == "\t"
           ? min(columns - column, 8 - column % 8)
-          : TerminalDocument.cellWidth(of: String(character))
+          : TerminalText.cellWidth(of: String(character))
         if width > 0, column >= columns || column + width > columns {
           rows += 1
           column = 0

@@ -361,6 +361,113 @@ public final class AccessibilityProvider: FlashSource {
     return stringValue(v)
   }
 
+  private static func hintSnapshot(_ values: [Any], frame: CGRect) -> AXHintTargetSnapshot {
+    let value = stringValue(values[7]) ?? (values[7] as? NSNumber)?.stringValue
+    return AXHintTargetSnapshot(
+      role: values[0] as? String ?? "AXUnknown", subrole: values[10] as? String,
+      title: stringValue(values[5]), description: stringValue(values[6]), value: value,
+      url: urlValue(values[8]) ?? urlValue(values[11]),
+      enabled: values[3] as? Bool ?? true, hidden: values[9] as? Bool ?? false,
+      frame: frame)
+  }
+
+  private static func resolveHintPoint(
+    element: AXUIElement, captured: AXHintTargetSnapshot, preferred: CGPoint,
+    pid: pid_t, screenH: CGFloat, insideWebArea: Bool,
+    allowsInteractiveDescendants: Bool = false
+  ) -> CGPoint? {
+    guard let currentSnapshot = readHintSnapshot(element, screenH: screenH),
+      var point = captured.resolvedClickPoint(preferred: preferred, current: currentSnapshot)
+    else { return nil }
+    let frame = currentSnapshot.frame
+    if insideWebArea,
+      let firstCharacter = AXAttribute.boundsForRange(
+        element, location: 0, length: 1, screenH: screenH),
+      frame.height > firstCharacter.height * 1.5
+    {
+      point = CGPoint(x: firstCharacter.midX, y: firstCharacter.midY)
+    }
+
+    // A scrolled-out object can retain valid geometry underneath another
+    // control. Require the live hit to belong to the retained AX object.
+    let application = AXApp.make(pid: pid)
+    var hit: AXUIElement?
+    guard
+      AXUIElementCopyElementAtPosition(
+        application, Float(point.x), Float(screenH - point.y), &hit) == .success
+    else { return nil }
+    for _ in 0..<32 {
+      guard let current = hit else { return nil }
+      if CFEqual(current, element) { return point }
+      // Scrolling targets their container, including its interactive children.
+      // Click hints must not redirect to a different interactive child.
+      if !allowsInteractiveDescendants, let role = AXAttribute.role(current),
+        ["AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem"]
+          .contains(role) || JumpTarget.textInputRoles.contains(role)
+      {
+        return nil
+      }
+      hit = AXAttribute.element(current, kAXParentAttribute as String)
+    }
+    return nil
+  }
+
+  private static func readHintSnapshot(_ element: AXUIElement, screenH: CGFloat)
+    -> AXHintTargetSnapshot?
+  {
+    var raw: CFArray?
+    guard
+      AXUIElementCopyMultipleAttributeValues(
+        element, batchAttrs, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
+      let values = raw as? [Any], values.count == 12
+    else { return nil }
+    let frame: CGRect
+    if let position = axValue(values[1]), let size = axValue(values[2]),
+      let standardFrame = frameFromAX(pos: position, size: size, screenH: screenH)
+    {
+      frame = standardFrame
+    } else {
+      // System-owned AX surfaces such as Dock items may expose AXFrame alone.
+      var rawFrame: CFTypeRef?
+      guard AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &rawFrame) == .success,
+        let rawFrame, CFGetTypeID(rawFrame) == AXValueGetTypeID()
+      else { return nil }
+      var axFrame = CGRect.zero
+      guard AXValueGetValue(rawFrame as! AXValue, .cgRect, &axFrame),
+        axFrame.width >= 3, axFrame.height >= 3
+      else { return nil }
+      frame = CGRect(
+        x: axFrame.minX, y: screenH - axFrame.maxY, width: axFrame.width, height: axFrame.height)
+    }
+    return hintSnapshot(values, frame: frame)
+  }
+
+  /// Retain a separately discovered AX surface, such as a Dock item or scroll
+  /// container, with the same commit verification used by the ordinary walk.
+  /// Both capture and resolution run off main.
+  public static func captureTarget(
+    element: AXUIElement, id: String, pid: pid_t, screenH: CGFloat,
+    providerID: String, bundleIdentifier: String? = nil,
+    allowsInteractiveDescendants: Bool = false
+  ) -> JumpTarget? {
+    guard let snapshot = readHintSnapshot(element, screenH: screenH), !snapshot.hidden else {
+      return nil
+    }
+    return JumpTarget(
+      id: id, frame: snapshot.frame, role: snapshot.role,
+      accessibilityLabel: snapshot.title ?? snapshot.description ?? snapshot.value,
+      url: snapshot.url, pid: pid,
+      resolveClickPoint: { preferred in
+        FirefoxAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { _ in
+          resolveHintPoint(
+            element: element, captured: snapshot, preferred: preferred,
+            pid: pid, screenH: screenH, insideWebArea: false,
+            allowsInteractiveDescendants: allowsInteractiveDescendants)
+        }
+      },
+      entersInsertMode: JumpTarget.textInputRoles.contains(snapshot.role), providerID: providerID)
+  }
+
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
@@ -664,7 +771,7 @@ public final class AccessibilityProvider: FlashSource {
     // are taller than 13px).
     if roleAllowed, insideWebArea, role == "AXLink",
       let posV = posValue, let sizeV = sizeValue,
-      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       frame.width < 13, frame.height < 13
     {
       roleAllowed = false
@@ -673,7 +780,7 @@ public final class AccessibilityProvider: FlashSource {
     // disabled row/cell can still be the real click target (see the
     // row/cell branch), whereas every other disabled element stays inert.
     if let posV = posValue, let sizeV = sizeValue,
-      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
       roleAllowed, !hidden
     {
@@ -689,28 +796,17 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
-      // Multi-line web links report a union bounding box whose centre can fall
-      // in the empty gap between wrapped lines, so a synthesized click there
-      // misses. Resolve the first character's box centre instead — guaranteed
-      // on the element — lazily at commit (no hint-walk cost) and only when the
-      // target is clearly multi-line; single-line targets keep the proven
-      // frame centre.
-      let resolveClickPoint: (() -> CGPoint?)? =
-        insideWebArea
-        ? {
-          FirefoxAccessibility.withTree(
-            pid: pid,
-            bundleIdentifier: bundleIdentifier
-          ) { _ in
-            guard
-              let charRect = AXAttribute.boundsForRange(
-                captured, location: 0, length: 1, screenH: screenH),
-              frame.height > charRect.height * 1.5
-            else { return nil }
-            return CGPoint(x: charRect.midX, y: charRect.midY)
-          }
+      let snapshot = Self.hintSnapshot(vals, frame: frame)
+      let resolveClickPoint: (CGPoint) -> CGPoint? = { preferred in
+        FirefoxAccessibility.withTree(
+          pid: pid,
+          bundleIdentifier: bundleIdentifier
+        ) { _ in
+          Self.resolveHintPoint(
+            element: captured, captured: snapshot, preferred: preferred,
+            pid: pid, screenH: screenH, insideWebArea: insideWebArea)
         }
-        : nil
+      }
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
@@ -766,7 +862,7 @@ public final class AccessibilityProvider: FlashSource {
     // may carry the real geometry.
     if depth > 0, !insideWebArea,
       let posV = posValue, let sizeV = sizeValue,
-      let elementFrame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      let elementFrame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       !elementFrame.isEmpty, !visible.intersects(elementFrame)
     {
       return
@@ -957,7 +1053,7 @@ public final class AccessibilityProvider: FlashSource {
     return combined
   }
 
-  private func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
+  private static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
     guard AXValueGetType(pos) == .cgPoint, AXValueGetType(size) == .cgSize else { return nil }
     var origin = CGPoint.zero
     var sz = CGSize.zero

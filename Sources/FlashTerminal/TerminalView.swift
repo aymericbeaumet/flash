@@ -86,7 +86,6 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   public private(set) var terminalFrame: TerminalFrame?
   private weak var session: TerminalSession?
-  private weak var document: TerminalDocument?
   private var selection: ClosedRange<Int>?
   private enum MouseGesture {
     case reporting
@@ -141,12 +140,10 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
 
   public func bind(session: TerminalSession?) {
-    guard self.session !== session || document != nil else { return }
+    guard self.session !== session else { return }
     self.session?.setFocused(false)
     self.session?.onFrame = nil
     self.session?.setWantsFrames(false)
-    document?.onFrame = nil
-    document = nil
     self.session = session
     terminalFrame = session?.frame
     selection = nil
@@ -155,18 +152,6 @@ public final class TerminalView: NSView, NSTextInputClient {
     session?.setWantsFrames(isRenderingEnabled)
     if window?.firstResponder === self { session?.setFocused(true) }
     updateCellGeometry()
-    updateColors()
-  }
-  public func bind(document: TerminalDocument) {
-    guard self.document !== document || session != nil else { return }
-    session?.onFrame = nil
-    self.document?.onFrame = nil
-    session = nil
-    self.document = document
-    terminalFrame = document.frame
-    selection = nil
-    mouseGesture = nil
-    document.onFrame = { [weak self] in self?.receive($0) }
     updateColors()
   }
   private func receive(_ frame: TerminalFrame) {
@@ -238,7 +223,6 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   private func updateColors() {
     session?.setColors(foreground: foreground, background: background)
-    document?.setColors(foreground: foreground, background: background)
     if isRenderingEnabled { needsDisplay = true }
   }
   public override func becomeFirstResponder() -> Bool {
@@ -645,7 +629,6 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   public func scroll(lines: Int) {
     session?.scroll(lines: lines)
-    document?.scroll(lines: lines)
   }
   public override func scrollWheel(with event: NSEvent) {
     let lines = Int(-event.scrollingDeltaY.rounded(.awayFromZero))

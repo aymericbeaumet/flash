@@ -5,8 +5,8 @@ Plugins publish text and rich marker values through `Context.status`; the host
 accepts only names declared by the plugin manifest, updates a plugin's segment
 set atomically, and coalesces notifications before rendering. Hovering never
 runs plugin work: inline popup content arrives in the same status value, and a
-live update re-hit-tests the stationary pointer and replaces the existing popup
-in place.
+live update re-hit-tests the stationary pointer and refreshes a hovered pager
+in place. Focused pagers hold their content stable until reopening or Command-R.
 
 Planned resident-plugin reloads preserve each last status segment for at most
 10 seconds while replacement values arrive. Republishing replaces it immediately;
@@ -25,12 +25,13 @@ The local system-monitor suite is deliberately split by resource. Each plugin
 owns `summary` and `details`; every summary carries its preview through
 `StatusValue::with_preview`, while the standalone details segment supports custom
 templates. Each also publishes a popup-free `label` for a named popup: yellow section
-name plus a grey fixed-width metric. CPU/MEM/DSK/BAT percentages use two digits plus `%`, capped at 99;
-detailed reports retain the actual values. NET uses four cells for aggregate
-download + upload on the default-route interface (`1.2M`, ` 12K`), in decimal
+name plus a grey metric. CPU/MEM/DSK percentages use two digits plus `%`, capped at 99;
+battery charge can reach 100%, and detailed reports retain the actual values.
+NET uses four cells for aggregate download + upload on the default-route
+interface (`1.2M`, ` 12K`), in decimal
 bytes per second. Counting the default route avoids double-counting VPN traffic.
 The labels contain no links or inline popups, so surrounding template bindings
-own clicks and hover. The maintained configuration uses native `details` popups;
+own clicks and hover. The maintained configuration shows `details` in PTY pagers;
 no third-party monitoring application is required. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
 
@@ -38,19 +39,45 @@ default to compact, and warn before falling back from an invalid value.
 | --- | --- | --- | --- |
 | `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU metadata every 15 seconds (`ioreg`) | `:cpu [refresh]` |
 | `memory` | Memory composition every second (`host_statistics64` + `sysctl`, in-process) | — | `:memory [refresh]` |
-| `disks` | I/O counters every second (`ioreg`) | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
+| `disks` | I/O counters every three seconds (`ioreg`) | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
 | `network` | Default-interface traffic every second (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
-| `power` | Battery/power snapshot on `core:power.changed`, with a 60-second safety poll | Battery health every 30 seconds and on `core:power.changed` | `:power [refresh]` |
+| `power` | Battery/power snapshot on `core:power.changed`, with a 60-second safety poll | Health collected during refreshes with a 30-second TTL; explicit `refresh` forces it | `:power [refresh]` |
 
 Every monitor retains 20 fast samples for its chart. The one-second samplers
 read kernel counters through the SDK's `flash_plugin::sys` module (the unsafe
 FFI lives in the SDK, never in a plugin) instead of forking a CLI per sample;
-`disks` still runs `ioreg` and `cpu` runs it for GPU metadata. CPU is the only
+`disks` runs `ioreg` every three seconds, reducing its scheduled subprocesses
+by two-thirds compared with one-second polling; `cpu` uses it only for GPU
+metadata and caches the logical CPU count. CPU is the only
 fixed-period loop: it subtracts the sample duration before sleeping, and its
 first sample brackets one period so the initial publish carries a real figure.
 The other monitors use the SDK interval primitive, whose delay begins after the
 awaited callback completes, so their cadence is nominal rather than a wall-
 clock guarantee.
+
+Details add context using the same snapshots and histories, without additional
+collection:
+
+- CPU shows recent average/peak usage and load per logical CPU, with the
+  1/5/15-minute load windows identified.
+- Memory shows free, wired and compressed bytes as shares of physical memory,
+  plus unused swap. Its used count includes cached and reclaimable pages; it
+  is not a memory-pressure measurement.
+- Disks show read/write totals since device reset and each visible volume's
+  used, total and free space. Volume names and mount paths occupy separate rows.
+- Network shows receive/send totals for the current default-route interface,
+  plus recent peaks. An interface change cannot retain another interface's totals.
+- Battery shows design and full-charge capacities in mAh alongside health,
+  cycles, temperature and adapter power. Only raw capacity fields are used;
+  IOKit's percentage-valued `MaxCapacity` is not an mAh fallback.
+
+Standard detail layouts target 50 terminal columns. Long external names, paths
+and addresses wrap in the pager.
+Use `[statusbar] popup_max_width = 480` for the standard 13-point font: it fits
+50 content columns with 10-point padding and a one-point border. The longest
+cached Codex report has 27 content rows; the pager reserves one additional
+footer row. Taller content scrolls in the pager. Smaller widths wrap more lines.
+See [status popups](status-popups.md) for the presentation boundary.
 
 Keep the ownership boundaries intact:
 
@@ -82,6 +109,8 @@ snapshot matters.
 Keep high-frequency measurement separate from discovery and health work.
 Independent collectors that become due together—CPU/GPU, disk I/O/capacity,
 and power/health—run concurrently so their timeouts do not stack.
+Power events refresh the charge and source immediately while respecting the
+health TTL, so a burst of notifications does not repeatedly spawn `ioreg`.
 
 ## Markup and sandbox boundary
 
@@ -99,8 +128,8 @@ control, CPU/GPU frequency, and S.M.A.R.T. health therefore remain out of
 scope; battery temperature reported by the power APIs is ordinary health data.
 
 `network` intentionally has no broad `network` capability. Route discovery
-uses `/usr/sbin/netstat -rn -f inet[6]`, traffic uses `netstat -bI`, and local
-addresses use `getifaddrs`. Do not replace route discovery with `/sbin/route`,
+uses `/usr/sbin/netstat -rn -f inet[6]`, traffic uses in-process interface counters,
+and local addresses use `getifaddrs`. Do not replace route discovery with `/sbin/route`,
 which requires a broad system-socket grant. SSID reads go through the narrow
 `wifi_info` host capability: background polling is passive, and only the
 explicit `:network refresh` action may request Location authorization.
@@ -116,12 +145,20 @@ bucket as Astra under Codex. “Astra” is a local presentation alias, not app-
 terminology. Grok remains a launcher only; do not add quota polling that reads
 or mutates unsupported credential stores.
 
-The plugin republishes a sanitized last-good cache at startup, refreshes
-Anthropic usage at a ten-minute TTL and OpenAI usage at a two-minute TTL, and
-rerenders relative reset labels once per minute. Quota labels show an unpadded
-dash once the cache is older than twice the provider TTL; cached detail tables
-remain available for inspection. Popup hover and status layout
-must remain pure reads of that state.
+Claude and Codex use the same stacked quota sections: remaining percentage and
+bar, used percentage, reset delay and usage pace. Reset details retain two units
+(`1h 30m`) while the status label stays compact. Pace compares the used share
+with the elapsed share of that window, in percentage points; missing reset data
+is unavailable, and an elapsed reset says `Awaiting refresh` until new data
+arrives. Missing provider/model windows remain explicit instead of implying
+unused quota. The largest Codex report is 26 lines when fresh or 27 when cached.
+
+The plugin republishes a sanitized last-good cache at startup. One timer runs
+each minute to rerender relative labels and check the independent fetch TTLs: ten minutes
+for Anthropic and two minutes for OpenAI. Only changed rendered segments publish.
+Quota labels show an unpadded dash once the cache is older than twice the provider
+TTL; cached details remain available for inspection. Popup hover and status
+layout are pure reads of that state and perform no authentication or API calls.
 
 Claude OAuth refresh preserves the complete credential document. Keychain writes
 use hex-encoded password data on `security -i` stdin, followed by read-back
@@ -164,9 +201,10 @@ Option-click any of its links; normal clicks preserve each link destination.
 
 For AGGR, the feed's article body is also the content of its Markdown export.
 The plugin prepares the excerpt during the background feed refresh; hovering
-only presents the existing terminal document and starts no fetch or child
-process. External text is escaped before adding styles, and truncation
-preserves complete style markers. URL marker values are escaped separately.
+opens an owned `less` process over that cached excerpt, without fetching or
+starting another collector. The registry removes the pager and its private
+snapshot on dismissal. External text is escaped before adding styles, and
+truncation preserves complete style markers. URL marker values are escaped separately.
 
 ## Validation
 

@@ -2,6 +2,23 @@ import AppKit
 import FlashCore
 import QuartzCore
 
+enum StatusBarHintSnapshot {
+  case live
+  case held(FlashStatusBarModel?)
+
+  mutating func receive(_ model: FlashStatusBarModel) -> Bool {
+    guard case .held = self else { return true }
+    self = .held(model)
+    return false
+  }
+
+  mutating func release() -> FlashStatusBarModel? {
+    guard case .held(let pending) = self else { return nil }
+    self = .live
+    return pending
+  }
+}
+
 /// The advanced-mode status bar (NORMAL / INSERT / COMMAND). When advanced
 /// mode is configured it stays on screen continuously; otherwise it's
 /// hidden. The historical "mode badge" identifiers now refer to this
@@ -128,6 +145,7 @@ extension OverlayPanel {
   }
 
   func setStatusBarModel(_ model: FlashStatusBarModel) {
+    guard statusBarHintSnapshot.receive(model) else { return }
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
@@ -156,6 +174,14 @@ extension OverlayPanel {
           + "panel_visible=\(isVisible)")
       renderModeBadgeOnlyOrHide()
     }
+  }
+
+  func captureStatusBarHintSnapshot() {
+    statusBarHintSnapshot = .held(nil)
+  }
+
+  func releaseStatusBarHintSnapshot() {
+    if let pending = statusBarHintSnapshot.release() { setStatusBarModel(pending) }
   }
 
   /// Re-anchor and re-order the bar after a space change or wake. Display

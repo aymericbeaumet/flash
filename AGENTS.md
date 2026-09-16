@@ -82,6 +82,11 @@ Surface requests that would violate these constraints before implementing them.
 - Use primary-screen height for AX/CGEvent versus NSScreen Y conversion. Screen
   unions start at `.null`. Layer changes disable implicit animation and new layer
   properties join `OverlayPanel.noActions`.
+- Hint commits validate captured target identity off the main thread. A missing,
+  changed, or ambiguous target cancels; never fall back to its old coordinates.
+- Every status popup uses a real PTY session. Collected text uses the shared
+  terminal pager; do not add a separate native document renderer. Keep focused
+  pager input and its snapshot stable until explicit refresh. See the popup guide.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,
   subprocesses, filesystem I/O, full layout and Carbon registration churn. With
   a live tap, recapture only restores NORMAL routing. Scope-only changes call

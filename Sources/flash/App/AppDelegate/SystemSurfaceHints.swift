@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import FlashCore
+import FlashProviders
 
 /// Hints beyond the focused app: the Dock (`mouse_dock`) and the menu-bar
 /// status items (`mouse_statusbar`). Wooshy-parity coverage without new
@@ -24,25 +25,13 @@ extension AppDelegate {
       return
     }
     let pid = dock.processIdentifier
+    let screenH = ActionDispatcher.primaryScreenHeight()
     let token = activationLifecycle.begin()
     applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let items = Self.dockItems(pid: pid)
+      let targets = Self.dockTargets(pid: pid, screenH: screenH)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
-        let screenH = ActionDispatcher.primaryScreenHeight()
-        let targets = items.enumerated().map { index, item in
-          JumpTarget(
-            id: "dock_item_\(index)",
-            frame: CGRect(
-              x: item.frame.minX, y: screenH - item.frame.maxY,
-              width: item.frame.width, height: item.frame.height),
-            role: "AXDockItem",
-            accessibilityLabel: item.title,
-            pid: pid,
-            entersInsertMode: false,
-            providerID: "mouse_dock")
-        }
         self.presentSystemSurfaceHints(targets, pid: pid, surface: "mouse_dock")
       }
     }
@@ -50,12 +39,26 @@ extension AppDelegate {
 
   func activateStatusItemHints() {
     guard prepareHintActivation(.statusItems) else { return }
-    // Layer 25 (`.statusBar`) windows are the menu-bar extras. Geometry only;
-    // Flash's own click windows are excluded by pid.
-    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+    let token = activationLifecycle.begin()
     let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
     let screenH = ActionDispatcher.primaryScreenHeight()
+    applyModeOverlay()
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+      let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+      let targets = Self.statusItemTargets(raw, ownPID: ownPID, screenH: screenH)
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        self.presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_statusbar")
+      }
+    }
+  }
+
+  static func statusItemTargets(
+    _ raw: [[String: Any]], ownPID: Int, screenH: CGFloat
+  ) -> [JumpTarget] {
+    // Layer 25 (`.statusBar`) windows are the menu-bar extras. Geometry only;
+    // Flash's own click windows are excluded by pid.
     var targets: [JumpTarget] = []
     for window in raw {
       guard
@@ -63,29 +66,33 @@ extension AppDelegate {
         layer == NSWindow.Level.statusBar.rawValue,
         let ownerPID = window[kCGWindowOwnerPID as String] as? Int,
         ownerPID != ownPID,
+        let windowNumber = window[kCGWindowNumber as String] as? CGWindowID,
         let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
         let x = bounds["X"], let y = bounds["Y"],
         let width = bounds["Width"], let height = bounds["Height"],
         width >= 8, width <= 400, height >= 8, height <= 44
       else { continue }
       let ownerName = window[kCGWindowOwnerName as String] as? String
+      let frame = CGRect(x: x, y: screenH - y - height, width: width, height: height)
       targets.append(
         JumpTarget(
-          id: "status_item_\(targets.count)",
-          // CG window bounds are top-left origin; flip to NSScreen.
-          frame: CGRect(x: x, y: screenH - y - height, width: width, height: height),
+          id: "status_item_\(ownerPID)_\(windowNumber)",
+          frame: frame,
           role: Self.statusItemHintRole,
           accessibilityLabel: ownerName,
           pid: pid_t(ownerPID),
+          resolveClickPoint: { preferred in
+            guard
+              let current = HintWindowSnapshot.current(
+                pid: pid_t(ownerPID), primaryHeight: screenH, windowNumber: windowNumber),
+              current.layer == layer
+            else { return nil }
+            return JumpTarget.relocatedClickPoint(preferred, from: frame, to: current.frame)
+          },
           entersInsertMode: false,
           providerID: "mouse_statusbar"))
     }
-    guard !targets.isEmpty else {
-      FlashLog.debug("[mouse_statusbar] no_status_items")
-      applyModeOverlay()
-      return
-    }
-    presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_statusbar")
+    return targets
   }
 
   private func presentSystemSurfaceHints(
@@ -111,9 +118,7 @@ extension AppDelegate {
     FlashLog.debug("[\(surface)] displayed targets=\(hints.count)")
   }
 
-  /// Dock items: title + frame (AX top-left coordinates) of every
-  /// `AXDockItem` in the Dock's list.
-  private static func dockItems(pid: pid_t) -> [(title: String?, frame: CGRect)] {
+  private static func dockTargets(pid: pid_t, screenH: CGFloat) -> [JumpTarget] {
     let app = AXApp.make(pid: pid)
     var listRaw: CFTypeRef?
     guard
@@ -121,7 +126,7 @@ extension AppDelegate {
         == .success,
       let lists = listRaw as? [AXUIElement]
     else { return [] }
-    var items: [(String?, CGRect)] = []
+    var targets: [JumpTarget] = []
     for list in lists {
       var childrenRaw: CFTypeRef?
       guard
@@ -136,22 +141,14 @@ extension AppDelegate {
             == .success,
           (roleRaw as? String) == "AXDockItem"
         else { continue }
-        var frameRaw: CFTypeRef?
-        guard
-          AXUIElementCopyAttributeValue(child, "AXFrame" as CFString, &frameRaw) == .success,
-          let frameValue = frameRaw,
-          CFGetTypeID(frameValue) == AXValueGetTypeID()
-        else { continue }
-        var frame = CGRect.zero
-        guard AXValueGetValue((frameValue as! AXValue), .cgRect, &frame) else { continue }
-        var titleRaw: CFTypeRef?
-        let title =
-          AXUIElementCopyAttributeValue(child, kAXTitleAttribute as CFString, &titleRaw)
-            == .success
-          ? titleRaw as? String : nil
-        items.append((title, frame))
+        if let target = AccessibilityProvider.captureTarget(
+          element: child, id: "dock_item_\(targets.count)", pid: pid, screenH: screenH,
+          providerID: "mouse_dock", bundleIdentifier: "com.apple.dock")
+        {
+          targets.append(target)
+        }
       }
     }
-    return items
+    return targets
   }
 }

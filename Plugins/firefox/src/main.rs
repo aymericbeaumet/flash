@@ -155,10 +155,12 @@ struct SessionTab {
     url: String,
 }
 
-/// Candidate payload: the raw url (the re-match key — see `resolve`) plus the
-/// tab's strip position at emit time, which powers the keystroke fast path.
+/// Candidate payload: the browser's stable tab ID when the mirror supplies
+/// one, plus the raw URL and strip position used by AX-only resolution.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct TabPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tab_id: Option<i64>,
     #[serde(default)]
     url: String,
     /// 1-based position in the tab strip of its window.
@@ -417,6 +419,7 @@ fn ax_candidates(tabs: &[Tab], source: &str, pid: i64) -> Vec<Candidate> {
             let seen = root_seen.entry(tab.root).or_default();
             *seen += 1;
             let payload = TabPayload {
+                tab_id: None,
                 url: tab.url.clone(),
                 index: *seen,
                 tab_count: root_totals[&tab.root],
@@ -428,10 +431,8 @@ fn ax_candidates(tabs: &[Tab], source: &str, pid: i64) -> Vec<Candidate> {
         .collect()
 }
 
-/// Candidates for one edition from the add-on mirror. Every position here is
-/// authoritative: the strip index is the browser's own, and the focused window
-/// is named outright, so the keystroke fast path stays available with several
-/// windows open.
+/// The mirror supplies stable tab IDs and authoritative strip positions.
+/// Only the active tab of its focused window is the current location.
 fn bridge_candidates(state: &BridgeState, source: &str, pid: i64) -> Vec<Candidate> {
     let mut window_totals: BTreeMap<i64, usize> = BTreeMap::new();
     for tab in &state.tabs {
@@ -443,13 +444,16 @@ fn bridge_candidates(state: &BridgeState, source: &str, pid: i64) -> Vec<Candida
         .iter()
         .map(|tab| {
             let payload = TabPayload {
+                tab_id: Some(tab.id),
                 url: tab.url.clone(),
                 index: tab.index as usize + 1,
                 tab_count: window_totals[&tab.window_id],
                 window_count,
                 window_focused: state.focused_window_id == Some(tab.window_id),
             };
-            candidate(&Tab::from_bridge(tab), source, pid, &payload)
+            let mut current = Tab::from_bridge(tab);
+            current.selected &= payload.window_focused;
+            candidate(&current, source, pid, &payload)
         })
         .collect()
 }
@@ -588,10 +592,14 @@ async fn try_collect_tabs_ax(ctx: &Context, pid: i64) -> Option<Vec<Tab>> {
         &["AXWebArea"],
     )
     .await?;
-    let window_roots = window_roots(&nodes);
+    Some(tabs_from_ax_snapshot(&nodes))
+}
+
+fn tabs_from_ax_snapshot(nodes: &[AxNode]) -> Vec<Tab> {
+    let window_roots = window_roots(nodes);
     let mut tabs = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for node in &nodes {
+    for node in nodes {
         if !is_tab(node) {
             continue;
         }
@@ -603,8 +611,7 @@ async fn try_collect_tabs_ax(ctx: &Context, pid: i64) -> Option<Vec<Tab>> {
             continue;
         };
         let url = tab_url(node);
-        let key = format!("{}|{title}|{url}", node.root);
-        if !seen.insert(key) {
+        if !seen.insert((node.root, node.handle)) {
             continue;
         }
         tabs.push(Tab {
@@ -618,7 +625,7 @@ async fn try_collect_tabs_ax(ctx: &Context, pid: i64) -> Option<Vec<Tab>> {
         });
     }
     apply_window_title_selection(&mut tabs, &window_roots);
-    Some(tabs)
+    tabs
 }
 
 /// Raise Firefox and snapshot its tabs (with session urls) concurrently.
@@ -1098,10 +1105,16 @@ fn candidate(tab: &Tab, source: &str, pid: i64, payload: &TabPayload) -> Candida
         .pid(pid)
         .payload_json(payload)
         .current_location(tab.selected);
+    if payload.tab_id.is_some() || !tab.url.is_empty() || !tab.title.is_empty() {
+        candidate = candidate.navigation_url(firefox_navigation_url(
+            pid,
+            &tab.url,
+            &tab.title,
+            payload.tab_id,
+        ));
+    }
     if !tab.url.is_empty() {
-        candidate = candidate
-            .url(tab.url.clone())
-            .navigation_url(firefox_navigation_url(pid, &tab.url, &tab.title));
+        candidate = candidate.url(tab.url.clone());
         if let Some(aliases) = url_aliases(&tab.url) {
             candidate = candidate.aliases([aliases]);
         }
@@ -1154,8 +1167,9 @@ async fn activate_and_find_tab(ctx: &Context, pid: i64, url: &str, name: &str) -
     find_tab(&tabs, url, name).cloned()
 }
 
-/// Resolve a flashlight pick. Fast path first: when the candidate carries a
-/// usable strip position in the FOCUSED window (plan within the walk budget),
+/// Resolve a flashlight pick. A mirrored tab uses its stable ID and a fresh
+/// AX window match. An AX-only candidate with a usable strip position in the
+/// focused window (plan within the walk budget) instead uses the key fast path:
 /// post Firefox's own tab shortcuts (⌘1..⌘8 / ⌘9 / ctrl+PgDn/PgUp) straight to
 /// the pid in parallel with the raise — no AX read on the critical path at
 /// all — then verify and, if the strip drifted since emit, correct through
@@ -1169,6 +1183,15 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
         return PerformResponse::unhandled();
     };
     let payload: Option<TabPayload> = row.payload_as();
+    if let Some(tab_id) = payload.as_ref().and_then(|payload| payload.tab_id) {
+        return restore_navigation(
+            ctx,
+            &NavigateRequest {
+                url: firefox_navigation_url(pid, "", "", Some(tab_id)),
+            },
+        )
+        .await;
+    }
     let url_owned = payload
         .as_ref()
         .map(|payload| payload.url.clone())
@@ -1195,7 +1218,8 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
                 spawn_fast_jump_verify(ctx, pid, url, name, plan_len);
                 let mut response = PerformResponse::ok().target_pid(pid);
                 if !url.is_empty() {
-                    response = response.navigation_url(firefox_navigation_url(pid, url, name));
+                    response =
+                        response.navigation_url(firefox_navigation_url(pid, url, name, None));
                 }
                 return response;
             }
@@ -1228,7 +1252,7 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
     let task_target = target.clone();
     tokio::spawn(async move {
         let _ax = ax;
-        if select_tab(&task_ctx, pid, &task_target).await {
+        if select_tab(&task_ctx, pid, &task_target, None).await {
             task_ctx.log("debug", &format!("[firefox] resolve selected pid={pid}"));
         } else {
             task_ctx.log(
@@ -1238,8 +1262,8 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
         }
     });
     let mut response = PerformResponse::ok().target_pid(pid);
-    if !url.is_empty() {
-        response = response.navigation_url(firefox_navigation_url(pid, url, name));
+    if !url.is_empty() || !name.is_empty() {
+        response = response.navigation_url(firefox_navigation_url(pid, url, name, None));
     }
     response
 }
@@ -1269,11 +1293,11 @@ fn spawn_fast_jump_verify(ctx: &Context, pid: i64, url: &str, name: &str, plan_l
                 &format!("[firefox] fast tab jump missed; correcting via AX pid={pid}"),
             );
             let target = hit.clone();
-            if select_tab(&ctx, pid, &target).await {
+            if select_tab(&ctx, pid, &target, None).await {
                 return;
             }
         } else if let Some(target) = activate_and_find_tab(&ctx, pid, &url, &name).await {
-            if select_tab(&ctx, pid, &target).await {
+            if select_tab(&ctx, pid, &target, None).await {
                 return;
             }
         }
@@ -1291,14 +1315,24 @@ async fn restore_navigation(ctx: &Context, request: &NavigateRequest) -> Perform
     let pid = route.pid;
     let session = ax_session(pid);
     let _ax = session.lock().await;
-    let Some(target) = activate_and_find_tab(ctx, pid, &route.url, &route.title).await else {
+    let target = if let Some(tab_id) = route.tab_id {
+        let (_, state, tabs) = tokio::join!(
+            activate_app(ctx, pid),
+            read_bridge_state(ctx, pid),
+            collect_tabs_ax(ctx, pid),
+        );
+        state.and_then(|state| find_bridge_tab(&tabs, &state, tab_id).cloned())
+    } else {
+        activate_and_find_tab(ctx, pid, &route.url, &route.title).await
+    };
+    let Some(target) = target else {
         ctx.log(
             "warn",
             &format!("[firefox] restore target not found pid={pid}"),
         );
         return PerformResponse::fail("restore target not found");
     };
-    if select_tab(ctx, pid, &target).await {
+    if select_tab(ctx, pid, &target, route.tab_id).await {
         PerformResponse::ok()
             .target_pid(pid)
             .navigation_url(request.url.clone())
@@ -1313,23 +1347,27 @@ async fn restore_navigation(ctx: &Context, request: &NavigateRequest) -> Perform
 
 struct FirefoxRoute {
     pid: i64,
+    tab_id: Option<i64>,
     url: String,
     title: String,
 }
 
-fn firefox_navigation_url(pid: i64, url: &str, title: &str) -> String {
-    format!(
-        "flash-firefox://tab?pid={}&url={}&title={}",
-        pid,
-        percent_encode(url),
-        percent_encode(title)
-    )
+fn firefox_navigation_url(pid: i64, url: &str, title: &str, tab_id: Option<i64>) -> String {
+    let target = if let Some(tab_id) = tab_id {
+        format!("id={tab_id}")
+    } else if !url.is_empty() {
+        format!("url={}", percent_encode(url))
+    } else {
+        format!("title={}", percent_encode(title))
+    };
+    format!("flash-firefox://tab?pid={pid}&{target}")
 }
 
 fn parse_firefox_navigation_url(raw: &str) -> Option<FirefoxRoute> {
     let prefix = "flash-firefox://tab?";
     let query = raw.strip_prefix(prefix)?;
     let mut pid = None;
+    let mut tab_id = None;
     let mut url = String::new();
     let mut title = String::new();
     for pair in query.split('&') {
@@ -1338,16 +1376,56 @@ fn parse_firefox_navigation_url(raw: &str) -> Option<FirefoxRoute> {
         let value = percent_decode(parts.next().unwrap_or(""));
         match key {
             "pid" => pid = value.parse::<i64>().ok(),
+            "id" => tab_id = Some(value.parse::<i64>().ok().filter(|id| *id >= 0)?),
             "url" => url = value,
             "title" => title = value,
-            _ => {}
+            _ => return None,
         }
     }
+    if usize::from(tab_id.is_some()) + usize::from(!url.is_empty()) + usize::from(!title.is_empty())
+        != 1
+    {
+        return None;
+    }
     Some(FirefoxRoute {
-        pid: pid?,
+        pid: pid.filter(|pid| *pid > 0)?,
+        tab_id,
         url,
         title,
     })
+}
+
+/// Bridge IDs remain stable while titles, URLs and strip positions change.
+/// Match the current complete window sequence to AX before selecting its tab;
+/// two indistinguishable windows cannot be resolved safely through this mirror.
+fn find_bridge_tab<'a>(tabs: &'a [Tab], state: &BridgeState, tab_id: i64) -> Option<&'a Tab> {
+    let target = state.tabs.iter().find(|tab| tab.id == tab_id)?;
+    let mut window: Vec<_> = state
+        .tabs
+        .iter()
+        .filter(|tab| tab.window_id == target.window_id)
+        .collect();
+    window.sort_by_key(|tab| tab.index);
+    let index = window.iter().position(|tab| tab.id == tab_id)?;
+    let mut ax_windows: BTreeMap<usize, Vec<&Tab>> = BTreeMap::new();
+    for tab in tabs {
+        ax_windows.entry(tab.root).or_default().push(tab);
+    }
+    let mut matches = ax_windows
+        .values()
+        .filter(|tabs| {
+            tabs.len() == window.len()
+                && tabs.iter().zip(&window).all(|(ax, bridge)| {
+                    (ax.url.is_empty() || ax.url == bridge.url)
+                        && (titles_match(&ax.title, &bridge.title)
+                            || (bridge.title.is_empty() && !ax.url.is_empty()))
+                })
+        })
+        .filter_map(|tabs| tabs.get(index).copied());
+    match (matches.next(), matches.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
 }
 
 fn percent_encode(raw: &str) -> String {
@@ -1416,7 +1494,7 @@ async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformRespons
     // Firefox owns this tab_select claim either way: a successful press is
     // ok, but a failed press must be an error (not `unhandled`) so the host
     // doesn't fall back to a ⌘<digit> keystroke that switches the wrong tab.
-    if select_tab(ctx, pid, &target).await {
+    if select_tab(ctx, pid, &target, None).await {
         PerformResponse::ok().target_pid(pid)
     } else {
         PerformResponse::fail("tab press did not stick")
@@ -1457,7 +1535,7 @@ async fn bridge_tab_select(
             return PerformResponse::unhandled();
         };
         let target = target.clone();
-        return if select_tab(ctx, pid, &target).await {
+        return if select_tab(ctx, pid, &target, None).await {
             PerformResponse::ok().target_pid(pid)
         } else {
             PerformResponse::fail("tab press did not stick")
@@ -1481,7 +1559,7 @@ async fn bridge_tab_select(
 /// the next strategy re-finds the tab in it. A strategy the element rejects
 /// (`ok == false`) purges nothing (the caller holds the pid's AX session, so nothing
 /// else snapshots either) and the next strategy reuses the same handles.
-async fn select_tab(ctx: &Context, pid: i64, tab: &Tab) -> bool {
+async fn select_tab(ctx: &Context, pid: i64, tab: &Tab, bridge_tab_id: Option<i64>) -> bool {
     raise_tab_window(ctx, tab).await;
     if tab.selected {
         return true;
@@ -1506,13 +1584,22 @@ async fn select_tab(ctx: &Context, pid: i64, tab: &Tab) -> bool {
         }
         tokio::time::sleep(Duration::from_millis(120)).await;
         let tabs = collect_tabs_ax(ctx, pid).await;
-        match tabs.iter().find(|candidate| same_tab(candidate, &current)) {
+        let fresh = if let Some(tab_id) = bridge_tab_id {
+            read_bridge_state(ctx, pid)
+                .await
+                .and_then(|state| find_bridge_tab(&tabs, &state, tab_id).cloned())
+        } else {
+            tabs.iter()
+                .find(|candidate| same_tab(candidate, &current))
+                .cloned()
+        };
+        match fresh {
             Some(fresh) if fresh.selected => {
-                raise_tab_window(ctx, fresh).await;
+                raise_tab_window(ctx, &fresh).await;
                 return true;
             }
             Some(fresh) => {
-                current = fresh.clone();
+                current = fresh;
                 ctx.log(
                     "debug",
                     &format!(
@@ -1861,6 +1948,12 @@ mod tests {
             ]
         );
         assert!(payloads.iter().all(|payload| payload.window_count == 2));
+        let current: Vec<_> = rows
+            .iter()
+            .filter(|row| row.meta(flash_plugin::candidate_metadata::CURRENT_LOCATION) == Some("1"))
+            .map(|row| row.title.as_str())
+            .collect();
+        assert_eq!(current, ["Beta"]);
     }
 
     #[test]
@@ -1871,6 +1964,143 @@ mod tests {
         assert!(two
             .iter()
             .all(|row| !row.payload_as::<TabPayload>().unwrap().window_focused));
+    }
+
+    #[test]
+    fn ax_candidates_keep_selection_changes_for_host_window_disambiguation() {
+        let mut front = ax_tab(0, "Front");
+        front.selected = true;
+        let mut back = ax_tab(1, "Back");
+        back.selected = true;
+        let rows = ax_candidates(&[front, back], "firefox.tabs", 1);
+        assert!(rows.iter().all(|row| {
+            row.meta(flash_plugin::candidate_metadata::CURRENT_LOCATION) == Some("1")
+                && !row.payload_as::<TabPayload>().unwrap().window_focused
+        }));
+    }
+
+    #[test]
+    fn url_location_identity_ignores_title_updates() {
+        assert_eq!(
+            firefox_navigation_url(99, "https://example.com/page", "Page", None),
+            firefox_navigation_url(99, "https://example.com/page", "Page (1)", None)
+        );
+    }
+
+    #[test]
+    fn bridge_locations_keep_tab_identity_across_title_and_window_changes() {
+        use flash_plugin::candidate_metadata::NAVIGATION_URL;
+        let mut state = BridgeState {
+            tabs: vec![
+                bridge_tab(10, 1, 0, "Same", true),
+                bridge_tab(20, 2, 0, "Same", true),
+            ],
+            ..BridgeState::default()
+        };
+        for tab in &mut state.tabs {
+            tab.url = "https://example.com/same".to_string();
+        }
+        let before = bridge_candidates(&state, "firefox.tabs", 99);
+        assert_ne!(
+            before[0].meta(NAVIGATION_URL),
+            before[1].meta(NAVIGATION_URL)
+        );
+        state.tabs[0].title = "Updated title".to_string();
+        state.tabs[0].url = "https://example.com/new-page".to_string();
+        state.tabs[0].window_id = 2;
+        state.tabs[0].index = 1;
+        let after = bridge_candidates(&state, "firefox.tabs", 99);
+        assert_eq!(
+            before[0].meta(NAVIGATION_URL),
+            after[0].meta(NAVIGATION_URL)
+        );
+    }
+
+    #[test]
+    fn ax_locations_without_urls_can_restore_by_title() {
+        let rows = ax_candidates(&[ax_tab(0, "Page")], "firefox.tabs", 99);
+        let route = rows[0]
+            .meta(flash_plugin::candidate_metadata::NAVIGATION_URL)
+            .and_then(parse_firefox_navigation_url)
+            .expect("AX-only tabs still need a restorable location");
+        assert_eq!(route.title, "Page");
+    }
+
+    #[test]
+    fn bridge_restore_distinguishes_same_url_tabs_and_follows_moves() {
+        let mut state = BridgeState {
+            tabs: vec![
+                bridge_tab(10, 1, 0, "Same", false),
+                bridge_tab(11, 1, 1, "Same", true),
+                bridge_tab(20, 2, 0, "Other", true),
+            ],
+            ..BridgeState::default()
+        };
+        for tab in &mut state.tabs {
+            tab.url = "https://example.com/same".to_string();
+        }
+        let tabs = vec![ax_tab(0, "Other"), ax_tab(1, "Same"), ax_tab(1, "Same")];
+        assert!(std::ptr::eq(
+            find_bridge_tab(&tabs, &state, 11).unwrap(),
+            &tabs[2]
+        ));
+
+        state.tabs[1].window_id = 2;
+        let moved = vec![ax_tab(0, "Other"), ax_tab(0, "Same"), ax_tab(1, "Same")];
+        assert!(std::ptr::eq(
+            find_bridge_tab(&moved, &state, 11).unwrap(),
+            &moved[1]
+        ));
+        assert!(find_bridge_tab(&moved, &state, 99).is_none());
+    }
+
+    #[test]
+    fn bridge_restore_cancels_when_two_ax_windows_are_indistinguishable() {
+        let state = BridgeState {
+            tabs: vec![bridge_tab(10, 1, 0, "Same", true)],
+            ..BridgeState::default()
+        };
+        let tabs = vec![ax_tab(0, "Same"), ax_tab(1, "Same")];
+        assert!(find_bridge_tab(&tabs, &state, 10).is_none());
+    }
+
+    #[test]
+    fn ax_snapshot_preserves_distinct_tabs_with_identical_titles_and_urls() {
+        let nodes: Vec<_> = [1, 2, 2]
+            .into_iter()
+            .map(|handle| AxNode {
+                handle,
+                parent: None,
+                root: 0,
+                attrs: BTreeMap::from([
+                    ("AXRole".to_string(), "AXTab".to_string()),
+                    ("AXTitle".to_string(), "Same".to_string()),
+                    ("AXURL".to_string(), "https://example.com/same".to_string()),
+                ]),
+            })
+            .collect();
+        let tabs = tabs_from_ax_snapshot(&nodes);
+        assert_eq!(
+            tabs.iter().map(|tab| tab.handle).collect::<Vec<_>>(),
+            [1, 2]
+        );
+    }
+
+    #[test]
+    fn navigation_routes_carry_exactly_one_identity() {
+        let stable = parse_firefox_navigation_url("flash-firefox://tab?pid=99&id=11").unwrap();
+        assert_eq!(stable.tab_id, Some(11));
+        assert!(stable.url.is_empty());
+        assert!(stable.title.is_empty());
+        for route in [
+            "flash-firefox://tab?pid=0&id=11",
+            "flash-firefox://tab?pid=99&id=-1",
+            "flash-firefox://tab?pid=99&id=11&title=Same",
+            "flash-firefox://tab?pid=99&url=https%3A%2F%2Fexample.com&title=Same",
+            "flash-firefox://tab?pid=99&title=",
+        ] {
+            assert!(parse_firefox_navigation_url(route).is_none(), "{route}");
+        }
     }
 
     #[test]

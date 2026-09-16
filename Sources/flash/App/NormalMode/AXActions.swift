@@ -336,10 +336,10 @@ extension NormalModeDispatcher {
     "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox",
   ]
 
-  /// Frames (AX top-left coordinates) of the focused window's scroll areas in
-  /// BFS order — nested scrollers are all reported so the user can hint the
-  /// inner one. Tiny decorative scrollers are skipped.
-  static func scrollAreaFrames(pid: pid_t, maxNodes: Int = 2000) -> [CGRect] {
+  /// Retained scroll areas in BFS order, including nested containers.
+  static func scrollAreaTargets(
+    pid: pid_t, screenH: CGFloat, bundleIdentifier: String, maxNodes: Int = 2000
+  ) -> [JumpTarget] {
     let app = AXApp.make(pid: pid)
     guard
       let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
@@ -347,14 +347,18 @@ extension NormalModeDispatcher {
     else { return [] }
     var queue = [window]
     var cursor = 0
-    var frames: [CGRect] = []
+    var targets: [JumpTarget] = []
     while cursor < queue.count, cursor < maxNodes {
       let element = queue[cursor]
       cursor += 1
-      if role(of: element) == "AXScrollArea", let frame = frame(of: element),
-        frame.width >= 40, frame.height >= 40
+      if role(of: element) == "AXScrollArea",
+        let target = AccessibilityProvider.captureTarget(
+          element: element, id: "scroll_area_\(targets.count)", pid: pid, screenH: screenH,
+          providerID: "scroll_target", bundleIdentifier: bundleIdentifier,
+          allowsInteractiveDescendants: true),
+        target.frame.width >= 40, target.frame.height >= 40
       {
-        frames.append(frame)
+        targets.append(target)
       }
       var raw: CFTypeRef?
       if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
@@ -364,6 +368,6 @@ extension NormalModeDispatcher {
         queue.append(contentsOf: children)
       }
     }
-    return frames
+    return targets
   }
 }

@@ -43,9 +43,9 @@ private func parseArgs() -> Args {
                             [--skip-resident-mode-tests]
 
         Launches the Flash native AppKit fixture, compares Flash's generic
-        AX targets against expected native controls, verifies AXPress state,
-        and drives the installed Flash resident through real pointer
-        interactions to guard normal/insert mode handoff behavior.
+        AX targets against expected native controls, verifies host clicks,
+        and drives the installed Flash resident through captured-target and
+        normal/insert mode handoff regressions.
         """)
       exit(0)
     default:
@@ -58,6 +58,7 @@ private func parseArgs() -> Args {
 
 private enum OracleError: Error, CustomStringConvertible {
   case accessibilityMissing
+  case consoleLocked
   case fixtureNotFound(String)
   case launchFailed(String)
   case axWindowTimedOut
@@ -72,6 +73,8 @@ private enum OracleError: Error, CustomStringConvertible {
     switch self {
     case .accessibilityMissing:
       return "Accessibility permission is missing for the native oracle app"
+    case .consoleLocked:
+      return "Native GUI probes require an unlocked console session"
     case .fixtureNotFound(let path):
       return "Native fixture app not found at \(path)"
     case .launchFailed(let message):
@@ -92,6 +95,12 @@ private enum OracleError: Error, CustomStringConvertible {
       return "Could not find native target \(label)"
     }
   }
+}
+
+private func ensureUnlockedConsole() throws {
+  guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+    session["CGSSessionScreenIsLocked"] as? Bool != true
+  else { throw OracleError.consoleLocked }
 }
 
 private func ensureAccessibility() throws {
@@ -209,13 +218,13 @@ private func targetCenter(label: String, targets: [JumpTarget]) throws -> CGPoin
   return CGPoint(x: target.frame.midX, y: target.frame.midY)
 }
 
-private func runFlash(_ verb: String, args: Args) throws {
+private func runFlash(_ verb: String, arguments: [String] = [], args: Args) throws {
   guard FileManager.default.isExecutableFile(atPath: args.flashCLIPath) else {
     throw OracleError.flashCLIUnavailable(args.flashCLIPath)
   }
   let process = Process()
   process.executableURL = URL(fileURLWithPath: args.flashCLIPath)
-  process.arguments = [verb]
+  process.arguments = [verb] + arguments
   let pipe = Pipe()
   process.standardError = pipe
   process.standardOutput = pipe
@@ -311,13 +320,194 @@ private func waitForResidentHints(
   throw OracleError.flashStateUnavailable("timed out waiting for \(behavior) hint layout")
 }
 
-private func commitResidentHint(label: String, args: Args) throws {
+private func captureResidentHint(label: String, args: Args) throws -> ResidentHint {
+  try ensureUnlockedConsole()
   try runFlash("mouse_target", args: args)
   let hints = try waitForResidentHints(behavior: "click", args: args)
   guard let hint = hints.first(where: { $0.accessibilityLabel == label }) else {
     throw OracleError.targetMissing("resident hint for \(label)")
   }
+  return hint
+}
+
+private func commitResidentHint(label: String, args: Args) throws {
+  let hint = try captureResidentHint(label: label, args: args)
+  try ensureUnlockedConsole()
   try postHintLabel(hint.label)
+}
+
+private func assertResidentHintIsStillCaptured(_ hint: ResidentHint, args: Args) throws {
+  let state = try fetchFlashState(args: args, timeout: 1)
+  guard state["hint_behavior"] as? String == "click",
+    state["activation_in_flight"] as? Bool == false,
+    let values = state["hints"] as? [[String: Any]],
+    try values.map(ResidentHint.init).contains(hint)
+  else { throw OracleError.flashStateUnavailable("captured hint changed before commit") }
+}
+
+private func waitForResidentHintsDismissed(args: Args) throws {
+  let deadline = Date().addingTimeInterval(4)
+  while Date() < deadline {
+    try ensureUnlockedConsole()
+    let state = try fetchFlashState(args: args, timeout: 1)
+    if state["activation_in_flight"] as? Bool == false,
+      let hints = state["hints"] as? [[String: Any]], hints.isEmpty
+    {
+      return
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  throw OracleError.flashStateUnavailable("captured hint was not dismissed")
+}
+
+@discardableResult
+private func waitForAXFrame(_ element: AXUIElement, near expected: CGRect) throws -> CGRect {
+  let deadline = Date().addingTimeInterval(4)
+  while Date() < deadline {
+    try ensureUnlockedConsole()
+    if let frame = AXIntegrationHarness.frame(of: element),
+      abs(frame.minX - expected.minX) < 1, abs(frame.minY - expected.minY) < 1,
+      abs(frame.width - expected.width) < 1, abs(frame.height - expected.height) < 1
+    {
+      return frame
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  throw OracleError.stateTimedOut("owned fixture AX frame \(NSStringFromRect(expected))")
+}
+
+private func setFixtureWindowFrame(_ window: AXUIElement, to frame: CGRect) throws {
+  try ensureUnlockedConsole()
+  var point = CGPoint(
+    x: frame.minX, y: AXIntegrationHarness.primaryScreenHeight() - frame.maxY)
+  guard let value = AXValueCreate(.cgPoint, &point) else { throw OracleError.axWindowTimedOut }
+  let result = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value)
+  guard result == .success else {
+    throw OracleError.stateTimedOut("moving owned fixture window failed AX=\(result.rawValue)")
+  }
+  try waitForAXFrame(window, near: frame)
+}
+
+private func verifyMovedResidentHint(
+  args: Args, app: NSRunningApplication, recorder: ConsoleIntegrationRecorder
+) throws {
+  guard let window = AXIntegrationHarness.focusedWindow(pid: app.processIdentifier),
+    let originalFrame = AXIntegrationHarness.frame(of: window),
+    let primary = findAXNode(
+      root: AXUIElementCreateApplication(app.processIdentifier),
+      labels: ["Primary Action"], maxNodes: 4_000),
+    let originalButton = primary.frame,
+    let screen = NSScreen.screens.first(where: { $0.frame.contains(originalButton.origin) })
+  else { throw OracleError.targetMissing("owned movable fixture window and primary button") }
+  let moves = [
+    CGVector(dx: 0, dy: 80), CGVector(dx: 0, dy: -80),
+    CGVector(dx: 200, dy: 0), CGVector(dx: -200, dy: 0),
+  ]
+  guard
+    let move = moves.first(where: {
+      screen.visibleFrame.contains(originalFrame.offsetBy(dx: $0.dx, dy: $0.dy))
+        && !originalButton.intersects(originalButton.offsetBy(dx: $0.dx, dy: $0.dy))
+    })
+  else { throw OracleError.stateTimedOut("space for an owned fixture-window move") }
+  defer {
+    try? runFlash("hints_dismiss", args: args)
+    do {
+      try setFixtureWindowFrame(window, to: originalFrame)
+    } catch {
+      recorder.fail("restoring moved fixture window failed: \(error)")
+    }
+  }
+  let hint = try captureResidentHint(label: "Primary Action", args: args)
+  let before = readState(args.statePath)["primary", default: 0]
+  try setFixtureWindowFrame(window, to: originalFrame.offsetBy(dx: move.dx, dy: move.dy))
+  let movedButton = try waitForAXFrame(
+    primary.element, near: originalButton.offsetBy(dx: move.dx, dy: move.dy))
+  try assertResidentHintIsStillCaptured(hint, args: args)
+  try ensureUnlockedConsole()
+  try postHintLabel(hint.label)
+  try waitForState(path: args.statePath, key: "primary", value: before + 1, timeout: 4)
+  try waitForResidentHintsDismissed(args: args)
+  try waitForFlashModeStable("normal", args: args, timeout: 4, stableFor: 0.35)
+  guard movedButton.contains(NSEvent.mouseLocation) else {
+    throw OracleError.stateTimedOut("cursor at the moved captured button")
+  }
+  recorder.pass("resident captured button followed its moved AX window and received the host click")
+}
+
+private func verifyChangedResidentHint(
+  args: Args, app: NSRunningApplication, recorder: ConsoleIntegrationRecorder
+) throws {
+  guard
+    let input = findAXNode(
+      root: AXUIElementCreateApplication(app.processIdentifier),
+      labels: ["Native Search Field"], maxNodes: 4_000)
+  else { throw OracleError.targetMissing("Native Search Field") }
+  var rawValue: CFTypeRef?
+  guard
+    AXUIElementCopyAttributeValue(input.element, kAXValueAttribute as CFString, &rawValue)
+      == .success, let originalValue = rawValue as? String
+  else { throw OracleError.stateTimedOut("capturing owned search-field value") }
+  defer {
+    try? runFlash("hints_dismiss", args: args)
+    let result = AXUIElementSetAttributeValue(
+      input.element, kAXValueAttribute as CFString, originalValue as CFString)
+    if result != .success {
+      recorder.fail("restoring fixture search value failed AX=\(result.rawValue)")
+    }
+  }
+  let hint = try captureResidentHint(label: "Native Search Field", args: args)
+  let changedValue = originalValue + " changed after hint capture"
+  try ensureUnlockedConsole()
+  let result = AXUIElementSetAttributeValue(
+    input.element, kAXValueAttribute as CFString, changedValue as CFString)
+  guard result == .success else {
+    throw OracleError.stateTimedOut(
+      "changing owned search-field value failed AX=\(result.rawValue)")
+  }
+  try waitForAXValue(input.element, value: changedValue)
+  try assertResidentHintIsStillCaptured(hint, args: args)
+  let pointerBefore = NSEvent.mouseLocation
+  try ensureUnlockedConsole()
+  try postHintLabel(hint.label)
+  try waitForResidentHintsDismissed(args: args)
+  try waitForFlashModeStable("normal", args: args, timeout: 4, stableFor: 0.35)
+  guard
+    hypot(NSEvent.mouseLocation.x - pointerBefore.x, NSEvent.mouseLocation.y - pointerBefore.y) < 1
+  else { throw OracleError.stateTimedOut("changed input target cancelled without a pointer move") }
+  recorder.pass("resident cancelled a captured input after its AX value changed")
+}
+
+private func runResidentCapturedTargetProbes(
+  args: Args, app: NSRunningApplication, recorder: ConsoleIntegrationRecorder
+) {
+  guard !args.skipResidentModeTests else { return }
+  do {
+    try ensureUnlockedConsole()
+    let originalMode = try flashMode(args: args)
+    defer {
+      try? runFlash("hints_dismiss", args: args)
+      try? runFlash(
+        originalMode == "insert" ? "enter_insert_mode" : "enter_normal_mode", args: args)
+    }
+    app.activate(options: [])
+    try waitForFocusedAXElement(pid: app.processIdentifier)
+    try runFlash("enter_normal_mode", args: args)
+    try waitForFlashMode("normal", args: args, timeout: 4)
+    do {
+      try verifyMovedResidentHint(args: args, app: app, recorder: recorder)
+    } catch {
+      recorder.fail("resident moved-target capture probe failed: \(error)")
+    }
+    try runFlash("enter_normal_mode", args: args)
+    try waitForFlashMode("normal", args: args, timeout: 4)
+    do {
+      try verifyChangedResidentHint(args: args, app: app, recorder: recorder)
+    } catch {
+      recorder.fail("resident changed-target capture probe failed: \(error)")
+    }
+  } catch {
+    recorder.fail("resident captured-target setup failed: \(error)")
+  }
 }
 
 private func commitResidentGrid(
@@ -460,12 +650,16 @@ private func postKey(_ key: CGKeyCode) {
 }
 
 private func postHintLabel(_ label: String) throws {
+  try postText(label.lowercased())
+}
+
+private func postText(_ text: String) throws {
   let source = CGEventSource(stateID: .hidSystemState)
-  for character in label.lowercased() {
+  for character in text {
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-    else { throw OracleError.flashCommandFailed("could not create hint key events") }
+    else { throw OracleError.flashCommandFailed("could not create text key events") }
     let units = Array(String(character).utf16)
     units.withUnsafeBufferPointer { buffer in
       guard let baseAddress = buffer.baseAddress else { return }
@@ -475,6 +669,106 @@ private func postHintLabel(_ label: String) throws {
     down.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.02)
     up.post(tap: .cghidEventTap)
+  }
+}
+
+@discardableResult
+private func waitForFocusedAXElement(
+  pid: pid_t, value: String? = nil, timeout: TimeInterval = 4
+) throws -> AXUIElement {
+  let system = AXUIElementCreateSystemWide()
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    try ensureUnlockedConsole()
+    if let focused = axElementAttribute(system, kAXFocusedUIElementAttribute as CFString) {
+      var focusedPID: pid_t = 0
+      if AXUIElementGetPid(focused, &focusedPID) == .success, focusedPID == pid,
+        value == nil
+          || AXIntegrationHarness.stringAttribute(focused, kAXValueAttribute as CFString) == value
+      {
+        return focused
+      }
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  throw OracleError.stateTimedOut("focused input in pid=\(pid)")
+}
+
+private func waitForAXValue(
+  _ element: AXUIElement, value: String, timeout: TimeInterval = 4
+) throws {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    try ensureUnlockedConsole()
+    if AXIntegrationHarness.stringAttribute(element, kAXValueAttribute as CFString) == value {
+      return
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  throw OracleError.stateTimedOut("expected value in original fixture input")
+}
+
+private func runResidentEmojiInsertionProbe(
+  args: Args, app: NSRunningApplication, recorder: ConsoleIntegrationRecorder
+) {
+  guard !args.skipResidentModeTests else { return }
+  do {
+    let originalMode = try flashMode(args: args)
+    defer {
+      try? runFlash(
+        originalMode == "insert" ? "enter_insert_mode" : "enter_normal_mode", args: args)
+    }
+    let residents = NSRunningApplication.runningApplications(withBundleIdentifier: "com.flash.app")
+      .filter { !$0.isTerminated }
+    guard residents.count == 1, let resident = residents.first else {
+      throw OracleError.flashStateUnavailable("emoji probe requires one running Flash resident")
+    }
+    let queryPrefix = ":flashlight @emojis.glyphs "
+    for label in ["Native Search Field", "Native Notes Area"] {
+      for entryMode in ["normal", "insert"] {
+        try ensureUnlockedConsole()
+        try runFlash("enter_insert_mode", args: args)
+        app.activate(options: [])
+        try waitForFocusedAXElement(pid: app.processIdentifier)
+        guard
+          let node = findAXNode(
+            root: AXUIElementCreateApplication(app.processIdentifier), labels: [label],
+            maxNodes: 4_000),
+          let frame = node.frame
+        else { throw OracleError.targetMissing(label) }
+        let cleared = AXUIElementSetAttributeValue(
+          node.element, kAXValueAttribute as CFString, "" as CFString)
+        guard cleared == .success else {
+          throw OracleError.stateTimedOut("clearing \(label) failed AX=\(cleared.rawValue)")
+        }
+        try ensureUnlockedConsole()
+        postMouseClick(at: CGPoint(x: frame.midX, y: frame.midY), action: .leftClick)
+        try waitForFocusedAXElement(pid: app.processIdentifier)
+        try runFlash(entryMode == "normal" ? "enter_normal_mode" : "enter_insert_mode", args: args)
+        try waitForFlashMode(entryMode, args: args, timeout: 4)
+        let clipboardChangeCount = NSPasteboard.general.changeCount
+        let restore = entryMode == "insert" ? ["--restore-mode"] : []
+        try runFlash(
+          "enter_command_mode", arguments: ["--input=\(queryPrefix)"] + restore, args: args)
+        // Observe real field-editor ownership, then send the query through the
+        // command panel so this covers the focus handoff that native inputs need.
+        try waitForFocusedAXElement(pid: resident.processIdentifier, value: queryPrefix)
+        try ensureUnlockedConsole()
+        try postText("rocket")
+        try waitForFocusedAXElement(pid: resident.processIdentifier, value: queryPrefix + "rocket")
+        try ensureUnlockedConsole()
+        postKey(CGKeyCode(kVK_Return))
+        try waitForAXValue(node.element, value: "🚀")
+        try waitForFocusedAXElement(pid: app.processIdentifier, value: "🚀")
+        try waitForFlashModeStable(entryMode, args: args, timeout: 4, stableFor: 0.35)
+        guard NSPasteboard.general.changeCount == clipboardChangeCount else {
+          throw OracleError.stateTimedOut("emoji insertion changed the clipboard")
+        }
+        recorder.pass("emoji returned to \(label), preserved clipboard and \(entryMode) mode")
+      }
+    }
+  } catch {
+    recorder.fail("resident emoji insertion probe failed: \(error)")
   }
 }
 
@@ -775,6 +1069,7 @@ private let timer = IntegrationTimer()
 private let provider = AccessibilityProvider()
 
 do {
+  try ensureUnlockedConsole()
   try ensureAccessibility()
   try? FileManager.default.removeItem(atPath: args.statePath)
   terminateRunningFixture(bundleID: args.fixtureBundleID)
@@ -870,7 +1165,9 @@ do {
     expectedState: nil,
     recorder: recorder)
 
+  runResidentCapturedTargetProbes(args: args, app: app, recorder: recorder)
   runResidentModeProbe(args: args, app: app, targets: targets, recorder: recorder)
+  runResidentEmojiInsertionProbe(args: args, app: app, recorder: recorder)
 
   runOpenMenuProbe(args: args, provider: provider, recorder: recorder, timer: timer)
 

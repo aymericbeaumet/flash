@@ -187,10 +187,15 @@ Notifications have no deadlines.
   plain; `F` Command-Shift), or
   `FlashTerminalLink` for links inside terminal content (`f` Shift, `F`
   Command-Shift). Every target preserves the requested click modifiers. Targets:
-  `{id, frame{x,y,width,height}, role?, label?, url?, pid?,
+  `{id, frame{x,y,width,height}, role?, label?, url?, pid?, context_id?,
   enters_insert_mode?, priority?}`. The nested `frame` is required; flat
   coordinates and unknown target fields are rejected. Geometry must be finite
   with positive width/height. One malformed target rejects the entire reply.
+  `context_id` is an optional non-empty opaque string identifying the live
+  source context containing the target. The host requires an exact match when
+  revalidating a captured hint; omitted/null means unspecified. Tmux includes
+  its backend, client tty, server process, session, window and pane identities,
+  so a reused pane label in another session cannot receive a captured click.
 - `perform` — the single effect method. Four kinds:
 
   ```json

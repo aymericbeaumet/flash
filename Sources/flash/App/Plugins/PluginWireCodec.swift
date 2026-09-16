@@ -130,7 +130,8 @@ enum PluginWireCodec {
   static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
     guard
       Set(raw.keys).isSubset(of: [
-        "id", "frame", "role", "label", "url", "pid", "enters_insert_mode", "priority",
+        "id", "frame", "role", "label", "url", "context_id", "pid", "enters_insert_mode",
+        "priority",
       ]),
       let id = raw["id"] as? String, !id.isEmpty,
       let frameRaw = raw["frame"] as? [String: Any],
@@ -144,6 +145,13 @@ enum PluginWireCodec {
       if let value = PluginJSON.present(raw[key]), !(value is String) { return nil }
     }
     let role = PluginJSON.present(raw["role"]) as? String
+    let contextID: String?
+    if let value = PluginJSON.present(raw["context_id"]) {
+      guard let text = value as? String, !text.isEmpty else { return nil }
+      contextID = text
+    } else {
+      contextID = nil
+    }
     let entersInsertMode: Bool
     if let value = PluginJSON.present(raw["enters_insert_mode"]) {
       guard let decoded = PluginJSON.boolean(value) else { return nil }
@@ -171,6 +179,7 @@ enum PluginWireCodec {
       id: id, frame: CGRect(x: x, y: y, width: width, height: height), role: role,
       label: PluginJSON.present(raw["label"]) as? String,
       url: PluginJSON.present(raw["url"]) as? String,
+      contextID: contextID,
       pid: pid, entersInsertMode: entersInsertMode, sourceID: sourceID, priority: priority)
   }
 

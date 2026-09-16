@@ -113,6 +113,7 @@ enum FlashStatusBarSDKValue: Equatable {
   case activeBundleIdentifier
   case modeLabel
   case date
+  case calendar
   case host
   case hostShort
   case user
@@ -507,7 +508,8 @@ enum FlashStatusBarTemplateEngine {
         dependencies.values.filter { $0.hasPrefix("flash.source.") }.map {
           String($0.dropFirst(13))
         }),
-      dependencies.containsTime || dependencies.values.contains("flash.date"),
+      dependencies.containsTime
+        || !dependencies.values.isDisjoint(with: ["flash.date", "flash.calendar"]),
       dependencies
     )
   }
@@ -522,6 +524,7 @@ enum FlashStatusBarTemplateEngine {
     case "flash.active_app_name": return .activeAppName
     case "flash.active_bundle_identifier": return .activeBundleIdentifier
     case "flash.date": return .date
+    case "flash.calendar": return .calendar
     case "host": return .host
     case "host_short": return .hostShort
     case "user": return .user
@@ -548,6 +551,8 @@ enum FlashStatusBarTemplateEngine {
       "flash.active_bundle_identifier": context.activeBundleIdentifier.trimmed,
       "flash.date": FlashStatusBarRenderer.dateText(
         now: context.now, calendar: context.calendar, locale: context.locale),
+      "flash.calendar": FlashStatusBarRenderer.calendarText(
+        now: context.now, timeZone: context.calendar.timeZone),
       "host": host, "host_short": host.split(separator: ".").first.map(String.init) ?? host,
       "user": context.userName.trimmed, "uid": String(context.userID),
       "pid": String(context.processID),
@@ -576,6 +581,21 @@ enum FlashStatusBarRenderer {
   /// because every production caller sits on the controller's single serial
   /// queue.
   private static let dateFormatter = DateFormatter()
+  private static var calendarCache: (day: DateInterval, timeZone: TimeZone, text: String)?
+
+  static func calendarText(now: Date, timeZone: TimeZone) -> String {
+    if let cached = calendarCache, cached.timeZone == timeZone,
+      now >= cached.day.start, now < cached.day.end
+    {
+      return cached.text
+    }
+    var calendar = Calendar(identifier: .iso8601)
+    calendar.timeZone = timeZone
+    guard let day = calendar.dateInterval(of: .day, for: now) else { return "" }
+    let text = CalendarStatusDocument.render(now: now, timeZone: timeZone)
+    calendarCache = (day, timeZone, text)
+    return text
+  }
 
   static func dateText(
     now: Date,

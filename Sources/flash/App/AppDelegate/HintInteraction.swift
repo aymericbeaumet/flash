@@ -13,6 +13,37 @@ enum HintActivationRequest {
 }
 
 extension AppDelegate {
+  /// AX/plugin verification may block, so it shares the discovery queue rather
+  /// than the keyboard loop. Cancellation or replacement invalidates its token.
+  func resolveHintPoints(
+    _ selections: [(target: JumpTarget, point: CGPoint)],
+    completion: @escaping (AppDelegate, [CGPoint]) -> Void
+  ) {
+    guard !activationLifecycle.inFlight else { return }
+    guard selections.contains(where: { $0.target.resolveClickPoint != nil }) else {
+      completion(self, selections.map(\.point))
+      return
+    }
+    let token = activationLifecycle.begin()
+    monitor.axQueue.async { [weak self] in
+      var points: [CGPoint] = []
+      for selection in selections {
+        guard let point = selection.target.resolvedClickPoint(preferred: selection.point) else {
+          DispatchQueue.main.async {
+            guard let self, self.activationLifecycle.complete(token: token) else { return }
+            self.cancelOverlay()
+          }
+          return
+        }
+        points.append(point)
+      }
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        completion(self, points)
+      }
+    }
+  }
+
   func prepareHintActivation(_ request: HintActivationRequest) -> Bool {
     guard activationLifecycle.requestReplacement(request) else { return false }
     switch modeStore.mode {
@@ -61,6 +92,7 @@ extension AppDelegate {
         guard let self,
           let result = self.activationLifecycle.completeCommit(token: token)
         else { return }
+        if self.hintSession.hints.isEmpty { self.overlay.releaseStatusBarHintSnapshot() }
         if result.applyOutcome { completion(self) }
         if !result.applyOutcome, result.replacement == nil {
           self.applyModeOverlay()
@@ -76,12 +108,15 @@ extension AppDelegate {
     }
   }
 
-  func clearHintSessionState() {
+  func clearHintSessionState(preservingStatusBarSnapshot: Bool = false) {
     for effect in hintSession.finish() {
       switch effect {
       case .releasePrimaryButton:
         _ = ActionDispatcher.releasePrimaryButton(at: NSEvent.mouseLocation)
       }
+    }
+    if !preservingStatusBarSnapshot, !activationLifecycle.isCommitting {
+      overlay.releaseStatusBarHintSnapshot()
     }
   }
 }

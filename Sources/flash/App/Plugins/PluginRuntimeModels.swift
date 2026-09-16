@@ -163,10 +163,18 @@ struct PluginWireTarget {
   var role: String?
   var label: String?
   var url: String?
+  var contextID: String? = nil
   var pid: pid_t?
   var entersInsertMode: Bool
   var sourceID: String
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.
   var priority: FlashPriority
+
+  func capturedTarget(contextPID: pid_t) -> JumpTarget {
+    JumpTarget(
+      id: id, frame: frame, role: role, accessibilityLabel: label, url: url,
+      contextID: contextID, pid: pid ?? contextPID, entersInsertMode: entersInsertMode,
+      priority: priority, providerID: sourceID)
+  }
 }

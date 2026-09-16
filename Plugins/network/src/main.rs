@@ -3,7 +3,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use flash_plugin::status::{
-    bytes_iec_compact, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled,
+    bytes_iec, bytes_iec_compact, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled,
 };
 use flash_plugin::{
     run, run_command, sys, Candidate, Color, CommandRequest, Context, History, Markup,
@@ -548,6 +548,11 @@ fn render_preview(state: &NetworkState) -> Option<Preview> {
         return None;
     }
     let catalog = state.catalog.as_ref();
+    let counters = state
+        .previous
+        .as_ref()
+        .filter(|sample| Some(sample.interface.as_str()) == state.default_interface.as_deref())
+        .map(|sample| sample.counters);
     let mut preview = Preview::new()
         .title("Network")
         .row("Wi-Fi", text_or_dash(state.wifi_ssid.as_deref()))
@@ -560,6 +565,31 @@ fn render_preview(state: &NetworkState) -> Option<Preview> {
             rate_cell(state.rates.map(|rates| rates.received)),
         )
         .row("Upload", rate_cell(state.rates.map(|rates| rates.sent)))
+        .row(
+            "Received",
+            counters.map_or_else(|| "—".to_string(), |counters| bytes_iec(counters.received)),
+        )
+        .row(
+            "Sent",
+            counters.map_or_else(|| "—".to_string(), |counters| bytes_iec(counters.sent)),
+        )
+        .note("Totals since interface reset · default route only")
+        .row(
+            "Down peak",
+            state
+                .received_history
+                .iter()
+                .reduce(f64::max)
+                .map_or_else(|| "—".to_string(), rate_iec),
+        )
+        .row(
+            "Up peak",
+            state
+                .sent_history
+                .iter()
+                .reduce(f64::max)
+                .map_or_else(|| "—".to_string(), rate_iec),
+        )
         .row("Down history", history_chart(&state.received_history))
         .row("Up history", history_chart(&state.sent_history))
         .row(
@@ -659,6 +689,39 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn details_show_current_interface_totals_and_recent_peaks() {
+        let state = NetworkState {
+            default_interface: Some("en0".to_string()),
+            previous: Some(TimedCounters {
+                interface: "en0".to_string(),
+                sampled_at: Instant::now(),
+                counters: NetCounters {
+                    received: 3 << 30,
+                    sent: 1 << 30,
+                },
+            }),
+            received_history: history([1024.0, 2048.0]),
+            sent_history: history([512.0, 1024.0]),
+            ..NetworkState::default()
+        };
+        let details = render_preview(&state).unwrap().render_plain();
+        assert!(details.contains("Received      3.0 GiB"), "{details}");
+        assert!(details.contains("Sent          1.0 GiB"), "{details}");
+        assert!(details.contains("Down peak     2.0 KiB/s"), "{details}");
+        assert!(details.contains("Up peak       1.0 KiB/s"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
+        let changed = NetworkState {
+            default_interface: Some("utun0".to_string()),
+            ..state
+        };
+        let details = render_preview(&changed).unwrap().render_plain();
+        assert!(
+            !details.contains("3.0 GiB"),
+            "old interface counters must not leak: {details}"
+        );
+    }
 
     fn history(values: impl IntoIterator<Item = f64>) -> History<HISTORY_LEN> {
         let mut history = History::new();
@@ -928,6 +991,11 @@ default fe80::%utun6 UGcIg utun6\n";
 #[fg=colour245]Interface     #[default]en##0\n\
 #[fg=colour245]Download      #[default]   1.5 MiB/s\n\
 #[fg=colour245]Upload        #[default]   2.0 KiB/s\n\
+#[fg=colour245]Received      #[default]—\n\
+#[fg=colour245]Sent          #[default]—\n\
+#[fg=colour245]Totals since interface reset · default route only#[default]\n\
+#[fg=colour245]Down peak     #[default]1 B/s\n\
+#[fg=colour245]Up peak       #[default]0 B/s\n\
 #[fg=colour245]Down history  #[default]···················█\n\
 #[fg=colour245]Up history    #[default]···················█\n\
 #[fg=colour245]Hostname      #[default]moria ##[fg=colour196]\n\
@@ -955,6 +1023,11 @@ default fe80::%utun6 UGcIg utun6\n";
 #[fg=colour245]Interface     #[default]en0\n\
 #[fg=colour245]Download      #[default]           —\n\
 #[fg=colour245]Upload        #[default]           —\n\
+#[fg=colour245]Received      #[default]—\n\
+#[fg=colour245]Sent          #[default]—\n\
+#[fg=colour245]Totals since interface reset · default route only#[default]\n\
+#[fg=colour245]Down peak     #[default]—\n\
+#[fg=colour245]Up peak       #[default]—\n\
 #[fg=colour245]Down history  #[default]····················\n\
 #[fg=colour245]Up history    #[default]····················\n\
 #[fg=colour245]Hostname      #[default]—"

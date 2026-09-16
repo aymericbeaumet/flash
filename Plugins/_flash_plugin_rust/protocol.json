@@ -67,6 +67,11 @@
       "effect"
     ]
   },
+  "hint_target": {
+    "$comment": "The host revalidates geometry and target identity before clicking. context_id is an optional non-empty opaque string identifying the containing live source context; a changed context cancels the captured target. Omitted or null means unspecified.",
+    "required": ["id", "frame"],
+    "optional": ["role", "label", "url", "pid", "enters_insert_mode", "priority", "context_id"]
+  },
   "effects": {
     "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect — argv side effects belong in perform, inside the sandbox.",
     "rows": [

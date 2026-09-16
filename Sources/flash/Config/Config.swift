@@ -478,6 +478,17 @@ struct Config {
         ("[t", sendKeyMapping("cmd+shift+[")),
         ("]t", sendKeyMapping("cmd+shift+]")),
         ("t", sendKeyMapping("cmd+t")),
+        ("g1", sendKeyMapping("cmd+1")),
+        ("g2", sendKeyMapping("cmd+2")),
+        ("g3", sendKeyMapping("cmd+3")),
+        ("g4", sendKeyMapping("cmd+4")),
+        ("g5", sendKeyMapping("cmd+5")),
+        ("g6", sendKeyMapping("cmd+6")),
+        ("g7", sendKeyMapping("cmd+7")),
+        ("g8", sendKeyMapping("cmd+8")),
+        ("g9", sendKeyMapping("cmd+9")),
+        ("[m", .flashCommand(.tabMovePrev)),
+        ("]m", .flashCommand(.tabMoveNext)),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
@@ -496,6 +507,7 @@ struct Config {
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
         ("x", sendKeyMapping("cmd+w")),
+        ("X", sendKeyMapping("cmd+shift+t")),
         ("y", .flashCommand(.yankSelection(register: nil))),
         ("p", .flashCommand(.paste(register: nil))),
         ("/", .flashCommand(.find)),
@@ -758,7 +770,7 @@ struct Config {
 
   private static func mappingJSONValue(_ mapping: ModeMapping) -> [String: Any] {
     [
-      "action": mapping.action.configValue,
+      "command": mapping.action.configValue,
       "key": mapping.key,
       "repeat": mapping.repeatsOnFinalKey,
     ]

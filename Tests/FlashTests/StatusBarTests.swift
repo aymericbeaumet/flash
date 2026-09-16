@@ -283,7 +283,11 @@ final class StatusBarTests: XCTestCase {
       ])
 
     XCTAssertEqual(regions.count, 2)
-    XCTAssertEqual(regions[0], StatusBarHintRegion(rect: hoverRect, action: .hover("memory")))
+    XCTAssertEqual(
+      regions[0],
+      StatusBarHintRegion(
+        rect: hoverRect,
+        action: .hover(.init(rect: hoverRect, name: "memory", content: "Memory details"))))
     XCTAssertEqual(regions[1], StatusBarHintRegion(rect: clickRect, action: .click(url)))
   }
 

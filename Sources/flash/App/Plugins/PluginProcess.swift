@@ -632,8 +632,14 @@ final class PluginProcess {
   /// Live hint pull (`hints`). Always a fresh request — there is no cached
   /// discovery. Blocks the caller up to `timeout` and returns `[]` for a
   /// missing/rejected/mismatched reply.
-  func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
+  func discoverTargets(
+    context: AppContext, timeout: TimeInterval, resolveAtCommit: Bool = true
+  ) -> [JumpTarget] {
     guard runtimeStateSnapshot() == .running else { return [] }
+    let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
+    let window =
+      resolveAtCommit
+      ? HintWindowSnapshot.current(pid: context.processID, primaryHeight: primaryHeight) : nil
     let startedAt = DispatchTime.now()
     let semaphore = DispatchSemaphore(value: 0)
     var targets: [JumpTarget] = []
@@ -659,7 +665,11 @@ final class PluginProcess {
         let wire = PluginWireCodec.hintTargets(
           from: payload, sourceID: "plugin:\(self.manifest.id)", contextPID: context.processID)
       else { return }
-      let decoded = wire.map { self.hostJumpTarget(from: $0, contextPID: context.processID) }
+      let decoded = wire.map {
+        self.hostJumpTarget(
+          from: $0, context: context, window: window, primaryHeight: primaryHeight,
+          timeout: timeout, resolveAtCommit: resolveAtCommit)
+      }
       resultLock.lock()
       targets = decoded
       resultLock.unlock()
@@ -688,18 +698,35 @@ final class PluginProcess {
   /// Hint activation is never delegated back to the plugin: the host posts a
   /// real mouse event to the owning app for every committed target.
   private func hostJumpTarget(
-    from wire: PluginWireTarget, contextPID: pid_t
+    from wire: PluginWireTarget, context: AppContext, window: HintWindowSnapshot?,
+    primaryHeight: CGFloat, timeout: TimeInterval, resolveAtCommit: Bool
   ) -> JumpTarget {
+    let captured = wire.capturedTarget(contextPID: context.processID)
+    guard resolveAtCommit else { return captured }
     return JumpTarget(
-      id: wire.id,
-      frame: wire.frame,
-      role: wire.role,
-      accessibilityLabel: wire.label,
-      url: wire.url,
-      pid: wire.pid ?? contextPID,
-      entersInsertMode: wire.entersInsertMode,
-      priority: wire.priority,
-      providerID: wire.sourceID)
+      id: captured.id, frame: captured.frame, role: captured.role,
+      accessibilityLabel: captured.accessibilityLabel, url: captured.url,
+      contextID: captured.contextID, pid: captured.pid,
+      resolveClickPoint: { [weak self] preferred in
+        guard let self, let window, window.frame == context.frontWindowFrame,
+          let current = HintWindowSnapshot.current(
+            pid: context.processID, primaryHeight: primaryHeight),
+          current.number == window.number, current.layer == window.layer
+        else { return nil }
+        let currentContext = AppContext(
+          bundleIdentifier: context.bundleIdentifier, processID: context.processID,
+          runningApp: context.runningApp, frontWindowFrame: current.frame,
+          allScreensFrame: context.allScreensFrame)
+        let live = self.discoverTargets(
+          context: currentContext, timeout: timeout, resolveAtCommit: false)
+        guard
+          HintWindowSnapshot.current(
+            pid: context.processID, primaryHeight: primaryHeight) == current
+        else { return nil }
+        return captured.matchingClickPoint(preferred: preferred, among: live)
+      },
+      entersInsertMode: captured.entersInsertMode, priority: captured.priority,
+      providerID: captured.providerID)
   }
 
   /// `search`: fetch live rows for one explicitly scoped query. Unlike

@@ -23,7 +23,7 @@ struct StatusBarPopupRegion: Equatable {
 
 enum StatusBarHintAction: Equatable {
   case click(URL)
-  case hover(String)
+  case hover(StatusBarPopupRegion)
 }
 
 struct StatusBarHintRegion: Equatable {
@@ -117,6 +117,16 @@ final class StatusBarClickView: NSView {
   /// a slip toward a menu) opens nothing — but is still swallowed.
   private var mouseDownLocation: NSPoint?
   private var rightMouseDownLocation: NSPoint?
+  private var mouseDownURL: URL?
+  private var mouseDownPopup: StatusBarPopupRegion?
+  private var rightMouseDownPopup: StatusBarPopupRegion?
+  private var hintedClick: (url: URL, point: CGPoint, timestamp: TimeInterval)?
+
+  func prepareHintClick(
+    url: URL, at point: CGPoint, timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
+  ) {
+    hintedClick = (url, point, timestamp)
+  }
 
   /// Movement past this (points) counts as a drag, not a click.
   static let dragSlop: CGFloat = 4
@@ -130,16 +140,34 @@ final class StatusBarClickView: NSView {
 
   override func mouseDown(with event: NSEvent) {
     mouseDownLocation = event.locationInWindow
+    let local = convert(event.locationInWindow, from: nil)
+    let pending = hintedClick
+    hintedClick = nil
+    if let pending,
+      event.cgEvent?.getIntegerValueField(.eventSourceUserData)
+        == ActionDispatcher.syntheticMouseEventTag
+    {
+      mouseDownURL =
+        (0...1).contains(event.timestamp - pending.timestamp)
+          && Self.isClick(from: pending.point, to: local) ? pending.url : nil
+      mouseDownPopup = nil
+    } else {
+      mouseDownURL = links.first(where: { $0.rect.contains(local) })?.url
+      mouseDownPopup = popups.first(where: { $0.rect.contains(local) })
+    }
   }
 
   override func mouseUp(with event: NSEvent) {
-    defer { mouseDownLocation = nil }
+    defer {
+      mouseDownLocation = nil
+      mouseDownURL = nil
+      mouseDownPopup = nil
+    }
     guard let start = mouseDownLocation,
       Self.isClick(from: start, to: event.locationInWindow)
     else { return }
-    let local = convert(event.locationInWindow, from: nil)
-    let url = links.first(where: { $0.rect.contains(local) })?.url
-    if let popup = popups.first(where: { $0.rect.contains(local) }),
+    let url = mouseDownURL
+    if let popup = mouseDownPopup,
       Self.focusesPopup(overLink: url != nil, modifiers: event.modifierFlags)
     {
       let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
@@ -166,15 +194,19 @@ final class StatusBarClickView: NSView {
 
   override func rightMouseDown(with event: NSEvent) {
     rightMouseDownLocation = event.locationInWindow
+    let local = convert(event.locationInWindow, from: nil)
+    rightMouseDownPopup = popups.first(where: { $0.rect.contains(local) })
   }
 
   override func rightMouseUp(with event: NSEvent) {
-    defer { rightMouseDownLocation = nil }
+    defer {
+      rightMouseDownLocation = nil
+      rightMouseDownPopup = nil
+    }
     guard let start = rightMouseDownLocation,
       Self.isClick(from: start, to: event.locationInWindow)
     else { return }
-    let local = convert(event.locationInWindow, from: nil)
-    guard let popup = popups.first(where: { $0.rect.contains(local) }) else { return }
+    guard let popup = rightMouseDownPopup else { return }
     let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
     onPopupClick?(popup, point)
   }
@@ -309,7 +341,7 @@ extension OverlayPanel {
     let clickRegions = links.map { StatusBarHintRegion(rect: $0.rect, action: .click($0.url)) }
     let hoverRegions = popups.compactMap { popup -> StatusBarHintRegion? in
       guard !links.contains(where: { sameSpan($0.rect, popup.rect) }) else { return nil }
-      return StatusBarHintRegion(rect: popup.rect, action: .hover(popup.name))
+      return StatusBarHintRegion(rect: popup.rect, action: .hover(popup))
     }
     return (clickRegions + hoverRegions).sorted {
       if abs($0.rect.minX - $1.rect.minX) >= 0.5 { return $0.rect.minX < $1.rect.minX }
@@ -435,9 +467,14 @@ extension OverlayPanel {
   func showStatusBarPopup(
     _ popup: StatusBarPopupRegion,
     at pointer: CGPoint,
-    screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
+    screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot(),
+    preservingContent: Bool = false
   ) {
     guard !statusPopupController.presentation.isFocused else { return }
+    if statusPopupController.isContentSnapshot, !preservingContent {
+      if statusPopupController.containsSnapshotAnchor(pointer) { return }
+      statusPopupController.leaveAnchor()
+    }
     // A terminal popup with no running session forks a PTY child on first
     // hover. Sweeping the pointer across the bar must not spawn one child per
     // span, so such a popup waits for a short dwell with the pointer still on
@@ -455,7 +492,8 @@ extension OverlayPanel {
           self?.statusBarHoverDwellName = nil
           return
         }
-        self.showStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot)
+        self.showStatusBarPopup(
+          popup, at: pointer, screenSnapshot: snapshot, preservingContent: preservingContent)
       }
       statusBarHoverDwellWork = work
       DispatchQueue.main.asyncAfter(
@@ -484,10 +522,21 @@ extension OverlayPanel {
       visibleFrame: screen.visibleFrame, style: statusBarPopupStyle,
       font: NSFont.monospacedSystemFont(
         ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
-        weight: .medium))
+        weight: .medium), preservingContent: preservingContent)
     activeStatusBarPopupName = statusPopupController.presentation.identity?.name
     activeStatusBarPopupContent = statusPopupController.content
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
+  }
+
+  func prepareStatusBarHintClick(url: URL, at point: CGPoint) -> Bool {
+    guard
+      let window = statusBarClickWindows.first(where: {
+        $0.frame.contains(point) && $0.isVisible && !$0.ignoresMouseEvents
+      })
+    else { return false }
+    let local = window.clickView.convert(window.convertPoint(fromScreen: point), from: nil)
+    window.clickView.prepareHintClick(url: url, at: local)
+    return true
   }
 
   func activateStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {
@@ -613,6 +662,7 @@ extension OverlayPanel {
           screenPopup.rect = popup.rect.offsetBy(dx: band.minX, dy: band.minY)
           self.showStatusBarPopup(screenPopup, at: point)
         } else {
+          if self.statusPopupController.containsSnapshotAnchor(point) { return }
           self.statusBarHoverGate = .ready
           self.statusPopupController.leaveAnchor()
           self.activeStatusBarPopupName = self.statusPopupController.presentation.identity?.name
@@ -643,6 +693,7 @@ extension OverlayPanel {
     statusPopupController.refresh(popups)
     activeStatusBarPopupName = statusPopupController.presentation.identity?.name
     activeStatusBarPopupContent = statusPopupController.content
+    if statusPopupController.containsSnapshotAnchor(pointer) { return }
     let acceptsPointer = !statusBarClickWindows.contains(where: \.ignoresMouseEvents)
     let popup = acceptsPointer ? popups.first(where: { $0.rect.contains(pointer) }) : nil
     let link = acceptsPointer ? links.first(where: { $0.rect.contains(pointer) }) : nil

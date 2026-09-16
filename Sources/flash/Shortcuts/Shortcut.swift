@@ -46,8 +46,8 @@ struct ModeMapping: Equatable {
 /// What a mapping fires. Resolved at config load so Carbon callbacks
 /// and overlay key handling never re-parse on the hot path.
 ///
-/// The action's TOML form is always an array of strings, either directly as a
-/// compact mapping value or under `action` in an inline mapping table. If
+/// The command's TOML form is always an array of strings, either directly as a
+/// compact mapping value or under `command` in an inline mapping table. If
 /// `argv[0]` names Flash (`"flash"` or a path whose basename is `flash`), the
 /// remainder is parsed against the resident verb table
 /// (``URLEventHandler/parse(verb:args:)``) and dispatched in-process. Otherwise

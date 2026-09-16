@@ -107,12 +107,17 @@ final class StatusBarHoverTests: XCTestCase {
       rect: CGRect(x: 100, y: 800, width: 200, height: 25), name: "article", content: "Preview")
     let controller = panel.statusPopupController
     var focusTransitions = 0
-    controller.willFocus = { focusTransitions += 1 }
+    let focused = expectation(description: "pager file is ready for input focus")
+    controller.willFocus = {
+      focusTransitions += 1
+      focused.fulfill()
+    }
     controller.preview(
       region, pointer: CGPoint(x: 150, y: 812),
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     panel.activateStatusBarPopup(region, at: .zero)
+    wait(for: [focused], timeout: 3)
     XCTAssertEqual(focusTransitions, 1)
     panel.syncStatusBarClickWindows(
       bandRects: [CGRect(x: 0, y: 800, width: 900, height: 25)], links: [], popups: [region])

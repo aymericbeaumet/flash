@@ -148,6 +148,24 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNotEqual(registry.spareShellKey, direct)
   }
 
+  func testInvalidTerminalOverridePreservesTheExistingPopupPager() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let pager = registry.preparePopup(
+      name: "details", data: Data("Last good details".utf8), columns: 50, rows: 4,
+      colors: StatusPopupColors(.init()))
+    var config = Config()
+    config.invalidTerminalNames.insert("details")
+    XCTAssertEqual(registry.prepareTerminal(name: "details", configuration: config), "details")
+    XCTAssertTrue(registry.sessions["details"] === pager)
+    XCTAssertTrue(registry.isPopupPager(name: "details"))
+    config.invalidTerminalNames.remove("details")
+    config.terminals["details"] = .init(command: ["/bin/sleep", "30"])
+    XCTAssertEqual(registry.prepareTerminal(name: "details", configuration: config), "details")
+    XCTAssertFalse(registry.sessions["details"] === pager)
+    XCTAssertFalse(registry.isPopupPager(name: "details"))
+  }
+
   func testFreshShellIsWarmedOnlyWhenAMappingOpensIt() {
     var mode = Config.Mode()
     XCTAssertFalse(AppDelegate.bindsFreshShell(mode))
@@ -519,6 +537,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     registry.apply(
       config.statusBar, terminals: config.terminals,
       invalidTerminalNames: config.invalidTerminalNames)
+    registry.sessions["system"]?.setWantsFrames(true)
     let ready = expectation(
       for: NSPredicate { _, _ in
         registry.sessions["system"]?.frame?.text.contains("ready") == true
@@ -546,6 +565,12 @@ final class StatusTerminalRegistryTests: XCTestCase {
     registry.apply(
       config.statusBar, terminals: config.terminals,
       invalidTerminalNames: config.invalidTerminalNames)
+    waitUntil {
+      if case .running = registry.sessions["system"]?.state { return true }
+      return false
+    }
+    XCTAssertNil(registry.sessions["system"]?.frame)
+    registry.sessions["system"]?.setWantsFrames(true)
     let ready = expectation(
       for: NSPredicate { _, _ in
         registry.sessions["system"]?.frame != nil

@@ -107,6 +107,7 @@ fn valid_target(target: &Value) -> bool {
             "role",
             "label",
             "url",
+            "context_id",
             "pid",
             "enters_insert_mode",
             "priority",
@@ -142,6 +143,9 @@ fn valid_target(target: &Value) -> bool {
         return false;
     }
     if present(target, "pid").is_some_and(|value| pid(value).is_none()) {
+        return false;
+    }
+    if present(target, "context_id").is_some_and(|value| value.as_str().is_none_or(str::is_empty)) {
         return false;
     }
     if ["id", "role", "label", "url"]

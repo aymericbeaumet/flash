@@ -125,6 +125,7 @@ extension AppDelegate {
       FlashProcessEnvironment.shared.refresh()
     }
     let cfg = ConfigLoader.load()
+    if hintSession.isActive || activationInFlight { cancelOverlay() }
     let previousAutostart = config.app.autostart
     // Rebuild the frecency store only when its tuning actually changed —
     // reconstruction reloads the on-disk snapshot, which is fine but not

@@ -12,23 +12,46 @@ document-URL and mark commands remain available for explicit mappings.
   amounts with `[mode] scroll_step_lines` and `scroll_page_lines`.
 - `gg` / `G` go to the top/bottom.
 - `u` undoes and `ctrl+r` redoes. Bare `d`, `j` and `k` are unbound.
-- `y` copies immediately, `p` pastes, `/` opens Find and `x` closes the current view.
+- `y` copies immediately, `p` pastes and `/` opens Find.
+- `x` sends Cmd-W to close the current tab; `X` sends Cmd-Shift-T to reopen it.
+  Both preserve NORMAL and send the same shortcut in every app.
 - `[a` / `]a` cycle previous/next app in MRU order.
 - `[t` / `]t` send Cmd-Shift-[ / Cmd-Shift-] directly in every app, including
   terminals. Repeat the final `t` to keep switching tabs.
-- `t` sends Cmd-T directly. All three shortcuts preserve NORMAL.
+- `t` sends Cmd-T directly. `g1`–`g9` send Cmd-1…Cmd-9 directly, including in
+  terminals and tmux. These shortcuts preserve NORMAL.
+- `[m` / `]m` move the current tab left/right; repeat `m` to continue moving it.
+  Tmux reorders its window, and Firefox receives Control-Shift-Page Up/Down.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
 - `f`, `sf`, and `Df` target discovered clickable elements. Primary clicks
   enter INSERT only on input targets; secondary clicks preserve NORMAL.
-- `mf` moves the cursor to a discovered target. Every other commit clicks
-  where the hint is and returns the pointer to where it was, so hinting never
-  relocates the mouse; `scroll_target` is the other verb that moves it.
+- `mf` moves the cursor to a discovered target. Hint clicks jump directly to
+  the selected target with the cursor hidden during repositioning, then leave
+  the pointer at the clicked location.
 - `F` applies a Command-Shift hint click. `ctrl+f` / `ctrl+shift+f` apply the
   same plain/modified clicks through mouse grid mode.
 - `sF` / `DF` use mouse grid mode for secondary/double clicks.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.
+
+## Movement history
+
+`ctrl+o` and `ctrl+i` move backward and forward across apps and source locations,
+including Firefox tabs and tmux windows. App focus and location-catalog changes
+feed the same history. Repeated observations of the same location coalesce;
+returning to a location after visiting another remains a chronological stop.
+Choosing a new destination after moving backward discards the forward branch.
+
+Locations restore through their owning source. The Firefox bridge preserves
+tab IDs across title, URL and window changes; restoration matches the current
+tab strip to one AX window and cancels if two windows are indistinguishable.
+Without the bridge, Firefox uses the URL, or title when AX has no URL.
+Tmux keeps stable window IDs so reordering a window does not change its history
+destination. Apps without a more precise source restore application focus.
+The stack does not capture page scroll positions, editor cursor positions, or
+terminal scrollback offsets. History is in memory and bounded to 20 stops in
+each direction.
 
 ## Shared mode exit
 

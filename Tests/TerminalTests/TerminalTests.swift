@@ -6,13 +6,12 @@ import XCTest
 
 final class TerminalTests: XCTestCase {
   func testANSIIndexedAndTruecolorForegroundsAndBackgroundsReachFrames() throws {
-    let buffer = TerminalBuffer(columns: 8, rows: 1, scrollback: false)
-    buffer.write(
-      Data(
-        ("\u{1B}[31;44mR\u{1B}[32mG"
-          + "\u{1B}[38;5;196;48;5;21mI"
-          + "\u{1B}[38;2;7;8;9;48;2;1;2;3mT").utf8))
-    let cells = try XCTUnwrap(buffer.snapshot()).cells
+    let cells = try frameFromPTY(
+      "\u{1B}[31;44mR\u{1B}[32mG"
+        + "\u{1B}[38;5;196;48;5;21mI"
+        + "\u{1B}[38;2;7;8;9;48;2;1;2;3mT",
+      columns: 8, rows: 1
+    ).cells
     XCTAssertGreaterThan(cells[0].foreground.red, cells[0].foreground.green)
     XCTAssertGreaterThan(cells[0].background.blue, cells[0].background.red)
     XCTAssertGreaterThan(cells[1].foreground.green, cells[1].foreground.red)
@@ -113,30 +112,40 @@ final class TerminalTests: XCTestCase {
     XCTAssertTrue(buffer.snapshot()?.text.contains("primary") == true)
   }
 
-  func testDocumentInterpretsStylesWideGraphemesAndReplacesTail() {
-    let document = TerminalDocument(columns: 12, rows: 2)
-    let first = expectation(description: "first frame")
-    document.onFrame = { frame in
-      XCTAssertEqual(frame.cells[0].text, "界")
-      XCTAssertEqual(frame.cells[0].width, 2)
-      XCTAssertEqual(frame.cells[1].width, 0)
-      XCTAssertEqual(frame.cells[2].text, "é")
-      XCTAssertEqual(frame.cells[0].foreground.red, 1)
-      first.fulfill()
-    }
-    document.replace(data: Data("\u{1B}[38;2;1;2;3m界é long".utf8))
-    wait(for: [first], timeout: 3)
-    let replacement = expectation(description: "replacement")
-    document.onFrame = { frame in
-      XCTAssertEqual(frame.text, "x\n")
-      replacement.fulfill()
-    }
-    document.replace(data: Data("x".utf8))
-    wait(for: [replacement], timeout: 3)
+  func testPTYInterpretsStylesWideGraphemesAndClearsReplacedTail() throws {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(
+        command: [
+          "/bin/sh", "-c",
+          "stty -echo; printf '%s' \"$1\"; read -r line; printf '%s' \"$2\"; read -r line",
+          "terminal-fixture", "\u{1B}[38;2;1;2;3m界é long", "\u{1B}[0m\u{1B}[2J\u{1B}[Hx",
+        ], columns: 12, rows: 2))
+    defer { session.shutdown() }
+    let first = expectation(
+      for: NSPredicate { _, _ in session.frame?.text == "界é long\n" }, evaluatedWith: nil)
+    session.start()
+    wait(for: [first], timeout: 5)
+    let frame = try XCTUnwrap(session.frame)
+    XCTAssertEqual(frame.cells[0].text, "界")
+    XCTAssertEqual(frame.cells[0].width, 2)
+    XCTAssertEqual(frame.cells[1].width, 0)
+    XCTAssertEqual(frame.cells[2].text, "é")
+    XCTAssertEqual(frame.cells[0].foreground.red, 1)
+    let replacement = expectation(
+      for: NSPredicate { _, _ in session.frame?.text == "x\n" }, evaluatedWith: nil)
+    session.send(Data("go\n".utf8))
+    wait(for: [replacement], timeout: 5)
   }
 
-  func testDocumentSanitizesLiteralControlSequences() {
-    XCTAssertEqual(TerminalDocument.sanitize(text: "a\u{1B}[2J\u{9B}31m\n\t\0"), "a�[2J�31m\n\t�")
+  func testTerminalTextSanitizesLiteralControlSequencesAndLineEndings() {
+    XCTAssertEqual(TerminalText.sanitize(text: "a\u{1B}[2J\u{9B}31m\n\t\0"), "a�[2J�31m\n\t�")
+    XCTAssertEqual(TerminalText.sanitize(text: "first\r\nsecond\rlast"), "first\nsecond�last")
+  }
+
+  func testTerminalTextMeasuresWideAndCombiningGraphemes() {
+    for (text, width) in [("", 0), ("a", 1), ("界", 2), ("é", 1), ("🚀", 2)] {
+      XCTAssertEqual(TerminalText.cellWidth(of: text), width, text)
+    }
   }
 
   func testControlChordsFromTheViewReachTheChildAsControlBytes() throws {
@@ -186,6 +195,46 @@ final class TerminalTests: XCTestCase {
     let retained = session.frame
     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     XCTAssertEqual(session.frame, retained)
+  }
+
+  func testSwitchingSessionsStopsPreviousFramesAndRebindingShowsLatestOutput() {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(
+        command: ["/bin/sh", "-c", "stty -echo; printf READY; read line; printf LATEST"],
+        columns: 20, rows: 3))
+    defer { session.shutdown() }
+    let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 200, height: 60))
+    view.isRenderingEnabled = true
+    view.bind(session: session)
+    session.start()
+    let ready = expectation(
+      for: NSPredicate { _, _ in view.terminalFrame?.text.contains("READY") == true },
+      evaluatedWith: nil)
+    wait(for: [ready], timeout: 5)
+    let replacement = TerminalSession(
+      configuration: TerminalConfiguration(
+        command: ["/bin/sh", "-c", "printf OTHER; read line"], columns: 20, rows: 3))
+    defer { replacement.shutdown() }
+    view.bind(session: replacement)
+    replacement.start()
+    let replaced = expectation(
+      for: NSPredicate { _, _ in view.terminalFrame?.text.contains("OTHER") == true },
+      evaluatedWith: nil)
+    wait(for: [replaced], timeout: 5)
+    let hiddenFrame = session.frame
+    session.send(Data("go\n".utf8))
+    let exited = expectation(
+      for: NSPredicate { _, _ in session.state == .exited(code: 0) }, evaluatedWith: nil)
+    wait(for: [exited], timeout: 5)
+    XCTAssertEqual(session.frame?.generation, hiddenFrame?.generation)
+    XCTAssertTrue(view.terminalFrame?.text.contains("OTHER") == true)
+    XCTAssertFalse(view.terminalFrame?.text.contains("LATEST") == true)
+
+    view.bind(session: session)
+    let latest = expectation(
+      for: NSPredicate { _, _ in view.terminalFrame?.text.contains("LATEST") == true },
+      evaluatedWith: nil)
+    wait(for: [latest], timeout: 5)
   }
 
   func testInputResizeAndExplicitRestart() {

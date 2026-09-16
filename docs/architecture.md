@@ -64,6 +64,29 @@ behind it. Old completions neither clear a newer activation nor apply stale mode
 or navigation effects. Pointer-session reset consumes a held-button release once.
 Shutdown lets already-started finite mouse synthesis finish.
 
+Hints retain the target captured by discovery. Before a commit, AX targets
+re-read the retained element's identity, properties and geometry; scrolling can
+move the click with that element, while a replaced, hidden or changed control
+cancels the selection. The final hit must still belong to that element. Dock
+items and scroll containers retain the same AX identity; native menu-bar items
+retain their owner PID and WindowServer window ID as their positions change.
+Plugin targets use a bounded fresh `hints` request and require one matching role,
+label, URL and optional source `context_id` in the same captured application
+window. Tmux supplies backend, client, server-lifetime, session, window and pane
+identity, so another server's `%1` cannot replace the selected pane. Missing or
+ambiguous matches cancel instead of falling back to the old coordinates.
+Resolution runs off the main loop and its result belongs to the activation
+generation. Configuration changes cancel existing hints before changing layout
+or actions.
+
+Flash holds status-bar publications while status hints are visible and until a
+selected host click finishes. A popup-only hint retains its captured content
+and anchor until the pointer leaves it. The latest queued status model is then
+applied. Live mode labels still bind to the current mode; a running terminal's
+own output remains live. External targets still receive a real host mouse
+event: Flash cannot freeze another application's state atomically with its
+click, or distinguish objects that expose identical reused AX/plugin data.
+
 ## Coordinates and rendering
 
 Targets use global NSScreen coordinates: primary-screen bottom-left origin,
