@@ -79,6 +79,11 @@ Resolution runs off the main loop and its result belongs to the activation
 generation. Configuration changes cancel existing hints before changing layout
 or actions.
 
+Every click sends a mouse-move event with the same modifiers before mouse-down
+and mouse-up, even when the pointer is already at the target. Terminals use
+this hover event to prepare their link action; Shift only on the button events
+can arrive too late for Alacritty's cached link highlight.
+
 Flash holds status-bar publications while status hints are visible and until a
 selected host click finishes. A popup-only hint retains its captured content
 and anchor until the pointer leaves it. The latest queued status model is then

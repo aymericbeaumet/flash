@@ -23,10 +23,9 @@ import Foundation
 // Security
 // --------
 //
-// Apple Events between two binaries with the *same* code-signing identity
-// don't trigger the macOS Automation TCC prompt; the CLI symlink at
-// `~/.local/bin/flash` and the resident at `/Applications/Flash.app` point
-// to the same Mach-O, so this stays prompt-free for the maintainer.
+// The CLI and resident use the same executable, but macOS Automation can
+// attribute a subprocess request to its launching app. GUI launchers need
+// an AppleEvents usage description and the applicable Automation permission.
 //
 // This entry point is intentionally narrow: no shell expansion, no
 // pass-through to other binaries — anything that isn't a known verb returns
@@ -134,21 +133,28 @@ enum FlashCLI {
     let sendMode = verb == "flash_quit" ? kAENoReply : kAEWaitReply
     let status = AESendMessage(&event, &reply, AESendMode(sendMode), 5 * 60)
     let replyDescriptor = NSAppleEventDescriptor(aeDescNoCopy: &reply)
-    if let error = replyDescriptor.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)),
-      error.int32Value != 0
-    {
-      let message =
-        replyDescriptor.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?
-        .stringValue ?? URLEventHandler.rejectionMessage("flash \(verb)")
-      FileHandle.standardError.write(("flash: " + message + "\n").data(using: .utf8) ?? Data())
-      return 2
+    let result = response(verb: verb, status: status, reply: replyDescriptor)
+    if let message = result.message {
+      FileHandle.standardError.write(Data("flash: \(message)\n".utf8))
     }
+    return result.exitCode
+  }
+
+  static func response(
+    verb: String, status: OSStatus, reply: NSAppleEventDescriptor
+  ) -> (exitCode: Int32, message: String?) {
     if status != noErr {
-      FileHandle.standardError.write(
-        "flash: could not send \(verb) (OSStatus=\(status))\n".data(using: .utf8) ?? Data())
-      return 1
+      return (1, "could not send \(verb) (OSStatus=\(status))")
     }
-    return 0
+    guard let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value,
+      error != 0
+    else { return (0, nil) }
+    let message = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?.stringValue
+    if error == errAEEventNotHandled, let message, !message.isEmpty {
+      return (2, message)
+    }
+    let detail = message.flatMap { $0.isEmpty ? nil : ": \($0)" } ?? ""
+    return (1, "AppleEvent \(verb) failed (OSStatus=\(error))\(detail)")
   }
 
   private static func addUTF8(value: String, to event: inout AppleEvent, key: AEKeyword) {

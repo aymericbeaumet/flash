@@ -49,6 +49,59 @@ final class ActionDispatcherTests: XCTestCase {
     XCTAssertEqual(modifiers, [.command, .shift])
   }
 
+  func testTerminalLinkClickPrimesHoverWithShiftBeforeButtonEvents() throws {
+    let point = CGPoint(x: 240, y: 360)
+    let events = try XCTUnwrap(
+      ActionDispatcher.clickEvents(
+        at: point, from: CGPoint(x: 100, y: 200), action: .leftClick,
+        modifiers: ActionDispatcher.hintClickModifiers(
+          for: target(role: JumpTarget.terminalLinkRole), requested: []),
+        source: CGEventSource(stateID: .privateState)))
+
+    XCTAssertEqual(events.map(\.type), [.mouseMoved, .leftMouseDown, .leftMouseUp])
+    for event in events {
+      XCTAssertEqual(event.flags, .maskShift)
+      XCTAssertEqual(event.location, point)
+      XCTAssertEqual(
+        event.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
+    }
+    XCTAssertEqual(events.first?.getIntegerValueField(.mouseEventDeltaX), 140)
+    XCTAssertEqual(events.first?.getIntegerValueField(.mouseEventDeltaY), 160)
+  }
+
+  func testStationaryClickStillPrimesHoverBeforeButtonEvents() throws {
+    let point = CGPoint(x: 240, y: 360)
+    let events = try XCTUnwrap(
+      ActionDispatcher.clickEvents(
+        at: point, from: point, action: .leftClick, modifiers: .shift,
+        source: CGEventSource(stateID: .privateState)))
+
+    XCTAssertEqual(events.map(\.type), [.mouseMoved, .leftMouseDown, .leftMouseUp])
+    XCTAssertEqual(events.first?.flags, .maskShift)
+    XCTAssertEqual(events.first?.getIntegerValueField(.mouseEventDeltaX), 0)
+    XCTAssertEqual(events.first?.getIntegerValueField(.mouseEventDeltaY), 0)
+  }
+
+  func testNewContextDoubleClickUsesOneModifiedHoverAndTaggedMousePairs() throws {
+    let events = try XCTUnwrap(
+      ActionDispatcher.clickEvents(
+        at: CGPoint(x: 240, y: 360), from: .zero, action: .doubleClick,
+        modifiers: ActionDispatcher.hintClickModifiers(
+          for: target(role: "AXLink"), requested: [.command, .shift]),
+        source: CGEventSource(stateID: .privateState)))
+
+    XCTAssertEqual(
+      events.map(\.type),
+      [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDown, .leftMouseUp])
+    XCTAssertEqual(
+      events.dropFirst().map { $0.getIntegerValueField(.mouseEventClickState) }, [1, 1, 2, 2])
+    for event in events {
+      XCTAssertEqual(event.flags, [.maskCommand, .maskShift])
+      XCTAssertEqual(
+        event.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
+    }
+  }
+
   func testDragAndSelectionCanRestoreTheirOriginalPointerPosition() {
     let origin = CGPoint(x: 100, y: 200)
     XCTAssertEqual(

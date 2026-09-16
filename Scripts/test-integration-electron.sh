@@ -53,6 +53,10 @@ fi
 if [[ $SKIP_NPM_CI -eq 0 ]]; then
   echo "==> Installing pinned Electron fixture dependencies"
   npm ci --prefix "$FIXTURE_DIR"
+  if [[ -z "${FLASH_ELECTRON_APP:-}" ]]; then
+    echo "==> Installing the pinned Electron binary"
+    node "$FIXTURE_DIR/node_modules/electron/install.js"
+  fi
 fi
 
 if [[ ! -d "$ELECTRON_APP" ]]; then

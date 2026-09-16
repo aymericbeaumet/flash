@@ -30,6 +30,8 @@ document-URL and mark commands remain available for explicit mappings.
   the pointer at the clicked location.
 - `F` applies a Command-Shift hint click. `ctrl+f` / `ctrl+shift+f` apply the
   same plain/modified clicks through mouse grid mode.
+- Terminal link hints add Shift, so `f` opens the link through the terminal;
+  `F` keeps Command-Shift. The hover and click carry the same modifiers.
 - `sF` / `DF` use mouse grid mode for secondary/double clicks.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader

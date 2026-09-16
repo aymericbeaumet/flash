@@ -106,6 +106,12 @@ bundle_app() {
 </plist>
 EOF
 
+  if [[ "$product" == "$ORACLE_PRODUCT" ]]; then
+    /usr/libexec/PlistBuddy -c \
+      "Add :NSAppleEventsUsageDescription string The Flash native oracle sends commands to the installed Flash resident to verify hint clicks and input modes." \
+      "$staging_app/Contents/Info.plist"
+  fi
+
   echo "==> Codesigning $app_name.app"
   codesign --force --deep --sign "$SIGN_IDENTITY" --identifier "$bundle_id" "$staging_app" >/dev/null
   codesign --verify --strict "$staging_app"

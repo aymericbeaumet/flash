@@ -8,6 +8,7 @@ build/
 DerivedData/
 *.xcodeproj
 *.xcworkspace
+Tests/ElectronFixture/node_modules/
 
 ## Rust plugin build output. Plugins are hermetic standalone crates whose
 ## committed Cargo.lock lives at Plugins/<id>/Cargo.lock (not ignored); a

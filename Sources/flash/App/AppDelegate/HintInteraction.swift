@@ -29,6 +29,9 @@ extension AppDelegate {
       var points: [CGPoint] = []
       for selection in selections {
         guard let point = selection.target.resolvedClickPoint(preferred: selection.point) else {
+          FlashLog.debug(
+            "[commit] captured_target_unavailable provider=\(selection.target.providerID) "
+              + "role=\(selection.target.role ?? "?")")
           DispatchQueue.main.async {
             guard let self, self.activationLifecycle.complete(token: token) else { return }
             self.cancelOverlay()

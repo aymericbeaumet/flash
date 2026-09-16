@@ -102,6 +102,57 @@ enum ActionDispatcher {
     let source = CGEventSource(stateID: .combinedSessionState)
     let originalCursor = CGEvent(source: source)?.location ?? cgPoint
 
+    guard
+      let events = clickEvents(
+        at: cgPoint, from: originalCursor, action: action, modifiers: modifiers, source: source)
+    else {
+      FlashLog.warn("[click] could not create CGEvent for synthesized click")
+      return
+    }
+    let movesCursor =
+      abs(originalCursor.x - cgPoint.x) >= 0.5
+      || abs(originalCursor.y - cgPoint.y) >= 0.5
+    withCursorHidden(when: movesCursor) {
+      if movesCursor { warpCursor(to: cgPoint) }
+      events[0].post(tap: .cghidEventTap)
+      usleep(20_000)
+      // Terminals need a nonzero down/up interval to recognize modified clicks.
+      let mouseDownHoldUs = useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000)
+      for event in events.dropFirst() {
+        event.post(tap: .cghidEventTap)
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+          usleep(mouseDownHoldUs)
+        }
+      }
+    }
+    FlashLog.trace(
+      "[click] synthesize at=(\(Int(screenPoint.x)),\(Int(screenPoint.y))) "
+        + "action=\(action) flags=\(modifiers.cgEventFlags.rawValue) "
+        + "modifiers=cmd:\(modifiers.contains(.command)) "
+        + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
+        + "alt:\(modifiers.contains(.option)) frontmost=\(frontmostBundleID)")
+  }
+
+  static func clickEvents(
+    at point: CGPoint,
+    from origin: CGPoint,
+    action: JumpAction,
+    modifiers: ClickModifiers,
+    source: CGEventSource?
+  ) -> [CGEvent]? {
+    // Terminals resolve clickable links from cached hover state. Prime it with
+    // the click's modifiers even when the cursor is already at the target.
+    guard
+      let move = CGEvent(
+        mouseEventSource: source, mouseType: .mouseMoved,
+        mouseCursorPosition: point, mouseButton: .left)
+    else { return nil }
+    move.flags = modifiers.cgEventFlags
+    move.setIntegerValueField(.mouseEventDeltaX, value: Int64((point.x - origin.x).rounded()))
+    move.setIntegerValueField(.mouseEventDeltaY, value: Int64((point.y - origin.y).rounded()))
+    move.setIntegerValueField(.eventSourceUserData, value: syntheticMouseEventTag)
+    var events = [move]
+
     let button: CGMouseButton
     let downType: CGEventType
     let upType: CGEventType
@@ -126,77 +177,20 @@ enum ActionDispatcher {
     case .tripleClick: clickCount = 3
     case .leftClick, .rightClick, .middleClick: clickCount = 1
     }
-    struct ClickPair {
-      let down: CGEvent
-      let up: CGEvent
-    }
-    var pairs: [ClickPair] = []
-    pairs.reserveCapacity(clickCount)
     for clickIndex in 1...clickCount {
-      guard
-        let down = CGEvent(
-          mouseEventSource: source, mouseType: downType, mouseCursorPosition: cgPoint,
-          mouseButton: button),
-        let up = CGEvent(
-          mouseEventSource: source, mouseType: upType, mouseCursorPosition: cgPoint,
-          mouseButton: button)
-      else {
-        FlashLog.warn("[click] could not create CGEvent for synthesized click")
-        return
-      }
-      down.flags = modifiers.cgEventFlags
-      up.flags = modifiers.cgEventFlags
-      down.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-      up.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-      // Stamp synthetic tag so our own pointer monitors drop this event
-      // instead of treating it as a real user click that would dismiss
-      // the overlay or flip mode. Matches `synthesizeMouseButton`.
-      down.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
-      up.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
-      pairs.append(ClickPair(down: down, up: up))
-    }
-
-    let postMove = {
-      if let move = CGEvent(
-        mouseEventSource: source,
-        mouseType: .mouseMoved,
-        mouseCursorPosition: cgPoint,
-        mouseButton: .left)
-      {
-        move.setIntegerValueField(
-          .mouseEventDeltaX, value: Int64((cgPoint.x - originalCursor.x).rounded()))
-        move.setIntegerValueField(
-          .mouseEventDeltaY, value: Int64((cgPoint.y - originalCursor.y).rounded()))
-        move.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
-        move.post(tap: .cghidEventTap)
+      for type in [downType, upType] {
+        guard
+          let event = CGEvent(
+            mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+            mouseButton: button)
+        else { return nil }
+        event.flags = modifiers.cgEventFlags
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+        event.setIntegerValueField(.eventSourceUserData, value: syntheticMouseEventTag)
+        events.append(event)
       }
     }
-
-    let movesCursor =
-      abs(originalCursor.x - cgPoint.x) >= 0.5
-      || abs(originalCursor.y - cgPoint.y) >= 0.5
-    withCursorHidden(when: movesCursor) {
-      if movesCursor {
-        // A warp itself posts no event. One mouseMoved lets the host apply its
-        // normal hover state without an interpolated pointer path.
-        warpCursor(to: cgPoint)
-        postMove()
-      }
-      usleep(20_000)
-      // Terminals need a nonzero down/up interval to recognize modified clicks.
-      let mouseDownHoldUs = useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000)
-      for pair in pairs {
-        pair.down.post(tap: .cghidEventTap)
-        usleep(mouseDownHoldUs)
-        pair.up.post(tap: .cghidEventTap)
-      }
-    }
-    FlashLog.trace(
-      "[click] synthesize at=(\(Int(screenPoint.x)),\(Int(screenPoint.y))) "
-        + "action=\(action) flags=\(modifiers.cgEventFlags.rawValue) "
-        + "modifiers=cmd:\(modifiers.contains(.command)) "
-        + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
-        + "alt:\(modifiers.contains(.option)) frontmost=\(frontmostBundleID)")
+    return events
   }
 
   /// Magic number stamped on every mouse event we synthesize so we can

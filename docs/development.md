@@ -36,4 +36,9 @@ Browser, native AppKit, and Electron integration suites are available separately
 ./Scripts/test-integration-electron.sh
 ```
 
+Electron setup installs both the pinned npm package and its binary. Native
+resident probes also require Automation permission for the signed oracle to
+send commands to Flash. The oracle bundle declares that usage; a native
+AppleEvent error reports its OSStatus rather than an invalid Flash command.
+
 `swift build` alone does not update the resident app in `/Applications`. See [AGENTS.md](../AGENTS.md) for the architecture, source contracts, and repository guardrails.
