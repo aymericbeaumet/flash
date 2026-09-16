@@ -31,6 +31,74 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertNil(value.outgoing.animation(forKey: crossfadeKey))
   }
 
+  func testPooledMetricAnimationCannotSurviveIntoModePill() {
+    let surface = render("10%", columns: 30)
+    redraw(surface, "11%", columns: 30)
+    let layers = surface.runLayers[0]
+    XCTAssertNotNil(layers.text.animation(forKey: crossfadeKey))
+    XCTAssertNotNil(layers.outgoing.animation(forKey: crossfadeKey))
+
+    redraw(surface, "#[pill]NORMAL#[nopill]", columns: 30)
+
+    XCTAssertEqual((layers.text.string as? NSAttributedString)?.string, "NORMAL")
+    XCTAssertNil(layers.text.animation(forKey: crossfadeKey))
+    XCTAssertNil(layers.outgoing.animation(forKey: crossfadeKey))
+    XCTAssertNil(layers.outgoing.string)
+  }
+
+  func testLiveModeTextResolvesBeforePillSizingAndPreservesLiteralText() {
+    var mode = FlashStatusTextSegment(text: "N", foreground: .red)
+    mode.isModeLabel = true
+    mode.pill = true
+    var literal = mode
+    literal.isModeLabel = false
+    let document = StatusFormatDocument(runs: [
+      mode, FlashStatusTextSegment(text: " N ", foreground: .defaultForeground), literal,
+    ])
+    let surface = NativeStatusBarSurface()
+    redraw(
+      surface, document: document, columns: 80,
+      labels: .init(normal: "N", insert: "I", command: "C"), style: .insert,
+      modeText: "LONG MODE")
+
+    XCTAssertEqual(
+      surface.runLayers.prefix(3).map { ($0.text.string as? NSAttributedString)?.string },
+      ["LONG MODE", " N ", "N"])
+    XCTAssertEqual(surface.runFrames[0].width, CGFloat(9) * 13 * 0.66 + 16, accuracy: 0.001)
+    XCTAssertEqual(surface.runFrames[1].minX, surface.runFrames[0].maxX, accuracy: 0.001)
+    XCTAssertEqual(document.runs[0].text, "N", "Rendering must not rewrite a published model")
+  }
+
+  func testLiveModeTextOutsidePillChangesImmediately() {
+    var mode = FlashStatusTextSegment(text: "STALE", foreground: .defaultForeground)
+    mode.isModeLabel = true
+    let document = StatusFormatDocument(runs: [mode])
+    let surface = NativeStatusBarSurface()
+    redraw(surface, document: document, columns: 40, modeText: "NORMAL")
+    redraw(surface, document: document, columns: 40, style: .insert, modeText: "INSERT")
+
+    let layers = surface.runLayers[0]
+    XCTAssertEqual((layers.text.string as? NSAttributedString)?.string, "INSERT")
+    XCTAssertNil(layers.text.animation(forKey: crossfadeKey))
+    XCTAssertNil(layers.outgoing.animation(forKey: crossfadeKey))
+  }
+
+  func testLiveModePillPreservesEmptyPlaceholderAcrossLabelChanges() {
+    var mode = FlashStatusTextSegment(text: "", foreground: .defaultForeground)
+    mode.isModeLabel = true
+    mode.pill = true
+    let document = StatusFormatDocument(runs: [mode])
+    let surface = NativeStatusBarSurface()
+    for (input, expected) in [(" INSERT ", "INSERT"), (" \t ", ""), ("NORMAL", "NORMAL")] {
+      redraw(surface, document: document, columns: 40, modeText: input)
+      let layers = surface.runLayers[0]
+      XCTAssertFalse(layers.pill.isHidden)
+      XCTAssertEqual((layers.text.string as? NSAttributedString)?.string, expected)
+      XCTAssertNil(layers.text.animationKeys())
+      XCTAssertNil(layers.outgoing.animationKeys())
+    }
+  }
+
   func testHoverWashUpdatesImmediatelyAndBarDrawsHairlineUnderTransparentRuns() throws {
     let surface = render("A #[fg=red]B#[default] C", columns: 10)
     let first = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "A " })
@@ -438,17 +506,39 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     labels: Config.Mode.Labels = .init(normal: "N", insert: "INSERT", command: "COMMAND"),
     style: OverlayModeBadgeStyle = .normal
   ) {
+    let modeText: String
+    switch style {
+    case .normal: modeText = labels.normal
+    case .insert: modeText = labels.insert
+    case .command: modeText = labels.command
+    }
+    redraw(
+      surface, document: StatusFormatDocument.parse(source), columns: columns, notch: notch,
+      labels: labels, style: style, modeText: modeText)
+  }
+
+  private func redraw(
+    _ surface: NativeStatusBarSurface, document: StatusFormatDocument, columns: Int,
+    notch: CGRect? = nil,
+    labels: Config.Mode.Labels = .init(normal: "N", insert: "INSERT", command: "COMMAND"),
+    style: OverlayModeBadgeStyle = .normal, modeText: String
+  ) {
     let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
     let width =
       ("M" as NSString).size(withAttributes: [.font: font]).width * CGFloat(columns)
       + OverlayPanel.statusBarEdgePadding * 2 + 0.001
+    let palette: OverlayPanel.ModeBadgePalette
+    switch style {
+    case .normal: palette = OverlayPanel.normalPalette
+    case .insert: palette = OverlayPanel.insertPalette
+    case .command: palette = OverlayPanel.commandPaletteValue
+    }
     surface.render(
-      document: StatusFormatDocument.parse(source),
+      document: document,
       barFrame: CGRect(x: 0, y: 0, width: width, height: 26),
       screenFrame: CGRect(x: 0, y: 0, width: width, height: 900),
       scale: 2, notch: notch, font: font,
       labels: labels,
-      palette: style == .insert ? OverlayPanel.insertPalette : OverlayPanel.normalPalette,
-      modeStyle: style)
+      palette: palette, modeStyle: style, modeText: modeText)
   }
 }

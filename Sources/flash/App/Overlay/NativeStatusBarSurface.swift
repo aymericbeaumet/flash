@@ -24,7 +24,7 @@ final class NativeStatusBarSurface {
     let curlyUnderline = CAShapeLayer()
     var previous: FlashStatusTextSegment?
     var previousFont: NSFont?
-    var previousPalette: OverlayModeBadgeStyle?
+    var previousForeground: CGColor?
     var previousFrame: CGRect?
     init() {
       for layer in [container, pill, text, outgoing, effect, overline, curlyUnderline] {
@@ -69,8 +69,16 @@ final class NativeStatusBarSurface {
   func render(
     document: StatusFormatDocument, barFrame: CGRect, screenFrame: CGRect,
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
-    palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle
+    palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle, modeText: String
   ) {
+    let modeText = modeText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let document = StatusFormatDocument(
+      runs: document.runs.map { run in
+        guard run.isModeLabel else { return run }
+        var run = run
+        run.text = modeText
+        return run
+      })
     let previousRuns = visibleRuns
     cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     availableColumns = max(
@@ -169,36 +177,47 @@ final class NativeStatusBarSurface {
           pillLabels.first { $0.padded == segment.text }?.label
           ?? segment.text.trimmingCharacters(in: .whitespaces)
         segment.bold = true
-        segment.foreground = .rgb(Self.rgb(palette.foregroundCG))
+        segment.foreground = .defaultForeground
         segment.background = .defaultBackground
         segment.reverse = false
       }
-      if !segment.cycle, layers.previous?.cycle == true {
+      let pillForeground = segment.pill ? palette.foregroundCG : nil
+      let foregroundColor = pillForeground.flatMap { NSColor(cgColor: $0) }
+      let allowsTransition = !segment.pill && !segment.isModeLabel
+      if !allowsTransition {
+        layers.text.removeAnimation(forKey: Self.cycleAnimationKey)
+        layers.text.removeAnimation(forKey: Self.crossfadeAnimationKey)
+        layers.effect.removeAnimation(forKey: Self.cycleAnimationKey)
+        layers.outgoing.removeAllAnimations()
+        layers.outgoing.string = nil
+      } else if !segment.cycle, layers.previous?.cycle == true {
         layers.text.removeAnimation(forKey: Self.cycleAnimationKey)
         layers.effect.removeAnimation(forKey: Self.cycleAnimationKey)
         layers.outgoing.removeAllAnimations()
       }
       let sameFont = layers.previousFont == font
+      let cycles = allowsTransition && cycling.contains(index)
       let changed =
         layers.previous != segment || !sameFont
-        || layers.previousPalette != modeStyle || cycling.contains(index)
+        || layers.previousForeground != pillForeground || cycles
       if changed {
         let outgoingString = layers.text.string
         let previousText = layers.previous?.text
         let samePlace = layers.previousFrame == rect && sameFont
-        let attributed = FlashStatusBarRenderer.attributedSegment(segment, font: font)
+        let attributed = FlashStatusBarRenderer.attributedSegment(
+          segment, font: font, foregroundColor: foregroundColor)
         layers.text.string = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
-          from: [segment], font: font)
+          from: [segment], font: font, foregroundColor: foregroundColor)
         layers.effect.string = attributed
         layers.text.setNeedsDisplay()
         layers.effect.setNeedsDisplay()
         layers.previous = segment
         layers.previousFont = font
-        layers.previousPalette = modeStyle
-        if cycling.contains(index) {
+        layers.previousForeground = pillForeground
+        if cycles {
           Self.runCycleTransition(
             layers, outgoing: outgoingString, textRect: textRect, startedAt: cycleStartedAt)
-        } else if !segment.pill, !segment.cycle, samePlace, let previousText,
+        } else if allowsTransition, !segment.cycle, samePlace, let previousText,
           previousText != segment.text
         {
           // A value changing in place (a metric tick, the clock) crossfades
@@ -221,8 +240,9 @@ final class NativeStatusBarSurface {
       }
       layers.overline.isHidden = !segment.overline || segment.hidden
       let foreground = segment.reverse ? segment.background : segment.foreground
-      let strokeColor = FlashStatusTextColor.nsColor(foreground).withAlphaComponent(
-        segment.dim ? 0.6 : 1)
+      let strokeColor = (foregroundColor ?? FlashStatusTextColor.nsColor(foreground))
+        .withAlphaComponent(
+          segment.dim ? 0.6 : 1)
       layers.overline.backgroundColor = strokeColor.cgColor
       layers.overline.frame = CGRect(
         x: 0, y: textY + textHeight - 1, width: rect.width, height: 1 / max(1, scale))
@@ -451,12 +471,6 @@ final class NativeStatusBarSurface {
       removed[alignment, default: 0] += reservedWidth - width
       return CGRect(x: x, y: 0, width: width, height: height)
     }
-  }
-
-  private static func rgb(_ value: CGColor) -> UInt32 {
-    let color = NSColor(cgColor: value)?.usingColorSpace(.sRGB) ?? .white
-    return UInt32(color.redComponent * 255) << 16 | UInt32(color.greenComponent * 255) << 8
-      | UInt32(color.blueComponent * 255)
   }
 
   static func preparedDocument(_ document: StatusFormatDocument, pillColumns: Int, hideCentre: Bool)

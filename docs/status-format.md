@@ -148,6 +148,14 @@ end rather than reaching the centred label. A bar too narrow to hold both
 lanes and that reservation drops the reservation instead of erasing a lane. These host
 surfaces do not alter format evaluation.
 
+Bare `#{flash.mode}` references retain their identity through template and
+option expansion. The renderer resolves their text from the current mode in
+the same paint as the pill's foreground, gradient and border. A queued status
+update cannot restore an earlier mode label. Mode labels and pills change
+immediately and never inherit a metric's crossfade or carousel animation.
+Literal text and explicitly transformed format values keep their authored
+meaning.
+
 The bar itself is a vertical gradient over the `fill` colour with a hairline
 along its bottom edge; default-background cells are transparent so both show
 through. Mode pills are lit from the top. A hovered `#[link]` or `#[popup]` run
@@ -157,7 +165,7 @@ outer separator spaces while preserving the span's click and popup targets.
 A whole-row popup does not wash the row while the pointer sits on one of its
 links, and a span wide enough to cover most of a lane is dimmed further.
 Status updates refresh the wash under a stationary pointer using the new
-layout. A value changing in place (a metric tick, the clock) crossfades over
+layout. A metric or clock value changing in place crossfades over
 100 ms, short enough that a 1 Hz metric reads as a snap rather than a
 smear. A carousel article change is one vertical push over 450 ms: the old
 line moves a full line height up and fades out while the next rises the same

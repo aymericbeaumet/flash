@@ -64,7 +64,7 @@ final class FeedStatusLayoutTests: XCTestCase {
       screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 900), scale: 2, notch: notch,
       font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
       labels: .init(normal: "N", insert: "INSERT", command: "COMMAND"),
-      palette: OverlayPanel.normalPalette, modeStyle: .normal)
+      palette: OverlayPanel.normalPalette, modeStyle: .normal, modeText: "N")
     return surface
   }
 }

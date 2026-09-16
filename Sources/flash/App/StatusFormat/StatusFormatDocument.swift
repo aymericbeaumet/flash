@@ -42,18 +42,33 @@ struct StatusFormatDocument: Equatable {
     defaultForeground: FlashStatusTextColor = .defaultForeground
   ) -> Self {
     let raw = evaluation.text
-    var locations: [(range: Range<Int>, span: StatusFormatSpan)] = []
+    var locations: [(range: Range<Int>, fragment: StatusFormatFragment)] = []
+    var emptyModeLabels: [Int: [StatusFormatSpan]] = [:]
     var offset = 0
     for fragment in evaluation.fragments {
-      locations.append((offset..<(offset + fragment.text.utf8.count), fragment.span))
+      locations.append((offset..<(offset + fragment.text.utf8.count), fragment))
+      if fragment.isModeLabel, fragment.text.isEmpty {
+        emptyModeLabels[offset, default: []].append(fragment.span)
+      }
       offset += fragment.text.utf8.count
     }
     var state = StatusFormatStyleState(defaultForeground: defaultForeground)
     var runs: [FlashStatusTextSegment] = []
     var inlineCounts: [String: Int] = [:]
+    func appendEmptyModeLabels(at offset: Int) {
+      for span in emptyModeLabels[offset] ?? [] {
+        var run = state.current
+        run.text = ""
+        run.origin = span
+        run.isModeLabel = true
+        runs.append(run)
+      }
+    }
     for piece in StatusFormatCells.pieces(raw) {
+      appendEmptyModeLabels(at: piece.bytes.lowerBound)
+      let fragment = locations.first(where: { $0.range.contains(piece.bytes.lowerBound) })?.fragment
       let origin =
-        locations.first(where: { $0.range.contains(piece.bytes.lowerBound) })?.span
+        fragment?.span
         ?? StatusFormatSpan(origin: .init(), bytes: piece.bytes)
       if piece.style, !state.current.ignore {
         let body = String(piece.raw.dropFirst(2).dropLast())
@@ -79,6 +94,7 @@ struct StatusFormatDocument: Equatable {
       var run = state.current
       run.text = text
       run.origin = origin
+      run.isModeLabel = fragment?.isModeLabel ?? false
       if run.alternateCharacterSet { run.text = alternateCharacters(run.text) }
       if var last = runs.last {
         last.text = run.text
@@ -89,6 +105,7 @@ struct StatusFormatDocument: Equatable {
       }
       runs.append(run)
     }
+    appendEmptyModeLabels(at: raw.utf8.count)
     return Self(runs: runs)
   }
 

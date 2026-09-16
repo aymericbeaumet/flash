@@ -279,7 +279,8 @@ final class StatusBarHoverTests: XCTestCase {
         document: StatusFormatDocument.parse(prefix + "#[popup=feed]AGGR#[nopopup]"),
         barFrame: CGRect(x: 0, y: 774, width: 900, height: 26), screenFrame: screen,
         scale: 2, notch: nil, font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
-        labels: .init(), palette: OverlayPanel.normalPalette, modeStyle: .normal)
+        labels: .init(), palette: OverlayPanel.normalPalette, modeStyle: .normal, modeText: "NORMAL"
+      )
       return try XCTUnwrap(
         surface.interactionRects(
           panelFrame: screen, popupTexts: ["feed": "Preview"], popupDocuments: [:]

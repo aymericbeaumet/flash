@@ -61,6 +61,7 @@ struct FlashStatusTextSegment: Equatable {
   var padding = 0
   var ignore = false
   var pill = false
+  var isModeLabel = false
   var shrink = false
   var cycle = false
 
@@ -441,7 +442,7 @@ enum FlashStatusBarTemplateEngine {
         var run = run
         run.text = normalizedTemplate(run.text)
         return run
-      }.filter { !$0.text.isEmpty || $0.isStyleBoundary }
+      }.filter { !$0.text.isEmpty || $0.isStyleBoundary || $0.isModeLabel }
     }
     let left = barRuns(.left)
     let centre = barRuns(.centre) + barRuns(.absoluteCentre)
@@ -743,11 +744,13 @@ enum FlashStatusBarRenderer {
   /// alpha (matching the old renderer, which never animated fills).
   static func attributedStatusStringHidingAnimatedSpans(
     from segments: [FlashStatusTextSegment],
-    font: NSFont
+    font: NSFont,
+    foregroundColor: NSColor? = nil
   ) -> NSAttributedString {
     let attributed = NSMutableAttributedString()
     for segment in segments {
-      let piece = attributedSegment(segment, font: font, currentTime: 0)
+      let piece = attributedSegment(
+        segment, font: font, currentTime: 0, foregroundColor: foregroundColor)
       if segment.blink || segment.breathing {
         let mutable = NSMutableAttributedString(attributedString: piece)
         let range = NSRange(location: 0, length: mutable.length)
@@ -856,7 +859,8 @@ enum FlashStatusBarRenderer {
   static func attributedSegment(
     _ segment: FlashStatusTextSegment,
     font: NSFont,
-    currentTime: TimeInterval = 0
+    currentTime: TimeInterval = 0,
+    foregroundColor: NSColor? = nil
   ) -> NSAttributedString {
     // tmux's `reverse` swaps fg + bg; mirror that so `#[reverse]…#[noreverse]`
     // matches what the user expects.
@@ -864,7 +868,7 @@ enum FlashStatusBarRenderer {
       segment.reverse ? segment.background : segment.foreground
     let background =
       segment.reverse ? segment.foreground : segment.background
-    let fg = nsColor(for: foreground)
+    let fg = foregroundColor ?? nsColor(for: foreground)
     let bg =
       segment.background == .defaultBackground && !segment.reverse
       ? nil : nsColor(for: background)

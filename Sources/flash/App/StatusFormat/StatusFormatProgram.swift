@@ -37,6 +37,7 @@ struct StatusFormatDependencies: Equatable {
 struct StatusFormatFragment: Equatable {
   var text: String
   var span: StatusFormatSpan
+  var isModeLabel = false
 }
 
 struct StatusFormatJobRequest: Equatable, Hashable {
@@ -504,7 +505,9 @@ private struct StatusFormatEvaluator {
     let windowQuery = nameQueries.contains { $0.arguments.isEmpty || $0.arguments[0].contains("w") }
     let sessionQuery = nameQueries.contains { $0.arguments.first?.contains("s") == true }
     func bool(_ value: Bool) -> String { value ? "1" : "0" }
-    func wrap(_ text: String) -> [StatusFormatFragment] { [.init(text: text, span: span)] }
+    func wrap(_ text: String, isModeLabel: Bool = false) -> [StatusFormatFragment] {
+      [.init(text: text, span: span, isModeLabel: isModeLabel)]
+    }
     var fragments: [StatusFormatFragment]
     if names.contains("l") {
       fragments = wrap(StatusFormatSyntax.unescape(expression.raw))
@@ -606,7 +609,9 @@ private struct StatusFormatEvaluator {
     } else if expression.raw.contains("#{") {
       fragments = expand(expression.operand, context: context, depth: depth)
     } else {
-      fragments = wrap(lookup(expression.raw, modifiers: modifiers, context: context) ?? "")
+      fragments = wrap(
+        lookup(expression.raw, modifiers: modifiers, context: context) ?? "",
+        isModeLabel: expression.raw == "flash.mode" && modifiers.isEmpty)
     }
     var value = fragments.map(\.text).joined()
     if names.contains("E") || names.contains("T") {

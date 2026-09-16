@@ -68,6 +68,11 @@ only when its selected target is an input; other hint targets keep NORMAL.
 A mouse-grid click always enters INSERT. Physical app clicks and an explicit
 `enter_insert_mode` mapping also hand typing to the app.
 
+The status pill resolves its mode label and palette from the current mode
+together. Background status evaluations preserve the live `#{flash.mode}`
+reference, so plugin updates and queued renders cannot repaint an old label
+with the new mode's colors. Mode labels update without a fade.
+
 Bind `["flash", "leave_mode"]` in `[mode.all.mappings]` to enable advanced
 mode with one exit shortcut. It returns INSERT to
 NORMAL, closes command-line, finder, and terminal surfaces using their recorded

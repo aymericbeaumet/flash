@@ -326,7 +326,7 @@ extension OverlayPanel {
         barFrame: Self.statusBarFrame(
           screenFrame: screen, visibleFrame: visible, panelFrame: panelFrame, fontSize: fontSize),
         screenFrame: screen, scale: scale, notch: notch, font: font, labels: modeLabels,
-        palette: modeBadgePalette(), modeStyle: modeBadgeStyle)
+        palette: modeBadgePalette(), modeStyle: modeBadgeStyle, modeText: modeBadgeText)
       let hits = surface.interactionRects(
         panelFrame: panelFrame, popupTexts: statusBarPopupTexts,
         popupDocuments: statusBarPopupDocuments)
