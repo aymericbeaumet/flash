@@ -1,7 +1,7 @@
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use flash_plugin::status::{duration_hours_minutes, percent3, sparkline_padded, sparkline_percent};
+use flash_plugin::status::{duration_hours_minutes, percent, sparkline_padded, sparkline_percent};
 use flash_plugin::{
     run, run_command, Color, CommandRequest, Context, Event, History, Markup, PerformResponse,
     Preview, Published, RefreshGate, StatusValue, Style,
@@ -361,12 +361,12 @@ fn render_status(
     summary_mode: SummaryMode,
     history: &ChargeHistory,
 ) -> PowerStatus {
-    // Charge is slow-moving, so it shows a true 100% rather than the 99 cap
-    // the fast metrics use; `percent3` is fixed-width, so the label never
-    // shifts its neighbours on the way there.
+    // Charge is slow-moving, so it reads true and plain: no 99 cap like the
+    // fast metrics, and no padding either — it crosses a width boundary so
+    // rarely that a reserved column would cost more than the shift saves.
     let charge = snapshot.battery.as_ref().map_or_else(
-        || "   —".to_string(),
-        |battery| percent3(f64::from(battery.percent)),
+        || "—".to_string(),
+        |battery| percent(f64::from(battery.percent)),
     );
     PowerStatus {
         summary: visible_summary(snapshot, summary_mode),
@@ -470,7 +470,7 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Marku
     }
     let (mut value, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            percent3(f64::from(battery.percent)),
+            percent(f64::from(battery.percent)),
             snapshot.source == PowerSource::Adapter,
         ),
         None => ("—".to_string(), false),
@@ -592,14 +592,14 @@ mod tests {
 
     #[test]
     fn label_keeps_charge_width_and_leaves_popup_interactions_to_the_template() {
-        // Charge is slow-moving, so unlike the fast metrics it reaches a true
-        // 100% — at a fixed four-column width, so the label never shifts.
+        // Charge is slow-moving, so unlike the fast metrics it reads true and
+        // unpadded: a plain 16% or 100%, not a reserved column.
         for (percent, expected) in [
-            (None, "   —"),
-            (Some(0), "  0%"),
-            (Some(9), "  9%"),
-            (Some(10), " 10%"),
-            (Some(99), " 99%"),
+            (None, "—"),
+            (Some(0), "0%"),
+            (Some(9), "9%"),
+            (Some(16), "16%"),
+            (Some(99), "99%"),
             (Some(100), "100%"),
         ] {
             let snapshot = PowerSnapshot {
@@ -643,8 +643,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_power_summary_uses_grey_three_column_percentage() {
-        for (percent, expected) in [(9, "  9%"), (10, " 10%"), (99, " 99%"), (100, "100%")] {
+    fn compact_power_summary_uses_a_grey_unpadded_percentage() {
+        for (percent, expected) in [(9, "9%"), (16, "16%"), (99, "99%"), (100, "100%")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
                 battery: Some(BatterySnapshot {
@@ -784,7 +784,7 @@ mod tests {
 
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact).as_str(),
-            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing] 73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
         assert!(visible_summary(&snapshot, SummaryMode::Full)
             .as_str()
@@ -871,7 +871,7 @@ History       ····················"
                         );
                     } else {
                         assert!(
-                            visible.contains(&format!("{percent:>3}%")),
+                            visible.contains(&format!("{percent}%")),
                             "{snapshot:?} {mode:?}"
                         );
                         if mode == SummaryMode::Full {
@@ -910,7 +910,7 @@ History       ····················"
         .unwrap();
         assert_eq!(
             visible_summary(&snapshot, SummaryMode::Compact).as_str(),
-            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245] 25%#[norange]#[default]#[pop-default]"
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
             render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new())

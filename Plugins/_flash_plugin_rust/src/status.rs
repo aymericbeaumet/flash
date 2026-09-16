@@ -761,19 +761,20 @@ pub fn rate_cells4(bytes_per_second: f64) -> String {
 ///
 /// For a FAST metric the cap is the honest trade: CPU and network readings
 /// cross 100 for a single sample constantly, and a label that widens for one
-/// tick shifts every run beside it. A slow metric should use [`percent3`],
-/// which reaches 100 without ever changing width.
+/// tick shifts every run beside it. A slow metric should use [`percent`],
+/// which reads true and is allowed to change width because it rarely does.
 pub fn percent2(value: f64) -> String {
     let value = if value > 0.0 { value.min(99.0) } else { 0.0 };
     format!("{value:>2.0}%")
 }
 
-/// Three-digit percentage that reaches 100: `  9%`, ` 99%`, `100%`. One column
-/// wider than [`percent2`] and never wider than itself, so a slow metric such
-/// as battery charge can show a true full reading without the label moving.
-pub fn percent3(value: f64) -> String {
+/// Unpadded percentage that reaches 100: `9%`, `16%`, `100%`. For a slow
+/// metric such as battery charge the reading should be true and plain; it
+/// crosses a width boundary so rarely that padding it would cost a column on
+/// every render to spare one shift a day.
+pub fn percent(value: f64) -> String {
     let value = if value > 0.0 { value.min(100.0) } else { 0.0 };
-    format!("{value:>3.0}%")
+    format!("{value:.0}%")
 }
 
 /// One bar per sample on a fixed 0–100 scale (rounded).
@@ -1123,19 +1124,18 @@ free form"
     }
 
     #[test]
-    fn percent3_reaches_one_hundred_at_a_fixed_width() {
+    fn percent_reads_true_without_padding() {
         for (value, expected) in [
-            (0.0, "  0%"),
-            (9.0, "  9%"),
-            (10.0, " 10%"),
+            (0.0, "0%"),
+            (9.0, "9%"),
+            (16.0, "16%"),
             (99.6, "100%"),
             (100.0, "100%"),
             (250.0, "100%"),
-            (-5.0, "  0%"),
-            (f64::NAN, "  0%"),
+            (-5.0, "0%"),
+            (f64::NAN, "0%"),
         ] {
-            assert_eq!(percent3(value), expected, "value {value}");
-            assert_eq!(percent3(value).chars().count(), 4);
+            assert_eq!(percent(value), expected, "value {value}");
         }
     }
 
