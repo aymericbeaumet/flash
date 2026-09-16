@@ -181,5 +181,9 @@ rtk proxy ./Scripts/test-integration-electron.sh
 The integration scripts own their fixture processes and cleanup. Native/Electron
 oracles verify real host clicks; the browser oracle compares AX targets with
 reference DOM markers. The no-tap key-window fallback may dismiss native menus.
+GUI probes require an unlocked console session. Check session state before
+sending test input and after unexpected delivery failures. While locked,
+Workspace lookups may be empty and AX window references may resolve to the app;
+neither those results nor missing input events establish an application bug.
 Type-checking and pure tests do not verify the visible overlay: report any
 remaining manual verification honestly.
