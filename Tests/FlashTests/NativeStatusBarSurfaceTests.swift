@@ -438,6 +438,37 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertFalse(NativeStatusBarSurface.truncationEquivalent("Hello…", "Help"))
   }
 
+  func testDrawnNotchTracesTheHousingOutline() {
+    // The camera housing hangs from the top edge: its sides run straight up
+    // into the bezel and only the two bottom corners are rounded. An outline
+    // that also flares at the top reads as a drawn widget, not a cutout.
+    let rect = CGRect(x: 100, y: 0, width: 185, height: 30)
+    let path = NativeStatusBarSurface.centreNotchPath(in: rect, height: rect.height)
+    XCTAssertEqual(path.boundingBox.minX, rect.minX, accuracy: 0.001)
+    XCTAssertEqual(path.boundingBox.maxX, rect.maxX, accuracy: 0.001)
+    XCTAssertEqual(path.boundingBox.height, rect.height, accuracy: 0.001)
+
+    let radius = NativeStatusBarSurface.notchCornerRadius
+    // Flush with both top corners, so nothing shows between it and the edge.
+    XCTAssertTrue(path.contains(CGPoint(x: rect.minX + 0.5, y: rect.height - 0.5)))
+    XCTAssertTrue(path.contains(CGPoint(x: rect.maxX - 0.5, y: rect.height - 0.5)))
+    // Straight sides all the way down to where the corners begin.
+    XCTAssertTrue(path.contains(CGPoint(x: rect.minX + 0.5, y: radius + 1)))
+    XCTAssertTrue(path.contains(CGPoint(x: rect.maxX - 0.5, y: radius + 1)))
+    // Both bottom corners are cut away.
+    XCTAssertFalse(path.contains(CGPoint(x: rect.minX + 0.5, y: 0.5)))
+    XCTAssertFalse(path.contains(CGPoint(x: rect.maxX - 0.5, y: 0.5)))
+    // The bottom edge between them is solid.
+    XCTAssertTrue(path.contains(CGPoint(x: rect.midX, y: 0.5)))
+
+    // A bar shorter than the radius degrades to a rounded stub, never an
+    // inverted or self-intersecting path.
+    let squat = NativeStatusBarSurface.centreNotchPath(
+      in: CGRect(x: 0, y: 0, width: 12, height: 4), height: 4)
+    XCTAssertEqual(squat.boundingBox.width, 12, accuracy: 0.001)
+    XCTAssertEqual(squat.boundingBox.height, 4, accuracy: 0.001)
+  }
+
   func testDrawnAndRealNotchesReserveTheSameClearance() {
     // A drawn recess is the real housing's width, so the lanes have to clear
     // it by the housing's margin too — otherwise the bar would lay out

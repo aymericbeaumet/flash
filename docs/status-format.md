@@ -145,9 +145,12 @@ for title-only ellipsis with an always-visible outbound arrow. An
 absolute-centre component owns its own columns plus a small gutter: a side
 lane contracts its elastic span first and then loses characters from its far
 end rather than reaching the centred label. That reservation is drawn as a
-recessed notch (the bar fill sunk slightly, rounded like the camera housing)
-with the real housing's fixed width (a connected notched display's, else the
-16-inch MacBook Pro's 185 pt). The side lanes clear it by `[statusbar]
+recessed notch — the bar fill sunk slightly — tracing the hardware outline:
+sides running straight up into the top edge with only the two bottom corners
+rounded, at the real housing's fixed width (a connected notched display's,
+else the 16-inch MacBook Pro's 185 pt). macOS publishes the notch rect but
+never its corner radius, so that radius is the one constant in the shape.
+The side lanes clear it by `[statusbar]
 notch_margin`, the same points they clear a real housing by, so both notches
 occupy identical space; centred content longer than the recess interior is
 clipped with an ellipsis. A screen with a physical notch hides the centre and

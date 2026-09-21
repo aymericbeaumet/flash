@@ -334,29 +334,28 @@ final class NativeStatusBarSurface {
 
   /// Physical notch proportions scaled to the bar: the housing's bottom corners
   /// are rounded and its top corners fillet outward into the bar's edge.
+  /// The camera housing's bottom corners. macOS publishes the notch's rect
+  /// (`auxiliaryTopLeftArea` / `auxiliaryTopRightArea`) but never its corner
+  /// radius, so this is the one part of the shape that is a constant rather
+  /// than measured.
+  static let notchCornerRadius: CGFloat = 9
+
+  /// The housing's outline: a rectangle hanging from the top edge whose sides
+  /// run straight up into the bezel, with only its two bottom corners
+  /// rounded. Layer coordinates are y-up, so the bar's top edge is `height`.
   static func centreNotchPath(in rect: CGRect, height: CGFloat) -> CGPath {
-    let fillet = min(height * 0.2, 5)
-    let radius = min(height * 0.35, 9)
-    let x0 = rect.minX + fillet
-    let x1 = rect.maxX - fillet
-    let top = height
+    let radius = max(0, min(notchCornerRadius, min(rect.width / 2, height)))
     let path = CGMutablePath()
-    path.move(to: CGPoint(x: rect.minX, y: top))
+    path.move(to: CGPoint(x: rect.minX, y: height))
+    path.addLine(to: CGPoint(x: rect.minX, y: radius))
     path.addArc(
-      center: CGPoint(x: rect.minX, y: top - fillet), radius: fillet,
-      startAngle: .pi / 2, endAngle: 0, clockwise: true)
-    path.addLine(to: CGPoint(x: x0, y: radius))
-    path.addArc(
-      center: CGPoint(x: x0 + radius, y: radius), radius: radius,
+      center: CGPoint(x: rect.minX + radius, y: radius), radius: radius,
       startAngle: .pi, endAngle: .pi * 1.5, clockwise: false)
-    path.addLine(to: CGPoint(x: x1 - radius, y: 0))
+    path.addLine(to: CGPoint(x: rect.maxX - radius, y: 0))
     path.addArc(
-      center: CGPoint(x: x1 - radius, y: radius), radius: radius,
-      startAngle: .pi * 1.5, endAngle: 0, clockwise: false)
-    path.addLine(to: CGPoint(x: x1, y: top - fillet))
-    path.addArc(
-      center: CGPoint(x: rect.maxX, y: top - fillet), radius: fillet,
-      startAngle: .pi, endAngle: .pi / 2, clockwise: true)
+      center: CGPoint(x: rect.maxX - radius, y: radius), radius: radius,
+      startAngle: .pi * 1.5, endAngle: .pi * 2, clockwise: false)
+    path.addLine(to: CGPoint(x: rect.maxX, y: height))
     path.closeSubpath()
     return path
   }
