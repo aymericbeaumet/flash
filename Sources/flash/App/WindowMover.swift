@@ -16,7 +16,13 @@ final class WindowLayoutManager {
   typealias ScreenLayoutsProvider =
     (Bool, Config.StatusBar.Monitor) -> [WindowScreenLayout]
 
-  static let defaultScreenRecoveryDelaysMs = [80, 250, 750, 1_500]
+  /// Bounded passes after a display change. AppKit reports the change before
+  /// `NSScreen` settles, and the apps themselves relocate their windows over
+  /// the following seconds — a reconnected or woken display is the slow case,
+  /// well past where the earlier ladder stopped looking. The last entry also
+  /// sets how long observed frames are treated as macOS's doing rather than
+  /// the user's.
+  static let defaultScreenRecoveryDelaysMs = [80, 250, 750, 1_500, 3_000]
 
   private struct WindowKey: Hashable {
     let pid: pid_t
@@ -139,6 +145,11 @@ final class WindowLayoutManager {
         forceRecovery || previousScreens != initialScreens
       else { return }
 
+      FlashLog.debug(
+        "[window_layout] screen_change screens=\(initialScreens.count) "
+          + "tracked=\(self.tracked.count) "
+          + "usable=\(initialScreens.map { NSStringFromRect($0.usableFrame) }.joined(separator: " "))"
+      )
       let now = DispatchTime.now()
       let continuingChange = now < self.screenChangeActiveUntil
       if !continuingChange {
@@ -279,11 +290,17 @@ final class WindowLayoutManager {
       let primaryHeight = WindowMover.primaryHeight(in: screens)
     else { return }
     var restored = 0
+    var alreadyCorrect = 0
+    var dropped = 0
     for key in screenChangeKeys {
-      guard var layout = tracked[key] else { continue }
+      guard var layout = tracked[key] else {
+        dropped += 1
+        continue
+      }
       guard NSRunningApplication(processIdentifier: layout.pid)?.isTerminated == false else {
         tracked.removeValue(forKey: key)
         selfAuthoredChangesUntil.removeValue(forKey: key)
+        dropped += 1
         continue
       }
       let bundleIdentifier =
@@ -306,6 +323,7 @@ final class WindowLayoutManager {
         else { return false }
         layout.screenID = plan.screen.id
         guard current.map({ WindowMover.framesApproximatelyEqual($0, plan.frame) }) != true else {
+          alreadyCorrect += 1
           return false
         }
         let startedAt = DispatchTime.now()
@@ -332,10 +350,13 @@ final class WindowLayoutManager {
       selfAuthoredChangesUntil[key] =
         .now() + .milliseconds(Self.authoredChangeGraceMs)
     }
-    if restored > 0 {
-      FlashLog.debug(
-        "[window_layout] restored count=\(restored)")
-    }
+    // Logged every pass, not only when something moved: a pass that restores
+    // nothing because the windows were already dropped from tracking looks
+    // identical to a pass that had nothing to do, and telling those apart is
+    // the whole question when a restore does not stick.
+    FlashLog.debug(
+      "[window_layout] restore_pass considered=\(screenChangeKeys.count) "
+        + "restored=\(restored) already_correct=\(alreadyCorrect) untracked=\(dropped)")
   }
 
   func appDidTerminate(pid: pid_t) {
@@ -878,6 +899,13 @@ enum WindowMover {
   /// apps settle without looping.
   private static let applyCorrectionAttempts = 2
 
+  /// Wall-clock ceiling on those corrections. Every AX write and read-back is
+  /// a blocking round trip into the target app, and this runs on the main
+  /// thread from a key mapping, so a pathologically slow app must give up its
+  /// turn rather than hold input. The post-restore check below is outside the
+  /// budget: it is the one that decides whether the move stuck at all.
+  private static let applyCorrectionBudgetMs = 120
+
   /// Push the rect into the AX window. Mirrors Hammerspoon's
   /// `setFrame` (size → position → size) so the move is instant and
   /// survives screen-edge clamping:
@@ -931,8 +959,11 @@ enum WindowMover {
     if temporarilyDisableEnhancedUserInterface {
       setEnhancedUserInterface(false, on: axApp)
     }
+    // Restored explicitly below so the frame can be verified with enhanced UI
+    // back on; this only catches the early-exit paths.
+    var enhancedUserInterfaceRestored = false
     defer {
-      if temporarilyDisableEnhancedUserInterface {
+      if temporarilyDisableEnhancedUserInterface, !enhancedUserInterfaceRestored {
         setEnhancedUserInterface(true, on: axApp)
       }
     }
@@ -947,6 +978,10 @@ enum WindowMover {
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, v)
       }
     }
+    func observed() -> CGRect? {
+      readWindowFrameInNSCoords(window: window, primaryHeight: primaryHeight)
+    }
+
     setSize()
     setPos()
     setSize()
@@ -955,13 +990,50 @@ enum WindowMover {
     // left the window short, correct it. The read-back is synchronous, so by
     // the time it returns the earlier position move has landed — the window now
     // sits at the origin and the corrective size write can grow freely.
-    for _ in 0..<Self.applyCorrectionAttempts {
-      guard
-        let actual = readWindowFrameInNSCoords(window: window, primaryHeight: primaryHeight),
-        !framesApproximatelyEqual(actual, nsRect)
-      else { break }
+    //
+    // Every round is verified, including the last. The previous shape checked
+    // *before* each correction and never after the final one, so a window that
+    // was still short when the attempts ran out simply stayed short, with
+    // nothing recorded — which is the "maximize needs a second press".
+    var actual = observed()
+    var converged = actual.map { framesApproximatelyEqual($0, nsRect) } ?? false
+    let budget = DispatchTime.now() + .milliseconds(Self.applyCorrectionBudgetMs)
+    var attempt = 0
+    while !converged, attempt < Self.applyCorrectionAttempts, DispatchTime.now() < budget {
+      attempt += 1
       setPos()
       setSize()
+      actual = observed()
+      converged = actual.map { framesApproximatelyEqual($0, nsRect) } ?? false
+    }
+
+    if temporarilyDisableEnhancedUserInterface {
+      setEnhancedUserInterface(true, on: axApp)
+      enhancedUserInterfaceRestored = true
+      // Turning enhanced UI back on makes some apps re-run their own layout,
+      // which can undo part of the move. That happens after every check above,
+      // so the window settled short and nothing noticed. Look once more with
+      // it on, and if the app took the frame back, put it right.
+      actual = observed()
+      if actual.map({ framesApproximatelyEqual($0, nsRect) }) != true {
+        setEnhancedUserInterface(false, on: axApp)
+        setPos()
+        setSize()
+        setEnhancedUserInterface(true, on: axApp)
+        actual = observed()
+      }
+      converged = actual.map { framesApproximatelyEqual($0, nsRect) } ?? false
+    }
+
+    if !converged {
+      // The window genuinely would not take the rect (min-size dialogs,
+      // grid-snapping terminals, an app fighting back). Record it: this used
+      // to fail silently, which is why it looked intermittent.
+      FlashLog.warn(
+        "[window_move] unconverged bundle=\(bundleIdentifier ?? "unknown") "
+          + "target=\(NSStringFromRect(nsRect)) "
+          + "actual=\(actual.map(NSStringFromRect) ?? "unreadable") "
+          + "corrections=\(attempt)")
     }
   }
 

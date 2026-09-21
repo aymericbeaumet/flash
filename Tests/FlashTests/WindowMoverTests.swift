@@ -4,6 +4,19 @@ import XCTest
 @testable import flash
 
 final class WindowMoverTests: XCTestCase {
+  func testScreenRecoveryLadderReachesASlowReconnect() {
+    let delays = WindowLayoutManager.defaultScreenRecoveryDelaysMs
+    XCTAssertEqual(delays.sorted(), delays, "passes have to run in order")
+    XCTAssertEqual(Set(delays).count, delays.count, "a repeated delay wastes a pass")
+    // AppKit reports the change before NSScreen settles, so the first pass is
+    // immediate ...
+    XCTAssertLessThanOrEqual(delays.first ?? .max, 100)
+    // ... and apps keep relocating their windows for seconds after a display
+    // reconnects or wakes. Stopping at 1.5s left those moves uncorrected,
+    // which is what made a restore need a manual redo.
+    XCTAssertGreaterThanOrEqual(delays.last ?? 0, 3_000)
+  }
+
   func testDefaultRecoveryIncludesLateSettlingPass() {
     XCTAssertGreaterThanOrEqual(
       WindowLayoutManager.defaultScreenRecoveryDelaysMs.last ?? 0,
