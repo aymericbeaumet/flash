@@ -173,8 +173,12 @@ impl Harness {
                 Some(
                     segments
                         .iter()
-                        .filter_map(|(name, value)| {
-                            Some((name.clone(), value.as_str()?.to_string()))
+                        .map(|(name, value)| {
+                            let text = value
+                                .as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| value.to_string());
+                            (name.clone(), text)
                         })
                         .collect(),
                 )

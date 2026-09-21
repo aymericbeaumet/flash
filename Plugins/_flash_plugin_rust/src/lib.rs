@@ -30,8 +30,8 @@ pub use context::{
 pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{run, Plugin};
 pub use status::{
-    Align, Color, Column, History, Markup, Preview, PreviewTooLarge, Published, StatusValue, Style,
-    Table, MAX_INLINE_PREVIEW_ENCODED_BYTES,
+    Align, Color, Column, History, Markup, Preview, PreviewTooLarge, Published, StatusCarousel,
+    StatusSegment, StatusValue, Style, Table, MAX_INLINE_PREVIEW_ENCODED_BYTES,
 };
 pub use types::{
     candidate_metadata, ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest,

@@ -508,6 +508,8 @@ struct Config {
         ("ctrl+r", .flashCommand(.redo)),
         ("x", sendKeyMapping("cmd+w")),
         ("X", sendKeyMapping("cmd+shift+t")),
+        ("r", sendKeyMapping("cmd+r")),
+        ("R", sendKeyMapping("cmd+shift+r")),
         ("y", .flashCommand(.yankSelection(register: nil))),
         ("p", .flashCommand(.paste(register: nil))),
         ("/", .flashCommand(.find)),

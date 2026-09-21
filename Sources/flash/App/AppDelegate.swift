@@ -24,22 +24,6 @@ enum InsertModeTransitionReason: Equatable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
-  enum HintCommitBehavior {
-    case click
-    case copyURL
-    case moveMouse
-    case drag
-    case select
-    case multiClick
-    case adjustClick
-    case searchClick
-    case mouseGridClick
-    case mouseGridMove
-    case mouseGridDrag
-    case mouseGridSelect
-    case mouseGridMulti
-  }
-
   struct MovementEntry {
     enum Kind {
       case app

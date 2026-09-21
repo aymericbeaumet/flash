@@ -158,7 +158,7 @@ startup_timeout = 5
 # label = "AGGR" # defaults to FEED
 # url = "https://aggr.aymericbeaumet.com/rss.xml"
 # refresh_interval = 300 # seconds between feed requests
-# cycle_interval = 30    # seconds per headline; slides upward
+# cycle_interval = 30    # seconds per headline; Flash rotates the carousel
 
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
@@ -422,6 +422,10 @@ leader = "\\"
 # prefixed with a register, e.g. "ay / "ap for register a. y resolves immediately.
 "x" = ["flash", "send_key", "--keys=cmd+w"]
 "X" = ["flash", "send_key", "--keys=cmd+shift+t"]
+# r reloads and R hard-reloads with the app's native chords. Terminals leave
+# cmd+r unbound, so there both do nothing instead of typing an r.
+"r" = ["flash", "send_key", "--keys=cmd+r"]
+"R" = ["flash", "send_key", "--keys=cmd+shift+r"]
 "y" = ["flash", "yank_selection"]
 "p" = ["flash", "paste"]
 "/" = ["flash", "app_find"]

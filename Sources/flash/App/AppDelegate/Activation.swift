@@ -14,21 +14,7 @@ extension AppDelegate {
 
   func activateMouseTarget(_ command: MouseCommand, contextOverride: AppContext?) {
     guard prepareHintActivation(.target(command, contextOverride)) else { return }
-    let behavior: HintCommitBehavior =
-      command.isDrag
-      ? .drag
-      : command.isSelect
-        ? .select
-        : command.isMulti
-          ? .multiClick
-          : command.isAdjust
-            ? .adjustClick
-            : command.isSearch ? .searchClick : command.isMove ? .moveMouse : .click
-    activate(
-      action: command.action,
-      commitBehavior: behavior,
-      clickModifiers: command.modifiers,
-      contextOverride: focusedAboutContext() ?? contextOverride)
+    activate(command: command, contextOverride: focusedAboutContext() ?? contextOverride)
   }
 
   func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {
@@ -46,15 +32,8 @@ extension AppDelegate {
     hintSession.mouseGridInitialRegion = region
     hintSession.mouseGridDepth = 0
     hintSession.sourceAppPID = context?.processID
-    hintSession.action = command.action
-    hintSession.presetClickModifiers = command.modifiers
-    hintSession.commitBehavior =
-      command.isDrag
-      ? .mouseGridDrag
-      : command.isSelect
-        ? .mouseGridSelect
-        : command.isMulti
-          ? .mouseGridMulti : command.isMove ? .mouseGridMove : .mouseGridClick
+    hintSession.command = command
+    hintSession.surface = .grid
     hintSession.prefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
@@ -94,16 +73,10 @@ extension AppDelegate {
     overlay.display(hints: hints)
   }
 
-  private func activate(
-    action: JumpAction,
-    commitBehavior: HintCommitBehavior = .click,
-    clickModifiers: ClickModifiers = [],
-    targetFilter: ((JumpTarget) -> Bool)? = nil,
-    contextOverride: AppContext? = nil
-  ) {
+  private func activate(command: MouseCommand, contextOverride: AppContext?) {
     MainThreadWatchdog.note("activation")
     FlashLog.trace(
-      "[activation] begin action=\(action) behavior=\(commitBehavior) mode=\(flashMode) "
+      "[activation] begin command=\(command) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
 
     guard let context = contextOverride ?? currentNonFlashContext() else {
@@ -118,9 +91,8 @@ extension AppDelegate {
         + "source=\(contextOverride == nil ? "focused" : "override")"
     )
     hintSession.sourceAppPID = context.processID
-    hintSession.action = action
-    hintSession.presetClickModifiers = clickModifiers
-    hintSession.commitBehavior = commitBehavior
+    hintSession.command = command
+    hintSession.surface = .targets
 
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
@@ -143,10 +115,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[activation] dispatch_discover gen=\(myGen) pid=\(context.processID) "
         + "bundle=\(context.bundleIdentifier)")
-    monitor.discoverAsync(
-      context: context,
-      targetFilter: targetFilter
-    ) { [weak self] hints in
+    monitor.discoverAsync(context: context) { [weak self] hints in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       FlashLog.trace(
@@ -164,10 +133,12 @@ extension AppDelegate {
       // Left-click hints (`f`) also label clickable and hover-popup status
       // spans, but only on the active window's screen. Popup-only commits move
       // the pointer into the span; clickable spans retain their click action.
-      let statusBarTargets: [JumpTarget] =
-        commitBehavior == .click && action == .leftClick
-        ? self.statusBarHintTargets(forActiveWindowFrame: context.frontWindowFrame)
-        : []
+      let statusBarTargets: [JumpTarget]
+      if case .click(.leftClick, _) = command {
+        statusBarTargets = self.statusBarHintTargets(forActiveWindowFrame: context.frontWindowFrame)
+      } else {
+        statusBarTargets = []
+      }
 
       if hints.isEmpty {
         // Empty result is also the symptom of accessibility
@@ -206,7 +177,7 @@ extension AppDelegate {
       self.hintSession.prefix = ""
       if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
       self.overlay.display(hints: displayHints)
-      if commitBehavior == .searchClick {
+      if command.isSearch {
         // Seek & click: the panel routes subsequent keys to the search
         // interpreter instead of hint-prefix typing.
         self.hintSession.searchActive = true
@@ -299,9 +270,8 @@ extension AppDelegate {
       return
     }
     hintSession.sourceAppPID = context.processID
-    hintSession.action = command.action
-    hintSession.presetClickModifiers = command.modifiers
-    hintSession.commitBehavior = .click
+    hintSession.command = command
+    hintSession.surface = .targets
     hintSession.prefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
@@ -329,7 +299,7 @@ extension AppDelegate {
   }
 
   /// `scroll_target`: hint-label the focused window's scroll areas.
-  /// Committing runs the `.moveMouse` behavior — the pointer lands inside the
+  /// Committing runs the `move` command — the pointer lands inside the
   /// chosen area, and `Scroller.scrollWheelPoint` already prefers the cursor's
   /// position, so every subsequent scroll verb targets that area with no
   /// Scroller state at all. A single area short-circuits to a direct move.
@@ -362,9 +332,8 @@ extension AppDelegate {
           return
         }
         self.hintSession.sourceAppPID = pid
-        self.hintSession.action = .leftClick
-        self.hintSession.presetClickModifiers = []
-        self.hintSession.commitBehavior = .moveMouse
+        self.hintSession.command = .move
+        self.hintSession.surface = .targets
         self.hintSession.prefix = ""
         self.overlay.overlayConfig = self.config.overlay
         self.overlay.debugConfig = self.config.debug

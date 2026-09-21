@@ -11,6 +11,14 @@ final class NativeStatusBarSurface {
   private(set) var runLayers: [RunLayer] = []
   private(set) var runFrames: [CGRect] = []
   private(set) var availableColumns = 0
+  /// What the last `render` had to touch, for the render trace.
+  struct RenderStats: Equatable {
+    var visible = 0
+    var changed = 0
+    var crossfades = 0
+    var cycles = 0
+  }
+  private(set) var lastRenderStats = RenderStats()
 
   final class RunLayer {
     let container = CALayer()
@@ -43,10 +51,15 @@ final class NativeStatusBarSurface {
     }
   }
 
-  /// Bottom-edge hairline and the wash behind the hovered segment. Both sit
-  /// beneath the run containers, which stay transparent over the default
-  /// background so the bar's gradient shows through.
+  /// Bottom-edge hairline, the centre notch, and the wash behind the hovered
+  /// segment. All sit beneath the run containers, which stay transparent over
+  /// the default background so the bar's gradient shows through.
   let hairline = CALayer()
+  /// A recess mimicking the camera-housing notch, drawn behind the
+  /// absolute-centre component and sized to its reservation (content plus
+  /// gutters), so the side lanes stop at its edges. Hidden on a screen with a
+  /// physical notch (the centre is hidden there) and when nothing is centred.
+  let centreNotch = CAShapeLayer()
   let hoverHighlight = CALayer()
   private var hoverBand = CGRect.zero
 
@@ -57,19 +70,25 @@ final class NativeStatusBarSurface {
     self.backgroundLayer = backgroundLayer
     backgroundLayer.actions = OverlayPanel.noActions
     backgroundLayer.masksToBounds = true
-    for layer in [hairline, hoverHighlight] { layer.actions = OverlayPanel.noActions }
+    for layer in [hairline, centreNotch, hoverHighlight] { layer.actions = OverlayPanel.noActions }
     hairline.backgroundColor = OverlayPanel.statusBarHairlineCG
+    centreNotch.isHidden = true
     hoverHighlight.backgroundColor = OverlayPanel.statusBarHoverHighlightCG
     hoverHighlight.cornerRadius = 3
     hoverHighlight.opacity = 0
     backgroundLayer.insertSublayer(hairline, at: 0)
-    backgroundLayer.insertSublayer(hoverHighlight, at: 1)
+    backgroundLayer.insertSublayer(centreNotch, at: 1)
+    backgroundLayer.insertSublayer(hoverHighlight, at: 2)
   }
 
+  /// `notchWidth` fixes the centre reservation (and the recess drawn behind
+  /// it) to the real camera housing's width; zero keeps the reservation
+  /// hugging the centred content.
   func render(
     document: StatusFormatDocument, barFrame: CGRect, screenFrame: CGRect,
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
-    palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle, modeText: String
+    palette: OverlayPanel.ModeBadgePalette, modeStyle: OverlayModeBadgeStyle, modeText: String,
+    notchWidth: CGFloat = 0
   ) {
     let modeText = modeText.trimmingCharacters(in: .whitespacesAndNewlines)
     let document = StatusFormatDocument(
@@ -108,12 +127,21 @@ final class NativeStatusBarSurface {
     }
     // Contraction first, then the hard clamp: the elastic span gives way
     // before a lane loses characters outright.
-    let reserve = Self.centreReservation(prepared, columns: availableColumns)
+    let notchColumns = notchWidth > 0 ? Int(ceil(notchWidth / cellWidth)) : 0
+    let reserve = Self.centreReservation(
+      prepared, columns: availableColumns, notchColumns: notchColumns)
+    // The side lanes keep a margin outside the recess so they never crowd it.
+    let laneReserve =
+      reserve.isEmpty
+      ? reserve
+      : max(0, reserve.lowerBound - Self.centreMarginColumns)
+        ..< min(availableColumns, reserve.upperBound + Self.centreMarginColumns)
     layout = StatusFormatLayout.layout(
       Self.clampedLanes(
         Self.shrinkingDocument(
-          prepared, columns: availableColumns, leftColumns: leftColumns, reserve: reserve),
-        columns: availableColumns, reserve: reserve),
+          prepared, columns: availableColumns, leftColumns: leftColumns, reserve: laneReserve),
+        columns: availableColumns, reserve: laneReserve,
+        centreColumns: notchColumns > 0 ? reserve.count - Self.centreGutterColumns * 2 : 0),
       columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
     runFrames = Self.frames(
@@ -134,11 +162,18 @@ final class NativeStatusBarSurface {
     hairline.contentsScale = scale
     let textHeight = font.pointSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
-    // The wash is a chip hugging the glyphs, not a full-height block.
-    hoverBand = CGRect(x: 0, y: textY + 1, width: barFrame.width, height: max(1, textHeight - 2))
+    // The wash is a chip hugging the glyphs, not a full-height block; it
+    // never moves the text it sits under.
+    hoverBand = CGRect(
+      x: 0, y: max(0, textY - Self.hoverWashVerticalPadding), width: barFrame.width,
+      height: min(barFrame.height, textHeight + Self.hoverWashVerticalPadding * 2))
     hoverHighlight.contentsScale = scale
+    renderCentreNotch(
+      reserve: reserve, barFrame: barFrame, scale: scale, fill: fillColor,
+      hidden: notch != nil)
     let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: visibleRuns)
     let cycleStartedAt = CACurrentMediaTime()
+    var stats = RenderStats(visible: visibleRuns.count)
     for (index, run) in visibleRuns.enumerated() {
       if index == runLayers.count {
         let layers = RunLayer()
@@ -201,6 +236,7 @@ final class NativeStatusBarSurface {
         layers.previous != segment || !sameFont
         || layers.previousForeground != pillForeground || cycles
       if changed {
+        stats.changed += 1
         let outgoingString = layers.text.string
         let previousText = layers.previous?.text
         let samePlace = layers.previousFrame == rect && sameFont
@@ -215,13 +251,16 @@ final class NativeStatusBarSurface {
         layers.previousFont = font
         layers.previousForeground = pillForeground
         if cycles {
+          stats.cycles += 1
           Self.runCycleTransition(
-            layers, outgoing: outgoingString, textRect: textRect, startedAt: cycleStartedAt)
+            layers, outgoing: outgoingString, textRect: textRect, travel: rect.height,
+            startedAt: cycleStartedAt)
         } else if allowsTransition, !segment.cycle, samePlace, let previousText,
           previousText != segment.text
         {
           // A value changing in place (a metric tick, the clock) crossfades
           // instead of snapping; a run that moved or was re-segmented does not.
+          stats.crossfades += 1
           Self.runCrossfade(layers, outgoing: outgoingString, textRect: textRect)
         }
       }
@@ -288,6 +327,58 @@ final class NativeStatusBarSurface {
       layers.previous = nil
       layers.previousFrame = nil
     }
+    lastRenderStats = stats
+  }
+
+  /// Physical notch proportions scaled to the bar: the housing's bottom corners
+  /// are rounded and its top corners fillet outward into the bar's edge.
+  static func centreNotchPath(in rect: CGRect, height: CGFloat) -> CGPath {
+    let fillet = min(height * 0.2, 5)
+    let radius = min(height * 0.35, 9)
+    let x0 = rect.minX + fillet
+    let x1 = rect.maxX - fillet
+    let top = height
+    let path = CGMutablePath()
+    path.move(to: CGPoint(x: rect.minX, y: top))
+    path.addArc(
+      center: CGPoint(x: rect.minX, y: top - fillet), radius: fillet,
+      startAngle: .pi / 2, endAngle: 0, clockwise: true)
+    path.addLine(to: CGPoint(x: x0, y: radius))
+    path.addArc(
+      center: CGPoint(x: x0 + radius, y: radius), radius: radius,
+      startAngle: .pi, endAngle: .pi * 1.5, clockwise: false)
+    path.addLine(to: CGPoint(x: x1 - radius, y: 0))
+    path.addArc(
+      center: CGPoint(x: x1 - radius, y: radius), radius: radius,
+      startAngle: .pi * 1.5, endAngle: 0, clockwise: false)
+    path.addLine(to: CGPoint(x: x1, y: top - fillet))
+    path.addArc(
+      center: CGPoint(x: rect.maxX, y: top - fillet), radius: fillet,
+      startAngle: .pi, endAngle: .pi / 2, clockwise: true)
+    path.closeSubpath()
+    return path
+  }
+
+  /// The notch spans the centre reservation exactly, so the side lanes (which
+  /// stop at the reservation) end where the recess begins.
+  private func renderCentreNotch(
+    reserve: Range<Int>, barFrame: CGRect, scale: CGFloat, fill: NSColor, hidden: Bool
+  ) {
+    guard !hidden, !reserve.isEmpty else {
+      centreNotch.isHidden = true
+      centreNotch.path = nil
+      return
+    }
+    let rect = OverlayPanel.snap(
+      CGRect(
+        x: OverlayPanel.statusBarEdgePadding + CGFloat(reserve.lowerBound) * cellWidth, y: 0,
+        width: CGFloat(reserve.count) * cellWidth, height: barFrame.height),
+      scale: scale)
+    centreNotch.frame = CGRect(x: 0, y: 0, width: barFrame.width, height: barFrame.height)
+    centreNotch.contentsScale = scale
+    centreNotch.fillColor = OverlayPanel.sunken(fill, by: OverlayPanel.statusBarNotchSink).cgColor
+    centreNotch.path = Self.centreNotchPath(in: rect, height: barFrame.height)
+    centreNotch.isHidden = false
   }
 
   /// Hover feedback follows the visible text immediately. A link can include
@@ -299,7 +390,8 @@ final class NativeStatusBarSurface {
     let bounds = rect.flatMap(hoverTextBounds)
     if let rect = bounds {
       hoverHighlight.frame = CGRect(
-        x: rect.minX - 3, y: hoverBand.minY, width: rect.width + 6, height: hoverBand.height)
+        x: rect.minX - Self.hoverWashHorizontalPadding, y: hoverBand.minY,
+        width: rect.width + Self.hoverWashHorizontalPadding * 2, height: hoverBand.height)
     }
     hoverHighlight.opacity = Self.hoverOpacity(for: bounds, cellWidth: cellWidth)
   }
@@ -349,6 +441,10 @@ final class NativeStatusBarSurface {
   /// wash rather than none, so the pin affordance survives.
   static let wideHoverCells = 24
   static let wideHoverOpacity: Float = 0.45
+  /// Wash padding around the hovered glyphs. The wash is its own layer, so
+  /// widening it never shifts a run.
+  static let hoverWashHorizontalPadding: CGFloat = 5
+  static let hoverWashVerticalPadding: CGFloat = 1
 
   /// Opacity for a hovered span: absent means hidden, a span wider than
   /// `wideHoverCells` is dimmed, anything else is full strength.
@@ -363,15 +459,18 @@ final class NativeStatusBarSurface {
   /// sets superimposed for a visible share of every second on a 1 Hz bar.
   static let crossfadeDuration: CFTimeInterval = 0.1
 
-  /// Carousel article change as one vertical push: the old line travels a
-  /// full line height up and fades out while the new line rises the same
-  /// distance from below and fades in. Both share one duration and the
-  /// standard ease-in-out curve (cubic-bezier 0.4, 0, 0.2, 1), so they read
-  /// as one strip sliding. Every run of one carousel group shares `startedAt`.
+  /// Carousel article change as one vertical push: the old line travels the
+  /// full bar height up (`travel`, the clipping container's height) and fades
+  /// out while the new line rises the same distance from below and fades in,
+  /// so the strip visibly enters and leaves through the bar's edges. Both
+  /// share one duration and the standard ease-in-out curve (cubic-bezier 0.4,
+  /// 0, 0.2, 1), so they read as one strip sliding. Every run of one carousel
+  /// group shares `startedAt`.
   private static func runCycleTransition(
-    _ layers: RunLayer, outgoing: Any?, textRect: CGRect, startedAt: CFTimeInterval
+    _ layers: RunLayer, outgoing: Any?, textRect: CGRect, travel: CGFloat,
+    startedAt: CFTimeInterval
   ) {
-    let distance = textRect.height
+    let distance = max(travel, textRect.height)
     let beginTime = layers.text.convertTime(startedAt, from: nil)
     let curve = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
     let incoming = CAAnimationGroup()
@@ -428,17 +527,36 @@ final class NativeStatusBarSurface {
     }
     var changed = Set<Int>()
     for (old, new) in zip(groups(previous), groups(next)) {
-      let sameArticle =
-        old.count == new.count
-        && zip(old, new).allSatisfy { before, after in
-          let lhs = previous[before].segment
-          let rhs = next[after].segment
-          return lhs.text == rhs.text && lhs.link == rhs.link && lhs.popup == rhs.popup
-            && lhs.popupContent == rhs.popupContent
-        }
+      // A lane re-budget (another lane grew, the centre changed) re-truncates
+      // the elastic title and can drop the row's tail runs; that is the same
+      // article and must not push the carousel.
+      let sameArticle = zip(old, new).allSatisfy { before, after in
+        sameCarouselArticle(previous[before].segment, next[after].segment)
+      }
       if !sameArticle { changed.formUnion(new) }
     }
     return changed
+  }
+
+  static func sameCarouselArticle(_ lhs: FlashStatusTextSegment, _ rhs: FlashStatusTextSegment)
+    -> Bool
+  {
+    guard lhs.link == rhs.link, lhs.popup == rhs.popup, lhs.popupContent == rhs.popupContent
+    else { return false }
+    return truncationEquivalent(lhs.text, rhs.text)
+  }
+
+  /// True when one text is the other cut short (with or without the `…`
+  /// marker), i.e. they differ only by elastic contraction or lane clamping.
+  static func truncationEquivalent(_ lhs: String, _ rhs: String) -> Bool {
+    func core(_ text: String) -> Substring {
+      var value = Substring(text)
+      while let last = value.last, last == "…" || last == " " { value = value.dropLast() }
+      return value
+    }
+    let left = core(lhs)
+    let right = core(rhs)
+    return left.hasPrefix(right) || right.hasPrefix(left)
   }
 
   /// Native cells reserve enough room for Flash's pill, but the pill keeps its
@@ -508,20 +626,26 @@ final class NativeStatusBarSurface {
   /// Blank columns kept between the absolute centre and either side lane, so
   /// a growing lane stops short of the centred label instead of abutting it.
   static let centreGutterColumns = 2
+  /// Blank columns kept outside the reservation (the drawn recess) on each
+  /// side, so the side lanes never crowd the notch's edges.
+  static let centreMarginColumns = 2
   /// A reservation never starves a side lane below this; on a bar too narrow
   /// for all three the centre gives ground rather than erasing a lane.
   static let centreReservationMinimumLaneColumns = 8
 
   /// The columns an absolute-centre run owns, gutters included. Empty when the
   /// document has no absolute centre, which keeps every other template on the
-  /// native tmux geometry byte for byte.
-  static func centreReservation(_ document: StatusFormatDocument, columns: Int) -> Range<Int> {
+  /// native tmux geometry byte for byte. A positive `notchColumns` fixes the
+  /// reservation to the camera housing's width regardless of the content.
+  static func centreReservation(
+    _ document: StatusFormatDocument, columns: Int, notchColumns: Int = 0
+  ) -> Range<Int> {
     let width = document.runs.filter {
       !$0.isStyleBoundary && $0.alignment == .absoluteCentre
     }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
     guard width > 0 else { return 0..<0 }
     let available = max(0, columns - centreReservationMinimumLaneColumns * 2)
-    let reserved = min(available, width + centreGutterColumns * 2)
+    let reserved = min(available, notchColumns > 0 ? notchColumns : width + centreGutterColumns * 2)
     guard reserved > 0 else { return 0..<0 }
     let start = (columns - reserved) / 2
     return start..<(start + reserved)
@@ -603,13 +727,15 @@ final class NativeStatusBarSurface {
     return StatusFormatDocument(runs: runs)
   }
 
-  /// Trim the side lanes to the columns the centre reservation leaves them.
-  /// Elastic `#[shrink]` contraction runs first; this is the backstop for a
-  /// lane with nothing elastic in it, so a left lane that keeps growing loses
-  /// its tail and a right lane loses its head rather than either colliding
-  /// with the centred label. Each lane keeps the end that carries meaning.
+  /// Trim the side lanes to the columns the centre reservation leaves them,
+  /// and the centred content to the reservation's interior when the
+  /// reservation is fixed (the notch). Elastic `#[shrink]` contraction runs
+  /// first; this is the backstop for a lane with nothing elastic in it, so a
+  /// left lane that keeps growing loses its tail and a right lane loses its
+  /// head rather than either colliding with the centred label. Each lane keeps
+  /// the end that carries meaning.
   static func clampedLanes(
-    _ document: StatusFormatDocument, columns: Int, reserve: Range<Int>
+    _ document: StatusFormatDocument, columns: Int, reserve: Range<Int>, centreColumns: Int = 0
   ) -> StatusFormatDocument {
     guard !reserve.isEmpty else { return document }
     var runs = document.runs
@@ -649,6 +775,11 @@ final class NativeStatusBarSurface {
     trim(
       ordinary.filter { runs[$0].alignment == .right },
       to: columns - reserve.upperBound, fromTail: false)
+    if centreColumns > 0 {
+      trim(
+        runs.indices.filter { !runs[$0].isStyleBoundary && runs[$0].alignment == .absoluteCentre },
+        to: max(1, centreColumns), fromTail: true)
+    }
     return StatusFormatDocument(runs: runs)
   }
 

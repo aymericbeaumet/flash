@@ -37,12 +37,26 @@ final class CapturedHintTargetTests: XCTestCase {
     XCTAssertNil(original.matchingClickPoint(preferred: .zero, among: []))
   }
 
-  func testAmbiguousSemanticIdentityCancelsEvenWhenAnOrdinalIDMatches() {
-    let original = target()
-    let duplicate = target(
-      id: "different-ordinal", frame: CGRect(x: 200, y: 0, width: 40, height: 20))
+  func testRepeatedLinkTextResolvesToTheCopyAtTheCapturedPosition() {
+    // A terminal pane showing `../../scripts/toggle_sleep.sh` on three lines:
+    // every copy shares label, URL, and role, so only position tells them apart.
+    let original = target(frame: CGRect(x: 10, y: 200, width: 100, height: 20))
+    let above = target(id: "l0", frame: CGRect(x: 10, y: 260, width: 100, height: 20))
+    let redrawn = target(id: "l1", frame: CGRect(x: 10, y: 201, width: 100, height: 20))
+    let below = target(id: "l2", frame: CGRect(x: 10, y: 140, width: 100, height: 20))
 
-    XCTAssertNil(original.matchingClickPoint(preferred: .zero, among: [original, duplicate]))
+    XCTAssertEqual(
+      original.matchingClickPoint(
+        preferred: CGPoint(x: 35, y: 210), among: [above, redrawn, below]),
+      CGPoint(x: 35, y: 211))
+  }
+
+  func testEquidistantDuplicatesStayAmbiguous() {
+    let original = target(frame: CGRect(x: 10, y: 200, width: 100, height: 20))
+    let above = target(id: "l0", frame: CGRect(x: 10, y: 240, width: 100, height: 20))
+    let below = target(id: "l1", frame: CGRect(x: 10, y: 160, width: 100, height: 20))
+
+    XCTAssertNil(original.matchingClickPoint(preferred: .zero, among: [above, below]))
   }
 
   func testChangedURLCancelsEvenWhenTheLinkLabelIsUnchanged() {

@@ -9,13 +9,17 @@ import Foundation
 /// activations by being forgotten in a hand-maintained reset list — the bug the
 /// old `clearHintSessionState()` comment warned about.
 struct HintSession {
-  var action: JumpAction = .leftClick
+  /// Where the hints came from: discovered targets, or the mouse grid's cells.
+  enum Surface { case targets, grid }
+
+  /// The verb that opened the session — button, click count, the preset
+  /// modifiers, and the session shape (move, drag, select, multi, adjust,
+  /// search). Magic modifiers held on the final hint key are unioned with the
+  /// preset ones at commit.
+  var command: MouseCommand = .click(.leftClick, modifiers: [])
+  var surface: Surface = .targets
   var hints: [AssignedHint] = []
   var prefix: String = ""
-  var commitBehavior: AppDelegate.HintCommitBehavior = .click
-  /// Modifiers requested by the command that opened the hints. These are
-  /// unioned with any magic modifiers held on the final hint key.
-  var presetClickModifiers: ClickModifiers = []
   var sourceAppPID: pid_t?
   var mouseGridRegion: MouseGrid.Region?
   var mouseGridDepth: Int = 0

@@ -605,10 +605,30 @@ final class PluginSystemTests: XCTestCase {
     process.applyStatusSegments(["segments": ["window": "2"]])
     XCTAssertEqual(
       process.statusBarInfo().statusSegments,
-      ["session": "main", "window": "2"])
+      ["session": .text("main"), "window": .text("2")])
     // "" clears one segment; undeclared names are ignored.
     process.applyStatusSegments(["segments": ["session": "", "undeclared": "x"]])
-    XCTAssertEqual(process.statusBarInfo().statusSegments, ["window": "2"])
+    XCTAssertEqual(process.statusBarInfo().statusSegments, ["window": .text("2")])
+    // A carousel object is a typed segment the host rotates; malformed
+    // objects are rejected whole and no lines clears.
+    process.applyStatusSegments([
+      "segments": [
+        "session": [
+          "prefix": "NEWS ", "lines": ["one", " ", "two"], "cycle_seconds": 30,
+        ]
+      ]
+    ])
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments["session"],
+      .carousel(prefix: "NEWS ", lines: ["one", "two"], cycleSeconds: 30))
+    process.applyStatusSegments(["segments": ["session": ["lines": ["x"], "cycle_seconds": 0]]])
+    process.applyStatusSegments(["segments": ["session": ["lines": [1], "cycle_seconds": 5]]])
+    process.applyStatusSegments(["segments": ["session": ["cycle_seconds": 5]]])
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments["session"],
+      .carousel(prefix: "NEWS ", lines: ["one", "two"], cycleSeconds: 30))
+    process.applyStatusSegments(["segments": ["session": ["lines": [" "], "cycle_seconds": 5]]])
+    XCTAssertNil(process.statusBarInfo().statusSegments["session"])
   }
 
   // MARK: - Activation derivation

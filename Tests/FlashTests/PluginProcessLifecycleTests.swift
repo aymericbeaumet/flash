@@ -611,7 +611,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     // The status frame arrives after both publishes on the same reader
     // queue, so once it lands the malformed publish has been processed.
     waitUntilTrue("marker segment") {
-      process.statusBarInfo().statusSegments["done"] == "1"
+      process.statusBarInfo().statusSegments["done"] == .text("1")
     }
     XCTAssertEqual(store.rows(for: "publisher").map(\.title), ["One", "Two"])
     let entry = try XCTUnwrap(store.entry(for: "publisher"))
@@ -648,12 +648,12 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let process = try makeProcess(fixture, store: store)
     process.start()
     waitUntilTrue("burst fully applied") {
-      process.statusBarInfo().statusSegments["beta"] == "done"
+      process.statusBarInfo().statusSegments["beta"] == .text("done")
         && process.statusBarInfo().statusSegments["alpha"] == nil
     }
     // Declared-only, "" clears, and no frame in the interleaved burst was
     // lost: the final store row and generation match the frame count.
-    XCTAssertEqual(process.statusBarInfo().statusSegments, ["beta": "done"])
+    XCTAssertEqual(process.statusBarInfo().statusSegments, ["beta": .text("done")])
     XCTAssertEqual(store.rows(for: "statusfix").map(\.title), ["row30"])
     XCTAssertEqual(store.entry(for: "statusfix")?.generation, 30)
     process.stopAndWait(reason: "test")
@@ -680,9 +680,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
       fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
     }
     XCTAssertEqual(
-      process.statusBarInfo().statusSegments, ["alpha": "CPU 12%", "beta": "MEM 34%"])
+      process.statusBarInfo().statusSegments, ["alpha": .text("CPU 12%"), "beta": .text("MEM 34%")])
     process.applyStatusSegments(["segments": ["alpha": "CPU 24%", "beta": ""]])
-    XCTAssertEqual(process.statusBarInfo().statusSegments, ["alpha": "CPU 24%"])
+    XCTAssertEqual(process.statusBarInfo().statusSegments, ["alpha": .text("CPU 24%")])
   }
 
   func testResidentReloadExpiresOnlySegmentsNotRepublished() throws {
@@ -704,10 +704,10 @@ final class PluginProcessLifecycleTests: XCTestCase {
     waitUntilTrue("reload finished") {
       fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
     }
-    XCTAssertEqual(process.statusBarInfo().statusSegments["alpha"], "CPU 12%")
+    XCTAssertEqual(process.statusBarInfo().statusSegments["alpha"], .text("CPU 12%"))
     process.applyStatusSegments(["segments": ["beta": "MEM 56%"]])
     waitUntilTrue("unrefreshed status expires") {
-      process.statusBarInfo().statusSegments == ["beta": "MEM 56%"]
+      process.statusBarInfo().statusSegments == ["beta": .text("MEM 56%")]
     }
   }
 

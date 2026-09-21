@@ -39,26 +39,26 @@ final class CommandLineTextField: NSTextField {
 
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
-  // The Flash status bar is an ordinary elevated window: above the focused
-  // app's normal windows so it stays visible, but a plain `.floating` level —
-  // NOT jammed against the menu-bar band one level under the system menu
-  // window, where it competed with the system menu bar for clicks. The native
-  // menu bar (app menus at the menu-bar window level 24, extras at
-  // `.statusBar`/25, and the auto-hide reveal the system draws on hover) sits
-  // well above `.floating`, so by pure window z-order it expands on top of
-  // Flash and takes the click; when it's tucked away, the band is Flash's.
-  // Normal-mode keystroke capture runs through the session CGEvent tap (not
-  // key focus), and the key-window fallback still works at this level (only
-  // `.statusBar`/25 is barred from becoming key).
+  // The overlay panel's persistent content is the active-window focus border:
+  // an ordinary elevated window above the focused app's normal windows but
+  // below Spotlight, banners and the Dock, and still allowed to become key for
+  // the no-tap key-window fallback (only `.statusBar`/25 is barred from key).
   static let persistentStatusWindowLevel: NSWindow.Level = .floating
-  // The status bar's *visual* lives on the `.floating` panel above, but its
-  // click windows must sit at the system menu-bar level: macOS only delivers
-  // menu-bar-band clicks to windows at (or above) that level — lower windows
-  // get nothing and the click falls through to the desktop. They don't steal
-  // native clicks despite outranking it, because they flip to click-through
-  // (`ignoresMouseEvents`) whenever the native menu bar is revealed; see
-  // `nativeMenuBarIsRevealed` / `menuBarRevealTimer`.
-  static let statusBarClickWindowLevel: NSWindow.Level = .statusBar
+  // The status bar lives in its own click-through window (`StatusBarWindow`)
+  // above the native menu bar: app menus at the menu-bar window level 24,
+  // extras at `.statusBar`/25, and the auto-hide reveal the system slides down
+  // from y<0 at those same levels. A reveal — the pointer grazing the top edge
+  // while hovering the bar, a menu key equivalent flashing its title, Flash
+  // becoming active, a wake — therefore slides in behind Flash's bar instead of
+  // painting over it for a second. The bar never yields the band: while it is
+  // enabled the native menu bar stays covered.
+  static let statusBarWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+  // The click windows sit above the bar window: macOS only delivers
+  // menu-bar-band clicks to windows at (or above) the menu-bar level — lower
+  // windows get nothing and the click falls through to the desktop. The bar
+  // window ignores mouse events, so the band's clicks reach them regardless.
+  static let statusBarClickWindowLevel = NSWindow.Level(
+    rawValue: NSWindow.Level.statusBar.rawValue + 2)
   static let candidateFinderHorizontalPadding: CGFloat = 8
   static let candidateFinderVerticalPadding: CGFloat = 7
   static let candidateFinderLineSpacing: CGFloat = 2
@@ -74,6 +74,8 @@ final class OverlayPanel: NSPanel {
   let modeBadgeLayer = CAGradientLayer()
   lazy var primaryStatusBarSurface = NativeStatusBarSurface(backgroundLayer: modeBadgeLayer)
   var secondaryStatusBars: [NativeStatusBarSurface] = []
+  /// Hosts `modeBadgeLayer` and the secondary bars; see `syncStatusBarWindow`.
+  let statusBarWindow: StatusBarWindow
   /// Which displays render the bar (`[statusbar] monitor`). `primary` skips the
   /// secondary (non-main) screen bars. Set by the AppDelegate on config load.
   var statusBarMonitor: Config.StatusBar.Monitor = .all {
@@ -83,8 +85,8 @@ final class OverlayPanel: NSPanel {
   /// `ModeBadgeLayoutStamp`.
   var statusBarLayoutRevision: UInt64 = 0
   var lastModeBadgeLayoutStamp: ModeBadgeLayoutStamp?
-  /// One full-band click window per screen (the bar's visual lives on this
-  /// click-through panel, so these windows do the click work). They swallow
+  /// One full-band click window per screen (the bar's visual lives on the
+  /// click-through `statusBarWindow`, so these windows do the click work). They swallow
   /// band clicks so a click on the bar never reveals the desktop, and open a
   /// `#[link=…]` run when the click lands on one. Pooled + repositioned on
   /// render. See `StatusBarClickPanel`.
@@ -109,16 +111,6 @@ final class OverlayPanel: NSPanel {
   var activeStatusBarPopupName: String?
   var activeStatusBarPopupContent: String?
   var activeStatusBarPopupVisibleFrame: CGRect?
-  /// Repeating probe that flips the click windows to click-through while the
-  /// native (auto-hidden) menu bar is revealed, so native wins those clicks.
-  /// Runs on a utility queue (never the main run loop, which owns the
-  /// keyboard tap) and only while the pointer is in the top band — armed by
-  /// the click view's `mouseEntered`, self-stopping when the pointer leaves.
-  var menuBarRevealTimer: DispatchSourceTimer?
-  /// The probe's last observed reveal state. Written on the probe queue
-  /// between `resume()` and `cancel()`, reset on the main thread around
-  /// those edges — the timer lifecycle serializes the two.
-  var menuBarRevealedShadow = false
   /// Invalidation token for the command-line key-window recovery ladder
   /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
   /// from a superseded pass die silently.
@@ -269,7 +261,15 @@ final class OverlayPanel: NSPanel {
     var mainScale: CGFloat
     var mainVisibleFrame: CGRect
     var nativeStatusBarFallbackHeight: CGFloat
+
+    /// Width of the camera housing the centre recess mimics: the connected
+    /// notched display's, else the 16-inch MacBook Pro housing.
+    var referenceNotchWidth: CGFloat {
+      screens.compactMap { $0.notch?.width }.first ?? OverlayPanel.defaultNotchWidth
+    }
   }
+
+  static let defaultNotchWidth: CGFloat = 185
 
   private static var snapshotLock = os_unfair_lock_s()
   private static var cachedSnapshot: ScreenSnapshot?
@@ -372,6 +372,7 @@ final class OverlayPanel: NSPanel {
 
   init() {
     let frame = OverlayPanel.unionScreenFrame()
+    statusBarWindow = StatusBarWindow(frame: frame)
     super.init(
       contentRect: frame,
       styleMask: [.borderless, .nonactivatingPanel],

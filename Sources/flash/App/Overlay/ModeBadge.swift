@@ -61,14 +61,6 @@ extension OverlayPanel {
         configureModeBadge(panelFrame: frame)
         configureCommandPrompt(panelFrame: frame)
         configureCandidateFinderResults(panelFrame: frame)
-        if !sublayers.contains(where: { $0 === modeBadgeLayer }) {
-          sublayers.append(modeBadgeLayer)
-        }
-        for bar in secondaryStatusBars {
-          if !sublayers.contains(where: { $0 === bar.backgroundLayer }) {
-            sublayers.append(bar.backgroundLayer)
-          }
-        }
         if commandPromptVisible,
           !sublayers.contains(where: { $0 === commandPromptLayer })
         {
@@ -84,14 +76,11 @@ extension OverlayPanel {
           sublayers.removeAll { $0 === candidateFinderResultsLayer }
         }
       } else {
-        sublayers.removeAll { $0 === modeBadgeLayer }
         sublayers.removeAll { $0 === commandPromptLayer }
         sublayers.removeAll { $0 === candidateFinderResultsLayer }
-        for bar in secondaryStatusBars {
-          sublayers.removeAll { $0 === bar.backgroundLayer }
-        }
         hideStatusBarClickWindows()
       }
+      syncStatusBarWindow()
       appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
       contentLayer.sublayers = sublayers
       if captureInput {
@@ -166,13 +155,13 @@ extension OverlayPanel {
       configureCandidateFinderResults(panelFrame: frame)
     }
     // A published model must reach the screen: if the bar layer lost its
-    // parent or the panel is not on screen, rebuild the layer tree and
-    // re-order the panel instead of waiting for the next mode transition.
-    if modeBadgeVisible, modeBadgeLayer.superlayer == nil || !isVisible {
+    // parent or the bar window is not on screen, re-host the layers and
+    // re-order the window instead of waiting for the next mode transition.
+    if modeBadgeVisible, modeBadgeLayer.superlayer == nil || !statusBarWindow.isVisible {
       FlashLog.warn(
         "[statusbar] reattach layer_attached=\(modeBadgeLayer.superlayer != nil) "
-          + "panel_visible=\(isVisible)")
-      renderModeBadgeOnlyOrHide()
+          + "window_visible=\(statusBarWindow.isVisible)")
+      syncStatusBarWindow()
     }
   }
 
@@ -186,7 +175,7 @@ extension OverlayPanel {
 
   /// Re-anchor and re-order the bar after a space change or wake. Display
   /// geometry may have changed without `didChangeScreenParameters`, and the
-  /// panel's z-order is only reasserted by `orderFrontRegardless`.
+  /// bar window's z-order is only reasserted by `orderFrontRegardless`.
   func reassertStatusBar(reason: String) {
     guard modeBadgeVisible else { return }
     FlashLog.trace("[statusbar] reassert reason=\(reason)")
@@ -209,14 +198,9 @@ extension OverlayPanel {
       configureModeBadge(panelFrame: frame)
       configureCommandPrompt(panelFrame: frame)
       configureCandidateFinderResults(panelFrame: frame)
+      syncStatusBarWindow()
       var sublayers: [CALayer] = []
       appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
-      if modeBadgeVisible {
-        sublayers.append(modeBadgeLayer)
-        for bar in secondaryStatusBars {
-          sublayers.append(bar.backgroundLayer)
-        }
-      }
       if commandPromptVisible {
         sublayers.append(commandPromptLayer)
       }
@@ -235,10 +219,12 @@ extension OverlayPanel {
       }
     } else if modeBadgeCapturesInput {
       contentLayer.sublayers = nil
+      syncStatusBarWindow()
       hideStatusBarClickWindows()
       captureKeyboardInput()
     } else {
       contentLayer.sublayers = nil
+      syncStatusBarWindow()
       hideStatusBarClickWindows()
       orderOut(nil)
     }
@@ -282,13 +268,15 @@ extension OverlayPanel {
     orderOut(nil)
   }
 
-  func appendModeBadgeLayerIfNeeded(to sublayers: inout [CALayer], panelFrame: CGRect) {
+  /// Transient renders (hints, banners, alerts) rebuild `contentLayer.sublayers`
+  /// from scratch: keep the bar window in step and append the command prompt /
+  /// candidate layers that stack above the transient content.
+  func syncStatusBarForTransientRender(
+    appendingPromptLayersTo sublayers: inout [CALayer], panelFrame: CGRect
+  ) {
     guard modeBadgeVisible else { return }
     configureModeBadge(panelFrame: panelFrame)
-    sublayers.append(modeBadgeLayer)
-    for bar in secondaryStatusBars {
-      sublayers.append(bar.backgroundLayer)
-    }
+    syncStatusBarWindow()
     if commandPromptVisible {
       configureCommandPrompt(panelFrame: panelFrame)
       sublayers.append(commandPromptLayer)
@@ -352,7 +340,8 @@ extension OverlayPanel {
         barFrame: Self.statusBarFrame(
           screenFrame: screen, visibleFrame: visible, panelFrame: panelFrame, fontSize: fontSize),
         screenFrame: screen, scale: scale, notch: notch, font: font, labels: modeLabels,
-        palette: modeBadgePalette(), modeStyle: modeBadgeStyle, modeText: modeBadgeText)
+        palette: modeBadgePalette(), modeStyle: modeBadgeStyle, modeText: modeBadgeText,
+        notchWidth: snapshot.referenceNotchWidth)
       let hits = surface.interactionRects(
         panelFrame: panelFrame, popupTexts: statusBarPopupTexts,
         popupDocuments: statusBarPopupDocuments)
@@ -361,6 +350,11 @@ extension OverlayPanel {
     configure(
       primaryStatusBarSurface, screen: mainFrame, visible: visible, scale: snapshot.mainScale,
       notch: mainNotch)
+    let stats = primaryStatusBarSurface.lastRenderStats
+    FlashLog.trace(
+      "[statusbar] render visible=\(stats.visible) changed=\(stats.changed) "
+        + "crossfade=\(stats.crossfades) cycle=\(stats.cycles) "
+        + "columns=\(primaryStatusBarSurface.availableColumns)")
     if primaryStatusBarSurface.visibleRuns.isEmpty,
       document.runs.contains(where: { !$0.isStyleBoundary && !$0.text.isEmpty })
     {

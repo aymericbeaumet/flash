@@ -123,11 +123,11 @@ extension OverlayPanel {
     if debugEnabled {
       newSublayers.append(debugShapeLayer)
     }
-    // Status bar goes in first so its opaque band sits *under* the hint chips —
-    // the status-bar link hints render over the bar instead of behind it. App
-    // hints never overlap the bar (they're filtered out of the menu-bar band by
-    // the visible-region test), so nothing else changes visually.
-    appendModeBadgeLayerIfNeeded(to: &newSublayers, panelFrame: frame)
+    // The status bar stays in its own window below this transient level, so the
+    // status-bar link hints render over the bar instead of behind it. App hints
+    // never overlap the bar (they're filtered out of the menu-bar band by the
+    // visible-region test), so nothing else changes visually.
+    syncStatusBarForTransientRender(appendingPromptLayersTo: &newSublayers, panelFrame: frame)
 
     hintLayers.reserveCapacity(hints.count)
     labelLayers.reserveCapacity(hints.count)
@@ -584,6 +584,11 @@ extension OverlayPanel {
   /// by `display`, `displayBanner`, and `ensurePanelFrame` so the
   /// "are we already at this frame?" branch is in one place.
   func applyPanelFrame(_ frame: CGRect) {
+    if statusBarWindow.frame != frame {
+      statusBarWindow.setFrame(frame, display: false)
+      statusBarWindow.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+      statusBarWindow.contentLayer.frame = statusBarWindow.contentView?.bounds ?? .zero
+    }
     guard self.frame != frame else { return }
     self.setFrame(frame, display: false)
     self.contentView?.frame = NSRect(origin: .zero, size: frame.size)

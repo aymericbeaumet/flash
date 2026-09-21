@@ -17,7 +17,9 @@ outside watched plugin directories and replace only changed code or signing
 identity; rebuilding unchanged plugins must not trigger resident reloads.
 Ordinary status updates render in place with only a 100 ms crossfade: only
 `#[cyc]` content opts into the upward carousel transition, and a pooled layer
-reused for an ordinary metric must clear that transition first.
+reused for an ordinary metric must clear that transition first. Carousels are a
+host primitive: a plugin publishes a `StatusCarousel` (lines plus a cycle) and
+Flash owns the rotation, exactly as it does for `#{cycle:}` script sources.
 
 ## System-monitor ownership
 
@@ -172,9 +174,12 @@ requires signing in again through Claude Code.
 `feed` owns the `summary` segment, selected with
 `#{flash.plugin.feed.summary}`. Set `[plugin.feed] url` to an RSS feed URL;
 without one, the plugin makes no network requests. `refresh_interval` defaults
-to 300 seconds and `cycle_interval` to 30 seconds. Article content uses
-`#[cyc]`/`#[nocyc]` for a 0.8-second upward slide. The title, domain, and
-outbound arrow move together while the label stays still.
+to 300 seconds and `cycle_interval` to 30 seconds. The plugin publishes every
+article in the window as one host-rotated carousel; Flash rotates it, keeps the
+visible headline until its scheduled rotation across refreshes, and slides the
+title, domain, and outbound arrow together through the full bar height while
+the label stays still as the carousel's prefix. The plugin wakes only when the
+oldest article leaves the window.
 Other metrics update without this transition, including when pooled layers are reused.
 
 Only items with a valid publication date within the rolling last 24 hours
@@ -189,15 +194,15 @@ the actual centre component; its arrow and click target remain visible. RSS item
 open the feed's article page; an Atom `link rel="via"` extension supplies the
 original article link when present. For AGGR, this means the title opens the
 archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`
-for this feed; the default label is `FEED`. The summary owns its label so the
-whole row shares one popup region, including short titles after rotation.
+for this feed; the default label is `FEED`. Each carousel line owns its
+preview, so the title, domain, and arrow share one popup region.
 
-Hovering the label, article title, domain, or arrow opens a terminal-rendered preview of its opening
+Hovering the article title, domain, or arrow opens a terminal-rendered preview of its opening
 lines from `content:encoded`, falling back to `description`. Paragraph breaks,
 headings, lists, quotations, emphasis, and code retain their structure. The
 excerpt is bounded to 12 logical lines and 900 visible characters; longer
-articles end with an ellipsis. Click the label to pin the preview, or
-Option-click any of its links; normal clicks preserve each link destination.
+articles end with an ellipsis. Option-click any of its links to pin the
+preview; normal clicks preserve each link destination.
 
 For AGGR, the feed's article body is also the content of its Markdown export.
 The plugin prepares the excerpt during the background feed refresh; hovering

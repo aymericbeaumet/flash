@@ -73,9 +73,11 @@ Handed to every handler; cheap to clone. Key surface:
 - Events: `running_applications()` is the host-maintained app snapshot (fed
   by `core:apps.changed`, delivered right after initialize). `RefreshGate`
   serializes refresh producers against it.
-- Status values: `status(segments)` takes anything `Into<StatusValue>` —
-  a plain string is ready-made markup, or build `StatusValue::text(visible)`
-  and attach a hover document with `.with_preview(Preview)`. `Markup::text`
+- Status values: `status(segments)` takes anything `Into<StatusSegment>` —
+  a plain string is ready-made markup, build `StatusValue::text(visible)`
+  and attach a hover document with `.with_preview(Preview)`, or publish a
+  host-rotated `StatusCarousel::new(lines, cycle).with_prefix(label)` whose
+  lines each carry their own preview (the feed plugin). `Markup::text`
   is the only entry for externally sourced text (it doubles literal `#`);
   `Markup::raw` inserts intentional markup, `Markup::colored`/`styled`
   wrap content in a `Style` (`Color::TITLE`, `MUTED`, `ACCENT`, `ALERT`,

@@ -24,7 +24,7 @@
     },
     "plugin_to_host_notifications": {
       "publish": "{rows} — full-replacement catalog; host-owned store; empty rows = authoritative empty; transient failure = don't publish (host keeps last-good)",
-      "status": "{segments: {name: value}} — manifest-declared names only; \"\" clears",
+      "status": "{segments: {name: value}} \u2014 manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
       "log": "{level, message, fields} — content-free"
     },
     "plugin_to_host_rpcs": {

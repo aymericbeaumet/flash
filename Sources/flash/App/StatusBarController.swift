@@ -40,6 +40,9 @@ final class FlashStatusBarController {
 
   private var sourceRecords: [String: SourceRecord] = [:]
   private var shellRecords: [String: ShellRecord] = [:]
+  /// Host-rotated plugin carousels keyed `<plugin>.<segment>`; a refresh with
+  /// new lines keeps the visible line until its scheduled rotation.
+  private var pluginCycles: [String: FlashStatusBarCycleState] = [:]
   private var nextClock: TimeInterval?
   private var pendingJobPublish: TimeInterval?
   private var lastJobPublish: TimeInterval = -.infinity
@@ -60,7 +63,7 @@ final class FlashStatusBarController {
     terminalPopupNames: Set<String> = [],
     refreshIntervalSeconds: TimeInterval = 5,
     pluginStatusesProvider: @escaping () -> [PluginStatusBarInfo] = { [] },
-    queue: DispatchQueue = DispatchQueue(label: "flash.status_bar", qos: .utility),
+    queue: DispatchQueue = DispatchQueue(label: "flash.status_bar", qos: .userInitiated),
     clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     makeJob: @escaping StatusCommandFactory = { invocation, queue, onLine, onCompletion in
       try StatusFormatCommandJob(
@@ -100,6 +103,7 @@ final class FlashStatusBarController {
       let jobs = sourceRecords.values.compactMap(\.job) + shellRecords.values.compactMap(\.job)
       sourceRecords.removeAll()
       shellRecords.removeAll()
+      pluginCycles.removeAll()
       stopJobs(jobs)
       nextClock = nil
       pendingJobPublish = nil
@@ -116,6 +120,7 @@ final class FlashStatusBarController {
   func updateFocusedApplication(_ app: NSRunningApplication?) {
     let name = app?.localizedName ?? ""
     let bundle = app?.bundleIdentifier ?? ""
+    FlashLog.trace("[statusbar] focus bundle=\(bundle)")
     queue.async { [weak self] in
       guard let self else { return }
       self.activeAppName = name
@@ -175,11 +180,43 @@ final class FlashStatusBarController {
     }
   }
 
+  /// Plugin carousels resolved to their visible line, with their rotation
+  /// state refreshed (lines and period) and pruned to the segments still
+  /// published.
+  private func resolvedPluginStatuses(now: TimeInterval) -> [PluginStatusBarInfo] {
+    var active: Set<String> = []
+    let statuses = pluginStatusesProvider().map { info -> PluginStatusBarInfo in
+      var info = info
+      for (name, segment) in info.statusSegments {
+        guard case .carousel(let prefix, let lines, let seconds) = segment else { continue }
+        let key = "\(info.id).\(name)"
+        active.insert(key)
+        if var cycle = pluginCycles[key] {
+          cycle.refresh(lines: lines, periodSeconds: seconds, now: now)
+          pluginCycles[key] = cycle
+        } else {
+          pluginCycles[key] = FlashStatusBarCycleState(
+            lines: lines, periodSeconds: seconds, now: now)
+          FlashLog.trace(
+            "[statusbar] carousel_start key=\(key) lines=\(lines.count) period=\(seconds)")
+        }
+        info.statusSegments[name] = .text(
+          PluginStatusSegment.carouselLine(
+            prefix: prefix, line: pluginCycles[key]?.visibleLine ?? ""))
+      }
+      return info
+    }
+    if pluginCycles.count != active.count {
+      pluginCycles = pluginCycles.filter { active.contains($0.key) }
+    }
+    return statuses
+  }
+
   private func publishCurrentModel() {
     let now = clock()
     let context = FlashStatusBarContext(
       activeAppName: activeAppName, activeBundleIdentifier: activeBundleIdentifier,
-      modeLabel: modeLabel, pluginStatuses: pluginStatusesProvider())
+      modeLabel: modeLabel, pluginStatuses: resolvedPluginStatuses(now: now))
     var values = sourceRecords.compactMapValues(\.value)
     for (name, record) in sourceRecords {
       if let cycle = record.cycle { values[name] = "#[cyc]" + cycle.visibleLine + "#[nocyc]" }
@@ -374,6 +411,7 @@ final class FlashStatusBarController {
     }
     dates += requiredSources.compactMap { sourceRecords[$0]?.cycle }
       .filter(\.needsRotationTimer).map(\.nextRotationAt)
+    dates += pluginCycles.values.filter(\.needsRotationTimer).map(\.nextRotationAt)
     if let nextClock { dates.append(nextClock) }
     if let pendingJobPublish { dates.append(pendingJobPublish) }
     guard let next = dates.filter(\.isFinite).min() else { return }
@@ -388,7 +426,9 @@ final class FlashStatusBarController {
     timer.resume()
   }
 
-  private func tick() {
+  /// Internal (not private) so the controller tests can fire a due deadline
+  /// deterministically instead of waiting on the dispatch timer.
+  func tick() {
     let now = clock()
     for key in requiredJobs.keys where shellRecords[key]?.value == nil {
       if let start = shellRecords[key]?.schedule.startedAt, now - start >= 2 {
@@ -401,6 +441,11 @@ final class FlashStatusBarController {
       lastJobPublish = now
     }
     for name in requiredSources { _ = sourceRecords[name]?.cycle?.advanceIfDue(now: now) }
+    for key in Array(pluginCycles.keys) {
+      if pluginCycles[key]?.advanceIfDue(now: now) == true {
+        FlashLog.trace("[statusbar] carousel_advance key=\(key)")
+      }
+    }
     publishCurrentModel()
   }
 

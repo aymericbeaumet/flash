@@ -240,10 +240,16 @@ Notifications:
   over-quota publish is rejected whole (content-free log) and the previous
   catalog is retained. An open flashlight refreshes from the store on a
   coalesced ≤1/s tick — lossless, since the store is already current.
-- `status` — `{"segments": {"name": "value"}}` for manifest-declared status
-  segments, rendered as `#{flash.plugin.<id>.<segment>}`; `""` clears a segment;
-  undeclared names are ignored. Segments are live state: cleared on any
-  teardown (unlike catalogs).
+- `status` — `{"segments": {"name": value}}` for manifest-declared status
+  segments, rendered as `#{flash.plugin.<id>.<segment>}`. A value is markup
+  (`""` clears) or a carousel object
+  `{"prefix"?: markup, "lines": [markup], "cycle_seconds": >= 1}`: the host
+  rotates the lines on its own clock (a republish keeps the visible line until
+  its scheduled rotation), draws `prefix` still before the visible line, and
+  wraps that line in `#[cyc]…#[nocyc]` for the carousel transition; blank
+  lines are dropped, no lines clears, and a malformed object is rejected whole
+  with a content-free warning. Undeclared names are ignored. Segments are live
+  state: cleared on any teardown (unlike catalogs).
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
   elapsed ms, method names — never query text, candidate data, clipboard
   content, config values, or event payloads).

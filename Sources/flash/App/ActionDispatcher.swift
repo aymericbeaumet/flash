@@ -3,9 +3,10 @@ import CoreGraphics
 import FlashCore
 
 enum ActionDispatcher {
-  /// Preserve the caller's click gesture for every target. Terminal links add
-  /// Shift as a transport requirement so the emulator handles the link instead
-  /// of forwarding the click to tmux.
+  /// The modifiers a hint click carries: the verb's preset ones plus whatever
+  /// magic modifiers were held on the final hint key, preserved for every
+  /// target. Terminal links add Shift as a transport requirement so the
+  /// emulator handles the link instead of forwarding the click to tmux.
   static func hintClickModifiers(
     for target: JumpTarget,
     requested modifiers: ClickModifiers
@@ -36,33 +37,13 @@ enum ActionDispatcher {
       ?? NSScreen.main?.frame.height ?? 1080
   }
 
-  /// Deliver a hint selection as one real mouse event to the underlying app.
-  /// There is deliberately no provider-owned activation or AXPress fallback:
-  /// Alacritty/tmux, browsers, native apps, and plugin targets all receive the
-  /// same real click and interpret it themselves. `f` is a plain click (with the
-  /// terminal-link Shift transport exception); `F` carries Command-Shift to every
-  /// target as the uniform new-context gesture.
-  ///
-  /// `completion` runs on the main thread after the off-main event posting.
-  static func perform(
-    _ action: JumpAction,
-    on target: JumpTarget,
-    clickPoint: CGPoint? = nil,
-    modifiers: ClickModifiers = [],
-    completion: (() -> Void)? = nil
-  ) {
-    let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
-    synthesizeClick(
-      at: point, action: action,
-      modifiers: hintClickModifiers(
-        for: target, requested: modifiers),
-      completion: completion)
-  }
-
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
   /// origin of primary screen). The cursor jumps directly to the click point
   /// while hidden, then reappears there after the mouse-up. There is no travel
-  /// animation or return trip.
+  /// animation or return trip. Every committed hint — Alacritty/tmux links,
+  /// browser and native controls, plugin targets, grid cells — is delivered
+  /// this way and interpreted by the app itself; there is deliberately no
+  /// provider-owned activation or AXPress fallback.
   ///
   /// Returns `true` once the click is enqueued. The blocking posting (settle +
   /// mouse-down-hold sleeps, ~40–60ms) runs on `clickQueue`, off the main run

@@ -8,7 +8,9 @@ final class StatusEvaluationInputsTests: XCTestCase {
       activeAppName: "App", activeBundleIdentifier: "com.example.app", modeLabel: "NORMAL",
       now: Date(timeIntervalSince1970: 1_000_000), calendar: .current, locale: .current,
       pluginStatuses: [
-        PluginStatusBarInfo(id: "cpu", state: "running", hasError: false, statusSegments: segments)
+        PluginStatusBarInfo(
+          id: "cpu", state: "running", hasError: false,
+          statusSegments: segments.mapValues(PluginStatusSegment.text))
       ],
       hostName: "h", userName: "u", userID: 1, processID: 1)
   }

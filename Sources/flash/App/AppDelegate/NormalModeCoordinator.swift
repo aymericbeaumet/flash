@@ -176,7 +176,6 @@ extension AppDelegate {
       overlay.hide()
     }
     clearHintSessionState()
-    hintSession.action = .leftClick
     if hadActivation {
       invalidateActivation(reason: reason)
     }

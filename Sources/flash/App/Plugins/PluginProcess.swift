@@ -67,7 +67,7 @@ final class PluginProcess {
   private var state: PluginRuntimeState = .stopped
   /// Runtime status-bar segments, merged under `lock` on every `status`
   /// notification so concurrent updates can never lose each other.
-  private var statusSegments: [String: String] = [:]
+  private var statusSegments: [String: PluginStatusSegment] = [:]
   private var staleStatusSegments: Set<String> = []
   private var statusExpiryWork: DispatchWorkItem?
   private var startDate: Date?
@@ -985,7 +985,7 @@ final class PluginProcess {
       onlyBundleIDs: manifest.onlyBundleIDs,
       priority: manifest.priority,
       commands: manifest.commands,
-      statusSegments: segments)
+      statusSegments: segments.mapValues(\.debugText))
   }
 
   /// The status bar's per-publish read: no rusage syscall, no commands copy.
@@ -1582,21 +1582,65 @@ final class PluginProcess {
     guard let raw = params["segments"] as? [String: Any] else { return }
     let declared = Set(manifest.statusSegments)
     guard !declared.isEmpty else { return }
-    lock.lock()
+    var decoded: [(key: String, segment: PluginStatusSegment?)] = []
     for (name, value) in raw {
       let key = name.trimmed
       guard declared.contains(key) else { continue }
-      guard let text = value as? String else { continue }
+      switch Self.decodeStatusSegment(value) {
+      case .clear: decoded.append((key, nil))
+      case .value(let segment): decoded.append((key, segment))
+      case .malformed:
+        FlashLog.plugin(
+          .warn, pluginID: manifest.id,
+          message: "[plugin] status segment rejected: expected markup or a carousel object",
+          fields: ["segment": key])
+      }
+    }
+    lock.lock()
+    for (key, segment) in decoded {
       staleStatusSegments.remove(key)
-      let trimmed = text.trimmed
-      if trimmed.isEmpty {
-        statusSegments.removeValue(forKey: key)
+      if let segment {
+        statusSegments[key] = segment
       } else {
-        statusSegments[key] = trimmed
+        statusSegments.removeValue(forKey: key)
       }
     }
     lock.unlock()
     notifyStatus()
+  }
+
+  enum DecodedStatusSegment: Equatable {
+    case clear
+    case value(PluginStatusSegment)
+    case malformed
+  }
+
+  /// A segment value is markup (`""` clears) or a carousel object
+  /// `{"prefix"?: markup, "lines": [markup], "cycle_seconds": ≥ 1}`; blank
+  /// lines are dropped and no lines clears. Anything else is rejected whole.
+  static func decodeStatusSegment(_ value: Any) -> DecodedStatusSegment {
+    if let text = value as? String {
+      let trimmed = text.trimmed
+      return trimmed.isEmpty ? .clear : .value(.text(trimmed))
+    }
+    guard let object = value as? [String: Any],
+      let rawLines = object["lines"] as? [Any],
+      let seconds = PluginJSON.number(object["cycle_seconds"]), seconds >= 1
+    else { return .malformed }
+    let prefix: String
+    switch object["prefix"] {
+    case nil: prefix = ""
+    case let text as String: prefix = text
+    default: return .malformed
+    }
+    var lines: [String] = []
+    for line in rawLines {
+      guard let text = line as? String else { return .malformed }
+      let trimmed = text.trimmed
+      if !trimmed.isEmpty { lines.append(trimmed) }
+    }
+    guard !lines.isEmpty else { return .clear }
+    return .value(.carousel(prefix: prefix, lines: lines, cycleSeconds: seconds))
   }
 
   private func setState(_ state: PluginRuntimeState) {

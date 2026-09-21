@@ -166,7 +166,7 @@ final class ConfigLoaderTests: XCTestCase {
       XCTAssertNotEqual(mapping.action.command, .focusInput, mapping.key)
     }
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
-    for rawKey in ["gN", "n", "N", "yy", "r", "R", "e"] {
+    for rawKey in ["gN", "n", "N", "yy", "e"] {
       XCTAssertNil(c.mode.normal.first { $0.key == key(rawKey) })
     }
     XCTAssertEqual(

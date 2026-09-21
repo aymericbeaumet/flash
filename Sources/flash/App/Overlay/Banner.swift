@@ -69,7 +69,7 @@ extension OverlayPanel {
       x: 8, y: (chipHeight - textHeight) / 2, width: approxWidth - 16, height: textHeight)
     chip.sublayers = [label]
     var sublayers: [CALayer] = [chip]
-    appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
+    syncStatusBarForTransientRender(appendingPromptLayersTo: &sublayers, panelFrame: frame)
     appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
     contentLayer.sublayers = sublayers
     transientContentVisible = true

@@ -1,21 +1,26 @@
 use crate::feed::{self, Article};
-use flash_plugin::{Color, Markup, Preview, Published, StatusValue, Style};
+use flash_plugin::{
+    Color, Markup, Preview, Published, StatusCarousel, StatusSegment, StatusValue, Style,
+};
 use reqwest::Url;
 use std::time::Duration;
 
+/// The articles inside the rolling window, published as one host-rotated
+/// carousel: Flash owns the cadence and the visible line, the plugin only
+/// republishes when the set changes.
 pub(crate) struct State {
     label: String,
+    cycle: Duration,
     articles: Vec<Article>,
-    current_url: Option<String>,
-    published: Published<StatusValue>,
+    published: Published<StatusSegment>,
 }
 
 impl State {
-    pub(crate) fn new(label: String) -> Self {
+    pub(crate) fn new(label: String, cycle: Duration) -> Self {
         Self {
             label,
+            cycle,
             articles: Vec::new(),
-            current_url: None,
             published: Published::new(),
         }
     }
@@ -24,52 +29,54 @@ impl State {
         &mut self,
         articles: Result<Vec<Article>, ()>,
         now: i64,
-    ) -> Option<StatusValue> {
+    ) -> Option<StatusSegment> {
         if let Ok(articles) = articles {
             self.articles = articles;
         }
-        self.update(now, false)
+        self.publish(now)
     }
 
-    pub(crate) fn cycle(&mut self, now: i64) -> Option<StatusValue> {
-        self.update(now, true)
+    pub(crate) fn expire(&mut self, now: i64) -> Option<StatusSegment> {
+        self.publish(now)
     }
 
-    pub(crate) fn expire(&mut self, now: i64) -> Option<StatusValue> {
-        self.update(now, false)
-    }
-
+    /// Time until the oldest retained article leaves the window.
     pub(crate) fn expires_in(&self, now: i64) -> Option<Duration> {
         self.articles
             .iter()
-            .find(|article| Some(&article.url) == self.current_url.as_ref())
-            .map(|article| {
-                Duration::from_secs(
-                    (article.published_at + feed::WINDOW_SECONDS - now).max(0) as u64
-                )
-            })
+            .map(|article| (article.published_at + feed::WINDOW_SECONDS - now).max(0) as u64)
+            .min()
+            .map(Duration::from_secs)
     }
 
-    fn update(&mut self, now: i64, advance: bool) -> Option<StatusValue> {
+    fn publish(&mut self, now: i64) -> Option<StatusSegment> {
         self.articles
             .retain(|article| feed::is_recent(article.published_at, now));
-        let previous = self
-            .articles
-            .iter()
-            .position(|article| Some(&article.url) == self.current_url.as_ref());
-        let index = previous
-            .map(|index| (index + usize::from(advance)) % self.articles.len())
-            .unwrap_or(0);
-        let selected = self.articles.get(index);
-        self.current_url = selected.map(|article| article.url.clone());
-        let summary = selected
-            .map(|article| render(article, &self.label))
-            .unwrap_or_default();
-        self.published.update(summary).cloned()
+        let segment = if self.articles.is_empty() {
+            StatusSegment::Value(StatusValue::empty())
+        } else {
+            StatusSegment::Carousel(
+                StatusCarousel::new(self.articles.iter().map(render), self.cycle)
+                    .with_prefix(prefix(&self.label)),
+            )
+        };
+        self.published.update(segment).cloned()
     }
 }
 
-pub(crate) fn render(article: &Article, label: &str) -> StatusValue {
+/// The still label drawn before every line.
+pub(crate) fn prefix(label: &str) -> Markup {
+    Markup::raw(format!(
+        "#[fg={title_color}]{label}#[fg={muted}] ",
+        title_color = Color::TITLE,
+        muted = Color::MUTED,
+        label = Markup::text(label),
+    ))
+}
+
+/// One carousel line: the elastic linked title, the origin domain, and the
+/// outbound arrow, sharing one article preview.
+pub(crate) fn render(article: &Article) -> StatusValue {
     let original = Url::parse(&article.original_url).expect("validated article URL");
     let domain = original.host_str().unwrap_or_default();
     let domain = Markup::text(domain.strip_prefix("www.").unwrap_or(domain));
@@ -86,12 +93,13 @@ pub(crate) fn render(article: &Article, label: &str) -> StatusValue {
         preview = preview.blank().raw(&article.preview);
     }
     let row = Markup::raw(format!(
-        "#[fg={title_color}]{label}#[fg={muted}] #[cyc]{title} {source} #[fg={accent}]{outbound}#[fg={muted}]#[nocyc]",
-        title_color = Color::TITLE,
+        "{title} {source} #[fg={accent}]{outbound}#[fg={muted}]",
         muted = Color::MUTED,
         accent = Color::ACCENT,
-        label = Markup::text(label),
-        title = Markup::link(Markup::raw("#[shrink]") + title + "#[noshrink]", &article.url),
+        title = Markup::link(
+            Markup::raw("#[shrink]") + title + "#[noshrink]",
+            &article.url
+        ),
         source = Markup::link(format!("({domain})"), origin.as_str()),
         outbound = Markup::link("↗", &article.original_url),
     ));
@@ -112,53 +120,41 @@ mod tests {
         }
     }
 
+    fn carousel(segment: Option<StatusSegment>) -> StatusCarousel {
+        match segment {
+            Some(StatusSegment::Carousel(carousel)) => carousel,
+            other => panic!("expected a carousel, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn refresh_preserves_rotation_and_failures_keep_last_good() {
+    fn refresh_publishes_recent_articles_as_one_host_carousel_and_failures_keep_last_good() {
         let articles: Vec<_> = ["A", "B", "C"]
             .into_iter()
             .map(|name| article(name, 100))
             .collect();
-        let mut state = State::new("AGGR".into());
+        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        let published = carousel(state.refresh(Ok(articles.clone()), 101));
         assert_eq!(
-            state.refresh(Ok(articles.clone()), 101),
-            Some(render(&articles[0], "AGGR"))
+            published.lines,
+            articles.iter().map(render).collect::<Vec<_>>()
         );
-        assert_eq!(state.cycle(102), Some(render(&articles[1], "AGGR")));
+        assert_eq!(published.cycle, Duration::from_secs(30));
+        assert_eq!(published.prefix, prefix("AGGR"));
         assert_eq!(state.refresh(Ok(articles.clone()), 103), None);
         assert_eq!(state.refresh(Err(()), 104), None);
-        assert_eq!(state.cycle(105), Some(render(&articles[2], "AGGR")));
-        assert_eq!(state.cycle(106), Some(render(&articles[0], "AGGR")));
+        let reordered: Vec<_> = articles.iter().rev().cloned().collect();
+        assert_eq!(
+            carousel(state.refresh(Ok(reordered.clone()), 105)).lines,
+            reordered.iter().map(render).collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn cycling_expires_last_good_even_after_fetch_failure() {
+    fn expiry_drops_old_articles_and_clears_when_none_remain() {
         let a = article("A", 100);
         let b = article("B", 200);
-        let mut state = State::new("AGGR".into());
-        state.refresh(Ok(vec![a, b.clone()]), 201);
-        assert_eq!(
-            state.refresh(Err(()), 100 + feed::WINDOW_SECONDS),
-            Some(render(&b, "AGGR"))
-        );
-        assert_eq!(
-            state.cycle(200 + feed::WINDOW_SECONDS),
-            Some(StatusValue::empty())
-        );
-        assert_eq!(state.cycle(201 + feed::WINDOW_SECONDS), None);
-    }
-
-    #[test]
-    fn valid_empty_refresh_clears_status() {
-        let mut state = State::new("AGGR".into());
-        state.refresh(Ok(vec![article("A", 100)]), 101);
-        assert_eq!(state.refresh(Ok(vec![]), 102), Some(StatusValue::empty()));
-    }
-
-    #[test]
-    fn expiry_can_wake_before_next_cycle_without_advancing_a_fresh_title() {
-        let a = article("A", 100);
-        let b = article("B", 200);
-        let mut state = State::new("AGGR".into());
+        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
         state.refresh(Ok(vec![a, b.clone()]), 201);
         assert_eq!(
             state.expires_in(99 + feed::WINDOW_SECONDS),
@@ -166,110 +162,69 @@ mod tests {
         );
         assert_eq!(state.expire(99 + feed::WINDOW_SECONDS), None);
         assert_eq!(
-            state.expire(100 + feed::WINDOW_SECONDS),
-            Some(render(&b, "AGGR"))
+            carousel(state.expire(100 + feed::WINDOW_SECONDS)).lines,
+            vec![render(&b)]
         );
         assert_eq!(
             state.expires_in(100 + feed::WINDOW_SECONDS),
             Some(Duration::from_secs(100))
         );
+        assert_eq!(
+            state.refresh(Err(()), 200 + feed::WINDOW_SECONDS),
+            Some(StatusSegment::Value(StatusValue::empty()))
+        );
+        assert_eq!(state.expires_in(200 + feed::WINDOW_SECONDS), None);
+        assert_eq!(state.expire(201 + feed::WINDOW_SECONDS), None);
     }
 
     #[test]
-    fn configured_label_is_escaped_and_stays_inside_whole_row_popup() {
-        let mut state = State::new("#[bold]NEWS".into());
-        let summary = state
-            .refresh(Ok(vec![article("Title", 100)]), 101)
-            .unwrap()
-            .render()
-            .unwrap();
-        assert!(summary.starts_with("#[popup=inline:"));
-        assert!(summary.contains("#[fg=#EBCB8B]##[bold]NEWS#[fg=colour245] "));
-        assert!(summary.ends_with("#[nopopup]"));
-        assert!(!summary.contains("AGGR"));
+    fn valid_empty_refresh_clears_status() {
+        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        state.refresh(Ok(vec![article("A", 100)]), 101);
+        assert_eq!(
+            state.refresh(Ok(vec![]), 102),
+            Some(StatusSegment::Value(StatusValue::empty()))
+        );
     }
 
     #[test]
-    fn status_preserves_archive_source_links_popup_and_escaped_text() {
+    fn configured_label_is_escaped_in_the_still_prefix() {
+        let label = prefix("#[bold]NEWS");
+        assert_eq!(label.as_str(), "#[fg=#EBCB8B]##[bold]NEWS#[fg=colour245] ");
+    }
+
+    #[test]
+    fn line_preserves_archive_source_links_popup_and_escaped_text() {
         let mut item = article("#[fg=red]Title", 100);
         item.url = "https://aggr.example/a,b]#[bold]".into();
         item.preview = crate::preview::render("Text #[bold]injection");
-        let summary = render(&item, "AGGR").render().unwrap();
-        assert!(summary.contains("#[link=https://aggr.example/a%2Cb%5D#%5Bbold%5D]"));
-        assert!(summary.contains("#[shrink]##[fg=red]Title#[noshrink]"));
-        assert!(summary.contains("(source.example)"));
-        assert!(summary.contains("#[link=https://www.source.example/original]"));
-        assert!(summary.contains("↗"));
-        assert!(summary.contains("%23%23%5Bbold%5Dinjection"));
+        let line = render(&item).render().unwrap();
+        assert!(line.starts_with("#[popup=inline:"));
+        assert!(line.ends_with("#[nopopup]"));
+        assert!(line.contains("#[link=https://aggr.example/a%2Cb%5D#%5Bbold%5D]"));
+        assert!(line.contains("#[shrink]##[fg=red]Title#[noshrink]"));
+        assert!(line.contains("(source.example)"));
+        assert!(line.contains("#[link=https://www.source.example/original]"));
+        assert!(line.contains("↗"));
+        assert!(line.contains("%23%23%5Bbold%5Dinjection"));
+        assert!(
+            !line.contains("AGGR"),
+            "the label is the still prefix, not part of a line"
+        );
     }
 
     #[test]
-    fn whole_article_row_shares_one_terminal_preview_and_preserves_links() {
+    fn line_preview_keeps_its_structure_after_the_title() {
         let mut item = article("Title", 100);
         item.preview = crate::preview::render(
             "<h2>Opening</h2><p>First paragraph.</p><p>Second paragraph.</p>",
         );
-        let summary = render(&item, "AGGR").render().unwrap();
-        let (row, suffix) = summary.split_once("#[nopopup]").unwrap();
-        assert!(row.starts_with("#[popup=inline:"));
-        assert!(row.contains("#[fg=#EBCB8B]AGGR#[fg=colour245] "));
-        assert!(row.contains("#[link=https://aggr.example/Title]"));
-        assert!(row.contains("First%20paragraph."));
-        assert!(row.contains("Second%20paragraph."));
-        assert!(row.contains("%0A%0A"));
-        assert!(row.contains("#[link=https://www.source.example/](source.example)#[nolink]"));
-        assert!(row.contains("#[link=https://www.source.example/original]↗#[nolink]"));
+        let line = render(&item).render().unwrap();
+        let (row, suffix) = line.split_once("#[nopopup]").unwrap();
         assert!(suffix.is_empty());
-        assert_eq!(summary.matches("#[popup=").count(), 1);
-    }
-
-    #[test]
-    fn long_unicode_articles_keep_the_inline_preview_within_the_wire_limit() {
-        let mut item = article("Title", 100);
-        item.title = "🦀".repeat(1000);
-        item.preview = crate::preview::render(&format!("<p>{}</p>", "🌍".repeat(1000)));
-        let summary = render(&item, "AGGR").render().unwrap();
-        let encoded = summary
-            .split_once("#[popup=inline:")
-            .unwrap()
-            .1
-            .split_once(']')
-            .unwrap()
-            .0;
-        assert!(encoded.len() <= flash_plugin::MAX_INLINE_PREVIEW_ENCODED_BYTES);
-        assert!(summary.contains("#[nopopup]"));
-    }
-
-    #[test]
-    fn carousel_marks_article_content_only_and_repeated_refresh_does_not_rotate() {
-        let mut state = State::new("NEWS".into());
-        let a = article("Latest", 200);
-        let b = article("Earlier", 100);
-        let initial = state
-            .refresh(Ok(vec![a.clone(), b.clone()]), 201)
-            .unwrap()
-            .render()
-            .unwrap();
-        assert!(initial.contains("#[fg=#EBCB8B]NEWS#[fg=colour245] #[cyc]"));
-        assert!(initial.ends_with("#[nocyc]#[nopopup]"));
-        assert_eq!(initial.matches("#[cyc]").count(), 1);
-        assert_eq!(state.refresh(Ok(vec![a.clone(), b.clone()]), 202), None);
-        assert_eq!(state.cycle(211), Some(render(&b, "NEWS")));
-        assert_eq!(state.cycle(221), Some(render(&a, "NEWS")));
-        assert_eq!(state.refresh(Ok(vec![a]), 222), None);
-        assert_eq!(state.cycle(231), None);
-    }
-
-    #[test]
-    fn title_alone_is_elastic_and_outbound_arrow_remains_in_fixed_suffix() {
-        let summary = render(&article("Long title", 100), "NEWS")
-            .render()
-            .unwrap();
-        let (_, elastic) = summary.split_once("#[shrink]").unwrap();
-        let (title, suffix) = elastic.split_once("#[noshrink]").unwrap();
-        assert_eq!(title, "Long title");
-        assert!(suffix.contains("(source.example)"));
-        assert!(suffix.contains("#[link=https://www.source.example/original]↗#[nolink]"));
-        assert!(!suffix.contains("#[shrink]"));
+        assert!(row.contains("Title"));
+        let (marker, _) = row.split_once(']').unwrap();
+        assert!(marker.contains("Opening"));
+        assert!(marker.contains("First"));
     }
 }

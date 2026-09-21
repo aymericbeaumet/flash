@@ -104,9 +104,8 @@ extension AppDelegate {
       return
     }
     hintSession.sourceAppPID = pid
-    hintSession.action = .leftClick
-    hintSession.presetClickModifiers = []
-    hintSession.commitBehavior = .click
+    hintSession.command = .click(.leftClick, modifiers: [])
+    hintSession.surface = .targets
     hintSession.prefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug

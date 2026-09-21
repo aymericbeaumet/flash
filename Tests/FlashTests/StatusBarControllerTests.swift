@@ -27,13 +27,17 @@ final class StatusBarControllerTests: XCTestCase {
     var tasks: [Task] = []
     var controller: FlashStatusBarController!
 
+    var pluginStatuses: [PluginStatusBarInfo] = []
+
     init(
       _ template: String, sources: [String: FlashStatusBarSourceDefinition] = [:],
       interval: TimeInterval = 0
     ) {
       controller = FlashStatusBarController(
         template: .init(template: template, sourceNames: Set(sources.keys)), sources: sources,
-        refreshIntervalSeconds: interval, queue: queue, clock: { [unowned self] in now },
+        refreshIntervalSeconds: interval,
+        pluginStatusesProvider: { [unowned self] in pluginStatuses },
+        queue: queue, clock: { [unowned self] in now },
         makeJob: { [unowned self] invocation, _, line, completion in
           let task = Task(invocation, line: line, completion: completion)
           tasks.append(task)
@@ -44,6 +48,7 @@ final class StatusBarControllerTests: XCTestCase {
     }
 
     func drain() { queue.sync {} }
+    func tick() { queue.sync { controller.tick() } }
     func update(
       _ template: String, sources: [String: FlashStatusBarSourceDefinition]? = nil,
       interval: TimeInterval? = nil
@@ -53,6 +58,56 @@ final class StatusBarControllerTests: XCTestCase {
         sources: sources, refreshIntervalSeconds: interval)
       drain()
     }
+  }
+
+  func testPluginCarouselRotatesOnTheHostClockAndKeepsTheVisibleLineAcrossRefreshes() {
+    let harness = Harness("#{flash.plugin.feed.summary}")
+    defer { harness.controller.stop() }
+    func publish(_ lines: [String]) {
+      harness.queue.sync {
+        harness.pluginStatuses = [
+          PluginStatusBarInfo(
+            id: "feed", state: "running", hasError: false,
+            statusSegments: [
+              "summary": .carousel(prefix: "NEWS ", lines: lines, cycleSeconds: 30)
+            ])
+        ]
+      }
+      harness.controller.refreshPluginSections()
+      harness.drain()
+    }
+    func text() -> String {
+      harness.queue.sync {
+        harness.controller.lastPublishedModel!.document.runs.map(\.text).joined()
+      }
+    }
+    publish(["one", "two"])
+    XCTAssertEqual(text(), "NEWS one")
+    XCTAssertTrue(
+      harness.queue.sync {
+        harness.controller.lastPublishedModel!.document.runs.contains {
+          $0.cycle && $0.text == "one"
+        }
+      })
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 130)
+    // A republish before the deadline neither rotates nor resets the cadence.
+    harness.queue.sync { harness.now = 110 }
+    publish(["two", "one", "three"])
+    XCTAssertEqual(text(), "NEWS one")
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 130)
+    // The scheduled rotation advances through the refreshed playlist.
+    harness.queue.sync { harness.now = 131 }
+    harness.controller.refreshPluginSections()
+    harness.drain()
+    XCTAssertEqual(text(), "NEWS one")
+    harness.tick()
+    XCTAssertEqual(text(), "NEWS three")
+    // Dropping the segment forgets its rotation state.
+    harness.queue.sync { harness.pluginStatuses = [] }
+    harness.controller.refreshPluginSections()
+    harness.drain()
+    XCTAssertEqual(text(), "")
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
   }
 
   func testUnchangedReloadPreservesRunningSourceAndCompletion() {

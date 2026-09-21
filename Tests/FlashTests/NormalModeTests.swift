@@ -47,7 +47,7 @@ final class NormalModeTests: XCTestCase {
       "d", "j", "k", "H", "L", "[h", "]h", "]b", "[B", "]B",
       "[e", "]e", "[s", "]s", "[w", "]w", "ctrl+tab", "ctrl+shift+tab",
       "g^", "g$", "g0",
-      "gt", "gT", "J", "K", "e", "n", "N", "yy", "r", "R",
+      "gt", "gT", "J", "K", "e", "n", "N", "yy",
     ]
     for removedKey in removedKeys {
       XCTAssertFalse(
@@ -80,6 +80,9 @@ final class NormalModeTests: XCTestCase {
     assertSendKeyKeys(command(chars: "x", mappings: config.mode.normal), "cmd+w")
     assertSendKeyKeys(
       command(chars: "X", flags: [.shift], mappings: config.mode.normal), "cmd+shift+t")
+    assertSendKeyKeys(command(chars: "r", mappings: config.mode.normal), "cmd+r")
+    assertSendKeyKeys(
+      command(chars: "R", flags: [.shift], mappings: config.mode.normal), "cmd+shift+r")
     XCTAssertEqual(command(chars: "i", mappings: config.mode.normal), .insertMode)
     XCTAssertNil(command(chars: "i"))
   }
@@ -98,6 +101,23 @@ final class NormalModeTests: XCTestCase {
           AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
             key: keyCode, flags: CGEventFlags(rawValue: flags), bundleIdentifier: bundle), bundle)
       }
+    }
+  }
+
+  func testDefaultReloadChordsAreRefusedInTerminalsWhereTheyWouldTypeAnR() throws {
+    for command in [command(chars: "r"), command(chars: "R", flags: [.shift])] {
+      guard case .sendKey(_, let keyCode, let flags) = command else {
+        return XCTFail("Reload defaults must send the standard app shortcut directly")
+      }
+      for bundle in TerminalBundles.identifiers {
+        XCTAssertTrue(
+          AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
+            key: keyCode, flags: CGEventFlags(rawValue: flags), bundleIdentifier: bundle), bundle)
+      }
+      XCTAssertFalse(
+        AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
+          key: keyCode, flags: CGEventFlags(rawValue: flags),
+          bundleIdentifier: "org.mozilla.firefox"))
     }
   }
 
@@ -400,7 +420,7 @@ final class NormalModeTests: XCTestCase {
         charactersIgnoringModifiers: " ",
         mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
       ).command)
-    XCTAssertNil(command(chars: "r"))
+    assertSendKeyKeys(command(chars: "r"), "cmd+r")
     XCTAssertNil(command(chars: ":"))
     assertSendKeyKeys(command(chars: "x"), "cmd+w")
     XCTAssertTrue(

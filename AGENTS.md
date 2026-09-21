@@ -82,6 +82,10 @@ Surface requests that would violate these constraints before implementing them.
 - Use primary-screen height for AX/CGEvent versus NSScreen Y conversion. Screen
   unions start at `.null`. Layer changes disable implicit animation and new layer
   properties join `OverlayPanel.noActions`.
+- The status bar draws only in `StatusBarWindow`, ordered above the native menu
+  bar and its extras and below transient overlays; never re-parent its layers
+  into the overlay panel or lower it to let an auto-hidden menu bar reveal over
+  it. See the rendering section of the architecture guide.
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
 - Every status popup uses a real PTY session. Collected text uses the shared

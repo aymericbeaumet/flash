@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 
 use crate::emit::Emitter;
 use crate::process::{self, ManagedChild, ManagedChildError};
-use crate::status::{PreviewTooLarge, StatusValue};
+use crate::status::{PreviewTooLarge, StatusSegment, StatusValue};
 use crate::types::{Candidate, PerformResponse, RunningApplication};
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
@@ -165,7 +165,7 @@ impl Context {
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: Into<StatusValue>,
+        V: Into<StatusSegment>,
     {
         let mut object = serde_json::Map::new();
         for (name, value) in segments {
@@ -173,24 +173,44 @@ impl Context {
             if name.is_empty() {
                 continue;
             }
-            let value = value.into();
-            let rendered = match value.render() {
-                Ok(rendered) => rendered,
-                Err(PreviewTooLarge { encoded_bytes }) => {
-                    self.log_fields(
-                        "warn",
-                        "[plugin] status preview exceeds the inline limit; published without it",
-                        BTreeMap::from([
-                            ("segment".to_string(), name.to_string()),
-                            ("encoded_bytes".to_string(), encoded_bytes.to_string()),
-                        ]),
-                    );
-                    value.visible.into_string()
+            let wire = match value.into() {
+                StatusSegment::Value(value) => json!(self.render_status_value(name, &value).trim()),
+                StatusSegment::Carousel(carousel) => {
+                    let lines: Vec<String> = carousel
+                        .lines
+                        .iter()
+                        .map(|line| self.render_status_value(name, line).trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect();
+                    json!({
+                        "prefix": carousel.prefix.as_str(),
+                        "lines": lines,
+                        "cycle_seconds": carousel.cycle.as_secs_f64().max(1.0),
+                    })
                 }
             };
-            object.insert(name.to_string(), json!(rendered.trim()));
+            object.insert(name.to_string(), wire);
         }
         self.emit.notify("status", json!({ "segments": object }));
+    }
+
+    /// The wire string for one value; a preview above the host's inline limit
+    /// is dropped with a content-free warning so the visible text still lands.
+    fn render_status_value(&self, name: &str, value: &StatusValue) -> String {
+        match value.render() {
+            Ok(rendered) => rendered,
+            Err(PreviewTooLarge { encoded_bytes }) => {
+                self.log_fields(
+                    "warn",
+                    "[plugin] status preview exceeds the inline limit; published without it",
+                    BTreeMap::from([
+                        ("segment".to_string(), name.to_string()),
+                        ("encoded_bytes".to_string(), encoded_bytes.to_string()),
+                    ]),
+                );
+                value.visible.as_str().to_string()
+            }
+        }
     }
 
     /// Structured, content-free logging (the `log` notification): counts,

@@ -330,7 +330,7 @@ extension AppDelegate {
           ],
         ]
       },
-      "hint_behavior": String(describing: hintSession.commitBehavior),
+      "hint_command": String(describing: hintSession.command),
       "activation_in_flight": activationInFlight,
       "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),

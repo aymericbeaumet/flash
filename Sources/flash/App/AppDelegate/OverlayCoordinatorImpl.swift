@@ -248,14 +248,7 @@ extension AppDelegate {
   /// `false` when not in mouse-grid mode so the caller falls back to the
   /// universal "space cancels the overlay" gesture.
   func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
-    guard
-      hintSession.commitBehavior == .mouseGridClick
-        || hintSession.commitBehavior == .mouseGridMove
-        || hintSession.commitBehavior == .mouseGridDrag
-        || hintSession.commitBehavior == .mouseGridSelect
-        || hintSession.commitBehavior == .mouseGridMulti,
-      let grid = hintSession.mouseGridRegion?.grid
-    else {
+    guard hintSession.surface == .grid, let grid = hintSession.mouseGridRegion?.grid else {
       return false
     }
     let centerIndex = grid.centerCellIndex
@@ -276,16 +269,11 @@ extension AppDelegate {
     }
   }
 
-  private func commit(
-    hint: AssignedHint, clickModifiers: ClickModifiers, resolvedPoint: CGPoint? = nil
-  ) {
+  private func commit(hint: AssignedHint, clickModifiers held: ClickModifiers) {
     guard !activationLifecycle.inFlight else { return }
-    switch hintSession.commitBehavior {
-    case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect, .mouseGridMulti:
-      commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
+    if hintSession.surface == .grid {
+      commitMouseGridCell(hint: hint, clickModifiers: held)
       return
-    case .click, .copyURL, .moveMouse, .drag, .select, .multiClick, .adjustClick, .searchClick:
-      break
     }
     if hint.target.role == AppDelegate.statusBarHoverHintRole {
       let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
@@ -299,32 +287,20 @@ extension AppDelegate {
       overlay.releaseStatusBarHintSnapshot()
       return
     }
-    if hintSession.commitBehavior == .copyURL {
-      if let url = hint.target.url {
-        NormalModeDispatcher.copy(url)
-      }
-      overlay.hide()
-      clearHintSessionState()
-      activationLifecycle.invalidate()
-      applyModeOverlay()
-      return
-    }
     let chipRect = OverlayPanel.chipFrame(
       for: hint, fontSize: CGFloat(config.overlay.fontSize))
     let preferredPoint = CGPoint(x: chipRect.midX, y: chipRect.midY)
-    if hintSession.commitBehavior == .adjustClick {
+    switch hintSession.command {
+    case .adjust:
       guard hintSession.adjustingHint == nil else { return }
       hintSession.adjustingHint = hint
       hintSession.adjustPoint = preferredPoint
       overlay.showAdjustment(markerAt: preferredPoint, targetFrame: hint.target.frame)
-      return
-    }
-    if hintSession.commitBehavior == .drag || hintSession.commitBehavior == .select {
+    case .drag, .select:
       if let source = hintSession.dragSourcePoint, let sourceHint = hintSession.dragSourceHint {
         resolveHintPoints([(sourceHint.target, source), (hint.target, preferredPoint)]) {
           owner, points in
-          owner.performTwoPhaseCommit(
-            from: points[0], to: points[1], clickModifiers: clickModifiers)
+          owner.performTwoPhaseGesture(from: points[0], to: points[1], clickModifiers: held)
         }
       } else {
         hintSession.dragSourcePoint = preferredPoint
@@ -332,60 +308,143 @@ extension AppDelegate {
         hintSession.prefix = ""
         overlay.filter(prefix: "", hints: hintSession.hints)
       }
-      return
-    }
-    guard let clickPoint = resolvedPoint else {
+    case .move:
       resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
-        owner.commit(hint: hint, clickModifiers: clickModifiers, resolvedPoint: points[0])
+        owner.movePointerAndFinish(to: points[0])
       }
-      return
+    case .click, .multi, .search:
+      resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
+        owner.performTargetClick(hint: hint, at: points[0], clickModifiers: held)
+      }
     }
-    if hintSession.commitBehavior == .moveMouse {
-      _ = ActionDispatcher.moveCursor(to: clickPoint)
-      overlay.hide()
-      clearHintSessionState()
-      activationLifecycle.invalidate()
-      applyModeOverlay()
-      return
-    }
-    if hintSession.commitBehavior == .multiClick {
-      commitMultiClick(hint: hint, clickPoint: clickPoint, clickModifiers: clickModifiers)
-      return
-    }
+  }
 
-    let action = hintSession.action
-    // The target carries its owning pid (always the focused app at walk time).
-    // Fall back to the activation-time focused pid if the provider didn't set
-    // one.
-    let pid = hint.target.pid ?? hintSession.sourceAppPID
-    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
-      for: hint.target,
-      requested: hintSession.presetClickModifiers.union(clickModifiers))
+  /// A resolved click on a discovered target. `--multi` keeps the hint set up
+  /// afterwards; every other session ends with this click.
+  private func performTargetClick(
+    hint: AssignedHint, at point: CGPoint, clickModifiers held: ClickModifiers
+  ) {
+    let target = hint.target
+    let gesture = PointerGesture(
+      kind: .click(hintSession.command.action),
+      point: point,
+      modifiers: ActionDispatcher.hintClickModifiers(
+        for: target, requested: hintSession.command.modifiers.union(held)),
+      target: target,
+      // The target carries its owning pid (the focused app at walk time); fall
+      // back to the activation-time pid when the provider didn't set one.
+      pid: target.pid ?? hintSession.sourceAppPID)
+    let followUp: PointerCommitFollowUp
+    if hintSession.command.isMulti {
+      followUp = .rearmHints
+    } else if target.role == AppDelegate.statusItemHintRole {
+      followUp = .statusItemMenu
+    } else {
+      followUp = .finish(.hint(entersInsertMode: target.entersInsertMode))
+    }
+    performPointerGesture(gesture, followUp: followUp)
+  }
+
+  /// Phase 2 of `--drag` / `--select`: both points are known, so the session
+  /// ends and the gesture goes out as one continuous drag, or a click plus
+  /// shift-click selection. Neither carries typing intent, so NORMAL just
+  /// recaptures once the gesture has been posted.
+  private func performTwoPhaseGesture(
+    from source: CGPoint, to destination: CGPoint, clickModifiers held: ClickModifiers
+  ) {
+    let kind: PointerGesture.Kind =
+      hintSession.command.isSelect ? .select(from: source) : .drag(from: source)
+    performPointerGesture(
+      PointerGesture(
+        kind: kind, point: destination,
+        modifiers: hintSession.command.modifiers.union(held),
+        target: nil, pid: hintSession.sourceAppPID),
+      followUp: .recapture)
+  }
+
+  /// `--move`: the pointer lands on the point and the session is over. There is
+  /// no event to wait for, so NORMAL recaptures at once.
+  private func movePointerAndFinish(to point: CGPoint) {
+    overlay.hide()
+    clearHintSessionState()
+    activationLifecycle.invalidate()
+    _ = ActionDispatcher.moveCursor(to: point)
+    applyModeOverlay()
+  }
+
+  /// One pointer gesture, resolved from the session and the modifiers held on
+  /// the final hint key.
+  struct PointerGesture {
+    enum Kind {
+      case click(JumpAction)
+      case drag(from: CGPoint)
+      case select(from: CGPoint)
+    }
+    var kind: Kind
+    var point: CGPoint
+    var modifiers: ClickModifiers
+    /// The discovered target, or nil for grid cells and two-phase gestures.
+    var target: JumpTarget?
+    var pid: pid_t?
+
+    var action: JumpAction? {
+      if case .click(let action) = kind { return action }
+      return nil
+    }
+  }
+
+  /// What the mode does once the gesture has been posted.
+  enum PointerCommitFollowUp {
+    /// The session is over: enter INSERT per the pointer policy, else recapture.
+    case finish(NormalModePointerPolicy.ClickTarget)
+    /// A status item's menu now owns the keyboard.
+    case statusItemMenu
+    /// `--multi` on targets: keep the hint set up for the next selection.
+    case rearmHints
+    /// `--multi` on the grid: restart it at its full extent.
+    case rearmGrid(MouseGrid.Region?)
+    /// Drags and selections have no typing intent: recapture NORMAL.
+    case recapture
+  }
+
+  /// The single delivery path for every committed gesture — hint, grid cell,
+  /// adjusted point, drag, selection: raise the owning app, tear the session
+  /// down (or keep it for `--multi`), post the events off-main, then hand the
+  /// mode back.
+  private func performPointerGesture(_ gesture: PointerGesture, followUp: PointerCommitFollowUp) {
     let wasNormalMode = flashMode == .normal
-    if let pid {
+    FlashLog.trace(
+      "[commit] kind=\(gesture.kind) role=\(gesture.target?.role ?? "-") "
+        + "provider=\(gesture.target?.providerID ?? "-") "
+        + "point=(\(Int(gesture.point.x)),\(Int(gesture.point.y))) "
+        + "modifiers=cmd:\(gesture.modifiers.contains(.command)) "
+        + "shift:\(gesture.modifiers.contains(.shift)) "
+        + "ctrl:\(gesture.modifiers.contains(.control)) "
+        + "alt:\(gesture.modifiers.contains(.option))")
+    if let target = gesture.target {
+      guard prepareCapturedStatusBarClick(target, at: gesture.point) else { return }
+    }
+    if let pid = gesture.pid, gesture.target != nil {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
-    let committedClick = LastCommittedClick(
-      point: clickPoint, action: action, modifiers: resolvedClickModifiers, pid: pid)
-    FlashLog.trace(
-      "[commit] action=\(action) role=\(hint.target.role ?? "?") "
-        + "provider=\(hint.target.providerID) "
-        + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y))) "
-        + "modifiers=cmd:\(resolvedClickModifiers.contains(.command)) "
-        + "shift:\(resolvedClickModifiers.contains(.shift)) "
-        + "ctrl:\(resolvedClickModifiers.contains(.control)) "
-        + "alt:\(resolvedClickModifiers.contains(.option))")
-
     if wasNormalMode {
       applyModeOverlay(captureOverride: false)
     }
-    overlay.hide()
-    // Restore focus to the target app before posting the mouse event so the
-    // underlying surface receives and interprets the click. The hinted window
-    // is on screen by construction, so no minimized-window AX probe; and when
-    // the target already is frontmost there is nothing to settle, so the
-    // click goes out on this turn instead of after the activation delay.
+    switch followUp {
+    case .finish, .statusItemMenu, .recapture:
+      overlay.hide()
+      clearHintSessionState(preservingStatusBarSnapshot: true)
+    case .rearmHints:
+      hintSession.prefix = ""
+      overlay.filter(prefix: "", hints: hintSession.hints)
+    case .rearmGrid:
+      break
+    }
+    // Raise the owning app before posting so the surface interprets the event.
+    // The hinted window is on screen by construction, so no minimized-window
+    // AX probe; and when the app already is frontmost there is nothing to
+    // settle, so the events go out on this turn instead of after a delay.
+    let targetApp = gesture.pid.flatMap { NSRunningApplication(processIdentifier: $0) }
     let targetAlreadyFrontmost =
       targetApp.map {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.processIdentifier
@@ -394,22 +453,66 @@ extension AppDelegate {
       RunningApplicationActivation.activate(
         targetApp, options: [], restoringMinimizedWindows: false)
     }
-    guard prepareCapturedStatusBarClick(hint.target, at: clickPoint) else { return }
-    clearHintSessionState(preservingStatusBarSnapshot: true)
-    performHintCommit(delayMs: targetAlreadyFrontmost ? 0 : 20, recording: committedClick) {
-      finished in
-      ActionDispatcher.perform(
-        action, on: hint.target, clickPoint: clickPoint,
-        modifiers: resolvedClickModifiers,
-        completion: finished)
+    let recorded = gesture.action.map {
+      LastCommittedClick(
+        point: gesture.point, action: $0, modifiers: gesture.modifiers, pid: gesture.pid)
+    }
+    performHintCommit(delayMs: targetAlreadyFrontmost ? 0 : 20, recording: recorded) { finished in
+      switch gesture.kind {
+      case .click(let action):
+        ActionDispatcher.synthesizeClick(
+          at: gesture.point, action: action, modifiers: gesture.modifiers, completion: finished)
+      case .drag(let source):
+        ActionDispatcher.synthesizeDrag(
+          from: source, to: gesture.point, modifiers: gesture.modifiers, completion: finished)
+      case .select(let source):
+        ActionDispatcher.synthesizeSelection(
+          from: source, to: gesture.point, modifiers: gesture.modifiers, completion: finished)
+      }
     } completion: { owner in
-      guard wasNormalMode, owner.flashMode == .normal else { return }
-      if hint.target.role == AppDelegate.statusItemHintRole {
-        owner.suspendNormalCaptureForNativeSurface(reason: "status_item_menu")
+      owner.finishPointerGesture(gesture, followUp: followUp, wasNormalMode: wasNormalMode)
+    }
+  }
+
+  private func finishPointerGesture(
+    _ gesture: PointerGesture, followUp: PointerCommitFollowUp, wasNormalMode: Bool
+  ) {
+    let action = gesture.action ?? .leftClick
+    switch followUp {
+    case .finish(let target):
+      guard wasNormalMode, flashMode == .normal else { return }
+      completeHintClick(target: target, action: action, at: gesture.point, pid: gesture.pid)
+    case .statusItemMenu:
+      guard wasNormalMode, flashMode == .normal else { return }
+      suspendNormalCaptureForNativeSurface(reason: "status_item_menu")
+    case .recapture:
+      guard wasNormalMode, flashMode == .normal else { return }
+      scheduleNormalModeRecapture()
+    case .rearmHints:
+      let target = NormalModePointerPolicy.ClickTarget.hint(
+        entersInsertMode: gesture.target?.entersInsertMode ?? false)
+      if flashMode == .normal,
+        NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
+      {
+        completeHintClick(target: target, action: action, at: gesture.point, pid: gesture.pid)
+        return
+      }
+      guard !hintSession.hints.isEmpty else { return }
+      // Re-present the surviving hint set so the panel re-keys: in
+      // non-advanced mode capture rides on panel key status, and the app
+      // activation above may have taken it.
+      overlay.display(hints: hintSession.hints)
+    case .rearmGrid(let initial):
+      if flashMode == .normal {
+        completeHintClick(target: .grid, action: action, at: gesture.point, pid: nil)
+        return
+      }
+      if let initial {
+        hintSession.mouseGridDepth = 0
+        hintSession.prefix = ""
+        displayMouseGridRegion(initial, depth: 0)
       } else {
-        owner.completeHintClick(
-          target: .hint(entersInsertMode: hint.target.entersInsertMode),
-          action: action, at: clickPoint, pid: pid)
+        cancelOverlay()
       }
     }
   }
@@ -480,7 +583,6 @@ extension AppDelegate {
     guard !hintSession.hints.isEmpty || hadActivation else { return }
     overlay.hide()
     clearHintSessionState()
-    hintSession.action = .leftClick
     if hadActivation {
       invalidateActivation(reason: reason)
     }
@@ -491,7 +593,6 @@ extension AppDelegate {
     let hadActivation = activationInFlight
     let hadTransientState = !hintSession.hints.isEmpty || hadActivation
     clearHintSessionState()
-    hintSession.action = .leftClick
     if hadTransientState {
       invalidateActivation(reason: reason)
     }
@@ -552,7 +653,7 @@ extension AppDelegate {
     return false
   }
 
-  private func commitMouseGridCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
+  private func commitMouseGridCell(hint: AssignedHint, clickModifiers held: ClickModifiers) {
     let nextRegion = MouseGrid.Region(
       frame: hint.target.frame, grid: hintSession.mouseGridRegion?.grid)
     let nextDepth = hintSession.mouseGridDepth + 1
@@ -567,35 +668,10 @@ extension AppDelegate {
     }
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
-    if hintSession.commitBehavior == .mouseGridMulti {
-      let action = hintSession.action
-      let modifiers = hintSession.presetClickModifiers.union(clickModifiers)
-      let initial = hintSession.mouseGridInitialRegion
-      let committedClick = LastCommittedClick(
-        point: point, action: action, modifiers: modifiers, pid: hintSession.sourceAppPID)
-      performHintCommit(recording: committedClick) { finished in
-        ActionDispatcher.synthesizeClick(
-          at: point, action: action, modifiers: modifiers, completion: finished)
-      } completion: { owner in
-        if owner.flashMode == .normal {
-          owner.completeHintClick(target: .grid, action: action, at: point, pid: nil)
-          return
-        }
-        if let initial {
-          owner.hintSession.mouseGridDepth = 0
-          owner.hintSession.prefix = ""
-          owner.displayMouseGridRegion(initial, depth: 0)
-        } else {
-          owner.cancelOverlay()
-        }
-      }
-      return
-    }
-    if hintSession.commitBehavior == .mouseGridDrag
-      || hintSession.commitBehavior == .mouseGridSelect
-    {
+    switch hintSession.command {
+    case .drag, .select:
       if let source = hintSession.dragSourcePoint {
-        performTwoPhaseCommit(from: source, to: point, clickModifiers: clickModifiers)
+        performTwoPhaseGesture(from: source, to: point, clickModifiers: held)
       } else if let initial = hintSession.mouseGridInitialRegion {
         // Phase 1: remember the anchor point and restart the grid from its full
         // extent so the second point can land anywhere, not only inside the
@@ -606,32 +682,20 @@ extension AppDelegate {
         displayMouseGridRegion(initial, depth: 0)
         FlashLog.trace(
           "[commit] grid_two_phase_anchor=(\(Int(point.x)),\(Int(point.y))) "
-            + "behavior=\(hintSession.commitBehavior) awaiting_second_point")
+            + "command=\(hintSession.command) awaiting_second_point")
       } else {
         cancelOverlay()
       }
-      return
-    }
-    let shouldMove = hintSession.commitBehavior == .mouseGridMove
-    let priorPID = hintSession.sourceAppPID
-    let clickAction = hintSession.action
-    let resolvedClickModifiers = hintSession.presetClickModifiers.union(clickModifiers)
-    overlay.hide()
-    clearHintSessionState()
-    activationLifecycle.invalidate()
-    if shouldMove {
-      _ = ActionDispatcher.moveCursor(to: point)
-      applyModeOverlay()
-      return
-    }
-    let committedClick = LastCommittedClick(
-      point: point, action: clickAction, modifiers: resolvedClickModifiers, pid: priorPID)
-    applyModeOverlay(captureOverride: false)
-    performHintCommit(recording: committedClick) { finished in
-      ActionDispatcher.synthesizeClick(
-        at: point, action: clickAction, modifiers: resolvedClickModifiers, completion: finished)
-    } completion: { owner in
-      owner.completeHintClick(target: .grid, action: clickAction, at: point, pid: priorPID)
+    case .move:
+      movePointerAndFinish(to: point)
+    case .click, .multi, .adjust, .search:
+      performPointerGesture(
+        PointerGesture(
+          kind: .click(hintSession.command.action), point: point,
+          modifiers: hintSession.command.modifiers.union(held),
+          target: nil, pid: hintSession.sourceAppPID),
+        followUp: hintSession.command.isMulti
+          ? .rearmGrid(hintSession.mouseGridInitialRegion) : .finish(.grid))
     }
   }
 
@@ -685,7 +749,7 @@ extension AppDelegate {
   }
 
   func updateSearchSelectionMarker() {
-    guard hintSession.searchActive || hintSession.commitBehavior == .searchClick,
+    guard hintSession.searchActive || hintSession.command.isSearch,
       !hintSession.hints.isEmpty
     else {
       overlay.hideAdjustment()
@@ -710,45 +774,12 @@ extension AppDelegate {
       cancelOverlay()
     case .commit:
       resolveHintPoints([(hint.target, point)]) { owner, points in
-        owner.performAdjustedCommit(hint: hint, at: points[0], clickModifiers: clickModifiers)
+        owner.performTargetClick(hint: hint, at: points[0], clickModifiers: clickModifiers)
       }
     case .snapLeft, .snapRight, .snapTop, .snapBottom, .interpolate, .reset:
       let updated = HintAdjustmentInterpreter.apply(command, to: point, in: hint.target.frame)
       hintSession.adjustPoint = updated
       overlay.showAdjustment(markerAt: updated, targetFrame: hint.target.frame)
-    }
-  }
-
-  /// Fire the adjusted hint click with the selected target's input intent.
-  private func performAdjustedCommit(
-    hint: AssignedHint,
-    at point: CGPoint,
-    clickModifiers: ClickModifiers
-  ) {
-    let action = hintSession.action
-    let pid = hint.target.pid ?? hintSession.sourceAppPID
-    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let modifiers = ActionDispatcher.hintClickModifiers(
-      for: hint.target, requested: hintSession.presetClickModifiers.union(clickModifiers))
-    let committedClick = LastCommittedClick(
-      point: point, action: action, modifiers: modifiers, pid: pid)
-    FlashLog.trace(
-      "[commit] adjust action=\(action) point=(\(Int(point.x)),\(Int(point.y)))")
-    overlay.hide()
-    guard prepareCapturedStatusBarClick(hint.target, at: point) else { return }
-    clearHintSessionState(preservingStatusBarSnapshot: true)
-    activationLifecycle.invalidate()
-    if let targetApp {
-      RunningApplicationActivation.activate(targetApp, options: [])
-    }
-    applyModeOverlay(captureOverride: false)
-    performHintCommit(recording: committedClick) { finished in
-      ActionDispatcher.synthesizeClick(
-        at: point, action: action, modifiers: modifiers, completion: finished)
-    } completion: { owner in
-      owner.completeHintClick(
-        target: .hint(entersInsertMode: hint.target.entersInsertMode),
-        action: action, at: point, pid: pid)
     }
   }
 
@@ -782,95 +813,6 @@ extension AppDelegate {
           action: last.action,
           modifiers: last.modifiers,
           completion: index < count ? nil : finished)
-      }
-    } completion: { owner in
-      if wasNormalMode, owner.flashMode == .normal {
-        owner.scheduleNormalModeRecapture()
-      }
-    }
-  }
-
-  /// One commit of a `--multi` session: perform the pending action on the
-  /// selected target, then re-arm the same hint set for the next selection
-  /// unless this click enters INSERT. Escape finishes the remaining session.
-  private func commitMultiClick(
-    hint: AssignedHint, clickPoint: CGPoint, clickModifiers: ClickModifiers
-  ) {
-    let action = hintSession.action
-    let pid = hint.target.pid ?? hintSession.sourceAppPID
-    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
-      for: hint.target,
-      requested: hintSession.presetClickModifiers.union(clickModifiers))
-    FlashLog.trace(
-      "[commit] multi action=\(action) role=\(hint.target.role ?? "?") "
-        + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y)))")
-    let committedClick = LastCommittedClick(
-      point: clickPoint, action: action, modifiers: resolvedClickModifiers, pid: pid)
-    guard prepareCapturedStatusBarClick(hint.target, at: clickPoint) else { return }
-    if let targetApp {
-      RunningApplicationActivation.activate(targetApp, options: [])
-    }
-    hintSession.prefix = ""
-    overlay.filter(prefix: "", hints: hintSession.hints)
-    performHintCommit(recording: committedClick) { finished in
-      ActionDispatcher.perform(
-        action, on: hint.target, clickPoint: clickPoint,
-        modifiers: resolvedClickModifiers, completion: finished)
-    } completion: { owner in
-      let target = NormalModePointerPolicy.ClickTarget.hint(
-        entersInsertMode: hint.target.entersInsertMode)
-      if owner.flashMode == .normal,
-        NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
-      {
-        owner.completeHintClick(target: target, action: action, at: clickPoint, pid: pid)
-        return
-      }
-      guard !owner.hintSession.hints.isEmpty else { return }
-      // Re-present the surviving hint set so the panel re-keys: in
-      // non-advanced mode capture rides on panel key status, and the app
-      // activation above may have taken it.
-      owner.overlay.display(hints: owner.hintSession.hints)
-    }
-  }
-
-  /// Phase 2 of a `--drag` / `--select` commit: both points are known, so tear
-  /// the session down and synthesize the gesture — a continuous drag, or a
-  /// click + shift-click selection. Both manipulate the pointer without typing
-  /// intent, so they never enter INSERT — NORMAL just recaptures once the
-  /// gesture has been posted.
-  private func performTwoPhaseCommit(
-    from source: CGPoint,
-    to destination: CGPoint,
-    clickModifiers: ClickModifiers
-  ) {
-    let isSelect =
-      hintSession.commitBehavior == .select || hintSession.commitBehavior == .mouseGridSelect
-    let modifiers = hintSession.presetClickModifiers.union(clickModifiers)
-    let wasNormalMode = flashMode == .normal
-    let targetApp = hintSession.sourceAppPID.flatMap { NSRunningApplication(processIdentifier: $0) }
-    FlashLog.trace(
-      "[commit] two_phase kind=\(isSelect ? "select" : "drag") "
-        + "from=(\(Int(source.x)),\(Int(source.y))) "
-        + "to=(\(Int(destination.x)),\(Int(destination.y))) "
-        + "modifiers=cmd:\(modifiers.contains(.command)) "
-        + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
-        + "alt:\(modifiers.contains(.option))")
-    if wasNormalMode {
-      applyModeOverlay(captureOverride: false)
-    }
-    overlay.hide()
-    if let targetApp {
-      RunningApplicationActivation.activate(targetApp, options: [])
-    }
-    clearHintSessionState(preservingStatusBarSnapshot: true)
-    performHintCommit(delayMs: 20) { finished in
-      if isSelect {
-        ActionDispatcher.synthesizeSelection(
-          from: source, to: destination, modifiers: modifiers, completion: finished)
-      } else {
-        ActionDispatcher.synthesizeDrag(
-          from: source, to: destination, modifiers: modifiers, completion: finished)
       }
     } completion: { owner in
       if wasNormalMode, owner.flashMode == .normal {

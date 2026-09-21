@@ -170,7 +170,6 @@ final class StatusBarHoverTests: XCTestCase {
       name: "shell", visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800),
       style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     panel.hideStatusBarClickWindows()
-    panel.statusBarNativeMenuDidReveal()
     XCTAssertEqual(panel.statusPopupController.focusedName, "shell")
     XCTAssertTrue(panel.statusPopupController.presentation.isStandalone)
   }
@@ -297,7 +296,7 @@ final class StatusBarHoverTests: XCTestCase {
     let moved = try redraw(" ")
     panel.refreshStatusBarPopup(popups: [moved], at: pointer, screenSnapshot: snapshot)
     XCTAssertEqual(
-      surface.hoverHighlight.frame.minX, moved.rect.minX - screen.minX - 3, accuracy: 0.001)
+      surface.hoverHighlight.frame.minX, moved.rect.minX - screen.minX - 5, accuracy: 0.001)
     panel.refreshStatusBarPopup(
       popups: [], links: [(moved.rect, URL(string: "https://example.com")!)], at: pointer,
       screenSnapshot: snapshot)

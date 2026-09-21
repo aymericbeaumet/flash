@@ -144,9 +144,16 @@ and stop before the notch or an absolute-centre component. The feed uses this
 for title-only ellipsis with an always-visible outbound arrow. An
 absolute-centre component owns its own columns plus a small gutter: a side
 lane contracts its elastic span first and then loses characters from its far
-end rather than reaching the centred label. A bar too narrow to hold both
-lanes and that reservation drops the reservation instead of erasing a lane. These host
-surfaces do not alter format evaluation.
+end rather than reaching the centred label. That reservation is drawn as a
+recessed notch (the bar fill sunk slightly, rounded like the camera housing)
+with the real housing's fixed width (a connected notched display's, else the
+16-inch MacBook Pro's 185 pt); the side lanes end where the recess begins and
+centred content longer than its interior is clipped with an ellipsis. A screen
+with a physical notch hides the centre and draws no recess. A bar too narrow to
+hold both lanes and that reservation drops the reservation instead of erasing a
+lane. A lane re-budget that only contracts or clamps a carousel row
+keeps the row in place; the carousel pushes vertically only for a different
+article. These host surfaces do not alter format evaluation.
 
 Bare `#{flash.mode}` references retain their identity through template and
 option expansion. The renderer resolves their text from the current mode in

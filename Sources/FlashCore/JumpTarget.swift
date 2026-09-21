@@ -80,19 +80,32 @@ public struct JumpTarget: @unchecked Sendable {
     return resolveClickPoint(point)
   }
 
-  /// Plugin target IDs may be walk ordinals. Match the captured semantics,
-  /// rejecting indistinguishable duplicates rather than choosing their order.
+  /// Plugin target IDs may be walk ordinals, so match the captured semantics.
+  /// The same link text is often visible more than once — a path repeated in
+  /// a terminal pane — and then the copy nearest the captured position is the
+  /// one the user picked; only two copies at the same distance are ambiguous.
   public func matchingClickPoint(preferred point: CGPoint, among targets: [JumpTarget]) -> CGPoint?
   {
     guard accessibilityLabel?.isEmpty == false || url?.isEmpty == false else { return nil }
-    let matches = targets.filter {
-      $0.providerID == providerID && $0.pid == pid && $0.role == role
-        && $0.accessibilityLabel == accessibilityLabel && $0.url == url
-        && $0.contextID == contextID
-        && $0.entersInsertMode == entersInsertMode
-    }
-    guard matches.count == 1, let current = matches.first else { return nil }
-    return Self.relocatedClickPoint(point, from: frame, to: current.frame)
+    let ranked =
+      targets
+      .filter {
+        $0.providerID == providerID && $0.pid == pid && $0.role == role
+          && $0.accessibilityLabel == accessibilityLabel && $0.url == url
+          && $0.contextID == contextID
+          && $0.entersInsertMode == entersInsertMode
+      }
+      .map { candidate -> (target: JumpTarget, distance: CGFloat) in
+        let dx = candidate.frame.midX - frame.midX
+        let dy = candidate.frame.midY - frame.midY
+        let distance = dx * dx + dy * dy
+        return (candidate, distance.isFinite ? distance : .infinity)
+      }
+      .sorted { $0.distance < $1.distance }
+    guard let nearest = ranked.first,
+      ranked.dropFirst().first.map({ $0.distance > nearest.distance }) ?? true
+    else { return nil }
+    return Self.relocatedClickPoint(point, from: frame, to: nearest.target.frame)
   }
 
   public static func relocatedClickPoint(

@@ -12,6 +12,7 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::ops::{Add, AddAssign};
+use std::time::Duration;
 
 /// The host rejects an inline preview whose percent-encoded body exceeds this
 /// many bytes (`StatusFormatDocument`).
@@ -590,6 +591,77 @@ impl From<String> for StatusValue {
 impl From<Markup> for StatusValue {
     fn from(visible: Markup) -> Self {
         Self::text(visible)
+    }
+}
+
+/// A host-rotated status carousel. Flash cycles `lines` every `cycle` on its
+/// own clock — a republish with new lines keeps the visible line until its
+/// scheduled rotation — renders `prefix` once, still, before the visible
+/// line, and wraps that line in `#[cyc]…#[nocyc]` so it takes the carousel
+/// transition. Each line carries its own preview. No lines clears the
+/// segment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusCarousel {
+    pub prefix: Markup,
+    pub lines: Vec<StatusValue>,
+    pub cycle: Duration,
+}
+
+impl StatusCarousel {
+    pub fn new(lines: impl IntoIterator<Item = StatusValue>, cycle: Duration) -> Self {
+        Self {
+            prefix: Markup::new(),
+            lines: lines.into_iter().collect(),
+            cycle,
+        }
+    }
+
+    pub fn with_prefix(mut self, prefix: impl Into<Markup>) -> Self {
+        self.prefix = prefix.into();
+        self
+    }
+}
+
+/// What `Context::status` publishes for one segment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StatusSegment {
+    Value(StatusValue),
+    Carousel(StatusCarousel),
+}
+
+impl From<StatusValue> for StatusSegment {
+    fn from(value: StatusValue) -> Self {
+        Self::Value(value)
+    }
+}
+
+impl From<StatusCarousel> for StatusSegment {
+    fn from(carousel: StatusCarousel) -> Self {
+        Self::Carousel(carousel)
+    }
+}
+
+impl From<&str> for StatusSegment {
+    fn from(visible: &str) -> Self {
+        Self::Value(StatusValue::text(visible))
+    }
+}
+
+impl From<&String> for StatusSegment {
+    fn from(visible: &String) -> Self {
+        Self::Value(StatusValue::text(visible))
+    }
+}
+
+impl From<String> for StatusSegment {
+    fn from(visible: String) -> Self {
+        Self::Value(StatusValue::text(visible))
+    }
+}
+
+impl From<Markup> for StatusSegment {
+    fn from(visible: Markup) -> Self {
+        Self::Value(StatusValue::text(visible))
     }
 }
 
@@ -1207,6 +1279,29 @@ free form"
         assert_eq!(progress_bar(-1.0, 4), "░░░░");
         assert_eq!(progress_bar(7.0, 4), "████");
         assert_eq!(progress_bar(0.5, 0), "");
+    }
+
+    #[test]
+    fn status_segments_convert_from_values_carousels_and_plain_text() {
+        let carousel = StatusCarousel::new(
+            [StatusValue::text("one"), StatusValue::text("two")],
+            Duration::from_secs(30),
+        )
+        .with_prefix(Markup::text("NEWS "));
+        assert_eq!(carousel.lines.len(), 2);
+        assert_eq!(carousel.prefix.as_str(), "NEWS ");
+        assert!(matches!(
+            StatusSegment::from(carousel.clone()),
+            StatusSegment::Carousel(_)
+        ));
+        assert_eq!(
+            StatusSegment::from("plain"),
+            StatusSegment::Value(StatusValue::text("plain"))
+        );
+        assert_eq!(
+            StatusSegment::from(StatusValue::empty()),
+            StatusSegment::Value(StatusValue::default())
+        );
     }
 
     #[test]

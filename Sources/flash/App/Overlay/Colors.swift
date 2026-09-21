@@ -50,6 +50,12 @@ extension OverlayPanel {
   static func lifted(_ color: NSColor, by fraction: CGFloat) -> NSColor {
     color.blended(withFraction: fraction, of: .white) ?? color
   }
+  /// A darker shade of a palette colour; the centre notch is the bar fill
+  /// sunk by `statusBarNotchSink` so it reads as a recess, not a panel.
+  static func sunken(_ color: NSColor, by fraction: CGFloat) -> NSColor {
+    color.blended(withFraction: fraction, of: .black) ?? color
+  }
+  static let statusBarNotchSink: CGFloat = 0.06
   /// Faint outline for the NORMAL-mode pill. The normal pill is dark-on-dark
   /// (same fill as the bar) so without a border it has no visible edge — a
   /// 1px, low-alpha white hairline reads as a subtle frame around it.

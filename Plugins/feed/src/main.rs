@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use flash_plugin::{run, Context, StatusValue};
+use flash_plugin::{run, Context, StatusSegment, StatusValue};
 use reqwest::{Client, Url};
 use serde_json::Value;
 
@@ -90,13 +90,15 @@ impl FlashPlugin for Feed {
                 return;
             }
         };
-        let state = Arc::new(Mutex::new(state::State::new(settings.label)));
+        let state = Arc::new(Mutex::new(state::State::new(
+            settings.label,
+            settings.cycle_interval,
+        )));
         let refreshed = Arc::new(tokio::sync::Notify::new());
-        drop(tokio::spawn(cycle_articles(
+        drop(tokio::spawn(expire_articles(
             ctx.clone(),
             Arc::clone(&state),
             Arc::clone(&refreshed),
-            settings.cycle_interval,
         )));
         drop(tokio::spawn(async move {
             let mut failure_logged = false;
@@ -128,11 +130,11 @@ impl FlashPlugin for Feed {
                     }
                     Err(_) => {}
                 }
-                let summary = state
+                let segment = state
                     .lock()
                     .unwrap()
                     .refresh(result.map_err(|_| ()), Utc::now().timestamp());
-                publish(&ctx, summary);
+                publish(&ctx, segment);
                 refreshed.notify_one();
                 tokio::time::sleep(settings.refresh_interval).await;
             }
@@ -140,39 +142,35 @@ impl FlashPlugin for Feed {
     }
 }
 
-async fn cycle_articles(
+/// Rotation belongs to the host; the plugin only wakes when the oldest
+/// article leaves the window, so the carousel never shows a stale headline.
+async fn expire_articles(
     ctx: Context,
     state: Arc<Mutex<state::State>>,
     refreshed: Arc<tokio::sync::Notify>,
-    period: Duration,
 ) {
-    let mut next_cycle = Instant::now() + period;
     loop {
-        let until_cycle = next_cycle.saturating_duration_since(Instant::now());
-        let delay = state
-            .lock()
-            .unwrap()
-            .expires_in(Utc::now().timestamp())
-            .map(|expiry| expiry.min(until_cycle))
-            .unwrap_or(until_cycle);
-        tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
-            _ = refreshed.notified() => continue,
+        let delay = state.lock().unwrap().expires_in(Utc::now().timestamp());
+        match delay {
+            Some(delay) => {
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = refreshed.notified() => continue,
+                }
+            }
+            None => {
+                refreshed.notified().await;
+                continue;
+            }
         }
-        let now = Utc::now().timestamp();
-        let summary = if Instant::now() >= next_cycle {
-            next_cycle = Instant::now() + period;
-            state.lock().unwrap().cycle(now)
-        } else {
-            state.lock().unwrap().expire(now)
-        };
-        publish(&ctx, summary);
+        let segment = state.lock().unwrap().expire(Utc::now().timestamp());
+        publish(&ctx, segment);
     }
 }
 
-fn publish(ctx: &Context, summary: Option<StatusValue>) {
-    if let Some(summary) = summary {
-        ctx.status([("summary", summary)]);
+fn publish(ctx: &Context, segment: Option<StatusSegment>) {
+    if let Some(segment) = segment {
+        ctx.status([("summary", segment)]);
     }
 }
 
@@ -243,6 +241,32 @@ mod tests {
         let frames = harness.drain();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0]["method"], "status");
+    }
+
+    #[tokio::test]
+    async fn carousel_publishes_still_prefix_lines_and_cycle_seconds_on_the_wire() {
+        let mut harness = Harness::new("feed");
+        let mut state = state::State::new("AGGR".into(), Duration::from_secs(30));
+        let article = feed::Article {
+            title: "Title".into(),
+            url: "https://aggr.example/a".into(),
+            original_url: "https://www.source.example/x".into(),
+            preview: String::new(),
+            published_at: 100,
+        };
+        let segment = state.refresh(Ok(vec![article]), 101).unwrap();
+        harness.context().status([("summary", segment)]);
+        let frames = harness.drain();
+        let summary = &frames[0]["params"]["segments"]["summary"];
+        assert_eq!(summary["cycle_seconds"], 30.0);
+        assert!(summary["prefix"].as_str().unwrap().contains("AGGR"));
+        let lines = summary["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 1);
+        let line = lines[0].as_str().unwrap();
+        assert!(line.contains("#[link=https://aggr.example/a]"));
+        assert!(line.contains("(source.example)"));
+        assert!(line.contains("↗"));
+        assert!(!line.contains("AGGR"));
     }
 
     #[test]

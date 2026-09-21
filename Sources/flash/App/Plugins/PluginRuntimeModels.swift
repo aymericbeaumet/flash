@@ -136,6 +136,28 @@ struct PluginStatus {
   }
 }
 
+/// One published status segment: plain markup, or a carousel whose lines the
+/// host rotates on its own clock (`FlashStatusBarCycleState`), rendering
+/// `prefix` once before the visible line and wrapping that line in
+/// `#[cyc]…#[nocyc]` so it takes the carousel transition.
+enum PluginStatusSegment: Equatable {
+  case text(String)
+  case carousel(prefix: String, lines: [String], cycleSeconds: TimeInterval)
+
+  static func carouselLine(prefix: String, line: String) -> String {
+    prefix + "#[cyc]" + line + "#[nocyc]"
+  }
+
+  /// The segment as the debug inspector shows it.
+  var debugText: String {
+    switch self {
+    case .text(let text): return text
+    case .carousel(let prefix, let lines, let seconds):
+      return "\(prefix)⟳\(Int(seconds))s " + lines.joined(separator: " | ")
+    }
+  }
+}
+
 /// The four fields the status bar actually renders, published every clock
 /// tick and focus change. Unlike `PluginStatus` this carries no rusage
 /// sample and no commands copy — keep it allocation-light.
@@ -143,7 +165,7 @@ struct PluginStatusBarInfo {
   var id: String
   var state: String
   var hasError: Bool
-  var statusSegments: [String: String]
+  var statusSegments: [String: PluginStatusSegment]
 }
 
 /// One reply to the unified `perform` method: the universal trichotomy.

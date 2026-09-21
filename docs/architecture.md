@@ -104,6 +104,18 @@ All overlay layer mutations disable implicit Core Animation actions. Add new
 animated properties to `OverlayPanel.noActions` as well as using disabled-action
 transactions. An empty discovery result stays silent.
 
+The persistent status bar draws in its own click-through `StatusBarWindow`,
+which shares the overlay panel's union-of-screens frame and hosts only the bar
+layers. It is ordered above the native menu bar and its extras, so a reveal of
+an auto-hidden menu bar (the pointer grazing the top edge while hovering the
+bar, a menu key equivalent flashing its title, Flash becoming active, a wake)
+slides those windows in behind the bar instead of painting over it for a second.
+While the bar is enabled the band is Flash's: the native menu bar stays covered
+and the click windows never step aside for it. The overlay panel keeps the focus
+border at `.floating` and transient surfaces at the screen-saver level, so
+status hints still render above the bar and transient teardown never detaches
+it.
+
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.
 Transient surfaces preserve their return state and obey advanced-mode eligibility.

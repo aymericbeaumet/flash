@@ -839,12 +839,11 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(panel.commandPromptLayer.shadowRadius, 0)
   }
 
-  func testPersistentStatusBarIsPlainWindowBelowNativeMenuBar() {
-    // The bar is an ordinary elevated window (`.floating`): above the focused
-    // app's normal windows, but well below the native menu bar (app menus at
-    // `.mainMenu`/24, extras at `.statusBar`/25) so the menu bar wins the
-    // z-order and expands on top of Flash. Not jammed against the menu-bar band
-    // at `.mainMenu - 1`, where it competed with the system menu bar for clicks.
+  func testPersistentOverlayPanelStaysPlainFloatingWindow() {
+    // The overlay panel's persistent content is the focus border: an ordinary
+    // elevated window above the focused app's normal windows, below the native
+    // menu bar, Spotlight and banners, and still allowed to become key for the
+    // no-tap fallback.
     XCTAssertEqual(
       OverlayPanel.windowLevelForOverlayContent(
         inputMode: .normal,
@@ -856,12 +855,56 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
       NSWindow.Level.floating.rawValue)
-    XCTAssertGreaterThan(
-      OverlayPanel.persistentStatusWindowLevel.rawValue,
-      NSWindow.Level.normal.rawValue)
     XCTAssertLessThan(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
       NSWindow.Level.mainMenu.rawValue)
+  }
+
+  func testStatusBarWindowOutranksNativeMenuBar() {
+    // Repro for the bar "flashing" for a second: with the system menu bar set
+    // to auto-hide, a reveal (the pointer grazing the top edge while hovering
+    // the bar, a menu key equivalent flashing its title, Flash becoming active,
+    // a wake) slid the native menu bar (level 24) and its extras (25) down over
+    // a bar that lived on the `.floating` overlay panel. The bar window must
+    // outrank both and stay below the transient overlay.
+    XCTAssertGreaterThan(
+      OverlayPanel.statusBarWindowLevel.rawValue, NSWindow.Level.mainMenu.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.statusBarWindowLevel.rawValue, NSWindow.Level.statusBar.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.statusBarClickWindowLevel.rawValue, OverlayPanel.statusBarWindowLevel.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.transientOverlayWindowLevel.rawValue, OverlayPanel.statusBarWindowLevel.rawValue)
+  }
+
+  func testStatusBarLayersLiveInTheirOwnWindowAndSurviveTransientTeardown() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    defer {
+      panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+      panel.orderOut(nil)
+    }
+
+    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+    XCTAssertTrue(panel.modeBadgeLayer.superlayer === panel.statusBarWindow.contentLayer)
+    XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === panel.modeBadgeLayer } ?? false)
+    XCTAssertTrue(panel.statusBarWindow.isVisible)
+    XCTAssertTrue(panel.statusBarWindow.ignoresMouseEvents)
+    XCTAssertEqual(panel.statusBarWindow.frame, panel.frame)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+
+    // A transient teardown rebuilds the overlay panel's layer tree from
+    // scratch; the bar must not be detached (the old one-second blank).
+    panel.hide()
+    XCTAssertTrue(panel.modeBadgeLayer.superlayer === panel.statusBarWindow.contentLayer)
+    XCTAssertTrue(panel.statusBarWindow.isVisible)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+    XCTAssertTrue(panel.statusBarClickWindows.allSatisfy { !$0.ignoresMouseEvents })
+
+    panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    XCTAssertFalse(panel.statusBarWindow.isVisible)
+    XCTAssertNil(panel.modeBadgeLayer.superlayer)
   }
 
   func testTransientSurfacesUseElevatedOverlayWindowLevel() {

@@ -15,6 +15,8 @@ document-URL and mark commands remain available for explicit mappings.
 - `y` copies immediately, `p` pastes and `/` opens Find.
 - `x` sends Cmd-W to close the current tab; `X` sends Cmd-Shift-T to reopen it.
   Both preserve NORMAL and send the same shortcut in every app.
+- `r` sends Cmd-R to reload; `R` sends Cmd-Shift-R to hard-reload. Terminals
+  leave Cmd-R unbound, so there both do nothing rather than typing an `r`.
 - `[a` / `]a` cycle previous/next app in MRU order.
 - `[t` / `]t` send Cmd-Shift-[ / Cmd-Shift-] directly in every app, including
   terminals. Repeat the final `t` to keep switching tabs.
@@ -32,6 +34,10 @@ document-URL and mark commands remain available for explicit mappings.
   same plain/modified clicks through mouse grid mode.
 - Terminal link hints add Shift, so `f` opens the link through the terminal;
   `F` keeps Command-Shift. The hover and click carry the same modifiers.
+- Modifiers held on the final hint key ride the click (`hints.magic_modifiers`,
+  and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
+  the grid alike. Link text repeated in a terminal pane resolves to the copy
+  under the hint.
 - `sF` / `DF` use mouse grid mode for secondary/double clicks.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader

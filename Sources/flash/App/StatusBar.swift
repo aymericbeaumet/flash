@@ -563,7 +563,15 @@ enum FlashStatusBarTemplateEngine {
       "flash.plugin.error_count": String(context.pluginStatuses.filter(\.hasError).count),
     ]
     for plugin in context.pluginStatuses {
-      for (name, value) in plugin.statusSegments {
+      for (name, segment) in plugin.statusSegments {
+        // The controller resolves carousels to their visible line before
+        // building the context; an unresolved one shows its first line.
+        let value: String
+        switch segment {
+        case .text(let text): value = text
+        case .carousel(let prefix, let lines, _):
+          value = PluginStatusSegment.carouselLine(prefix: prefix, line: lines.first ?? "")
+        }
         native.values["flash.plugin.\(plugin.id).\(name)"] = value
       }
     }
