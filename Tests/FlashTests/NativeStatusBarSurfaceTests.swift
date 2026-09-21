@@ -439,30 +439,38 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
   }
 
   func testDrawnNotchTracesTheHousingOutline() {
-    // The camera housing hangs from the top edge: its sides run straight up
-    // into the bezel and only the two bottom corners are rounded. An outline
-    // that also flares at the top reads as a drawn widget, not a cutout.
+    // The housing is widest flush with the top edge, flares inward through
+    // the top corners rather than meeting the bezel square, runs straight
+    // down its sides, and rounds its two bottom corners.
     let rect = CGRect(x: 100, y: 0, width: 185, height: 30)
     let path = NativeStatusBarSurface.centreNotchPath(in: rect, height: rect.height)
+    let fillet = NativeStatusBarSurface.notchTopFilletRadius
+    let radius = NativeStatusBarSurface.notchCornerRadius
     XCTAssertEqual(path.boundingBox.minX, rect.minX, accuracy: 0.001)
     XCTAssertEqual(path.boundingBox.maxX, rect.maxX, accuracy: 0.001)
     XCTAssertEqual(path.boundingBox.height, rect.height, accuracy: 0.001)
 
-    let radius = NativeStatusBarSurface.notchCornerRadius
-    // Flush with both top corners, so nothing shows between it and the edge.
-    XCTAssertTrue(path.contains(CGPoint(x: rect.minX + 0.5, y: rect.height - 0.5)))
-    XCTAssertTrue(path.contains(CGPoint(x: rect.maxX - 0.5, y: rect.height - 0.5)))
-    // Straight sides all the way down to where the corners begin.
-    XCTAssertTrue(path.contains(CGPoint(x: rect.minX + 0.5, y: radius + 1)))
-    XCTAssertTrue(path.contains(CGPoint(x: rect.maxX - 0.5, y: radius + 1)))
-    // Both bottom corners are cut away.
-    XCTAssertFalse(path.contains(CGPoint(x: rect.minX + 0.5, y: 0.5)))
-    XCTAssertFalse(path.contains(CGPoint(x: rect.maxX - 0.5, y: 0.5)))
-    // The bottom edge between them is solid.
+    // Full width along the top edge ...
+    XCTAssertTrue(path.contains(CGPoint(x: rect.midX, y: rect.height - 0.5)))
+    // ... narrowing through the top corners, so the extreme corner is cut.
+    XCTAssertFalse(path.contains(CGPoint(x: rect.minX + 0.5, y: rect.height - 0.5)))
+    XCTAssertFalse(path.contains(CGPoint(x: rect.maxX - 0.5, y: rect.height - 0.5)))
+
+    // Straight sides below the fillets, inset by exactly the fillet.
+    let side = rect.height - fillet - 1
+    XCTAssertTrue(path.contains(CGPoint(x: rect.minX + fillet + 0.5, y: side)))
+    XCTAssertFalse(path.contains(CGPoint(x: rect.minX + fillet - 0.5, y: side)))
+    XCTAssertTrue(path.contains(CGPoint(x: rect.maxX - fillet - 0.5, y: side)))
+    XCTAssertFalse(path.contains(CGPoint(x: rect.maxX - fillet + 0.5, y: side)))
+    XCTAssertTrue(path.contains(CGPoint(x: rect.minX + fillet + 0.5, y: radius + 1)))
+
+    // Both bottom corners are rounded away, the edge between them solid.
+    XCTAssertFalse(path.contains(CGPoint(x: rect.minX + fillet + 0.5, y: 0.5)))
+    XCTAssertFalse(path.contains(CGPoint(x: rect.maxX - fillet - 0.5, y: 0.5)))
     XCTAssertTrue(path.contains(CGPoint(x: rect.midX, y: 0.5)))
 
-    // A bar shorter than the radius degrades to a rounded stub, never an
-    // inverted or self-intersecting path.
+    // A squat bar degrades to a rounded stub, never an inverted or
+    // self-intersecting path.
     let squat = NativeStatusBarSurface.centreNotchPath(
       in: CGRect(x: 0, y: 0, width: 12, height: 4), height: 4)
     XCTAssertEqual(squat.boundingBox.width, 12, accuracy: 0.001)

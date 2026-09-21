@@ -334,28 +334,47 @@ final class NativeStatusBarSurface {
 
   /// Physical notch proportions scaled to the bar: the housing's bottom corners
   /// are rounded and its top corners fillet outward into the bar's edge.
-  /// The camera housing's bottom corners. macOS publishes the notch's rect
-  /// (`auxiliaryTopLeftArea` / `auxiliaryTopRightArea`) but never its corner
-  /// radius, so this is the one part of the shape that is a constant rather
-  /// than measured.
+  /// The housing's bottom corners, rounded into the display.
+  ///
+  /// macOS publishes the notch's rect (`auxiliaryTopLeftArea` /
+  /// `auxiliaryTopRightArea`) but neither of its radii, so both are constants
+  /// matched to the hardware rather than measured.
   static let notchCornerRadius: CGFloat = 9
 
-  /// The housing's outline: a rectangle hanging from the top edge whose sides
-  /// run straight up into the bezel, with only its two bottom corners
-  /// rounded. Layer coordinates are y-up, so the bar's top edge is `height`.
+  /// The housing's top corners, where it meets the bezel. These curve the
+  /// other way: the black flares *outward* into the top edge instead of
+  /// meeting it at a hard right angle, which is why the notch is at its
+  /// widest flush with the top and narrower along its straight sides. The
+  /// published rect is that widest width.
+  static let notchTopFilletRadius: CGFloat = 5
+
+  /// The housing's outline. Layer coordinates are y-up, so the bar's top edge
+  /// is `height`: the path leaves the top edge at full width, curves inward
+  /// through the fillets, runs straight down the sides, and rounds the two
+  /// bottom corners.
   static func centreNotchPath(in rect: CGRect, height: CGFloat) -> CGPath {
-    let radius = max(0, min(notchCornerRadius, min(rect.width / 2, height)))
+    let fillet = max(0, min(notchTopFilletRadius, min(rect.width / 4, height / 2)))
+    let radius = max(
+      0, min(notchCornerRadius, min(rect.width / 2 - fillet, height - fillet)))
+    let left = rect.minX + fillet
+    let right = rect.maxX - fillet
     let path = CGMutablePath()
     path.move(to: CGPoint(x: rect.minX, y: height))
-    path.addLine(to: CGPoint(x: rect.minX, y: radius))
     path.addArc(
-      center: CGPoint(x: rect.minX + radius, y: radius), radius: radius,
+      center: CGPoint(x: rect.minX, y: height - fillet), radius: fillet,
+      startAngle: .pi / 2, endAngle: 0, clockwise: true)
+    path.addLine(to: CGPoint(x: left, y: radius))
+    path.addArc(
+      center: CGPoint(x: left + radius, y: radius), radius: radius,
       startAngle: .pi, endAngle: .pi * 1.5, clockwise: false)
-    path.addLine(to: CGPoint(x: rect.maxX - radius, y: 0))
+    path.addLine(to: CGPoint(x: right - radius, y: 0))
     path.addArc(
-      center: CGPoint(x: rect.maxX - radius, y: radius), radius: radius,
+      center: CGPoint(x: right - radius, y: radius), radius: radius,
       startAngle: .pi * 1.5, endAngle: .pi * 2, clockwise: false)
-    path.addLine(to: CGPoint(x: rect.maxX, y: height))
+    path.addLine(to: CGPoint(x: right, y: height - fillet))
+    path.addArc(
+      center: CGPoint(x: rect.maxX, y: height - fillet), radius: fillet,
+      startAngle: .pi, endAngle: .pi / 2, clockwise: true)
     path.closeSubpath()
     return path
   }
