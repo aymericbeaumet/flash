@@ -163,7 +163,10 @@ startup_timeout = 5
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
 # visibility — it is independent of advanced mode (enter_normal_mode/leave_mode
-# binding). Defaults to false.
+# binding). Defaults to false. Enabling it also asks macOS to auto-hide the
+# native menu bar, whose band the Flash bar takes over; reaching for the top
+# edge still reveals it. Turning the bar off restores the menu bar only if
+# Flash was the one that hid it.
 enabled = false
 # Which displays show the bar: "all" (default, every screen's top band) or
 # "primary" (only the main / menu-bar display).

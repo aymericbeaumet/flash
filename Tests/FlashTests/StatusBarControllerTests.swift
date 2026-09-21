@@ -37,7 +37,7 @@ final class StatusBarControllerTests: XCTestCase {
         template: .init(template: template, sourceNames: Set(sources.keys)), sources: sources,
         refreshIntervalSeconds: interval,
         pluginStatusesProvider: { [unowned self] in pluginStatuses },
-        queue: queue, clock: { [unowned self] in now },
+        scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
         makeJob: { [unowned self] invocation, _, line, completion in
           let task = Task(invocation, line: line, completion: completion)
           tasks.append(task)

@@ -130,7 +130,7 @@ enum FlashCLI {
 
     var reply = AppleEvent()
     // Quit tears down the resident before a reply can be sent.
-    let sendMode = verb == "flash_quit" ? kAENoReply : kAEWaitReply
+    let sendMode = verb == "quit" ? kAENoReply : kAEWaitReply
     let status = AESendMessage(&event, &reply, AESendMode(sendMode), 5 * 60)
     let replyDescriptor = NSAppleEventDescriptor(aeDescNoCopy: &reply)
     let result = response(verb: verb, status: status, reply: replyDescriptor)

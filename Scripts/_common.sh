@@ -58,9 +58,9 @@ parse_mode() {
 kill_all_flash() {
   # Both product flavors ("Flash" release, "Flash 🧪" dev) share the bundle
   # id and must never run concurrently — quit and kill every variant.
-  "$CLI_LINK_PATH" flash_quit >/dev/null 2>&1 ||
-    "/Applications/$APP_NAME.app/Contents/MacOS/flash" flash_quit >/dev/null 2>&1 ||
-    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" flash_quit >/dev/null 2>&1 ||
+  "$CLI_LINK_PATH" quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
     true
   pkill -f "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" 2>/dev/null || true
   killall "$APP_NAME 🧪" 2>/dev/null || true

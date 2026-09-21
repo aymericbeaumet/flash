@@ -19,7 +19,7 @@ final class MainThreadWatchdog {
   static let activityRingSize = 8
 
   private let queue = DispatchQueue(label: "flash.main_thread_watchdog", qos: .userInitiated)
-  private var timer: DispatchSourceTimer?
+  private var registered = false
   private var awaitingPong = false
   private var pingSentAt = DispatchTime.now()
 
@@ -71,16 +71,27 @@ final class MainThreadWatchdog {
 
   // MARK: - Ping
 
+  /// The watchdog pings main four times a second, so it earns its keep only
+  /// while someone can read the result. `[debug] log_level` decides.
+  func setEnabled(_ enabled: Bool) {
+    if enabled {
+      start()
+    } else {
+      guard registered else { return }
+      registered = false
+      PollScheduler.shared.unregister(Self.clientID)
+    }
+  }
+
+  static let clientID = "core:main_thread_watchdog"
+
   func start() {
-    guard timer == nil else { return }
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(
-      deadline: .now() + .milliseconds(Self.pingIntervalMs),
-      repeating: .milliseconds(Self.pingIntervalMs),
-      leeway: .milliseconds(50))
-    timer.setEventHandler { [weak self] in self?.ping() }
-    self.timer = timer
-    timer.resume()
+    guard !registered else { return }
+    registered = true
+    // A stall measurement is only meaningful if the ping itself is punctual.
+    PollScheduler.shared.register(
+      Self.clientID, everyMs: Self.pingIntervalMs, priority: .system, on: queue
+    ) { [weak self] in self?.ping() }
   }
 
   private func ping() {

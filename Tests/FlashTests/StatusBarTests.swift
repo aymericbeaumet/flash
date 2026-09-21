@@ -860,13 +860,14 @@ final class StatusBarTests: XCTestCase {
       NSWindow.Level.mainMenu.rawValue)
   }
 
-  func testStatusBarWindowOutranksNativeMenuBar() {
+  func testStatusBarWindowOutranksNativeMenuBarAndYieldsOnlyToThePointer() {
     // Repro for the bar "flashing" for a second: with the system menu bar set
-    // to auto-hide, a reveal (the pointer grazing the top edge while hovering
-    // the bar, a menu key equivalent flashing its title, Flash becoming active,
-    // a wake) slid the native menu bar (level 24) and its extras (25) down over
-    // a bar that lived on the `.floating` overlay panel. The bar window must
-    // outrank both and stay below the transient overlay.
+    // to auto-hide, a reveal (a menu key equivalent flashing its title, Flash
+    // becoming active, a wake) slid the native menu bar (level 24) and its
+    // extras (25) down over a bar that lived on the `.floating` overlay panel.
+    // The bar window must outrank both and stay below the transient overlay —
+    // and drop back under the menu bar only while the reveal probe sees it
+    // revealed under the pointer, so the top edge still reaches it.
     XCTAssertGreaterThan(
       OverlayPanel.statusBarWindowLevel.rawValue, NSWindow.Level.mainMenu.rawValue)
     XCTAssertGreaterThan(
@@ -875,6 +876,14 @@ final class StatusBarTests: XCTestCase {
       OverlayPanel.statusBarClickWindowLevel.rawValue, OverlayPanel.statusBarWindowLevel.rawValue)
     XCTAssertGreaterThan(
       OverlayPanel.transientOverlayWindowLevel.rawValue, OverlayPanel.statusBarWindowLevel.rawValue)
+    XCTAssertEqual(
+      OverlayPanel.statusBarWindowLevel(yieldingToNativeMenuBar: false),
+      OverlayPanel.statusBarWindowLevel)
+    XCTAssertEqual(
+      OverlayPanel.statusBarWindowLevel(yieldingToNativeMenuBar: true),
+      OverlayPanel.statusBarYieldedWindowLevel)
+    XCTAssertLessThan(
+      OverlayPanel.statusBarYieldedWindowLevel.rawValue, NSWindow.Level.mainMenu.rawValue)
   }
 
   func testStatusBarLayersLiveInTheirOwnWindowAndSurviveTransientTeardown() {
@@ -901,6 +910,16 @@ final class StatusBarTests: XCTestCase {
     XCTAssertTrue(panel.statusBarWindow.isVisible)
     XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
     XCTAssertTrue(panel.statusBarClickWindows.allSatisfy { !$0.ignoresMouseEvents })
+
+    // A pointer-driven reveal lowers the bar; folding away restores it, and so
+    // does tearing the probe down with a reveal still latched.
+    panel.setStatusBarYieldsToNativeMenuBar(true)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarYieldedWindowLevel)
+    panel.setStatusBarYieldsToNativeMenuBar(false)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+    panel.setStatusBarYieldsToNativeMenuBar(true)
+    panel.stopMenuBarRevealTracking()
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
 
     panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
     XCTAssertFalse(panel.statusBarWindow.isVisible)
@@ -1016,19 +1035,130 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(wide, 2_000)
   }
 
-  func testSystemStatusBarSpaceReservationRemovesMenuBarAutoHide() {
-    let current: NSApplication.PresentationOptions = [.autoHideDock, .autoHideMenuBar]
-    let enabled = AppDelegate.systemStatusBarSpaceReservationPresentationOptions(
-      current: current,
-      enabled: true)
-    let disabled = AppDelegate.systemStatusBarSpaceReservationPresentationOptions(
-      current: enabled,
-      enabled: false)
+  func testNativeMenuBarAutoHideOnlyReversesTheHideFlashItselfApplied() {
+    typealias AutoHide = NativeMenuBarAutoHide
+    // Enabling the bar hides the native menu bar and claims the change.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: true, current: false, owned: false),
+      .init(write: true, owned: true))
+    // Already hidden by the user: adopt it without claiming it.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: true, current: true, owned: false),
+      .init(write: nil, owned: false))
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: true, current: true, owned: true),
+      .init(write: nil, owned: true))
+    // Disabling the bar restores only a menu bar Flash hid ...
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: false, current: true, owned: true),
+      .init(write: false, owned: false))
+    // ... and never a preference the user set themselves.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: false, current: true, owned: false),
+      .init(write: nil, owned: false))
+    // Nothing to undo when the user already un-hid it; ownership is released.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: false, current: false, owned: true),
+      .init(write: nil, owned: false))
+  }
 
-    XCTAssertFalse(enabled.contains(.autoHideMenuBar))
-    XCTAssertTrue(enabled.contains(.autoHideDock))
-    XCTAssertFalse(disabled.contains(.autoHideMenuBar))
-    XCTAssertTrue(disabled.contains(.autoHideDock))
+  func testErrorAlertsSurviveTransientTeardownAndInfoToastsDoNot() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissAlert()
+      panel.orderOut(nil)
+    }
+    // An error has to stay readable: a dismiss observer firing during the
+    // restart churn used to wipe it within the same event loop.
+    XCTAssertTrue(OverlayPanel.AlertStyle.error.restoresAfterHide)
+    XCTAssertFalse(OverlayPanel.AlertStyle.standard.restoresAfterHide)
+
+    panel.displayAlert("Something broke", duration: 30, style: .error)
+    XCTAssertNotNil(panel.activeAlert)
+    panel.hide()
+    XCTAssertNotNil(panel.activeAlert, "an unexpired error must re-render itself")
+    XCTAssertTrue(panel.transientContentVisible)
+
+    // Its own expiry clears the record, so the restore cannot resurrect it.
+    panel.activeAlert = nil
+    panel.hide()
+    XCTAssertNil(panel.activeAlert)
+    XCTAssertFalse(panel.transientContentVisible)
+
+    // An informational toast keeps the get-out-of-the-way behaviour.
+    panel.displayAlert("Sleep ON", duration: 30, style: .standard)
+    XCTAssertNil(panel.activeAlert)
+    panel.hide()
+    XCTAssertFalse(panel.transientContentVisible)
+
+    // An alert whose dwell already elapsed is dropped rather than re-shown.
+    panel.activeAlert = OverlayPanel.ActiveAlert(
+      message: "stale", style: .error, until: DispatchTime.now())
+    panel.hide()
+    XCTAssertNil(panel.activeAlert)
+  }
+
+  func testPagerPromptRowIsClippedOnlyForNoninteractivePreviews() {
+    XCTAssertTrue(StatusPopupController.hidesPagerPromptRow(rows: 6, interactive: false))
+    XCTAssertFalse(StatusPopupController.hidesPagerPromptRow(rows: 6, interactive: true))
+    // A single-row popup would be left with nothing to draw.
+    XCTAssertFalse(StatusPopupController.hidesPagerPromptRow(rows: 1, interactive: false))
+  }
+
+  func testOnlyWindowMoveAndResizeResolveGeometryFromTheObservedElement() {
+    XCTAssertTrue(AppMonitor.isWindowGeometryNotification(kAXWindowMovedNotification as String))
+    XCTAssertTrue(AppMonitor.isWindowGeometryNotification(kAXWindowResizedNotification as String))
+    // Everything else still needs a WindowServer pass to find the top window.
+    for notification in [
+      kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification,
+      kAXWindowCreatedNotification, kAXWindowMiniaturizedNotification,
+      kAXWindowDeminiaturizedNotification, kAXUIElementDestroyedNotification,
+      kAXApplicationHiddenNotification, kAXApplicationShownNotification,
+    ] {
+      XCTAssertFalse(AppMonitor.isWindowGeometryNotification(notification as String), notification)
+      XCTAssertTrue(
+        AppMonitor.notificationMayChangeActiveWindowBorder(
+          notification as String, observedElementIsFocusedWindow: true),
+        notification)
+    }
+  }
+
+  func testWatchdogRunsOnlyWhileItsOutputIsReadable() {
+    let previous = FlashLog.emits(.debug)
+    defer { FlashLog.setLevel(previous ? .debug : .info) }
+    FlashLog.setLevel(.info)
+    XCTAssertFalse(FlashLog.emits(.debug))
+    XCTAssertTrue(FlashLog.emits(.warn))
+    FlashLog.setLevel(.trace)
+    XCTAssertTrue(FlashLog.emits(.debug))
+  }
+
+  func testAXWindowGeometryConvertsIntoTheSameScreenSpaceAsTheWindowServerScan() {
+    // The border's fast path reads a moved window's frame from AX instead of
+    // scanning the window list, so the conversion has to land in NSScreen
+    // space (primary bottom-left origin, Y-up) or a drag would draw the
+    // stroke somewhere else entirely.
+    let primaryHeight: CGFloat = 1000
+    // A window 40pt below the primary's top edge, 300pt tall.
+    XCTAssertEqual(
+      WindowMover.nsRectFromAX(
+        position: CGPoint(x: 120, y: 40), size: CGSize(width: 400, height: 300),
+        primaryHeight: primaryHeight),
+      CGRect(x: 120, y: 660, width: 400, height: 300))
+    // Flush with the primary's top-left corner.
+    XCTAssertEqual(
+      WindowMover.nsRectFromAX(
+        position: .zero, size: CGSize(width: 800, height: primaryHeight),
+        primaryHeight: primaryHeight),
+      CGRect(x: 0, y: 0, width: 800, height: primaryHeight))
+    // A display to the left of and above the primary keeps its negative
+    // origin rather than being clamped into the primary's box.
+    XCTAssertEqual(
+      WindowMover.nsRectFromAX(
+        position: CGPoint(x: -1920, y: -200), size: CGSize(width: 600, height: 400),
+        primaryHeight: primaryHeight),
+      CGRect(x: -1920, y: 800, width: 600, height: 400))
   }
 
   func testStatusBarLinkClickAcceptsStationaryAndSmallJitter() {

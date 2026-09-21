@@ -84,13 +84,26 @@ Surface requests that would violate these constraints before implementing them.
   properties join `OverlayPanel.noActions`.
 - The status bar draws only in `StatusBarWindow`, ordered above the native menu
   bar and its extras and below transient overlays; never re-parent its layers
-  into the overlay panel or lower it to let an auto-hidden menu bar reveal over
-  it. See the rendering section of the architecture guide.
+  into the overlay panel. It lowers for exactly one case, a reveal under the
+  pointer, via the reveal probe. Enabling the bar auto-hides the native menu bar
+  through `NativeMenuBarAutoHide`, which reverses only what Flash set; keep that
+  ownership rule when touching any other global preference.
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
 - Every status popup uses a real PTY session. Collected text uses the shared
   terminal pager; do not add a separate native document renderer. Keep focused
   pager input and its snapshot stable until explicit refresh. See the popup guide.
+- Prefer events to polling. A window move or resize reads its frame from the AX
+  element that fired, never a WindowServer scan, and schedules no settle tick.
+- Polling is a last resort and goes through `PollScheduler`, the one clock in
+  the process; never arm a `DispatchSourceTimer`, a `tokio` sleep loop, or a
+  `Timer` for a recurring job in core or plugin code. Use `register` for a fixed
+  cadence and `scheduleOnce` when the next wake-up is an irregular deadline.
+  Plugins register over the wire with `poll` (the Rust SDK's `ctx.interval`) and
+  are ticked with `core:poll:<name>`. Pick the priority that matches how visible
+  lateness is — slack is what lets wake-ups coalesce — and scope every
+  registration to when it can observe anything (a subscriber present, the
+  pointer in the band, the log level emitted), saying so where it is armed.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,
   subprocesses, filesystem I/O, full layout and Carbon registration churn. With
   a live tap, recapture only restores NORMAL routing. Scope-only changes call

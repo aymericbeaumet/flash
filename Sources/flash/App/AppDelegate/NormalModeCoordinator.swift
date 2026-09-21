@@ -191,12 +191,26 @@ extension AppDelegate {
     notification: String,
     observedWindow: AXUIElement?
   ) {
-    guard let context = currentNonFlashContext(), context.processID == pid else { return }
-    if let observedWindow,
-      notification == kAXWindowMovedNotification as String
-        || notification == kAXWindowResizedNotification as String
-        || notification == kAXUIElementDestroyedNotification as String
+    if AppMonitor.isWindowGeometryNotification(notification), let observedWindow,
+      let app = currentNonFlashRunningApplication(), app.processIdentifier == pid
     {
+      // Identity only here — resolving the window context would scan every
+      // on-screen window on the main thread for each event of a drag.
+      observedWindowGeometryDidChange(
+        pid: pid, window: observedWindow, notification: notification,
+        statusBarReservesSpace: statusBarVisible,
+        statusBarMonitor: config.statusBar.monitor)
+      if pluginManager.hasListener(for: "core:ax.changed") {
+        pluginManager.emit(
+          PluginEvent(
+            name: "core:ax.changed",
+            payload: ["notification": notification, "pid": Int(pid)],
+            bundleID: app.bundleIdentifier))
+      }
+      return
+    }
+    guard let context = currentNonFlashContext(), context.processID == pid else { return }
+    if let observedWindow, notification == kAXUIElementDestroyedNotification as String {
       windowLayoutManager.observedWindowFrameChange(
         pid: pid,
         window: observedWindow,

@@ -52,6 +52,47 @@ extension AppDelegate {
     }
   }
 
+  /// A move or resize names the window that changed, so its geometry is one
+  /// AX read on the element that fired — not a `CGWindowListCopyWindowInfo`
+  /// scan of every on-screen window, which the old path ran three times per
+  /// event (once on main to resolve the context, once to place the stroke,
+  /// once more on the settle tick). That scan cost is what made the border
+  /// trail a dragged window instead of riding with it, so there is no settle
+  /// poll here: the next AX event is the next truth.
+  func observedWindowGeometryDidChange(
+    pid: pid_t,
+    window: AXUIElement,
+    notification: String,
+    statusBarReservesSpace: Bool,
+    statusBarMonitor: Config.StatusBar.Monitor
+  ) {
+    let borderVisible = Self.activeWindowBorderShouldBeVisible(
+      configEnabled: overlay.overlayConfig.windowBorder,
+      modeBadgeEnabled: modeBadgeEnabled,
+      hasHints: hintSession.isActive,
+      sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
+    FlashLog.trace("[mode] active_border_geometry reason=\(notification) visible=\(borderVisible)")
+    if !borderVisible { hideActiveWindowBorder(reason: "hidden_\(notification)") }
+    activeWindowBorderUpdateGeneration &+= 1
+    let generation = activeWindowBorderUpdateGeneration
+    let primaryHeight = monitor.primaryScreenHeight()
+    monitor.geometryQueue.async { [weak self] in
+      let frame = WindowMover.readWindowFrameInNSCoords(
+        window: window, primaryHeight: primaryHeight)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if let frame {
+          self.windowLayoutManager.observedWindowFrameChange(
+            pid: pid, window: window, frame: frame, notification: notification,
+            statusBarReservesSpace: statusBarReservesSpace,
+            statusBarMonitor: statusBarMonitor)
+        }
+        guard borderVisible, self.activeWindowBorderUpdateGeneration == generation else { return }
+        self.applyActiveWindowBorder(frame: frame)
+      }
+    }
+  }
+
   private func applyActiveWindowBorder(frame: CGRect?) {
     let style = resolvedActiveWindowBorderStyle()
     overlay.setActiveWindowBorder(

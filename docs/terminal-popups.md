@@ -187,7 +187,9 @@ File-writer tests use temporary destinations. Diagnostics include:
   PID, exit status, and spawn failure category and reason, without command arguments or output.
 - `Status terminal restart scheduled`: attempt number and retry delay under
   `core:StatusTerminalRegistry.restart`, correlated by hashed popup ID.
-- `Status inline popup rejected` reports an invalid or oversized marker.
+- `Status menu reveal changed`: whether the native menu bar has taken over the
+  band, lowering the bar window beneath it. `Status inline popup rejected`
+  reports an invalid or oversized marker.
 
 These records exclude article text, URLs, terminal contents, and raw popup
 names. Feed refresh outcomes and plugin lifecycle events remain under

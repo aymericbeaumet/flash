@@ -100,45 +100,61 @@ impl FlashPlugin for Feed {
             Arc::clone(&state),
             Arc::clone(&refreshed),
         )));
-        drop(tokio::spawn(async move {
-            let mut failure_logged = false;
-            loop {
-                let started = Instant::now();
-                let result = fetch_articles(&client, &settings.url).await;
-                match &result {
-                    Ok(articles) => {
-                        ctx.log(
-                            "info",
-                            &format!(
-                                "[feed] refresh outcome={} count={} elapsed_ms={}",
-                                if articles.is_empty() { "empty" } else { "ok" },
-                                articles.len(),
-                                started.elapsed().as_millis()
-                            ),
-                        );
-                        failure_logged = false;
+        let failure_logged = Arc::new(Mutex::new(false));
+        let refresh = {
+            let state = Arc::clone(&state);
+            let refreshed = Arc::clone(&refreshed);
+            let failure_logged = Arc::clone(&failure_logged);
+            let url = settings.url.clone();
+            move |ctx: Context| {
+                let client = client.clone();
+                let state = Arc::clone(&state);
+                let refreshed = Arc::clone(&refreshed);
+                let failure_logged = Arc::clone(&failure_logged);
+                let url = url.clone();
+                async move {
+                    let started = Instant::now();
+                    let result = fetch_articles(&client, &url).await;
+                    match &result {
+                        Ok(articles) => {
+                            ctx.log(
+                                "info",
+                                &format!(
+                                    "[feed] refresh outcome={} count={} elapsed_ms={}",
+                                    if articles.is_empty() { "empty" } else { "ok" },
+                                    articles.len(),
+                                    started.elapsed().as_millis()
+                                ),
+                            );
+                            *failure_logged.lock().unwrap() = false;
+                        }
+                        Err(error) => {
+                            let mut logged = failure_logged.lock().unwrap();
+                            if !*logged {
+                                ctx.log(
+                                    "warn",
+                                    &format!(
+                                        "[feed] refresh outcome=failed reason={error} elapsed_ms={}",
+                                        started.elapsed().as_millis()
+                                    ),
+                                );
+                                *logged = true;
+                            }
+                        }
                     }
-                    Err(error) if !failure_logged => {
-                        ctx.log(
-                            "warn",
-                            &format!(
-                                "[feed] refresh outcome=failed reason={error} elapsed_ms={}",
-                                started.elapsed().as_millis()
-                            ),
-                        );
-                        failure_logged = true;
-                    }
-                    Err(_) => {}
+                    let segment = state
+                        .lock()
+                        .unwrap()
+                        .refresh(result.map_err(|_| ()), Utc::now().timestamp());
+                    publish(&ctx, segment);
+                    refreshed.notify_one();
                 }
-                let segment = state
-                    .lock()
-                    .unwrap()
-                    .refresh(result.map_err(|_| ()), Utc::now().timestamp());
-                publish(&ctx, segment);
-                refreshed.notify_one();
-                tokio::time::sleep(settings.refresh_interval).await;
             }
-        }));
+        };
+        // The authoritative first fetch happens now; the host drives every
+        // one after it from the shared clock.
+        refresh(ctx.clone()).await;
+        drop(ctx.interval(settings.refresh_interval, refresh));
     }
 }
 

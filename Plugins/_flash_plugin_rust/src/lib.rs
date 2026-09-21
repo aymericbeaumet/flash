@@ -23,6 +23,7 @@ mod wire;
 /// then write `impl FlashPlugin for MyPlugin { … }`.
 pub use flash_plugin_macros::plugin;
 
+pub use context::PollHandle;
 pub use context::{
     applescript_quote, run_command, run_command_with_slow_threshold, run_osascript, shorten,
     spawn_managed, CommandOutput, Context, NormalModeTarget, RefreshGate,

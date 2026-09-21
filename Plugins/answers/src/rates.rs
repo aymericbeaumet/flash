@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use flash_plugin::Context;
+use flash_plugin::{Context, PollHandle};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
@@ -96,28 +96,16 @@ pub(crate) async fn seed_and_refresh(ctx: Context, store: RatesStore) {
         store.replace(cached);
     }
 
-    tokio::spawn(async move {
-        // Network availability must never hold calculator readiness hostage:
-        // a first-run `1+1` should work even while the initial ECB request is
-        // in flight. A last-good disk snapshot is loaded before this task is
-        // spawned, so repeat launches still have currency conversion
-        // immediately; only a truly cold launch warms it asynchronously.
-        let mut delay = if store.snapshot().is_fresh_snapshot() {
-            Duration::ZERO
-        } else {
-            match fetch_rates(&ctx).await {
-                Some(rates) => {
-                    store.replace(rates.clone());
-                    persist(&path, &rates).await;
-                    REFRESH_INTERVAL
-                }
-                None => RETRY_INTERVAL,
-            }
-        };
-        loop {
-            tokio::time::sleep(delay).await;
-            let refreshed = fetch_rates(&ctx).await;
-            delay = match refreshed {
+    let handle: Arc<OnceLock<PollHandle>> = Arc::new(OnceLock::new());
+    let slot = Arc::clone(&handle);
+    let refresh = move |ctx: Context| {
+        let store = store.clone();
+        let path = path.clone();
+        let slot = Arc::clone(&slot);
+        async move {
+            // Retry sooner than the steady cadence while the fetch is
+            // failing, and drop back once rates land.
+            let period = match fetch_rates(&ctx).await {
                 Some(rates) => {
                     store.replace(rates.clone());
                     persist(&path, &rates).await;
@@ -125,8 +113,20 @@ pub(crate) async fn seed_and_refresh(ctx: Context, store: RatesStore) {
                 }
                 None => RETRY_INTERVAL,
             };
+            if let Some(handle) = slot.get() {
+                handle.set_period(period);
+            }
         }
-    });
+    };
+
+    let registered = ctx.interval(REFRESH_INTERVAL, refresh.clone());
+    drop(handle.set(registered));
+    // Network availability must never hold calculator readiness hostage: a
+    // first-run `1+1` should work even while the initial ECB request is in
+    // flight. A last-good disk snapshot is loaded above, so repeat launches
+    // still have currency conversion immediately; only a truly cold launch
+    // warms it asynchronously.
+    drop(tokio::spawn(refresh(ctx)));
 }
 
 async fn fetch_rates(ctx: &Context) -> Option<ExchangeRates> {

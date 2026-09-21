@@ -9,7 +9,6 @@ final class DebugServer {
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
   private var listener: NWListener?
   private var logSinkID: UUID?
-  private var stateTimer: DispatchSourceTimer?
   private var logs: [[String: Any]] = []
   private var eventConnections: [UUID: NWConnection] = [:]
   /// Last app-state snapshot — taken on the main thread, then confined to
@@ -74,8 +73,7 @@ final class DebugServer {
       FlashLog.removeSink(logSinkID)
     }
     logSinkID = nil
-    stateTimer?.cancel()
-    stateTimer = nil
+    PollScheduler.shared.unregister(Self.pollClientID)
     listener?.cancel()
     listener = nil
     for connection in eventConnections.values {
@@ -123,17 +121,19 @@ final class DebugServer {
     }
   }
 
+  /// The inspector page is a debug surface with no change notification of its
+  /// own, so it refreshes on a cadence — registered with the shared clock like
+  /// everything else, and only while a browser is actually listening.
   private func startStateTimer() {
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(
-      deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(150))
-    timer.setEventHandler { [weak self] in
+    PollScheduler.shared.register(
+      Self.pollClientID, everyMs: 1000, priority: .low, on: queue
+    ) { [weak self] in
       guard let self, !self.eventConnections.isEmpty else { return }
       self.refreshStateFromMain()
     }
-    stateTimer = timer
-    timer.resume()
   }
+
+  static let pollClientID = "core:debug_inspector"
 
   private func handle(_ connection: NWConnection) {
     guard Self.isLoopback(endpoint: connection.endpoint) else {

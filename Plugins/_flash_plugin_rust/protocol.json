@@ -16,7 +16,7 @@
     "host_to_plugin": {
       "initialize": "request {protocol_version} -> {ok, protocol_version}; reply immediately, once ever; ok:false or a version mismatch is terminal (flush, exit 0)",
       "ping": "request {} -> {ok:true}",
-      "event": "notification {name, payload}; never replied",
+      "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`",
       "evaluate": "request {query, scope, surface} -> {ok, answers}; CPU-only over pre-warmed state",
       "search": "request {query, scope} -> {ok, rows}; live sources only, may do real work",
       "hints": "request {bundle_id, pid, front_window_frame} -> {ok, targets, context_pid?}; always live",
@@ -24,7 +24,8 @@
     },
     "plugin_to_host_notifications": {
       "publish": "{rows} — full-replacement catalog; host-owned store; empty rows = authoritative empty; transient failure = don't publish (host keeps last-good)",
-      "status": "{segments: {name: value}} \u2014 manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
+      "status": "{segments: {name: value}} — manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
+      "poll": "{intervals: {name: seconds >= 0.05}} — full-replacement set of cadences the host should drive for this plugin; empty clears. Plugins must not arm their own timers: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Malformed frames are rejected whole.",
       "log": "{level, message, fields} — content-free"
     },
     "plugin_to_host_rpcs": {
@@ -69,8 +70,19 @@
   },
   "hint_target": {
     "$comment": "The host revalidates geometry and target identity before clicking. context_id is an optional non-empty opaque string identifying the containing live source context; a changed context cancels the captured target. Omitted or null means unspecified.",
-    "required": ["id", "frame"],
-    "optional": ["role", "label", "url", "pid", "enters_insert_mode", "priority", "context_id"]
+    "required": [
+      "id",
+      "frame"
+    ],
+    "optional": [
+      "role",
+      "label",
+      "url",
+      "pid",
+      "enters_insert_mode",
+      "priority",
+      "context_id"
+    ]
   },
   "effects": {
     "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect — argv side effects belong in perform, inside the sandbox.",

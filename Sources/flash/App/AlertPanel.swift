@@ -2,19 +2,26 @@ import AppKit
 import QuartzCore
 
 extension OverlayPanel {
-  struct AlertStyle {
+  struct AlertStyle: Equatable {
     let fillColor: NSColor
     let strokeColor: NSColor
     let textColor: NSColor
+    /// Whether the toast re-renders itself when a transient overlay teardown
+    /// (an app switch, a mode change, a dismiss observer) wipes the layer
+    /// tree. An error has to survive long enough to be read; an informational
+    /// toast keeps the old behaviour and gets out of the way.
+    let restoresAfterHide: Bool
 
     static let standard = AlertStyle(
       fillColor: NSColor.black.withAlphaComponent(0.75),
       strokeColor: .white,
-      textColor: .white)
+      textColor: .white,
+      restoresAfterHide: false)
     static let error = AlertStyle(
       fillColor: NSColor.systemRed.withAlphaComponent(0.92),
       strokeColor: NSColor.white.withAlphaComponent(0.95),
-      textColor: .white)
+      textColor: .white,
+      restoresAfterHide: true)
 
     static func from(_ style: AlertCommand.Style) -> AlertStyle {
       switch style {
@@ -41,6 +48,12 @@ extension OverlayPanel {
     let duration = duration ?? Self.alertDisplayDuration
     transientDisplayToken &+= 1
     let myToken = transientDisplayToken
+    activeAlert =
+      style.restoresAfterHide
+      ? ActiveAlert(
+        message: message, style: style,
+        until: DispatchTime.now() + .milliseconds(Int(duration * 1000)))
+      : nil
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -105,13 +118,32 @@ extension OverlayPanel {
 
     DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
       guard let self, self.transientDisplayToken == myToken else { return }
+      self.activeAlert = nil
       self.hide()
     }
   }
 
   func dismissAlert() {
     transientDisplayToken &+= 1
+    activeAlert = nil
     hide()
+  }
+
+  /// Re-render an alert that a transient teardown wiped before its dwell ran
+  /// out, so the message is on screen for the time it asked for rather than
+  /// flashing for whatever is left of the current event loop. Called at the
+  /// end of `hide()`; the expiry path clears `activeAlert` first so this
+  /// cannot resurrect a toast that simply ran its course.
+  func restoreActiveAlertIfNeeded() {
+    guard let alert = activeAlert else { return }
+    let now = DispatchTime.now()
+    guard alert.until > now else {
+      activeAlert = nil
+      return
+    }
+    let remaining =
+      Double(alert.until.uptimeNanoseconds - now.uptimeNanoseconds) / 1_000_000_000
+    displayAlert(alert.message, duration: remaining, style: alert.style)
   }
 
   private static func alertTextSize(for message: String, maxWidth: CGFloat) -> CGSize {

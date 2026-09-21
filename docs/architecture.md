@@ -47,6 +47,35 @@ leaving explicit activation available. Maintenance refreshes run before the
 freshness ceiling and do not inherit the longer noisy-AX throttle. The active
 window border has its own event-driven lifecycle and bounded recovery checks;
 it does not poll continuously or retain a frame when the focused window disappears.
+A move or resize names the window that changed, so its frame comes from one AX
+read on that element and is applied with no settle tick — the border rides a
+drag rather than trailing a WindowServer scan. Only events that change which
+window is on top fall back to a window-list pass and schedule bounded recovery
+checks.
+
+What genuinely cannot be driven by an event goes through `PollScheduler`, the
+one periodic clock in the process — there is no second timer. Core watchers and
+plugins register there instead of arming their own, so twenty pollers cost one
+wake-up rather than twenty; deadlines snap to a multiple of each interval so
+clients sharing a period also share a tick, a client whose previous run has not
+returned is skipped rather than queued, and the timer stops entirely when
+nothing is registered. A registration is either a fixed cadence or a one-shot
+deadline, which is how a client whose wake-ups are irregular still rides the
+shared clock: the status bar re-registers its next deadline — the earliest of
+the user's per-source intervals, cycle rotations and pending output — each time
+one lands. Plugins register over the wire with `poll` and are ticked with a
+`core:poll:<name>` event.
+
+Each registration carries a priority, which sets how much slack its wake-up
+allows: `system` for input-adjacent probes whose lateness is visible, `high`
+for surfaces on screen, `normal` for ordinary sampling, `low` for background
+upkeep. Generous slack is what lets the kernel slide a tick onto an interrupt
+it was already taking, and the tightest priority riding a wake-up sets it, so a
+lax client can never loosen a demanding one. Registrations are also scoped to
+when they can observe anything at all: the pasteboard watcher runs only while a
+plugin subscribes to `clipboard.changed`, the menu-bar reveal probe only while
+the pointer is in the band, the watchdog only while its level is logged, and
+the inspector broadcast only while a browser is listening.
 
 Finalization rejects invalid geometry, filters visible regions and deduplicates
 overlap with smaller frames winning. Visual rows anchor their vertical tolerance
@@ -106,15 +135,17 @@ transactions. An empty discovery result stays silent.
 
 The persistent status bar draws in its own click-through `StatusBarWindow`,
 which shares the overlay panel's union-of-screens frame and hosts only the bar
-layers. It is ordered above the native menu bar and its extras, so a reveal of
-an auto-hidden menu bar (the pointer grazing the top edge while hovering the
-bar, a menu key equivalent flashing its title, Flash becoming active, a wake)
-slides those windows in behind the bar instead of painting over it for a second.
-While the bar is enabled the band is Flash's: the native menu bar stays covered
-and the click windows never step aside for it. The overlay panel keeps the focus
-border at `.floating` and transient surfaces at the screen-saver level, so
-status hints still render above the bar and transient teardown never detaches
-it.
+layers. It is ordered above the native menu bar and its extras, so a reveal
+Flash did not ask for (a menu key equivalent flashing its title, Flash becoming
+active, a wake) slides those windows in behind the bar instead of painting over
+it for a second. The pointer is the exception: while the reveal probe sees the
+native menu bar actually revealed under the pointer, the bar window drops below
+it and the click windows turn click-through, so reaching for the top edge still
+gets the real menu bar and its clicks. Enabling the bar also asks macOS to
+auto-hide the native menu bar, and disabling it restores only a menu bar Flash
+itself hid. The overlay panel keeps the focus border at `.floating` and
+transient surfaces at the screen-saver level, so status hints still render above
+the bar and transient teardown never detaches it.
 
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.

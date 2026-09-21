@@ -117,6 +117,14 @@ Handed to every handler; cheap to clone. Key surface:
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.
+- Cadences: `ctx.interval(period, callback)` does **not** start a timer in the
+  plugin. It registers `period` with the host, which drives every poller in
+  Flash — core watchers included — from one clock, and ticks the callback when
+  the registration is due. The returned `PollHandle` can `set_period` (a retry
+  backoff, an idle backend) or `cancel`; dropping it leaves the cadence
+  running. A callback that overruns its period simply misses ticks. Prefer
+  `on_event`: the host exposes an event for every source it can observe, and a
+  cadence is the answer only when nothing else can tell you the value changed.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
   (content-free); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
   A preview travels inside the segment string as a percent-encoded

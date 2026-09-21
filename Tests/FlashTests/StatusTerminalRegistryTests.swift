@@ -148,6 +148,21 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNotEqual(registry.spareShellKey, direct)
   }
 
+  func testPopupPagerPromptDrawsNothingInsteadOfAStandoutBlock() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    _ = registry.preparePopup(
+      name: "details", data: Data("Last good details".utf8), columns: 50, rows: 4,
+      colors: StatusPopupColors(.init()))
+    let command = try XCTUnwrap(registry.definitions["details"]?.command)
+    let prompt = try XCTUnwrap(command.first { $0.hasPrefix("-Ps") })
+    // `less` renders its short prompt in reverse video, so a blank prompt
+    // still paints a light block at the foot of every preview. Leading with
+    // "exit reverse" (passed through by -R) leaves the row genuinely empty.
+    XCTAssertEqual(prompt, "-Ps\u{1B}[27m")
+    XCTAssertTrue(command.contains("-R"))
+  }
+
   func testInvalidTerminalOverridePreservesTheExistingPopupPager() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }

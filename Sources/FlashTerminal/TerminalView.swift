@@ -69,6 +69,18 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   public var foreground: NSColor = .white { didSet { updateColors() } }
   public var background: NSColor = .black { didSet { updateColors() } }
+  /// Whether the cursor cell is painted. A hover preview is a rendered
+  /// document, not a surface the user types into, and its pager parks a
+  /// cursor on the prompt row — which the inverted cursor fill turns into a
+  /// stray light block. The popup controller enables this only once the
+  /// surface actually takes keyboard focus.
+  public var drawsCursor = true {
+    didSet {
+      guard drawsCursor != oldValue else { return }
+      updateBlinkTimer()
+      if let frame = terminalFrame { setNeedsDisplay(rowRect(frame.cursorY, size: cellSize)) }
+    }
+  }
   public var isRenderingEnabled = false {
     didSet {
       session?.setWantsFrames(isRenderingEnabled)
@@ -204,7 +216,8 @@ public final class TerminalView: NSView, NSTextInputClient {
   private func updateBlinkTimer() {
     let blinking =
       terminalFrame.map {
-        $0.cursorBlinking && $0.cursorVisible && session != nil || $0.hasBlinkingCells
+        drawsCursor && $0.cursorBlinking && $0.cursorVisible && session != nil
+          || $0.hasBlinkingCells
       } ?? false
     guard isRenderingEnabled && blinking else {
       blinkTimer?.invalidate()
@@ -378,7 +391,9 @@ public final class TerminalView: NSView, NSTextInputClient {
         flushRun()
       }
     }
-    if frame.cursorVisible && session != nil && (blinkVisible || !frame.cursorBlinking) {
+    if drawsCursor && frame.cursorVisible && session != nil
+      && (blinkVisible || !frame.cursorBlinking)
+    {
       var cursor = NSRect(
         x: CGFloat(frame.cursorX) * size.width, y: CGFloat(frame.cursorY) * size.height,
         width: size.width, height: size.height)

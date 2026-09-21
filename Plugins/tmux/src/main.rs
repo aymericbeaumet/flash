@@ -54,8 +54,8 @@ use std::time::{Duration, Instant};
 
 use flash_plugin::{
     run, ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame,
-    HintsRequest, HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, Priority,
-    TERMINAL_LINK_ROLE,
+    HintsRequest, HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle,
+    Priority, TERMINAL_LINK_ROLE,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -3663,38 +3663,59 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
             )
             .await;
         }
-        loop {
-            if socket_registry.has_unseen_sockets().await {
-                // Drain newly discovered sockets in bounded waves. Stale
-                // endpoints fail quickly, so a complete first catalog still
-                // meets the warm-source publish budget without ever launching
-                // an unbounded subprocess fan-out.
-                tokio::task::yield_now().await;
-            } else {
+        let handle: Arc<OnceLock<PollHandle>> = Arc::new(OnceLock::new());
+        let slot = Arc::clone(&handle);
+        let registered = ctx.interval(Duration::from_secs(POLL_INTERVAL_SECS), move |ctx| {
+            let path = path.clone();
+            let last_hash = Arc::clone(&last_hash);
+            let client_snapshot = Arc::clone(&client_snapshot);
+            let partitions = Arc::clone(&partitions);
+            let last_status = Arc::clone(&last_status);
+            let local_config = Arc::clone(&local_config);
+            let coordinator = Arc::clone(&coordinator);
+            let socket_registry = Arc::clone(&socket_registry);
+            let slot = Arc::clone(&slot);
+            async move {
+                // Drain newly discovered sockets in bounded waves before
+                // yielding the tick. Stale endpoints fail quickly, so a
+                // complete first catalog still meets the warm-source
+                // publish budget without ever launching an unbounded
+                // subprocess fan-out.
+                loop {
+                    refresh_candidate_locations_for_path(
+                        path.as_deref(),
+                        &ctx,
+                        &last_hash,
+                        &client_snapshot,
+                        &partitions,
+                        &last_status,
+                        &local_config,
+                        &coordinator,
+                        &socket_registry,
+                    )
+                    .await;
+                    if !socket_registry.has_unseen_sockets().await {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                // Nobody is looking at a tmux window: let the catalog lag
+                // a few seconds instead of running a `tmux` inventory
+                // subprocess every second.
                 let attached = client_snapshot
                     .lock()
                     .map(|snapshot| !snapshot.clients.is_empty())
                     .unwrap_or(true);
-                let period = if attached {
-                    POLL_INTERVAL_SECS
-                } else {
-                    IDLE_POLL_INTERVAL_SECS
-                };
-                tokio::time::sleep(Duration::from_secs(period)).await;
+                if let Some(handle) = slot.get() {
+                    handle.set_period(Duration::from_secs(if attached {
+                        POLL_INTERVAL_SECS
+                    } else {
+                        IDLE_POLL_INTERVAL_SECS
+                    }));
+                }
             }
-            refresh_candidate_locations_for_path(
-                path.as_deref(),
-                &ctx,
-                &last_hash,
-                &client_snapshot,
-                &partitions,
-                &last_status,
-                &local_config,
-                &coordinator,
-                &socket_registry,
-            )
-            .await;
-        }
+        });
+        drop(handle.set(registered));
     });
 }
 
@@ -3703,34 +3724,57 @@ fn start_remote_candidate_poll(plugin: &Tmux, ctx: &Context, initial_succeeded: 
     let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
     let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
     let ctx = ctx.clone();
-    tokio::spawn(async move {
-        let mut failure_index = if initial_succeeded { 0 } else { 1 };
-        loop {
-            let delay = if failure_index == 0 {
-                REMOTE_POLL_INTERVAL_SECS
-            } else {
-                REMOTE_RETRY_DELAYS_SECS
-                    [(failure_index - 1).min(REMOTE_RETRY_DELAYS_SECS.len() - 1)]
-            };
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-            let discovered = discover_remote_tmux_configs(&ctx).await;
-            if let Ok(mut configured) = remote_configs.lock() {
-                *configured = discovered.clone();
+    let initial_index = if initial_succeeded { 0usize } else { 1 };
+    let failure_index = Arc::new(Mutex::new(initial_index));
+    let handle: Arc<OnceLock<PollHandle>> = Arc::new(OnceLock::new());
+    let slot = Arc::clone(&handle);
+    let registered = ctx.interval(
+        Duration::from_secs(remote_poll_delay_secs(initial_index)),
+        move |ctx| {
+            let remote_configs = Arc::clone(&remote_configs);
+            let partitions = Arc::clone(&partitions);
+            let last_hash = Arc::clone(&last_hash);
+            let failure_index = Arc::clone(&failure_index);
+            let slot = Arc::clone(&slot);
+            async move {
+                let discovered = discover_remote_tmux_configs(&ctx).await;
+                if let Ok(mut configured) = remote_configs.lock() {
+                    *configured = discovered.clone();
+                }
+                let ok = refresh_remote_backends(
+                    &discovered,
+                    &ctx,
+                    Arc::clone(&partitions),
+                    Arc::clone(&last_hash),
+                )
+                .await;
+                // Back off through the retry ladder on failure and drop back
+                // to the steady cadence as soon as a refresh lands.
+                let next = {
+                    let mut index = failure_index.lock().unwrap();
+                    *index = if ok {
+                        0
+                    } else {
+                        (*index + 1).min(REMOTE_RETRY_DELAYS_SECS.len())
+                    };
+                    remote_poll_delay_secs(*index)
+                };
+                if let Some(handle) = slot.get() {
+                    handle.set_period(Duration::from_secs(next));
+                }
             }
-            if refresh_remote_backends(
-                &discovered,
-                &ctx,
-                Arc::clone(&partitions),
-                Arc::clone(&last_hash),
-            )
-            .await
-            {
-                failure_index = 0;
-            } else {
-                failure_index = (failure_index + 1).min(REMOTE_RETRY_DELAYS_SECS.len());
-            }
-        }
-    });
+        },
+    );
+    drop(handle.set(registered));
+}
+
+/// Steady cadence at index zero, then the retry ladder.
+fn remote_poll_delay_secs(failure_index: usize) -> u64 {
+    if failure_index == 0 {
+        REMOTE_POLL_INTERVAL_SECS
+    } else {
+        REMOTE_RETRY_DELAYS_SECS[(failure_index - 1).min(REMOTE_RETRY_DELAYS_SECS.len() - 1)]
+    }
 }
 
 // ---- Tab actions ------------------------------------------------------------

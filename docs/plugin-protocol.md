@@ -250,6 +250,17 @@ Notifications:
   lines are dropped, no lines clears, and a malformed object is rejected whole
   with a content-free warning. Undeclared names are ignored. Segments are live
   state: cleared on any teardown (unlike catalogs).
+- `poll` — `{"intervals": {"<name>": <seconds>}}`, the plugin's complete set of
+  cadences it wants the host to drive; an empty set stops its polling. Plugins
+  must not arm their own timers. The host folds every registration in the app
+  onto one clock (see the architecture guide) and delivers
+  `event {"name": "core:poll:<name>"}` when one is due, bypassing manifest
+  `listen` because the registration *is* the subscription. Names are
+  `[a-z0-9_-]`, the floor is 0.05 s, and a malformed frame is rejected whole.
+  Ticks are one-way and unacknowledged, so a plugin whose previous callback is
+  still running drops the ticks it missed rather than running back-to-back to
+  catch up. Reach for a cadence only when no event can tell you the value
+  changed.
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
   elapsed ms, method names — never query text, candidate data, clipboard
   content, config values, or event payloads).

@@ -760,10 +760,19 @@ enum WindowMover {
     AXValueGetValue(posValue, .cgPoint, &pos)
     AXValueGetValue(sizeValue, .cgSize, &size)
 
-    // AX y is from primary's top-left, Y-down. Convert to NSScreen
-    // y (from primary's bottom-left, Y-up).
-    let nsY = primaryHeight - pos.y - size.height
-    return CGRect(x: pos.x, y: nsY, width: size.width, height: size.height)
+    return nsRectFromAX(position: pos, size: size, primaryHeight: primaryHeight)
+  }
+
+  /// AX y is from the primary screen's top-left, Y-down. Convert to NSScreen
+  /// y (from the primary's bottom-left, Y-up). The active-window border's
+  /// fast path reads geometry this way, so it has to land in the same space
+  /// as the WindowServer scan it replaced.
+  static func nsRectFromAX(
+    position: CGPoint, size: CGSize, primaryHeight: CGFloat
+  ) -> CGRect {
+    CGRect(
+      x: position.x, y: primaryHeight - position.y - size.height,
+      width: size.width, height: size.height)
   }
 
   /// Map a `WindowPosition` onto a slot of the supplied usable frame

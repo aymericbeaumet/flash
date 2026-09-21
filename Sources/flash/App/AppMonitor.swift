@@ -370,6 +370,15 @@ final class AppMonitor {
       || notification == kAXApplicationShownNotification
   }
 
+  /// A move or resize names the window that changed, so the border and the
+  /// layout tracker can read its frame straight from that AX element. Every
+  /// other border-relevant notification still needs a WindowServer pass to
+  /// work out which window is now on top.
+  static func isWindowGeometryNotification(_ notification: String) -> Bool {
+    notification == kAXWindowMovedNotification as String
+      || notification == kAXWindowResizedNotification as String
+  }
+
   static func notificationMayChangeObservedWindow(_ notification: String) -> Bool {
     notification == kAXFocusedWindowChangedNotification
       || notification == kAXMainWindowChangedNotification
@@ -390,9 +399,9 @@ final class AppMonitor {
 
   func start() {
     installWorkspaceObservers()
-    // The tap source, AX observer sources, and all mode logic share the
-    // main run loop; when it stalls, input stalls system-wide. Record it.
-    mainThreadWatchdog.start()
+    // The tap source, AX observer sources, and all mode logic share the main
+    // run loop; when it stalls, input stalls system-wide. `ConfigReload`
+    // arms the recorder once the configured log level is known.
     wakeChromiumAccessibilityForAllRunningApps()
     if let app = NSWorkspace.shared.frontmostApplication {
       onFocusedAppChanged(to: app)

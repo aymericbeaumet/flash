@@ -14,7 +14,7 @@ final class FlashStatusBarController {
   private var terminalPopupNames: Set<String>
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
   private var refreshIntervalSeconds: TimeInterval
-  private var timer: DispatchSourceTimer?
+  private let scheduler: PollScheduler
   private var timerGeneration: UInt64 = 0
   private(set) var nextWakeup: TimeInterval?
   private var started = false
@@ -63,6 +63,7 @@ final class FlashStatusBarController {
     terminalPopupNames: Set<String> = [],
     refreshIntervalSeconds: TimeInterval = 5,
     pluginStatusesProvider: @escaping () -> [PluginStatusBarInfo] = { [] },
+    scheduler: PollScheduler = .shared,
     queue: DispatchQueue = DispatchQueue(label: "flash.status_bar", qos: .userInitiated),
     clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     makeJob: @escaping StatusCommandFactory = { invocation, queue, onLine, onCompletion in
@@ -72,6 +73,7 @@ final class FlashStatusBarController {
         timeoutSeconds: invocation.timeoutSeconds, onLine: onLine, onCompletion: onCompletion)
     }
   ) {
+    self.scheduler = scheduler
     self.queue = queue
     self.clock = clock
     self.makeJob = makeJob
@@ -96,8 +98,7 @@ final class FlashStatusBarController {
   func stop() {
     queue.sync {
       started = false
-      timer?.cancel()
-      timer = nil
+      scheduler.unregister(Self.pollClientID)
       timerGeneration &+= 1
       nextWakeup = nil
       let jobs = sourceRecords.values.compactMap(\.job) + shellRecords.values.compactMap(\.job)
@@ -397,9 +398,14 @@ final class FlashStatusBarController {
     }
   }
 
+  static let pollClientID = "core:status_bar"
+
+  /// These wake-ups are not a fixed cadence but the earliest of the user's
+  /// declared per-source intervals, cycle rotations, clock expansion and
+  /// pending output — so the bar re-registers its next deadline on the shared
+  /// clock each time one lands, rather than owning a timer.
   private func armTimer() {
-    timer?.cancel()
-    timer = nil
+    scheduler.unregister(Self.pollClientID)
     timerGeneration &+= 1
     let generation = timerGeneration
     nextWakeup = nil
@@ -416,14 +422,15 @@ final class FlashStatusBarController {
     if let pendingJobPublish { dates.append(pendingJobPublish) }
     guard let next = dates.filter(\.isFinite).min() else { return }
     nextWakeup = next
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(deadline: .now() + max(0.001, next - clock()), leeway: .milliseconds(25))
-    timer.setEventHandler { [weak self] in
+    // The bar is a surface the user is looking at, so its slack is tight; the
+    // generation check still discards a fire that a newer plan superseded.
+    scheduler.scheduleOnce(
+      Self.pollClientID, afterMs: Int((max(0.001, next - clock()) * 1000).rounded()),
+      priority: .high, on: queue
+    ) { [weak self] in
       guard let self, self.timerGeneration == generation else { return }
       self.tick()
     }
-    self.timer = timer
-    timer.resume()
   }
 
   /// Internal (not private) so the controller tests can fire a due deadline

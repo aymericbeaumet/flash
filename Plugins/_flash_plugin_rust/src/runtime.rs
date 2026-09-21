@@ -187,6 +187,12 @@ fn decode_perform(params: Value) -> Result<Perform, String> {
 async fn run_event_worker<P: Plugin>(plugin: Arc<P>, ctx: Context, events: Arc<EventMailbox>) {
     loop {
         let inbound = events.next().await;
+        if let Some(name) = inbound.event.name.strip_prefix("core:poll:") {
+            // Infrastructure, not plugin-visible: `interval` callbacks are
+            // the subscription.
+            ctx.deliver_poll_tick(name);
+            continue;
+        }
         if inbound.event.name == "core:apps.changed" {
             // The empty list is authoritative too: a terminated final app
             // must clear the snapshot before plugin code rebuilds from it.

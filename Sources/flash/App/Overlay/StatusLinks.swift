@@ -48,9 +48,12 @@ struct StatusBarScreenInteractions {
 ///
 /// It sits at `OverlayPanel.statusBarClickWindowLevel` (above the system
 /// menu-bar level and the bar window) because macOS only delivers menu-bar-band
-/// clicks to windows at or above that level. The band is Flash's whenever the
-/// bar is enabled: the bar window covers a revealed native menu bar, so the
-/// click windows never step aside for it.
+/// clicks to windows at or above that level. To avoid stealing the native menu
+/// bar's own clicks, the window flips to click-through
+/// (`ignoresMouseEvents = true`) and the bar window drops below the menu bar
+/// whenever the auto-hidden menu bar is actually revealed under the pointer
+/// (`OverlayPanel.menuBarRevealTimer`), so native wins then; when the menu bar
+/// is folded away, the band is Flash's and the window swallows the click.
 final class StatusBarClickView: NSView {
   /// Link sub-rects in this view's coordinate space, with their targets.
   var links: [(rect: CGRect, url: URL)] = [] {
@@ -82,6 +85,7 @@ final class StatusBarClickView: NSView {
   /// Fired on `mouseEntered`. The overlay uses it to arm the menu-bar
   /// reveal probe only while the pointer is actually in the band, so the
   /// probe costs nothing in the steady state.
+  var onPointerEntered: (() -> Void)?
 
   /// Dispatches a named `#[range=user|<name>]` click (the `[statusbar.click]`
   /// action map). Set by the overlay from the AppDelegate's handler.
@@ -227,7 +231,10 @@ final class StatusBarClickView: NSView {
   }
 
   override func mouseMoved(with event: NSEvent) { updatePointer(at: event) }
-  override func mouseEntered(with event: NSEvent) { updatePointer(at: event) }
+  override func mouseEntered(with event: NSEvent) {
+    onPointerEntered?()
+    updatePointer(at: event)
+  }
   override func mouseExited(with event: NSEvent) {
     NSCursor.arrow.set()
     let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
@@ -258,7 +265,7 @@ final class StatusBarClickView: NSView {
   private func logHover(event: String, popup: StatusBarPopupRegion?, overLink: Bool, point: CGPoint)
   {
     let popupID = popup.map { StatusFormatDocument.stableID($0.name) } ?? "none"
-    let signature = "\(popupID):\(overLink)"
+    let signature = "\(popupID):\(overLink):\(window?.ignoresMouseEvents ?? false)"
     guard event != "moved" || signature != hoverDiagnosticSignature else { return }
     hoverDiagnosticSignature = event == "exited" ? nil : signature
     FlashLog.debug(
@@ -266,6 +273,7 @@ final class StatusBarClickView: NSView {
       fields: [
         "event": event, "popup_id": popupID, "over_link": String(overLink),
         "window": String(window?.windowNumber ?? 0),
+        "ignores_mouse": String(window?.ignoresMouseEvents ?? false),
         "popup_count": String(popups.count),
         "content_bytes": String(popup?.content.utf8.count ?? 0),
         "pointer": NSStringFromPoint(point),
@@ -524,7 +532,7 @@ extension OverlayPanel {
   func prepareStatusBarHintClick(url: URL, at point: CGPoint) -> Bool {
     guard
       let window = statusBarClickWindows.first(where: {
-        $0.frame.contains(point) && $0.isVisible
+        $0.frame.contains(point) && $0.isVisible && !$0.ignoresMouseEvents
       })
     else { return false }
     let local = window.clickView.convert(window.convertPoint(fromScreen: point), from: nil)
@@ -641,6 +649,7 @@ extension OverlayPanel {
           content: popup.content,
           document: popup.document)
       }
+      view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
       view.onStatusBarAction = statusBarActionHandler
       view.onPopupClick = { [weak self] popup, point in
         var screenPopup = popup
@@ -668,6 +677,10 @@ extension OverlayPanel {
     // A content/config refresh does not generate mouseMoved for a stationary
     // pointer. Re-hit-test now so an open popup updates immediately.
     refreshStatusBarPopup(popups: popups, links: links, at: NSEvent.mouseLocation)
+    // The probe normally arms on hover, but if the pointer is already parked
+    // in the band when the windows (re)appear no `mouseEntered` will fire —
+    // catch that case here.
+    if Self.pointerIsInMenuBarBand() { startMenuBarRevealTracking() }
   }
 
   /// Re-hit-test live status content, including the wash under a stationary
@@ -682,8 +695,9 @@ extension OverlayPanel {
     activeStatusBarPopupName = statusPopupController.presentation.identity?.name
     activeStatusBarPopupContent = statusPopupController.content
     if statusPopupController.containsSnapshotAnchor(pointer) { return }
-    let popup = popups.first(where: { $0.rect.contains(pointer) })
-    let link = links.first(where: { $0.rect.contains(pointer) })
+    let acceptsPointer = !statusBarClickWindows.contains(where: \.ignoresMouseEvents)
+    let popup = acceptsPointer ? popups.first(where: { $0.rect.contains(pointer) }) : nil
+    let link = acceptsPointer ? links.first(where: { $0.rect.contains(pointer) }) : nil
     setStatusBarHoverHighlight(
       StatusBarClickView.hoverWashRect(link: link?.rect, popup: popup?.rect))
     guard !statusPopupController.presentation.isFocused else { return }
@@ -699,10 +713,130 @@ extension OverlayPanel {
   /// Tear down every click window (bar hidden).
   func hideStatusBarClickWindows() {
     lastModeBadgeLayoutStamp = nil
+    stopMenuBarRevealTracking()
     if !statusPopupController.presentation.isStandalone { hideStatusBarPopup() }
     guard !statusBarClickWindows.isEmpty || lastStatusBarClickSignature != nil else { return }
     for window in statusBarClickWindows { window.orderOut(nil) }
     statusBarClickWindows.removeAll()
     lastStatusBarClickSignature = nil
   }
+
+  // MARK: Reveal-aware yielding
+
+  /// Serial utility queue the reveal probe runs on. Everything the probe
+  /// touches is a thread-safe C call (`CGEvent(source:)`, `CGDisplayBounds`,
+  /// `CGWindowListCopyWindowInfo`), so none of its work belongs on the main
+  /// run loop — which owns the keyboard event tap and must never share it
+  /// with a 12.5 Hz window-server scan.
+  private static let menuBarRevealProbeQueue = DispatchQueue(
+    label: "flash.status_bar.reveal", qos: .utility)
+  static let menuBarRevealClientID = "core:menu_bar_reveal"
+  static let menuBarRevealIntervalMs = 80
+
+  /// The bar window and its click windows both outrank the native menu bar, so
+  /// they must step aside while it is actually revealed under the pointer —
+  /// otherwise reaching for the top edge would show nothing. Poll on a short
+  /// cadence and flip `ignoresMouseEvents` plus the bar's window level:
+  /// revealed → click-through and bar lowered (native wins); folded → bar back
+  /// on top and the windows catching. The probe runs only while the pointer is
+  /// near the band (armed by `mouseEntered`, self-stopping otherwise), and hops
+  /// to main only when the state flips. Call on the main thread.
+  func startMenuBarRevealTracking() {
+    guard !menuBarRevealProbeArmed else { return }
+    FlashLog.debug("Status menu reveal tracking started", source: "core:StatusLinks.menuReveal")
+    menuBarRevealProbeArmed = true
+    menuBarRevealedShadow = false
+    PollScheduler.shared.register(
+      Self.menuBarRevealClientID, everyMs: Self.menuBarRevealIntervalMs, priority: .system,
+      on: Self.menuBarRevealProbeQueue
+    ) { [weak self] in self?.probeMenuBarReveal() }
+  }
+
+  func stopMenuBarRevealTracking() {
+    if menuBarRevealProbeArmed {
+      FlashLog.debug("Status menu reveal tracking stopped", source: "core:StatusLinks.menuReveal")
+    }
+    menuBarRevealProbeArmed = false
+    PollScheduler.shared.unregister(Self.menuBarRevealClientID)
+    menuBarRevealedShadow = false
+    // Leave the windows catching and the bar on top (the defaults) so a stale
+    // click-through or yielded state can't survive a hide/show.
+    for window in statusBarClickWindows where window.ignoresMouseEvents {
+      window.ignoresMouseEvents = false
+    }
+    setStatusBarYieldsToNativeMenuBar(false)
+  }
+
+  /// One probe tick, on the probe queue.
+  private func probeMenuBarReveal() {
+    let pointerNearBand = Self.pointerIsInMenuBarBand()
+    let revealed =
+      pointerNearBand
+      && Self.nativeMenuBarIsRevealed(
+        mainScreenWidth: CGDisplayBounds(CGMainDisplayID()).width)
+    let changed = revealed != menuBarRevealedShadow
+    menuBarRevealedShadow = revealed
+    if changed {
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        for window in self.statusBarClickWindows where window.ignoresMouseEvents != revealed {
+          window.ignoresMouseEvents = revealed
+        }
+        self.setStatusBarYieldsToNativeMenuBar(revealed)
+        FlashLog.debug(
+          "Status menu reveal changed",
+          fields: [
+            "revealed": String(revealed),
+            "click_windows": String(self.statusBarClickWindows.count),
+          ],
+          source: "core:StatusLinks.menuReveal")
+        if revealed { self.statusBarNativeMenuDidReveal() }
+      }
+    }
+    if !pointerNearBand && !revealed {
+      // Pointer left the band with the menu bar folded: nothing to watch.
+      // `mouseEntered` re-arms on the next hover.
+      DispatchQueue.main.async { [weak self] in self?.stopMenuBarRevealTracking() }
+    }
+  }
+
+  func statusBarNativeMenuDidReveal() {
+    guard !statusPopupController.presentation.isStandalone else { return }
+    hideStatusBarPopup(reason: "native_menu_revealed")
+  }
+
+  /// True while the pointer sits in the top band of the main display — the
+  /// only place the auto-hidden menu bar can reveal. Thread-safe (CG calls
+  /// only; `CGEvent` locations use a top-left global origin, so the band is
+  /// small y).
+  static func pointerIsInMenuBarBand() -> Bool {
+    guard let pointer = CGEvent(source: nil)?.location else { return false }
+    let main = CGDisplayBounds(CGMainDisplayID())
+    return pointer.y <= main.minY + 40
+      && pointer.x >= main.minX && pointer.x <= main.maxX
+  }
+
+  /// True when the window server has an on-screen window at the main-menu level
+  /// spanning the top of the main display — i.e. the menu bar is revealed.
+  /// Matches by level + bounds only (no window-title read), so it needs no
+  /// Screen Recording permission.
+  static func nativeMenuBarIsRevealed(mainScreenWidth: CGFloat) -> Bool {
+    guard
+      let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+        as? [[String: Any]]
+    else { return false }
+    let menuLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
+    for info in infos {
+      guard
+        let layer = info[kCGWindowLayer as String] as? Int, layer == menuLayer,
+        let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+        let y = bounds["Y"], let width = bounds["Width"]
+      else { continue }
+      // CGWindow bounds use a top-left global origin: a revealed menu bar sits
+      // flush at the top (y ~ 0) and spans most of the main display.
+      if y <= 1, width >= mainScreenWidth * 0.6 { return true }
+    }
+    return false
+  }
 }
+

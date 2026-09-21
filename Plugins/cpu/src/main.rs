@@ -1,5 +1,5 @@
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flash_plugin::status::{percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
@@ -155,14 +155,13 @@ impl FlashPlugin for Cpu {
         )
         .await;
 
-        let cpu_ctx = ctx.clone();
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.cpu_gate);
-        drop(tokio::spawn(async move {
-            loop {
-                let started = Instant::now();
-                refresh_cpu(&cpu_ctx, &state, &gate).await;
-                tokio::time::sleep(cpu_sample_delay(started.elapsed())).await;
+        drop(ctx.interval(CPU_SAMPLE_PERIOD, move |ctx| {
+            let state = Arc::clone(&state);
+            let gate = Arc::clone(&gate);
+            async move {
+                refresh_cpu(&ctx, &state, &gate).await;
             }
         }));
 
@@ -307,10 +306,6 @@ async fn collect_gpu(
 
 fn begin_collection(gate: &tokio::sync::Mutex<()>) -> Option<tokio::sync::MutexGuard<'_, ()>> {
     gate.try_lock().ok()
-}
-
-fn cpu_sample_delay(elapsed: Duration) -> Duration {
-    CPU_SAMPLE_PERIOD.saturating_sub(elapsed)
 }
 
 async fn acquire_collection<'a>(
@@ -941,15 +936,5 @@ Model         Apple M4 Pro"
             .render_plain();
         assert!(empty.contains("Recent avg    —"), "{empty}");
         assert!(empty.contains("Recent peak   —"), "{empty}");
-    }
-
-    #[test]
-    fn cpu_sampler_keeps_a_fixed_period_regardless_of_sample_cost() {
-        assert_eq!(
-            cpu_sample_delay(Duration::from_millis(250)),
-            Duration::from_millis(750)
-        );
-        assert_eq!(cpu_sample_delay(Duration::from_secs(1)), Duration::ZERO);
-        assert_eq!(cpu_sample_delay(Duration::from_secs(2)), Duration::ZERO);
     }
 }

@@ -232,7 +232,12 @@ final class StatusTerminalRegistry {
     let snapshot = StatusPopupSnapshot(data: data)
     let definition = Config.Terminal(
       command: [
-        "/usr/bin/less", "-R", "--mouse", "--wheel-lines=3", "-~", "-Ps ", snapshot.fileURL.path,
+        // `-Ps` is drawn in reverse video, which turns an otherwise blank
+        // prompt into a light block at the foot of every preview. `-R` passes
+        // the prompt's own escapes through, and a leading "exit reverse" makes
+        // less skip standout entirely, leaving the row genuinely empty.
+        "/usr/bin/less", "-R", "--mouse", "--wheel-lines=3", "-~", "-Ps\u{1B}[27m",
+        snapshot.fileURL.path,
       ],
       environment: ["LESS": "", "LESSOPEN": "", "LESSHISTFILE": "-", "LESSSECURE": "1"],
       columns: columns, rows: rows)

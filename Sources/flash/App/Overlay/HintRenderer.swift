@@ -437,6 +437,7 @@ extension OverlayPanel {
     candidateFinderQuery = ""
     recycleAll()
     renderModeBadgeOnlyOrHide()
+    restoreActiveAlertIfNeeded()
   }
 
   func captureKeyboardInput() {

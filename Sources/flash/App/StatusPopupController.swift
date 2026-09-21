@@ -252,6 +252,7 @@ final class StatusPopupController {
     let next = presentation.applying(event)
     guard next != presentation else { return }
     presentation = next
+    terminalView.drawsCursor = next.isFocused || next.isStandalone
     if next == .hidden {
       terminalView.isRenderingEnabled = false
       if windowActionsEnabled { panel.orderOut(nil) }
@@ -260,6 +261,7 @@ final class StatusPopupController {
 
   private func layout(region: StatusBarPopupRegion) {
     guard let identity = presentation.identity else { return }
+    terminalView.drawsCursor = presentation.isFocused || presentation.isStandalone
     if terminalView.font != font { terminalView.font = font }
     let colors = StatusPopupColors(style)
     let foreground = colors.foreground
@@ -272,6 +274,11 @@ final class StatusPopupController {
     let maximumRows = max(1, Int((visibleFrame.height - inset * 2) / max(1, cell.height)))
     let columns: Int
     let rows: Int
+    /// `less` owns the last row for its prompt. A hover preview is a rendered
+    /// document, so that row is a blank strip under the text; clip it instead
+    /// of showing it. A focused pager keeps it — that is where `/` search
+    /// input and less's own messages appear.
+    var hidesPagerPromptRow = false
     var exitText = ""
     var footerHeight: CGFloat = 0
     var sourceKind = "terminal"
@@ -308,6 +315,8 @@ final class StatusPopupController {
         text: text, availableColumns: available, maximumRows: max(1, maximumRows - 1))
       columns = available
       rows = min(maximumRows, grid.rows + 1)
+      hidesPagerPromptRow = Self.hidesPagerPromptRow(
+        rows: rows, interactive: presentation.isFocused || presentation.isStandalone)
       let session: TerminalSession
       if let existing = terminals.sessions[region.name], presentation.isFocused || isContentSnapshot
       {
@@ -321,9 +330,13 @@ final class StatusPopupController {
       session.resize(columns: columns, rows: rows)
     }
     content = region.content
+    // The session keeps every row; only the drawn height shrinks, so the
+    // clipped prompt row never reaches the screen.
+    let visibleRows = rows - (hidesPagerPromptRow ? 1 : 0)
     let layout = OverlayPanel.statusBarPopupLayout(
       textSize: CGSize(
-        width: CGFloat(columns) * cell.width, height: CGFloat(rows) * cell.height + footerHeight),
+        width: CGFloat(columns) * cell.width,
+        height: CGFloat(visibleRows) * cell.height + footerHeight),
       padding: CGFloat(style.padding), borderWidth: CGFloat(style.borderWidth))
     let target: CGRect
     if let anchor = identity.anchor {
@@ -345,7 +358,7 @@ final class StatusPopupController {
     panel.setFrame(target, display: false)
     terminalView.frame = CGRect(
       x: layout.labelFrame.minX, y: layout.labelFrame.minY + footerHeight,
-      width: layout.labelFrame.width, height: CGFloat(rows) * cell.height)
+      width: layout.labelFrame.width, height: CGFloat(visibleRows) * cell.height)
     exitLabel.stringValue = exitText
     exitLabel.isHidden = exitText.isEmpty
     exitLabel.font = font
@@ -415,6 +428,15 @@ final class StatusPopupController {
     }
     result += "\u{1B}[0m"
     return Data(result.utf8)
+  }
+
+  /// `less` keeps the last row for its prompt. A preview is a rendered
+  /// document, so that row is a blank strip below the text and gets clipped;
+  /// an interactive pager keeps it, because that is where `/` search input
+  /// and less's own messages land. A one-row popup keeps it either way —
+  /// there is nothing left to show otherwise.
+  static func hidesPagerPromptRow(rows: Int, interactive: Bool) -> Bool {
+    rows > 1 && !interactive
   }
 
   static func documentGrid(text: String, availableColumns: Int, maximumRows: Int) -> (

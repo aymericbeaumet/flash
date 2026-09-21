@@ -92,6 +92,15 @@ enum FlashLog {
     FlashLogFileWriter(url: $0, queue: ioQueue)
   }
 
+  /// Whether `level` currently reaches a sink or the log file. Diagnostic-only
+  /// machinery (the main-thread watchdog) uses this to stay off entirely when
+  /// nothing would read its output.
+  static func emits(_ level: Level) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return level >= minLevel || !sinks.isEmpty
+  }
+
   static func setLevel(_ level: Level) {
     lock.lock()
     minLevel = level

@@ -4,9 +4,10 @@ import AppKit
 ///
 /// macOS exposes no pasteboard-change notification, so the only mechanism is
 /// to compare `NSPasteboard.changeCount` (a monotonic integer the system bumps
-/// on every write) against the last seen value. Reading that integer is a
-/// single cheap call, so a low-frequency main-runloop timer is sufficient and
-/// never spawns a subprocess.
+/// on every write) against the last seen value. That makes this one of the few
+/// places a poll is the only option — so it runs on the shared
+/// `PollScheduler` rather than its own timer, and only while a plugin
+/// subscribes to `clipboard.changed`.
 ///
 /// This lives in the core on purpose: plugins must not poll. The clipboard
 /// plugin instead subscribes to the `clipboard.changed` event the core emits
@@ -14,11 +15,12 @@ import AppKit
 final class ClipboardMonitor {
   private let pasteboard: NSPasteboard
   private let onChange: (String) -> Void
-  /// The 2 Hz poll lives on its own utility queue: `changeCount` is a cheap
-  /// read that never needs the main run loop (which hosts the keyboard tap),
-  /// and only an actual change hops to main to read the payload.
+  /// The 2 Hz poll runs on a utility queue: `changeCount` is a cheap read
+  /// that never needs the main run loop (which hosts the keyboard tap), and
+  /// only an actual change hops to main to read the payload.
   private let queue = DispatchQueue(label: "flash.clipboard", qos: .utility)
-  private var timer: DispatchSourceTimer?
+  private let scheduler: PollScheduler
+  private var registered = false
   private var lastChangeCount: Int
 
   /// Pasteboard types that mark a payload as a password (`ConcealedType`) or
@@ -27,25 +29,31 @@ final class ClipboardMonitor {
   private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
   private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
-  init(pasteboard: NSPasteboard = .general, onChange: @escaping (String) -> Void) {
+  static let clientID = "core:clipboard"
+
+  init(
+    pasteboard: NSPasteboard = .general,
+    scheduler: PollScheduler = .shared,
+    onChange: @escaping (String) -> Void
+  ) {
     self.pasteboard = pasteboard
+    self.scheduler = scheduler
     self.onChange = onChange
     self.lastChangeCount = pasteboard.changeCount
   }
 
   func start(interval: TimeInterval = 0.5) {
-    guard timer == nil else { return }
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(
-      deadline: .now() + interval, repeating: interval, leeway: .milliseconds(100))
-    timer.setEventHandler { [weak self] in self?.poll() }
-    self.timer = timer
-    timer.resume()
+    guard !registered else { return }
+    registered = true
+    scheduler.register(
+      Self.clientID, everyMs: Int(interval * 1000), on: queue
+    ) { [weak self] in self?.poll() }
   }
 
   func stop() {
-    timer?.cancel()
-    timer = nil
+    guard registered else { return }
+    registered = false
+    scheduler.unregister(Self.clientID)
   }
 
   private func poll() {

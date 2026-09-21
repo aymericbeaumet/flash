@@ -376,7 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     configureDebugServer(for: config)
     logPermissionState()
     installDismissObservers()
-    startClipboardMonitor()
+    reconcileClipboardMonitor()
     startPowerSourceMonitor()
     pluginManager.emit(
       PluginEvent(
@@ -825,10 +825,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshEffectiveMappings(for: app.bundleIdentifier)
   }
 
-  /// Start the in-process pasteboard watcher and bridge its callback onto the
-  /// `clipboard.changed` plugin event. Owning the watch here keeps plugins
-  /// free of polling — the clipboard plugin just subscribes to the event.
-  private func startClipboardMonitor() {
+  /// Run the in-process pasteboard watcher only while a plugin subscribes to
+  /// `clipboard.changed`. macOS publishes no pasteboard notification, so this
+  /// is the one unavoidable poll on that path — and with no subscriber there
+  /// is nothing to poll for. Owning the watch here keeps plugins free of
+  /// polling; the clipboard plugin just subscribes to the event.
+  func reconcileClipboardMonitor() {
+    let wanted = pluginManager.hasListener(for: "core:clipboard.changed")
+    guard wanted != (clipboardMonitor != nil) else { return }
+    guard wanted else {
+      clipboardMonitor?.stop()
+      clipboardMonitor = nil
+      FlashLog.debug("[clipboard] watcher stopped: no subscriber")
+      return
+    }
+    FlashLog.debug("[clipboard] watcher started")
     clipboardMonitor = ClipboardMonitor { [weak self] text in
       guard let self else { return }
       self.pluginManager.emit(

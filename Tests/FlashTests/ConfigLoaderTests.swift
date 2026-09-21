@@ -81,6 +81,27 @@ final class ConfigLoaderTests: XCTestCase {
       .enterCommand(input: "flashlight ", restoreMode: false))
   }
 
+  func testRestoreModeFlagSurvivesMappingParsingSoInsertResumesAfterThePicker() {
+    // The emoji picker case: fired from INSERT, the command surface must hand
+    // the user back to INSERT instead of dropping them into NORMAL mid-typing.
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+ctrl+<space>" = ["flash", "enter_command_mode", \
+        "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
+      "cmd+<space>" = ["flash", "enter_command_mode", "--input=:flashlight "]
+      """
+    )
+    XCTAssertTrue(config.diagnostics.isEmpty)
+    XCTAssertEqual(
+      config.mode.all.first { $0.key == key("cmd+ctrl+<space>") }?.action.command,
+      .enterCommand(input: "flashlight @emojis.glyphs ", restoreMode: true))
+    // Without the flag the surface still returns to NORMAL.
+    XCTAssertEqual(
+      config.mode.all.first { $0.key == key("cmd+<space>") }?.action.command,
+      .enterCommand(input: "flashlight ", restoreMode: false))
+  }
+
   func testCommandMappingsOverrideAllWithoutReplacingCommandTyping() {
     let config = ConfigLoader.parse(
       """

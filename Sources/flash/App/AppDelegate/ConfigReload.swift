@@ -148,6 +148,7 @@ extension AppDelegate {
     // so a hot-reload of the config also propagates without needing
     // to touch `FlashLog` from two places.
     FlashLog.setLevel(cfg.debug.logLevel)
+    monitor.mainThreadWatchdog.setEnabled(FlashLog.emits(.debug))
     for diagnostic in cfg.loadingDiagnostics {
       FlashLog.warn("[config] \(diagnostic.logMessage)")
     }
@@ -198,7 +199,7 @@ extension AppDelegate {
     // decides whether the bar (and its reserved screen space) appears.
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
-    applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
+    NativeMenuBarAutoHide.reconcile(hidden: statusBarVisible)
     windowLayoutManager.screenParametersDidChange(
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
@@ -231,6 +232,7 @@ extension AppDelegate {
     pluginStateRefreshWork?.cancel()
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
+      self.reconcileClipboardMonitor()
       self.statusBarController?.refreshPluginSections()
       self.debugServer?.broadcastState()
     }
@@ -342,29 +344,6 @@ extension AppDelegate {
     guard !selectedInitialMode else { return }
     selectedInitialMode = true
     dispatchMode(.startup(advancedEnabled: hasNormalModeBinding(config)))
-  }
-
-  func applySystemStatusBarSpaceReservation(enabled: Bool) {
-    let current = NSApp.presentationOptions
-    let updated = Self.systemStatusBarSpaceReservationPresentationOptions(
-      current: current,
-      enabled: enabled)
-    let changed = updated != current
-    if changed {
-      NSApp.presentationOptions = updated
-    }
-    FlashLog.debug("[statusbar] system_menu_bar_reservation enabled=\(enabled) changed=\(changed)")
-  }
-
-  static func systemStatusBarSpaceReservationPresentationOptions(
-    current: NSApplication.PresentationOptions,
-    enabled: Bool
-  ) -> NSApplication.PresentationOptions {
-    var options = current
-    if enabled {
-      options.remove(.autoHideMenuBar)
-    }
-    return options
   }
 
   private func showConfigErrorAlertIfNeeded(for cfg: Config) {

@@ -83,6 +83,8 @@ See [status popups](status-popups.md) for the presentation boundary.
 
 Keep the ownership boundaries intact:
 
+- Register sampling cadences with the host (`ctx.interval`) instead of arming a
+  timer: one clock drives every monitor, so their wake-ups coalesce.
 - `system` owns destructive and session-level system actions, not telemetry.
 - `caffeinate` alone owns sleep-assertion lifecycle.
 - Core owns date/time rendering; `answers` provides timezone lookup.

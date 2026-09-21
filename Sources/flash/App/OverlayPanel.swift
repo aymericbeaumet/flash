@@ -47,16 +47,21 @@ final class OverlayPanel: NSPanel {
   // The status bar lives in its own click-through window (`StatusBarWindow`)
   // above the native menu bar: app menus at the menu-bar window level 24,
   // extras at `.statusBar`/25, and the auto-hide reveal the system slides down
-  // from y<0 at those same levels. A reveal — the pointer grazing the top edge
-  // while hovering the bar, a menu key equivalent flashing its title, Flash
-  // becoming active, a wake — therefore slides in behind Flash's bar instead of
-  // painting over it for a second. The bar never yields the band: while it is
-  // enabled the native menu bar stays covered.
+  // from y<0 at those same levels. A reveal Flash did not ask for — a menu key
+  // equivalent flashing its title, Flash becoming active, a wake — therefore
+  // slides in behind the bar instead of painting over it for a second.
+  // The pointer is the one exception: while the probe sees the native bar
+  // actually revealed under it, the window drops to
+  // `statusBarYieldedWindowLevel` so reaching for the top edge still gets the
+  // real menu bar (`setStatusBarYieldsToNativeMenuBar`).
   static let statusBarWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+  static let statusBarYieldedWindowLevel: NSWindow.Level = .floating
   // The click windows sit above the bar window: macOS only delivers
   // menu-bar-band clicks to windows at (or above) the menu-bar level — lower
   // windows get nothing and the click falls through to the desktop. The bar
   // window ignores mouse events, so the band's clicks reach them regardless.
+  // They don't steal native clicks despite outranking the menu bar, because
+  // they flip to click-through alongside the bar's yield.
   static let statusBarClickWindowLevel = NSWindow.Level(
     rawValue: NSWindow.Level.statusBar.rawValue + 2)
   static let candidateFinderHorizontalPadding: CGFloat = 8
@@ -111,6 +116,28 @@ final class OverlayPanel: NSPanel {
   var activeStatusBarPopupName: String?
   var activeStatusBarPopupContent: String?
   var activeStatusBarPopupVisibleFrame: CGRect?
+  /// An alert that must outlive a transient teardown; see
+  /// `restoreActiveAlertIfNeeded`.
+  struct ActiveAlert {
+    var message: String
+    var style: AlertStyle
+    var until: DispatchTime
+  }
+  var activeAlert: ActiveAlert?
+  /// Whether the shared-clock probe that lowers the bar window and makes the
+  /// click windows click-through while the native (auto-hidden) menu bar is
+  /// revealed under the pointer is currently registered. macOS publishes no
+  /// reveal notification, so this is a poll of last resort — armed by the
+  /// click view's `mouseEntered` and dropped the moment the pointer leaves
+  /// the band, and ticked by `PollScheduler` rather than its own timer.
+  var menuBarRevealProbeArmed = false
+  /// The probe's last observed reveal state. Written on the probe queue
+  /// between `resume()` and `cancel()`, reset on the main thread around
+  /// those edges — the timer lifecycle serializes the two.
+  var menuBarRevealedShadow = false
+  /// True while the bar sits below a pointer-revealed native menu bar; see
+  /// `setStatusBarYieldsToNativeMenuBar`.
+  var statusBarYieldsToNativeMenuBar = false
   /// Invalidation token for the command-line key-window recovery ladder
   /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
   /// from a superseded pass die silently.
