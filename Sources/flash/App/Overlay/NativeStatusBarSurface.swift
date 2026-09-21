@@ -130,12 +130,14 @@ final class NativeStatusBarSurface {
     let notchColumns = notchWidth > 0 ? Int(ceil(notchWidth / cellWidth)) : 0
     let reserve = Self.centreReservation(
       prepared, columns: availableColumns, notchColumns: notchColumns)
-    // The side lanes keep a margin outside the recess so they never crowd it.
+    // The side lanes clear the drawn recess by the same margin they clear a
+    // real camera housing by, so both notches sit in identical space.
+    let marginColumns = Self.centreMarginColumns(cellWidth: cellWidth)
     let laneReserve =
       reserve.isEmpty
       ? reserve
-      : max(0, reserve.lowerBound - Self.centreMarginColumns)
-        ..< min(availableColumns, reserve.upperBound + Self.centreMarginColumns)
+      : max(0, reserve.lowerBound - marginColumns)
+        ..< min(availableColumns, reserve.upperBound + marginColumns)
     layout = StatusFormatLayout.layout(
       Self.clampedLanes(
         Self.shrinkingDocument(
@@ -623,12 +625,21 @@ final class NativeStatusBarSurface {
 
   /// Flash's opt-in elastic spans consume overflow before native alignment and
   /// list drawing. Unmarked formats pass through to tmux's clipping unchanged.
-  /// Blank columns kept between the absolute centre and either side lane, so
-  /// a growing lane stops short of the centred label instead of abutting it.
+  /// Blank columns kept *inside* the reservation, between the recess edge and
+  /// the centred label. This is a text inset rather than a margin around the
+  /// notch — it clears the recess's rounded corners, which a real housing has
+  /// no equivalent of because nothing is drawn inside it.
   static let centreGutterColumns = 2
-  /// Blank columns kept outside the reservation (the drawn recess) on each
-  /// side, so the side lanes never crowd the notch's edges.
-  static let centreMarginColumns = 2
+  /// Clearance between a side lane and the notch, as whole columns of the
+  /// shared `[statusbar] notch_margin` — the very same points a real camera
+  /// housing reserves above. A drawn recess and real hardware are the same
+  /// width, so keeping the same margin makes a notched Mac and an external
+  /// display lay the bar out identically. Rounded up, so a lane never
+  /// encroaches on the gap by a fraction of a cell.
+  static func centreMarginColumns(cellWidth: CGFloat) -> Int {
+    guard cellWidth > 0 else { return 0 }
+    return Int(ceil(OverlayPanel.statusBarNotchMargin / cellWidth))
+  }
   /// A reservation never starves a side lane below this; on a bar too narrow
   /// for all three the centre gives ground rather than erasing a lane.
   static let centreReservationMinimumLaneColumns = 8

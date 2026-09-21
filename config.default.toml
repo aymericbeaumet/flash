@@ -179,8 +179,11 @@ font_size = 13
 # Timeout for one named Flash source run; keep its last successful value on
 # timeout. Native #(...) jobs and persistent PTY commands have no such timeout.
 command_timeout = 6.0
-# Points kept clear on each side of a notch (camera housing). The centre
-# region hides entirely on notched screens.
+# Points kept clear on each side of a notch — the real camera housing on a
+# notched screen, and the recess the bar draws behind its centre region
+# elsewhere. Both are the same width and use this same margin, so the bar lays
+# out identically on a notched Mac and an external display. The centre region
+# hides entirely on notched screens, where the hardware supplies the gap.
 notch_margin = 6
 # Hover-popup chrome. Popup bodies use the same inline text styles as the bar;
 # these values control their default foreground and surrounding surface.

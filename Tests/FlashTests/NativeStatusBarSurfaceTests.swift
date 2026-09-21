@@ -438,6 +438,28 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertFalse(NativeStatusBarSurface.truncationEquivalent("Hello…", "Help"))
   }
 
+  func testDrawnAndRealNotchesReserveTheSameClearance() {
+    // A drawn recess is the real housing's width, so the lanes have to clear
+    // it by the housing's margin too — otherwise the bar would lay out
+    // differently on a notched Mac and on an external display.
+    let previous = FlashTunables.statusBarNotchMargin
+    defer { FlashTunables.statusBarNotchMargin = previous }
+    for margin in [0.0, 6.0, 14.0] {
+      FlashTunables.statusBarNotchMargin = margin
+      for cellWidth in [6, 8.05, 13] as [CGFloat] {
+        let columns = NativeStatusBarSurface.centreMarginColumns(cellWidth: cellWidth)
+        let points = CGFloat(columns) * cellWidth
+        // Never less than a real notch reserves ...
+        XCTAssertGreaterThanOrEqual(points, OverlayPanel.statusBarNotchMargin)
+        // ... and rounded up to whole cells by at most one, so the lanes
+        // never lose a meaningful slice to the gap.
+        XCTAssertLessThan(points, OverlayPanel.statusBarNotchMargin + cellWidth)
+      }
+    }
+    // A degenerate cell width cannot produce an infinite margin.
+    XCTAssertEqual(NativeStatusBarSurface.centreMarginColumns(cellWidth: 0), 0)
+  }
+
   func testAbsoluteCentreDrawsARecessedNotchOfTheRealHousingWidth() throws {
     let columns = 60
     let notchWidth: CGFloat = 185
@@ -462,7 +484,9 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     where index != centre && !run.segment.text.allSatisfy(\.isWhitespace) {
       let frame = surface.runFrames[index]
       // The recess is snapped to the pixel grid, so allow half a device pixel.
-      let margin = CGFloat(NativeStatusBarSurface.centreMarginColumns) * surface.cellWidth
+      let margin =
+        CGFloat(NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth))
+        * surface.cellWidth
       XCTAssertTrue(
         frame.maxX <= notch.minX - margin + 0.51 || frame.minX >= notch.maxX + margin - 0.51,
         "run '\(run.segment.text)' col=\(run.column)+\(run.columns) frame=\(frame) "
