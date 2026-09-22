@@ -949,3 +949,64 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     nil
   }
 }
+
+/// The command line only shows a caret while its panel holds the key window.
+/// Activation is asynchronous, so a short recovery ladder covers the gap —
+/// these cover the two ways that ladder used to fail.
+final class CommandLineKeyRecoveryTests: XCTestCase {
+  func testTheLadderAdvancesThroughEscalatingDelays() {
+    let delays = (0..<OverlayPanel.commandLineKeyRecoveryDelaysMs.count).map {
+      OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: $0)
+    }
+    XCTAssertEqual(delays, [30, 80, 160, 320, 640])
+  }
+
+  func testTheLadderIsExhaustedInsteadOfLoopingForever() {
+    // The regression: every retry restarted the ladder, so only its first rung
+    // ever fired and the command line retried every 30 ms for seconds.
+    let count = OverlayPanel.commandLineKeyRecoveryDelaysMs.count
+    XCTAssertNil(OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: count))
+    XCTAssertNil(OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: count + 40))
+  }
+
+  func testANegativeAttemptCountCannotRearmTheLadder() {
+    XCTAssertNil(OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: -1))
+  }
+
+  func testTheLadderIsBoundedInTotalWaiting() {
+    XCTAssertLessThan(OverlayPanel.commandLineKeyRecoveryDelaysMs.reduce(0, +), 2_000)
+  }
+
+  func testTheWorkspaceFrontmostAppIsTheActivationSource() {
+    XCTAssertEqual(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: 4242, lastNonFlashPID: 77, currentPID: 5),
+      4242)
+  }
+
+  func testTheLastFocusedAppTakesOverWhenTheFrontmostPointerNamesFlash() {
+    // The regression: `activate(from:)` was skipped whenever the frontmost
+    // pointer reported Flash — stale or not — which is exactly the state the
+    // ladder could not recover from.
+    XCTAssertEqual(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: 5, lastNonFlashPID: 77, currentPID: 5),
+      77)
+  }
+
+  func testTheLastFocusedAppTakesOverWhenThereIsNoFrontmostPointer() {
+    XCTAssertEqual(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: nil, lastNonFlashPID: 77, currentPID: 5),
+      77)
+  }
+
+  func testThereIsNoActivationSourceWhenOnlyFlashIsKnown() {
+    XCTAssertNil(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: 5, lastNonFlashPID: 5, currentPID: 5))
+    XCTAssertNil(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: nil, lastNonFlashPID: nil, currentPID: 5))
+  }
+}

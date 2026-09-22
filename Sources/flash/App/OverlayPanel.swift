@@ -142,6 +142,11 @@ final class OverlayPanel: NSPanel {
   /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
   /// from a superseded pass die silently.
   var commandLineKeyRecoveryGeneration: UInt64 = 0
+
+  /// The app Flash last saw focused, kept so an activation request can name a
+  /// source even when the workspace's frontmost pointer is stale or reports
+  /// Flash itself. Written by the focus-change path in `AppDelegate`.
+  var lastNonFlashApplicationPID: pid_t?
   /// Dispatches a named `#[range=user|<name>]` status-bar click through the
   /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
   /// consumed by the click windows and the `f`-hint activation path.

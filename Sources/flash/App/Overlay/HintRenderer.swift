@@ -440,7 +440,52 @@ extension OverlayPanel {
     restoreActiveAlertIfNeeded()
   }
 
-  func captureKeyboardInput() {
+  /// Escalating delays for the command-line key-recovery ladder. Activation is
+  /// granted asynchronously, so the first pass routinely runs before the panel
+  /// holds key; these retries cover that without becoming a resident poll.
+  static let commandLineKeyRecoveryDelaysMs = [30, 80, 160, 320, 640]
+
+  /// The ladder's next step, or nil once it is exhausted. `attempt` is the
+  /// number of retries already spent, so a fresh capture starts at 0 and each
+  /// retry advances exactly one rung. Restarting from 0 on every retry is what
+  /// turned this into an unbounded 30 ms loop that spun for seconds.
+  static func commandLineKeyRecoveryDelayMs(afterAttempt attempt: Int) -> Int? {
+    guard attempt >= 0, attempt < commandLineKeyRecoveryDelaysMs.count else { return nil }
+    return commandLineKeyRecoveryDelaysMs[attempt]
+  }
+
+  /// Which app to name as the source of an activation request.
+  ///
+  /// `NSWorkspace.frontmostApplication` settles asynchronously and can report
+  /// Flash itself. `activate(from:)` is the request that actually hands this
+  /// non-activating panel the key window, and gating it on that pointer meant
+  /// it was skipped in precisely the case with no other working remedy — the
+  /// app nominally active, no key window, and a retry ladder with nothing left
+  /// to try. Fall back to the app Flash last saw focused.
+  static func activationSourcePID(
+    workspaceFrontPID: pid_t?, lastNonFlashPID: pid_t?, currentPID: pid_t
+  ) -> pid_t? {
+    if let workspaceFrontPID, workspaceFrontPID != currentPID { return workspaceFrontPID }
+    if let lastNonFlashPID, lastNonFlashPID != currentPID { return lastNonFlashPID }
+    return nil
+  }
+
+  /// Whether the command line actually has a live caret.
+  ///
+  /// `NSWindow.isKeyWindow` is the wrong question to ask of this
+  /// non-activating panel: measured live, it reports false while the panel IS
+  /// `NSApp.keyWindow` and the field editor's `shouldDrawInsertionPoint` is
+  /// true. Recovery gated on it retried for seconds against a perfectly
+  /// healthy command line. Ask the field editor instead, and fall back to key
+  /// ownership before the editor exists.
+  var commandLineHoldsKeyboardFocus: Bool {
+    if let editor = commandTextField.currentEditor() as? NSTextView {
+      return editor.shouldDrawInsertionPoint
+    }
+    return isKeyWindow || NSApp.keyWindow === self
+  }
+
+  func captureKeyboardInput(recoveryAttempt: Int = 0) {
     let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
     // NORMAL / hints input is captured by the global keyboard tap, so we don't
@@ -480,6 +525,11 @@ extension OverlayPanel {
     // re-activation and the non-activating panel never regained key (`makeKey()`
     // alone doesn't grant it on this macOS), leaving no caret. Re-activate
     // whenever we aren't the key window so the panel reliably regains it.
+    // Deliberately still gated on `isKeyWindow`, not on caret liveness: the
+    // field editor is reused across opens, so a stale one can report a live
+    // caret before this open has activated Flash at all, and skipping
+    // activation there would send the user's keystrokes to the app behind.
+    // The request is idempotent, so asking once more costs nothing.
     if !NSApp.isActive || !isKeyWindow {
       requestApplicationActivationForKeyboardCapture()
     }
@@ -503,7 +553,12 @@ extension OverlayPanel {
       }
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
-      if !editing {
+      // Restarting the blink timer does not move the caret — the selection is
+      // synced above — so an async-merge re-render is safe to re-arm too. What
+      // is not safe is skipping it: a pass that finds the field already
+      // "editing" but the window not yet key used to leave the caret dead with
+      // no path back, because only the `!editing` branch could restart it.
+      if !editing || commandLineHoldsKeyboardFocus {
         (commandTextField.currentEditor() as? NSTextView)?
           .updateInsertionPointStateAndRestartTimer(true)
       }
@@ -512,29 +567,40 @@ extension OverlayPanel {
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
           + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode) "
           + "editor=\(commandTextField.currentEditor() != nil)")
+      let editorView = commandTextField.currentEditor() as? NSTextView
+      let drawsCaretDescription = editorView?.shouldDrawInsertionPoint.description ?? "no_editor"
+      FlashLog.trace(
+        "[overlay] capture_keyboard_key attempt=\(recoveryAttempt) "
+          + "visible=\(isVisible) on_active_space=\(isOnActiveSpace) "
+          + "is_key=\(isKeyWindow) app_key_is_self=\(NSApp.keyWindow === self) "
+          + "app_active=\(NSApp.isActive) draws_caret=\(drawsCaretDescription)")
       // Activation is granted asynchronously on modern macOS, so a single
       // makeKey() pass can land before we're active and leave the field
       // caret dead — and the normal-mode recapture ladder deliberately
       // skips while a modal is up, so nothing would ever retry. Run a
       // short bounded ladder of our own until the panel actually holds
       // key. Any newer capture pass supersedes it (generation).
-      if !isKeyWindow {
-        commandLineKeyRecoveryGeneration &+= 1
-        let generation = commandLineKeyRecoveryGeneration
-        for delayMs in [30, 80, 160, 320, 640] {
-          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
-            [weak self] in
-            guard let self,
-              self.commandLineKeyRecoveryGeneration == generation,
-              self.inputMode == .commandLine,
-              !self.isKeyWindow
-            else { return }
-            FlashLog.trace("[overlay] capture_keyboard key_retry delay=\(delayMs)")
-            self.captureKeyboardInput()
-          }
-        }
-      } else {
-        commandLineKeyRecoveryGeneration &+= 1
+      commandLineKeyRecoveryGeneration &+= 1
+      guard !commandLineHoldsKeyboardFocus else { return }
+      guard let delayMs = Self.commandLineKeyRecoveryDelayMs(afterAttempt: recoveryAttempt)
+      else {
+        FlashLog.warn(
+          "[overlay] capture_keyboard key_recovery_exhausted attempts=\(recoveryAttempt) "
+            + "active=\(NSApp.isActive) app_key_is_self=\(NSApp.keyWindow === self); "
+            + "command line has no caret")
+        return
+      }
+      let generation = commandLineKeyRecoveryGeneration
+      let nextAttempt = recoveryAttempt + 1
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+        guard let self,
+          self.commandLineKeyRecoveryGeneration == generation,
+          self.inputMode == .commandLine,
+          !self.commandLineHoldsKeyboardFocus
+        else { return }
+        FlashLog.trace(
+          "[overlay] capture_keyboard key_retry delay=\(delayMs) attempt=\(nextAttempt)")
+        self.captureKeyboardInput(recoveryAttempt: nextAttempt)
       }
       return
     }
@@ -556,20 +622,24 @@ extension OverlayPanel {
       frontDescription = "nil"
     }
 
+    let sourcePID = Self.activationSourcePID(
+      workspaceFrontPID: front?.processIdentifier,
+      lastNonFlashPID: lastNonFlashApplicationPID,
+      currentPID: current.processIdentifier)
     var acceptedFrom = false
-    if #available(macOS 14.0, *),
-      let front,
-      front.processIdentifier != current.processIdentifier
-    {
+    if #available(macOS 14.0, *) {
       NSApp.activate()
-      acceptedFrom = current.activate(from: front, options: [.activateAllWindows])
-    } else if #available(macOS 14.0, *) {
-      NSApp.activate()
+      if let sourcePID, let source = NSRunningApplication(processIdentifier: sourcePID),
+        !source.isTerminated
+      {
+        acceptedFrom = current.activate(from: source, options: [.activateAllWindows])
+      }
     }
     let acceptedDirect = current.activate(options: [.activateAllWindows])
     let activeAfterRequest = NSApp.isActive
     FlashLog.trace(
       "[overlay] capture_activation front=\(frontDescription) "
+        + "source=\(sourcePID.map(String.init) ?? "nil") "
         + "accepted_from=\(acceptedFrom) accepted_direct=\(acceptedDirect) "
         + "active=\(activeAfterRequest)")
     return activeAfterRequest || acceptedFrom || acceptedDirect

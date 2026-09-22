@@ -838,6 +838,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func refreshFocusDependentState(for app: NSRunningApplication) {
+    if app.bundleIdentifier != Bundle.main.bundleIdentifier {
+      overlay?.lastNonFlashApplicationPID = app.processIdentifier
+    }
     statusBarController?.updateFocusedApplication(app)
     registry.refreshRunningApplications()
     refreshEffectiveMappings(for: app.bundleIdentifier)
