@@ -275,6 +275,17 @@ extension AppDelegate {
       commitMouseGridCell(hint: hint, clickModifiers: held)
       return
     }
+    if hint.target.providerID == "statusbar", let raw = hint.target.url,
+      let url = URL(string: raw)
+    {
+      overlay.hide()
+      clearHintSessionState(preservingStatusBarSnapshot: true)
+      activationLifecycle.invalidate()
+      applyModeOverlay()
+      overlay.activateStatusBarLink(url)
+      overlay.releaseStatusBarHintSnapshot()
+      return
+    }
     if hint.target.role == AppDelegate.statusBarHoverHintRole {
       let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
       let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
@@ -421,9 +432,6 @@ extension AppDelegate {
         + "shift:\(gesture.modifiers.contains(.shift)) "
         + "ctrl:\(gesture.modifiers.contains(.control)) "
         + "alt:\(gesture.modifiers.contains(.option))")
-    if let target = gesture.target {
-      guard prepareCapturedStatusBarClick(target, at: gesture.point) else { return }
-    }
     if let pid = gesture.pid, gesture.target != nil {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
@@ -516,17 +524,6 @@ extension AppDelegate {
         cancelOverlay()
       }
     }
-  }
-
-  private func prepareCapturedStatusBarClick(_ target: JumpTarget, at point: CGPoint) -> Bool {
-    guard target.providerID == "statusbar" else { return true }
-    guard let rawURL = target.url, let url = URL(string: rawURL),
-      overlay.prepareStatusBarHintClick(url: url, at: point)
-    else {
-      cancelOverlay()
-      return false
-    }
-    return true
   }
 
   private func completeHintClick(

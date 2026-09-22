@@ -121,13 +121,6 @@ final class StatusBarClickView: NSView {
   private var mouseDownURL: URL?
   private var mouseDownPopup: StatusBarPopupRegion?
   private var rightMouseDownPopup: StatusBarPopupRegion?
-  private var hintedClick: (url: URL, point: CGPoint, timestamp: TimeInterval)?
-
-  func prepareHintClick(
-    url: URL, at point: CGPoint, timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
-  ) {
-    hintedClick = (url, point, timestamp)
-  }
 
   /// Movement past this (points) counts as a drag, not a click.
   static let dragSlop: CGFloat = 4
@@ -142,20 +135,16 @@ final class StatusBarClickView: NSView {
   override func mouseDown(with event: NSEvent) {
     mouseDownLocation = event.locationInWindow
     let local = convert(event.locationInWindow, from: nil)
-    let pending = hintedClick
-    hintedClick = nil
-    if let pending,
-      event.cgEvent?.getIntegerValueField(.eventSourceUserData)
-        == ActionDispatcher.syntheticMouseEventTag
-    {
-      mouseDownURL =
-        (0...1).contains(event.timestamp - pending.timestamp)
-          && Self.isClick(from: pending.point, to: local) ? pending.url : nil
-      mouseDownPopup = nil
-    } else {
-      mouseDownURL = links.first(where: { $0.rect.contains(local) })?.url
-      mouseDownPopup = popups.first(where: { $0.rect.contains(local) })
-    }
+    // Only physical clicks reach here now. A hinted status-bar link is opened
+    // straight from the hint's own URL (`activateStatusBarLink`) instead of
+    // being replayed as a synthetic click into this window, so there is no
+    // pending gesture to reconcile against whatever the bar published since.
+    mouseDownURL = links.first(where: { $0.rect.contains(local) })?.url
+    mouseDownPopup = popups.first(where: { $0.rect.contains(local) })
+    FlashLog.trace(
+      "[statusbar] click_down at=\(local) links=\(links.count) popups=\(popups.count) "
+        + "url=\(mouseDownURL?.absoluteString ?? "nil") "
+        + "popup=\(mouseDownPopup?.name ?? "nil")")
   }
 
   override func mouseUp(with event: NSEvent) {
@@ -166,8 +155,15 @@ final class StatusBarClickView: NSView {
     }
     guard let start = mouseDownLocation,
       Self.isClick(from: start, to: event.locationInWindow)
-    else { return }
+    else {
+      FlashLog.trace(
+        "[statusbar] click_up dropped had_down=\(mouseDownLocation != nil) treated_as=drag")
+      return
+    }
     let url = mouseDownURL
+    FlashLog.trace(
+      "[statusbar] click_up url=\(url?.absoluteString ?? "nil") "
+        + "popup=\(mouseDownPopup?.name ?? "nil")")
     if let popup = mouseDownPopup,
       Self.focusesPopup(overLink: url != nil, modifiers: event.modifierFlags)
     {
@@ -175,22 +171,40 @@ final class StatusBarClickView: NSView {
       onPopupClick?(popup, point)
       return
     }
-    if let url {
-      if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
-        onStatusBarAction?(action)
-        return
-      }
-      // `activates = true` brings the handling browser to the front and gives
-      // it keyboard focus. The plain `open(url)` opens the tab in the
-      // background (the click panel is non-activating, so the previously
-      // focused app keeps focus) — typing then lands in the old app.
-      let configuration = NSWorkspace.OpenConfiguration()
-      configuration.activates = true
-      NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)
-    }
+    if let url { activate(url: url) }
     // Non-link clicks are intentionally not forwarded (no super call): the band
     // is Flash's while the menu bar is folded, so the click stops here instead
     // of leaking to the wallpaper or the window underneath.
+  }
+
+  /// Follow a status-bar link: a `#[range=…]` action goes back to Flash, and
+  /// anything else opens in the handling app.
+  func activate(url: URL) {
+    if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
+      onStatusBarAction?(action)
+      return
+    }
+    Self.openExternally(url)
+  }
+
+  /// Hand a status-bar link to whichever app handles it.
+  ///
+  /// `activates = true` brings the handling browser to the front and gives it
+  /// keyboard focus. A plain `open(url)` opens the tab in the background — the
+  /// click panel is non-activating, so the previously focused app keeps focus
+  /// and typing lands in the old app.
+  static func openExternally(_ url: URL) {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    NSWorkspace.shared.open(url, configuration: configuration) { app, error in
+      if let error {
+        FlashLog.warn("[statusbar] link_open_failed url=\(url.absoluteString) error=\(error)")
+      } else {
+        FlashLog.trace(
+          "[statusbar] link_opened url=\(url.absoluteString) "
+            + "app=\(app?.bundleIdentifier ?? "nil")")
+      }
+    }
   }
 
   override func rightMouseDown(with event: NSEvent) {
@@ -529,15 +543,24 @@ extension OverlayPanel {
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
 
-  func prepareStatusBarHintClick(url: URL, at point: CGPoint) -> Bool {
-    guard
-      let window = statusBarClickWindows.first(where: {
-        $0.frame.contains(point) && $0.isVisible && !$0.ignoresMouseEvents
-      })
-    else { return false }
-    let local = window.clickView.convert(window.convertPoint(fromScreen: point), from: nil)
-    window.clickView.prepareHintClick(url: url, at: local)
-    return true
+  /// Follow a hinted status-bar link directly.
+  ///
+  /// This used to arm the click view with the URL and then synthesize a click
+  /// into the menu-bar band, hoping the event came back to Flash's own click
+  /// window. That chain has several ways to break — the pointer warp wakes the
+  /// native menu-bar reveal, the arming is matched by timestamp and proximity,
+  /// and the click has to be delivered to a window in the menu-bar band — and
+  /// when any link broke, the hint silently did nothing. The hint already
+  /// carries the URL the user picked, so follow it. Re-publication of the bar
+  /// in the meantime cannot change it either, which is what the arming was
+  /// protecting in the first place.
+  func activateStatusBarLink(_ url: URL) {
+    FlashLog.trace("[statusbar] hint_link url=\(url.absoluteString)")
+    if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
+      statusBarActionHandler?(action)
+      return
+    }
+    StatusBarClickView.openExternally(url)
   }
 
   func activateStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {

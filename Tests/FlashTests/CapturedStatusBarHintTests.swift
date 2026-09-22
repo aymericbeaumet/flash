@@ -27,18 +27,34 @@ final class CapturedStatusBarHintTests: XCTestCase {
     XCTAssertEqual(panel.statusBarLayoutRevision, revision + 1)
   }
 
-  func testCapturedHostClickKeepsSelectedActionAcrossPublicationBeforeMouseDown() throws {
+  /// A hinted link is followed from the URL the hint carried, so whatever the
+  /// bar published between showing the hint and committing it cannot redirect
+  /// the user somewhere else.
+  func testAHintedLinkFollowsTheSelectedActionNotWhateverTheBarPublishedSince() throws {
     let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 24))
-    let original = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "original"))
+    let selected = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "original"))
     let replacement = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "replacement"))
     var actions: [String] = []
     view.onStatusBarAction = { actions.append($0) }
-    view.prepareHintClick(url: original, at: CGPoint(x: 30, y: 12), timestamp: 10)
     view.links = [(view.bounds, replacement)]
-    try click(view, timestamp: 10.1, synthetic: true)
+    view.activate(url: selected)
     XCTAssertEqual(actions, ["original"])
-    try click(view, timestamp: 10.3, synthetic: true)
-    XCTAssertEqual(actions, ["original", "replacement"], "The captured action is consumed once")
+  }
+
+  /// The previous design replayed the hint as a synthetic click into Flash's
+  /// own menu-bar-band window and matched it back to an armed URL by timestamp
+  /// and proximity. Every step was a way for the gesture to vanish, so there
+  /// is no longer any arming to reconcile — following the link needs nothing
+  /// but the hint.
+  func testFollowingAHintedLinkDoesNotDependOnAMouseEvent() throws {
+    let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 24))
+    let selected = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "picked"))
+    var actions: [String] = []
+    view.onStatusBarAction = { actions.append($0) }
+    // No links published at all, and no click: the hint still resolves.
+    view.links = []
+    view.activate(url: selected)
+    XCTAssertEqual(actions, ["picked"])
   }
 
   func testPhysicalClickUsesWhatIsUnderThePointerAndKeepsItUntilMouseUp() throws {
@@ -48,21 +64,18 @@ final class CapturedStatusBarHintTests: XCTestCase {
     let next = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "next"))
     var actions: [String] = []
     view.onStatusBarAction = { actions.append($0) }
-    view.prepareHintClick(url: stale, at: CGPoint(x: 30, y: 12), timestamp: 10)
+    _ = stale
     view.links = [(view.bounds, current)]
     try click(view, timestamp: 10.1) { view.links = [(view.bounds, next)] }
     XCTAssertEqual(actions, ["current"])
   }
 
-  func testExpiredCapturedGestureCancelsInsteadOfOpeningAReplacement() throws {
+  func testAPhysicalClickOnEmptyBandDoesNothing() throws {
     let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 24))
-    let original = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "original"))
-    let replacement = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "replacement"))
     var actions: [String] = []
     view.onStatusBarAction = { actions.append($0) }
-    view.prepareHintClick(url: original, at: CGPoint(x: 30, y: 12), timestamp: 10)
-    view.links = [(view.bounds, replacement)]
-    try click(view, timestamp: 12, synthetic: true)
+    view.links = []
+    try click(view, timestamp: 12)
     XCTAssertTrue(actions.isEmpty)
   }
 
@@ -129,5 +142,21 @@ final class CapturedStatusBarHintTests: XCTestCase {
     view.mouseDown(with: down)
     between()
     view.mouseUp(with: up)
+  }
+}
+
+extension CapturedStatusBarHintTests {
+  /// Following a hinted link must not depend on a status-bar click window
+  /// existing or being mouse-enabled. Those windows are Flash's own, they come
+  /// and go with the bar's layout, and requiring one was part of why a hinted
+  /// link could silently do nothing.
+  func testAHintedRangeActionReachesTheHandlerWithNoClickWindows() throws {
+    let panel = OverlayPanel()
+    let url = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "bat-prefs"))
+    var actions: [String] = []
+    panel.statusBarActionHandler = { actions.append($0) }
+    XCTAssertTrue(panel.statusBarClickWindows.isEmpty)
+    panel.activateStatusBarLink(url)
+    XCTAssertEqual(actions, ["bat-prefs"])
   }
 }
