@@ -26,9 +26,13 @@ document-URL and mark commands remain available for explicit mappings.
   Tmux reorders its window, and Firefox receives Control-Shift-Page Up/Down.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
 - Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
-  screen position through the grid. The same prefix picks the click on either
-  surface: none for primary, `s` secondary, `D` double, `T` triple, `m` move.
-  So `Df` double-clicks an element and `DF` double-clicks a grid position.
+  screen position through the grid. A lowercase prefix picks the click on
+  either surface: none for primary, `s` secondary, `d` double, `m` move.
+  So `df` double-clicks an element and `dF` double-clicks a grid position.
+- A prefix letter must not also be a mapping of its own, or that mapping waits
+  for `sequence_timeout_ms` before it fires. Triple click therefore ships
+  unbound, because `tf` would stall the bare `t` (new tab). Bind `tf` / `tF`
+  in your own config if you want it, and drop your `t` mapping to match.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. Hint clicks jump directly to the selected target with the cursor
   hidden during repositioning, then leave the pointer at the clicked location.
@@ -38,7 +42,7 @@ document-URL and mark commands remain available for explicit mappings.
   and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
   the grid alike. Link text repeated in a terminal pane resolves to the copy
   under the hint.
-- `sF` / `DF` use mouse grid mode for secondary/double clicks.
+- `sF` / `dF` use mouse grid mode for secondary/double clicks.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.

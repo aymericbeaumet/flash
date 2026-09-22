@@ -52,15 +52,14 @@ extension NormalModeDispatcher {
 
         ## Mouse Targets
 
-        - `f` clicks a target in its current context (plain click; terminal links add Shift).
-        - `F` sends Command-Shift-click to open a target in a new context.
-        - `ctrl-f` starts mouse grid mode for a precise screen position.
-        - `ctrl-shift-f` starts the grid and sends Command-Shift-click at the final point.
-        - `sf` right-clicks a discovered target.
-        - `Df` double-clicks a discovered target.
-        - `mf` moves the cursor to a discovered target.
-        - `sF` / `DF` right-click or double-click with mouse grid mode.
-        - `mF` moves the cursor with mouse grid mode.
+        - `f` clicks a discovered target (plain click; terminal links add Shift).
+        - `F` starts mouse grid mode and clicks a precise screen position.
+        - `sf` / `sF` right-click a target or a grid position.
+        - `df` / `dF` double-click a target or a grid position.
+        - `mf` / `mF` move the cursor to a target or a grid position.
+        - Modifiers held on the final hint key ride the click, so `f` then
+          Command-Shift-`<hint>` is a Command-Shift click with no binding of its own.
+        - Triple click ships unbound: `tf` would stall the bare `t`. Bind it yourself.
 
         ## Command Line
 

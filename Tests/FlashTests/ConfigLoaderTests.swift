@@ -159,7 +159,7 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("sf") })?.action.command,
       .mouseTarget(.click(.rightClick, modifiers: [])))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("Df") })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("df") })?.action.command,
       .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
@@ -172,14 +172,14 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("sF") })?.action.command,
       .mouseGrid(.click(.rightClick, modifiers: [])))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("DF") })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("dF") })?.action.command,
       .mouseGrid(.click(.doubleClick, modifiers: [])))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("Tf") })?.action.command,
-      .mouseTarget(.click(.tripleClick, modifiers: [])))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("TF") })?.action.command,
-      .mouseGrid(.click(.tripleClick, modifiers: [])))
+    // Triple click ships unbound: `t` is the new-tab mapping, and a key that
+    // is both a mapping and the prefix of a longer one waits for the sequence
+    // timeout before it fires.
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("tf") }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("tF") }))
+    XCTAssertNotNil(c.mode.normal.first(where: { $0.key == key("t") }))
     // The modified variants are gone: magic modifiers on the final hint key
     // cover them, so there is nothing separate to bind.
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+f") }))

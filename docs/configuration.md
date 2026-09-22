@@ -95,8 +95,8 @@ leader = "\\"
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_grid"]
-"Df" = ["flash", "mouse_target", "--double"]
-"DF" = ["flash", "mouse_grid", "--double"]
+"df" = ["flash", "mouse_target", "--double"]
+"dF" = ["flash", "mouse_grid", "--double"]
 ```
 
 Mapping values are argv arrays, or inline tables with a `command` argv array and

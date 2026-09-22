@@ -399,13 +399,16 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]))
     XCTAssertNil(
       command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]))
-    // Every click prefix reaches both surfaces.
+    // Every click prefix reaches both surfaces, and they are all lowercase.
     XCTAssertEqual(
-      command(pending: "T", chars: "f"),
-      .mouseTarget(.click(.tripleClick, modifiers: [])))
+      command(pending: "m", chars: "f"),
+      .mouseTarget(.move))
     XCTAssertEqual(
-      command(pending: "T", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.click(.tripleClick, modifiers: [])))
+      command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]),
+      .mouseGrid(.move))
+    // Triple click ships unbound so `t` can stay the new-tab mapping: a key
+    // that is also the prefix of a longer one waits for the sequence timeout.
+    XCTAssertNotNil(command(chars: "t"))
     // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
     // pending sequence rather than yielding `nil`.
     XCTAssertEqual(transition(chars: "s").pending, "s")
@@ -419,13 +422,14 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.click(.rightClick, modifiers: [])))
+    // `d` is the double-click prefix, so it parks rather than yielding `nil`.
     XCTAssertNil(command(chars: "d"))
-    XCTAssertEqual(transition(chars: "D", ignoring: "d", flags: [.shift]).pending, "D")
+    XCTAssertEqual(transition(chars: "d").pending, "d")
     XCTAssertEqual(
-      command(pending: "D", chars: "f"),
+      command(pending: "d", chars: "f"),
       .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
-      command(pending: "D", chars: "F", ignoring: "f", flags: [.shift]),
+      command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.click(.doubleClick, modifiers: [])))
   }
 
@@ -2500,13 +2504,13 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in [
       "h", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "f", "F", "sf", "Df", "Tf", "mf", "sF",
-      "DF", "TF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
+      "gg", "G", "f", "F", "sf", "df", "mf", "sF",
+      "dF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "[a", "]a", "[t", "]t", "N{mapping}",
       "flash mouse_target",
       "flash mouse_target --secondary",
-      "flash mouse_target --double", "flash mouse_target --triple",
-      "flash mouse_grid", "flash mouse_grid --triple",
+      "flash mouse_target --double", "flash mouse_target --move",
+      "flash mouse_grid", "flash mouse_grid --double",
       "flash app_previous", "flash app_next", "flash app_undo", "flash app_redo", "?",
       "flash send_key --keys=cmd+shift+[", "flash send_key --keys=cmd+shift+]",
       "flash send_key --keys=cmd+t",
@@ -3152,5 +3156,25 @@ extension NormalModeTests {
   func testTheBorderHasNoTargetWhenNothingIsFocused() {
     XCTAssertNil(
       AppDelegate.activeWindowBorderTargetPID(activatedPID: nil, frontmostPID: nil))
+  }
+}
+
+extension NormalModeTests {
+  /// A key that is both a mapping of its own and the prefix of a longer one is
+  /// parked until `sequence_timeout_ms` elapses instead of firing. That is a
+  /// full second of apparent deadness on a key the user presses constantly, so
+  /// no shipped default may be shaped that way. This is the rule that keeps
+  /// triple click off `tf` while `t` opens a tab.
+  func testNoDefaultNormalMappingIsBothAnActionAndAPrefix() {
+    let keys = Config().mode.normal.map(\.key)
+    var offenders: [String] = []
+    for candidate in keys where keys.contains(where: { $0 != candidate && $0.hasPrefix(candidate) })
+    {
+      offenders.append(candidate)
+    }
+    XCTAssertEqual(
+      offenders.sorted(), [],
+      "these default mappings stall for the sequence timeout because a longer "
+        + "binding extends them")
   }
 }

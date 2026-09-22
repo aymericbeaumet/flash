@@ -492,18 +492,23 @@ struct Config {
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
         // Lowercase `f` targets discovered elements, uppercase `F` targets a
-        // screen position through the grid. The same prefix picks the click on
-        // either: none, `s`econdary, `D`ouble, `T`riple, `m`ove. Modifiers ride
-        // the final hint key (`hints.magic_modifiers`), so there are no
-        // separate modified bindings to remember.
+        // screen position through the grid. A lowercase prefix picks the click
+        // on either: none, `s`econdary, `d`ouble, `m`ove. Modifiers ride the
+        // final hint key (`hints.magic_modifiers`), so there are no separate
+        // modified bindings to remember.
+        //
+        // Every prefix letter must be free of a mapping of its own. The
+        // interpreter parks a key that is both an exact mapping and the prefix
+        // of a longer one until `sequence_timeout_ms` elapses, so binding `t`
+        // here would make a bare `t` (new tab) wait a full second. Triple
+        // click is deliberately unbound for that reason — add `"tf"` in your
+        // own config if you want it, and drop your `t` mapping to match.
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
         ("F", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
         ("sF", .flashCommand(.mouseGrid(.click(.rightClick, modifiers: [])))),
-        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
-        ("DF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
-        ("Tf", .flashCommand(.mouseTarget(.click(.tripleClick, modifiers: [])))),
-        ("TF", .flashCommand(.mouseGrid(.click(.tripleClick, modifiers: [])))),
+        ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
+        ("dF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.move))),
         ("u", .flashCommand(.undo)),
