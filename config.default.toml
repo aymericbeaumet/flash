@@ -412,15 +412,20 @@ leader = "\\"
 "ctrl+i" = ["flash", "movement_forward"]
 # f clicks normally; F applies the same Command-Shift gesture in every app.
 # Terminal links additionally require Shift so the terminal opens the link.
+# Lowercase f targets discovered elements, uppercase F targets a screen
+# position through the grid. The same prefix picks the click on either:
+# none, s(econdary), D(ouble), T(riple), m(ove). Modifiers ride the final
+# hint key (hints.magic_modifiers), so holding cmd+shift on it is a
+# Command-Shift click without a binding of its own.
 "f" = ["flash", "mouse_target"]
-"F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
-"ctrl+f" = ["flash", "mouse_grid"]
-"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
+"F" = ["flash", "mouse_grid"]
 "sf" = ["flash", "mouse_target", "--secondary"]
-"Df" = ["flash", "mouse_target", "--double"]
-"mf" = ["flash", "mouse_target", "--move"]
 "sF" = ["flash", "mouse_grid", "--secondary"]
+"Df" = ["flash", "mouse_target", "--double"]
 "DF" = ["flash", "mouse_grid", "--double"]
+"Tf" = ["flash", "mouse_target", "--triple"]
+"TF" = ["flash", "mouse_grid", "--triple"]
+"mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
 "u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]

@@ -164,15 +164,26 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
+    // `F` is the grid twin of `f`, and every click prefix works on both.
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
-      .mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("ctrl+f") })?.action.command,
       .mouseGrid(.click(.leftClick, modifiers: [])))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") })?.action.command,
-      .mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
+      c.mode.normal.first(where: { $0.key == key("sF") })?.action.command,
+      .mouseGrid(.click(.rightClick, modifiers: [])))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("DF") })?.action.command,
+      .mouseGrid(.click(.doubleClick, modifiers: [])))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("Tf") })?.action.command,
+      .mouseTarget(.click(.tripleClick, modifiers: [])))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("TF") })?.action.command,
+      .mouseGrid(.click(.tripleClick, modifiers: [])))
+    // The modified variants are gone: magic modifiers on the final hint key
+    // cover them, so there is nothing separate to bind.
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+f") }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.move))

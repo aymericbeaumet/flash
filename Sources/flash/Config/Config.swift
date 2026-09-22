@@ -491,18 +491,20 @@ struct Config {
         ("]m", .flashCommand(.tabMoveNext)),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
+        // Lowercase `f` targets discovered elements, uppercase `F` targets a
+        // screen position through the grid. The same prefix picks the click on
+        // either: none, `s`econdary, `D`ouble, `T`riple, `m`ove. Modifiers ride
+        // the final hint key (`hints.magic_modifiers`), so there are no
+        // separate modified bindings to remember.
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        ("F", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))),
-        ("ctrl+f", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
-        (
-          "ctrl+shift+f",
-          .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
-        ),
+        ("F", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
-        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
-        ("mf", .flashCommand(.mouseTarget(.move))),
         ("sF", .flashCommand(.mouseGrid(.click(.rightClick, modifiers: [])))),
+        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("DF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
+        ("Tf", .flashCommand(.mouseTarget(.click(.tripleClick, modifiers: [])))),
+        ("TF", .flashCommand(.mouseGrid(.click(.tripleClick, modifiers: [])))),
+        ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.move))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),

@@ -370,15 +370,21 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       command(chars: "f"),
       .mouseTarget(.click(.leftClick, modifiers: [])))
+    // `F` is the grid twin of `f`; the modified variants are gone because
+    // magic modifiers on the final hint key already provide them.
     XCTAssertEqual(
       command(chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
-    XCTAssertEqual(
-      command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]),
       .mouseGrid(.click(.leftClick, modifiers: [])))
+    XCTAssertNil(command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]))
+    XCTAssertNil(
+      command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]))
+    // Every click prefix reaches both surfaces.
     XCTAssertEqual(
-      command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]),
-      .mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
+      command(pending: "T", chars: "f"),
+      .mouseTarget(.click(.tripleClick, modifiers: [])))
+    XCTAssertEqual(
+      command(pending: "T", chars: "F", ignoring: "f", flags: [.shift]),
+      .mouseGrid(.click(.tripleClick, modifiers: [])))
     // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
     // pending sequence rather than yielding `nil`.
     XCTAssertEqual(transition(chars: "s").pending, "s")
@@ -2473,13 +2479,13 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in [
       "h", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "f", "F", "ctrl-f", "ctrl+shift+f", "sf", "Df", "mf", "sF",
-      "DF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
+      "gg", "G", "f", "F", "sf", "Df", "Tf", "mf", "sF",
+      "DF", "TF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "[a", "]a", "[t", "]t", "N{mapping}",
       "flash mouse_target",
-      "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
       "flash mouse_target --secondary",
-      "flash mouse_target --double", "flash mouse_grid",
+      "flash mouse_target --double", "flash mouse_target --triple",
+      "flash mouse_grid", "flash mouse_grid --triple",
       "flash app_previous", "flash app_next", "flash app_undo", "flash app_redo", "?",
       "flash send_key --keys=cmd+shift+[", "flash send_key --keys=cmd+shift+]",
       "flash send_key --keys=cmd+t",

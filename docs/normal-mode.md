@@ -25,15 +25,15 @@ document-URL and mark commands remain available for explicit mappings.
 - `[m` / `]m` move the current tab left/right; repeat `m` to continue moving it.
   Tmux reorders its window, and Firefox receives Control-Shift-Page Up/Down.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
-- `f`, `sf`, and `Df` target discovered clickable elements. Primary clicks
-  enter INSERT only on input targets; secondary clicks preserve NORMAL.
-- `mf` moves the cursor to a discovered target. Hint clicks jump directly to
-  the selected target with the cursor hidden during repositioning, then leave
-  the pointer at the clicked location.
-- `F` applies a Command-Shift hint click. `ctrl+f` / `ctrl+shift+f` apply the
-  same plain/modified clicks through mouse grid mode.
-- Terminal link hints add Shift, so `f` opens the link through the terminal;
-  `F` keeps Command-Shift. The hover and click carry the same modifiers.
+- Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
+  screen position through the grid. The same prefix picks the click on either
+  surface: none for primary, `s` secondary, `D` double, `T` triple, `m` move.
+  So `Df` double-clicks an element and `DF` double-clicks a grid position.
+- Primary clicks enter INSERT only on input targets; secondary clicks preserve
+  NORMAL. Hint clicks jump directly to the selected target with the cursor
+  hidden during repositioning, then leave the pointer at the clicked location.
+- Terminal link hints add Shift, so `f` opens the link through the terminal.
+  The hover and click carry the same modifiers.
 - Modifiers held on the final hint key ride the click (`hints.magic_modifiers`,
   and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
   the grid alike. Link text repeated in a terminal pane resolves to the copy
