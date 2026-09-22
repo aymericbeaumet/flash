@@ -38,10 +38,14 @@ contracts before changing a subsystem:
    Plugins are host-owned NDJSON stdio children, with stderr for diagnostics and
    stdin EOF for shutdown. No custom external IPC, sockets, Mach services,
    daemonized clients, `flash://` URL scheme or separate `flashctl` executable.
-5. No OCR, Vision, ScreenCaptureKit, screenshots, pixel capture or Screen
-   Recording permission. WindowServer metadata is allowed for geometry and
-   occlusion only. Accessibility is the grant for AX and the keyboard tap; do
-   not add Input Monitoring requests.
+5. No Flash process ever reads screen content: no OCR, Vision,
+   ScreenCaptureKit, `CGWindowListCreateImage`, `CGDisplayStream` or any other
+   in-process pixel read. WindowServer metadata is allowed, for geometry,
+   occlusion and window identity. Capture belongs to the `screenshot` plugin,
+   which spawns Apple's `screencapture` to write straight to the clipboard —
+   the one reason Flash holds Screen Recording, and no image data crosses a
+   Flash process even then. Accessibility is the grant for AX and the keyboard
+   tap; do not add Input Monitoring requests.
 6. Empty target discovery stays silent. Never show a no-targets banner.
 7. No backward-compatibility shims. Renames update code, bundled plugins,
    defaults, tests, docs and affected `~/.config/flash/flash.toml` entries together.

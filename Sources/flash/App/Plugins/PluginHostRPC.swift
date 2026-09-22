@@ -20,7 +20,10 @@ final class PluginHostRPC {
   /// — `core:focus.changed` alone is insufficient because Flash itself is
   /// the focused process while normal mode is active. Set by AppDelegate
   /// during plugin setup.
-  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)?
+  /// `windowID` is the frontmost window's WindowServer number — metadata, not
+  /// pixels. A plugin needs it to name a window to a capture tool without
+  /// making the user click one.
+  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String, windowID: CGWindowID?)?)?
   /// Executor for the `host.post_keys` RPC: posts a short synthesized chord
   /// sequence to a pid at the given interval. Set by AppDelegate so the
   /// posting can register each chord with the mappings dispatcher first
@@ -99,12 +102,14 @@ final class PluginHostRPC {
           reply(["ok": true, "present": false])
           return
         }
-        reply([
+        var payload: [String: Any] = [
           "ok": true,
           "present": true,
           "pid": Int(target.pid),
           "bundle_id": target.bundleID,
-        ])
+        ]
+        if let windowID = target.windowID { payload["window_id"] = Int(windowID) }
+        reply(payload)
       }
     case "host.activate":
       guard capabilities.contains(.appControl) else {

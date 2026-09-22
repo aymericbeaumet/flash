@@ -44,6 +44,9 @@ const HOST_TIMEOUT_ERROR: &str = "host call timed out";
 pub struct NormalModeTarget {
     pub pid: i64,
     pub bundle_id: String,
+    /// The frontmost window's WindowServer id, when it has one. Metadata
+    /// only — it names a window without reading anything from it.
+    pub window_id: Option<i64>,
 }
 
 /// Per-process runtime handed to every plugin callback. Holds identity, the
@@ -433,7 +436,14 @@ impl Context {
         if pid <= 0 || bundle_id.is_empty() {
             return None;
         }
-        Some(NormalModeTarget { pid, bundle_id })
+        Some(NormalModeTarget {
+            pid,
+            bundle_id,
+            window_id: result
+                .get("window_id")
+                .and_then(Value::as_i64)
+                .filter(|id| *id > 0),
+        })
     }
 
     /// Activate (raise) the app owning `pid` (`host.activate`). Requires the

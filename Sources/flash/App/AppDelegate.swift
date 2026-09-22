@@ -288,10 +288,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.pluginStateDidChange()
     }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
-      guard let context = self?.normalModeContext() ?? self?.currentNonFlashContext() else {
-        return nil
-      }
-      return (pid: context.processID, bundleID: context.bundleIdentifier)
+      guard let self,
+        let context = self.normalModeContext() ?? self.currentNonFlashContext()
+      else { return nil }
+      let window = HintWindowSnapshot.current(
+        pid: context.processID, primaryHeight: self.monitor.primaryScreenHeight())
+      return (
+        pid: context.processID, bundleID: context.bundleIdentifier, windowID: window?.number
+      )
     }
     pluginManager.onNotifyRequested = { [weak self] message, durationMs in
       self?.overlay.displayBanner(message, durationMs: durationMs)

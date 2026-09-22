@@ -267,7 +267,9 @@ Notifications:
 
 Host RPCs, capability-gated default-deny (checked per process against the
 manifest; the full method↔capability table lives in `protocol.json`):
-`host.ping`, `host.fetch` (`network_fetch`), `host.normal_mode_target` +
+`host.ping`, `host.fetch` (`network_fetch`), `host.normal_mode_target`
+(which also reports the focused window's WindowServer `window_id`, so a plugin
+can name a window without asking the user to pick one) +
 `host.activate` (`app_control`), `host.open` (`open`), `host.post_media_key`
 (`media_keys`), `host.process_table` + `host.signal` (`process_control`),
 `host.clipboard_write` (`clipboard`), `host.notify` (`notify`),

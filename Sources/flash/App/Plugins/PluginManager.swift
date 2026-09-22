@@ -161,7 +161,8 @@ final class PluginManager {
   }
   /// See `PluginHostRPC.onNormalModeTargetRequested`; forwarded so
   /// AppDelegate wiring stays on the manager.
-  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)? {
+  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String, windowID: CGWindowID?)?)?
+  {
     get { hostRPC.onNormalModeTargetRequested }
     set { hostRPC.onNormalModeTargetRequested = newValue }
   }
