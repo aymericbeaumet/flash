@@ -310,12 +310,25 @@ final class PluginHostRPCArmTests: XCTestCase {
 
   func testNormalModeTargetReportsTheResolvedTargetOrAbsence() {
     let rpc = PluginHostRPC()
-    rpc.onNormalModeTargetRequested = { (pid: 42, bundleID: "com.example.app") }
+    rpc.onNormalModeTargetRequested = {
+      (pid: 42, bundleID: "com.example.app", windowID: CGWindowID(9_001))
+    }
     let reply = hostReply(rpc, "host.normal_mode_target", [:], capabilities: [.appControl])
     XCTAssertEqual(reply["ok"] as? Bool, true)
     XCTAssertEqual(reply["present"] as? Bool, true)
     XCTAssertEqual(reply["pid"] as? Int, 42)
     XCTAssertEqual(reply["bundle_id"] as? String, "com.example.app")
+    // Window identity travels with the target so a plugin can name a window
+    // without asking the user to pick one.
+    XCTAssertEqual(reply["window_id"] as? Int, 9_001)
+
+    // A target with no resolvable window simply omits the id.
+    rpc.onNormalModeTargetRequested = {
+      (pid: 42, bundleID: "com.example.app", windowID: nil)
+    }
+    let windowless = hostReply(rpc, "host.normal_mode_target", [:], capabilities: [.appControl])
+    XCTAssertEqual(windowless["present"] as? Bool, true)
+    XCTAssertNil(windowless["window_id"])
 
     rpc.onNormalModeTargetRequested = { nil }
     let absent = hostReply(rpc, "host.normal_mode_target", [:], capabilities: [.appControl])

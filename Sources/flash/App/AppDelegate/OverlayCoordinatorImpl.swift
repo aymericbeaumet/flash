@@ -443,13 +443,12 @@ extension AppDelegate {
     // Raise the owning app before posting so the surface interprets the event.
     // The hinted window is on screen by construction, so no minimized-window
     // AX probe; and when the app already is frontmost there is nothing to
-    // settle, so the events go out on this turn instead of after a delay.
+    // settle, so the events go out on this turn.
     let targetApp = gesture.pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let targetAlreadyFrontmost =
-      targetApp.map {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.processIdentifier
-      } ?? true
-    if let targetApp, !targetAlreadyFrontmost {
+    let needsHandoff = Self.hintCommitNeedsFrontmostHandoff(
+      targetPID: gesture.pid,
+      frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    if let targetApp, needsHandoff {
       RunningApplicationActivation.activate(
         targetApp, options: [], restoringMinimizedWindows: false)
     }
@@ -457,7 +456,9 @@ extension AppDelegate {
       LastCommittedClick(
         point: gesture.point, action: $0, modifiers: gesture.modifiers, pid: gesture.pid)
     }
-    performHintCommit(delayMs: targetAlreadyFrontmost ? 0 : 20, recording: recorded) { finished in
+    performHintCommit(
+      awaitingFrontmost: needsHandoff ? gesture.pid : nil, recording: recorded
+    ) { finished in
       switch gesture.kind {
       case .click(let action):
         ActionDispatcher.synthesizeClick(
@@ -609,7 +610,12 @@ extension AppDelegate {
         decision: decision, click: click, targetPID: targetPID),
       let click
     else { return }
-    if let targetPID, let app = NSRunningApplication(processIdentifier: targetPID) {
+    let needsHandoff = Self.hintCommitNeedsFrontmostHandoff(
+      targetPID: targetPID,
+      frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    if let targetPID, needsHandoff,
+      let app = NSRunningApplication(processIdentifier: targetPID)
+    {
       RunningApplicationActivation.activate(app, options: [])
     }
     FlashLog.trace(
@@ -619,10 +625,19 @@ extension AppDelegate {
         + "shift:\(click.modifiers.contains(.shift)) "
         + "ctrl:\(click.modifiers.contains(.control)) "
         + "alt:\(click.modifiers.contains(.option))")
-    _ = ActionDispatcher.synthesizeClick(
-      at: click.location,
-      action: click.action,
-      modifiers: click.modifiers)
+    let post = {
+      _ = ActionDispatcher.synthesizeClick(
+        at: click.location,
+        action: click.action,
+        modifiers: click.modifiers)
+    }
+    // Same race as a hint commit: the click this replaces was spent on
+    // activation, so re-posting before the app is forward spends it again.
+    if let targetPID, needsHandoff {
+      whenFrontmost(pid: targetPID, then: post)
+    } else {
+      post()
+    }
   }
 
   static func physicalPointerClickShouldBeForwarded(
@@ -795,7 +810,10 @@ extension AppDelegate {
     }
     guard prepareHintActivation(.repeatLast(repeatCount)) else { return }
     let wasNormalMode = flashMode == .normal
-    if let pid = last.pid,
+    let needsHandoff = Self.hintCommitNeedsFrontmostHandoff(
+      targetPID: last.pid,
+      frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    if let pid = last.pid, needsHandoff,
       let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated
     {
       RunningApplicationActivation.activate(app, options: [])
@@ -806,7 +824,7 @@ extension AppDelegate {
     // The click queue is serial, so posting the repeats back-to-back keeps
     // them ordered; only the final one carries the recapture completion.
     let count = max(1, repeatCount)
-    performHintCommit { finished in
+    performHintCommit(awaitingFrontmost: needsHandoff ? last.pid : nil) { finished in
       for index in 1...count {
         _ = ActionDispatcher.synthesizeClick(
           at: last.point,

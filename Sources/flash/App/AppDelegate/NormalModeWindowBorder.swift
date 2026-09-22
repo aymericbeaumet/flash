@@ -19,7 +19,22 @@ enum ActiveWindowBorderSessionSuspension: Hashable {
 }
 
 extension AppDelegate {
-  func updateActiveWindowBorder(reason: String) {
+  /// Which app the stroke must frame.
+  ///
+  /// `NSWorkspace.shared.frontmostApplication` settles asynchronously: for
+  /// tens of milliseconds after an activation notification it still names the
+  /// app the user just left. Resolving the border target through it drew the
+  /// stroke around the *previous* window, and nothing corrected it until the
+  /// new app happened to emit an AX geometry notification — several hundred
+  /// milliseconds, or the next app switch. The notification names the app that
+  /// activated, so when one is in hand it wins.
+  static func activeWindowBorderTargetPID(
+    activatedPID: pid_t?, frontmostPID: pid_t?
+  ) -> pid_t? {
+    activatedPID ?? frontmostPID
+  }
+
+  func updateActiveWindowBorder(reason: String, activated: NSRunningApplication? = nil) {
     guard
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
@@ -36,20 +51,52 @@ extension AppDelegate {
     // is applied one hop later unless a newer update or hide superseded it.
     activeWindowBorderUpdateGeneration &+= 1
     let generation = activeWindowBorderUpdateGeneration
-    guard let app = activeWindowBorderApplication() else {
+    guard let app = activeWindowBorderApplication(activated: activated) else {
       applyActiveWindowBorder(frame: nil)
       return
     }
     let pid = app.processIdentifier
     let primaryH = monitor.primaryScreenHeight()
     let monitor: AppMonitor = self.monitor
+    // Paint what the AX notifications last told us about this app right away.
+    // The authoritative read below supersedes it a hop later, under the same
+    // generation, so a stale entry self-corrects instead of persisting.
+    if let cached = activeWindowBorderFrameCache[pid] {
+      FlashLog.trace(
+        "[mode] active_border_cached reason=\(reason) pid=\(pid) frame=\(Self.describe(cached))")
+      applyActiveWindowBorder(frame: cached)
+    }
+    let requestedAt = DispatchTime.now().uptimeNanoseconds
     monitor.geometryQueue.async { [weak self] in
+      let startedAt = DispatchTime.now().uptimeNanoseconds
       let frame = AppMonitor.topApplicationWindowFrame(for: pid, primaryH: primaryH)
+      let readAt = DispatchTime.now().uptimeNanoseconds
       DispatchQueue.main.async {
         guard let self, self.activeWindowBorderUpdateGeneration == generation else { return }
+        FlashLog.trace(
+          "[mode] active_border_frame reason=\(reason) pid=\(pid) "
+            + "queue_wait_ms=\(Self.elapsedMs(requestedAt, startedAt)) "
+            + "read_ms=\(Self.elapsedMs(startedAt, readAt)) "
+            + "total_ms=\(Self.elapsedMs(requestedAt, DispatchTime.now().uptimeNanoseconds)) "
+            + "frame=\(Self.describe(frame))")
         self.applyActiveWindowBorder(frame: frame)
+        self.rememberActiveWindowBorderFrame(frame, for: pid)
       }
     }
+  }
+
+  /// Record what the front window of `pid` looks like now, so the next
+  /// activation of that app can paint before any WindowServer round trip.
+  func rememberActiveWindowBorderFrame(_ frame: CGRect?, for pid: pid_t) {
+    if let frame {
+      activeWindowBorderFrameCache[pid] = frame
+    } else {
+      activeWindowBorderFrameCache.removeValue(forKey: pid)
+    }
+  }
+
+  func forgetActiveWindowBorderFrames(for pid: pid_t) {
+    activeWindowBorderFrameCache.removeValue(forKey: pid)
   }
 
   /// A move or resize names the window that changed, so its geometry is one
@@ -87,10 +134,20 @@ extension AppDelegate {
             statusBarReservesSpace: statusBarReservesSpace,
             statusBarMonitor: statusBarMonitor)
         }
+        self.rememberActiveWindowBorderFrame(frame, for: pid)
         guard borderVisible, self.activeWindowBorderUpdateGeneration == generation else { return }
         self.applyActiveWindowBorder(frame: frame)
       }
     }
+  }
+
+  static func elapsedMs(_ from: UInt64, _ to: UInt64) -> String {
+    String(format: "%.1f", Double(to &- from) / 1_000_000)
+  }
+
+  static func describe(_ frame: CGRect?) -> String {
+    guard let frame else { return "nil" }
+    return "(\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width)),\(Int(frame.height)))"
   }
 
   private func applyActiveWindowBorder(frame: CGRect?) {
@@ -133,6 +190,11 @@ extension AppDelegate {
     }
   }
 
+  /// Reconciliation ticks run on the main thread, so the WindowServer lookup
+  /// they need must not. That scan blocks for half a second whenever an app
+  /// activation has the window list in flux — measured repeatedly at ~500 ms
+  /// — and on main that stalls keyboard handling and every overlay redraw
+  /// along with the stroke it was trying to place.
   func reconcileActiveWindowBorder(reason: String) {
     guard
       Self.activeWindowBorderShouldBeVisible(
@@ -145,7 +207,25 @@ extension AppDelegate {
       return
     }
 
-    let frame = activeWindowBorderContext()?.frontWindowFrame
+    activeWindowBorderUpdateGeneration &+= 1
+    let generation = activeWindowBorderUpdateGeneration
+    guard let app = activeWindowBorderApplication() else {
+      applyActiveWindowBorderReconciliation(frame: nil, reason: reason)
+      return
+    }
+    let pid = app.processIdentifier
+    let primaryH = monitor.primaryScreenHeight()
+    monitor.geometryQueue.async { [weak self] in
+      let frame = AppMonitor.topApplicationWindowFrame(for: pid, primaryH: primaryH)
+      DispatchQueue.main.async {
+        guard let self, self.activeWindowBorderUpdateGeneration == generation else { return }
+        self.rememberActiveWindowBorderFrame(frame, for: pid)
+        self.applyActiveWindowBorderReconciliation(frame: frame, reason: reason)
+      }
+    }
+  }
+
+  private func applyActiveWindowBorderReconciliation(frame: CGRect?, reason: String) {
     switch Self.activeWindowBorderReconciliationAction(
       trackedFrame: activeWindowBorderTrackedFrame,
       currentFrame: frame,
@@ -291,19 +371,17 @@ extension AppDelegate {
   /// Mode is global/sticky, so the border target is simply the currently
   /// focused non-Flash app (the old per-insert "owner pid" is gone). Identity
   /// only — no WindowServer geometry.
-  private func activeWindowBorderApplication() -> NSRunningApplication? {
-    guard let app = currentNonFlashRunningApplication(),
+  private func activeWindowBorderApplication(
+    activated: NSRunningApplication? = nil
+  ) -> NSRunningApplication? {
+    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
+    let preferred =
+      activated.flatMap { $0.bundleIdentifier == flashBundleIdentifier ? nil : $0 }
+    guard let app = preferred ?? currentNonFlashRunningApplication(),
       !app.isTerminated,
       !Self.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: app.bundleIdentifier)
     else { return nil }
     return app
-  }
-
-  /// Reconciliation ticks run off the keypress path and may resolve the frame
-  /// synchronously in one WindowServer snapshot.
-  private func activeWindowBorderContext() -> AppContext? {
-    guard let app = activeWindowBorderApplication() else { return nil }
-    return monitor.appWindowContext(for: app.processIdentifier)
   }
 
 }

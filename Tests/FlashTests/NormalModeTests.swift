@@ -366,6 +366,27 @@ final class NormalModeTests: XCTestCase {
       command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
   }
 
+  func testHintCommitWaitsForFocusOnlyWhenTheTargetIsNotAlreadyFrontmost() {
+    // Repro for hint clicks that "don't go through": `activate` is advisory
+    // and asynchronous, so a click posted on a fixed delay lands on whichever
+    // app is still frontmost. Measured at 9 of 43 clicks hitting the wrong
+    // app before this waited for the real handoff.
+    XCTAssertTrue(
+      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: 501, frontmostPID: 777))
+    // Flash itself being frontmost is the same problem, not an exemption.
+    XCTAssertTrue(
+      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: 501, frontmostPID: nil))
+    // Already there: post on this turn, no wait, no delay.
+    XCTAssertFalse(
+      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: 501, frontmostPID: 501))
+    // Nothing to hand off to.
+    XCTAssertFalse(
+      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: nil, frontmostPID: 501))
+    // Bounded, so an app that refuses activation still gets its click.
+    XCTAssertGreaterThanOrEqual(AppDelegate.frontmostHandoffTimeoutMs, 200)
+    XCTAssertLessThanOrEqual(AppDelegate.frontmostHandoffTimeoutMs, 1_000)
+  }
+
   func testMouseTargetAndGridCurrentAndNewTabMappings() {
     XCTAssertEqual(
       command(chars: "f"),
@@ -3109,5 +3130,27 @@ final class NormalModeTests: XCTestCase {
       subtitle: "app",
       bundleIdentifier: bundleIdentifier,
       url: URL(fileURLWithPath: path))
+  }
+}
+
+extension NormalModeTests {
+  func testTheBorderFollowsTheActivatedAppNotTheLaggyFrontmostPointer() {
+    // The regression: switching from Messages to Alacritty left the stroke
+    // around the Messages window because `frontmostApplication` still named
+    // Messages when the border update ran.
+    XCTAssertEqual(
+      AppDelegate.activeWindowBorderTargetPID(activatedPID: 4242, frontmostPID: 99),
+      4242)
+  }
+
+  func testTheBorderFallsBackToTheFrontmostPointerWithoutAnActivation() {
+    XCTAssertEqual(
+      AppDelegate.activeWindowBorderTargetPID(activatedPID: nil, frontmostPID: 99),
+      99)
+  }
+
+  func testTheBorderHasNoTargetWhenNothingIsFocused() {
+    XCTAssertNil(
+      AppDelegate.activeWindowBorderTargetPID(activatedPID: nil, frontmostPID: nil))
   }
 }

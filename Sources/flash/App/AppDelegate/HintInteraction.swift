@@ -29,9 +29,13 @@ extension AppDelegate {
       var points: [CGPoint] = []
       for selection in selections {
         guard let point = selection.target.resolvedClickPoint(preferred: selection.point) else {
-          FlashLog.debug(
+          // The gesture is dropped here: the user pressed a hint label and
+          // gets no click at all, so this is warn-level, not a trace crumb.
+          FlashLog.warn(
             "[commit] captured_target_unavailable provider=\(selection.target.providerID) "
-              + "role=\(selection.target.role ?? "?")")
+              + "role=\(selection.target.role ?? "?") "
+              + "label=\(selection.target.accessibilityLabel ?? "?") "
+              + "point=(\(Int(selection.point.x)),\(Int(selection.point.y))); click dropped")
           DispatchQueue.main.async {
             guard let self, self.activationLifecycle.complete(token: token) else { return }
             self.cancelOverlay()
@@ -79,8 +83,58 @@ extension AppDelegate {
 
   /// The token covers the delay, dispatch, and completion. Input which has
   /// started always finishes; cancellation only suppresses its UI/mode outcome.
+  /// How long a commit will wait for the target app to actually come
+  /// forward. Long enough for a real handoff, short enough that an app which
+  /// refuses activation still gets its click instead of the gesture vanishing.
+  static let frontmostHandoffTimeoutMs = 400
+
+  /// Whether the click has to wait for a focus handoff at all.
+  static func hintCommitNeedsFrontmostHandoff(
+    targetPID: pid_t?, frontmostPID: pid_t?
+  ) -> Bool {
+    guard let targetPID else { return false }
+    return targetPID != frontmostPID
+  }
+
+  /// `NSRunningApplication.activate` is advisory and asynchronous: it returns
+  /// long before the app is frontmost. A click posted in that window lands on
+  /// whoever still is — macOS spends it raising a window, or another app eats
+  /// it outright — which is the hint click that "doesn't go through". Wait for
+  /// the workspace to confirm the switch instead of guessing at a delay, and
+  /// fall back after `frontmostHandoffTimeoutMs` so a refusing app cannot
+  /// strand the gesture.
+  func whenFrontmost(pid: pid_t, then body: @escaping () -> Void) {
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+      body()
+      return
+    }
+    var observer: NSObjectProtocol?
+    var settled = false
+    let finish: (Bool) -> Void = { confirmed in
+      guard !settled else { return }
+      settled = true
+      if let observer { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+      if !confirmed {
+        FlashLog.warn(
+          "[click] focus handoff timed out pid=\(pid) "
+            + "after=\(Self.frontmostHandoffTimeoutMs)ms; clicking anyway")
+      }
+      body()
+    }
+    observer = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+    ) { note in
+      let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+      guard app?.processIdentifier == pid else { return }
+      finish(true)
+    }
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.frontmostHandoffTimeoutMs)
+    ) { finish(false) }
+  }
+
   func performHintCommit(
-    delayMs: Int = 0,
+    awaitingFrontmost awaitedPID: pid_t? = nil,
     recording click: LastCommittedClick? = nil,
     action: @escaping (@escaping () -> Void) -> Void,
     completion: @escaping (AppDelegate) -> Void
@@ -104,10 +158,10 @@ extension AppDelegate {
         if let replacement = result.replacement { self.performHintActivation(replacement) }
       }
     }
-    if delayMs == 0 {
-      start()
+    if let awaitedPID {
+      whenFrontmost(pid: awaitedPID, then: start)
     } else {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: start)
+      start()
     }
   }
 

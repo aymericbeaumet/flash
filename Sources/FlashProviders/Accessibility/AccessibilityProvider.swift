@@ -390,26 +390,89 @@ public final class AccessibilityProvider: FlashSource {
 
     // A scrolled-out object can retain valid geometry underneath another
     // control. Require the live hit to belong to the retained AX object.
+    //
+    // A single probe point is not enough to decide that. Wide containers —
+    // list rows and table cells above all — routinely carry a button or a link
+    // across their midpoint, and vetoing on that one sample dropped the whole
+    // gesture: the user pressed a hint label and nothing happened at all.
+    // Sample a few spots inside the element's live frame instead, and only
+    // give up when every one of them resolves to somebody else.
     let application = AXApp.make(pid: pid)
+    for candidate in hintPointCandidates(preferred: point, in: frame) {
+      switch hitTestOutcome(
+        application: application, element: element, at: candidate, screenH: screenH,
+        allowsInteractiveDescendants: allowsInteractiveDescendants)
+      {
+      case .matches:
+        return candidate
+      case .unavailable:
+        // The hit test itself failed. It is a refinement, not a precondition,
+        // so fall back to what the overlay drew rather than eating the click.
+        return candidate
+      case .foreign:
+        continue
+      }
+    }
+    return nil
+  }
+
+  enum HintHitTestOutcome {
+    /// The probe point resolves to the retained element (or a non-interactive
+    /// descendant of it).
+    case matches
+    /// The probe point belongs to a different interactive control.
+    case foreign
+    /// The Accessibility hit test could not answer.
+    case unavailable
+  }
+
+  /// Probe points for the commit-time hit test, preferred point first, then a
+  /// short sweep of the element's own frame. The insets stay inside the frame
+  /// for any size, so a degenerate rect simply repeats its own centre and the
+  /// duplicates are dropped.
+  static func hintPointCandidates(preferred: CGPoint, in frame: CGRect) -> [CGPoint] {
+    guard frame.width > 0, frame.height > 0 else { return [preferred] }
+    let insetX = min(6, frame.width / 4)
+    let insetY = min(6, frame.height / 4)
+    let alternates = [
+      CGPoint(x: frame.minX + insetX, y: frame.midY),
+      CGPoint(x: frame.maxX - insetX, y: frame.midY),
+      CGPoint(x: frame.midX, y: frame.minY + insetY),
+      CGPoint(x: frame.midX, y: frame.maxY - insetY),
+    ]
+    var result = [preferred]
+    for candidate in alternates
+    where !result.contains(where: {
+      abs($0.x - candidate.x) < 1 && abs($0.y - candidate.y) < 1
+    }) {
+      result.append(candidate)
+    }
+    return result
+  }
+
+  private static func hitTestOutcome(
+    application: AXUIElement, element: AXUIElement, at point: CGPoint, screenH: CGFloat,
+    allowsInteractiveDescendants: Bool
+  ) -> HintHitTestOutcome {
     var hit: AXUIElement?
     guard
       AXUIElementCopyElementAtPosition(
         application, Float(point.x), Float(screenH - point.y), &hit) == .success
-    else { return nil }
+    else { return .unavailable }
     for _ in 0..<32 {
-      guard let current = hit else { return nil }
-      if CFEqual(current, element) { return point }
+      guard let current = hit else { return .unavailable }
+      if CFEqual(current, element) { return .matches }
       // Scrolling targets their container, including its interactive children.
       // Click hints must not redirect to a different interactive child.
       if !allowsInteractiveDescendants, let role = AXAttribute.role(current),
         ["AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem"]
           .contains(role) || JumpTarget.textInputRoles.contains(role)
       {
-        return nil
+        return .foreign
       }
       hit = AXAttribute.element(current, kAXParentAttribute as String)
     }
-    return nil
+    return .unavailable
   }
 
   private static func readHintSnapshot(_ element: AXUIElement, screenH: CGFloat)

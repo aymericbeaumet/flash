@@ -222,6 +222,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderUpdateGeneration: UInt64 = 0
   var activeWindowBorderTrackedFrame: CGRect?
+  /// Last frame observed for each app's front window, fed by the AX geometry
+  /// notifications Flash already subscribes to. On an app switch the
+  /// WindowServer scan can block for half a second, which is exactly how long
+  /// the stroke used to sit on the window the user just left; the cache paints
+  /// the right rectangle on the activation itself and the scan corrects it.
+  var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>()
   var activationInFlight: Bool { activationLifecycle.inFlight }
@@ -566,6 +572,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
         self.applyFocusedApplicationChange(app, reason: "focus_changed", emitFocusEvent: true)
         self.cancelOverlay()
+        // Move the stroke on the activation itself rather than waiting for the
+        // new app's first AX geometry notification. `app` is authoritative
+        // here; the workspace's frontmost pointer is not yet. The recovery
+        // ticks then absorb an app that reports its window geometry late.
+        self.updateActiveWindowBorder(reason: "app_activated", activated: app)
+        self.scheduleActiveWindowBorderReconciliation(
+          delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "app_activated")
         if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
           self.scheduleNormalModeRecapture()
         }
@@ -627,6 +640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.registry.refreshRunningApplications()
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
+        self.forgetActiveWindowBorderFrames(for: app.processIdentifier)
         if app.processIdentifier == self.observedFocusedAppPID {
           self.hideActiveWindowBorder(reason: "app_terminated")
           DispatchQueue.main.async {
