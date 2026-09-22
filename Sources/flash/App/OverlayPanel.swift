@@ -147,6 +147,9 @@ final class OverlayPanel: NSPanel {
   /// source even when the workspace's frontmost pointer is stale or reports
   /// Flash itself. Written by the focus-change path in `AppDelegate`.
   var lastNonFlashApplicationPID: pid_t?
+
+  /// Supersedes a pending caret re-arm when a newer command-line open starts.
+  var commandLineCaretRearmGeneration: UInt64 = 0
   /// Dispatches a named `#[range=user|<name>]` status-bar click through the
   /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
   /// consumed by the click windows and the `f`-hint activation path.
@@ -535,8 +538,7 @@ final class OverlayPanel: NSPanel {
       commandTextField.isHidden = false
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
-      (commandTextField.currentEditor() as? NSTextView)?
-        .updateInsertionPointStateAndRestartTimer(true)
+      rearmCommandLineCaret()
     }
   }
 

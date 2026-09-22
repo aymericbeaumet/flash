@@ -485,6 +485,33 @@ extension OverlayPanel {
     return isKeyWindow || NSApp.keyWindow === self
   }
 
+  /// Restart the field editor's insertion-point blink. Idempotent, and it does
+  /// not move the caret — the selection is owned by
+  /// `syncCommandTextFieldSelection` — so it is safe to repeat.
+  func rearmCommandLineCaret() {
+    guard inputMode == .commandLine,
+      let editor = commandTextField.currentEditor() as? NSTextView
+    else { return }
+    editor.updateInsertionPointStateAndRestartTimer(true)
+  }
+
+  /// Delays for the post-open caret re-arm. Two turns: the next one, and one
+  /// far enough out to be past an activation handoff. Deliberately a fixed,
+  /// tiny list rather than a retry loop — arming is idempotent and there is no
+  /// state to poll for.
+  static let commandLineCaretRearmDelaysMs = [0, 80]
+
+  private func scheduleCommandLineCaretRearm() {
+    commandLineCaretRearmGeneration &+= 1
+    let generation = commandLineCaretRearmGeneration
+    for delayMs in Self.commandLineCaretRearmDelaysMs {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+        guard let self, self.commandLineCaretRearmGeneration == generation else { return }
+        self.rearmCommandLineCaret()
+      }
+    }
+  }
+
   func captureKeyboardInput(recoveryAttempt: Int = 0) {
     let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
@@ -539,30 +566,33 @@ extension OverlayPanel {
     let responderDescription: String
     if inputMode == .commandLine {
       commandTextField.isHidden = false
-      // The field editor is reused across open/close cycles. A *stale* editor can
-      // persist (so `currentEditor() != nil` even though the field isn't focused),
-      // making the refocus a no-op and leaving no caret on the 2nd+ open. The
-      // reliable "actually editing" signal is that the live first responder IS
-      // this field's editor. On a real (re)open it isn't, so force a clean refocus
-      // (resign first → rebuild the editor) and restart the blink timer; on an
-      // async-merge re-render the field IS editing, so leave it untouched.
-      let editing =
-        firstResponder != nil && firstResponder === commandTextField.currentEditor()
-      if !editing {
-        makeFirstResponder(nil)
-      }
+      // The field editor is reused across open/close cycles, and a reused one
+      // arrives carrying the previous session's insertion-point state. When
+      // that state already looked correct, nothing re-armed the blink and the
+      // command line opened with no visible cursor until the first keystroke
+      // redrew it — which is exactly the reported symptom: always able to
+      // type, cursor appears on the first character.
+      //
+      // The old code skipped the rebuild whenever the field was already
+      // "editing", to avoid stomping a live caret on an async candidate merge.
+      // That guard protects nothing here: this runs once per open, and the
+      // re-renders that merge late candidates never reach it (measured at one
+      // capture pass against five renders for a single open). So rebuild
+      // unconditionally and re-arm every time.
+      let hadEditor = commandTextField.currentEditor() != nil
+      makeFirstResponder(nil)
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
-      // Restarting the blink timer does not move the caret — the selection is
-      // synced above — so an async-merge re-render is safe to re-arm too. What
-      // is not safe is skipping it: a pass that finds the field already
-      // "editing" but the window not yet key used to leave the caret dead with
-      // no path back, because only the `!editing` branch could restart it.
-      if !editing || commandLineHoldsKeyboardFocus {
-        (commandTextField.currentEditor() as? NSTextView)?
-          .updateInsertionPointStateAndRestartTimer(true)
-      }
-      responderDescription = editing ? "command(edit)" : "command(refocus)"
+      rearmCommandLineCaret()
+      // Arming once is not enough. The blink only starts if AppKit considers
+      // the panel key at that instant, and this pass usually runs before the
+      // activation it just requested has settled. `becomeKey` would normally
+      // re-arm afterwards, but this non-activating panel does not receive it
+      // (measured: the delivery count never moved across ten opens), so a
+      // single badly-timed arming left the command line with no cursor until
+      // the first keystroke redrew it. Re-arm once the turn has settled.
+      scheduleCommandLineCaretRearm()
+      responderDescription = hadEditor ? "command(rebuilt)" : "command(new)"
       FlashLog.trace(
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
           + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode) "

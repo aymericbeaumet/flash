@@ -1010,3 +1010,28 @@ final class CommandLineKeyRecoveryTests: XCTestCase {
         workspaceFrontPID: nil, lastNonFlashPID: nil, currentPID: 5))
   }
 }
+
+/// The command line's caret is armed by restarting the field editor's blink
+/// timer, which only takes effect if AppKit considers the panel key at that
+/// instant. The panel does not receive `becomeKey`, so the arming is repeated
+/// on later turns rather than left to a notification that never arrives.
+final class CommandLineCaretRearmTests: XCTestCase {
+  func testTheCaretIsRearmedOnTheNextTurnAndOncePastAHandoff() {
+    XCTAssertEqual(OverlayPanel.commandLineCaretRearmDelaysMs, [0, 80])
+  }
+
+  func testTheRearmIsAFixedListRatherThanARetryLoop() {
+    // Arming is idempotent and there is no state to poll for, so this must
+    // stay a short fixed schedule. An unbounded ladder here is what spun the
+    // main thread for seconds in the key-recovery path.
+    XCTAssertLessThanOrEqual(OverlayPanel.commandLineCaretRearmDelaysMs.count, 3)
+    XCTAssertEqual(
+      OverlayPanel.commandLineCaretRearmDelaysMs.sorted(),
+      OverlayPanel.commandLineCaretRearmDelaysMs)
+    XCTAssertLessThan(OverlayPanel.commandLineCaretRearmDelaysMs.reduce(0, +), 500)
+  }
+
+  func testTheFirstRearmRunsOnTheVeryNextTurn() {
+    XCTAssertEqual(OverlayPanel.commandLineCaretRearmDelaysMs.first, 0)
+  }
+}
