@@ -113,8 +113,8 @@ extension OverlayPanel {
     if inputMode == .commandLine {
       // The `:` now lives at the head of the editable buffer, so the
       // field owns the whole string (colon included) and no longer
-      // needs a leading inset to clear a pinned prompt glyph.
-      commandCaretLayer.isHidden = true
+      // needs a leading inset to clear a pinned prompt glyph. The caret is
+      // placed at the end of this pass, once the field has its final frame.
       configureCommandTextField(
         promptFrame: commandPromptLayer.frame,
         font: labelFont,
@@ -141,6 +141,69 @@ extension OverlayPanel {
     } else {
       commandPromptLabel.string = prompt
     }
+    // Every re-render relays the field out, so the caret is repositioned here
+    // rather than only when the command line opens. Late candidate merges
+    // arrive hundreds of milliseconds after the open and used to land after
+    // the last caret arming.
+    updateCommandCaretLayer()
+  }
+
+  /// Paint Flash's own caret.
+  ///
+  /// AppKit only blinks a field editor's insertion point when it considers the
+  /// window key, and this non-activating panel reports `isKeyWindow == false`
+  /// even while it is `NSApp.keyWindow` and receives every keystroke. The
+  /// command line therefore opened with no visible cursor until the first
+  /// character forced a redraw. Owning the caret removes that dependency
+  /// completely: it is a layer Flash positions and blinks.
+  func updateCommandCaretLayer() {
+    guard inputMode == .commandLine, !commandTextField.isHidden,
+      let screenRect = commandLineEditor?.caretScreenRect()
+    else {
+      commandCaretLayer.isHidden = true
+      return
+    }
+    let windowRect = convertFromScreen(screenRect)
+    let rect = Self.commandCaretFrame(
+      caretInWindow: windowRect, promptFrame: commandPromptLayer.frame)
+    let moved = commandCaretLayer.frame != rect
+    if moved {
+      FlashLog.trace(
+        "[overlay] command_caret x=\(Int(rect.minX)) y=\(Int(rect.minY)) h=\(Int(rect.height))")
+    }
+    commandCaretLayer.frame = rect
+    commandCaretLayer.backgroundColor = Self.nordSnowStorm2CG
+    commandCaretLayer.isHidden = false
+    if moved || commandCaretLayer.animation(forKey: Self.commandCaretBlinkKey) == nil {
+      restartCommandCaretBlink()
+    }
+  }
+
+  /// The caret's frame inside `commandPromptLayer`, from the caret rectangle
+  /// the field editor reports in window coordinates. Both rectangles share the
+  /// window's bottom-left origin, so this is a translation onto the layer plus
+  /// a fixed stroke width; rounding keeps the stroke on a pixel boundary.
+  static func commandCaretFrame(caretInWindow: CGRect, promptFrame: CGRect) -> CGRect {
+    CGRect(
+      x: (caretInWindow.minX - promptFrame.minX).rounded(),
+      y: (caretInWindow.minY - promptFrame.minY).rounded(),
+      width: commandCaretWidth,
+      height: caretInWindow.height.rounded())
+  }
+
+  /// Restart the blink from its solid phase, the way a real caret behaves
+  /// right after it moves.
+  func restartCommandCaretBlink() {
+    commandCaretLayer.removeAnimation(forKey: Self.commandCaretBlinkKey)
+    commandCaretLayer.opacity = 1
+    let blink = CABasicAnimation(keyPath: "opacity")
+    blink.fromValue = 1
+    blink.toValue = 0
+    blink.duration = Self.commandCaretBlinkSeconds
+    blink.autoreverses = true
+    blink.repeatCount = .infinity
+    blink.beginTime = CACurrentMediaTime() + Self.commandCaretBlinkSeconds
+    commandCaretLayer.add(blink, forKey: Self.commandCaretBlinkKey)
   }
 
   func configureCommandTextField() {

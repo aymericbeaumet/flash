@@ -485,14 +485,12 @@ extension OverlayPanel {
     return isKeyWindow || NSApp.keyWindow === self
   }
 
-  /// Restart the field editor's insertion-point blink. Idempotent, and it does
-  /// not move the caret — the selection is owned by
-  /// `syncCommandTextFieldSelection` — so it is safe to repeat.
+  /// Re-place Flash's caret layer. Idempotent: it reads the position back from
+  /// the field editor's own layout, so repeating it neither moves the caret nor
+  /// disturbs the text.
   func rearmCommandLineCaret() {
-    guard inputMode == .commandLine,
-      let editor = commandTextField.currentEditor() as? NSTextView
-    else { return }
-    editor.updateInsertionPointStateAndRestartTimer(true)
+    guard inputMode == .commandLine else { return }
+    updateCommandCaretLayer()
   }
 
   /// Delays for the post-open caret re-arm. Two turns: the next one, and one
@@ -584,13 +582,8 @@ extension OverlayPanel {
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
       rearmCommandLineCaret()
-      // Arming once is not enough. The blink only starts if AppKit considers
-      // the panel key at that instant, and this pass usually runs before the
-      // activation it just requested has settled. `becomeKey` would normally
-      // re-arm afterwards, but this non-activating panel does not receive it
-      // (measured: the delivery count never moved across ten opens), so a
-      // single badly-timed arming left the command line with no cursor until
-      // the first keystroke redrew it. Re-arm once the turn has settled.
+      // Placing it once is not enough: the field editor finishes laying out
+      // after this pass, and late candidate merges relay it out again.
       scheduleCommandLineCaretRearm()
       responderDescription = hadEditor ? "command(rebuilt)" : "command(new)"
       FlashLog.trace(

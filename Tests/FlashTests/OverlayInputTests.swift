@@ -1035,3 +1035,44 @@ final class CommandLineCaretRearmTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.commandLineCaretRearmDelaysMs.first, 0)
   }
 }
+
+/// Flash paints the command line's caret itself, because AppKit only blinks a
+/// field editor's insertion point for a window it considers key and this
+/// non-activating panel reports that as false even while it is `NSApp.keyWindow`
+/// and receiving every keystroke.
+final class CommandCaretGeometryTests: XCTestCase {
+  func testTheCaretIsPlacedRelativeToThePromptLayer() {
+    let frame = OverlayPanel.commandCaretFrame(
+      caretInWindow: CGRect(x: 640, y: 812, width: 0, height: 17),
+      promptFrame: CGRect(x: 600, y: 800, width: 780, height: 38))
+    XCTAssertEqual(frame.minX, 40)
+    XCTAssertEqual(frame.minY, 12)
+    XCTAssertEqual(frame.height, 17)
+  }
+
+  func testTheCaretHasAVisibleStrokeWidth() {
+    let frame = OverlayPanel.commandCaretFrame(
+      caretInWindow: CGRect(x: 10, y: 10, width: 0, height: 17),
+      promptFrame: CGRect(x: 0, y: 0, width: 100, height: 38))
+    XCTAssertGreaterThan(frame.width, 0)
+    XCTAssertEqual(frame.width, OverlayPanel.commandCaretWidth)
+  }
+
+  func testTheCaretLandsOnAPixelBoundary() {
+    let frame = OverlayPanel.commandCaretFrame(
+      caretInWindow: CGRect(x: 640.4, y: 812.6, width: 0, height: 17.3),
+      promptFrame: CGRect(x: 600, y: 800, width: 780, height: 38))
+    XCTAssertEqual(frame.minX, frame.minX.rounded())
+    XCTAssertEqual(frame.minY, frame.minY.rounded())
+    XCTAssertEqual(frame.height, frame.height.rounded())
+  }
+
+  func testAScrolledFieldStillPlacesTheCaretInsideThePrompt() {
+    // A long command scrolls the single-line field, so the editor reports a
+    // caret near the trailing edge rather than past it.
+    let prompt = CGRect(x: 600, y: 800, width: 780, height: 38)
+    let frame = OverlayPanel.commandCaretFrame(
+      caretInWindow: CGRect(x: 1370, y: 812, width: 0, height: 17), promptFrame: prompt)
+    XCTAssertLessThan(frame.maxX, prompt.width)
+  }
+}

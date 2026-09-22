@@ -37,6 +37,37 @@ final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
 
+/// The command line's field editor.
+///
+/// AppKit gates a text view's insertion point on `window.isKeyWindow`, and this
+/// non-activating panel reports that as false even while it *is*
+/// `NSApp.keyWindow` and receiving every keystroke the user types. That
+/// mismatch is why the command line kept opening without a cursor: the caret
+/// was suppressed for a window that is key for every practical purpose, and
+/// the first keystroke's redraw was what finally revealed it.
+///
+/// Supplying our own field editor lets us answer that question ourselves, and
+/// gives somewhere to count the draws so the caret is observable at all — it
+/// is painted by AppKit, so nothing else in Flash can see whether it happened.
+final class CommandLineFieldEditor: NSTextView {
+  /// Flash paints the caret itself, on `commandCaretLayer`. AppKit must not
+  /// also paint one, or the two would overlap and blink out of phase.
+  override var shouldDrawInsertionPoint: Bool { false }
+
+  /// Where the caret belongs, in this editor's own screen coordinates. Asking
+  /// the editor rather than re-measuring the string keeps the caret on the
+  /// glyph boundary AppKit actually laid out, including when a long command
+  /// has scrolled the single-line field horizontally.
+  func caretScreenRect() -> CGRect? {
+    var actual = NSRange()
+    let rect = firstRect(
+      forCharacterRange: NSRange(location: selectedRange.location, length: 0),
+      actualRange: &actual)
+    guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.height > 0 else { return nil }
+    return rect
+  }
+}
+
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
   // The overlay panel's persistent content is the active-window focus border:
@@ -150,6 +181,29 @@ final class OverlayPanel: NSPanel {
 
   /// Supersedes a pending caret re-arm when a newer command-line open starts.
   var commandLineCaretRearmGeneration: UInt64 = 0
+
+  /// Flash owns the command line's field editor so the caret is not suppressed
+  /// by this panel's inconsistent key-window reporting. AppKit asks for it
+  /// through `fieldEditor(_:for:)` and reuses the instance, exactly as it does
+  /// with its own.
+  private lazy var commandLineFieldEditor: CommandLineFieldEditor = {
+    let editor = CommandLineFieldEditor(frame: .zero)
+    editor.isFieldEditor = true
+    return editor
+  }()
+
+  /// The live field editor, when it is ours and currently installed.
+  var commandLineEditor: CommandLineFieldEditor? {
+    commandTextField.currentEditor() as? CommandLineFieldEditor
+  }
+
+  override func fieldEditor(_ createFlag: Bool, for client: Any?) -> NSText? {
+    let field: CommandLineTextField? =
+      (client as? CommandLineTextField) ?? (client as? NSTextFieldCell)?
+      .controlView as? CommandLineTextField
+    guard field != nil else { return super.fieldEditor(createFlag, for: client) }
+    return commandLineFieldEditor
+  }
   /// Dispatches a named `#[range=user|<name>]` status-bar click through the
   /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
   /// consumed by the click windows and the `f`-hint activation path.
@@ -168,6 +222,9 @@ final class OverlayPanel: NSPanel {
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()
+  static let commandCaretWidth: CGFloat = 2
+  static let commandCaretBlinkSeconds: CFTimeInterval = 0.5
+  static let commandCaretBlinkKey = "flash.command.caret.blink"
   let commandTextField = CommandLineTextField(frame: .zero)
   let candidateFinderResultsLayer = CAGradientLayer()
   let candidateFinderResultsLabel = CATextLayer()

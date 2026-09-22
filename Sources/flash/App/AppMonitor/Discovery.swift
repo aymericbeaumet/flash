@@ -68,7 +68,13 @@ extension AppMonitor {
         return
       }
 
-      if let model = lookupPreparedModel(for: pid) {
+      // An empty prepared model is not an answer, it is a stale miss: it is
+      // what a refresh that ran before the app had an AX tree leaves behind,
+      // and serving it means the user presses `f` and gets no hints at all
+      // while the status bar's own hints still appear. Measured on Slack: 5 of
+      // 39 activations returned zero targets in 0.13 ms from this cache, while
+      // a refresh on the same window finds about 92. Fall through and refresh.
+      if let model = lookupPreparedModel(for: pid), !model.targets.isEmpty {
         if let targetFilter {
           let cfg = snapshotConfig()
           let targets = model.targets.filter(targetFilter)
