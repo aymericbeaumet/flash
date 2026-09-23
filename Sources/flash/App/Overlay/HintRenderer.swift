@@ -469,19 +469,15 @@ extension OverlayPanel {
     return nil
   }
 
-  /// Whether the command line actually has a live caret.
-  ///
-  /// `NSWindow.isKeyWindow` is the wrong question to ask of this
-  /// non-activating panel: measured live, it reports false while the panel IS
-  /// `NSApp.keyWindow` and the field editor's `shouldDrawInsertionPoint` is
-  /// true. Recovery gated on it retried for seconds against a perfectly
-  /// healthy command line. Ask the field editor instead, and fall back to key
-  /// ownership before the editor exists.
+  /// Whether the command line actually has a live caret: AppKit blinks the
+  /// field editor's insertion point only in a window it reports as key.
+  /// `shouldDrawInsertionPoint` is not that signal — it stays true for an
+  /// editing field in a panel that is not key yet, including right after a
+  /// reopen that is still waiting on activation — so recovery that trusted it
+  /// stopped before the caret ever appeared.
   var commandLineHoldsKeyboardFocus: Bool {
-    if let editor = commandTextField.currentEditor() as? NSTextView {
-      return editor.shouldDrawInsertionPoint
-    }
-    return isKeyWindow || NSApp.keyWindow === self
+    guard isKeyWindow, let editor = commandTextField.currentEditor() else { return false }
+    return firstResponder === editor
   }
 
   /// Restart the field editor's insertion-point blink. The caret is AppKit's

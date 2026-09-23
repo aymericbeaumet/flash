@@ -870,19 +870,31 @@ extension AppDelegate {
   }
 
   func overlayDidCancelCommandLine() {
-    // Hand activation back to the app the bar covered, the way a *submit* does via
-    // its app switch. `NSApp.deactivate()` is advisory and ignored on this macOS
-    // (Flash stays "active"), so the non-activating panel couldn't regain key on
-    // the next open and showed no caret. Activating another app reliably
-    // deactivates Flash, so reopening forces a clean re-activation → the panel
-    // keys → the caret returns. Mirrors the working submit path.
-    if let context = currentNonFlashContext() ?? normalModeContext(),
+    returnActivationToCoveredApp(reason: "command_cancel")
+    finishCommandLineInteraction(reason: "command_cancel")
+  }
+
+  /// Hand activation back to the app the command bar covered when the bar
+  /// closes without running anything; a submit that opens an app hands it
+  /// over through that app's own activation instead.
+  ///
+  /// `NSApp.deactivate()` and a bare `activate(options:)` are both ignored on
+  /// this macOS: Flash stays active with no key window, macOS never makes the
+  /// panel key again on the next open, and the command line shows no caret.
+  /// The cooperative handoff — yield, then activate from Flash — is the
+  /// request that actually moves activation, so the next open starts from a
+  /// clean activation and keys the panel.
+  func returnActivationToCoveredApp(reason: String) {
+    guard NSApp.isActive,
+      let context = currentNonFlashContext() ?? normalModeContext(),
       let app = NSRunningApplication(processIdentifier: context.processID),
       !app.isTerminated
-    {
-      RunningApplicationActivation.activate(app, options: [])
-    }
-    finishCommandLineInteraction(reason: "command_cancel")
+    else { return }
+    NSApp.yieldActivation(to: app)
+    let accepted = app.activate(from: .current, options: [])
+    FlashLog.trace(
+      "[mode] return_activation reason=\(reason) "
+        + "to=\(app.bundleIdentifier ?? "nil"):\(app.processIdentifier) accepted=\(accepted)")
   }
 
   func overlayDidUpdateCommandLine(

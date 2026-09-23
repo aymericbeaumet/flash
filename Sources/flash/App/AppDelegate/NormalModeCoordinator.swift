@@ -29,6 +29,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[mode] enter_normal from=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight)")
+    returnActivationIfClosingCommandBar(reason: "enter_normal")
     dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
   }
 
@@ -39,11 +40,19 @@ extension AppDelegate {
       return
     }
     if overlay.statusPopupController.isVisible { dismissTerminal() }
+    returnActivationIfClosingCommandBar(reason: "leave_mode")
     overlay.resignCommandTextFieldFocus()
     dispatchMode(
       .leaveMode(
         hasHints: hintSession.isActive || activationInFlight,
         targetPID: terminalReturnApplicationPID))
+  }
+
+  /// A mode mapping that closes the open command bar is a cancel: nothing ran,
+  /// so activation goes back to the app the bar covered.
+  private func returnActivationIfClosingCommandBar(reason: String) {
+    guard overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder else { return }
+    returnActivationToCoveredApp(reason: reason)
   }
 
   func enterInsertMode(
