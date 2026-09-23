@@ -696,62 +696,40 @@ extension OverlayPanel {
     contentLayer.frame = contentView?.bounds ?? .zero
   }
 
+  /// Per keystroke: toggles each chip by prefix and re-renders only the
+  /// visible labels. Labels are unique within a set, so there is nothing to
+  /// memoize across chips; the visible-index set exists only for debug bounds.
   func filter(prefix: String, hints: [AssignedHint]) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     let upper = prefix.uppercased()
     let prefixLen = upper.count
-    let fontSize = CGFloat(overlayConfig.fontSize)
-    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let labelFont = NSFont.monospacedSystemFont(
+      ofSize: CGFloat(overlayConfig.fontSize), weight: .bold)
     let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
     let importantFGNS = nsColor(fromHex: overlayConfig.importantHintFG) ?? fgNS
+    let tracksBounds = debugConfig.showHintsBounds
     var visible = Set<Int>()
-    var cache: [AttributedLabelKey: NSAttributedString] = [:]
-    cache.reserveCapacity(hints.count)
     for (idx, hint) in hints.enumerated() {
       guard idx < hintLayers.count, idx < labelLayers.count else { break }
-      let chip = hintLayers[idx]
       let matches = hint.display.hasPrefix(upper)
-      chip.isHidden = !matches
-      // Only rebuild the visible chips' labels — hidden chips don't
-      // contribute to what the user sees and there's nothing wasted in
-      // leaving their previous-prefix label state in place.
-      if matches {
-        visible.insert(idx)
-        let l = labelLayers[idx]
-        // Keep CATextLayer's own font in lockstep with the attributed
-        // string's weight — see the note in `display(hints:)`. Cheap;
-        // CATextLayer compares font references and noops on equal.
-        l.font = labelFont
-        let accented = hint.target.priority.usesAccentHintStyle
-        // Memoise per `(display, typedPrefixLen, accented)` — the accent
-        // variant's fg colour differs, so it can't share the regular cache key.
-        let labelFG: NSColor = accented ? importantFGNS : fgNS
-        let key = AttributedLabelKey(
-          display: hint.display,
-          typedPrefixLen: prefixLen,
-          accented: accented)
-        if let cached = cache[key] {
-          l.string = cached
-        } else {
-          let attr = Self.attributedLabel(
-            display: hint.display, typedPrefixLen: prefixLen,
-            font: labelFont, fgNS: labelFG)
-          cache[key] = attr
-          l.string = attr
-        }
-      }
+      hintLayers[idx].isHidden = !matches
+      // Hidden chips keep their previous label; nobody sees it.
+      guard matches else { continue }
+      if tracksBounds { visible.insert(idx) }
+      let label = labelLayers[idx]
+      // Keep CATextLayer's own font in lockstep with the attributed
+      // string's weight — see the note in `display(hints:)`. Cheap;
+      // CATextLayer compares font references and noops on equal.
+      label.font = labelFont
+      label.string = Self.attributedLabel(
+        display: hint.display, typedPrefixLen: prefixLen, font: labelFont,
+        fgNS: hint.target.priority.usesAccentHintStyle ? importantFGNS : fgNS)
     }
-    if debugConfig.showHintsBounds {
+    if tracksBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()
-  }
-
-  private struct AttributedLabelKey: Hashable {
-    let display: String
-    let typedPrefixLen: Int
-    let accented: Bool
   }
 
   /// Centered paragraph style — immutable, allocated once.
