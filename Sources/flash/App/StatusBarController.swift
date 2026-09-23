@@ -15,9 +15,38 @@ final class FlashStatusBarController {
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
   private var refreshIntervalSeconds: TimeInterval
   private let scheduler: PollScheduler
+  /// Invalidates a scheduled fire once a newer plan (or a stop) replaced it.
+  /// Monotonic across lifecycles, so no fire can outlive the run that armed it.
   private var timerGeneration: UInt64 = 0
-  private(set) var nextWakeup: TimeInterval?
-  private var started = false
+
+  /// Deadlines exist only while the bar runs: stopping drops them with the
+  /// state, so a stopped controller can never hold a clock tick or a pending
+  /// publish that a later start would fire.
+  private struct Schedule {
+    var nextClock: TimeInterval?
+    var pendingJobPublish: TimeInterval?
+    var nextWakeup: TimeInterval?
+  }
+
+  private enum Lifecycle {
+    case stopped
+    case running(Schedule)
+  }
+
+  private var lifecycle = Lifecycle.stopped
+
+  private var schedule: Schedule? {
+    get {
+      if case .running(let schedule) = lifecycle { return schedule }
+      return nil
+    }
+    set {
+      guard case .running = lifecycle, let newValue else { return }
+      lifecycle = .running(newValue)
+    }
+  }
+
+  var nextWakeup: TimeInterval? { schedule?.nextWakeup }
   private var nextJobToken: UInt64 = 0
   private var requiredSources: Set<String> = []
   private var requiredJobs: [String: StatusFormatJobRequest] = [:]
@@ -43,8 +72,6 @@ final class FlashStatusBarController {
   /// Host-rotated plugin carousels keyed `<plugin>.<segment>`; a refresh with
   /// new lines keeps the visible line until its scheduled rotation.
   private var pluginCycles: [String: FlashStatusBarCycleState] = [:]
-  private var nextClock: TimeInterval?
-  private var pendingJobPublish: TimeInterval?
   private var lastJobPublish: TimeInterval = -.infinity
   private var activeAppName = ""
   private var activeBundleIdentifier = ""
@@ -90,7 +117,12 @@ final class FlashStatusBarController {
   func start() {
     queue.async { [weak self] in
       guard let self else { return }
-      self.started = true
+      if case .stopped = self.lifecycle {
+        self.lifecycle = .running(Schedule())
+        // A restart plans afresh: an evaluation cached before the stop would
+        // take the unchanged-inputs shortcut and never re-arm the clock.
+        self.lastEvaluation = nil
+      }
       self.publishCurrentModel()
     }
   }
@@ -107,17 +139,14 @@ final class FlashStatusBarController {
   }
 
   private func stopOnQueue() {
-    started = false
+    lifecycle = .stopped
     scheduler.unregister(Self.pollClientID)
     timerGeneration &+= 1
-    nextWakeup = nil
     let jobs = sourceRecords.values.compactMap(\.job) + shellRecords.values.compactMap(\.job)
     sourceRecords.removeAll()
     shellRecords.removeAll()
     pluginCycles.removeAll()
     stopJobs(jobs)
-    nextClock = nil
-    pendingJobPublish = nil
   }
 
   func updateModeLabel(_ label: String) {
@@ -165,7 +194,7 @@ final class FlashStatusBarController {
       if let terminalPopupNames { self.terminalPopupNames = terminalPopupNames }
       if let refreshIntervalSeconds, refreshIntervalSeconds != self.refreshIntervalSeconds {
         self.refreshIntervalSeconds = refreshIntervalSeconds
-        self.nextClock = nil
+        self.schedule?.nextClock = nil
         let now = self.clock()
         for key in Array(self.shellRecords.keys) {
           self.shellRecords[key]?.schedule.reschedule(
@@ -241,7 +270,7 @@ final class FlashStatusBarController {
     {
       // Nothing the template or its popups read has changed since the last
       // evaluation: only the time-driven bookkeeping below runs.
-      guard started else { return }
+      guard schedule != nil else { return }
       runDueJobs(now: now)
       armTimer()
       return
@@ -272,7 +301,7 @@ final class FlashStatusBarController {
       shellRecords[key] = ShellRecord(command: request.command, value: old?.value)
       if let job = old?.job { obsoleteJobs.append(job) }
     }
-    if requiredJobs.isEmpty { pendingJobPublish = nil }
+    if requiredJobs.isEmpty { schedule?.pendingJobPublish = nil }
     for name in Array(sourceRecords.keys) where !requiredSources.contains(name) {
       if let job = sourceRecords[name]?.job {
         sourceRecords[name]?.job = nil
@@ -281,12 +310,13 @@ final class FlashStatusBarController {
       }
     }
     stopJobs(obsoleteJobs)
+    guard var schedule else { return }
     if result.needsClock && refreshIntervalSeconds > 0 {
-      if nextClock == nil { nextClock = now + max(1, refreshIntervalSeconds) }
+      if schedule.nextClock == nil { schedule.nextClock = now + max(1, refreshIntervalSeconds) }
     } else {
-      nextClock = nil
+      schedule.nextClock = nil
     }
-    guard started else { return }
+    self.schedule = schedule
     runDueJobs(now: now)
     armTimer()
   }
@@ -399,10 +429,10 @@ final class FlashStatusBarController {
     let due = max(now, lastJobPublish + 1)
     if due <= now {
       lastJobPublish = now
-      pendingJobPublish = nil
+      schedule?.pendingJobPublish = nil
       publishCurrentModel()
     } else {
-      pendingJobPublish = due
+      schedule?.pendingJobPublish = due
       armTimer()
     }
   }
@@ -417,8 +447,9 @@ final class FlashStatusBarController {
     scheduler.unregister(Self.pollClientID)
     timerGeneration &+= 1
     let generation = timerGeneration
-    nextWakeup = nil
-    guard started else { return }
+    guard var schedule else { return }
+    schedule.nextWakeup = nil
+    defer { self.schedule = schedule }
     var dates = requiredSources.compactMap { sourceRecords[$0]?.schedule.dueAt }
     dates += requiredJobs.keys.compactMap { shellRecords[$0]?.schedule.dueAt }
     dates += requiredJobs.keys.compactMap { key in
@@ -427,10 +458,10 @@ final class FlashStatusBarController {
     dates += requiredSources.compactMap { sourceRecords[$0]?.cycle }
       .filter(\.needsRotationTimer).map(\.nextRotationAt)
     dates += pluginCycles.values.filter(\.needsRotationTimer).map(\.nextRotationAt)
-    if let nextClock { dates.append(nextClock) }
-    if let pendingJobPublish { dates.append(pendingJobPublish) }
+    if let nextClock = schedule.nextClock { dates.append(nextClock) }
+    if let pendingJobPublish = schedule.pendingJobPublish { dates.append(pendingJobPublish) }
     guard let next = dates.filter(\.isFinite).min() else { return }
-    nextWakeup = next
+    schedule.nextWakeup = next
     // The bar is a surface the user is looking at, so its slack is tight; the
     // generation check still discards a fire that a newer plan superseded.
     scheduler.scheduleOnce(
@@ -451,9 +482,9 @@ final class FlashStatusBarController {
         shellRecords[key]?.value = "<'\(key)' not ready>"
       }
     }
-    if let nextClock, nextClock <= now { self.nextClock = nil }
-    if let pendingJobPublish, pendingJobPublish <= now {
-      self.pendingJobPublish = nil
+    if let nextClock = schedule?.nextClock, nextClock <= now { schedule?.nextClock = nil }
+    if let pendingJobPublish = schedule?.pendingJobPublish, pendingJobPublish <= now {
+      schedule?.pendingJobPublish = nil
       lastJobPublish = now
     }
     for name in requiredSources { _ = sourceRecords[name]?.cycle?.advanceIfDue(now: now) }

@@ -60,6 +60,25 @@ final class StatusBarControllerTests: XCTestCase {
     }
   }
 
+  func testStoppingDropsEveryDeadlineAndARestartPlansAfresh() {
+    // `%H:%M` needs the clock, so a running bar always has a next wake-up.
+    let harness = Harness("%H:%M", interval: 60)
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 160)
+
+    harness.controller.stop()
+    harness.drain()
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+    // A template change while stopped evaluates, but schedules nothing.
+    harness.update("%H:%M:%S", interval: 30)
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+
+    harness.queue.sync { harness.now = 500 }
+    harness.controller.start()
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 530)
+    harness.controller.stop()
+  }
+
   func testPluginCarouselRotatesOnTheHostClockAndKeepsTheVisibleLineAcrossRefreshes() {
     let harness = Harness("#{flash.plugin.feed.summary}")
     defer { harness.controller.stop() }
