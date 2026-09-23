@@ -237,7 +237,7 @@ extension AppMonitor {
   /// that is still launching. Nothing else retries: the entry exists, so later
   /// focus changes only refresh the window, and the app stayed unobserved for
   /// its whole life — no move, close or minimize ever reached the border.
-  static let observerRegistrationRetryDelaysMs = [250, 1_000, 3_000]
+  static let observerRegistrationRetryDelaysMs = [60, 150, 400, 1_000, 3_000]
 
   /// Register `notifications` on the application element, then (re)resolve the
   /// focused window, retrying the refused ones on a bounded ladder. `entry`

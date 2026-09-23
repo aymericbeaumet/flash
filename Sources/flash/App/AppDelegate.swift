@@ -283,12 +283,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         pid: pid, notification: notification, observedWindow: window)
     }
     monitor.focusedWindowDidResolve = { [weak self] pid, window in
-      guard let self, self.currentNonFlashContext()?.processID == pid else { return }
+      // Identity, not a window-list scan: resolution fires on every focus
+      // swap, and the list's top window can belong to another app.
+      guard let self, self.currentNonFlashRunningApplication()?.processIdentifier == pid
+      else { return }
       self.windowLayoutManager.observedFocusedWindow(
         pid: pid,
         window: window,
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor)
+      // A launching app activates before it has a window, so the stroke found
+      // nothing; its focused window resolving is the first sign one exists.
+      if self.activeWindowBorderTrackedFrame == nil {
+        self.updateActiveWindowBorder(reason: "focused_window_resolved")
+      }
     }
     monitor.start()
     pluginManager.onStateChanged = { [weak self] in
