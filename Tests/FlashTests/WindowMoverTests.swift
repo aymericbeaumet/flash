@@ -403,6 +403,52 @@ final class WindowMoverTests: XCTestCase {
       "whole-point rounding of a fractional target has landed")
   }
 
+  func testLayoutsLandOnWholePointsAndNeighbouringSlotsShareAnEdge() {
+    // An odd-width display: the halves meet on one whole-point edge.
+    let odd = CGRect(x: 0, y: 0, width: 1727, height: 1085)
+    let left = WindowMover.rectFor(position: .leftHalf, in: odd)
+    let right = WindowMover.rectFor(position: .rightHalf, in: odd)
+    XCTAssertEqual(left.maxX, right.minX)
+    XCTAssertEqual(left.width + right.width, odd.width)
+    let top = WindowMover.rectFor(position: .topHalf, in: odd)
+    let bottom = WindowMover.rectFor(position: .bottomHalf, in: odd)
+    XCTAssertEqual(bottom.maxY, top.minY)
+    XCTAssertEqual(top.height + bottom.height, odd.height)
+    // alt+z on the 1920×1050 home display: whole points, same share of it.
+    let centred = WindowLayout.proportional(
+      ProportionalWindowFrame(
+        xPercent: 10.6925, yPercent: 10.6925, widthPercent: 78.615, heightPercent: 78.615))
+    let home = CGRect(x: 0, y: 0, width: 1920, height: 1050)
+    let frame = WindowMover.rectFor(layout: centred, in: home)
+    XCTAssertEqual(frame, CGRect(x: 205, y: 112, width: 1510, height: 826))
+    XCTAssertEqual(frame.minY - home.minY, home.maxY - frame.maxY, "centred vertically")
+    for rect in [left, right, top, bottom, frame] {
+      XCTAssertEqual(rect, rect.integral, "\(rect)")
+    }
+  }
+
+  func testDeclaredProportionalLayoutIsRecognizedWithoutBeingTracked() {
+    let centred = WindowLayout.proportional(
+      ProportionalWindowFrame(
+        xPercent: 10.6925, yPercent: 10.6925, widthPercent: 78.615, heightPercent: 78.615))
+    let usable = CGRect(x: 0, y: 0, width: 2048, height: 1122)
+    let frame = WindowMover.rectFor(layout: centred, in: usable)
+    // After a restart nothing is tracked: only the config's mappings know it.
+    XCTAssertNil(WindowMover.semanticLayout(matching: frame, in: usable, existing: nil))
+    XCTAssertEqual(
+      WindowMover.semanticLayout(matching: frame, in: usable, existing: nil, declared: [centred]),
+      centred)
+    // A named slot still wins, and a free-form frame matches nothing.
+    XCTAssertEqual(
+      WindowMover.semanticLayout(
+        matching: usable, in: usable, existing: nil, declared: [centred]),
+      .position(.maximized))
+    XCTAssertNil(
+      WindowMover.semanticLayout(
+        matching: CGRect(x: 100, y: 100, width: 900, height: 700), in: usable, existing: nil,
+        declared: [centred]))
+  }
+
   func testEachRecoveryPassSettlesTheNativeBandBeforeSnapshottingSlots() {
     let screen = WindowScreenLayout(
       id: 1,

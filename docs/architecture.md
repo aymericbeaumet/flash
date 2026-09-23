@@ -203,7 +203,11 @@ heights are re-read on display changes and before every recovery pass after
 one, never on a Space switch or wake, so a restored window lands exactly where
 the next `window_move` would put it. Restores and moves accept a placement only
 within a point of its slot; the two-point tolerance recognises slots, it does
-not accept placements.
+not accept placements. Accessibility cannot read or move windows while the
+session is locked or asleep, which is when a wake reports new displays, so
+restores wait for the session: a window counts as restored only once its frame
+was read back in its slot, and one whose frame was unreadable stays pending
+until the session resumes or the window is focused.
 
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.

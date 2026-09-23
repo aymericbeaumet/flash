@@ -447,6 +447,19 @@ struct Config {
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
+
+    /// The proportional layouts `window_move` mappings apply, in any scope.
+    var declaredWindowLayouts: [WindowLayout] {
+      var layouts: [WindowLayout] = []
+      for mapping in all + normal + insert + terminal + command {
+        guard case .flashCommand(.moveWindow(let params)) = mapping.action,
+          case .proportional? = params.layout, let layout = params.layout,
+          !layouts.contains(layout)
+        else { continue }
+        layouts.append(layout)
+      }
+      return layouts
+    }
     var normalLeader: String? = Self.defaultNormalLeader
     var labels = Labels()
     /// How long the interpreter waits for the next key in a pending

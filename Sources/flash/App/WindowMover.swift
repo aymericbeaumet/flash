@@ -48,6 +48,16 @@ final class WindowLayoutManager {
   private var screenChangeKeys: Set<WindowKey> = []
   private var screenChangeActiveUntil = DispatchTime(uptimeNanoseconds: 0)
   private var selfAuthoredChangesUntil: [WindowKey: DispatchTime] = [:]
+  /// Accessibility cannot read or move windows while the session is locked or
+  /// asleep, which is exactly when a wake reports the new displays. Restores
+  /// wait for the session instead of failing against it.
+  private var sessionSuspended = false
+  /// Windows whose layout has not landed because their frame could not be
+  /// read. They are restored when the session resumes, and when focused.
+  private var pendingRestoreKeys: Set<WindowKey> = []
+  /// The proportional layouts the config's `window_move` mappings apply, so a
+  /// window placed by one is recognized again after Flash restarts.
+  private var declaredLayouts: [WindowLayout] = []
 
   private let screenRecoveryDelaysMs: [Int]
   private let screenLayoutsProvider: ScreenLayoutsProvider
@@ -96,6 +106,36 @@ final class WindowLayoutManager {
       } else {
         self.tracked.removeValue(forKey: key)
         self.selfAuthoredChangesUntil.removeValue(forKey: key)
+      }
+    }
+  }
+
+  func setDeclaredLayouts(_ layouts: [WindowLayout]) {
+    queue.async { [weak self] in self?.declaredLayouts = layouts }
+  }
+
+  /// The session stopped or resumed being interactive (lock, sleep, screens
+  /// asleep). Resuming restores every window whose layout did not land while
+  /// it was away, re-reading the displays over the usual recovery passes.
+  func setSessionSuspended(
+    _ suspended: Bool,
+    statusBarReservesSpace: Bool,
+    statusBarMonitor: Config.StatusBar.Monitor,
+    beforeRecoveryPass: (() -> Void)? = nil,
+    afterRecoveryPass: (([WindowScreenLayout]) -> Void)? = nil
+  ) {
+    queue.async { [weak self] in
+      guard let self, self.sessionSuspended != suspended else { return }
+      self.sessionSuspended = suspended
+      guard !suspended, !self.pendingRestoreKeys.isEmpty else { return }
+      FlashLog.debug(
+        "[window_layout] session_resumed pending=\(self.pendingRestoreKeys.count)")
+      DispatchQueue.main.async { [weak self] in
+        self?.screenParametersDidChange(
+          statusBarReservesSpace: statusBarReservesSpace,
+          statusBarMonitor: statusBarMonitor,
+          beforeRecoveryPass: beforeRecoveryPass,
+          afterRecoveryPass: afterRecoveryPass)
       }
     }
   }
@@ -178,7 +218,7 @@ final class WindowLayoutManager {
             guard let self, self.screenChangeGeneration == generation else { return }
             if !screens.isEmpty {
               self.currentScreens = screens
-              self.restoreTrackedLayouts(using: screens)
+              self.restoreTrackedLayouts(self.screenChangeKeys, using: screens)
               if let afterRecoveryPass {
                 DispatchQueue.main.async {
                   afterRecoveryPass(screens)
@@ -214,6 +254,7 @@ final class WindowLayoutManager {
       if notification == kAXUIElementDestroyedNotification as String {
         self.tracked.removeValue(forKey: key)
         self.selfAuthoredChangesUntil.removeValue(forKey: key)
+        self.pendingRestoreKeys.remove(key)
         return
       }
       // AppKit can publish the new NSScreen topology before delivering its
@@ -223,6 +264,10 @@ final class WindowLayoutManager {
       if self.currentScreens != screens {
         return
       }
+      // Nobody moves windows on a locked screen: frames changing then are
+      // macOS relocating them, and a window still waiting for its layout must
+      // not have it erased by the displaced frame it is waiting to leave.
+      if self.sessionSuspended || self.pendingRestoreKeys.contains(key) { return }
       let now = DispatchTime.now()
       if now < self.screenChangeActiveUntil
         || now < (self.selfAuthoredChangesUntil[key] ?? DispatchTime(uptimeNanoseconds: 0))
@@ -250,6 +295,12 @@ final class WindowLayoutManager {
       if self.currentScreens.isEmpty { self.currentScreens = screens }
       guard self.currentScreens == screens else { return }
       let key = WindowKey(pid: pid, window: window)
+      if self.pendingRestoreKeys.contains(key) {
+        // Its layout never landed (the frame was unreadable then); the user
+        // is looking at it now, so put it right.
+        self.restoreTrackedLayouts([key], using: screens)
+        return
+      }
       let now = DispatchTime.now()
       guard now >= self.screenChangeActiveUntil,
         now >= (self.selfAuthoredChangesUntil[key] ?? DispatchTime(uptimeNanoseconds: 0)),
@@ -278,7 +329,8 @@ final class WindowLayoutManager {
       let layout = WindowMover.semanticLayout(
         matching: frame,
         in: screen.usableFrame,
-        existing: existingLayout)
+        existing: existingLayout,
+        declared: declaredLayouts)
     else {
       tracked.removeValue(forKey: key)
       return
@@ -290,50 +342,61 @@ final class WindowLayoutManager {
       screenID: screen.id)
   }
 
-  private func restoreTrackedLayouts(using screens: [WindowScreenLayout]) {
-    guard !screenChangeKeys.isEmpty,
+  private enum RestoreOutcome {
+    case restored, alreadyCorrect, refused, unreadable
+  }
+
+  private func restoreTrackedLayouts(_ keys: Set<WindowKey>, using screens: [WindowScreenLayout]) {
+    guard !keys.isEmpty,
       let primaryHeight = WindowMover.primaryHeight(in: screens)
     else { return }
-    var restored = 0
-    var alreadyCorrect = 0
+    guard !sessionSuspended else {
+      pendingRestoreKeys.formUnion(keys.filter { tracked[$0] != nil })
+      FlashLog.debug(
+        "[window_layout] restore_deferred reason=session_suspended "
+          + "pending=\(pendingRestoreKeys.count)")
+      return
+    }
+    var counts: [RestoreOutcome: Int] = [:]
     var dropped = 0
-    for key in screenChangeKeys {
+    for key in keys {
       guard var layout = tracked[key] else {
+        pendingRestoreKeys.remove(key)
         dropped += 1
         continue
       }
       guard NSRunningApplication(processIdentifier: layout.pid)?.isTerminated == false else {
         tracked.removeValue(forKey: key)
         selfAuthoredChangesUntil.removeValue(forKey: key)
+        pendingRestoreKeys.remove(key)
         dropped += 1
         continue
       }
       let bundleIdentifier =
         NSRunningApplication(processIdentifier: layout.pid)?.bundleIdentifier
       let axApp = AXApp.make(pid: layout.pid)
-      let didRestore = GeckoAccessibility.withWindowManagement(
+      let outcome = GeckoAccessibility.withWindowManagement(
         pid: layout.pid,
         bundleIdentifier: bundleIdentifier,
         app: axApp
-      ) { axApp, prepareGeometry in
-        let current = WindowMover.readWindowFrameInNSCoords(
-          window: layout.window,
-          primaryHeight: primaryHeight)
+      ) { axApp, prepareGeometry -> RestoreOutcome in
         guard
+          let current = WindowMover.readWindowFrameInNSCoords(
+            window: layout.window,
+            primaryHeight: primaryHeight),
           let plan = WindowMover.recoveryPlan(
             layout: layout.layout,
             screenID: layout.screenID,
             currentFrame: current,
             screens: screens)
-        else { return false }
+        else { return .unreadable }
         layout.screenID = plan.screen.id
-        guard current.map({ WindowMover.framesMatchPlacement($0, plan.frame) }) != true else {
-          alreadyCorrect += 1
-          return false
+        guard !WindowMover.framesMatchPlacement(current, plan.frame) else {
+          return .alreadyCorrect
         }
         let startedAt = DispatchTime.now()
         prepareGeometry()
-        WindowMover.apply(
+        let applied = WindowMover.apply(
           rect: plan.frame,
           toWindow: layout.window,
           axApp: axApp,
@@ -346,10 +409,19 @@ final class WindowLayoutManager {
               + "layout=\(WindowMover.description(of: layout.layout)) "
               + "elapsed_ms=\(Int(elapsedMs.rounded()))")
         }
-        return true
+        switch applied {
+        case .converged: return .restored
+        case .refused: return .refused
+        case .unreadable: return .unreadable
+        }
       }
-      if didRestore {
-        restored += 1
+      counts[outcome, default: 0] += 1
+      // An unreadable window keeps waiting (a locked or waking session); one
+      // that took its frame, or whose app refused it, is done.
+      if outcome == .unreadable {
+        pendingRestoreKeys.insert(key)
+      } else {
+        pendingRestoreKeys.remove(key)
       }
       tracked[key] = layout
       selfAuthoredChangesUntil[key] =
@@ -360,8 +432,10 @@ final class WindowLayoutManager {
     // identical to a pass that had nothing to do, and telling those apart is
     // the whole question when a restore does not stick.
     FlashLog.debug(
-      "[window_layout] restore_pass considered=\(screenChangeKeys.count) "
-        + "restored=\(restored) already_correct=\(alreadyCorrect) untracked=\(dropped)")
+      "[window_layout] restore_pass considered=\(keys.count) "
+        + "restored=\(counts[.restored] ?? 0) already_correct=\(counts[.alreadyCorrect] ?? 0) "
+        + "refused=\(counts[.refused] ?? 0) unreadable=\(counts[.unreadable] ?? 0) "
+        + "untracked=\(dropped) pending=\(pendingRestoreKeys.count)")
   }
 
   func appDidTerminate(pid: pid_t) {
@@ -372,6 +446,7 @@ final class WindowLayoutManager {
         self.tracked.removeValue(forKey: key)
         self.selfAuthoredChangesUntil.removeValue(forKey: key)
         self.screenChangeKeys.remove(key)
+        self.pendingRestoreKeys.remove(key)
       }
     }
   }
@@ -803,6 +878,24 @@ enum WindowMover {
   static func rectFor(
     position: WindowPosition, in vf: CGRect
   ) -> CGRect {
+    pointAligned(fractionalRect(for: position, in: vf))
+  }
+
+  /// A slot's edges on whole points. Each edge rounds on its own and the size
+  /// follows from the rounded edges, so neighbouring slots (the two halves of
+  /// an odd-width display) share an edge instead of leaving a gap or
+  /// overlapping, and the frame an app reports back matches it exactly.
+  static func pointAligned(_ rect: CGRect) -> CGRect {
+    let minX = rect.minX.rounded()
+    let minY = rect.minY.rounded()
+    return CGRect(
+      x: minX, y: minY,
+      width: rect.maxX.rounded() - minX, height: rect.maxY.rounded() - minY)
+  }
+
+  private static func fractionalRect(
+    for position: WindowPosition, in vf: CGRect
+  ) -> CGRect {
     let halfW = vf.width / 2
     let halfH = vf.height / 2
     switch position {
@@ -847,13 +940,14 @@ enum WindowMover {
     case .proportional(let frame):
       let width = usableFrame.width * CGFloat(frame.widthPercent / 100)
       let height = usableFrame.height * CGFloat(frame.heightPercent / 100)
-      return CGRect(
-        x: usableFrame.minX + usableFrame.width * CGFloat(frame.xPercent / 100),
-        y: usableFrame.maxY
-          - usableFrame.height * CGFloat(frame.yPercent / 100)
-          - height,
-        width: width,
-        height: height)
+      return pointAligned(
+        CGRect(
+          x: usableFrame.minX + usableFrame.width * CGFloat(frame.xPercent / 100),
+          y: usableFrame.maxY
+            - usableFrame.height * CGFloat(frame.yPercent / 100)
+            - height,
+          width: width,
+          height: height))
     }
   }
 
@@ -871,17 +965,26 @@ enum WindowMover {
     }
   }
 
+  /// The layout `frame` sits in: the window's own tracked layout first, then
+  /// a named slot, then a proportional layout the config's mappings declare —
+  /// so a window placed by such a mapping is recognized after Flash restarts.
   static func semanticLayout(
     matching frame: CGRect,
     in usableFrame: CGRect,
-    existing: WindowLayout?
+    existing: WindowLayout?,
+    declared: [WindowLayout] = []
   ) -> WindowLayout? {
     if let existing,
       framesApproximatelyEqual(frame, rectFor(layout: existing, in: usableFrame))
     {
       return existing
     }
-    return position(matching: frame, in: usableFrame).map(WindowLayout.position)
+    if let position = position(matching: frame, in: usableFrame) {
+      return .position(position)
+    }
+    return declared.first {
+      framesApproximatelyEqual(frame, rectFor(layout: $0, in: usableFrame))
+    }
   }
 
   static func framesApproximatelyEqual(
@@ -952,13 +1055,21 @@ enum WindowMover {
   ///      and, if it missed the target, re-issue position → size. Bounded so a
   ///      window that genuinely can't reach the rect (grid-snapping terminals,
   ///      min-size dialogs) stops instead of looping.
+  /// How a placement ended: the window took the rect, its app kept it
+  /// elsewhere, or its frame could not be read back (the session is locked,
+  /// or the app is not answering Accessibility).
+  enum ApplyOutcome: Equatable {
+    case converged, refused, unreadable
+  }
+
+  @discardableResult
   static func apply(
     rect nsRect: CGRect,
     toWindow window: AXUIElement,
     axApp: AXUIElement,
     primaryHeight: CGFloat,
     bundleIdentifier: String?
-  ) {
+  ) -> ApplyOutcome {
     let axY = primaryHeight - nsRect.maxY
     var axPos = CGPoint(x: nsRect.origin.x, y: axY)
     var axSize = CGSize(width: nsRect.width, height: nsRect.height)
@@ -1050,6 +1161,7 @@ enum WindowMover {
           + "actual=\(actual.map(NSStringFromRect) ?? "unreadable") "
           + "corrections=\(attempt)")
     }
+    return converged ? .converged : actual == nil ? .unreadable : .refused
   }
 
   /// Read `AXEnhancedUserInterface`. Returns `nil` for apps that

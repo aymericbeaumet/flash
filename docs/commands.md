@@ -47,4 +47,10 @@ and `y` are offsets from the top-left of Flash's usable screen area, including
 its status-bar reservation on each display where the bar is configured to
 render. Flash retains that geometry as window intent: an explicit
 `--screen=+1` move, a resolution or usable-area change, and display
-attachment/removal all reapply it against the destination screen.
+attachment/removal all reapply it against the destination screen. Every slot
+lands on whole points, each edge rounded on its own, so neighbouring slots share
+an edge. A display change that arrives while the Mac is locked or asleep (a wake
+at a different desk) is applied once the session is back; a window whose frame
+could not be read then is restored as soon as it can be, or when focused. A
+window already sitting in a proportional frame one of your `window_move`
+mappings declares is recognized after Flash restarts.

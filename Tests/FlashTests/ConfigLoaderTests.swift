@@ -325,6 +325,24 @@ final class ConfigLoaderTests: XCTestCase {
         .statusBar.observedPluginIDs, [], "a hidden bar observes nothing")
   }
 
+  func testDeclaredWindowLayoutsAreTheProportionalWindowMoveMappings() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "alt+m" = ["flash", "window_move", "--position=maximized"]
+      "alt+z" = ["flash", "window_move", "--x=10.6925%", "--y=10.6925%", "--width=78.615%", "--height=78.615%"]
+      [mode.normal.mappings]
+      "z" = ["flash", "window_move", "--x=10.6925%", "--y=10.6925%", "--width=78.615%", "--height=78.615%"]
+      """)
+    XCTAssertEqual(
+      config.mode.declaredWindowLayouts,
+      [
+        .proportional(
+          ProportionalWindowFrame(
+            xPercent: 10.6925, yPercent: 10.6925, widthPercent: 78.615, heightPercent: 78.615))
+      ])
+  }
+
   func testShownPopupNamesComeFromTheEnabledBarsMarkers() {
     let toml = """
       [statusbar]

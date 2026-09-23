@@ -782,12 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor,
         beforeRecoveryPass: { [weak self] in self?.overlay.settleNativeMenuBarHeights() },
-        afterRecoveryPass: { [weak self] _ in
-          // The semantic window restore runs off-main. Repaint only after each
-          // recovery pass has applied its AX frame so the border cannot sample
-          // the pre-handoff geometry and remain on the disconnected display.
-          self?.updateActiveWindowBorder(reason: "screen_layout_recovered")
-        })
+        afterRecoveryPass: { [weak self] _ in self?.windowLayoutRecovered() })
       // OverlayPanel invalidates its screen snapshot from the same notification.
       // Redraw on the next main turn so the border path uses the rebuilt union.
       DispatchQueue.main.async {

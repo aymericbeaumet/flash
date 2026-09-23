@@ -272,12 +272,14 @@ extension AppDelegate {
       guard inserted else { return }
       FlashLog.trace("[mode] active_border_session_suspend reason=\(reason)")
       hideActiveWindowBorder(reason: reason)
+      windowLayoutSessionChanged(suspended: true)
       return
     }
 
     guard activeWindowBorderSessionSuspensions.remove(source) != nil else { return }
     FlashLog.trace("[mode] active_border_session_resume reason=\(reason)")
     guard activeWindowBorderSessionSuspensions.isEmpty else { return }
+    windowLayoutSessionChanged(suspended: false)
     reconcileFrontmostApplication(reason: reason)
     updateActiveWindowBorder(reason: reason)
     scheduleActiveWindowBorderReconciliation(
