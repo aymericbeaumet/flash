@@ -65,6 +65,8 @@ final class PollSchedulerTests: XCTestCase {
     let scheduler = PollScheduler()
     let ticked = expectation(description: "both clients tick")
     ticked.expectedFulfillmentCount = 2
+    // Both keep ticking until they are unregistered below.
+    ticked.assertForOverFulfill = false
     let queue = DispatchQueue(label: "poll.tests")
     for id in ["core:one", "core:two"] {
       scheduler.register(id, everyMs: 50, on: queue) { ticked.fulfill() }
