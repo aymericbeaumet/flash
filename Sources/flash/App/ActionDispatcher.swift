@@ -38,14 +38,10 @@ enum ActionDispatcher {
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
-  /// origin of primary screen). The click needs the pointer on the target —
-  /// the HID tap hit-tests at the cursor, and terminals resolve links from
-  /// hover state — so the cursor jumps there while hidden and is put back
-  /// where the user left it after the mouse-up: a hint clicks without moving
-  /// the pointer. Verbs whose purpose is moving it (`--move`, `scroll_target`,
-  /// pointer mode) use `moveCursor` instead. Every committed hint —
-  /// Alacritty/tmux links, browser and native controls, plugin targets, grid
-  /// cells — is delivered this way and interpreted by the app itself; there is
+  /// origin of primary screen). The pointer moves to the target and stays
+  /// there, as with a hardware click. Every committed hint — Alacritty/tmux
+  /// links, browser and native controls, plugin targets, grid cells — is
+  /// delivered this way and interpreted by the app itself; there is
   /// deliberately no provider-owned activation or AXPress fallback.
   ///
   /// Returns `true` once the click is enqueued. The blocking posting (settle +
@@ -93,24 +89,15 @@ enum ActionDispatcher {
       FlashLog.warn("[click] could not create CGEvent for synthesized click")
       return
     }
-    let restorePoint = cursorRestorePoint(from: originalCursor, to: cgPoint)
-    withCursorHidden(when: restorePoint != nil) {
-      if restorePoint != nil { warpCursor(to: cgPoint) }
-      events[0].post(tap: .cghidEventTap)
-      usleep(20_000)
-      // Terminals need a nonzero down/up interval to recognize modified clicks.
-      let mouseDownHoldUs = useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000)
-      for event in events.dropFirst() {
-        event.post(tap: .cghidEventTap)
-        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
-          usleep(mouseDownHoldUs)
-        }
-      }
-      if let restorePoint {
-        // Let the app finish handling the release before the pointer leaves: a
-        // control that reads the cursor in its mouse-up must still see the hit.
+    warpCursor(to: cgPoint)
+    events[0].post(tap: .cghidEventTap)
+    usleep(20_000)
+    // Terminals need a nonzero down/up interval to recognize modified clicks.
+    let mouseDownHoldUs = useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000)
+    for event in events.dropFirst() {
+      event.post(tap: .cghidEventTap)
+      if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
         usleep(mouseDownHoldUs)
-        warpCursor(to: restorePoint)
       }
     }
     FlashLog.trace(
@@ -186,26 +173,6 @@ enum ActionDispatcher {
   /// and drop them instead of recursing.
   static let syntheticMouseEventTag: Int64 = 0x46_4C_53_44  // "FLSD"
 
-  static func withCursorHidden<T>(
-    when enabled: Bool,
-    hide: () -> CGError = { CGDisplayHideCursor(CGMainDisplayID()) },
-    show: () -> Void = { CGDisplayShowCursor(CGMainDisplayID()) },
-    perform: () throws -> T
-  ) rethrows -> T {
-    let didHide = enabled && hide() == .success
-    defer { if didHide { show() } }
-    return try perform()
-  }
-
-  /// Where a click or drag returns the pointer. Skip a redundant warp when
-  /// the gesture already ended at its original pointer position.
-  static func cursorRestorePoint(
-    from origin: CGPoint, to clickPoint: CGPoint
-  ) -> CGPoint? {
-    if abs(origin.x - clickPoint.x) < 0.5, abs(origin.y - clickPoint.y) < 0.5 { return nil }
-    return origin
-  }
-
   /// Warp and immediately re-associate. A bare warp suppresses local HID
   /// movement for the source's suppression interval (0.25 s), which would eat
   /// the user's next physical nudge.
@@ -215,11 +182,9 @@ enum ActionDispatcher {
   }
 
   /// Synthesize a continuous left-button drag from `from` to `to` (both
-  /// NSScreen, bottom-left origin). Unlike clicks, the cursor stays visible
-  /// for the whole gesture — drop targets light up from the interpolated
-  /// `leftMouseDragged` stream exactly as they do for a hardware drag — and it
-  /// is returned to where the user left it once the drop has committed.
-  /// `modifiers` are held on every event so option-drag copy / cmd-drag
+  /// NSScreen, bottom-left origin). Drop targets light up from the
+  /// interpolated `leftMouseDragged` stream exactly as they do for a hardware
+  /// drag, and the pointer stays at the drop point. `modifiers` are held on every event so option-drag copy / cmd-drag
   /// semantics reach the receiving app.
   ///
   /// `completion` runs on the main thread after the gesture has been posted.
@@ -290,10 +255,6 @@ enum ActionDispatcher {
     // pointer before the release commits the drop.
     usleep(60_000)
     post(.leftMouseUp, at: end)
-    if let restorePoint = cursorRestorePoint(from: previous, to: end) {
-      usleep(useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000))
-      warpCursor(to: restorePoint)
-    }
     FlashLog.trace(
       "[drag] synthesize from=(\(Int(from.x)),\(Int(from.y))) "
         + "to=(\(Int(to.x)),\(Int(to.y))) flags=\(flags.rawValue)")
@@ -304,8 +265,7 @@ enum ActionDispatcher {
   /// macOS gesture, so it survives line wraps and never turns into an
   /// accidental drag of an already-selected range (which a down→dragged→up
   /// stream starting on a selection would). `modifiers` are applied to both
-  /// clicks; shift is forced onto the second. Like every click, each one puts
-  /// the pointer back where the user left it.
+  /// clicks; shift is forced onto the second. The pointer stays at `to`.
   ///
   /// `completion` runs on the main thread after both clicks have been posted.
   @discardableResult
