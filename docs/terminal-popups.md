@@ -221,7 +221,7 @@ children. Commands should remain in the foreground; popup declarations are not a
 
 ## Build and verification
 
-The backend pins libghostty-vt to `b0c421fcd2e290629d4285c181b52fe2f2095f06` and Zig 0.16.0. `Scripts/build-ghostty.sh --dev` downloads the pinned source with a SHA-256 check and caches a native macOS static XCFramework under `build/ghostty`. `--release` combines arm64 and x86_64 into the macOS slice. It does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
+The backend pins libghostty-vt to `622b4eecd7d2ce1a10930537c17f0d61abdba817` and Zig 0.16.0. `Scripts/build-ghostty.sh --dev` downloads the pinned source with a SHA-256 check and caches a native macOS static XCFramework under `build/ghostty`. `--release` combines arm64 and x86_64 into the macOS slice. It does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
 
 Run the bootstrap before direct SwiftPM commands on a fresh checkout:
 

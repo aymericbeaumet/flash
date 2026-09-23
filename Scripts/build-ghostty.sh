@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-revision=b0c421fcd2e290629d4285c181b52fe2f2095f06
-checksum=4c4b59046a50eaefcfa3afab5d28eef5c663730e5f467687f88e7003bcd29586
+revision=622b4eecd7d2ce1a10930537c17f0d61abdba817
+checksum=762d7bf7778a5590dee92501e9c246f758b54925401ca6c5f72838009b1379ff
 mode=${1:---dev}
 [[ "$mode" == --dev || "$mode" == --release ]] || { echo "Usage: $0 [--dev|--release]" >&2; exit 2; }
 [[ "$(zig version)" == 0.16.0 ]] || { echo 'Install Zig 0.16.0 (mise install zig).' >&2; exit 1; }
