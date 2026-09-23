@@ -39,17 +39,13 @@ extension AppDelegate {
     case .passThrough:
       FlashLog.trace("[mode] pointer_pass_through reason=idle_scroll")
       return
-    case .menuBar(let menuDecision):
+    case .menuBar(let dismissHints):
       noteMenuBarInteraction(reason: "pointer_click")
-      FlashLog.trace(
-        "[mode] pointer_in_menu_bar mode=\(flashMode) suspend_native="
-          + "\(menuDecision.suspendForNativeSurface)")
-      if menuDecision.dismissTransientHintsWithoutRekey {
+      FlashLog.trace("[mode] pointer_in_menu_bar mode=\(flashMode)")
+      if dismissHints {
         dismissTransientPointerStateWithoutRekey(reason: "menu_bar_click")
       }
-      if menuDecision.suspendForNativeSurface {
-        suspendNormalCaptureForNativeSurface(reason: "menu_bar_pointer")
-      }
+      suspendNormalCaptureForNativeSurface(reason: "menu_bar_pointer")
       return
     case .app(let appDecision):
       handleAppPointerDecision(appDecision, click: pointerClick)
@@ -77,25 +73,17 @@ extension AppDelegate {
     if let clickedContext, flashMode == .normal {
       normalModeTargetPID = clickedContext.processID
     }
-    if decision.dismissTransientHintsWithoutRekey {
-      dismissTransientPointerStateWithoutRekey(reason: "physical_native_surface")
-    }
-    if decision.suspendForNativeSurface {
-      suspendNormalCaptureForNativeSurface(reason: "physical_native_surface")
-      return
-    }
-    let handoffToken: UInt64?
-    if decision.enterInsert {
-      handoffToken = notePointerInsertHandoff(reason: "physical_pointer_click")
-    } else {
-      handoffToken = nil
-    }
-    if decision.releaseCapture {
-      releaseNormalCaptureForPointerHandoff(reason: "physical_pointer_click")
-    } else {
+    switch decision {
+    case .ignore:
       cancelOverlay()
-    }
-    if decision.enterInsert {
+    case .suspendForNativeSurface(let dismissHints):
+      if dismissHints {
+        dismissTransientPointerStateWithoutRekey(reason: "physical_native_surface")
+      }
+      suspendNormalCaptureForNativeSurface(reason: "physical_native_surface")
+    case .handOffToInsert:
+      let handoffToken = notePointerInsertHandoff(reason: "physical_pointer_click")
+      releaseNormalCaptureForPointerHandoff(reason: "physical_pointer_click")
       // A physical left / double click ALWAYS hands the keyboard to the app and
       // enters INSERT — no editability probe. The user clicked with the mouse to
       // work in that app. Hint commits additionally require an input target.
@@ -643,7 +631,7 @@ extension AppDelegate {
     click: OverlayPointerClick?,
     targetPID: pid_t?
   ) -> Bool {
-    guard decision.releaseCapture, let click else { return false }
+    guard decision == .handOffToInsert, let click else { return false }
     switch click.action {
     case .rightClick:
       return false

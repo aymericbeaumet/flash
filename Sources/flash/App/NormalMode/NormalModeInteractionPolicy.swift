@@ -28,21 +28,23 @@ enum NormalModePointerPolicy {
     }
   }
 
-  struct AppClickDecision: Equatable {
-    var releaseCapture: Bool
-    var enterInsert: Bool
-    var suspendForNativeSurface: Bool
-    var dismissTransientHintsWithoutRekey: Bool
-  }
-
-  struct MenuBarClickDecision: Equatable {
-    var suspendForNativeSurface: Bool
-    var dismissTransientHintsWithoutRekey: Bool
+  /// What a physical click in an app does to NORMAL — exactly one outcome.
+  enum AppClickDecision: Equatable {
+    /// NORMAL doesn't own the click (another mode, the command line).
+    case ignore
+    /// A right-click's native context menu runs its own modal key session:
+    /// NORMAL capture suspends until it closes, and transient hints showing
+    /// behind it are dropped first.
+    case suspendForNativeSurface(dismissHints: Bool)
+    /// A left / double click hands the keyboard to the app and enters INSERT.
+    case handOffToInsert
   }
 
   enum PointerDecision: Equatable {
     case passThrough
-    case menuBar(MenuBarClickDecision)
+    /// A menu-bar click opens a native menu: NORMAL capture suspends,
+    /// transient hints showing behind it are dropped first.
+    case menuBar(dismissHints: Bool)
     case app(AppClickDecision)
     case cancelOverlay
   }
@@ -72,10 +74,7 @@ enum NormalModePointerPolicy {
 
     guard case .click(let click) = intent else { return .cancelOverlay }
     if pointIsInMenuBar, !activationInFlight {
-      return .menuBar(
-        MenuBarClickDecision(
-          suspendForNativeSurface: true,
-          dismissTransientHintsWithoutRekey: hasHints))
+      return .menuBar(dismissHints: hasHints)
     }
 
     let decision = appClickDecision(
@@ -83,8 +82,7 @@ enum NormalModePointerPolicy {
       wasCommandLine: overlayInputMode == .commandLine,
       hasHints: hasHints,
       action: click.action)
-    guard decision.releaseCapture || decision.enterInsert || decision.suspendForNativeSurface
-    else { return .cancelOverlay }
+    guard decision != .ignore else { return .cancelOverlay }
     return .app(decision)
   }
 
@@ -94,32 +92,18 @@ enum NormalModePointerPolicy {
     hasHints: Bool,
     action: JumpAction
   ) -> AppClickDecision {
-    guard mode == .normal, !wasCommandLine else {
-      return AppClickDecision(
-        releaseCapture: false,
-        enterInsert: false,
-        suspendForNativeSurface: false,
-        dismissTransientHintsWithoutRekey: false)
-    }
+    guard mode == .normal, !wasCommandLine else { return .ignore }
     // Right-click opens a native context menu that runs its own modal key
     // session — it must NEVER flip the mode (same rule as the `f`/`F` commits).
     // Suspend normal capture so the menu owns the keyboard, then NORMAL resumes
     // when it dismisses; drop any transient hints first so they don't linger
     // behind the menu.
     if action == .rightClick {
-      return AppClickDecision(
-        releaseCapture: false,
-        enterInsert: false,
-        suspendForNativeSurface: true,
-        dismissTransientHintsWithoutRekey: hasHints)
+      return .suspendForNativeSurface(dismissHints: hasHints)
     }
     // A physical left / double click always hands the keyboard to the app and
     // enters INSERT. Hint clicks additionally require an input target.
-    return AppClickDecision(
-      releaseCapture: true,
-      enterInsert: true,
-      suspendForNativeSurface: false,
-      dismissTransientHintsWithoutRekey: false)
+    return .handOffToInsert
   }
 
   static func pointerScrollShouldPassThrough(

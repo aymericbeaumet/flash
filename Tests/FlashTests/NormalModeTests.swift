@@ -1123,10 +1123,7 @@ final class NormalModeTests: XCTestCase {
         pointIsInMenuBar: true)
       XCTAssertEqual(
         decision,
-        .menuBar(
-          NormalModePointerPolicy.MenuBarClickDecision(
-            suspendForNativeSurface: true,
-            dismissTransientHintsWithoutRekey: false)))
+        .menuBar(dismissHints: false))
     }
   }
 
@@ -1184,69 +1181,45 @@ final class NormalModeTests: XCTestCase {
         wasCommandLine: false,
         hasHints: false,
         action: .leftClick),
-      NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: true,
-        enterInsert: true,
-        suspendForNativeSurface: false,
-        dismissTransientHintsWithoutRekey: false))
+      NormalModePointerPolicy.AppClickDecision.handOffToInsert)
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: false,
         hasHints: false,
         action: .doubleClick),
-      NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: true,
-        enterInsert: true,
-        suspendForNativeSurface: false,
-        dismissTransientHintsWithoutRekey: false))
+      NormalModePointerPolicy.AppClickDecision.handOffToInsert)
     // Right-click never flips the mode: it suspends normal capture so the
     // native context menu owns the keyboard, and drops any transient hints
-    // showing behind it (so `dismissTransientHintsWithoutRekey` tracks hasHints).
+    // showing behind it (so `dismissHints` tracks hasHints).
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: false,
         hasHints: true,
         action: .rightClick),
-      NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: false,
-        enterInsert: false,
-        suspendForNativeSurface: true,
-        dismissTransientHintsWithoutRekey: true))
+      NormalModePointerPolicy.AppClickDecision.suspendForNativeSurface(dismissHints: true))
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: false,
         hasHints: false,
         action: .rightClick),
-      NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: false,
-        enterInsert: false,
-        suspendForNativeSurface: true,
-        dismissTransientHintsWithoutRekey: false))
+      NormalModePointerPolicy.AppClickDecision.suspendForNativeSurface(dismissHints: false))
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .insert,
         wasCommandLine: false,
         hasHints: false,
         action: .leftClick),
-      NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: false,
-        enterInsert: false,
-        suspendForNativeSurface: false,
-        dismissTransientHintsWithoutRekey: false))
+      NormalModePointerPolicy.AppClickDecision.ignore)
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: true,
         hasHints: false,
         action: .leftClick),
-      NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: false,
-        enterInsert: false,
-        suspendForNativeSurface: false,
-        dismissTransientHintsWithoutRekey: false))
+      NormalModePointerPolicy.AppClickDecision.ignore)
   }
 
   func testNormalAppRightClickSuspendsForContextMenuInsteadOfInsert() {
@@ -1268,24 +1241,12 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       decision,
       .app(
-        NormalModePointerPolicy.AppClickDecision(
-          releaseCapture: false,
-          enterInsert: false,
-          suspendForNativeSurface: true,
-          dismissTransientHintsWithoutRekey: false)))
+        NormalModePointerPolicy.AppClickDecision.suspendForNativeSurface(dismissHints: false)))
   }
 
   func testPhysicalPointerClickForwardingOnlyCoversActivationOnlyPrimaryClicks() {
-    let released = NormalModePointerPolicy.AppClickDecision(
-      releaseCapture: true,
-      enterInsert: true,
-      suspendForNativeSurface: false,
-      dismissTransientHintsWithoutRekey: false)
-    let notReleased = NormalModePointerPolicy.AppClickDecision(
-      releaseCapture: false,
-      enterInsert: false,
-      suspendForNativeSurface: false,
-      dismissTransientHintsWithoutRekey: false)
+    let released = NormalModePointerPolicy.AppClickDecision.handOffToInsert
+    let notReleased = NormalModePointerPolicy.AppClickDecision.ignore
 
     XCTAssertTrue(
       AppDelegate.physicalPointerClickShouldBeForwarded(
@@ -1377,10 +1338,7 @@ final class NormalModeTests: XCTestCase {
             location: CGPoint(x: 20, y: 20),
             modifiers: [])),
         pointIsInMenuBar: true),
-      .menuBar(
-        NormalModePointerPolicy.MenuBarClickDecision(
-          suspendForNativeSurface: true,
-          dismissTransientHintsWithoutRekey: true)))
+      .menuBar(dismissHints: true))
   }
 
   func testWorkspaceActivationRecaptureSkipsPointerInsertHandoff() {
