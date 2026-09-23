@@ -277,11 +277,11 @@ character produced by Shift.
 
 ## Rejected commands
 
-Unknown commands and unsupported subcommands use Flash’s existing error toast
-and warning log. The diagnostic names the invocation and points to the mapping
-or configuration. Invalid mapping arrays report their source location during
+Unknown commands and unsupported subcommands do nothing visible: no toast, only
+a warning log naming the invocation and pointing to the mapping or
+configuration. Invalid mapping arrays report their source location during
 configuration loading. Malformed built-in commands cannot silently become plugin
-calls, and plugin execution failures are also surfaced.
+calls. Plugin execution failures still raise the error toast.
 
 The CLI accepts `--key=value` and boolean `--flag` arguments, rejects stray
 positional subcommands, and returns status 2 when parsing or resident dispatch

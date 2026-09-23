@@ -528,8 +528,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     return true
   }
 
+  /// An unknown or unsupported command does nothing visible: a typo on the
+  /// command line or a key with no handler in this app is not an error worth
+  /// a toast. The log keeps the diagnostic, and the CLI still gets its
+  /// rejection reply.
   func warnUnsupportedCommand(_ command: String) {
-    displayCommandWarning(URLEventHandler.rejectionMessage(command))
+    FlashLog.warn(URLEventHandler.rejectionMessage(command), source: "core:Command")
   }
 
   func warnCommandFailure(_ command: String) {
