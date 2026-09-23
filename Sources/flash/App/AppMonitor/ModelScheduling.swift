@@ -25,14 +25,14 @@ extension AppMonitor {
     slowAutomaticModelRefreshPIDs.removeAll()
   }
 
-  private func allowsAutomaticRefresh(pid: pid_t, reason: String) -> Bool {
-    !PreparedModelScheduler.isSpeculative(reason: reason)
+  private func allowsAutomaticRefresh(pid: pid_t, reason: ModelRefreshReason) -> Bool {
+    !reason.isSpeculative
       || (!axEventStormingPIDs.contains(pid) && !slowAutomaticModelRefreshPIDs.contains(pid))
   }
 
   /// New events extend one debounce wake per burst. Higher-priority requests
   /// can move it earlier; an obsolete callback never owns the replacement.
-  func scheduleModelRefresh(for pid: pid_t, reason: String) {
+  func scheduleModelRefresh(for pid: pid_t, reason: ModelRefreshReason) {
     guard allowsAutomaticRefresh(pid: pid, reason: reason),
       let arm = modelScheduler.scheduleRefresh(
         pid: pid, reason: reason, now: DispatchTime.now().uptimeNanoseconds)
@@ -66,14 +66,14 @@ extension AppMonitor {
           FlashLog.debug("[ax] maintenance_suspended pid=\(pid) reason=user_idle")
           return
         }
-        self.scheduleModelRefresh(for: pid, reason: "maintenance")
+        self.scheduleModelRefresh(for: pid, reason: .maintenance)
       }
     }
   }
 
   private func scheduleMaintenanceRefresh(for model: PreparedModel) {
     modelScheduler.cancelMaintenance(pid: model.pid)
-    guard allowsAutomaticRefresh(pid: model.pid, reason: "maintenance") else { return }
+    guard allowsAutomaticRefresh(pid: model.pid, reason: .maintenance) else { return }
     let arm = modelScheduler.scheduleMaintenance(
       pid: model.pid, computedAt: model.computedAt.uptimeNanoseconds,
       dirtyToken: model.dirtyToken, configRevision: model.configRevision,
@@ -96,10 +96,10 @@ extension AppMonitor {
   /// A maintenance walk that reproduces the current model unchanged is
   /// evidence the app is static: serve it longer before walking again. Any
   /// other outcome resets to the base ceiling.
-  static func nextFreshnessMs(previous: PreparedModel?, built: PreparedModel, reason: String)
-    -> Int
-  {
-    guard reason == "maintenance", let previous,
+  static func nextFreshnessMs(
+    previous: PreparedModel?, built: PreparedModel, reason: ModelRefreshReason
+  ) -> Int {
+    guard reason == .maintenance, let previous,
       previous.dirtyToken == built.dirtyToken,
       previous.configRevision == built.configRevision,
       previous.fingerprint == built.fingerprint
@@ -109,7 +109,7 @@ extension AppMonitor {
 
   func runModelRefresh(
     pid: pid_t,
-    reason: String,
+    reason: ModelRefreshReason,
     completion: ((PreparedModel?) -> Void)?
   ) {
     // Activation may jump a debounce/maintenance wake. Invalidate both tickets
@@ -147,7 +147,7 @@ extension AppMonitor {
         fields: [
           "pid": "\(pid)",
           "bundle": context.bundleIdentifier,
-          "reason": reason,
+          "reason": reason.logValue,
         ])
       return
     }
@@ -191,7 +191,7 @@ extension AppMonitor {
         let waiter = self.pendingModelCompletion.removeValue(forKey: pid)
         defer {
           if shouldRunQueued {
-            self.scheduleModelRefresh(for: pid, reason: "queued")
+            self.scheduleModelRefresh(for: pid, reason: .queued)
           }
         }
 
@@ -207,7 +207,7 @@ extension AppMonitor {
                 fields: [
                   "pid": "\(pid)",
                   "bundle": context.bundleIdentifier,
-                  "reason": reason,
+                  "reason": reason.logValue,
                   "elapsed_ms": String(format: "%.2f", rebuildElapsedMs),
                 ])
             }

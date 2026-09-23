@@ -60,24 +60,24 @@ final class PreparedModelStoreTests: XCTestCase {
       pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
     let same = model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: "maintenance"),
+      AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: .maintenance),
       AppMonitor.modelFreshnessMs * 2)
     var grown = previous
     grown.freshnessMs = AppMonitor.modelFreshnessMaxMs
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: grown, built: same, reason: "maintenance"),
+      AppMonitor.nextFreshnessMs(previous: grown, built: same, reason: .maintenance),
       AppMonitor.modelFreshnessMaxMs)
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: "focus"),
+      AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: .focus),
       AppMonitor.modelFreshnessMs)
     let moved = model(
       pid: 42, token: 7, revision: 3, computedAt: now,
       targets: [target(id: "one", frame: CGRect(x: 5, y: 5, width: 10, height: 10))])
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: previous, built: moved, reason: "maintenance"),
+      AppMonitor.nextFreshnessMs(previous: previous, built: moved, reason: .maintenance),
       AppMonitor.modelFreshnessMs)
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: nil, built: same, reason: "maintenance"),
+      AppMonitor.nextFreshnessMs(previous: nil, built: same, reason: .maintenance),
       AppMonitor.modelFreshnessMs)
   }
 

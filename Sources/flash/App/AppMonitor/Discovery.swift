@@ -172,7 +172,7 @@ extension AppMonitor {
   private func refreshForActivation(
     pid: pid_t, completion: @escaping (PreparedModel?) -> Void
   ) {
-    runModelRefresh(pid: pid, reason: "activation") { [weak self] first in
+    runModelRefresh(pid: pid, reason: .activation) { [weak self] first in
       guard let self else { return }
       guard let first else { return completion(nil) }
       let lastHealthy = self.healthyTargetCounts[pid]
@@ -185,7 +185,7 @@ extension AppMonitor {
         "[discover] retry pid=\(pid) targets=\(first.targets.count) "
           + "last_healthy=\(lastHealthy.map(String.init) ?? "none")")
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.activationRetryDelayMs)) {
-        self.runModelRefresh(pid: pid, reason: "activation_retry") { retried in
+        self.runModelRefresh(pid: pid, reason: .activationRetry) { retried in
           let best = [first, retried].compactMap { $0 }.max { $0.targets.count < $1.targets.count }
           FlashLog.info(
             "[discover] retry_result pid=\(pid) first=\(first.targets.count) "

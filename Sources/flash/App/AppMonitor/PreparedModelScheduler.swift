@@ -1,10 +1,61 @@
 import Foundation
 
+/// Why a prepared hint model is rebuilt. The case decides throttling,
+/// priority and speculation; `logValue` exists only for logs, so an AX event
+/// storm no longer builds a reason string per notification.
+enum ModelRefreshReason: Equatable {
+  case activation
+  case activationRetry
+  case focus
+  case config
+  case space
+  case screen
+  case maintenance
+  /// A rebuild requested while another one was running.
+  case queued
+  /// An Accessibility notification from the app, by name.
+  case axEvent(String)
+  /// A Flash action that changed the app (`normal_scroll`, …).
+  case userAction(String)
+
+  /// AX churn and queued follow-ups honor the minimum interval between walks.
+  var isThrottled: Bool {
+    switch self {
+    case .axEvent, .queued: return true
+    default: return false
+    }
+  }
+
+  /// Rebuilds nobody is waiting on, paused while an app storms or walks slow.
+  var isSpeculative: Bool { isThrottled || self == .maintenance }
+
+  /// A pending refresh is never demoted to a lower-priority reason.
+  var priority: Int {
+    if isThrottled { return 0 }
+    return self == .maintenance ? 1 : 2
+  }
+
+  var logValue: String {
+    switch self {
+    case .activation: return "activation"
+    case .activationRetry: return "activation_retry"
+    case .focus: return "focus"
+    case .config: return "config"
+    case .space: return "space"
+    case .screen: return "screen"
+    case .maintenance: return "maintenance"
+    case .queued: return "queued"
+    case .axEvent(let notification): return "ax:\(notification)"
+    case .userAction(let action): return action
+    }
+  }
+}
+
 /// Main-thread scheduling state. Times are supplied by the caller so debounce,
 /// preemption, cancellation, and maintenance can be checked without real timers.
 struct PreparedModelScheduler {
   enum Request: Equatable {
-    case refresh(String)
+    case refresh(ModelRefreshReason)
     case maintenance(dirtyToken: UInt64, configRevision: UInt64)
   }
 
@@ -51,33 +102,20 @@ struct PreparedModelScheduler {
     maintenanceLeadNs = UInt64(maintenanceLeadMs) * 1_000_000
   }
 
-  static func isSpeculative(reason: String) -> Bool {
-    shouldThrottle(reason: reason) || reason == "maintenance"
-  }
-
-  static func shouldThrottle(reason: String) -> Bool {
-    reason.hasPrefix("ax:") || reason == "queued"
-  }
-
-  private static func priority(reason: String) -> Int {
-    if shouldThrottle(reason: reason) { return 0 }
-    return reason == "maintenance" ? 1 : 2
-  }
-
   func hasRefresh(pid: pid_t) -> Bool {
     entries[Key(pid: pid, kind: .refresh)] != nil
   }
 
-  mutating func scheduleRefresh(pid: pid_t, reason: String, now: UInt64) -> Arm? {
+  mutating func scheduleRefresh(pid: pid_t, reason: ModelRefreshReason, now: UInt64) -> Arm? {
     let key = Key(pid: pid, kind: .refresh)
     var deadline = now + debounceNs
-    if Self.shouldThrottle(reason: reason), let last = lastStartedAt[pid] {
+    if reason.isThrottled, let last = lastStartedAt[pid] {
       deadline = max(deadline, last + minimumIntervalNs)
     }
     if var existing = entries[key], case .refresh(let previousReason) = existing.request {
       // AX events may invalidate the model while a focus/config refresh is
       // pending, but must not demote that refresh into a throttled AX request.
-      guard Self.priority(reason: reason) >= Self.priority(reason: previousReason) else {
+      guard reason.priority >= previousReason.priority else {
         return nil
       }
       if deadline >= existing.deadline {
@@ -132,7 +170,7 @@ struct PreparedModelScheduler {
 
   mutating func suppressSpeculativeRefresh(pid: pid_t) {
     let key = Key(pid: pid, kind: .refresh)
-    if case .refresh(let reason) = entries[key]?.request, Self.isSpeculative(reason: reason) {
+    if case .refresh(let reason) = entries[key]?.request, reason.isSpeculative {
       entries.removeValue(forKey: key)
     }
     cancelMaintenance(pid: pid)

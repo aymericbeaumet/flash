@@ -42,7 +42,7 @@ extension AppMonitor {
       forName: NSWorkspace.activeSpaceDidChangeNotification,
       object: nil, queue: .main
     ) { [weak self] _ in
-      self?.onFocusedEnvironmentChanged(reason: "space")
+      self?.onFocusedEnvironmentChanged(reason: .space)
     }
     workspaceObservers = [activate, terminate, launch, activeSpace]
 
@@ -50,7 +50,7 @@ extension AppMonitor {
       forName: NSApplication.didChangeScreenParametersNotification,
       object: nil, queue: .main
     ) { [weak self] _ in
-      self?.onFocusedEnvironmentChanged(reason: "screen")
+      self?.onFocusedEnvironmentChanged(reason: .screen)
     }
     localObservers = [screen]
   }
@@ -71,7 +71,7 @@ extension AppMonitor {
     } else {
       refreshFocusedWindowObservation(for: pid)
     }
-    scheduleModelRefresh(for: pid, reason: "focus")
+    scheduleModelRefresh(for: pid, reason: .focus)
     focusedElementMayHaveChanged?(pid)
   }
 
@@ -94,7 +94,7 @@ extension AppMonitor {
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
     if Self.notificationShouldSchedulePreparedModelRefresh(notification), !eventStorming {
-      scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
+      scheduleModelRefresh(for: pid, reason: .axEvent(notification))
     }
     if Self.notificationMayChangeObservedWindow(notification) {
       refreshFocusedWindowObservation(for: pid)
@@ -116,7 +116,7 @@ extension AppMonitor {
       guard let self, pid > 0 else { return }
       self.dirtyTokens[pid, default: 0] &+= 1
       self.invalidatePreparedModel(for: pid)
-      self.scheduleModelRefresh(for: pid, reason: reason)
+      self.scheduleModelRefresh(for: pid, reason: .userAction(reason))
       FlashLog.debug("[ax] model_invalidated pid=\(pid) reason=\(reason)")
     }
   }
@@ -169,7 +169,7 @@ extension AppMonitor {
     axEventStormingPIDs = stormingPIDs
   }
 
-  private func onFocusedEnvironmentChanged(reason: String) {
+  private func onFocusedEnvironmentChanged(reason: ModelRefreshReason) {
     guard let app = NSWorkspace.shared.frontmostApplication else { return }
     let pid = app.processIdentifier
     guard pid > 0 else { return }

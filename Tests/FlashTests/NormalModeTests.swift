@@ -648,18 +648,20 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testBackgroundModelRefreshThrottleAppliesOnlyToNoisyRefreshes() {
-    XCTAssertTrue(PreparedModelScheduler.shouldThrottle(reason: "ax:AXValueChanged"))
-    XCTAssertTrue(PreparedModelScheduler.shouldThrottle(reason: "queued"))
-    XCTAssertFalse(PreparedModelScheduler.shouldThrottle(reason: "maintenance"))
-    XCTAssertFalse(PreparedModelScheduler.shouldThrottle(reason: "focus"))
-    XCTAssertFalse(PreparedModelScheduler.shouldThrottle(reason: "config"))
+    XCTAssertTrue(ModelRefreshReason.axEvent("AXValueChanged").isThrottled)
+    XCTAssertTrue(ModelRefreshReason.queued.isThrottled)
+    XCTAssertFalse(ModelRefreshReason.maintenance.isThrottled)
+    XCTAssertTrue(ModelRefreshReason.maintenance.isSpeculative)
+    XCTAssertFalse(ModelRefreshReason.focus.isThrottled)
+    XCTAssertFalse(ModelRefreshReason.userAction("normal_scroll").isSpeculative)
+    XCTAssertEqual(ModelRefreshReason.axEvent("AXValueChanged").logValue, "ax:AXValueChanged")
   }
 
   func testAXEventStormSuppressesOnlySpeculativePreparedModelRefreshes() {
     let registry = SourceRegistry(descriptors: [], runningApplications: [])
     let monitor = AppMonitor(registry: registry, config: .default)
     let pid = pid_t(42)
-    monitor.scheduleModelRefresh(for: pid, reason: "ax:AXUIElementDestroyed")
+    monitor.scheduleModelRefresh(for: pid, reason: .axEvent("AXUIElementDestroyed"))
     XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
 
     for _ in 0..<AppMonitor.axEventStormCountThreshold {
@@ -669,12 +671,12 @@ final class NormalModeTests: XCTestCase {
 
     XCTAssertTrue(monitor.axEventStormingPIDs.contains(pid))
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
-    monitor.scheduleModelRefresh(for: pid, reason: "ax:AXUIElementDestroyed")
+    monitor.scheduleModelRefresh(for: pid, reason: .axEvent("AXUIElementDestroyed"))
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
-    monitor.scheduleModelRefresh(for: pid, reason: "maintenance")
+    monitor.scheduleModelRefresh(for: pid, reason: .maintenance)
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
 
-    monitor.scheduleModelRefresh(for: pid, reason: "focus")
+    monitor.scheduleModelRefresh(for: pid, reason: .focus)
     XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.cancelRefreshWork(for: pid)
   }
@@ -707,13 +709,13 @@ final class NormalModeTests: XCTestCase {
     let pid = pid_t(43)
     monitor.slowAutomaticModelRefreshPIDs.insert(pid)
 
-    monitor.scheduleModelRefresh(for: pid, reason: "ax:AXLayoutChanged")
+    monitor.scheduleModelRefresh(for: pid, reason: .axEvent("AXLayoutChanged"))
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
-    monitor.scheduleModelRefresh(for: pid, reason: "queued")
+    monitor.scheduleModelRefresh(for: pid, reason: .queued)
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
-    monitor.scheduleModelRefresh(for: pid, reason: "maintenance")
+    monitor.scheduleModelRefresh(for: pid, reason: .maintenance)
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
-    monitor.scheduleModelRefresh(for: pid, reason: "focus")
+    monitor.scheduleModelRefresh(for: pid, reason: .focus)
     XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.cancelRefreshWork(for: pid)
   }

@@ -78,7 +78,7 @@ final class AppMonitor {
       let pid = app.processIdentifier
       guard pid > 0 else { return }
       self.invalidatePreparedModel(for: pid)
-      self.scheduleModelRefresh(for: pid, reason: "config")
+      self.scheduleModelRefresh(for: pid, reason: .config)
     }
   }
 

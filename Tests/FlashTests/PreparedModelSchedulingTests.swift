@@ -16,23 +16,24 @@ final class PreparedModelSchedulingTests: XCTestCase {
   func testCancelledWakeCannotConsumeRearmedRefresh() throws {
     var clock = Clock()
     var state = scheduler()
-    let old = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "focus", now: clock.now))
+    let old = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .focus, now: clock.now))
     state.cancelRefresh(pid: 42)
     clock.advance(10)
-    let new = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "config", now: clock.now))
+    let new = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .config, now: clock.now))
     clock.advance(100)
     XCTAssertEqual(state.wake(old.ticket, now: clock.now), .stale)
     XCTAssertTrue(state.hasRefresh(pid: 42))
-    XCTAssertEqual(state.wake(new.ticket, now: clock.now), .fire(.refresh("config")))
+    XCTAssertEqual(state.wake(new.ticket, now: clock.now), .fire(.refresh(.config)))
     XCTAssertEqual(state.wake(new.ticket, now: clock.now), .stale)
   }
 
   func testEventBurstKeepsOneTimerAndExtendsItsDeadline() throws {
     var clock = Clock()
     var state = scheduler()
-    let first = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "ax:layout", now: clock.now))
+    let first = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axEvent("layout"), now: clock.now))
     clock.advance(60)
-    XCTAssertNil(state.scheduleRefresh(pid: 42, reason: "ax:resize", now: clock.now))
+    XCTAssertNil(state.scheduleRefresh(pid: 42, reason: .axEvent("resize"), now: clock.now))
     clock.advance(20)
     guard case .wait(let extended) = state.wake(first.ticket, now: clock.now) else {
       return XCTFail("The first wake must retain the burst until its last event settles")
@@ -40,22 +41,23 @@ final class PreparedModelSchedulingTests: XCTestCase {
     XCTAssertEqual(extended.ticket, first.ticket)
     XCTAssertEqual(extended.deadline, 140_000_000)
     clock.advance(60)
-    XCTAssertEqual(state.wake(extended.ticket, now: clock.now), .fire(.refresh("ax:resize")))
+    XCTAssertEqual(state.wake(extended.ticket, now: clock.now), .fire(.refresh(.axEvent("resize"))))
   }
 
   func testFocusRefreshPreemptsThrottledNoiseAndRetainsPriority() throws {
     var clock = Clock()
     var state = scheduler()
     state.noteRefreshStarted(pid: 42, now: clock.now)
-    let noisy = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "ax:layout", now: clock.now))
+    let noisy = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axEvent("layout"), now: clock.now))
     XCTAssertEqual(noisy.deadline, 2_500_000_000)
     clock.advance(10)
-    let focus = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "focus", now: clock.now))
+    let focus = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .focus, now: clock.now))
     clock.advance(10)
-    XCTAssertNil(state.scheduleRefresh(pid: 42, reason: "ax:layout", now: clock.now))
+    XCTAssertNil(state.scheduleRefresh(pid: 42, reason: .axEvent("layout"), now: clock.now))
     state.suppressSpeculativeRefresh(pid: 42)
     clock.advance(70)
-    XCTAssertEqual(state.wake(focus.ticket, now: clock.now), .fire(.refresh("focus")))
+    XCTAssertEqual(state.wake(focus.ticket, now: clock.now), .fire(.refresh(.focus)))
     clock.advance(3000)
     XCTAssertEqual(state.wake(noisy.ticket, now: clock.now), .stale)
   }
@@ -73,10 +75,10 @@ final class PreparedModelSchedulingTests: XCTestCase {
       state.wake(maintenance.ticket, now: clock.now),
       .fire(.maintenance(dirtyToken: 7, configRevision: 2)))
     let refresh = try XCTUnwrap(
-      state.scheduleRefresh(pid: 42, reason: "maintenance", now: clock.now))
+      state.scheduleRefresh(pid: 42, reason: .maintenance, now: clock.now))
     XCTAssertLessThan(refresh.deadline + 50_000_000, computedAt + 1_500_000_000)
     clock.advance(80)
-    XCTAssertEqual(state.wake(refresh.ticket, now: clock.now), .fire(.refresh("maintenance")))
+    XCTAssertEqual(state.wake(refresh.ticket, now: clock.now), .fire(.refresh(.maintenance)))
   }
 
   func testMaintenanceWakesLeadBeforeTheModelsOwnFreshness() {
@@ -103,16 +105,16 @@ final class PreparedModelSchedulingTests: XCTestCase {
 
   func testSpeculativeSuppressionAndResetInvalidateBothTimerKinds() throws {
     var state = scheduler()
-    let refresh = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "ax:layout", now: 0))
+    let refresh = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .axEvent("layout"), now: 0))
     let maintenance = state.scheduleMaintenance(
       pid: 42, computedAt: 0, dirtyToken: 7, configRevision: 2)
     state.suppressSpeculativeRefresh(pid: 42)
     XCTAssertEqual(state.wake(refresh.ticket, now: 3_000_000_000), .stale)
     XCTAssertEqual(state.wake(maintenance.ticket, now: 3_000_000_000), .stale)
-    let focus = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "focus", now: 0))
+    let focus = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .focus, now: 0))
     state.reset()
-    let next = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: "focus", now: 0))
+    let next = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .focus, now: 0))
     XCTAssertEqual(state.wake(focus.ticket, now: 3_000_000_000), .stale)
-    XCTAssertEqual(state.wake(next.ticket, now: 3_000_000_000), .fire(.refresh("focus")))
+    XCTAssertEqual(state.wake(next.ticket, now: 3_000_000_000), .fire(.refresh(.focus)))
   }
 }
