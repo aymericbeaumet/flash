@@ -164,10 +164,12 @@ impl Emitter {
     }
 
     pub(crate) fn log(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
-        self.notify(
-            "log",
-            json!({ "level": level, "message": message, "fields": fields }),
-        );
+        let mut params = json!({ "level": level, "message": message, "fields": fields });
+        // A line logged while serving a request names its interaction.
+        if let Some(trace) = crate::trace::current() {
+            params["trace"] = json!(trace);
+        }
+        self.notify("log", params);
     }
 
     /// Detach the queue: buffered frames still drain, later emits become

@@ -4,6 +4,32 @@ import XCTest
 @testable import flash
 
 final class DebugServerTests: XCTestCase {
+  func testTracesSummarizeEachInteractionAcrossHostAndPlugins() {
+    let logs: [[String: Any]] = [
+      [
+        "trace": "a1", "time_unix_ms": Int64(100), "level": "debug", "message": "[trace] begin",
+        "fields": ["origin": "key"], "source": "core:AppDelegate.swift.route()",
+      ],
+      ["trace": "a1", "time_unix_ms": Int64(130), "level": "warn", "source": "plugin:tmux"],
+      ["time_unix_ms": Int64(140), "level": "info", "source": "core:x"],
+      [
+        "trace": "b2", "time_unix_ms": Int64(200), "level": "debug", "message": "[trace] begin",
+        "fields": ["origin": "cli"], "source": "core:y",
+      ],
+    ]
+    let traces = DebugServer.traceSummaries(logs)
+    XCTAssertEqual(traces.map { $0["trace"] as? String }, ["b2", "a1"], "newest first")
+    let first = traces[1]
+    XCTAssertEqual(first["origin"] as? String, "key")
+    XCTAssertEqual(first["duration_ms"] as? Int64, 30)
+    XCTAssertEqual(first["lines"] as? Int, 2)
+    XCTAssertEqual(first["worst_level"] as? String, "warn")
+    XCTAssertEqual(first["sources"] as? [String], ["core", "plugin:tmux"])
+    XCTAssertEqual(
+      DebugServer.queryValue("trace", in: "GET /logs?x=1&trace=a1 HTTP/1.1\r\n"), "a1")
+    XCTAssertNil(DebugServer.queryValue("trace", in: "GET /logs HTTP/1.1\r\n"))
+  }
+
   /// DNS rebinding: a page on its own hostname, rebound to 127.0.0.1, must
   /// not read the inspector; only requests naming this listener pass.
   func testInspectorServesOnlyRequestsForItsOwnLoopbackHost() {

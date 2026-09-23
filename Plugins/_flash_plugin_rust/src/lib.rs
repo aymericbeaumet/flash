@@ -15,6 +15,7 @@ mod runtime;
 pub mod status;
 pub mod sys;
 pub mod testing;
+mod trace;
 mod types;
 mod wire;
 

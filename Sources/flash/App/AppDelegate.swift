@@ -407,7 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
 
     urlHandler = URLEventHandler(
-      handler: { [weak self] cmd in self?.handleURLCommand(cmd) ?? false },
+      handler: { [weak self] cmd in Trace.ensure(.cli) { self?.handleURLCommand(cmd) ?? false } },
       rejected: { [weak self] command in self?.warnUnsupportedCommand(command) })
     mappings.start(
       dispatch: { [weak self] action in
@@ -1036,6 +1036,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       tapEscapeClosedPopup = false
       return
     }
+    Trace.begin(.key) { routeTracedKey(event) }
+  }
+
+  private func routeTracedKey(_ event: NSEvent) {
     // HID timestamp → this main-thread turn: the tap-side latency budget.
     FlashLog.debug(
       "[latency] tap_to_route ms="

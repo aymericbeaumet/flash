@@ -127,7 +127,8 @@ Handed to every handler; cheap to clone. Key surface:
   `on_event`: the host exposes an event for every source it can observe, and a
   cadence is the answer only when nothing else can tell you the value changed.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
-  (content-free); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
+  (content-free); a line logged while serving a request carries that
+  request's `trace` id automatically (tasks the handler spawns itself don't); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
   A preview travels inside the segment string as a percent-encoded
   `#[popup=inline:…]` marker, so the visible text and its hover document
   publish atomically. The host rejects an encoded body above 16384 bytes

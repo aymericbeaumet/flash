@@ -17,6 +17,10 @@ extension AppDelegate {
   }
 
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
+    Trace.ensure(.pointer) { handlePointerIntent(intent) }
+  }
+
+  private func handlePointerIntent(_ intent: OverlayPointerIntent) {
     cancelPointerInsertHandoff(reason: "new_pointer_interaction")
     let pointIsInMenuBar: Bool
     let pointerClick: OverlayPointerClick?
@@ -1031,7 +1035,7 @@ extension AppDelegate {
   }
 
   func overlayDidSubmitCommandLine(_ command: String) {
-    submitCommandLine(command)
+    Trace.ensure(.commandLine) { submitCommandLine(command) }
   }
 
   func openSourceItem(matching target: String) {

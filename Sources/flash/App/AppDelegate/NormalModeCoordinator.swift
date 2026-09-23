@@ -1290,6 +1290,7 @@ extension AppDelegate {
       activateNormalModeKeyTargetIfNeeded(
         target.processID, flags: flags)
       ? Self.normalModeKeyTargetActivationDelayMs : 0
+    let trace = Trace.current
     for index in 0..<count {
       let delay = DispatchTimeInterval.milliseconds(activationDelayMs + index * 35)
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -1297,7 +1298,12 @@ extension AppDelegate {
         // through the Carbon dispatcher can't re-trigger our own hotkey for
         // the same combo (e.g. a `⌘⇧]` tab-traversal chord).
         self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-        NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
+        Trace.run(in: trace) {
+          FlashLog.debug(
+            "[normal_mode] send_key",
+            fields: ["pid": "\(target.processID)", "repeat": "\(index + 1)"])
+          NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
+        }
       }
     }
     let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)

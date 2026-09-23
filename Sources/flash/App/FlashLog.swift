@@ -59,6 +59,8 @@ enum FlashLog {
     var fields: [String: String]
     var pid: Int
     var timeUnixMs: Int64
+    /// The interaction this line belongs to (`Trace`), when there is one.
+    var trace: String? = nil
 
     var jsonObject: [String: Any] {
       var object: [String: Any] = [
@@ -70,6 +72,9 @@ enum FlashLog {
       ]
       if !fields.isEmpty {
         object["fields"] = fields
+      }
+      if let trace {
+        object["trace"] = trace
       }
       return object
     }
@@ -191,15 +196,18 @@ enum FlashLog {
   ) {
     emit(.error, source: source, fileID: fileID, function: function, fields: fields, message)
   }
+  /// A line from, or about, plugin `pluginID`. `trace` is the interaction
+  /// it serves when known off the main thread (a plugin echoes it back).
   static func plugin(
     _ level: Level,
     pluginID: String,
     message: @autoclosure () -> String,
-    fields: @autoclosure () -> [String: String] = [:]
+    fields: @autoclosure () -> [String: String] = [:],
+    trace: String? = nil
   ) {
     emit(
       level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields,
-      message)
+      trace: trace, message)
   }
 
   private static func emit(
@@ -208,6 +216,7 @@ enum FlashLog {
     fileID: StaticString,
     function: StaticString,
     fields: () -> [String: String],
+    trace: String? = nil,
     _ message: () -> String
   ) {
     lock.lock()
@@ -221,7 +230,8 @@ enum FlashLog {
       message: message(),
       fields: fields(),
       pid: pid,
-      timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()))
+      timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()),
+      trace: trace ?? Trace.current?.text)
     if sinkPass {
       lock.lock()
       let receivers = sinks.values.filter { level >= ($0.minLevel ?? minLevel) }.map(\.sink)

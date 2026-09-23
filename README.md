@@ -61,7 +61,7 @@ click on an input. See [normal mode](docs/normal-mode.md) for the complete bindi
 - [Status bar format](docs/status-format.md) · [Ready-to-use example](docs/examples/statusbar/README.md)
 - [Calendar](docs/calendar.md) · [Usage and system details](docs/status-popups.md)
 - [Terminal windows](docs/terminal-popups.md) · [Plugins](docs/plugin-cookbook.md)
-- [Development and tests](docs/development.md) · [Architecture](docs/architecture.md)
+- [Development and tests](docs/development.md) · [Architecture](docs/architecture.md) · [Observability](docs/observability.md)
 
 ## License
 

@@ -309,6 +309,7 @@ where
             .unwrap_or("")
             .to_string();
         let params = frame.get("params").cloned().unwrap_or_else(|| json!({}));
+        let trace = crate::trace::from_envelope(&frame);
 
         // Frame triage: id+method = request, id alone = the host's response
         // to a plugin-initiated call, method alone = notification.
@@ -405,7 +406,7 @@ where
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tasks.spawn(async move {
+                    tasks.spawn(crate::trace::scope(trace, async move {
                         let _permits = permits;
                         let response = plugin.evaluate(request);
                         let answers =
@@ -413,7 +414,7 @@ where
                         ctx.emit
                             .respond(id, json!({ "ok": true, "answers": answers }))
                             .await;
-                    });
+                    }));
                 }
                 Err(error) => {
                     reply!(id, json!({ "ok": false, "error": error }));
@@ -423,7 +424,7 @@ where
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tasks.spawn(async move {
+                    tasks.spawn(crate::trace::scope(trace, async move {
                         let _permits = permits;
                         let response = plugin.on_search(ctx.clone(), request).await;
                         let rows =
@@ -431,7 +432,7 @@ where
                         ctx.emit
                             .respond(id, json!({ "ok": true, "rows": rows }))
                             .await;
-                    });
+                    }));
                 }
                 Err(error) => {
                     reply!(id, json!({ "ok": false, "error": error }));
@@ -441,7 +442,7 @@ where
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tasks.spawn(async move {
+                    tasks.spawn(crate::trace::scope(trace, async move {
                         let _permits = permits;
                         let response = plugin.on_hints(ctx.clone(), request).await;
                         let targets =
@@ -454,7 +455,7 @@ where
                             result = json!({ "ok": false, "error": "invalid hints response" });
                         }
                         ctx.emit.respond(id, result).await;
-                    });
+                    }));
                 }
                 Err(error) => {
                     reply!(id, json!({ "ok": false, "error": error }));
@@ -464,11 +465,11 @@ where
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tasks.spawn(async move {
+                    tasks.spawn(crate::trace::scope(trace, async move {
                         let _permits = permits;
                         let response = plugin.perform(ctx.clone(), request).await;
                         ctx.emit.respond(id, response.to_value()).await;
-                    });
+                    }));
                 }
                 Err(error) => {
                     reply!(id, json!({ "ok": false, "error": error }));
@@ -1052,6 +1053,32 @@ mod tests {
             json!({ "method": "log", "params": { "level": "warn", "message": "hello", "fields": { "k": "v" } } })
         );
         assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// The host names the interaction on the request envelope; every line the
+    /// handler logs carries it back, and nothing else does.
+    #[tokio::test]
+    async fn a_traced_request_logs_under_its_trace() {
+        let mut wire = serve(TestPlugin::default()).await;
+        let mut request = command(2, "notify");
+        request["trace"] = json!("k3f9");
+        wire.send(request).await;
+        assert_eq!(wire.recv().await["method"], "status");
+        assert_eq!(
+            wire.recv().await,
+            json!({ "method": "log", "params": {
+                "level": "warn", "message": "hello", "fields": { "k": "v" }, "trace": "k3f9"
+            } })
+        );
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        let mut malformed = command(3, "notify");
+        malformed["trace"] = json!("NOT-VALID");
+        wire.send(malformed).await;
+        assert_eq!(wire.recv().await["method"], "status");
+        assert!(wire.recv().await["params"].get("trace").is_none());
+        assert_eq!(wire.recv_response(3).await, json!({ "ok": true }));
         wire.close_stdin().await;
         wire.finished().await;
     }

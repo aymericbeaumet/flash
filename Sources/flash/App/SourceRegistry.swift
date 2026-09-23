@@ -744,6 +744,9 @@ final class SourceRegistry {
     // trace level: materializing a reason string for every excluded plugin was
     // measurable on each repeated normal-mode mapping.
     let startedNs = DispatchTime.now().uptimeNanoseconds
+    // Sources complete on later main turns; each re-enters the interaction
+    // that asked, so their lines and the caller's completion carry its id.
+    let trace = Trace.current
     let env = environment
     let allSources = sources
     var sourceSnapshot: [FlashSource] = []
@@ -765,7 +768,7 @@ final class SourceRegistry {
         "[source_action] action=\(capability.traceDescription) considered=\(allSources.count) "
           + "passing=0 unhandled "
           + "bundle=\(context.bundleIdentifier)")
-      DispatchQueue.main.async { completion(.unhandled) }
+      DispatchQueue.main.async { Trace.run(in: trace) { completion(.unhandled) } }
       return
     }
     FlashLog.trace(
@@ -789,17 +792,19 @@ final class SourceRegistry {
       let source = sourceSnapshot[index]
       let attemptNs = DispatchTime.now().uptimeNanoseconds
       action(source, env) { result in
-        FlashLog.trace(
-          "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
-            + "disposition=\(result.disposition)")
-        switch result.disposition {
-        case .performed, .failed:
-          // `.failed` also stops the chain: the source claimed the action
-          // for this context, so a lower-priority source must not re-run
-          // it (and the caller must not keystroke-fallback).
-          finish(result, handledBy: source.identifier)
-        case .unhandled:
-          attempt(index + 1)
+        Trace.run(in: trace) {
+          FlashLog.trace(
+            "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
+              + "disposition=\(result.disposition)")
+          switch result.disposition {
+          case .performed, .failed:
+            // `.failed` also stops the chain: the source claimed the action
+            // for this context, so a lower-priority source must not re-run
+            // it (and the caller must not keystroke-fallback).
+            finish(result, handledBy: source.identifier)
+          case .unhandled:
+            attempt(index + 1)
+          }
         }
       }
     }

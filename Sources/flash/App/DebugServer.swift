@@ -168,7 +168,12 @@ final class DebugServer {
       case "/state":
         self.sendJSON(self.cachedState, connection: connection)
       case "/logs":
-        self.sendJSON(["logs": self.logs], connection: connection)
+        let trace = Self.queryValue("trace", in: request)
+        let logs =
+          trace.map { id in self.logs.filter { $0["trace"] as? String == id } } ?? self.logs
+        self.sendJSON(["logs": logs], connection: connection)
+      case "/traces":
+        self.sendJSON(["traces": Self.traceSummaries(self.logs)], connection: connection)
       case "/events":
         self.startEvents(connection)
       default:
@@ -292,6 +297,69 @@ final class DebugServer {
       if let port, value == "\(name):\(port)" { return true }
     }
     return false
+  }
+
+  /// Recent interactions (`Trace`), newest first: when each began and last
+  /// logged, how many lines it produced, its worst level, and which host and
+  /// plugin sources took part — the index into `/logs?trace=`.
+  static func traceSummaries(_ logs: [[String: Any]]) -> [[String: Any]] {
+    struct Summary {
+      var origin = ""
+      var first = Int64.max
+      var last = Int64.min
+      var lines = 0
+      var worst = FlashLog.Level.trace
+      var sources: [String] = []
+    }
+    var summaries: [String: Summary] = [:]
+    for log in logs {
+      guard let trace = log["trace"] as? String else { continue }
+      var summary = summaries[trace] ?? Summary()
+      let time = (log["time_unix_ms"] as? Int64) ?? Int64(log["time_unix_ms"] as? Int ?? 0)
+      summary.first = min(summary.first, time)
+      summary.last = max(summary.last, time)
+      summary.lines += 1
+      if let level = (log["level"] as? String).flatMap(FlashLog.Level.parse), level > summary.worst
+      {
+        summary.worst = level
+      }
+      if log["message"] as? String == "[trace] begin",
+        let origin = (log["fields"] as? [String: String])?["origin"]
+      {
+        summary.origin = origin
+      }
+      if let source = log["source"] as? String {
+        let owner = source.hasPrefix("plugin:") ? source : "core"
+        if !summary.sources.contains(owner) { summary.sources.append(owner) }
+      }
+      summaries[trace] = summary
+    }
+    return summaries.sorted { $0.value.first > $1.value.first }.prefix(200).map { trace, summary in
+      [
+        "trace": trace,
+        "origin": summary.origin,
+        "started_unix_ms": summary.first,
+        "duration_ms": summary.last - summary.first,
+        "lines": summary.lines,
+        "worst_level": summary.worst.name,
+        "sources": summary.sources,
+      ]
+    }
+  }
+
+  static func queryValue(_ name: String, in request: String) -> String? {
+    let first = request.split(separator: "\n", maxSplits: 1).first ?? ""
+    let parts = first.split(separator: " ")
+    guard parts.count >= 2,
+      let query = parts[1].split(separator: "?", maxSplits: 1).dropFirst().first
+    else { return nil }
+    for pair in query.split(separator: "&") {
+      let kv = pair.split(separator: "=", maxSplits: 1)
+      if kv.first == Substring(name), kv.count == 2 {
+        return String(kv[1]).removingPercentEncoding
+      }
+    }
+    return nil
   }
 
   private static func requestPath(_ request: String) -> String {

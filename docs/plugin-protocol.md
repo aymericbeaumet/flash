@@ -99,7 +99,12 @@ conformant: pings never race in-flight requests.
 
 NDJSON on stdin/stdout: UTF-8, one JSON object per newline-terminated line, no
 envelope beyond `id`/`method`/`params`/`result` (`id`+`method` = request,
-`id` alone = response, `method` alone = notification). Ids are positive
+`id` alone = response, `method` alone = notification), plus the host's
+optional `trace` on a request: the id (`^[0-9a-z]{1,16}$`) of the user
+interaction that caused it. A `log` notification emitted while serving that
+request carries it back as `params.trace` (the Rust SDK does both), so one
+interaction reads end to end across processes; see
+[observability](observability.md). Ids are positive
 monotonic integers per sender. Booleans and floating-point values are never
 integer IDs or protocol versions; `ok` and other Boolean fields accept only
 JSON booleans. Native process IDs are checked positive 32-bit integers.
@@ -113,7 +118,9 @@ stream self-heals at the next newline. An outbound response that would exceed
 the cap is replaced by `{"ok": false, "error": "response exceeded outbound
 frame limit"}` under the same id. stderr is diagnostics only — lines are
 logged but never treated as plugin failure; use the `log` notification for
-structured logging (recorded with `source = "plugin:<id>"`). Geometry is
+structured logging (recorded with `source = "plugin:<id>"`); stderr is logged
+as whole lines, each capped at 4 KiB, at most 20 per 10 s, and the rest are
+counted. Geometry is
 always NSScreen coordinates.
 
 **The response law.** Every `result` is a JSON object carrying boolean `ok`.

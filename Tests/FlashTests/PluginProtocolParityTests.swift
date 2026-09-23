@@ -22,6 +22,23 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(try spec()["protocol_version"] as? Int, PluginProtocol.version)
   }
 
+  /// The host mints trace ids and checks those plugins echo back against
+  /// the pattern the contract pins.
+  func testTraceIDsMatchSpec() throws {
+    let trace = try XCTUnwrap(try spec()["trace"] as? [String: Any])
+    let pattern = try XCTUnwrap(trace["pattern"] as? String)
+    XCTAssertEqual(pattern, "^[0-9a-z]{1,16}$")
+    let minted = Trace.ID(value: UInt64(Date().timeIntervalSince1970 * 1000) << 12).text
+    XCTAssertNotNil(minted.range(of: pattern, options: .regularExpression), minted)
+    XCTAssertNotNil(Trace.ID(value: .max).text.range(of: pattern, options: .regularExpression))
+    for text in ["k3f9", "0", String(repeating: "z", count: 16)] {
+      XCTAssertTrue(Trace.isValid(text), text)
+    }
+    for text in ["", "K3F9", "k3-f9", String(repeating: "z", count: 17)] {
+      XCTAssertFalse(Trace.isValid(text), text)
+    }
+  }
+
   func testDeadlineTableMatchesSpec() throws {
     let deadlines = try XCTUnwrap(try spec()["deadlines_ms"] as? [String: Any])
     XCTAssertEqual(deadlines["startup"] as? Int, PluginProtocol.startupDeadlineMs)

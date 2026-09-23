@@ -255,8 +255,10 @@ share the main run loop. Treat that loop as the input latency budget:
   Focusing a terminal popup suspends every Carbon registration; leaving it
   restores the active scope.
 
-`MainThreadWatchdog` records a `main_thread_stall` warning when the loop misses
-its maintained threshold. The warning carries `last_activity_ms_ago`: the most
+`MainRunLoopStallObserver` records a `main_busy` warning, at any log level,
+for every main run-loop busy stretch over 250 ms; at `debug`, the ping-based
+`MainThreadWatchdog` also records `main_thread_stall` while a stall is still
+in progress. Both carry `last_activity_ms_ago`: the most
 recent coarse main-thread units of work (`tap_key`, `mode_effects`,
 `mode_overlay`, `effective_mappings`, `activation`, `hint_commit`,
 `config_reload`) with their age, so a stall names what main was doing. Call

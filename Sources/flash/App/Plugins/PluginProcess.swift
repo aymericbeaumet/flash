@@ -22,19 +22,23 @@ final class PluginProcess {
     let method: String
     let startedAt: DispatchTime
     let deadline: DispatchTime?
+    /// The interaction the request serves (`Trace`), for its log lines.
+    let trace: String?
 
     init(
       completion: @escaping RequestCompletion,
       settleOnStop: Bool,
       method: String = "test",
       startedAt: DispatchTime = .now(),
-      deadline: DispatchTime? = nil
+      deadline: DispatchTime? = nil,
+      trace: String? = nil
     ) {
       self.completion = completion
       self.settleOnStop = settleOnStop
       self.method = method
       self.startedAt = startedAt
       self.deadline = deadline
+      self.trace = trace
     }
   }
 
@@ -48,6 +52,7 @@ final class PluginProcess {
     let params: [String: Any]
     let timeoutMs: Int
     let startedAt: DispatchTime
+    let trace: Trace.ID?
     let completion: (PluginPerformOutcome) -> Void
   }
 
@@ -531,6 +536,7 @@ final class PluginProcess {
         kind: item.kind,
         params: item.params,
         timeoutMs: max(1, item.timeoutMs - elapsedMs),
+        trace: item.trace,
         completion: item.completion)
     }
   }
@@ -858,8 +864,11 @@ final class PluginProcess {
     timeoutMs: Int? = nil,
     completion: @escaping (PluginPerformOutcome) -> Void
   ) {
+    // The interaction that asked travels on the request and comes back with
+    // the outcome, which completes inside it.
+    let trace = Trace.current
     let mainCompletion: (PluginPerformOutcome) -> Void = { outcome in
-      DispatchQueue.main.async { completion(outcome) }
+      DispatchQueue.main.async { Trace.run(in: trace) { completion(outcome) } }
     }
     guard manifest.exec != nil else {
       mainCompletion(.unhandled)
@@ -876,21 +885,24 @@ final class PluginProcess {
         mainCompletion(.unhandled)
       case .running:
         self.dispatchPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, completion: mainCompletion)
+          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          completion: mainCompletion)
       case .stopped where self.lifecycle.state == .stopped:
         mainCompletion(.unhandled)
       case .stopped
       where self.manifest.activation == .onDemand
         && (self.lifecycle.state == .idle || self.lifecycle.state == .initial):
         self.enqueueDeferredPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, completion: mainCompletion)
+          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          completion: mainCompletion)
         self.applyLifecycle(.activate)
       case .stopped, .installing, .launching:
         // A resident plugin still starting (or between restarts): dispatch
         // once running; the deferral deadline settles `.unhandled` if that
         // never happens.
         self.enqueueDeferredPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, completion: mainCompletion)
+          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          completion: mainCompletion)
       }
     }
   }
@@ -899,6 +911,7 @@ final class PluginProcess {
     kind: String,
     params: [String: Any],
     timeoutMs: Int,
+    trace: Trace.ID?,
     completion: @escaping (PluginPerformOutcome) -> Void
   ) {
     var wireParams = params
@@ -906,7 +919,8 @@ final class PluginProcess {
     sendRequest(
       method: "perform",
       params: wireParams,
-      timeout: .milliseconds(max(1, timeoutMs))
+      timeout: .milliseconds(max(1, timeoutMs)),
+      trace: trace
     ) { response in
       completion(PluginWireCodec.performOutcome(from: response))
     }
@@ -916,6 +930,7 @@ final class PluginProcess {
     kind: String,
     params: [String: Any],
     timeoutMs: Int,
+    trace: Trace.ID?,
     completion: @escaping (PluginPerformOutcome) -> Void
   ) {
     guard deferredPerforms.count < PluginProtocol.maxPendingRequests else {
@@ -931,6 +946,7 @@ final class PluginProcess {
         params: params,
         timeoutMs: timeoutMs,
         startedAt: .now(),
+        trace: trace,
         completion: completion))
     Self.deadlineQueue.asyncAfter(deadline: .now() + .milliseconds(max(1, timeoutMs))) {
       [weak self] in
@@ -1221,8 +1237,10 @@ final class PluginProcess {
     params: [String: Any],
     timeout: DispatchTimeInterval,
     settleOnStop: Bool = true,
+    trace: Trace.ID? = nil,
     completion: (([String: Any]?) -> Void)? = nil
   ) {
+    let traceText = trace?.text
     let startedAt = DispatchTime.now()
     let deadline = startedAt + timeout
     transportLock.lock()
@@ -1248,7 +1266,7 @@ final class PluginProcess {
           completion: completion,
           settleOnStop: settleOnStop,
           method: method,
-          startedAt: startedAt, deadline: deadline)
+          startedAt: startedAt, deadline: deadline, trace: traceText)
         Self.deadlineQueue.asyncAfter(deadline: deadline) { [weak self] in
           self?.queue.async { [weak self] in
             guard let self, let request = self.pending.removeValue(forKey: id) else { return }
@@ -1261,16 +1279,15 @@ final class PluginProcess {
                 "id": "\(id)",
                 "method": method,
                 "elapsed_ms": elapsedMs,
-              ])
+              ],
+              trace: traceText)
             request.completion(nil)
           }
         }
       }
-      self.writeFrame([
-        "id": id,
-        "method": method,
-        "params": params,
-      ])
+      var frame: [String: Any] = ["id": id, "method": method, "params": params]
+      if let traceText { frame["trace"] = traceText }
+      self.writeFrame(frame)
     }
   }
 
@@ -1556,7 +1573,8 @@ final class PluginProcess {
       if let deadline = request.deadline, DispatchTime.now() >= deadline {
         FlashLog.plugin(
           .debug, pluginID: manifest.id, message: "[plugin] reply after its deadline",
-          fields: ["id": "\(responseID)", "method": request.method, "elapsed_ms": elapsedMs])
+          fields: ["id": "\(responseID)", "method": request.method, "elapsed_ms": elapsedMs],
+          trace: request.trace)
         request.completion(nil)
         return
       }
@@ -1572,7 +1590,8 @@ final class PluginProcess {
           "method": request.method,
           "elapsed_ms": elapsedMs,
           "ok": result == nil ? "false" : "true",
-        ])
+        ],
+        trace: request.trace)
       request.completion(result)
       return
     }
@@ -1591,10 +1610,13 @@ final class PluginProcess {
       let level = FlashLog.Level.parse(params["level"] as? String ?? "info") ?? .info
       let message = params["message"] as? String ?? ""
       let fields = params["fields"] as? [String: String] ?? [:]
+      // A line logged while serving a request names that request's
+      // interaction; a malformed id is dropped rather than trusted.
+      let trace = (params["trace"] as? String).flatMap { Trace.isValid($0) ? $0 : nil }
       lock.lock()
       lastLog = message
       lock.unlock()
-      FlashLog.plugin(level, pluginID: manifest.id, message: message, fields: fields)
+      FlashLog.plugin(level, pluginID: manifest.id, message: message, fields: fields, trace: trace)
       // Debug telemetry belongs in the log file, but it must not continually
       // invalidate the status bar and HTTP inspector state.
       if level >= .info {

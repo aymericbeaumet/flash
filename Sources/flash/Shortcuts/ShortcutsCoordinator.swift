@@ -183,8 +183,10 @@ final class MappingsCoordinator {
     }
     lastFireDiagnostic = diagnostic
     lastFireAt = now
-    FlashLog.debug("[mappings] fired \(diagnostic)")
-    mappingDispatch?(mapping.action)
+    Trace.ensure(.hotkey) {
+      FlashLog.debug("[mappings] fired \(diagnostic)")
+      mappingDispatch?(mapping.action)
+    }
   }
 
   private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
