@@ -60,7 +60,9 @@ final class DebugServer {
       listener.start(queue: queue)
       self.listener = listener
       startStateTimer()
-      logSinkID = FlashLog.addSink { [weak self] record in
+      // Follows `[debug] log_level`: the inspector shows what the log file
+      // gets, and never forces lower-level messages on hot paths to be built.
+      logSinkID = FlashLog.addSink(minLevel: nil) { [weak self] record in
         self?.append(record)
       }
     } catch {
@@ -149,6 +151,14 @@ final class DebugServer {
       }
       guard let data, let request = String(data: data, encoding: .utf8) else {
         connection.cancel()
+        return
+      }
+      // A loopback peer is not enough: a web page can rebind its own hostname
+      // to 127.0.0.1 and read /state (clipboard, hints) and /logs through the
+      // victim's browser. That request carries the attacker's hostname.
+      guard Self.hostIsLoopback(request: request, port: self.listeningPort) else {
+        FlashLog.warn("[debug] http inspector refused a request for a foreign host")
+        self.sendText("forbidden", status: "403 Forbidden", connection: connection)
         return
       }
       let path = Self.requestPath(request)
@@ -267,6 +277,21 @@ final class DebugServer {
       \r
       \(body)
       """
+  }
+
+  /// The request's `Host` header names this loopback listener: 127.0.0.1,
+  /// localhost or [::1], on its own port.
+  static func hostIsLoopback(request: String, port: UInt16?) -> Bool {
+    let header = request.split(whereSeparator: \.isNewline).dropFirst().first { line in
+      line.lowercased().hasPrefix("host:")
+    }
+    guard let header else { return false }
+    let value = header.dropFirst("host:".count).trimmingCharacters(in: .whitespaces).lowercased()
+    for name in ["127.0.0.1", "localhost", "[::1]"] {
+      if value == name { return port == 80 }
+      if let port, value == "\(name):\(port)" { return true }
+    }
+    return false
   }
 
   private static func requestPath(_ request: String) -> String {

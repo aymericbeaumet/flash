@@ -389,8 +389,9 @@ extension OverlayPanel {
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
       mappings: normalModeMappings)
     FlashLog.trace(
-      "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
-        + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
+      // No key codes or characters: NORMAL swallows whatever the user types,
+      // and the log must never record keystrokes (hard constraint 2).
+      "[input] normal pending_before=\(pendingBeforeTimeout) "
         + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
         + "repeat=\(transition.repeatCount) repeat_anchor=\(transition.repeatAnchor ?? "nil")")
     normalModePending = transition.pending

@@ -1018,7 +1018,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     MainThreadWatchdog.note("tap_key")
     // HID timestamp → this main-thread turn: the tap-side latency budget.
     FlashLog.debug(
-      "[latency] tap_to_route key=\(event.keyCode) ms="
+      "[latency] tap_to_route ms="
         + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
     switch overlay.inputMode {
     case .passive:

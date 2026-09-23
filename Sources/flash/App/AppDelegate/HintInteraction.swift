@@ -34,7 +34,6 @@ extension AppDelegate {
           FlashLog.warn(
             "[commit] captured_target_unavailable provider=\(selection.target.providerID) "
               + "role=\(selection.target.role ?? "?") "
-              + "label=\(selection.target.accessibilityLabel ?? "?") "
               + "point=(\(Int(selection.point.x)),\(Int(selection.point.y))); click dropped")
           DispatchQueue.main.async {
             guard let self, self.activationLifecycle.complete(token: token) else { return }

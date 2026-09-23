@@ -4,6 +4,22 @@ import XCTest
 @testable import flash
 
 final class DebugServerTests: XCTestCase {
+  /// DNS rebinding: a page on its own hostname, rebound to 127.0.0.1, must
+  /// not read the inspector; only requests naming this listener pass.
+  func testInspectorServesOnlyRequestsForItsOwnLoopbackHost() {
+    func request(_ host: String?) -> String {
+      "GET /state HTTP/1.1\r\n" + (host.map { "Host: \($0)\r\n" } ?? "") + "Accept: */*\r\n\r\n"
+    }
+    for host in ["127.0.0.1:4242", "localhost:4242", "[::1]:4242", "LOCALHOST:4242"] {
+      XCTAssertTrue(DebugServer.hostIsLoopback(request: request(host), port: 4242), host)
+    }
+    for host in ["evil.example:4242", "127.0.0.1:9999", "localhost", "127.0.0.1.evil.example:4242"]
+    {
+      XCTAssertFalse(DebugServer.hostIsLoopback(request: request(host), port: 4242), host)
+    }
+    XCTAssertFalse(DebugServer.hostIsLoopback(request: request(nil), port: 4242))
+  }
+
   func testParsesLoopbackHostAndPort() {
     let localhost = DebugServer.parse(host: "localhost", port: 4242)
     XCTAssertEqual(localhost?.host, "localhost")
