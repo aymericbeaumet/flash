@@ -148,6 +148,15 @@ Startup resolves tap availability before entering NORMAL or a capturing surface.
 Starting the tap after NORMAL renders would activate Flash through the fallback
 path and leave the previous app inactive until another app switch.
 
+Handing activation back needs the cooperative API: `NSApp.yieldActivation(to:)`
+then `app.activate(from: .current)`. `NSApp.deactivate()` and a bare
+`activate(options:)` are ignored on current macOS, and they leave Flash active
+with no key window: the next command-line open cannot make the panel key, so
+AppKit draws no caret. Closing the command line without running anything hands
+activation back this way; a submit that opens an app hands it over through that
+app's own activation. The command line's caret is AppKit's insertion point, and
+it is live only while the panel is key with the field editor as first responder.
+
 The tap source, Carbon callbacks, AX observer sources, and mode coordinator all
 share the main run loop. Treat that loop as the input latency budget:
 
