@@ -30,6 +30,7 @@ extension AppDelegate {
       "[mode] enter_normal from=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight)")
     returnActivationIfClosingCommandBar(reason: "enter_normal")
+    overlay.dismissEphemeralStatusBarPopup(reason: "enter_normal_mode")
     dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
   }
 

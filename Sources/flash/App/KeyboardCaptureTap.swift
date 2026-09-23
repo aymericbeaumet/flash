@@ -68,6 +68,9 @@ final class KeyboardCaptureTap {
     /// A native surface (About window, suspended session) owns the keyboard:
     /// only a key a mapping or the NORMAL interpreter claims is swallowed.
     case swallowIfNativeSurfaceKeyIsMapped
+    /// A bare Escape while a status-bar hover preview shows closes the
+    /// preview, in any base mode, instead of reaching the app.
+    case closeEphemeralPopup
   }
 
   /// The tap's single most security-sensitive decision, side-effect free so
@@ -80,13 +83,20 @@ final class KeyboardCaptureTap {
     aboutWindowVisible: Bool,
     aboutWindowOwnsKeyboard: Bool,
     nativeSurfaceSuspended: Bool,
-    isModifiedChord: Bool
+    isModifiedChord: Bool,
+    isBareEscape: Bool = false,
+    ephemeralPopupShown: Bool = false
   ) -> Decision {
     // A terminal popup's own view owns input.
     if isTerminal { return .pass }
     let nativeSurfaceShown = aboutWindowVisible || nativeSurfaceSuspended
     // A hint session owns the keyboard in every base mode.
     if inputMode == .hints, !nativeSurfaceShown { return .swallow }
+    // The command line takes Escape itself; anywhere else a shown preview
+    // is what Escape closes.
+    if isBareEscape, ephemeralPopupShown, inputMode != .commandLine, !nativeSurfaceShown {
+      return .closeEphemeralPopup
+    }
     // INSERT is transparent so typing flows to the focused app, but a modified
     // chord bound to an active mapping fires Flash's action on this fast path
     // (swallowed, so the app never sees it). The highest-rate branch: a bare

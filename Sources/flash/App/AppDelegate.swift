@@ -90,6 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var statusTerminalEnvironmentReady = false
   var terminalReturnApplicationPID: pid_t?
   let mainRunLoopStallObserver = MainRunLoopStallObserver()
+  /// The swallowed Escape that closed a hover preview; its routing, queued
+  /// right behind, must not also reach a mapping or the interpreter.
+  var tapEscapeClosedPopup = false
   var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
@@ -981,7 +984,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         activationInFlight: activationInFlight),
       nativeSurfaceSuspended: nativeSurfaceSuspended,
       isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
-        || flags.contains(.maskAlternate))
+        || flags.contains(.maskAlternate),
+      isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
+        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty,
+      ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil)
     switch decision {
     case .pass:
       return false
@@ -993,6 +999,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
       guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
       return !IsSecureEventInputEnabled()
+    case .closeEphemeralPopup:
+      guard !IsSecureEventInputEnabled() else { return false }
+      tapEscapeClosedPopup = true
+      // Out of the synchronous tap callback: hiding a panel is AppKit work.
+      DispatchQueue.main.async { [weak self] in
+        self?.overlay.dismissEphemeralStatusBarPopup(reason: "escape")
+      }
+      return true
     case .swallowIfNativeSurfaceKeyIsMapped:
       guard !IsSecureEventInputEnabled() else { return false }
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
@@ -1018,6 +1032,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// interpreter.
   func routeTapCapturedKey(_ event: NSEvent) {
     MainThreadWatchdog.note("tap_key")
+    if tapEscapeClosedPopup {
+      tapEscapeClosedPopup = false
+      return
+    }
     // HID timestamp → this main-thread turn: the tap-side latency budget.
     FlashLog.debug(
       "[latency] tap_to_route ms="

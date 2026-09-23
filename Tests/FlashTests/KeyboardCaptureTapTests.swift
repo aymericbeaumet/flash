@@ -58,15 +58,38 @@ final class KeyboardCaptureTapTests: XCTestCase {
       .pass)
   }
 
+  /// A bare Escape closes a shown hover preview in either base mode; the
+  /// command line and a hint session keep their own Escape.
+  func testEscapeClosesAHoverPreview() {
+    for flashMode: FlashMode in [.normal, .insert] {
+      let inputMode: OverlayInputMode = flashMode == .normal ? .normal : .passive
+      XCTAssertEqual(
+        decide(flashMode: flashMode, inputMode: inputMode, escape: true, preview: true),
+        .closeEphemeralPopup)
+      XCTAssertNotEqual(
+        decide(flashMode: flashMode, inputMode: inputMode, escape: true, preview: false),
+        .closeEphemeralPopup)
+    }
+    XCTAssertEqual(
+      decide(flashMode: .normal, inputMode: .commandLine, escape: true, preview: true), .pass)
+    XCTAssertEqual(
+      decide(flashMode: .insert, inputMode: .hints, escape: true, preview: true), .swallow)
+    XCTAssertEqual(
+      decide(flashMode: .normal, inputMode: .normal, escape: true, preview: true, terminal: true),
+      .pass)
+  }
+
   private func decide(
     flashMode: FlashMode, inputMode: OverlayInputMode, chord: Bool = false,
+    escape: Bool = false, preview: Bool = false,
     terminal: Bool = false, aboutWindowVisible: Bool = false, aboutOwns: Bool = false,
     nativeSurfaceSuspended: Bool = false
   ) -> KeyboardCaptureTap.Decision {
     KeyboardCaptureTap.decide(
       isTerminal: terminal, flashMode: flashMode, inputMode: inputMode,
       aboutWindowVisible: aboutWindowVisible, aboutWindowOwnsKeyboard: aboutOwns,
-      nativeSurfaceSuspended: nativeSurfaceSuspended, isModifiedChord: chord)
+      nativeSurfaceSuspended: nativeSurfaceSuspended, isModifiedChord: chord,
+      isBareEscape: escape, ephemeralPopupShown: preview)
   }
 
   func testInsertModeSwallowsOnlyForAHintSession() {
