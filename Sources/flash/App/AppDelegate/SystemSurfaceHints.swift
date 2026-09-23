@@ -106,7 +106,6 @@ extension AppDelegate {
     hintSession.command = .click(.leftClick, modifiers: [])
     hintSession.surface = .targets
     hintSession.prefix = ""
-    overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
     let hints = assignHints(targets)
     activationLifecycle.invalidate()

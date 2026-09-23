@@ -35,7 +35,6 @@ extension AppDelegate {
     hintSession.command = command
     hintSession.surface = .grid
     hintSession.prefix = ""
-    overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
     overlay.mouseGridOpacity = Float(config.hints.mouseGridOpacity)
     displayMouseGridRegion(region, depth: 0)
@@ -94,7 +93,6 @@ extension AppDelegate {
     hintSession.command = command
     hintSession.surface = .targets
 
-    overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
 
     if !isAccessibilityTrusted() {
@@ -271,7 +269,6 @@ extension AppDelegate {
     hintSession.command = command
     hintSession.surface = .targets
     hintSession.prefix = ""
-    overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
     if !isAccessibilityTrusted() {
       promptForAccessibility()
@@ -333,7 +330,6 @@ extension AppDelegate {
         self.hintSession.command = .move
         self.hintSession.surface = .targets
         self.hintSession.prefix = ""
-        self.overlay.overlayConfig = self.config.overlay
         self.overlay.debugConfig = self.config.debug
         let hints = self.assignHints(targets)
         self.activationLifecycle.invalidate()

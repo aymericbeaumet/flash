@@ -232,8 +232,11 @@ final class OverlayPanel: NSPanel {
 
   weak var coordinator: OverlayCoordinator?
 
+  /// Set at launch and on config reload. An unchanged value keeps the
+  /// status-bar layout memo and the border stroke.
   var overlayConfig: Config.Overlay = .init() {
     didSet {
+      guard overlayConfig != oldValue else { return }
       statusBarLayoutRevision &+= 1
       restyleActiveWindowBorder()
     }
