@@ -4,5 +4,5 @@
 # built with rustup-managed Cargo; build-plugins.sh uses rustup's
 # multi-target support for universal release builds.
 [tools]
-python = "3.13"
+python = "3.14"
 zig = "0.16.0"
