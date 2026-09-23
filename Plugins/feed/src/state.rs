@@ -12,7 +12,18 @@ pub(crate) struct State {
     label: String,
     cycle: Duration,
     articles: Vec<Article>,
-    published: Published<StatusSegment>,
+    published: Published<Segments>,
+}
+
+/// The two segments the plugin owns. `summary` keeps the links and the inline
+/// article preview; `label` is popup-free and link-free so a template binding
+/// owns hover and clicks, exactly as the system monitors do. Publishing both
+/// lets a configuration choose its own popup — a terminal running any reader —
+/// without the plugin deciding what hovering a headline should show.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Segments {
+    pub(crate) summary: StatusSegment,
+    pub(crate) label: StatusSegment,
 }
 
 impl State {
@@ -29,14 +40,14 @@ impl State {
         &mut self,
         articles: Result<Vec<Article>, ()>,
         now: i64,
-    ) -> Option<StatusSegment> {
+    ) -> Option<Segments> {
         if let Ok(articles) = articles {
             self.articles = articles;
         }
         self.publish(now)
     }
 
-    pub(crate) fn expire(&mut self, now: i64) -> Option<StatusSegment> {
+    pub(crate) fn expire(&mut self, now: i64) -> Option<Segments> {
         self.publish(now)
     }
 
@@ -49,18 +60,27 @@ impl State {
             .map(Duration::from_secs)
     }
 
-    fn publish(&mut self, now: i64) -> Option<StatusSegment> {
+    fn publish(&mut self, now: i64) -> Option<Segments> {
         self.articles
             .retain(|article| feed::is_recent(article.published_at, now));
-        let segment = if self.articles.is_empty() {
-            StatusSegment::Value(StatusValue::empty())
+        let segments = if self.articles.is_empty() {
+            Segments {
+                summary: StatusSegment::Value(StatusValue::empty()),
+                label: StatusSegment::Value(StatusValue::empty()),
+            }
         } else {
-            StatusSegment::Carousel(
-                StatusCarousel::new(self.articles.iter().map(render), self.cycle)
-                    .with_prefix(prefix(&self.label)),
-            )
+            Segments {
+                summary: StatusSegment::Carousel(
+                    StatusCarousel::new(self.articles.iter().map(render), self.cycle)
+                        .with_prefix(prefix(&self.label)),
+                ),
+                label: StatusSegment::Carousel(
+                    StatusCarousel::new(self.articles.iter().map(render_label), self.cycle)
+                        .with_prefix(prefix(&self.label)),
+                ),
+            }
         };
-        self.published.update(segment).cloned()
+        self.published.update(segments).cloned()
     }
 }
 
@@ -106,6 +126,25 @@ pub(crate) fn render(article: &Article) -> StatusValue {
     StatusValue::text(row).with_preview(preview)
 }
 
+/// One popup-free carousel line: the elastic title and its origin domain form
+/// a single link to the feed item, with no outbound arrow and no inline
+/// preview. Only the click destination is data the plugin owns; hover belongs
+/// to the surrounding template, so a configuration can point the segment at any
+/// popup it likes. The still prefix stays outside the link, so a template link
+/// wrapping the segment addresses the feed rather than any one item.
+pub(crate) fn render_label(article: &Article) -> StatusValue {
+    let original = Url::parse(&article.original_url).expect("validated article URL");
+    let domain = original.host_str().unwrap_or_default();
+    let domain = Markup::text(domain.strip_prefix("www.").unwrap_or(domain));
+    let title = Markup::text(feed::truncate(&article.title, 160));
+    let row = Markup::raw(format!("#[shrink]{title}#[noshrink] ({domain})"));
+    StatusValue::text(Markup::raw(format!(
+        "{item}#[fg={muted}]",
+        muted = Color::MUTED,
+        item = Markup::link(row, &article.url),
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,11 +159,25 @@ mod tests {
         }
     }
 
-    fn carousel(segment: Option<StatusSegment>) -> StatusCarousel {
-        match segment {
+    fn carousel(segments: Option<Segments>) -> StatusCarousel {
+        match segments.map(|segments| segments.summary) {
             Some(StatusSegment::Carousel(carousel)) => carousel,
             other => panic!("expected a carousel, got {other:?}"),
         }
+    }
+
+    fn label_carousel(segments: Option<Segments>) -> StatusCarousel {
+        match segments.map(|segments| segments.label) {
+            Some(StatusSegment::Carousel(carousel)) => carousel,
+            other => panic!("expected a carousel, got {other:?}"),
+        }
+    }
+
+    fn cleared() -> Option<Segments> {
+        Some(Segments {
+            summary: StatusSegment::Value(StatusValue::empty()),
+            label: StatusSegment::Value(StatusValue::empty()),
+        })
     }
 
     #[test]
@@ -171,7 +224,7 @@ mod tests {
         );
         assert_eq!(
             state.refresh(Err(()), 200 + feed::WINDOW_SECONDS),
-            Some(StatusSegment::Value(StatusValue::empty()))
+            cleared()
         );
         assert_eq!(state.expires_in(200 + feed::WINDOW_SECONDS), None);
         assert_eq!(state.expire(201 + feed::WINDOW_SECONDS), None);
@@ -181,10 +234,35 @@ mod tests {
     fn valid_empty_refresh_clears_status() {
         let mut state = State::new("AGGR".into(), Duration::from_secs(30));
         state.refresh(Ok(vec![article("A", 100)]), 101);
+        assert_eq!(state.refresh(Ok(vec![]), 102), cleared());
+    }
+
+    #[test]
+    fn label_mirrors_the_summary_carousel_with_one_item_link_and_no_preview() {
+        let articles: Vec<_> = ["A", "B"].into_iter().map(|n| article(n, 100)).collect();
+        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        let published = state.refresh(Ok(articles.clone()), 101);
+        let summary = carousel(published.clone());
+        let label = label_carousel(published);
+        assert_eq!(label.cycle, summary.cycle);
+        assert_eq!(label.prefix, summary.prefix);
         assert_eq!(
-            state.refresh(Ok(vec![]), 102),
-            Some(StatusSegment::Value(StatusValue::empty()))
+            label.lines,
+            articles.iter().map(render_label).collect::<Vec<_>>()
         );
+        for (line, source) in label.lines.iter().zip(&articles) {
+            let rendered = line.visible.as_str();
+            // Title and domain share one link to the feed item; the arrow and
+            // the inline preview are gone, so hover belongs to the template.
+            assert_eq!(
+                rendered.matches("#[link=").count(),
+                1,
+                "title and domain must form a single clickable link"
+            );
+            assert!(rendered.contains(&format!("#[link={}]", source.url)));
+            assert!(!rendered.contains("\u{2197}"));
+            assert!(line.preview.is_none());
+        }
     }
 
     #[test]

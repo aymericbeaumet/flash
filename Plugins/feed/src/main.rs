@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use flash_plugin::{run, Context, StatusSegment, StatusValue};
+use flash_plugin::{run, Context, StatusValue};
 use reqwest::{Client, Url};
 use serde_json::Value;
 
@@ -68,7 +68,10 @@ flash_plugin::plugin!(Feed);
 
 impl FlashPlugin for Feed {
     async fn on_start(&self, ctx: Context) {
-        ctx.status([("summary", StatusValue::empty())]);
+        ctx.status([
+            ("summary", StatusValue::empty()),
+            ("label", StatusValue::empty()),
+        ]);
         let settings = match settings(&ctx) {
             Ok(Some(settings)) => settings,
             Ok(None) => return,
@@ -184,9 +187,9 @@ async fn expire_articles(
     }
 }
 
-fn publish(ctx: &Context, segment: Option<StatusSegment>) {
-    if let Some(segment) = segment {
-        ctx.status([("summary", segment)]);
+fn publish(ctx: &Context, segments: Option<state::Segments>) {
+    if let Some(segments) = segments {
+        ctx.status([("summary", segments.summary), ("label", segments.label)]);
     }
 }
 
@@ -270,8 +273,8 @@ mod tests {
             preview: String::new(),
             published_at: 100,
         };
-        let segment = state.refresh(Ok(vec![article]), 101).unwrap();
-        harness.context().status([("summary", segment)]);
+        let segments = state.refresh(Ok(vec![article]), 101).unwrap();
+        publish(&harness.context(), Some(segments));
         let frames = harness.drain();
         let summary = &frames[0]["params"]["segments"]["summary"];
         assert_eq!(summary["cycle_seconds"], 30.0);
@@ -281,8 +284,39 @@ mod tests {
         let line = lines[0].as_str().unwrap();
         assert!(line.contains("#[link=https://aggr.example/a]"));
         assert!(line.contains("(source.example)"));
-        assert!(line.contains("↗"));
+        assert!(line.contains("\u{2197}"));
         assert!(!line.contains("AGGR"));
+    }
+
+    #[tokio::test]
+    async fn label_carousel_links_the_whole_row_to_the_item_without_popup_or_arrow() {
+        let mut harness = Harness::new("feed");
+        let mut state = state::State::new("AGGR".into(), Duration::from_secs(30));
+        let article = feed::Article {
+            title: "Title".into(),
+            url: "https://aggr.example/a".into(),
+            original_url: "https://www.source.example/x".into(),
+            preview: "A preview".into(),
+            published_at: 100,
+        };
+        let segments = state.refresh(Ok(vec![article]), 101).unwrap();
+        publish(&harness.context(), Some(segments));
+        let frames = harness.drain();
+        let label = &frames[0]["params"]["segments"]["label"];
+        assert_eq!(label["cycle_seconds"], 30.0);
+        assert!(label["prefix"].as_str().unwrap().contains("AGGR"));
+        let lines = label["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 1);
+        let line = lines[0].as_str().unwrap();
+        // The template owns hover; title and domain share one link to the item.
+        assert!(!line.contains("#[popup="));
+        assert!(!line.contains("\u{2197}"));
+        assert!(!line.contains("#[link=https://www.source.example/x]"));
+        assert_eq!(line.matches("#[link=").count(), 1);
+        assert!(line.contains("#[link=https://aggr.example/a]"));
+        // The visible content is still the headline and its origin domain.
+        assert!(line.contains("Title"));
+        assert!(line.contains("(source.example)"));
     }
 
     #[test]

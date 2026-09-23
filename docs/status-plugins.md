@@ -173,8 +173,9 @@ requires signing in again through Claude Code.
 
 ## Feed headlines
 
-`feed` owns the `summary` segment, selected with
-`#{flash.plugin.feed.summary}`. Set `[plugin.feed] url` to an RSS feed URL;
+`feed` owns the `summary` and `label` segments, selected with
+`#{flash.plugin.feed.summary}` and `#{flash.plugin.feed.label}`. Set
+`[plugin.feed] url` to an RSS feed URL;
 without one, the plugin makes no network requests. `refresh_interval` defaults
 to 300 seconds and `cycle_interval` to 30 seconds. The plugin publishes every
 article in the window as one host-rotated carousel; Flash rotates it, keeps the
@@ -198,6 +199,27 @@ original article link when present. For AGGR, this means the title opens the
 archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`
 for this feed; the default label is `FEED`. Each carousel line owns its
 preview, so the title, domain, and arrow share one popup region.
+
+`label` carries the same rotating headlines with the same still prefix and
+cadence, but no outbound arrow and no inline preview, and its title and domain
+form one link to the feed item rather than three separate targets. Binding
+`label` instead of `summary` hands hover to the surrounding template, so a
+configuration can wrap it in its own `#[popup=…]` and point that popup at any
+terminal command it likes — a feed reader, a script, anything. The plugin does
+not decide what hovering a headline shows; the configuration does. The still
+prefix stays outside the item link, so a template link wrapping the segment
+addresses the feed itself: clicking the prefix opens the feed, clicking the
+headline or its domain opens that item.
+
+```toml
+# A popup the configuration owns end to end.
+"@left" = "#[popup=feed]#[link=https://example.com]#{flash.plugin.feed.label}#[nolink]#[nopopup]"
+
+[terminal.feed]
+command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]
+persistent = true
+working_directory = "."
+```
 
 Hovering the article title, domain, or arrow opens a terminal-rendered preview of its opening
 lines from `content:encoded`, falling back to `description`. Paragraph breaks,
