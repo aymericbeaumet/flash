@@ -188,27 +188,37 @@ public final class AccessibilityProvider: FlashSource {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    let app = AXApp.make(pid: context.processID)
-    let selected = FirefoxAccessibility.withTree(
-      pid: context.processID,
-      bundleIdentifier: context.bundleIdentifier,
-      app: app
-    ) { app in
-      guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String)
-      else { return false }
-      let tabs = Self.tabElements(in: focusedWindow)
-      guard index <= tabs.count else { return false }
-      if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
-        RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
+    let pid = context.processID
+    let bundleIdentifier = context.bundleIdentifier
+    // The tab search is synchronous AX IPC over up to thousands of nodes and
+    // holds Firefox's per-process tree lock, so it never runs on the main run
+    // loop, which hosts the keyboard tap. Activation follows on main once the
+    // tab is pressed; the pressed tab is on screen, so no minimized-window
+    // restore is needed.
+    DispatchQueue.global(qos: .userInitiated).async {
+      let app = AXApp.make(pid: pid)
+      let selected = FirefoxAccessibility.withTree(
+        pid: pid,
+        bundleIdentifier: bundleIdentifier,
+        app: app
+      ) { app in
+        guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String)
+        else { return false }
+        let tabs = Self.tabElements(in: focusedWindow)
+        guard index <= tabs.count else { return false }
+        let tab = tabs[index - 1]
+        let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+        return pressed
+          || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+            == .success
       }
-      let tab = tabs[index - 1]
-      let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
-      return pressed
-        || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
-          == .success
-    }
-    DispatchQueue.main.async {
-      completion(selected ? .performed(pid: context.processID) : .unhandled)
+      DispatchQueue.main.async {
+        if selected, let runningApp = NSRunningApplication(processIdentifier: pid) {
+          RunningApplicationActivation.activate(
+            runningApp, options: [.activateAllWindows], restoringMinimizedWindows: false)
+        }
+        completion(selected ? .performed(pid: pid) : .unhandled)
+      }
     }
   }
 

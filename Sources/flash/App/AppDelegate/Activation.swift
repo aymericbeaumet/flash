@@ -389,7 +389,8 @@ extension AppDelegate {
       if let last = lastPermissionPromptAt, now.timeIntervalSince(last) < 5 {
         // Settings was already opened recently; don't re-open.
       } else {
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(
+          url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         lastPermissionPromptAt = now
       }
     }

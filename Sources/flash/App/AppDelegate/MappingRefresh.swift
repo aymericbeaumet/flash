@@ -44,7 +44,7 @@ extension AppDelegate {
       return PluginSelectorContext(bundleID: fallbackBundleID)
     }
     return PluginSelectorContext(
-      bundleID: currentNonFlashContext()?.bundleIdentifier ?? fallbackBundleID)
+      bundleID: currentNonFlashRunningApplication()?.bundleIdentifier ?? fallbackBundleID)
   }
 
   private func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {

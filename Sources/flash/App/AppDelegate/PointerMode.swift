@@ -109,7 +109,7 @@ extension AppDelegate {
       cancelOverlay()
       return
     }
-    let pid = currentNonFlashContext()?.processID ?? normalModeTargetPID
+    let pid = currentNonFlashRunningApplication()?.processIdentifier ?? normalModeTargetPID
     let committedClick = LastCommittedClick(
       point: location, action: .leftClick, modifiers: [], pid: pid)
     clearHintSessionState()

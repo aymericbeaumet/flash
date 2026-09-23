@@ -613,7 +613,8 @@ extension AppDelegate {
     if let targetPID, needsHandoff,
       let app = NSRunningApplication(processIdentifier: targetPID)
     {
-      RunningApplicationActivation.activate(app, options: [])
+      // The clicked window is on screen by construction.
+      RunningApplicationActivation.activate(app, options: [], restoringMinimizedWindows: false)
     }
     FlashLog.trace(
       "[mode] pointer_forward_host_click action=\(click.action) "
@@ -813,7 +814,8 @@ extension AppDelegate {
     if let pid = last.pid, needsHandoff,
       let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated
     {
-      RunningApplicationActivation.activate(app, options: [])
+      // Re-clicking a point Flash already clicked: that window is on screen.
+      RunningApplicationActivation.activate(app, options: [], restoringMinimizedWindows: false)
     }
     FlashLog.trace(
       "[mouse_repeat] point=(\(Int(last.point.x)),\(Int(last.point.y))) "
@@ -1132,7 +1134,9 @@ extension AppDelegate {
       resetCommandLineState()
       applyModeOverlay(captureOverride: true)
       if let url = URL(string: raw), url.scheme != nil {
-        NSWorkspace.shared.open(url)
+        // Async: the synchronous variant is a LaunchServices round trip on main.
+        NSWorkspace.shared.open(
+          url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
       }
       return
     case .openApplication(let bundleID):

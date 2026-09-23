@@ -30,6 +30,7 @@ final class SourceRegistry {
   /// activation checks never touch `NSRunningApplication.bundleIdentifier`
   /// (a LaunchServices round trip on a cold instance) on a read path.
   private var runningBundleIDs: Set<String> = []
+  private var runningApplicationsRefreshQueued = false
   private var openConfig: Config.Open
 
   init(
@@ -96,9 +97,31 @@ final class SourceRegistry {
     return FlashSourceEnvironment(runningApplications: runningApplications)
   }
 
-  /// Refresh the running-app set from the workspace. Event-driven (app
-  /// launch / terminate / activation, config reload); read paths use the
-  /// cached set rather than re-enumerating the workspace per query.
+  /// Refresh the running-app set on `runningApplicationsQueue`. Event-driven
+  /// (app launch / terminate / activation, config reload). Right after an
+  /// activation every `NSRunningApplication` property read is a LaunchServices
+  /// round trip, several milliseconds per enumeration, so it stays off main;
+  /// requests arriving while one is queued share it.
+  func scheduleRunningApplicationsRefresh() {
+    lock.lock()
+    let alreadyQueued = runningApplicationsRefreshQueued
+    runningApplicationsRefreshQueued = true
+    lock.unlock()
+    guard !alreadyQueued else { return }
+    Self.runningApplicationsQueue.async { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      self.runningApplicationsRefreshQueued = false
+      self.lock.unlock()
+      self.refreshRunningApplications()
+    }
+  }
+
+  private static let runningApplicationsQueue = DispatchQueue(
+    label: "flash.sources.running_apps", qos: .userInitiated)
+
+  /// Refresh the running-app set from the workspace synchronously. Read paths
+  /// use the cached set rather than re-enumerating the workspace per query.
   func refreshRunningApplications(_ applications: [NSRunningApplication]? = nil) {
     let applications = applications ?? runningApplicationsProvider()
     let bundleIDs = Set(applications.compactMap(\.bundleIdentifier))
@@ -457,20 +480,24 @@ final class SourceRegistry {
     return descriptors
   }
 
+  /// Name resolution consults LaunchServices, the app folders on disk and
+  /// every bundle's `Info.plist`, then prepares plugin catalogs, so it runs on
+  /// `resolutionQueue`; the completion lands on main.
   func resolveCandidate(
     matching target: String,
     sourceID: String? = nil,
     completion: @escaping (Candidate?) -> Void
   ) {
-    guard Thread.isMainThread else {
-      DispatchQueue.main.async { [weak self] in
-        self?.resolveCandidate(
-          matching: target,
-          sourceID: sourceID,
-          completion: completion)
-      }
-      return
+    Self.resolutionQueue.async {
+      let item = self.resolveCandidateOffMain(matching: target, sourceID: sourceID)
+      DispatchQueue.main.async { completion(item) }
     }
+  }
+
+  private static let resolutionQueue = DispatchQueue(
+    label: "flash.sources.resolve_name", qos: .userInitiated)
+
+  private func resolveCandidateOffMain(matching target: String, sourceID: String?) -> Candidate? {
     let env = environment
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
@@ -493,8 +520,7 @@ final class SourceRegistry {
         !CandidateFinder.insertsText(item),
         item.effect == nil
       else { continue }
-      completion(CandidateFinder.prepare(item))
-      return
+      return CandidateFinder.prepare(item)
     }
 
     // Plugin fallback: warm catalogs are a synchronous host-store read now,
@@ -518,11 +544,10 @@ final class SourceRegistry {
           && (candidate.title.localizedCaseInsensitiveContains(target)
             || candidate.displayTitle.localizedCaseInsensitiveContains(target))
       }) {
-        completion(item)
-        return
+        return item
       }
     }
-    completion(nil)
+    return nil
   }
 
   func candidate(forProcessID pid: pid_t) -> Candidate? {

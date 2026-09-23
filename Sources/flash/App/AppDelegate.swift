@@ -304,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
       guard let self,
-        let context = self.normalModeContext() ?? self.currentNonFlashContext()
+        let context = self.normalModeDispatchContext()
       else { return nil }
       let window = HintWindowSnapshot.current(
         pid: context.processID, primaryHeight: self.monitor.primaryScreenHeight())
@@ -336,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
       return NormalModeDispatcher.sendGlobalKey(virtualKey: key, flags: flags)
     }
-    pluginManager.cacheRunningApplicationsSnapshot(runningApplicationsSnapshot())
+    pluginManager.cacheRunningApplicationsSnapshot(Self.runningApplicationsSnapshot())
     pluginManager.start(config: config)
 
     overlay = OverlayPanel()
@@ -627,7 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
-      self.registry.refreshRunningApplications()
+      self.registry.scheduleRunningApplicationsRefresh()
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.pluginManager.emit(
           PluginEvent(
@@ -650,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
-      self.registry.refreshRunningApplications()
+      self.registry.scheduleRunningApplicationsRefresh()
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
         self.forgetActiveWindowBorderFrames(for: app.processIdentifier)
@@ -804,7 +804,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashLog.trace(
       "[focus] key_reconcile target_pid=\(targetPID) observed=\(observedFocusedAppPID ?? 0) "
         + "front=\(front.processIdentifier)")
-    applyFocusedApplicationChange(front, reason: "key_down", emitFocusEvent: true)
+    // This runs inside the synchronous tap callback. Settle only what this
+    // keystroke's swallow decision reads — the observed app and its effective
+    // mappings — and let the rest of the focus change (plugin events,
+    // running-app snapshots, activation history) follow on the next turn.
+    let pid = front.processIdentifier
+    observedFocusedAppPID = pid
+    refreshEffectiveMappings(for: front.bundleIdentifier)
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.observedFocusedAppPID == pid else { return }
+      self.applyFocusedApplicationChange(front, reason: "key_down", emitFocusEvent: true)
+    }
   }
 
   func reconcileFrontmostApplication(reason: String) {
@@ -856,7 +866,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       overlay?.lastNonFlashApplicationPID = app.processIdentifier
     }
     statusBarController?.updateFocusedApplication(app)
-    registry.refreshRunningApplications()
+    registry.scheduleRunningApplicationsRefresh()
     refreshEffectiveMappings(for: app.bundleIdentifier)
   }
 
@@ -1027,11 +1037,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func emitRunningApplicationsChanged(reason: String) {
     pluginManager.emitRunningApplicationsChanged(
-      reason: reason,
-      applications: runningApplicationsSnapshot())
+      reason: reason, snapshot: Self.runningApplicationsSnapshot)
   }
 
-  func runningApplicationsSnapshot() -> [[String: Any]] {
+  /// Thread-safe: `NSRunningApplication` properties read atomically.
+  static func runningApplicationsSnapshot() -> [[String: Any]] {
     NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
       guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
       return [
@@ -1067,7 +1077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clipboardMonitor = nil
     powerSourceMonitor?.stop()
     powerSourceMonitor = nil
-    statusBarController?.stop()
+    statusBarController?.stopAndWait()
     statusBarController = nil
     terminalInputMappings?.flush()
     overlay.statusPopupController.dismiss()

@@ -36,7 +36,7 @@ extension AppDelegate {
       self.terminalInputMappings?.flush()
       self.terminalReturnApplicationPID =
         self.terminalReturnApplicationPID
-        ?? self.currentNonFlashContext()?.processID
+        ?? self.currentNonFlashRunningApplication()?.processIdentifier
         ?? self.normalModeTargetPID
       self.dispatchMode(.openTerminal)
     }

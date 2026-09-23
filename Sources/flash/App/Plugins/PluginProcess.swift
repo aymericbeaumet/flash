@@ -75,6 +75,12 @@ final class PluginProcess {
   private var staleStatusSegments: Set<String> = []
   private var statusExpiryWork: DispatchWorkItem?
   private var startDate: Date?
+  /// Mirrors of queue-confined runtime fields, guarded by `lock`, so status
+  /// reads from main never wait on `queue` (a stop sleeps there for up to
+  /// 1.5 s). Republished by `publishRuntimeStatus` whenever they change.
+  private var publishedPID: pid_t?
+  private var publishedStartDate: Date?
+  private var publishedRestartCount = 0
   private var lifecycle = PluginLifecycle()
   private var restartWork: DispatchWorkItem?
   /// Set by a user-initiated reload so the lifecycle teardown keeps the
@@ -225,6 +231,7 @@ final class PluginProcess {
     // Terminal status is observable only after teardown and catalog removal.
     // Nested startup transitions may advance the reducer while interpreting
     // effects, so publish its current projection rather than a captured state.
+    publishRuntimeStatus()
     setState(lifecycle.runtimeState)
   }
 
@@ -294,6 +301,7 @@ final class PluginProcess {
     process = nil
     stdinPipe = nil
     startDate = nil
+    publishRuntimeStatus()
     cancelPollRegistrations()
     lock.lock()
     if preserveStatus {
@@ -434,6 +442,7 @@ final class PluginProcess {
     self.process = process
     self.stdinPipe = stdin
     self.startDate = Date()
+    publishRuntimeStatus()
     self.lastInboundFrameAt = .now()
     let initializationStartedAt = DispatchTime.now()
     // initialize carries the protocol version and nothing else; the reply
@@ -953,14 +962,23 @@ final class PluginProcess {
 
   // MARK: - Status reads
 
-  func statusSnapshot() -> PluginStatus {
-    // `process`/`startDate`/`restartCount` are queue-confined; hop onto the
-    // queue (the same manager→process direction stopAndWait uses) instead of
-    // racing them under `lock`, which guards state/segments/lastError/lastLog.
-    let (pid, startDate, restartCount) = queue.sync {
-      (process?.processIdentifier, self.startDate, self.lifecycle.failures.count)
-    }
+  /// On `queue`: mirror the queue-confined runtime fields for lock-only reads.
+  private func publishRuntimeStatus() {
+    let pid = process?.processIdentifier
+    let started = startDate
+    let restarts = lifecycle.failures.count
     lock.lock()
+    publishedPID = pid
+    publishedStartDate = started
+    publishedRestartCount = restarts
+    lock.unlock()
+  }
+
+  func statusSnapshot() -> PluginStatus {
+    lock.lock()
+    let pid = publishedPID
+    let startDate = publishedStartDate
+    let restartCount = publishedRestartCount
     let segments = statusSegments
     let state = self.state
     let lastError = self.lastError

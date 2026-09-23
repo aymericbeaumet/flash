@@ -95,20 +95,29 @@ final class FlashStatusBarController {
     }
   }
 
+  /// Stopping reaps command jobs, which can wait up to a second for them to
+  /// exit, so it runs on `queue`; a later `start()` still follows it there.
   func stop() {
-    queue.sync {
-      started = false
-      scheduler.unregister(Self.pollClientID)
-      timerGeneration &+= 1
-      nextWakeup = nil
-      let jobs = sourceRecords.values.compactMap(\.job) + shellRecords.values.compactMap(\.job)
-      sourceRecords.removeAll()
-      shellRecords.removeAll()
-      pluginCycles.removeAll()
-      stopJobs(jobs)
-      nextClock = nil
-      pendingJobPublish = nil
-    }
+    queue.async { [weak self] in self?.stopOnQueue() }
+  }
+
+  /// Termination only: the jobs must be reaped before the process exits.
+  func stopAndWait() {
+    queue.sync { stopOnQueue() }
+  }
+
+  private func stopOnQueue() {
+    started = false
+    scheduler.unregister(Self.pollClientID)
+    timerGeneration &+= 1
+    nextWakeup = nil
+    let jobs = sourceRecords.values.compactMap(\.job) + shellRecords.values.compactMap(\.job)
+    sourceRecords.removeAll()
+    shellRecords.removeAll()
+    pluginCycles.removeAll()
+    stopJobs(jobs)
+    nextClock = nil
+    pendingJobPublish = nil
   }
 
   func updateModeLabel(_ label: String) {

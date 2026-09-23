@@ -191,9 +191,16 @@ share the main run loop. Treat that loop as the input latency budget:
   process's pending Core Animation transaction while holding the WindowServer
   connection lock, so from another queue it deadlocks against a main-thread
   commit that carries WindowServer actions until SkyLight's 500 ms timeout,
-  freezing the main thread with it. Hint discovery, system-surface hints and
-  the menu-bar reveal probe still read the window list off main and share that
-  exposure. Scroll verbs resolve
+  freezing the main thread with it. Every window-list read therefore goes
+  through `WindowSnapshot.windowList`, which runs it on main (background
+  callers hop with `DispatchQueue.main.sync`, so main must never wait
+  synchronously on a queue that reads the window list); a guardrail rejects
+  any other caller. AX work, LaunchServices lookups, catalog gathering and
+  plugin event encoding stay off main: `tab_select`, `y` and `:q` press or
+  read through AX on background queues, minimized-window restores follow an
+  activation instead of preceding it, app-name resolution and the running-app
+  refresh run on their own queues, and plugin events are encoded on the plugin
+  manager's event queue only when a plugin listens. Scroll verbs resolve
   the wheel target frame on the AX queue and do not re-render the mode surface
   afterwards. `configureModeBadge` is memoized on its inputs
   (`ModeBadgeLayoutStamp`), so re-applying an unchanged mode surface skips the

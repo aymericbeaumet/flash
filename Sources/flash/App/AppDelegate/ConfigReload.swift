@@ -192,7 +192,7 @@ extension AppDelegate {
     configureDebugServer(for: cfg)
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
-    registry.refreshRunningApplications()
+    registry.scheduleRunningApplicationsRefresh()
     monitor.updateConfig(cfg)
     // The status bar's visibility is an explicit, standalone config switch —
     // it is NOT derived from advanced mode. `[statusbar] enabled` alone

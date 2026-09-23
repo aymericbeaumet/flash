@@ -412,16 +412,24 @@ final class PluginManager {
     runningApplicationsLock.unlock()
   }
 
-  func emitRunningApplicationsChanged(reason: String, applications: [[String: Any]]) {
-    cacheRunningApplicationsSnapshot(applications)
-    emit(
-      PluginEvent(
-        name: "core:apps.changed",
-        payload: [
-          "reason": reason,
-          "running_applications": applications,
-        ],
-        bundleID: nil))
+  /// Enumerating the running apps and encoding the full list is work for
+  /// `eventQueue`, not the focus change on main that triggers it.
+  func emitRunningApplicationsChanged(
+    reason: String, snapshot: @escaping () -> [[String: Any]]
+  ) {
+    eventQueue.async { [weak self] in
+      guard let self else { return }
+      let applications = snapshot()
+      self.cacheRunningApplicationsSnapshot(applications)
+      self.emitOnEventQueue(
+        PluginEvent(
+          name: "core:apps.changed",
+          payload: [
+            "reason": reason,
+            "running_applications": applications,
+          ],
+          bundleID: nil))
+    }
   }
 
   func updateConfig(_ config: Config) {
@@ -480,17 +488,26 @@ final class PluginManager {
     }
   }
 
+  /// Events leave the caller at once: with no listener nothing happens, and
+  /// otherwise encoding (a full running-app list, clipboard text) and fan-out
+  /// run on `eventQueue`, whose serial order keeps delivery in emit order.
   func emit(_ event: PluginEvent) {
-    // sendEvent filters by listen pattern off-queue and hops to each
-    // plugin's own queue, so fan-out from the snapshot is safe anywhere. The
-    // frame is identical for every listener (a full running-app list for
-    // `core:apps.changed`), so it is encoded once here.
+    guard hasListener(for: event.name) else { return }
+    eventQueue.async { [weak self] in self?.emitOnEventQueue(event) }
+  }
+
+  /// sendEvent filters by listen pattern and hops to each plugin's own queue.
+  /// The frame is identical for every listener, so it is encoded once here.
+  private func emitOnEventQueue(_ event: PluginEvent) {
+    guard hasListener(for: event.name) else { return }
     var event = event
     event.encodedFrame = PluginProcess.encodedEventFrame(event)
     for plugin in readHotSnapshot().plugins {
       plugin.sendEvent(event)
     }
   }
+
+  private let eventQueue = DispatchQueue(label: "flash.plugins.events", qos: .userInitiated)
 
   /// Returns true when a plugin owns `(command, subcommand)` and the
   /// invocation was dispatched (synchronous ownership check). The plugin

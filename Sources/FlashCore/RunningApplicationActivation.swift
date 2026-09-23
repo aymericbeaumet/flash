@@ -3,9 +3,11 @@ import ApplicationServices
 
 public enum RunningApplicationActivation {
   /// `restoringMinimizedWindows` costs one `kAXWindows` read plus one
-  /// `kAXMinimized` read per window — synchronous AX IPC on the calling
-  /// thread. Pass `false` when the target's window is known to be on screen
-  /// (a hint commit, an INSERT hand-off to the focused app).
+  /// `kAXMinimized` read per window — AX IPC into the target app, which never
+  /// runs on the main run loop: called from main, the restore follows on a
+  /// background queue and a minimized window reappears a moment after the
+  /// activation. Pass `false` when the target's window is known to be on
+  /// screen (a hint commit, a forwarded click, an INSERT hand-off).
   @discardableResult
   public static func activate(
     _ app: NSRunningApplication,
@@ -13,11 +15,19 @@ public enum RunningApplicationActivation {
     restoringMinimizedWindows: Bool = true
   ) -> Bool {
     if restoringMinimizedWindows {
-      restoreMinimizedWindows(processID: app.processIdentifier)
+      let pid = app.processIdentifier
+      if Thread.isMainThread {
+        restoreQueue.async { restoreMinimizedWindows(processID: pid) }
+      } else {
+        restoreMinimizedWindows(processID: pid)
+      }
     }
     app.unhide()
     return app.activate(options: options)
   }
+
+  private static let restoreQueue = DispatchQueue(
+    label: "flash.activation.restore_minimized", qos: .userInitiated)
 
   @discardableResult
   public static func restoreMinimizedWindows(processID pid: pid_t) -> Int {

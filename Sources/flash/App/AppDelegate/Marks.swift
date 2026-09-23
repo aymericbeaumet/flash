@@ -163,12 +163,33 @@ extension AppDelegate {
         + "forward=\(movementForwardStack.count)")
   }
 
+  /// Gathering and preparing every location catalog costs tens of
+  /// milliseconds; it runs off main and only the diff against the recorded
+  /// selection comes back.
   func recordPublishedLocations() {
     guard let app = currentNonFlashRunningApplication(), !app.isTerminated else { return }
-    let candidates = registry.locationSnapshotCandidates(scope: .all)
-    if !recordPublishedLocations(candidates, processID: app.processIdentifier) {
-      scheduleAmbientLocationRecord(pid: app.processIdentifier, reason: "location_catalog")
+    let pid = app.processIdentifier
+    let registry: SourceRegistry = self.registry
+    Self.locationGatherQueue.async {
+      let candidates = registry.locationSnapshotCandidates(scope: .all)
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.currentNonFlashRunningApplication()?.processIdentifier == pid else {
+          return
+        }
+        if !self.recordPublishedLocations(candidates, processID: pid) {
+          self.scheduleAmbientLocationRecord(pid: pid, reason: "location_catalog")
+        }
+      }
     }
+  }
+
+  static let locationGatherQueue = DispatchQueue(
+    label: "flash.movement.location_gather", qos: .utility)
+
+  /// The focused app's context by identity alone: no window-list scan, which
+  /// the ambient location path used to run three times per focus change.
+  private func focusedIdentityContext() -> AppContext? {
+    currentNonFlashRunningApplication().flatMap { monitor.makeContext(for: $0) }
   }
 
   /// Only a changed selection can add a stop. Other catalog publications must
@@ -200,7 +221,7 @@ extension AppDelegate {
     let token = ambientLocationRecordToken
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
       guard let self, self.ambientLocationRecordToken == token else { return }
-      guard let context = self.currentNonFlashContext(), context.processID == pid else { return }
+      guard let context = self.focusedIdentityContext(), context.processID == pid else { return }
       self.resolveAmbientLocation(
         in: context,
         source: reason,
@@ -220,9 +241,7 @@ extension AppDelegate {
   ) {
     resolveCurrentLocation(in: context) { [weak self] location in
       guard let self, self.ambientLocationRecordToken == token else { return }
-      guard
-        let focused = self.currentNonFlashContext(),
-        focused.processID == context.processID
+      guard self.currentNonFlashRunningApplication()?.processIdentifier == context.processID
       else { return }
 
       let recordedPreciseLocation = self.recordAmbientLocation(
@@ -234,7 +253,7 @@ extension AppDelegate {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(750)) { [weak self] in
         guard let self, self.ambientLocationRecordToken == token else { return }
         guard
-          let retryContext = self.currentNonFlashContext(),
+          let retryContext = self.focusedIdentityContext(),
           retryContext.processID == context.processID
         else { return }
         self.resolveAmbientLocation(
@@ -246,16 +265,16 @@ extension AppDelegate {
     }
   }
 
-  /// Read the warm location catalogs synchronously (built-ins + the plugin
-  /// catalog store), then keep AX-dependent URL disambiguation serialized on
-  /// AppMonitor's queue. Completion returns to main.
+  /// Read the warm location catalogs (built-ins + the plugin catalog store)
+  /// and run the AX-dependent URL disambiguation serialized on AppMonitor's
+  /// queue, both off main. Completion returns to main.
   private func resolveCurrentLocation(
     in context: AppContext,
     completion: @escaping (Candidate?) -> Void
   ) {
-    let candidates = registry.locationSnapshotCandidates(scope: .all)
     let registry: SourceRegistry = self.registry
     monitor.axQueue.async {
+      let candidates = registry.locationSnapshotCandidates(scope: .all)
       let location = registry.currentLocation(in: context, candidates: candidates)
       DispatchQueue.main.async {
         completion(location)
@@ -350,10 +369,10 @@ extension AppDelegate {
   }
 
   private func currentMovementEntry(completion: @escaping (MovementEntry?) -> Void) {
-    if let context = currentNonFlashContext() {
+    if let context = focusedIdentityContext() {
       resolveCurrentLocation(in: context) { [weak self] location in
         guard let self,
-          self.currentNonFlashContext()?.processID == context.processID
+          self.currentNonFlashRunningApplication()?.processIdentifier == context.processID
         else {
           completion(nil)
           return

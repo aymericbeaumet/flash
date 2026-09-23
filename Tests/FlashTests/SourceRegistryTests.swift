@@ -129,6 +129,64 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(candidateCalls, 1)
   }
 
+  func testScheduledRunningApplicationsRefreshRunsOffMainAndCoalesces() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let bundleID = try XCTUnwrap(app.bundleIdentifier)
+    let lock = NSLock()
+    var providerCalls = 0
+    var providerRanOnMain = false
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let registry = SourceRegistry(
+      descriptors: [
+        SourceDescriptor(identifier: "dynamic", activationPolicy: .bundleIDs([bundleID])) {
+          StubSource(identifier: "dynamic", capabilities: [.candidates]) { _ in [] }
+        }
+      ],
+      terminalBundleIDs: [],
+      runningApplications: [],
+      runningApplicationsProvider: {
+        lock.lock()
+        providerCalls += 1
+        let first = providerCalls == 1
+        providerRanOnMain = providerRanOnMain || Thread.isMainThread
+        lock.unlock()
+        if first {
+          entered.signal()
+          release.wait()
+        }
+        return [app]
+      })
+
+    registry.scheduleRunningApplicationsRefresh()
+    XCTAssertEqual(entered.wait(timeout: .now() + 2), .success)
+    // One refresh is running; these three share the single follow-up.
+    registry.scheduleRunningApplicationsRefresh()
+    registry.scheduleRunningApplicationsRefresh()
+    registry.scheduleRunningApplicationsRefresh()
+    release.signal()
+
+    let refreshed = expectation(description: "refreshed")
+    func poll() {
+      lock.lock()
+      let calls = providerCalls
+      lock.unlock()
+      if calls >= 2, registry.source(identifier: "dynamic") != nil {
+        refreshed.fulfill()
+      } else {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: poll)
+      }
+    }
+    poll()
+    wait(for: [refreshed], timeout: 2)
+    Thread.sleep(forTimeInterval: 0.05)
+    lock.lock()
+    XCTAssertEqual(providerCalls, 2)
+    XCTAssertFalse(providerRanOnMain)
+    lock.unlock()
+  }
+
   func testCoreAppCandidatesOnlyQueryCoreAppSource() {
     var appCalls = 0
     var pluginCalls = 0

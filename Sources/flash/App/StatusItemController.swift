@@ -158,7 +158,8 @@ final class StatusItemController: NSObject {
   }
 
   @objc private func openRepo() {
-    NSWorkspace.shared.open(Self.repoURL)
+    NSWorkspace.shared.open(
+      Self.repoURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
   }
 
   @objc private func openConfiguration() {
@@ -172,7 +173,8 @@ final class StatusItemController: NSObject {
         at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
       fm.createFile(atPath: url.path, contents: Data())
     }
-    NSWorkspace.shared.open(url)
+    NSWorkspace.shared.open(
+      url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
   }
 
   @objc private func quit() {

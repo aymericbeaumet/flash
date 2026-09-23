@@ -742,8 +742,8 @@ extension AppDelegate {
   /// after the close; the second read catches a slower app.
   static let activeWindowBorderEventSettleDelaysMs = [45, 150]
   /// Follow-up reads after an activation or display change. A launching app's
-  /// first window reaches the window list somewhere past the first step.
-  static let activeWindowBorderRecoveryDelaysMs = [80, 150, 250, 750]
+  /// first window is picked up by its focused-window resolution instead.
+  static let activeWindowBorderRecoveryDelaysMs = [80, 250, 750]
   static let activeWindowBorderFrameTolerance: CGFloat = 1
 
   private static func pointerFocusLossTarget() -> String {
@@ -1197,7 +1197,8 @@ extension AppDelegate {
         .map { "\(tab)/\($0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0)" }
         ?? tab
       if let url = URL(string: "http://\(host):\(port)/#\(fragment)") {
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(
+          url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")
       }
       return
@@ -1279,7 +1280,7 @@ extension AppDelegate {
   }
 
   func quitNormalModeTargetApp(force: Bool = false) {
-    guard let context = normalModeContext(),
+    guard let context = normalModeDispatchContext(),
       let app = NSRunningApplication(processIdentifier: context.processID)
     else {
       FlashLog.debug("[normal_mode] no target app for :quit")
@@ -1304,18 +1305,31 @@ extension AppDelegate {
   /// (a tab / tmux window) and `:qa` (quits the whole app). Falls back to ⌘W when
   /// the window has no AX close button (borderless/custom windows).
   func closeFocusedWindowInNormalMode() {
-    guard let context = normalModeContext() else {
+    guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for :q (close window)")
       applyModeOverlay()
       return
     }
     FlashLog.debug(
       "[normal_mode] close window pid=\(context.processID) bundle=\(context.bundleIdentifier)")
-    if !NormalModeDispatcher.closeFocusedWindow(pid: context.processID) {
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand)
+    let pid = context.processID
+    Self.normalModeAXActionQueue.async { [weak self] in
+      let closed = NormalModeDispatcher.closeFocusedWindow(pid: pid)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if !closed {
+          self.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand)
+        }
+        self.applyModeOverlay()
+      }
     }
-    applyModeOverlay()
   }
+
+  /// Quick AX reads and presses for NORMAL verbs (`y`, `:q`). They are IPC
+  /// into the target app, so never on the main run loop; a queue of their own
+  /// keeps them from waiting behind a hint walk on `axQueue`.
+  static let normalModeAXActionQueue = DispatchQueue(
+    label: "flash.normal.ax_action", qos: .userInteractive)
 
   func sendNormalModeKey(
     _ key: CGKeyCode,
@@ -1471,7 +1485,8 @@ extension AppDelegate {
       let app = NSRunningApplication(processIdentifier: processID),
       !app.isTerminated
     else { return false }
-    RunningApplicationActivation.activate(app, options: [])
+    // A synthesized key needs the app active, not its minimized windows back.
+    RunningApplicationActivation.activate(app, options: [], restoringMinimizedWindows: false)
     return true
   }
 
@@ -1550,13 +1565,20 @@ extension AppDelegate {
   /// selection off the AX tree when the app exposes it (no clipboard churn);
   /// otherwise synthesizes ⌘C and stores whatever lands on the pasteboard.
   private func yankSelection(into register: String?) {
-    guard let context = normalModeContext() else {
+    guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for yank_selection")
       applyModeOverlay()
       return
     }
     let pid = context.processID
-    if let text = NormalModeDispatcher.selectedText(pid: pid) {
+    Self.normalModeAXActionQueue.async { [weak self] in
+      let text = NormalModeDispatcher.selectedText(pid: pid)
+      DispatchQueue.main.async { self?.finishYankSelection(axText: text, pid: pid, into: register) }
+    }
+  }
+
+  private func finishYankSelection(axText: String?, pid: pid_t, into register: String?) {
+    if let text = axText {
       registers.write(text, register: register)
       FlashLog.debug(
         "[normal_mode] yank ax len=\(text.count) register=\(register ?? "*clipboard*")")
@@ -1585,7 +1607,7 @@ extension AppDelegate {
   /// pasting a named register never disturbs the clipboard. `repeatCount`
   /// pastes the contents that many times (`3p`).
   private func pasteRegister(_ register: String?, repeatCount: Int) {
-    guard let context = normalModeContext() else {
+    guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for paste")
       applyModeOverlay()
       return
@@ -1624,7 +1646,7 @@ extension AppDelegate {
   }
 
   private func copyFocusedDocumentURL() {
-    guard let context = normalModeContext() else {
+    guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for copyDocumentURL")
       return
     }
