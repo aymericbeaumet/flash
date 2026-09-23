@@ -102,7 +102,7 @@ final class ActionDispatcherTests: XCTestCase {
     }
   }
 
-  func testDragAndSelectionCanRestoreTheirOriginalPointerPosition() {
+  func testClicksAndDragsReturnThePointerToWhereTheUserLeftIt() {
     let origin = CGPoint(x: 100, y: 200)
     XCTAssertEqual(
       ActionDispatcher.cursorRestorePoint(

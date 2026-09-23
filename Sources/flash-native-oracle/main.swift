@@ -420,18 +420,21 @@ private func verifyMovedResidentHint(
   let hint = try captureResidentHint(label: "Primary Action", args: args)
   let before = readState(args.statePath)["primary", default: 0]
   try setFixtureWindowFrame(window, to: originalFrame.offsetBy(dx: move.dx, dy: move.dy))
-  let movedButton = try waitForAXFrame(
+  _ = try waitForAXFrame(
     primary.element, near: originalButton.offsetBy(dx: move.dx, dy: move.dy))
   try assertResidentHintIsStillCaptured(hint, args: args)
+  let pointerBefore = NSEvent.mouseLocation
   try ensureUnlockedConsole()
   try postHintLabel(hint.label)
   try waitForState(path: args.statePath, key: "primary", value: before + 1, timeout: 4)
   try waitForResidentHintsDismissed(args: args)
   try waitForFlashModeStable("normal", args: args, timeout: 4, stableFor: 0.35)
-  guard movedButton.contains(NSEvent.mouseLocation) else {
-    throw OracleError.stateTimedOut("cursor at the moved captured button")
-  }
-  recorder.pass("resident captured button followed its moved AX window and received the host click")
+  guard
+    hypot(NSEvent.mouseLocation.x - pointerBefore.x, NSEvent.mouseLocation.y - pointerBefore.y) < 1
+  else { throw OracleError.stateTimedOut("captured button clicked without a pointer move") }
+  recorder.pass(
+    "resident captured button followed its moved AX window and received the host click "
+      + "without moving the pointer")
 }
 
 private func verifyChangedResidentHint(

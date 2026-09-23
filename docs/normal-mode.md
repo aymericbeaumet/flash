@@ -34,8 +34,9 @@ document-URL and mark commands remain available for explicit mappings.
   unbound, because `tf` would stall the bare `t` (new tab). Bind `tf` / `tF`
   in your own config if you want it, and drop your `t` mapping to match.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
-  NORMAL. Hint clicks jump directly to the selected target with the cursor
-  hidden during repositioning, then leave the pointer at the clicked location.
+  NORMAL. Hint clicks do not move the pointer: it jumps to the target while
+  hidden, clicks, and returns to where it was. `m` (move) is the prefix that
+  leaves it on the target.
 - Terminal link hints add Shift, so `f` opens the link through the terminal.
   The hover and click carry the same modifiers.
 - Modifiers held on the final hint key ride the click (`hints.magic_modifiers`,
