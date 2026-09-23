@@ -83,6 +83,8 @@ enum PluginProtocol {
   static let frameOverflowError = "response exceeded outbound frame limit"
   static let requestCapacityError = "plugin request capacity exceeded"
   static let hostCallCapacityError = "host call capacity exceeded"
+  /// A plugin's read-only handler ran out of the request's `deadline_ms`.
+  static let deadlineExceededError = "deadline exceeded"
   static func capabilityDeniedError(_ capability: String) -> String {
     "missing \(capability) capability"
   }

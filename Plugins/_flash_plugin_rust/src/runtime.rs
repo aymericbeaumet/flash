@@ -4,6 +4,7 @@
 //! and stdin-EOF shutdown. Parent liveness is stdin EOF: the host owns the
 //! pipe, so a dead host ends the loop.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -105,6 +106,26 @@ pub trait Plugin: Send + Sync + 'static {
         let _ = ctx;
         async {}
     }
+}
+
+/// Answer a request whose handler ran out of its deadline, and say so in the
+/// log under the request's trace.
+async fn deadline_exceeded(ctx: &Context, id: Value, method: &str, deadline: Option<Duration>) {
+    let deadline_ms = deadline.map_or(0, |deadline| deadline.as_millis());
+    ctx.log_fields(
+        "warn",
+        &format!("[plugin] {method} exceeded its deadline"),
+        BTreeMap::from([
+            ("method".to_string(), method.to_string()),
+            ("deadline_ms".to_string(), deadline_ms.to_string()),
+        ]),
+    );
+    ctx.emit
+        .respond(
+            id,
+            json!({ "ok": false, "error": crate::deadline::DEADLINE_EXCEEDED_ERROR }),
+        )
+        .await;
 }
 
 pub(crate) struct InboundEvent {
@@ -310,6 +331,7 @@ where
             .to_string();
         let params = frame.get("params").cloned().unwrap_or_else(|| json!({}));
         let trace = crate::trace::from_envelope(&frame);
+        let deadline = crate::deadline::from_envelope(&frame);
 
         // Frame triage: id+method = request, id alone = the host's response
         // to a plugin-initiated call, method alone = notification.
@@ -426,7 +448,12 @@ where
                     let ctx = ctx.clone();
                     tasks.spawn(crate::trace::scope(trace, async move {
                         let _permits = permits;
-                        let response = plugin.on_search(ctx.clone(), request).await;
+                        let handler = plugin.on_search(ctx.clone(), request);
+                        let Some(response) = crate::deadline::within(deadline, handler).await
+                        else {
+                            deadline_exceeded(&ctx, id, "search", deadline).await;
+                            return;
+                        };
                         let rows =
                             serde_json::to_value(&response.rows).unwrap_or_else(|_| json!([]));
                         ctx.emit
@@ -444,7 +471,12 @@ where
                     let ctx = ctx.clone();
                     tasks.spawn(crate::trace::scope(trace, async move {
                         let _permits = permits;
-                        let response = plugin.on_hints(ctx.clone(), request).await;
+                        let handler = plugin.on_hints(ctx.clone(), request);
+                        let Some(response) = crate::deadline::within(deadline, handler).await
+                        else {
+                            deadline_exceeded(&ctx, id, "hints", deadline).await;
+                            return;
+                        };
                         let targets =
                             serde_json::to_value(&response.targets).unwrap_or_else(|_| json!([]));
                         let mut result = json!({ "ok": true, "targets": targets });
@@ -575,6 +607,9 @@ mod tests {
         }
 
         async fn on_hints(&self, _: Context, request: HintsRequest) -> HintsResponse {
+            if request.bundle_id.as_deref() == Some("slow") {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
             if request.bundle_id.as_deref() == Some("invalid") {
                 // A zero-width frame fails the shared target validation.
                 return HintsResponse::targets(vec![JumpTarget::new(
@@ -1079,6 +1114,37 @@ mod tests {
         assert_eq!(wire.recv().await["method"], "status");
         assert!(wire.recv().await["params"].get("trace").is_none());
         assert_eq!(wire.recv_response(3).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// A read-only handler past its deadline is dropped and answers in time;
+    /// one within it, or without a deadline, answers normally.
+    #[tokio::test]
+    async fn a_hints_handler_past_its_deadline_answers_deadline_exceeded() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({
+            "id": 2, "method": "hints", "deadline_ms": 60, "trace": "k3f9",
+            "params": { "bundle_id": "slow", "pid": 1 }
+        }))
+        .await;
+        let log = wire.recv().await;
+        assert_eq!(
+            log["params"]["message"],
+            "[plugin] hints exceeded its deadline"
+        );
+        assert_eq!(log["params"]["fields"]["deadline_ms"], "60");
+        assert_eq!(log["params"]["trace"], "k3f9");
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": false, "error": "deadline exceeded" })
+        );
+        wire.send(json!({
+            "id": 3, "method": "hints", "deadline_ms": 500,
+            "params": { "bundle_id": "dev.flash.test", "pid": 1 }
+        }))
+        .await;
+        assert_eq!(wire.recv_response(3).await["ok"], true);
         wire.close_stdin().await;
         wire.finished().await;
     }

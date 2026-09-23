@@ -136,6 +136,11 @@ Handed to every handler; cheap to clone. Key surface:
   as `PreviewTooLarge`, and `status` then logs a content-free warning
   (segment name and encoded size only) and publishes the visible text alone
   rather than losing the segment.
+- Deadlines: an `on_search` / `on_hints` handler still running a tenth of the
+  request's `deadline_ms` (at most 50 ms) before it is dropped, with the
+  subprocesses and host calls it awaits, and the request answers `deadline
+  exceeded`. Bound inner waits below that budget to answer partially instead
+  (the vscode plugin gives `host.ax_snapshot` a `deadline_ms`).
 - Timers: `interval(period, cb)` — non-overlapping ticks; plugins may also
   `tokio::spawn` freely.
 

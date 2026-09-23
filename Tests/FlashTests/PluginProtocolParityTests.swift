@@ -98,6 +98,7 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(errors["frame_overflow"] as? String, PluginProtocol.frameOverflowError)
     XCTAssertEqual(errors["request_capacity"] as? String, PluginProtocol.requestCapacityError)
     XCTAssertEqual(errors["host_call_capacity"] as? String, PluginProtocol.hostCallCapacityError)
+    XCTAssertEqual(errors["deadline_exceeded"] as? String, PluginProtocol.deadlineExceededError)
     XCTAssertEqual(
       errors["capability_denied"] as? String,
       PluginProtocol.capabilityDeniedError("<capability>"))

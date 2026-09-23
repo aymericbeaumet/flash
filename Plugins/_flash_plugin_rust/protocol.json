@@ -128,7 +128,8 @@
     "frame_overflow": "response exceeded outbound frame limit",
     "capability_denied": "missing <capability> capability",
     "request_capacity": "plugin request capacity exceeded",
-    "host_call_capacity": "host call capacity exceeded"
+    "host_call_capacity": "host call capacity exceeded",
+    "deadline_exceeded": "deadline exceeded"
   },
   "capabilities": [
     "accessibility",
@@ -148,6 +149,10 @@
     "pattern": "^[0-9a-z]{1,16}$",
     "host_to_plugin": "optional `trace` key on a request envelope (hints, search, evaluate, perform) naming the user interaction that caused it",
     "plugin_to_host": "a `log` notification emitted while serving that request carries it back as params.trace; a malformed id is ignored"
+  },
+  "deadline": {
+    "host_to_plugin": "optional `deadline_ms` on a request envelope: the milliseconds the host still waits for the reply as it writes the request, a positive integer",
+    "plugin": "a search or hints handler still running a tenth of the deadline (at most 50 ms) before it is dropped and answers errors.deadline_exceeded; evaluate and perform run to completion"
   },
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
   "transport_limits": {

@@ -112,15 +112,20 @@ optional `trace` on a request: the id (`^[0-9a-z]{1,16}$`) of the user
 interaction that caused it. A `log` notification emitted while serving that
 request carries it back as `params.trace` (the Rust SDK does both), so one
 interaction reads end to end across processes; see
-[observability](observability.md). Ids are positive
+[observability](observability.md). Every request also carries `deadline_ms`,
+the milliseconds the host still waits for its reply as it writes it. Ids are positive
 monotonic integers per sender. Booleans and floating-point values are never
 integer IDs or protocol versions; `ok` and other Boolean fields accept only
 JSON booleans. Native process IDs are checked positive 32-bit integers.
 Host and plugin counters are independent and
 may overlap — an inbound `id`+`method` frame is always a request, never a
 reply. Exactly one reply per id'd request; responses to unknown ids are
-dropped. There is **no cancellation**: late replies are dropped and the
-deadline table is the contract. Lines are capped at 10 MiB in both
+dropped. There is **no cancellation** message: late replies are dropped and
+the deadline table is the contract. A plugin may stop a handler whose answer
+would come too late: the Rust SDK drops a `search` or `hints` handler still
+running a tenth of `deadline_ms` (at most 50 ms) before it, which answers
+`{"ok": false, "error": "deadline exceeded"}` and logs a warning under the
+request's trace; `evaluate` and `perform` run to completion. Lines are capped at 10 MiB in both
 directions, excluding the terminating newline; an undecodable or oversized line is dropped (never fatal) and the
 stream self-heals at the next newline. An outbound response that would exceed
 the cap is replaced by `{"ok": false, "error": "response exceeded outbound
@@ -313,7 +318,9 @@ posted through the host's session event stream for macOS-owned shortcuts and
 rejects unmodified input. The AX broker exists because `AXUIElement` cannot
 cross a process boundary: `host.ax_snapshot` BFS-walks a subtree (default
 cap 3000 nodes) and returns flat nodes with opaque handles; geometry in
-NSScreen coordinates. `capabilities` also includes `network` (composes
+NSScreen coordinates. An optional `deadline_ms` bounds the walk from the
+call's arrival: past it the reply carries the nodes reached so far and
+`"truncated": true`. `capabilities` also includes `network` (composes
 `network-outbound` into the sandbox profile), `network_fetch` (the host
 performs HTTPS GETs on the plugin's behalf via `host.fetch`, restricted to
 the manifest's `fetch_urls` prefixes, 8 s timeout, 1 MiB UTF-8 cap — the

@@ -7,6 +7,7 @@
 //! typed host RPC client. Everything a plugin touches is a typed value.
 
 mod context;
+mod deadline;
 mod emit;
 mod events;
 mod framing;

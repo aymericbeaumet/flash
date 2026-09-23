@@ -1320,8 +1320,19 @@ final class PluginProcess {
       }
       var frame: [String: Any] = ["id": id, "method": method, "params": params]
       if let traceText { frame["trace"] = traceText }
+      // What is left of the wait, so the plugin can stop a handler whose
+      // answer would arrive after it (the SDK's read-only handlers do).
+      frame["deadline_ms"] = Self.remainingMilliseconds(until: deadline)
       self.writeFrame(frame)
     }
+  }
+
+  /// Whole milliseconds left before `deadline`, at least 1.
+  static func remainingMilliseconds(until deadline: DispatchTime, now: DispatchTime = .now()) -> Int
+  {
+    let left = deadline.uptimeNanoseconds > now.uptimeNanoseconds
+      ? deadline.uptimeNanoseconds - now.uptimeNanoseconds : 0
+    return max(1, Int(left / 1_000_000))
   }
 
   private func routeHostRequest(id: Int, method: String, params: [String: Any], generation: UInt64)

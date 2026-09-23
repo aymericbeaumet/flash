@@ -857,6 +857,38 @@ final class PluginProcessLifecycleTests: XCTestCase {
     process.stopAndWait(reason: "test")
   }
 
+  func testRequestsCarryWhatIsLeftOfTheirDeadline() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "deadline",
+      manifest: PluginFixtureKit.manifest(
+        id: "deadline",
+        extra: #""commands": [{ "command": "deadline", "subcommand": "run", "description": "x" }]"#),
+      script: PluginFixtureKit.script(
+        onPerform: #"printf '%s\n' "$line" > "$D/perform"; "# + PluginFixtureKit.performOK))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    process.start()
+    let done = expectation(description: "perform")
+    process.perform(
+      kind: "command", params: ["command": "deadline", "subcommand": "run"], timeoutMs: 3_000
+    ) { _ in done.fulfill() }
+    wait(for: [done], timeout: 8)
+    let line = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("perform"), encoding: .utf8)
+    let frame = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+    let deadline = try XCTUnwrap(frame["deadline_ms"] as? Int)
+    XCTAssertTrue((1...3_000).contains(deadline), "\(deadline)")
+    process.stopAndWait(reason: "test")
+
+    let now = DispatchTime.now()
+    XCTAssertEqual(
+      PluginProcess.remainingMilliseconds(until: now + .milliseconds(250), now: now), 250)
+    XCTAssertEqual(
+      PluginProcess.remainingMilliseconds(until: now, now: now + .seconds(1)), 1,
+      "a passed deadline still names a positive wait")
+  }
+
   func testStatusBoundPluginSpawnsOnceTheBarObservesItAndOutlivesTheObserver() throws {
     let fixture = try PluginFixtureKit.make(
       id: "statusbound",

@@ -66,6 +66,8 @@ watchdog also reports stalls while they are still in progress
 - An exit records whether the process exited or died of a signal, and its
   status.
 - A failed source action logs the claiming source and the reason it gave.
+- A `search` or `hints` handler that runs out of its request's `deadline_ms`
+  logs `[plugin] <method> exceeded its deadline` under the request's trace.
 - Per-plugin CPU % (`/state`, `:plugins`) is computed from real CPU time;
   rusage reports Mach ticks, converted to nanoseconds.
 

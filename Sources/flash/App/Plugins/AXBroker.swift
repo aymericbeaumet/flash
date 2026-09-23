@@ -92,13 +92,19 @@ final class AXBroker {
     let collect = params["collect"] as? [String] ?? []
     let pruneRoles = Set(params["prune_roles"] as? [String] ?? [])
     guard params["max_nodes"] == nil || PluginJSON.integer(params["max_nodes"]) != nil,
-      params["geometry"] == nil || PluginJSON.boolean(params["geometry"]) != nil
+      params["geometry"] == nil || PluginJSON.boolean(params["geometry"]) != nil,
+      params["deadline_ms"] == nil || (PluginJSON.integer(params["deadline_ms"]) ?? 0) > 0
     else {
       reply(["ok": false, "error": "invalid snapshot scalar params"])
       return
     }
     let maxNodes = PluginJSON.integer(params["max_nodes"]) ?? 3_000
     let geometry = PluginJSON.boolean(params["geometry"]) ?? false
+    // Counted from the call's arrival, so time queued behind another walk
+    // spends it too.
+    let deadline = PluginJSON.integer(params["deadline_ms"]).map {
+      DispatchTime.now() + .milliseconds($0)
+    }
 
     queue.async { [weak self] in
       guard let self else {
@@ -121,10 +127,15 @@ final class AXBroker {
         }
         var nodes: [[String: Any]] = []
         var seen = AXElementIdentitySet()
-        for (rootIndex, root) in roots.enumerated() {
+        var expired = false
+        walk: for (rootIndex, root) in roots.enumerated() {
           var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
           var index = 0
           while index < bfs.count, nodes.count < maxNodes {
+            if let deadline, DispatchTime.now() >= deadline {
+              expired = true
+              break walk
+            }
             let item = bfs[index]
             let element = item.element
             index += 1
@@ -143,7 +154,9 @@ final class AXBroker {
             bfs.append(contentsOf: children.map { ($0, handle) })
           }
         }
-        return ["ok": true, "nodes": nodes]
+        // A walk cut short by its deadline still answers with the nodes it
+        // reached — breadth first, so the shallowest.
+        return expired ? ["ok": true, "nodes": nodes, "truncated": true] : ["ok": true, "nodes": nodes]
       }
       reply(response)
     }
