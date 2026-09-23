@@ -2507,8 +2507,10 @@ final class NormalModeTests: XCTestCase {
   func testHorizontalAndEdgeScrollsDoNotPostPixelWheelEventsIntoTerminals() {
     let restore = NormalModeDispatcher.wheelEventPoster
     defer { NormalModeDispatcher.wheelEventPoster = restore }
-    var posted = 0
-    NormalModeDispatcher.wheelEventPoster = { _ in posted += 1 }
+    var continuous: [Int64] = []
+    NormalModeDispatcher.wheelEventPoster = {
+      continuous.append($0.getIntegerValueField(.scrollWheelEventIsContinuous))
+    }
     let pid = ProcessInfo.processInfo.processIdentifier
     let frame = CGRect(x: 0, y: 0, width: 1200, height: 900)
     for kind in [
@@ -2516,7 +2518,8 @@ final class NormalModeTests: XCTestCase {
     ] {
       _ = NormalModeDispatcher.scroll(kind, pid: pid, bundleID: "org.alacritty", windowFrame: frame)
     }
-    XCTAssertEqual(posted, 0)
+    // Only the edges' bounded line scrolls; no pixel wheel reaches a terminal.
+    XCTAssertEqual(continuous, [0, 0])
   }
 
   /// Firefox reorders a tab with Control-Shift-Page, never Command-Shift:
