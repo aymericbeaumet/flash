@@ -53,19 +53,56 @@ final class KeyboardCaptureTap {
     self.handle = handle
   }
 
-  /// Pure swallow decision. NORMAL and hints capture every key; INSERT and
-  /// key-window surfaces are left untouched unless a native surface owns the
-  /// keyboard and an explicit mapping claims the key.
-  ///
-  /// Extracted as a static, side-effect-free function so the tap's single most
-  /// security-sensitive decision is unit-testable without a live `CGEventTap`.
-  static func shouldSwallow(
+  /// What the tap does with one `keyDown`, decided from state alone. The
+  /// effects a decision needs — the secure-input syscall, the frontmost-app
+  /// reconcile, a mapping lookup — are evaluated by the caller only for the
+  /// decision that asks for them, cheapest first. Every swallow yields to a
+  /// focused secure text field (password), whose keys always pass.
+  enum Decision: Equatable {
+    case pass
+    case swallow
+    /// INSERT: a modified chord is swallowed when an active mapping claims it
+    /// in the actual frontmost app (reconciled first: the app switcher may
+    /// have changed it without a notification yet).
+    case swallowIfInsertChordIsMapped
+    /// A native surface (About window, suspended session) owns the keyboard:
+    /// only a key a mapping or the NORMAL interpreter claims is swallowed.
+    case swallowIfNativeSurfaceKeyIsMapped
+  }
+
+  /// The tap's single most security-sensitive decision, side-effect free so
+  /// the whole mode × input × ownership table is unit-testable without a
+  /// live `CGEventTap`.
+  static func decide(
+    isTerminal: Bool,
     flashMode: FlashMode,
     inputMode: OverlayInputMode,
-    hasMapping: Bool = false,
-    nativeSurfaceOwnsKeyboard: Bool = false
-  ) -> Bool {
-    if nativeSurfaceOwnsKeyboard { return hasMapping }
+    aboutWindowVisible: Bool,
+    aboutWindowOwnsKeyboard: Bool,
+    nativeSurfaceSuspended: Bool,
+    isModifiedChord: Bool
+  ) -> Decision {
+    // A terminal popup's own view owns input.
+    if isTerminal { return .pass }
+    let nativeSurfaceShown = aboutWindowVisible || nativeSurfaceSuspended
+    // A hint session owns the keyboard in every base mode.
+    if inputMode == .hints, !nativeSurfaceShown { return .swallow }
+    // INSERT is transparent so typing flows to the focused app, but a modified
+    // chord bound to an active mapping fires Flash's action on this fast path
+    // (swallowed, so the app never sees it). The highest-rate branch: a bare
+    // key returns here without any lookup.
+    if flashMode == .insert, !nativeSurfaceShown {
+      return isModifiedChord ? .swallowIfInsertChordIsMapped : .pass
+    }
+    if aboutWindowOwnsKeyboard || nativeSurfaceSuspended {
+      return .swallowIfNativeSurfaceKeyIsMapped
+    }
+    return shouldSwallow(flashMode: flashMode, inputMode: inputMode) ? .swallow : .pass
+  }
+
+  /// NORMAL and hints capture every key; INSERT and key-window surfaces are
+  /// left untouched.
+  static func shouldSwallow(flashMode: FlashMode, inputMode: OverlayInputMode) -> Bool {
     switch inputMode {
     case .hints:
       // A hint session owns every key whatever the base mode: hints opened

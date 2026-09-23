@@ -955,73 +955,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.keyboardCaptureActive = true
   }
 
-  /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
-  /// thread. INSERT is never touched (keys flow straight to the focused app);
-  /// NORMAL is hermetic and captures every key, modified chords included:
-  /// `normalModeMappings` carries the same compiled set the Carbon registry does,
-  /// and the session tap swallows the event before Carbon dispatch, so there's no
-  /// double-fire. Command-line / modal / candidate-finder own the key window and
-  /// type into their own fields, so the tap leaves those alone.
+  /// Whether the keyboard tap swallows a `keyDown`: the pure
+  /// `KeyboardCaptureTap.decide`, then only the effects that decision needs.
+  /// Runs on the main thread inside the synchronous tap callback on every
+  /// keystroke, so nothing here resolves the keyboard layout or touches
+  /// AppKit. NORMAL is hermetic: `normalModeMappings` carries the same
+  /// compiled set the Carbon registry does, and the session tap swallows the
+  /// event before Carbon dispatch, so there's no double-fire.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
-    if case .terminal = modeStore.mode { return false }
-    // A hint session owns the keyboard in every base mode (see
-    // `KeyboardCaptureTap.shouldSwallow`); a secure field still keeps its keys.
-    if overlay.inputMode == .hints, !(aboutWindowVisible || nativeSurfaceSuspended) {
+    let flags = event.flags
+    let decision = KeyboardCaptureTap.decide(
+      isTerminal: modeStore.mode.isTerminal,
+      flashMode: flashMode,
+      inputMode: overlay.inputMode,
+      aboutWindowVisible: aboutWindowVisible,
+      aboutWindowOwnsKeyboard: Self.aboutWindowShouldOwnNativeKeyboard(
+        visible: aboutWindowVisible,
+        hasTransientInput: hintSession.isActive,
+        activationInFlight: activationInFlight),
+      nativeSurfaceSuspended: nativeSurfaceSuspended,
+      isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
+        || flags.contains(.maskAlternate))
+    switch decision {
+    case .pass:
+      return false
+    case .swallow:
       return !IsSecureEventInputEnabled()
-    }
-    // INSERT is transparent so typing flows to the focused app. But a modified
-    // chord bound to an active mapping (`[mode.all]` / `[mode.insert]`) must
-    // still fire Flash's action. Historically that went only through a Carbon
-    // hotkey — a slower keypress→dispatch route than this session tap — which
-    // is why *leaving* insert (⌘⌃[ → NORMAL) lagged while *entering* it (`i`,
-    // swallowed right here) was instant, and why the app also saw the chord.
-    // Handle mapped chords on the same fast tap path instead: swallow (so the
-    // app never receives the chord) and let `routeTapCapturedKey` fire the
-    // mapping. Only *mapped* chords are swallowed — ordinary typing and
-    // unmapped chords (⌘C, ⌘Tab, …) pass straight through, and `hasMapping`
-    // matches only modified chords so a bare key can never match. This is the
-    // highest-rate branch (every keystroke while typing), so it is ordered
-    // cheapest-first: raw flag test, O(1) table lookup, and only for a mapped
-    // chord the frontmost reconcile and the secure-input syscall.
-    if flashMode == .insert, !(aboutWindowVisible || nativeSurfaceSuspended) {
-      let flags = event.flags
-      guard
-        flags.contains(.maskCommand) || flags.contains(.maskControl)
-          || flags.contains(.maskAlternate)
-      else { return false }
+    case .swallowIfInsertChordIsMapped:
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       reconcileFrontmostApplication(
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
       guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
-      // A focused secure text field (password) turns on secure event input;
-      // never intercept keystrokes bound for it.
       return !IsSecureEventInputEnabled()
-    }
-    // A focused secure text field (password) turns on secure event input.
-    // Let its keystrokes through without changing the user's selected mode.
-    if IsSecureEventInputEnabled() {
-      return false
-    }
-    let aboutOwnsNativeKeyboard = Self.aboutWindowShouldOwnNativeKeyboard(
-      visible: aboutWindowVisible,
-      hasTransientInput: hintSession.isActive,
-      activationInFlight: activationInFlight)
-    if aboutOwnsNativeKeyboard || nativeSurfaceSuspended {
-      let flags = event.flags
+    case .swallowIfNativeSurfaceKeyIsMapped:
+      guard !IsSecureEventInputEnabled() else { return false }
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-      let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-      return KeyboardCaptureTap.shouldSwallow(
-        flashMode: flashMode,
-        inputMode: overlay.inputMode,
-        hasMapping: hasMapping,
-        nativeSurfaceOwnsKeyboard: true)
+      return keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
     }
-    // INSERT under a native surface (About window / suspended session) was
-    // handled above; a bare INSERT never reaches here. NORMAL swallows every
-    // keypress; `routeTapCapturedKey` fires mappings and the interpreter
-    // consumes the rest. Runs synchronously on every keystroke, so nothing here
-    // resolves the keyboard layout or touches AppKit.
-    return KeyboardCaptureTap.shouldSwallow(flashMode: flashMode, inputMode: overlay.inputMode)
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {

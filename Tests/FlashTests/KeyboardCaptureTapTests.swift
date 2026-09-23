@@ -12,17 +12,6 @@ final class KeyboardCaptureTapTests: XCTestCase {
     XCTAssertTrue(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .hints))
   }
 
-  func testNormalModeSwallowsEveryChordMappedOrNot() {
-    for hasMapping in [false, true] {
-      XCTAssertTrue(
-        KeyboardCaptureTap.shouldSwallow(
-          flashMode: .normal, inputMode: .normal, hasMapping: hasMapping))
-      XCTAssertTrue(
-        KeyboardCaptureTap.shouldSwallow(
-          flashMode: .normal, inputMode: .hints, hasMapping: hasMapping))
-    }
-  }
-
   func testNormalModeNeverSwallowsKeyWindowSurfaces() {
     // The command line owns the key window and types into its own field — the
     // tap must pass it through untouched.
@@ -30,25 +19,54 @@ final class KeyboardCaptureTapTests: XCTestCase {
   }
 
   func testNativeSurfacePassesUnmappedInputButSwallowsMappings() {
-    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine] {
-      XCTAssertFalse(
-        KeyboardCaptureTap.shouldSwallow(
-          flashMode: .normal,
-          inputMode: inputMode,
-          nativeSurfaceOwnsKeyboard: true))
+    for flashMode: FlashMode in [.normal, .insert] {
+      for inputMode: OverlayInputMode in [.normal, .passive, .commandLine] {
+        XCTAssertEqual(
+          decide(flashMode: flashMode, inputMode: inputMode, nativeSurfaceSuspended: true),
+          .swallowIfNativeSurfaceKeyIsMapped)
+      }
     }
-    XCTAssertTrue(
-      KeyboardCaptureTap.shouldSwallow(
-        flashMode: .normal,
-        inputMode: .normal,
-        hasMapping: true,
-        nativeSurfaceOwnsKeyboard: true))
-    XCTAssertTrue(
-      KeyboardCaptureTap.shouldSwallow(
-        flashMode: .insert,
-        inputMode: .normal,
-        hasMapping: true,
-        nativeSurfaceOwnsKeyboard: true))
+    XCTAssertEqual(
+      decide(flashMode: .normal, inputMode: .normal, aboutWindowVisible: true, aboutOwns: true),
+      .swallowIfNativeSurfaceKeyIsMapped)
+  }
+
+  /// The pure decision over the whole state table: NORMAL swallows every key,
+  /// INSERT only a modified chord a mapping claims, a hint session every key
+  /// in either base mode, a terminal popup nothing.
+  func testTapDecisionTable() {
+    XCTAssertEqual(decide(flashMode: .normal, inputMode: .normal), .swallow)
+    XCTAssertEqual(decide(flashMode: .normal, inputMode: .normal, chord: true), .swallow)
+    XCTAssertEqual(decide(flashMode: .normal, inputMode: .commandLine), .pass)
+    XCTAssertEqual(decide(flashMode: .insert, inputMode: .passive), .pass)
+    XCTAssertEqual(
+      decide(flashMode: .insert, inputMode: .passive, chord: true), .swallowIfInsertChordIsMapped)
+    for flashMode: FlashMode in [.normal, .insert] {
+      XCTAssertEqual(decide(flashMode: flashMode, inputMode: .hints), .swallow)
+      XCTAssertEqual(decide(flashMode: flashMode, inputMode: .hints, terminal: true), .pass)
+    }
+    // The About window yields to a hint session over it: an open hint session
+    // keeps every key even while the window is shown.
+    XCTAssertEqual(
+      decide(flashMode: .normal, inputMode: .hints, aboutWindowVisible: true, aboutOwns: false),
+      .swallow)
+    // Shown but not owning (activation in flight): INSERT stays transparent.
+    XCTAssertEqual(
+      decide(
+        flashMode: .insert, inputMode: .passive, chord: true, aboutWindowVisible: true,
+        aboutOwns: false),
+      .pass)
+  }
+
+  private func decide(
+    flashMode: FlashMode, inputMode: OverlayInputMode, chord: Bool = false,
+    terminal: Bool = false, aboutWindowVisible: Bool = false, aboutOwns: Bool = false,
+    nativeSurfaceSuspended: Bool = false
+  ) -> KeyboardCaptureTap.Decision {
+    KeyboardCaptureTap.decide(
+      isTerminal: terminal, flashMode: flashMode, inputMode: inputMode,
+      aboutWindowVisible: aboutWindowVisible, aboutWindowOwnsKeyboard: aboutOwns,
+      nativeSurfaceSuspended: nativeSurfaceSuspended, isModifiedChord: chord)
   }
 
   func testInsertModeSwallowsOnlyForAHintSession() {
