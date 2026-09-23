@@ -225,39 +225,8 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   }
 
   private static func sourceActionCapabilities(_ actions: [String]) -> FlashSourceCapabilities {
-    var caps: FlashSourceCapabilities = []
-    for action in actions {
-      switch action {
-      case "tab_select":
-        caps.insert(.tabSelection)
-      case "tab_next", "tab_prev", "tab_previous", "tab_first", "tab_last":
-        caps.insert(.tabNavigation)
-      case "tab_new":
-        caps.insert(.tabCreation)
-      case "tab_close":
-        caps.insert(.tabClosing)
-      case "tab_move_previous", "tab_move_next":
-        caps.insert(.tabReorder)
-      case "pane_next", "pane_previous":
-        caps.insert(.paneNavigation)
-      case "pane_split_vertical", "pane_split_horizontal":
-        caps.insert(.paneSplitting)
-      case "pane_close":
-        caps.insert(.paneClosing)
-      case "tab_reopen":
-        caps.insert(.tabReopen)
-      case "scroll_top", "scroll_bottom":
-        caps.insert(.scrollExtremes)
-      case "app_reload":
-        caps.insert(.reload)
-      case "resource_archive":
-        caps.insert(.resourceArchiving)
-      case "resource_next", "resource_previous":
-        caps.insert(.resourceNavigation)
-      default:
-        break
-      }
+    actions.reduce(into: []) { caps, name in
+      if let action = SourceAction.byWireName[name] { caps.insert(action.requiredCapability) }
     }
-    return caps
   }
 }

@@ -4323,7 +4323,7 @@ fn source_action_prefers_warm_client(name: &str) -> bool {
     matches!(
         name,
         "tab_next"
-            | "tab_prev"
+            | "tab_previous"
             | "tab_move_next"
             | "tab_move_previous"
             | "pane_next"
@@ -4409,7 +4409,7 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
     let ok = match req.name.as_str() {
         "tab_select" => tab_select(plugin, &client, req.index()).await,
         "tab_next" => tab_adjacent(plugin, &client, "next").await,
-        "tab_prev" => tab_adjacent(plugin, &client, "previous").await,
+        "tab_previous" => tab_adjacent(plugin, &client, "previous").await,
         "tab_first" => tab_extreme(plugin, &client, "first").await,
         "tab_last" => tab_extreme(plugin, &client, "last").await,
         "tab_new" => tab_new(plugin, ctx, &client).await,
@@ -5154,7 +5154,7 @@ mod tests {
     fn repeatable_navigation_actions_prefer_the_warm_client_snapshot() {
         for action in [
             "tab_next",
-            "tab_prev",
+            "tab_previous",
             "tab_move_next",
             "tab_move_previous",
             "pane_next",

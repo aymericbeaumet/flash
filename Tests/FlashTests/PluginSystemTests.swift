@@ -1001,6 +1001,30 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  func testManifestActionsMustNameSourceActions() throws {
+    for (action, valid) in [("tab_previous", true), ("tab_prev", false), ("tab_sideways", false)] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "acts",
+            "name": "Acts",
+            "version": "1.0.0",
+            "description": "Declared actions",
+            "exec": ["/usr/bin/true"],
+            "actions": ["\(action)"]
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      if valid {
+        XCTAssertEqual(try PluginManifest.load(from: root).actions, [action])
+      } else {
+        XCTAssertThrowsError(try PluginManifest.load(from: root), action)
+      }
+    }
+    XCTAssertEqual(SourceAction.byWireName["tab_previous"], .tabPrev)
+    XCTAssertEqual(SourceAction.byWireName.count, 21, "one entry per action")
+  }
+
   /// App shortcuts are plugin data: the browsers and firefox plugins own the
   /// browser chords (Safari's own hard reload included), `defaults` Messages'
   /// conversation chord, `terminals` the emulators' split traversal.

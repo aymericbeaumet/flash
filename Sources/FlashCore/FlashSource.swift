@@ -375,7 +375,7 @@ public enum SourceAction: Sendable, Equatable {
     switch self {
     case .tabSelect: return "tab_select"
     case .tabNext: return "tab_next"
-    case .tabPrev: return "tab_prev"
+    case .tabPrev: return "tab_previous"
     case .tabFirst: return "tab_first"
     case .tabLast: return "tab_last"
     case .tabNew: return "tab_new"
@@ -396,6 +396,17 @@ public enum SourceAction: Sendable, Equatable {
     case .scrollBottom: return "scroll_bottom"
     }
   }
+
+  /// Every action by wire name, for manifests that declare the actions a
+  /// plugin performs (`actions`); the parameters of a representative value
+  /// don't matter there.
+  public static let byWireName: [String: SourceAction] = Dictionary(
+    uniqueKeysWithValues: [
+      SourceAction.tabSelect(index: 1), .tabNext, .tabPrev, .tabFirst, .tabLast, .tabNew,
+      .tabClose, .tabMovePrev, .tabMoveNext, .tabReopen, .paneNext, .panePrev,
+      .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
+      .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom,
+    ].map { ($0.wireName, $0) })
 
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
   /// Only ``tabSelect`` currently carries one (the 1-based tab index).

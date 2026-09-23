@@ -51,7 +51,7 @@
   "actions": [
     "tab_select",
     "tab_next",
-    "tab_prev",
+    "tab_previous",
     "tab_first",
     "tab_last",
     "tab_new",

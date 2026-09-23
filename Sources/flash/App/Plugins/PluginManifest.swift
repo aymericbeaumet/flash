@@ -962,6 +962,9 @@ struct PluginManifest: Decodable, Equatable {
         "manifest.json sources must be all-warm or all-live; mixing modes in one plugin "
           + "is not supported")
     }
+    for action in actions where SourceAction.byWireName[action] == nil {
+      throw PluginError.failure("manifest.json actions names an unknown action: \(action)")
+    }
     for (name, chords) in actionKeystrokes {
       for (bundle, chord) in chords where HotkeySyntax.parse(hotkey: chord) == nil {
         throw PluginError.failure(
