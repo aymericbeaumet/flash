@@ -905,6 +905,7 @@ private func keyEvent(
 }
 
 private final class SpyOverlayCoordinator: OverlayCoordinator {
+  var lastFocusedApplicationPID: pid_t? { nil }
   var commandLineSelectionDeltas: [Int] = []
   var insertSelectionCount = 0
   var submittedCommands: [String] = []

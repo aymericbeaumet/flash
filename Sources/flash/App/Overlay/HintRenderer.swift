@@ -654,7 +654,7 @@ extension OverlayPanel {
 
     let sourcePID = Self.activationSourcePID(
       workspaceFrontPID: front?.processIdentifier,
-      lastNonFlashPID: lastNonFlashApplicationPID,
+      lastNonFlashPID: coordinator?.lastFocusedApplicationPID,
       currentPID: current.processIdentifier)
     var acceptedFrom = false
     if #available(macOS 14.0, *) {

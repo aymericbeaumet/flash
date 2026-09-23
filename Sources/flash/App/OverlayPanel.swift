@@ -172,11 +172,6 @@ final class OverlayPanel: NSPanel {
   /// from a superseded pass die silently.
   var commandLineKeyRecoveryGeneration: UInt64 = 0
 
-  /// The app Flash last saw focused, kept so an activation request can name a
-  /// source even when the workspace's frontmost pointer is stale or reports
-  /// Flash itself. Written by the focus-change path in `AppDelegate`.
-  var lastNonFlashApplicationPID: pid_t?
-
   /// Supersedes a pending caret re-arm when a newer command-line open starts.
   var commandLineCaretRearmGeneration: UInt64 = 0
 
@@ -807,6 +802,9 @@ final class OverlayPanel: NSPanel {
 }
 
 protocol OverlayCoordinator: AnyObject {
+  /// The app Flash last saw focused (never Flash itself), so an activation
+  /// request can name a source when the workspace's frontmost pointer is stale.
+  var lastFocusedApplicationPID: pid_t? { get }
   func overlayDidCancel()
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)

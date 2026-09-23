@@ -197,6 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var sourceItemResolutionGeneration: UInt64 = 0
   var appCurrent: pid_t?
   var observedFocusedAppPID: pid_t?
+  var lastFocusedApplicationPID: pid_t? {
+    observedFocusedAppPID.flatMap { $0 == getpid() ? nil : $0 }
+  }
   var appBackStack: [pid_t] = []
   var appForwardStack: [pid_t] = []
   var appNavigationTargetPID: pid_t?
@@ -886,9 +889,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func refreshFocusDependentState(for app: NSRunningApplication) {
-    if app.bundleIdentifier != Bundle.main.bundleIdentifier {
-      overlay?.lastNonFlashApplicationPID = app.processIdentifier
-    }
     statusBarController?.updateFocusedApplication(app)
     registry.scheduleRunningApplicationsRefresh()
     refreshEffectiveMappings(for: app.bundleIdentifier)
