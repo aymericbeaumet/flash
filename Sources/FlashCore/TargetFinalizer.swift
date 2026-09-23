@@ -67,6 +67,11 @@ public enum TargetFinalizer {
       let lhsArea = area(lhs.target.frame)
       let rhsArea = area(rhs.target.frame)
       if lhsArea != rhsArea { return lhsArea < rhsArea }
+      // Over the same area a typing surface beats the control laid over it:
+      // WhatsApp covers its search field with a same-size button.
+      if lhs.target.entersInsertMode != rhs.target.entersInsertMode {
+        return lhs.target.entersInsertMode
+      }
       if !lhsArea.isFinite {
         let lhsLog = logArea(lhs.target.frame)
         let rhsLog = logArea(rhs.target.frame)

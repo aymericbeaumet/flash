@@ -106,12 +106,19 @@ Browser pages keep a Vimium-style semantic allowlist. Inside an app whose whole
 UI is a web view (Electron and other wrappers), a control-sized `AXGroup` or
 `AXListItem` with a press action is a target too — the cards and rows those
 apps build from clickable divs. Electron apps are woken like Chromium browsers,
-recognised by the `Electron Framework` they ship.
+recognised by the `Electron Framework` they ship. Inside UIKit content (the
+`iOSContentGroup` a Mac Catalyst or iPad app's window hosts, as in Messages
+and WhatsApp), each conversation row or message is one leaf `AXStaticText`, and
+every element there carries a press action; a control-sized leaf is a target,
+ranked like a generic container. A text-input role there enters INSERT only
+when its focus is settable, which excludes read-only message bubbles.
 
 Finalization rejects invalid geometry, filters visible regions and deduplicates
 overlap with smaller frames winning, except that a semantic control always beats
-a generic pressable container over the same area. Visual rows anchor their vertical tolerance
-to the row's topmost target, then sort horizontally with stable tie-breakers.
+a generic pressable container or UIKit text cell over the same area, and a
+typing surface beats a same-size control laid over it (WhatsApp's search
+field). Visual rows anchor their vertical tolerance to the row's topmost
+target, then sort horizontally with stable tie-breakers.
 A pairwise “within eight pixels” comparator is not transitive and must not be
 used as a sorting predicate.
 

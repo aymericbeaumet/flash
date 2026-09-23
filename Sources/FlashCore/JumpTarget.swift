@@ -63,17 +63,36 @@ public struct JumpTarget: @unchecked Sendable {
     self.providerID = providerID
   }
 
-  /// AX roles that represent a typing surface. Committing a click on a
-  /// target with one of these roles puts the user in insert mode.
-  /// Generic containers admitted only for their press action (a web app's
-  /// cards and rows); dedup ranks them below every semantic control.
+  /// Generic elements admitted only because the app makes them clickable (a
+  /// web app's cards and rows, an iOS app's conversation rows and messages);
+  /// dedup ranks them below every semantic control. A typing surface is never
+  /// generic, whatever its role (WhatsApp's search field is an `AXStaticText`).
   public var isGenericContainer: Bool {
-    role == "AXGroup" || role == "AXListItem"
+    !entersInsertMode
+      && (role == "AXGroup" || role == "AXListItem" || role == IOSContent.cellRole)
   }
 
+  /// AX roles that represent a typing surface. Committing a click on a
+  /// target with one of these roles puts the user in insert mode.
   public static let textInputRoles: Set<String> = [
     "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
   ]
+
+  /// A search field is a typing surface whatever role carries it: WhatsApp's
+  /// chat search is an `AXStaticText`, Finder's collapsed toolbar search an
+  /// `AXButton` that opens and focuses its field.
+  public static func isTextInput(role: String?, subrole: String?) -> Bool {
+    (role.map(textInputRoles.contains) ?? false) || subrole == "AXSearchField"
+  }
+
+  /// This target with its INSERT decision replaced, for a provider that
+  /// settles the decision after capture.
+  public func enteringInsertMode(_ entersInsertMode: Bool) -> JumpTarget {
+    JumpTarget(
+      id: id, frame: frame, role: role, accessibilityLabel: accessibilityLabel, url: url,
+      contextID: contextID, pid: pid, resolveClickPoint: resolveClickPoint,
+      entersInsertMode: entersInsertMode, priority: priority, providerID: providerID)
+  }
 
   /// Semantic role for links discovered inside terminal content. Terminal
   /// emulators use Shift-click to bypass application mouse reporting and

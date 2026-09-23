@@ -136,6 +136,31 @@ final class TargetFinalizerTests: XCTestCase {
       ["card", "link"])
   }
 
+  func testAUIKitTextCellNeverDisplacesTheLinkInsideIt() {
+    let visible = [CGRect(x: 0, y: 0, width: 1000, height: 1000)]
+    // A one-line message whose whole text is a link.
+    let link = candidate(
+      id: "link", frame: CGRect(x: 10, y: 10, width: 200, height: 20), role: "AXLink")
+    let message = candidate(
+      id: "message", frame: CGRect(x: 12, y: 12, width: 196, height: 16), role: "AXStaticText")
+    XCTAssertEqual(
+      TargetFinalizer.finalize([message, link], visibleRegions: visible).map(\.id), ["link"])
+  }
+
+  func testATypingSurfaceBeatsTheSameSizeControlLaidOverIt() {
+    let visible = [CGRect(x: 0, y: 0, width: 1000, height: 1000)]
+    let frame = CGRect(x: 297, y: 202, width: 355, height: 32)
+    let overlay = candidate(id: "overlay", frame: frame, role: "AXButton")
+    let search = TargetCandidate(
+      target: JumpTarget(
+        id: "search", frame: frame, role: "AXStaticText", entersInsertMode: true,
+        providerID: "test"),
+      priority: 10, providerOrder: 0, ordinal: 1)
+    XCTAssertFalse(search.target.isGenericContainer)
+    XCTAssertEqual(
+      TargetFinalizer.finalize([overlay, search], visibleRegions: visible).map(\.id), ["search"])
+  }
+
   func testPressContainersAreControlSizedNotPageRegions() {
     let window = CGRect(x: 0, y: 0, width: 1000, height: 800)
     XCTAssertTrue(

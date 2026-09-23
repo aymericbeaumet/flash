@@ -113,7 +113,10 @@ only when its selected target is an input; other hint targets keep NORMAL.
 `F` follows the same rule: the grid point is hit-tested before the click, and
 only a primary, double or triple click on a text input enters INSERT. Physical
 app clicks and an explicit `enter_insert_mode` mapping also hand typing to the
-app.
+app. A text input is a text-field, text-area, combo-box or search-field role,
+or any element with the search-field subrole. In an iOS app (Mac Catalyst or
+iPad, such as Messages and WhatsApp) it must also accept keyboard focus: UIKit
+reports read-only text such as a message bubble with a text-area role.
 
 The status pill resolves its mode label and palette from the current mode
 together. Background status evaluations preserve the live `#{flash.mode}`

@@ -551,7 +551,8 @@ public final class AccessibilityProvider: FlashSource {
             allowsInteractiveDescendants: allowsInteractiveDescendants)
         }
       },
-      entersInsertMode: JumpTarget.textInputRoles.contains(snapshot.role), providerID: providerID)
+      entersInsertMode: JumpTarget.isTextInput(role: snapshot.role, subrole: snapshot.subrole),
+      providerID: providerID)
   }
 
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
@@ -588,12 +589,20 @@ public final class AccessibilityProvider: FlashSource {
     var idCounter: Int = 0
   }
 
-  /// Tentative target awaiting an action-name IPC. The candidate is fully
-  /// formed — if the action check passes, it's appended to
-  /// `confirmedTargets` as-is; otherwise dropped.
+  /// Tentative target awaiting one IPC. The candidate is fully formed; the
+  /// check decides whether it is kept, and whether it still enters INSERT.
   private struct PendingTarget {
     let candidate: JumpTarget
     let element: AXUIElement
+    var check: PendingCheck = .pressAction
+  }
+
+  private enum PendingCheck {
+    /// Kept only when the element exposes `AXPress`.
+    case pressAction
+    /// Always kept; a UIKit text-input role enters INSERT only when the
+    /// element can take keyboard focus (`IOSContent.canTakeKeyboardFocus`).
+    case keyboardFocus
   }
 
   private struct WalkItem {
@@ -602,6 +611,7 @@ public final class AccessibilityProvider: FlashSource {
     let insideClickable: Bool
     let insideWebArea: Bool
     let insideExtensionDocument: Bool
+    let insideIOSContent: Bool
     let idPrefix: String
     let fanoutBudget: Int
   }
@@ -684,6 +694,7 @@ public final class AccessibilityProvider: FlashSource {
       insideClickable: false,
       insideWebArea: false,
       insideExtensionDocument: false,
+      insideIOSContent: false,
       idPrefix: "r",
       fanoutBudget: Self.maxFanoutLevels,
       state: &state
@@ -774,6 +785,7 @@ public final class AccessibilityProvider: FlashSource {
     insideClickable: Bool,
     insideWebArea: Bool,
     insideExtensionDocument: Bool,
+    insideIOSContent: Bool,
     idPrefix: String,
     fanoutBudget: Int,
     state: inout WalkState
@@ -785,6 +797,7 @@ public final class AccessibilityProvider: FlashSource {
         insideClickable: insideClickable,
         insideWebArea: insideWebArea,
         insideExtensionDocument: insideExtensionDocument,
+        insideIOSContent: insideIOSContent,
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget))
     while let item = worklist.pop() {
@@ -813,6 +826,7 @@ public final class AccessibilityProvider: FlashSource {
     let insideClickable = item.insideClickable
     let insideWebArea = item.insideWebArea
     let insideExtensionDocument = item.insideExtensionDocument
+    let insideIOSContent = item.insideIOSContent
     let idPrefix = item.idPrefix
     let fanoutBudget = item.fanoutBudget
 
@@ -874,13 +888,27 @@ public final class AccessibilityProvider: FlashSource {
     {
       isAppWebPressContainer = Self.pressContainerFits(frame, in: visible)
     }
+    // A UIKit app (Mac Catalyst, iPad) makes each conversation row or message
+    // one leaf `AXStaticText` (`IOSContent.cellRole`); sized like a control,
+    // it is the click target, ranked below semantic controls in dedup.
+    var isIOSContentCell = false
+    if insideIOSContent, !insideWebArea, role == IOSContent.cellRole,
+      allChildren?.isEmpty ?? true,
+      let posV = posValue, let sizeV = sizeValue,
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+    {
+      isIOSContentCell = Self.pressContainerFits(frame, in: visible)
+    }
     let baseAllowlist = insideWebArea ? Self.webClickableRoles : Self.roles
     var roleAllowed =
       role.map { baseAllowlist.contains($0) } ?? false
       || (insideWebArea && isRowOrCellRole)
       || isExtensionPopupPressRole
       || isAppWebPressContainer
-    if roleAllowed, role == "AXImage", insideClickable {
+      || isIOSContentCell
+    // An image or UIKit text cell inside a button or link is that control's
+    // own content, already covered by its hint.
+    if roleAllowed, role == "AXImage" || isIOSContentCell, insideClickable {
       roleAllowed = false
     }
     // Vimium-parity heuristic for AXLink-only: drop anchors smaller
@@ -931,6 +959,7 @@ public final class AccessibilityProvider: FlashSource {
             pid: pid, screenH: screenH, insideWebArea: insideWebArea)
         }
       }
+      let isTextInput = JumpTarget.isTextInput(role: capturedRole, subrole: subrole)
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
@@ -939,7 +968,7 @@ public final class AccessibilityProvider: FlashSource {
         url: url,
         pid: pid,
         resolveClickPoint: resolveClickPoint,
-        entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
+        entersInsertMode: isTextInput,
         priority: isTabAnchor ? .urgent : .normal,
         providerID: identifier
       )
@@ -954,6 +983,9 @@ public final class AccessibilityProvider: FlashSource {
           || isAppWebPressContainer
         {
           state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
+        } else if isTextInput, insideIOSContent {
+          state.pendingTargets.append(
+            PendingTarget(candidate: candidate, element: captured, check: .keyboardFocus))
         } else {
           state.confirmedTargets.append(candidate)
         }
@@ -1023,6 +1055,7 @@ public final class AccessibilityProvider: FlashSource {
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
     let nowInsideExtensionDocument = currentOrAncestorInsideExtensionDocument
+    let nowInsideIOSContent = insideIOSContent || subrole == IOSContent.groupSubrole
 
     // Concurrent fan-out fires at the first multi-child node on each
     // walk path, up to `maxFanoutLevels` times per path. The original
@@ -1044,6 +1077,7 @@ public final class AccessibilityProvider: FlashSource {
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
       let captureInsideExtensionDocument = nowInsideExtensionDocument
+      let captureInsideIOSContent = nowInsideIOSContent
       let captureDepth = depth
       let captureIdPrefix = idPrefix
       let captureNewBudget = fanoutBudget - 1
@@ -1078,6 +1112,7 @@ public final class AccessibilityProvider: FlashSource {
               insideClickable: captureInsideClickable,
               insideWebArea: captureInsideWebArea,
               insideExtensionDocument: captureInsideExtensionDocument,
+              insideIOSContent: captureInsideIOSContent,
               idPrefix: childPrefix,
               fanoutBudget: captureNewBudget,
               state: &workerState
@@ -1100,16 +1135,17 @@ public final class AccessibilityProvider: FlashSource {
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
         insideExtensionDocument: nowInsideExtensionDocument,
+        insideIOSContent: nowInsideIOSContent,
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget)
     }
   }
 
-  /// Parallel resolution of action-name IPCs for tentative targets that
-  /// the walker bookkept during tree descent. Each
-  /// `AXUIElementCopyActionNames` is independent so they can run
-  /// concurrently, bounded by the target app's main-thread service rate
-  /// (and `DispatchQueue.concurrentPerform`'s thread pool sizing).
+  /// Parallel resolution of the one IPC each tentative target the walker
+  /// bookkept during tree descent still needs (see `PendingCheck`). Each
+  /// read is independent so they can run concurrently, bounded by the
+  /// target app's main-thread service rate (and
+  /// `DispatchQueue.concurrentPerform`'s thread pool sizing).
   ///
   /// The walk previously paid this IPC inline per element — for AWS
   /// Console (every page-tree AXGroup exposes `AXPress`) that doubled
@@ -1117,22 +1153,38 @@ public final class AccessibilityProvider: FlashSource {
   /// web-heavy-app walk wall time.
   private func resolvePendingActionChecks(_ pending: [PendingTarget]) -> [JumpTarget] {
     if pending.isEmpty { return [] }
-    // Per-iteration write into a UInt8 buffer is byte-aligned and the
-    // indices are disjoint, so this is safe without locking.
+    // Per-iteration write into a one-byte enum buffer is byte-aligned and
+    // the indices are disjoint, so this is safe without locking.
     // (Concurrent reads of `pending` are also safe — it's a value
     // type, never mutated during the parallel pass.)
-    var keep = [UInt8](repeating: 0, count: pending.count)
-    keep.withUnsafeMutableBufferPointer { buf in
+    var outcomes = [PendingOutcome](repeating: .drop, count: pending.count)
+    outcomes.withUnsafeMutableBufferPointer { buf in
       DispatchQueue.concurrentPerform(iterations: pending.count) { i in
-        buf[i] = AXClick.hasPressAction(pending[i].element) ? 1 : 0
+        switch pending[i].check {
+        case .pressAction:
+          buf[i] = AXClick.hasPressAction(pending[i].element) ? .keep : .drop
+        case .keyboardFocus:
+          buf[i] =
+            IOSContent.canTakeKeyboardFocus(pending[i].element) ? .keep : .keepWithoutInsert
+        }
       }
     }
     var out: [JumpTarget] = []
     out.reserveCapacity(pending.count)
-    for (i, k) in keep.enumerated() where k == 1 {
-      out.append(pending[i].candidate)
+    for (i, outcome) in outcomes.enumerated() {
+      switch outcome {
+      case .drop: continue
+      case .keep: out.append(pending[i].candidate)
+      case .keepWithoutInsert: out.append(pending[i].candidate.enteringInsertMode(false))
+      }
     }
     return out
+  }
+
+  private enum PendingOutcome: UInt8 {
+    case drop
+    case keep
+    case keepWithoutInsert
   }
 
   private func primaryScreenHeight() -> CGFloat {

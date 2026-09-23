@@ -1316,6 +1316,11 @@ final class NormalModeTests: XCTestCase {
     let deep =
       Array(repeating: "AXGroup", count: AXTextInputProbe.ancestorLimit + 1) + ["AXTextArea"]
     XCTAssertFalse(AXTextInputProbe.isTextInput(roles: deep))
+    // A search field is typed into whatever role carries it.
+    XCTAssertTrue(
+      AXTextInputProbe.isTextInput(path: [(role: "AXStaticText", subrole: "AXSearchField")]))
+    XCTAssertTrue(JumpTarget.isTextInput(role: "AXButton", subrole: "AXSearchField"))
+    XCTAssertFalse(JumpTarget.isTextInput(role: "AXStaticText", subrole: nil))
   }
 
   func testNormalModePointerPolicyMatrixForAppClicks() {

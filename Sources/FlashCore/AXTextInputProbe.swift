@@ -1,9 +1,10 @@
 import ApplicationServices
 import CoreGraphics
 
-/// Whether a screen point lands in a text input, judged by the same roles that
-/// mark a discovered hint target as one (`JumpTarget.textInputRoles`), so a
-/// grid click and a hint click enter INSERT under one rule.
+/// Whether a screen point lands in a text input, judged by the same rule that
+/// marks a discovered hint target as one (`JumpTarget.isTextInput`, and in
+/// UIKit content `IOSContent.canTakeKeyboardFocus`), so a grid click and a hint
+/// click enter INSERT under one rule.
 public enum AXTextInputProbe {
   /// The deepest element under a point is often a text run inside the field
   /// (web editors expose AXStaticText children), so a few ancestors are checked.
@@ -20,29 +21,45 @@ public enum AXTextInputProbe {
         == .success, let element = hit
     else { return false }
     AXUIElementSetMessagingTimeout(element, messagingTimeout)
-    return isTextInput(roles: rolesFromElementUp(element, limit: ancestorLimit))
+    guard let input = textInput(fromElementUp: element, limit: ancestorLimit) else { return false }
+    return IOSContent.canTakeKeyboardFocus(input) || !IOSContent.contains(input)
   }
 
   /// The decision on the roles from the hit element up through its ancestors.
   public static func isTextInput(roles: [String]) -> Bool {
-    roles.prefix(ancestorLimit + 1).contains { JumpTarget.textInputRoles.contains($0) }
+    isTextInput(path: roles.map { (role: $0, subrole: nil) })
   }
 
-  private static func rolesFromElementUp(_ start: AXUIElement, limit: Int) -> [String] {
-    var roles: [String] = []
+  /// The decision on the roles and subroles from the hit element up through
+  /// its ancestors.
+  public static func isTextInput(path: [(role: String, subrole: String?)]) -> Bool {
+    path.prefix(ancestorLimit + 1).contains {
+      JumpTarget.isTextInput(role: $0.role, subrole: $0.subrole)
+    }
+  }
+
+  private static func textInput(fromElementUp start: AXUIElement, limit: Int) -> AXUIElement? {
     var current: AXUIElement? = start
-    while let element = current, roles.count <= limit {
-      var role: CFTypeRef?
-      AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-      roles.append(role as? String ?? "")
-      if JumpTarget.textInputRoles.contains(roles.last ?? "") { break }
-      var parent: CFTypeRef?
+    var visited = 0
+    while let element = current, visited <= limit {
+      visited += 1
+      // One IPC per level: the role and subrole decide, the parent continues.
+      var raw: CFArray?
       guard
-        AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent)
-          == .success, let parent, CFGetTypeID(parent) == AXUIElementGetTypeID()
-      else { break }
+        AXUIElementCopyMultipleAttributeValues(
+          element, levelAttributes, AXCopyMultipleAttributeOptions(rawValue: 0), &raw)
+          == .success, let values = raw as? [Any], values.count == 3
+      else { return nil }
+      if JumpTarget.isTextInput(role: values[0] as? String, subrole: values[1] as? String) {
+        return element
+      }
+      let parent = values[2] as CFTypeRef
+      guard CFGetTypeID(parent) == AXUIElementGetTypeID() else { return nil }
       current = (parent as! AXUIElement)
     }
-    return roles
+    return nil
   }
+
+  private static let levelAttributes =
+    [kAXRoleAttribute, kAXSubroleAttribute, kAXParentAttribute] as CFArray
 }
