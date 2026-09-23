@@ -51,8 +51,8 @@ enabled = true
 
 NORMAL stays active across app and tab changes. Use `f` for hints, `t` for a new
 tab, `[t` / `]t` to switch tabs, `u` to undo, and Control-D/U to scroll. INSERT
-starts through an explicit mapping, a physical app click, an input hint click,
-or a grid click. See [normal mode](docs/normal-mode.md) for the complete bindings.
+starts through an explicit mapping, a physical app click, or a hint or grid
+click on an input. See [normal mode](docs/normal-mode.md) for the complete bindings.
 
 ## Guides
 
@@ -62,3 +62,7 @@ or a grid click. See [normal mode](docs/normal-mode.md) for the complete binding
 - [Calendar](docs/calendar.md) · [Usage and system details](docs/status-popups.md)
 - [Terminal windows](docs/terminal-popups.md) · [Plugins](docs/plugin-cookbook.md)
 - [Development and tests](docs/development.md) · [Architecture](docs/architecture.md)
+
+## License
+
+Flash is released under the [MIT License](LICENSE).
