@@ -33,8 +33,7 @@ enum ActionDispatcher {
   /// AX(top-left) → NSScreen(bottom-left) Y-flip. `NSScreen` is main-affine, so
   /// callers must invoke this on the main thread.
   static func primaryScreenHeight() -> CGFloat {
-    NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
-      ?? NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left

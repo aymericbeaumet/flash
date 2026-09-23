@@ -269,6 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var lastPermissionPromptAt: Date?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // First, so the cached primary-screen height refreshes before any other
+    // screen-parameter observer reads it.
+    ScreenSpace.startObserving()
     // Resolve the login-shell environment once, off the main thread, so every
     // `script:`/`command:` task, mapping, and plugin inherits the same PATH
     // and tooling the user has in their terminal. A GUI launch from Finder/

@@ -382,10 +382,7 @@ extension NormalModeDispatcher {
   private static let extremeWheelDelta: Int32 = 1_000_000
 
   static func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
   private static func scrollBar(axis: Axis, pid: pid_t) -> AXUIElement? {
     let app = AXApp.make(pid: pid)

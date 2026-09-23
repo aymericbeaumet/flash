@@ -85,10 +85,7 @@ extension AppMonitor {
   }
 
   func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
 
   /// Push runtime config that should take effect on the next activation.

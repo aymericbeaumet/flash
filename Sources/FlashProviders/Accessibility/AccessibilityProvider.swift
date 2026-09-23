@@ -1179,10 +1179,7 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   private func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
 
   public static func isExtensionDocumentURL(_ value: String?) -> Bool {
