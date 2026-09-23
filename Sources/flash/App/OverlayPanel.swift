@@ -33,6 +33,13 @@ struct OverlayPointerClick: Equatable {
   var frontmostPIDAtClick: pid_t = -1
 }
 
+extension NSScreen {
+  /// The CoreGraphics display behind this screen; absent for virtual screens.
+  var displayID: CGDirectDisplayID? {
+    (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+  }
+}
+
 final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
@@ -353,6 +360,15 @@ final class OverlayPanel: NSPanel {
     var mainScale: CGFloat
     var mainVisibleFrame: CGRect
     var nativeStatusBarFallbackHeight: CGFloat
+    /// Each display's own native menu bar height, keyed by screen frame. A
+    /// notched built-in's bar is taller than an external's, so no single
+    /// measurement fits every display.
+    var nativeMenuBarHeights: [(screenFrame: CGRect, height: CGFloat)] = []
+
+    func nativeStatusBarFallbackHeight(forScreenFrame screenFrame: CGRect) -> CGFloat {
+      nativeMenuBarHeights.first { $0.screenFrame == screenFrame }?.height
+        ?? nativeStatusBarFallbackHeight
+    }
 
     /// Width of the camera housing the centre recess mimics: the connected
     /// notched display's, else the 16-inch MacBook Pro housing.
@@ -365,6 +381,10 @@ final class OverlayPanel: NSPanel {
 
   private static var snapshotLock = os_unfair_lock_s()
   private static var cachedSnapshot: ScreenSnapshot?
+  /// Native menu bar heights per display. They change only with the display
+  /// topology, so a Space switch or wake rebuilds the snapshot from these
+  /// instead of scanning the window list again.
+  private static var cachedNativeMenuBarHeights: [CGDirectDisplayID: CGFloat]?
 
   static func currentScreenSnapshot() -> ScreenSnapshot {
     os_unfair_lock_lock(&snapshotLock)
@@ -384,16 +404,44 @@ final class OverlayPanel: NSPanel {
   /// geometry (see `ModeBadgeLayoutStamp`) recompute after a screen change.
   private(set) static var screenSnapshotRevision: UInt64 = 0
 
-  static func invalidateScreenSnapshot() {
+  static func invalidateScreenSnapshot(remeasuringNativeMenuBars: Bool = false) {
     os_unfair_lock_lock(&snapshotLock)
     cachedSnapshot = nil
+    if remeasuringNativeMenuBars { cachedNativeMenuBarHeights = nil }
     screenSnapshotRevision &+= 1
     os_unfair_lock_unlock(&snapshotLock)
   }
 
+  /// Re-read every display's native menu bar, invalidating the snapshot only
+  /// when a height moved. Returns whether one did. Main thread.
+  static func remeasureNativeMenuBars() -> Bool {
+    let measured = measureNativeMenuBarHeights()
+    os_unfair_lock_lock(&snapshotLock)
+    defer { os_unfair_lock_unlock(&snapshotLock) }
+    guard measured != cachedNativeMenuBarHeights else { return false }
+    cachedNativeMenuBarHeights = measured
+    cachedSnapshot = nil
+    screenSnapshotRevision &+= 1
+    return true
+  }
+
+  private static func nativeMenuBarHeightsByDisplay() -> [CGDirectDisplayID: CGFloat] {
+    os_unfair_lock_lock(&snapshotLock)
+    let cached = cachedNativeMenuBarHeights
+    os_unfair_lock_unlock(&snapshotLock)
+    if let cached { return cached }
+    let measured = measureNativeMenuBarHeights()
+    os_unfair_lock_lock(&snapshotLock)
+    cachedNativeMenuBarHeights = measured
+    os_unfair_lock_unlock(&snapshotLock)
+    return measured
+  }
+
   private static func buildScreenSnapshot() -> ScreenSnapshot {
     var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)] = []
+    var displays: [(displayID: CGDirectDisplayID?, frame: CGRect)] = []
     for s in NSScreen.screens {
+      displays.append((s.displayID, s.frame))
       // A notched display exposes the areas LEFT and RIGHT of the camera
       // housing; the gap between them is the notch itself.
       var notch: CGRect?
@@ -408,13 +456,82 @@ final class OverlayPanel: NSPanel {
       }
       screens.append((s.backingScaleFactor, s.frame, s.visibleFrame, notch))
     }
+    let menuBars = resolveNativeMenuBarHeights(
+      screens: displays,
+      measured: nativeMenuBarHeightsByDisplay(),
+      appKitFallback: measureNativeStatusBarFallbackHeight)
     return makeScreenSnapshot(
-      screens: screens, nativeStatusBarFallbackHeight: measureNativeStatusBarFallbackHeight())
+      screens: screens,
+      nativeStatusBarFallbackHeight: menuBars.fallback,
+      nativeMenuBarHeights: menuBars.perScreen)
+  }
+
+  /// Pair each screen with its display's measured bar. A display without a
+  /// bar of its own (a secondary display when Displays have separate Spaces
+  /// is off) falls back to the primary display's. AppKit's app-wide
+  /// measurement, which follows whichever display last hosted the active menu
+  /// bar, is the last resort when the window list shows no bar at all.
+  static func resolveNativeMenuBarHeights(
+    screens: [(displayID: CGDirectDisplayID?, frame: CGRect)],
+    measured: [CGDirectDisplayID: CGFloat],
+    appKitFallback: () -> CGFloat
+  ) -> (perScreen: [(screenFrame: CGRect, height: CGFloat)], fallback: CGFloat) {
+    let perScreen = screens.compactMap { screen in
+      screen.displayID.flatMap { measured[$0] }.map { (screenFrame: screen.frame, height: $0) }
+    }
+    let fallback =
+      perScreen.first { $0.screenFrame.origin == .zero }?.height
+      ?? perScreen.first?.height
+      ?? appKitFallback()
+    return (perScreen, fallback)
+  }
+
+  /// The native menu bar on one display: the widest main-menu-level window
+  /// along its top edge, flush with it when revealed or parked just above it
+  /// while auto-hidden. Both inputs use WindowServer's top-left global space.
+  static func nativeMenuBarHeight(
+    displayBounds display: CGRect, menuBarWindows: [CGRect]
+  ) -> CGFloat? {
+    menuBarWindows.filter { bar in
+      bar.height > 0
+        && bar.minX >= display.minX - 1 && bar.maxX <= display.maxX + 1
+        && (abs(bar.minY - display.minY) <= 1 || abs(bar.maxY - display.minY) <= 1)
+    }
+    .max { $0.width < $1.width }?.height
+  }
+
+  /// Matches by window level and bounds only, like the reveal probe, so it
+  /// reads no window titles and needs no Screen Recording permission.
+  /// `.optionAll` because an auto-hidden bar is off-screen.
+  private static func measureNativeMenuBarHeights() -> [CGDirectDisplayID: CGFloat] {
+    guard
+      let infos = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID)
+        as? [[String: Any]]
+    else { return [:] }
+    let menuLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
+    let ownPID = Int(getpid())
+    let bars = infos.compactMap { info -> CGRect? in
+      guard
+        info[kCGWindowLayer as String] as? Int == menuLayer,
+        info[kCGWindowOwnerPID as String] as? Int != ownPID,
+        let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+        let x = bounds["X"], let y = bounds["Y"],
+        let width = bounds["Width"], let height = bounds["Height"]
+      else { return nil }
+      return CGRect(x: x, y: y, width: width, height: height)
+    }
+    var heights: [CGDirectDisplayID: CGFloat] = [:]
+    for id in NSScreen.screens.compactMap(\.displayID) {
+      heights[id] = nativeMenuBarHeight(
+        displayBounds: CGDisplayBounds(id), menuBarWindows: bars)
+    }
+    return heights
   }
 
   static func makeScreenSnapshot(
     screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)],
-    nativeStatusBarFallbackHeight: CGFloat
+    nativeStatusBarFallbackHeight: CGFloat,
+    nativeMenuBarHeights: [(screenFrame: CGRect, height: CGFloat)] = []
   ) -> ScreenSnapshot {
     let union = screens.reduce(CGRect.null) { $0.union($1.frame) }
     // NSScreen.main follows the key window and can be a secondary display.
@@ -425,7 +542,8 @@ final class OverlayPanel: NSPanel {
       mainFrame: primary?.frame,
       mainScale: primary?.scale ?? 2,
       mainVisibleFrame: primary?.visibleFrame ?? .zero,
-      nativeStatusBarFallbackHeight: nativeStatusBarFallbackHeight)
+      nativeStatusBarFallbackHeight: nativeStatusBarFallbackHeight,
+      nativeMenuBarHeights: nativeMenuBarHeights)
   }
 
   private static func measureNativeStatusBarFallbackHeight() -> CGFloat {
@@ -476,7 +594,7 @@ final class OverlayPanel: NSPanel {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      OverlayPanel.invalidateScreenSnapshot()
+      OverlayPanel.invalidateScreenSnapshot(remeasuringNativeMenuBars: true)
       // A monitor was (un)plugged. The status bar is anchored to `NSScreen.main`
       // and the panel window spans the union of all screens; both just moved, so
       // without a re-layout the bar is stranded on coordinates that no longer
@@ -486,7 +604,7 @@ final class OverlayPanel: NSPanel {
       // (notably when unplugging the display that hosted the menu bar), so
       // re-anchor once more on the next runloop hop against the finalized layout.
       DispatchQueue.main.async {
-        OverlayPanel.invalidateScreenSnapshot()
+        OverlayPanel.invalidateScreenSnapshot(remeasuringNativeMenuBars: true)
         self?.statusBarDidChangeScreenParameters()
       }
     }

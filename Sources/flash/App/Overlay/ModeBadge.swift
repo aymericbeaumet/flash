@@ -187,6 +187,19 @@ extension OverlayPanel {
       style: modeBadgeStyle)
   }
 
+  /// Each display-change recovery pass re-reads the native menu bars before it
+  /// snapshots the window slots. The bars can finish moving after the
+  /// notification's own measurement, and re-anchoring the bar here keeps it on
+  /// the same band as the slots rather than on that transitional reading.
+  func settleNativeMenuBarHeights() {
+    guard Self.remeasureNativeMenuBars() else { return }
+    FlashLog.debug(
+      "[statusbar] native_menu_bar_settled heights="
+        + Self.currentScreenSnapshot().nativeMenuBarHeights
+        .map { "\(NSStringFromRect($0.screenFrame))=\($0.height)" }.joined(separator: " "))
+    statusBarDidChangeScreenParameters()
+  }
+
   func renderModeBadgeOnlyOrHide() {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -400,32 +413,25 @@ extension OverlayPanel {
     statusBarFontSize
   }
 
-  static func nativeStatusBarFallbackHeight() -> CGFloat {
-    currentScreenSnapshot().nativeStatusBarFallbackHeight
-  }
-
+  /// `fallbackHeight` defaults to the native menu bar of the display at
+  /// `screenFrame`.
   static func nativeStatusBarHeight(
     screenFrame: CGRect,
     visibleFrame: CGRect,
-    fallbackHeight: CGFloat = nativeStatusBarFallbackHeight()
+    fallbackHeight: CGFloat? = nil
   ) -> CGFloat {
     let reservedTopBand = max(0, screenFrame.maxY - visibleFrame.maxY)
-    return max(reservedTopBand, max(0, fallbackHeight))
-  }
-
-  static func statusBarHeight(
-    screenFrame: CGRect,
-    visibleFrame: CGRect,
-    fontSize _: CGFloat
-  ) -> CGFloat {
-    nativeStatusBarHeight(screenFrame: screenFrame, visibleFrame: visibleFrame)
+    let fallback =
+      fallbackHeight
+      ?? currentScreenSnapshot().nativeStatusBarFallbackHeight(forScreenFrame: screenFrame)
+    return max(reservedTopBand, max(0, fallback))
   }
 
   static func statusBarHeight(
     screenFrame: CGRect,
     visibleFrame: CGRect,
     fontSize _: CGFloat,
-    fallbackNativeStatusBarHeight: CGFloat
+    fallbackNativeStatusBarHeight: CGFloat? = nil
   ) -> CGFloat {
     nativeStatusBarHeight(
       screenFrame: screenFrame,

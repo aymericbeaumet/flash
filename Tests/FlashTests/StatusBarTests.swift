@@ -71,6 +71,73 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(height, 30)
   }
 
+  func testNativeMenuBarHeightReadsTheBarAlongEachDisplaysOwnTopEdge() {
+    // WindowServer space: top-left origin, Y down. The laptop sits below the
+    // external, so its folded bar parks inside the external's bottom rows.
+    let external = CGRect(x: 0, y: 0, width: 2048, height: 1152)
+    let laptop = CGRect(x: 160, y: 1152, width: 1728, height: 1117)
+    let foldedExternalBar = CGRect(x: 0, y: -30, width: 2048, height: 30)
+    let foldedLaptopBar = CGRect(x: 160, y: 1119, width: 1728, height: 33)
+    let bars = [foldedExternalBar, foldedLaptopBar]
+
+    XCTAssertEqual(
+      OverlayPanel.nativeMenuBarHeight(displayBounds: external, menuBarWindows: bars), 30)
+    XCTAssertEqual(
+      OverlayPanel.nativeMenuBarHeight(displayBounds: laptop, menuBarWindows: bars), 33)
+    XCTAssertEqual(
+      OverlayPanel.nativeMenuBarHeight(
+        displayBounds: laptop,
+        menuBarWindows: [CGRect(x: 160, y: 1152, width: 1728, height: 33)]),
+      33, "a revealed bar sits flush with the display's top edge")
+    XCTAssertNil(
+      OverlayPanel.nativeMenuBarHeight(displayBounds: laptop, menuBarWindows: [foldedExternalBar]))
+  }
+
+  func testEachDisplayReservesItsOwnNativeMenuBarHeight() {
+    // AppKit's app-wide measurement follows whichever display last hosted the
+    // active menu bar. Applied to every display, it flipped the laptop's band
+    // between its visible-frame reserve (32) and its notched bar (33), and the
+    // external's between 30 and 33, so a restored window missed the slot the
+    // next `window_move` computed.
+    let external = CGRect(x: 0, y: 0, width: 2048, height: 1152)
+    let laptop = CGRect(x: 160, y: -1117, width: 1728, height: 1117)
+    let laptopVisible = CGRect(x: 160, y: -1117, width: 1728, height: 1085)
+    let barless = CGRect(x: 2048, y: 0, width: 1920, height: 1080)
+    let resolved = OverlayPanel.resolveNativeMenuBarHeights(
+      screens: [
+        (displayID: 1, frame: laptop), (displayID: 2, frame: external),
+        (displayID: 3, frame: barless),
+      ],
+      measured: [1: 33, 2: 30],
+      appKitFallback: {
+        XCTFail("a measured bar makes the AppKit measurement unnecessary")
+        return 0
+      })
+    let snapshot = OverlayPanel.makeScreenSnapshot(
+      screens: [
+        (scale: 2, frame: laptop, visibleFrame: laptopVisible, notch: nil),
+        (scale: 2, frame: external, visibleFrame: external, notch: nil),
+        (scale: 1, frame: barless, visibleFrame: barless, notch: nil),
+      ],
+      nativeStatusBarFallbackHeight: resolved.fallback,
+      nativeMenuBarHeights: resolved.perScreen)
+    func band(_ frame: CGRect, visible: CGRect) -> CGFloat {
+      OverlayPanel.nativeStatusBarHeight(
+        screenFrame: frame, visibleFrame: visible,
+        fallbackHeight: snapshot.nativeStatusBarFallbackHeight(forScreenFrame: frame))
+    }
+
+    XCTAssertEqual(band(laptop, visible: laptopVisible), 33)
+    XCTAssertEqual(band(external, visible: external), 30)
+    XCTAssertEqual(
+      band(barless, visible: barless), 30,
+      "a display without a bar of its own follows the primary display's")
+    XCTAssertEqual(
+      OverlayPanel.resolveNativeMenuBarHeights(
+        screens: [(displayID: 2, frame: external)], measured: [:], appKitFallback: { 24 }
+      ).fallback, 24)
+  }
+
   func testStatusBarFrameUsesExactPerScreenNativeStatusBarHeight() {
     let frame = OverlayPanel.statusBarFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),

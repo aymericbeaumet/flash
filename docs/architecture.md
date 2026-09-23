@@ -147,6 +147,16 @@ itself hid. The overlay panel keeps the focus border at `.floating` and
 transient surfaces at the screen-saver level, so status hints still render above
 the bar and transient teardown never detaches it.
 
+On each display the bar is as tall as that display's own native menu bar, read
+by level and bounds from WindowServer's main-menu window, and `window_move`
+slots reserve the same band. AppKit's app-wide `menuBarHeight` follows whichever
+display last hosted the active menu bar, so it is only the last resort. The
+heights are re-read on display changes and before every recovery pass after
+one, never on a Space switch or wake, so a restored window lands exactly where
+the next `window_move` would put it. Restores and moves accept a placement only
+within a point of its slot; the two-point tolerance recognises slots, it does
+not accept placements.
+
 Mode projection describes render/input state without changing mode as a drawing
 side effect. Reentrant effects enqueue events behind the current transition.
 Transient surfaces preserve their return state and obey advanced-mode eligibility.

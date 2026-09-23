@@ -103,18 +103,23 @@ final class WindowLayoutManager {
   /// Reapply semantic layouts after any display topology or usable-frame
   /// change. Repeated bounded passes cover apps that perform their own delayed
   /// relocation after AppKit's screen notification; a newer notification
-  /// cancels the older recovery generation.
+  /// cancels the older recovery generation. `beforeRecoveryPass` runs on main
+  /// ahead of each pass's geometry snapshot.
   func screenParametersDidChange(
     statusBarReservesSpace: Bool,
     statusBarMonitor: Config.StatusBar.Monitor,
     forceRecovery: Bool = true,
+    beforeRecoveryPass: (() -> Void)? = nil,
     afterRecoveryPass: (([WindowScreenLayout]) -> Void)? = nil
   ) {
     let provider = screenLayoutsProvider
     scheduleScreenRecovery(
       initialScreens: provider(statusBarReservesSpace, statusBarMonitor),
       forceRecovery: forceRecovery,
-      settledScreens: { provider(statusBarReservesSpace, statusBarMonitor) },
+      settledScreens: {
+        beforeRecoveryPass?()
+        return provider(statusBarReservesSpace, statusBarMonitor)
+      },
       afterRecoveryPass: afterRecoveryPass)
   }
 
@@ -322,7 +327,7 @@ final class WindowLayoutManager {
             screens: screens)
         else { return false }
         layout.screenID = plan.screen.id
-        guard current.map({ WindowMover.framesApproximatelyEqual($0, plan.frame) }) != true else {
+        guard current.map({ WindowMover.framesMatchPlacement($0, plan.frame) }) != true else {
           alreadyCorrect += 1
           return false
         }
@@ -414,12 +419,9 @@ enum WindowMover {
     let screens = NSScreen.screens
     let mainFrame = (screens.first { $0.frame.origin == .zero } ?? screens.first)?.frame
     return screens.enumerated().map { index, screen in
-      let number =
-        screen.deviceDescription[
-          NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
       // NSScreenNumber is present for physical displays. Keep a deterministic
       // fallback for virtual/test screens rather than dropping the layout.
-      let screenID = number?.uint32Value ?? CGDirectDisplayID(index + 1)
+      let screenID = screen.displayID ?? CGDirectDisplayID(index + 1)
       return WindowScreenLayout(
         id: screenID,
         frame: screen.frame,
@@ -683,7 +685,7 @@ enum WindowMover {
     visibleFrame: CGRect,
     statusBarReservesSpace: Bool,
     fontSize: CGFloat,
-    fallbackNativeStatusBarHeight: CGFloat = OverlayPanel.nativeStatusBarFallbackHeight()
+    fallbackNativeStatusBarHeight: CGFloat? = nil
   ) -> CGRect {
     guard statusBarReservesSpace else { return visibleFrame }
     let statusBarHeight = OverlayPanel.statusBarHeight(
@@ -893,6 +895,17 @@ enum WindowMover {
       && abs(lhs.height - rhs.height) <= tolerance
   }
 
+  /// Whether a window sits where a placement put it. Slot recognition above
+  /// forgives a couple of points; placement cannot, or a window left a point
+  /// off its slot stays there until the next manual move closes the gap.
+  /// Anything under a point is the app rounding a fractional target.
+  static func framesMatchPlacement(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+    abs(lhs.minX - rhs.minX) < 1
+      && abs(lhs.minY - rhs.minY) < 1
+      && abs(lhs.width - rhs.width) < 1
+      && abs(lhs.height - rhs.height) < 1
+  }
+
   /// The most correction passes `apply` makes after its initial
   /// size → position → size burst. One pass is enough to defeat the async
   /// grow-clamp race described below; the extra margin lets grid-snapping
@@ -996,7 +1009,7 @@ enum WindowMover {
     // was still short when the attempts ran out simply stayed short, with
     // nothing recorded — which is the "maximize needs a second press".
     var actual = observed()
-    var converged = actual.map { framesApproximatelyEqual($0, nsRect) } ?? false
+    var converged = actual.map { framesMatchPlacement($0, nsRect) } ?? false
     let budget = DispatchTime.now() + .milliseconds(Self.applyCorrectionBudgetMs)
     var attempt = 0
     while !converged, attempt < Self.applyCorrectionAttempts, DispatchTime.now() < budget {
@@ -1004,7 +1017,7 @@ enum WindowMover {
       setPos()
       setSize()
       actual = observed()
-      converged = actual.map { framesApproximatelyEqual($0, nsRect) } ?? false
+      converged = actual.map { framesMatchPlacement($0, nsRect) } ?? false
     }
 
     if temporarilyDisableEnhancedUserInterface {
@@ -1015,14 +1028,14 @@ enum WindowMover {
       // so the window settled short and nothing noticed. Look once more with
       // it on, and if the app took the frame back, put it right.
       actual = observed()
-      if actual.map({ framesApproximatelyEqual($0, nsRect) }) != true {
+      if actual.map({ framesMatchPlacement($0, nsRect) }) != true {
         setEnhancedUserInterface(false, on: axApp)
         setPos()
         setSize()
         setEnhancedUserInterface(true, on: axApp)
         actual = observed()
       }
-      converged = actual.map { framesApproximatelyEqual($0, nsRect) } ?? false
+      converged = actual.map { framesMatchPlacement($0, nsRect) } ?? false
     }
 
     if !converged {

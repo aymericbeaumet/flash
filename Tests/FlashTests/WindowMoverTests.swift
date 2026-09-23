@@ -388,6 +388,47 @@ final class WindowMoverTests: XCTestCase {
         in: usable))
   }
 
+  func testPlacementIsExactToThePointWhileSlotRecognitionToleratesRounding() {
+    let slot = CGRect(x: 0, y: 0, width: 1728, height: 1084)
+    let onePointTall = CGRect(x: 0, y: 0, width: 1728, height: 1085)
+
+    XCTAssertEqual(WindowMover.position(matching: onePointTall, in: slot), .maximized)
+    XCTAssertFalse(
+      WindowMover.framesMatchPlacement(onePointTall, slot),
+      "a restore that calls this done leaves the point the next window_move closes")
+    XCTAssertTrue(
+      WindowMover.framesMatchPlacement(
+        CGRect(x: 219, y: 120, width: 1610, height: 880),
+        CGRect(x: 218.98, y: 119.65, width: 1610.04, height: 879.7)),
+      "whole-point rounding of a fractional target has landed")
+  }
+
+  func testEachRecoveryPassSettlesTheNativeBandBeforeSnapshottingSlots() {
+    let screen = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 2048, height: 1152),
+      usableFrame: CGRect(x: 0, y: 0, width: 2048, height: 1122))
+    var events: [String] = []
+    let manager = WindowLayoutManager(
+      screenRecoveryDelaysMs: [0, 1],
+      screenLayouts: { _, _ in
+        events.append("slots")
+        return [screen]
+      })
+    let recovered = expectation(description: "every pass ran")
+    recovered.expectedFulfillmentCount = 2
+
+    manager.screenParametersDidChange(screens: [screen])
+    manager.screenParametersDidChange(
+      statusBarReservesSpace: true,
+      statusBarMonitor: .primary,
+      beforeRecoveryPass: { events.append("settle") },
+      afterRecoveryPass: { _ in recovered.fulfill() })
+
+    wait(for: [recovered], timeout: 1)
+    XCTAssertEqual(events, ["slots", "settle", "slots", "settle", "slots"])
+  }
+
   func testScreenLookupUsesLargestOverlapWhenWindowCentreIsOffScreen() {
     let primary = WindowScreenLayout(
       id: 1,
@@ -452,11 +493,11 @@ final class WindowMoverTests: XCTestCase {
     manager.screenParametersDidChange(screens: [initial])
     manager.screenParametersDidChange(
       statusBarReservesSpace: true,
-      statusBarMonitor: .primary
-    ) { screens in
-      XCTAssertEqual(screens, [settled])
-      recovered.fulfill()
-    }
+      statusBarMonitor: .primary,
+      afterRecoveryPass: { screens in
+        XCTAssertEqual(screens, [settled])
+        recovered.fulfill()
+      })
 
     wait(for: [recovered], timeout: 1)
     XCTAssertTrue(snapshots.isEmpty)
@@ -488,11 +529,11 @@ final class WindowMoverTests: XCTestCase {
     manager.screenParametersDidChange(
       statusBarReservesSpace: true,
       statusBarMonitor: .primary,
-      forceRecovery: false
-    ) { screens in
-      XCTAssertEqual(screens, [primary, secondaryWithoutBar])
-      recovered.fulfill()
-    }
+      forceRecovery: false,
+      afterRecoveryPass: { screens in
+        XCTAssertEqual(screens, [primary, secondaryWithoutBar])
+        recovered.fulfill()
+      })
 
     wait(for: [recovered], timeout: 1)
   }
