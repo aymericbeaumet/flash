@@ -31,7 +31,7 @@ final class SourceRegistryTests: XCTestCase {
           return StubSource(identifier: "unmatched")
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     XCTAssertNotNil(registry.source(identifier: "always"))
@@ -77,7 +77,7 @@ final class SourceRegistryTests: XCTestCase {
           }
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     let items = registry.synchronousCandidates(scope: .running)
@@ -112,7 +112,7 @@ final class SourceRegistryTests: XCTestCase {
           }
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       runningApplicationsProvider: { [app] })
 
@@ -144,7 +144,7 @@ final class SourceRegistryTests: XCTestCase {
           StubSource(identifier: "dynamic", capabilities: [.candidates]) { _ in [] }
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       runningApplicationsProvider: {
         lock.lock()
@@ -204,7 +204,7 @@ final class SourceRegistryTests: XCTestCase {
           }
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -268,7 +268,7 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -310,7 +310,7 @@ final class SourceRegistryTests: XCTestCase {
             candidateSourceLabels: ["apps"])
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -336,7 +336,7 @@ final class SourceRegistryTests: XCTestCase {
             ])
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -382,7 +382,7 @@ final class SourceRegistryTests: XCTestCase {
       supportsHandler: { _ in true })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app],
       pluginSourcesProvider: { [tmux, accessibility] })
 
@@ -458,7 +458,7 @@ final class SourceRegistryTests: XCTestCase {
       allScreensFrame: .zero)
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app],
       pluginSourcesProvider: {
         [
@@ -514,7 +514,7 @@ final class SourceRegistryTests: XCTestCase {
           ApplicationSource()
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     let current = registry.currentLocation(
@@ -552,7 +552,7 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     let current = registry.currentLocation(
@@ -568,7 +568,7 @@ final class SourceRegistryTests: XCTestCase {
     let plugin = StubSource(identifier: "plugin:projects", capabilities: [.candidates])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [plugin] })
 
@@ -596,7 +596,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [plugin] })
 
@@ -642,7 +642,7 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [])
 
     XCTAssertTrue(registry.canRestoreNavigation(to: url))
@@ -690,7 +690,7 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [])
 
     registry.resolveCandidate(matching: "Slack") { match in
@@ -741,7 +741,7 @@ final class SourceRegistryTests: XCTestCase {
           })
       }
       return SourceRegistry(
-        descriptors: descriptors, terminalBundleIDs: [], runningApplications: [])
+        descriptors: descriptors, isTerminalEmulator: { _ in false }, runningApplications: [])
     }
 
     // Only the emoji (insert-text) candidate matches → nil, never typed text.
@@ -779,7 +779,7 @@ final class SourceRegistryTests: XCTestCase {
       ])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app],
       pluginSourcesProvider: { [active, inactive] })
 
@@ -812,7 +812,7 @@ final class SourceRegistryTests: XCTestCase {
             ])
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [nonLocation, location] })
 
@@ -842,7 +842,7 @@ final class SourceRegistryTests: XCTestCase {
       ])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [apple, location, reference] })
 
@@ -871,7 +871,7 @@ final class SourceRegistryTests: XCTestCase {
       capabilities: [.candidates])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [second, empty, first] })
 
@@ -911,7 +911,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [nonLocation, location] })
 
@@ -972,7 +972,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [processes, locations] })
 
@@ -1007,7 +1007,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [low, high] })
 
@@ -1041,7 +1041,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [answers, generic] })
 
@@ -1073,7 +1073,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [evaluator] })
 
@@ -1102,7 +1102,7 @@ final class SourceRegistryTests: XCTestCase {
       queryEvaluationHandler: { _, _ in })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [fast, stalled] })
 
@@ -1135,7 +1135,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [active, inactive] })
 

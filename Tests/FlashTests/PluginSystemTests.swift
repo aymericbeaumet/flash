@@ -825,7 +825,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(manifest.onlyBundleIDs.isEmpty)
     let selector = CompiledPluginSelector(manifest.selector)
     XCTAssertFalse(selector.isEmpty)
-    XCTAssertTrue(TerminalBundles.identifiers.contains("com.mitchellh.ghostty"))
+    TerminalEmulatorFixture.declareOfficial()
+    XCTAssertTrue(TerminalEmulators.contains("com.mitchellh.ghostty"))
     XCTAssertTrue(selector.matches(PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
     XCTAssertTrue(selector.matches(PluginSelectorContext(bundleID: "org.alacritty")))
     XCTAssertFalse(selector.matches(PluginSelectorContext(bundleID: "org.mozilla.firefox")))
@@ -1021,6 +1022,8 @@ final class PluginSystemTests: XCTestCase {
       defaults.mappings.filter(\.repeatsOnFinalKey).map(\.key).sorted(), ["[t", "]t"])
     let terminals = try manifest("terminals")
     XCTAssertEqual(terminals.activation, .manifestOnly)
+    XCTAssertTrue(
+      Set(terminals.terminalEmulators).isSuperset(of: ["org.alacritty", "com.mitchellh.ghostty"]))
     XCTAssertEqual(terminals.actionKeystrokes[.paneNext]?["com.mitchellh.ghostty"], "cmd+]")
   }
 

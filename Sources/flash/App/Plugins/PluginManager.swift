@@ -251,6 +251,7 @@ final class PluginManager {
     var wildcardShebangs: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
     var actionKeystrokeIndex: [SourceActionName: [ActionKeystrokeTarget]] = [:]
+    var terminalEmulators: Set<String> = []
     var helpTopics: [HelpTopic] = []
     var order = 0
     for plugin in plugins {
@@ -320,6 +321,8 @@ final class PluginManager {
             selector: rootSelector))
       }
 
+      terminalEmulators.formUnion(manifest.terminalEmulators)
+
       for (name, chords) in manifest.actionKeystrokes {
         actionKeystrokeIndex[name, default: []].append(
           ActionKeystrokeTarget(
@@ -380,6 +383,9 @@ final class PluginManager {
       verbIndex: verbIndex,
       actionKeystrokeIndex: actionKeystrokeIndex,
       helpTopics: helpTopics)
+    // Declared before the snapshot is visible, so every selector resolved
+    // against it already sees these apps as terminals.
+    TerminalEmulators.declare(terminalEmulators)
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
     hotSnapshotLock.unlock()

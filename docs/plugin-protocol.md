@@ -351,8 +351,8 @@ read-denied, network and exec open), with its full output persisted for
 forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
-`mappings`, `help`, `action_keystrokes`, and `verbs` whose every entry
-declares a keystroke (the bundled `defaults` and `terminals` plugins are the
+`mappings`, `help`, `action_keystrokes`, `terminal_emulators`, and `verbs`
+whose every entry declares a keystroke (the bundled `defaults` and `terminals` plugins are the
 exemplars). Anything process-bound is
 rejected. Loading is strict — unknown top-level or nested keys and malformed
 known fields are rejected outright, and new manifest surface only ever
@@ -457,6 +457,12 @@ Section semantics:
   `scroll_bottom`; an unknown name or unparseable chord rejects the manifest.
   Manifest-only plugins may declare it. App knowledge lives here, never in
   the host.
+- **`terminal_emulators`** — bundle ids of apps this plugin declares as
+  terminal emulators. No protocol identifies one, so the host learns them as
+  data: across plugins the union gets the terminal rules (an unbound Command
+  chord is refused rather than typed, pixel wheels are refused) and matches
+  `only_terminals`. The bundled manifest-only `terminals` plugin declares the
+  common emulators.
 - **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
@@ -469,8 +475,9 @@ Section semantics:
 
 `only_bundle_ids` and `only_terminals` may appear at the root and on mapping
 entries; root and entry selectors compound. `only_terminals: true` scopes to
-the host-owned terminal emulator list (`TerminalBundles`, which includes
-Ghostty) so a plugin never carries its own terminal allowlist; the registry
+the declared terminal emulators (the union of every plugin's
+`terminal_emulators`, see below) so a plugin never carries its own terminal
+allowlist; the registry
 instantiates such a plugin only while a known terminal runs, and its `hints`
 provider is consulted only in those apps, keeping hint activation elsewhere on
 the zero-hop prepared-model path. The numeric manifest `priority` (default 25) is

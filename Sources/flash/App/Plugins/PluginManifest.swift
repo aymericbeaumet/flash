@@ -119,8 +119,8 @@ struct PluginPattern: Hashable, Equatable {
 
 /// Decode-only active-window selector data: the manifest root and mapping
 /// entries may scope with `only_bundle_ids` and/or `only_terminals` (the
-/// host-owned `TerminalBundles` list, so a plugin never carries its own
-/// terminal allowlist). All matching goes through ``CompiledPluginSelector``.
+/// declared `TerminalEmulators`, so a plugin never carries its own terminal
+/// allowlist). All matching goes through ``CompiledPluginSelector``.
 struct PluginSelector: Decodable, Hashable, Equatable {
   var onlyBundleIDs: [String]
   var onlyTerminals: Bool
@@ -172,8 +172,7 @@ struct CompiledPluginSelector: Hashable, Equatable {
       }
     }
     if onlyTerminals {
-      guard let bundleID = context.bundleID, TerminalBundles.identifiers.contains(bundleID)
-      else { return false }
+      guard TerminalEmulators.contains(context.bundleID) else { return false }
     }
     return true
   }
@@ -592,6 +591,9 @@ struct PluginManifest: Decodable, Equatable {
   /// chord when no source performs the action in that app, so an app's own
   /// shortcuts live in the plugin that knows the app, never in the host.
   var actionKeystrokes: [SourceActionName: [String: String]]
+  /// Bundle ids of apps this plugin declares as terminal emulators; the
+  /// union across plugins is `TerminalEmulators`.
+  var terminalEmulators: [String]
   var priority: Int
   /// Global active-window selector for this plugin, compounded with
   /// mapping-entry selectors.
@@ -692,6 +694,7 @@ struct PluginManifest: Decodable, Equatable {
     case sources
     case navigation, verbs
     case actionKeystrokes = "action_keystrokes"
+    case terminalEmulators = "terminal_emulators"
   }
 
   init(
@@ -709,6 +712,7 @@ struct PluginManifest: Decodable, Equatable {
     navigation: [String] = [],
     verbs: [PluginVerbRegistration] = [],
     actionKeystrokes: [SourceActionName: [String: String]] = [:],
+    terminalEmulators: [String] = [],
     priority: Int = 25,
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
@@ -734,6 +738,7 @@ struct PluginManifest: Decodable, Equatable {
     self.navigation = navigation
     self.verbs = verbs
     self.actionKeystrokes = actionKeystrokes
+    self.terminalEmulators = Self.uniqueTrimmed(terminalEmulators)
     self.priority = priority
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
@@ -773,6 +778,8 @@ struct PluginManifest: Decodable, Equatable {
       }
       table[name] = entry.value
     }
+    self.terminalEmulators = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .terminalEmulators) ?? [])
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
@@ -970,9 +977,9 @@ struct PluginManifest: Decodable, Equatable {
     } else {
       // Manifest-only plugin: no child process ever runs, so any surface
       // that would need RPC into (or events delivered to) the plugin is
-      // invalid. Mappings, help topics, action keystrokes, and verbs whose
-      // every dispatch resolves to a host-synthesized keystroke are the
-      // complete allowed surface.
+      // invalid. Mappings, help topics, action keystrokes, terminal-emulator
+      // declarations, and verbs whose every dispatch resolves to a
+      // host-synthesized keystroke are the complete allowed surface.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),
         ("hints", hints != nil),

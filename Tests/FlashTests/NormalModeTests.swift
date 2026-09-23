@@ -7,6 +7,11 @@ import XCTest
 @testable import flash
 
 final class NormalModeTests: XCTestCase {
+  override func setUp() {
+    super.setUp()
+    TerminalEmulatorFixture.declareOfficial()
+  }
+
   func testAboutWindowYieldsKeyboardToTransientHintInput() {
     XCTAssertTrue(
       AppDelegate.aboutWindowShouldOwnNativeKeyboard(
@@ -2395,7 +2400,8 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testTerminalTargetsKeepTheirExistingPixelWheelFallbackPolicy() {
-    for bundle in TerminalBundles.identifiers {
+    XCTAssertTrue(TerminalEmulatorFixture.official.contains("org.alacritty"))
+    for bundle in TerminalEmulatorFixture.official {
       XCTAssertTrue(
         NormalModeDispatcher.pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundle), bundle
       )

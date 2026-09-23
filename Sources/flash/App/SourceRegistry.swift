@@ -20,7 +20,7 @@ struct HintProviderPlan {
 
 final class SourceRegistry {
   private let descriptors: [SourceDescriptor]
-  private let terminalBundleIDs: Set<String>
+  private let isTerminalEmulator: (String) -> Bool
   private let runningApplicationsProvider: () -> [NSRunningApplication]
   private let pluginSourcesProvider: () -> [FlashSource]
   private let lock = NSLock()
@@ -36,7 +36,7 @@ final class SourceRegistry {
   init(
     descriptors: [SourceDescriptor]? = nil,
     openConfig: Config.Open = .init(),
-    terminalBundleIDs: Set<String> = TerminalBundles.identifiers,
+    isTerminalEmulator: @escaping (String) -> Bool = TerminalEmulators.contains,
     runningApplications: [NSRunningApplication]? = nil,
     runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
     pluginSourcesProvider: (() -> [FlashSource])? = nil
@@ -52,7 +52,7 @@ final class SourceRegistry {
       self.runningApplicationsProvider = { NSWorkspace.shared.runningApplications }
     }
     self.pluginSourcesProvider = pluginSourcesProvider ?? { [] }
-    self.terminalBundleIDs = terminalBundleIDs
+    self.isTerminalEmulator = isTerminalEmulator
     self.openConfig = openConfig
     self.descriptors =
       descriptors
@@ -134,7 +134,7 @@ final class SourceRegistry {
           Self.activationPolicyMatches(
             descriptor.activationPolicy,
             runningBundleIDs: bundleIDs,
-            terminalBundleIDs: terminalBundleIDs)
+            isTerminalEmulator: isTerminalEmulator)
         }
         .map(\.identifier))
 
@@ -325,7 +325,7 @@ final class SourceRegistry {
       Self.activationPolicyMatches(
         source.activationPolicy,
         runningBundleIDs: bundleIDs,
-        terminalBundleIDs: terminalBundleIDs)
+        isTerminalEmulator: isTerminalEmulator)
     }
   }
 
@@ -813,7 +813,7 @@ final class SourceRegistry {
   private static func activationPolicyMatches(
     _ policy: FlashSourceActivationPolicy,
     runningBundleIDs: Set<String>,
-    terminalBundleIDs: Set<String>
+    isTerminalEmulator: (String) -> Bool
   ) -> Bool {
     switch policy {
     case .always:
@@ -821,7 +821,7 @@ final class SourceRegistry {
     case .bundleIDs(let bundleIDs):
       return !bundleIDs.isDisjoint(with: runningBundleIDs)
     case .terminalBundles:
-      return !terminalBundleIDs.isDisjoint(with: runningBundleIDs)
+      return runningBundleIDs.contains(where: isTerminalEmulator)
     }
   }
 }

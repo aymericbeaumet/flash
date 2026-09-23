@@ -1564,7 +1564,7 @@ extension AppDelegate {
   func commandChordTypesText(
     key: CGKeyCode, flags: CGEventFlags, bundleIdentifier: String
   ) -> Bool {
-    guard TerminalBundles.identifiers.contains(bundleIdentifier) else { return false }
+    guard TerminalEmulators.contains(bundleIdentifier) else { return false }
     return Self.commandChordTypesTextInTerminal(key: key, flags: flags) {
       pluginManager.declaresActionKeystroke(
         key: key, flags: flags.intersection(Self.normalModeKeyModifierMask),

@@ -136,6 +136,10 @@ final class PluginManagerReloadTests: XCTestCase {
       manager.declaresActionKeystroke(
         key: bracket.keyCode, flags: bracket.eventFlags,
         in: PluginSelectorContext(bundleID: "org.alacritty")))
+    XCTAssertTrue(
+      TerminalEmulators.contains("org.alacritty"), "publishing declares the terminals plugin's list"
+    )
+    XCTAssertFalse(TerminalEmulators.contains("com.example.app"))
   }
 
   // MARK: - reloadAll

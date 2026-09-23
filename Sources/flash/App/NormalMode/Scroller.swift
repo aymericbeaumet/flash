@@ -252,7 +252,7 @@ extension NormalModeDispatcher {
   /// Horizontal/edge fallbacks retain their terminal AX behavior. Explicit
   /// vertical line scrolling goes directly through the terminal's mouse handling.
   static func pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: String) -> Bool {
-    TerminalBundles.identifiers.contains(bundleIdentifier)
+    TerminalEmulators.contains(bundleIdentifier)
   }
 
   /// Injection seam: production posts to the HID tap.
