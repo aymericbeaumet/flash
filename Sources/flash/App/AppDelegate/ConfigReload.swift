@@ -349,17 +349,15 @@ extension AppDelegate {
 
   private func showConfigErrorAlertIfNeeded(for cfg: Config) {
     guard let message = cfg.loadingErrorAlertMessage else {
-      lastConfigErrorAlertMessage = nil
-      if configErrorAlertVisible {
-        configErrorAlertVisible = false
-        overlay.dismissAlert()
+      if let shown = shownConfigError {
+        shownConfigError = nil
+        overlay.dismissToast(token: shown.toastToken)
       }
       return
     }
-    guard message != lastConfigErrorAlertMessage else { return }
-    lastConfigErrorAlertMessage = message
-    configErrorAlertVisible = true
+    guard message != shownConfigError?.message else { return }
     overlay.displayAlert(message, duration: 8, style: .error)
+    shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
 
   func logPermissionState() {

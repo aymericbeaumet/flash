@@ -1158,6 +1158,23 @@ final class StatusBarTests: XCTestCase {
     XCTAssertNil(panel.toast)
   }
 
+  func testClearingAnOlderToastLeavesTheCurrentOne() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissToast()
+      panel.orderOut(nil)
+    }
+    panel.displayAlert("config error", duration: 30, style: .error)
+    let configError = panel.toastToken
+    panel.displayBanner("Copied", durationMs: 0)
+    let banner = panel.toast?.layer
+
+    // The config error resolving must not close the banner that replaced it.
+    panel.dismissToast(token: configError)
+    XCTAssertTrue(panel.toast?.layer === banner)
+  }
+
   func testAToastNeverTearsDownTheHintsItAppearsOver() {
     _ = NSApplication.shared
     let panel = OverlayPanel()

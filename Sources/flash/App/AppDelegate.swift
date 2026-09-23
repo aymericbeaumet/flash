@@ -107,8 +107,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The effective mode last handed to `MappingsCoordinator`, so a focus
   /// change only re-registers Carbon hotkeys when the chord set changed.
   var lastAppliedMappingMode: Config.Mode?
-  var lastConfigErrorAlertMessage: String?
-  var configErrorAlertVisible = false
+  /// The config error last shown: its message, so an unchanged error is not
+  /// re-shown on every reload, and its toast, so clearing the error closes
+  /// that toast and never another one.
+  struct ShownConfigError {
+    let message: String
+    let toastToken: UInt64
+  }
+  var shownConfigError: ShownConfigError?
 
   /// Owns transient hint content and any primary button held by pointer mode.
   /// The overlay's key routing and the focus border's visibility are
@@ -466,15 +472,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .sendKey, .sendKeys:
       performMappedCommand(cmd)
     case .showAlert(let alert):
-      configErrorAlertVisible = false
-      lastConfigErrorAlertMessage = nil
+      shownConfigError = nil
       overlay.displayAlert(
         alert.message,
         duration: alert.duration,
         style: .from(alert.style))
     case .dismissAlert:
-      configErrorAlertVisible = false
-      lastConfigErrorAlertMessage = nil
+      shownConfigError = nil
       overlay.dismissAlert()
     case .showUsage(let topic):
       showHelp(topic: topic)
