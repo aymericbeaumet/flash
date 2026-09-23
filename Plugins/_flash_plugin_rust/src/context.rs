@@ -889,7 +889,7 @@ impl CommandOutput {
 /// Run `osascript -e <script>` with the same sandboxed env + timeout as
 /// `run_command`.
 pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
-    run_command(
+    let output = run_command(
         ctx,
         &[
             "/usr/bin/osascript".to_string(),
@@ -898,7 +898,75 @@ pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> Co
         ],
         timeout,
     )
-    .await
+    .await;
+    // The error number names the failure (-1743: not authorized to send Apple
+    // events, -600: the app is not running) without the message's content.
+    if let Some(code) = (!output.ok)
+        .then(|| osascript_error_code(&output.stderr))
+        .flatten()
+    {
+        if let Some(suppressed) = admit_subprocess_warning(&format!("osascript:{code}")) {
+            let mut fields = BTreeMap::from([
+                ("error_code".to_string(), code.to_string()),
+                ("status".to_string(), output.status.to_string()),
+            ]);
+            if suppressed > 0 {
+                fields.insert("suppressed".to_string(), suppressed.to_string());
+            }
+            ctx.log_fields("warn", "[plugin] osascript failed", fields);
+        }
+    }
+    output
+}
+
+/// The AppleScript error number osascript ends its error line with:
+/// `…: execution error: <message> (-1743)`.
+fn osascript_error_code(stderr: &str) -> Option<i64> {
+    let line = stderr.trim_end();
+    let inner = line.strip_suffix(')')?;
+    let open = inner.rfind('(')?;
+    inner[open + 1..].parse().ok()
+}
+
+/// One warning per kind of subprocess trouble per window: a plugin polling a
+/// failing or slow program would otherwise log it on every tick.
+const SUBPROCESS_WARNING_WINDOW: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+struct WarningGate {
+    /// Per key: when the last warning was admitted, and how many were held
+    /// back since.
+    admitted: HashMap<String, (Instant, u64)>,
+}
+
+impl WarningGate {
+    /// `Some(held back since the last one)` when a warning for `key` may be
+    /// logged at `now`, `None` when it is held back.
+    fn admit(&mut self, key: &str, now: Instant) -> Option<u64> {
+        match self.admitted.get_mut(key) {
+            Some((last, held)) if now.duration_since(*last) < SUBPROCESS_WARNING_WINDOW => {
+                *held += 1;
+                None
+            }
+            Some((last, held)) => {
+                *last = now;
+                Some(std::mem::take(held))
+            }
+            None => {
+                self.admitted.insert(key.to_string(), (now, 0));
+                Some(0)
+            }
+        }
+    }
+}
+
+static SUBPROCESS_WARNINGS: std::sync::LazyLock<Mutex<WarningGate>> =
+    std::sync::LazyLock::new(|| Mutex::new(WarningGate::default()));
+
+fn admit_subprocess_warning(key: &str) -> Option<u64> {
+    SUBPROCESS_WARNINGS
+        .lock()
+        .map_or(Some(0), |mut gate| gate.admit(key, Instant::now()))
 }
 
 /// Run a subprocess with Flash's plugin sandbox environment: the plugin data
@@ -1042,16 +1110,20 @@ fn log_command_latency(
     if !command_latency_requires_warning(output, elapsed, slow_threshold) {
         return;
     }
-    ctx.log_fields(
-        "warn",
-        "[plugin] subprocess slow",
-        BTreeMap::from([
-            ("executable".to_string(), executable.to_string()),
-            ("elapsed_ms".to_string(), elapsed.as_millis().to_string()),
-            ("timeout_ms".to_string(), timeout.as_millis().to_string()),
-            ("status".to_string(), output.status.to_string()),
-        ]),
-    );
+    let timed_out = output.status == 124;
+    let Some(suppressed) = admit_subprocess_warning(&format!("{executable}:{timed_out}")) else {
+        return;
+    };
+    let mut fields = BTreeMap::from([
+        ("executable".to_string(), executable.to_string()),
+        ("elapsed_ms".to_string(), elapsed.as_millis().to_string()),
+        ("timeout_ms".to_string(), timeout.as_millis().to_string()),
+        ("status".to_string(), output.status.to_string()),
+    ]);
+    if suppressed > 0 {
+        fields.insert("suppressed".to_string(), suppressed.to_string());
+    }
+    ctx.log_fields("warn", "[plugin] subprocess slow", fields);
 }
 
 /// Wrap `value` as an AppleScript string literal (escaping `\` and `"`).
@@ -1126,6 +1198,46 @@ mod tests {
             pid,
             ..RunningApplication::default()
         }
+    }
+
+    #[test]
+    fn subprocess_warnings_are_admitted_once_a_window_with_a_held_back_count() {
+        let mut gate = WarningGate::default();
+        let start = Instant::now();
+        assert_eq!(gate.admit("osascript:false", start), Some(0));
+        assert_eq!(
+            gate.admit("osascript:false", start + Duration::from_secs(10)),
+            None
+        );
+        assert_eq!(
+            gate.admit("osascript:false", start + Duration::from_secs(20)),
+            None
+        );
+        assert_eq!(gate.admit("osascript:true", start), Some(0), "per key");
+        assert_eq!(
+            gate.admit("osascript:false", start + SUBPROCESS_WARNING_WINDOW),
+            Some(2)
+        );
+        assert_eq!(
+            gate.admit("osascript:false", start + SUBPROCESS_WARNING_WINDOW * 3),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn osascript_errors_are_read_by_number_alone() {
+        assert_eq!(
+            osascript_error_code(
+                "35:120: execution error: Not authorized to send Apple events to Safari. (-1743)\n"
+            ),
+            Some(-1743)
+        );
+        assert_eq!(
+            osascript_error_code("execution error: (it) broke (-600)"),
+            Some(-600)
+        );
+        assert_eq!(osascript_error_code("Connection invalid"), None);
+        assert_eq!(osascript_error_code(""), None);
     }
 
     #[test]

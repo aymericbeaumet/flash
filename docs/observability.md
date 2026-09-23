@@ -66,6 +66,11 @@ watchdog also reports stalls while they are still in progress
 - An exit records whether the process exited or died of a signal, and its
   status.
 - A failed source action logs the claiming source and the reason it gave.
+- Rust SDK plugins warn `[plugin] subprocess slow` for a program run past
+  its slow threshold or timing out, and `[plugin] osascript failed` with the
+  AppleScript error number (`-1743`: not authorized to send Apple events),
+  never its message. Each kind logs once a minute at most; `suppressed`
+  counts the ones held back.
 - A `search` or `hints` handler that runs out of its request's `deadline_ms`
   logs `[plugin] <method> exceeded its deadline` under the request's trace.
 - Per-plugin CPU % (`/state`, `:plugins`) is computed from real CPU time;
