@@ -72,7 +72,11 @@ Handed to every handler; cheap to clone. Key surface:
   `[plugin.<id>]` table.
 - Events: `running_applications()` is the host-maintained app snapshot (fed
   by `core:apps.changed`, delivered right after initialize). `RefreshGate`
-  serializes refresh producers against it.
+  serializes refresh producers against it. A `static AppWatch` answers whether an event
+  can change what the plugin reads from its apps — focus into, within or out
+  of one, one launching or quitting, their running instances changing, a
+  flashlight session opening — so an app-scripting plugin refreshes on those
+  alone (the browsers and firefox plugins).
 - Status values: `status(segments)` takes anything `Into<StatusSegment>` —
   a plain string is ready-made markup, build `StatusValue::text(visible)`
   and attach a hover document with `.with_preview(Preview)`, or publish a

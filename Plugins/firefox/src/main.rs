@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bridge_state::{state_file, BridgeState, BridgeTab, BRIDGE_DIR_NAME, MAX_STATE_BYTES};
 use flash_plugin::{
-    run, ActionRequest, Candidate, CommandRequest, Context, Event, NavigateRequest,
+    run, ActionRequest, AppWatch, Candidate, CommandRequest, Context, Event, NavigateRequest,
     PerformResponse, RefreshGate, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,9 @@ const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 /// Debounce latch: one pending coalesced event refresh at a time.
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+/// A refresh reads every running Firefox, so only events touching one
+/// schedule it: focus changes elsewhere cannot change a tab list.
+static FIREFOX_EVENTS: AppWatch = AppWatch::new();
 
 /// Coalesce an event burst into one refresh `EVENT_DEBOUNCE` out.
 fn schedule_refresh(ctx: &Context) {
@@ -267,12 +270,8 @@ impl FlashPlugin for Firefox {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        match event.name.as_str() {
-            "core:apps.changed"
-            | "core:focus.changed"
-            | "core:window.focus.changed"
-            | "core:session.opened" => schedule_refresh(&ctx),
-            _ => {}
+        if FIREFOX_EVENTS.touches(&event, || ctx.running_applications(), is_firefox) {
+            schedule_refresh(&ctx);
         }
     }
 

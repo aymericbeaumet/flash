@@ -17,7 +17,7 @@ use tokio::sync::{broadcast, oneshot};
 use crate::emit::Emitter;
 use crate::process::{self, ManagedChild, ManagedChildError};
 use crate::status::{PreviewTooLarge, StatusSegment, StatusValue};
-use crate::types::{Candidate, PerformResponse, RunningApplication};
+use crate::types::{Candidate, Event, PerformResponse, RunningApplication};
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
@@ -156,6 +156,66 @@ impl RefreshGate {
         let _guard = self.inner.try_lock().ok()?;
         let applications = ctx.running_applications();
         Some(operation(ctx.clone(), applications).await)
+    }
+}
+
+/// Tells which host events can change what a plugin reads from a set of apps
+/// (tab lists over AppleScript, an AX tree, …), so an event-driven refresh
+/// runs only for those and a poll catches the rest. Remembers the previously
+/// focused bundle and the apps' running instances between calls: keep one per
+/// plugin in a `static`.
+#[derive(Debug, Default)]
+pub struct AppWatch {
+    focused: Mutex<Option<String>>,
+    instances: Mutex<Option<Vec<(String, i64)>>>,
+}
+
+impl AppWatch {
+    pub const fn new() -> Self {
+        Self {
+            focused: Mutex::new(None),
+            instances: Mutex::new(None),
+        }
+    }
+
+    /// Whether `event` can change the watched apps, those whose bundle id
+    /// `ours` accepts: focus moving into, within or out of one; one launching
+    /// or quitting; the set of their running instances changing (`running`
+    /// is read for `core:apps.changed` only); a flashlight session opening.
+    /// No other event can.
+    pub fn touches(
+        &self,
+        event: &Event,
+        running: impl FnOnce() -> Vec<RunningApplication>,
+        ours: impl Fn(&str) -> bool,
+    ) -> bool {
+        match event.name.as_str() {
+            "core:session.opened" => true,
+            "core:focus.changed" | "core:window.focus.changed" => {
+                let current = event.bundle_id.clone().unwrap_or_default();
+                let previous = self
+                    .focused
+                    .lock()
+                    .ok()
+                    .and_then(|mut focused| focused.replace(current.clone()));
+                ours(&current) || previous.is_some_and(|previous| ours(&previous))
+            }
+            "core:apps.launched" | "core:apps.terminated" => {
+                event.bundle_id.as_deref().is_none_or(&ours)
+            }
+            "core:apps.changed" => {
+                let mut instances: Vec<(String, i64)> = running()
+                    .into_iter()
+                    .filter(|app| ours(&app.bundle_id))
+                    .map(|app| (app.bundle_id, app.pid))
+                    .collect();
+                instances.sort();
+                self.instances.lock().map_or(true, |mut last| {
+                    last.replace(instances.clone()) != Some(instances)
+                })
+            }
+            _ => false,
+        }
     }
 }
 
@@ -1051,6 +1111,64 @@ pub(crate) fn test_context() -> Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_event(name: &str, bundle: &str) -> Event {
+        Event {
+            name: name.to_string(),
+            bundle_id: Some(bundle.to_string()),
+            ..Event::default()
+        }
+    }
+
+    fn app(bundle: &str, pid: i64) -> RunningApplication {
+        RunningApplication {
+            bundle_id: bundle.to_string(),
+            pid,
+            ..RunningApplication::default()
+        }
+    }
+
+    #[test]
+    fn app_watch_passes_only_events_that_touch_the_watched_apps() {
+        let watch = AppWatch::new();
+        let ours = |bundle: &str| bundle == "com.example.browser";
+        let none = Vec::new;
+        let focus = |bundle| app_event("core:focus.changed", bundle);
+
+        assert!(!watch.touches(&focus("com.example.editor"), none, ours));
+        assert!(
+            watch.touches(&focus("com.example.browser"), none, ours),
+            "into"
+        );
+        assert!(
+            watch.touches(
+                &app_event("core:window.focus.changed", "com.example.browser"),
+                none,
+                ours
+            ),
+            "within"
+        );
+        assert!(
+            watch.touches(&focus("com.example.mail"), none, ours),
+            "out of"
+        );
+        assert!(!watch.touches(&focus("com.example.editor"), none, ours));
+
+        let launched = |bundle| app_event("core:apps.launched", bundle);
+        assert!(watch.touches(&launched("com.example.browser"), none, ours));
+        assert!(!watch.touches(&launched("com.example.editor"), none, ours));
+
+        let changed = app_event("core:apps.changed", "");
+        let browser = || vec![app("com.example.browser", 7), app("com.example.editor", 8)];
+        assert!(watch.touches(&changed, browser, ours), "first snapshot");
+        let another_app = || vec![app("com.example.editor", 9), app("com.example.browser", 7)];
+        assert!(!watch.touches(&changed, another_app, ours));
+        let relaunched = || vec![app("com.example.browser", 10)];
+        assert!(watch.touches(&changed, relaunched, ours));
+
+        assert!(watch.touches(&app_event("core:session.opened", ""), none, ours));
+        assert!(!watch.touches(&app_event("core:clipboard.changed", ""), none, ours));
+    }
 
     #[tokio::test]
     async fn host_call_admission_is_bounded_and_abort_releases_pending_entries() {

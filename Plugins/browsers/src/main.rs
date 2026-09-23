@@ -3,7 +3,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    applescript_quote, run, run_osascript, ActionRequest, Candidate, Context, Event,
+    applescript_quote, run, run_osascript, ActionRequest, AppWatch, Candidate, Context, Event,
     PerformResponse, RefreshGate, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,9 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 /// Debounce latch: one pending coalesced event refresh at a time.
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+/// A refresh scripts every running browser, so only events touching one
+/// schedule it: focus changes elsewhere cannot change a tab list.
+static BROWSER_EVENTS: AppWatch = AppWatch::new();
 static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
     LazyLock::new(|| Mutex::new(RefreshLogState::default()));
 /// Last-published rows, kept so a partial cycle (one browser's AppleScript
@@ -277,14 +280,12 @@ impl FlashPlugin for Browsers {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        match event.name.as_str() {
-            "core:apps.changed"
-            | "core:apps.launched"
-            | "core:apps.terminated"
-            | "core:focus.changed"
-            | "core:window.focus.changed"
-            | "core:session.opened" => schedule_refresh(&ctx),
-            _ => {}
+        if BROWSER_EVENTS.touches(
+            &event,
+            || ctx.running_applications(),
+            |bundle| browser_for(bundle).is_some(),
+        ) {
+            schedule_refresh(&ctx);
         }
     }
 
