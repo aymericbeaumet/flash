@@ -65,6 +65,12 @@ public struct JumpTarget: @unchecked Sendable {
 
   /// AX roles that represent a typing surface. Committing a click on a
   /// target with one of these roles puts the user in insert mode.
+  /// Generic containers admitted only for their press action (a web app's
+  /// cards and rows); dedup ranks them below every semantic control.
+  public var isGenericContainer: Bool {
+    role == "AXGroup" || role == "AXListItem"
+  }
+
   public static let textInputRoles: Set<String> = [
     "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
   ]

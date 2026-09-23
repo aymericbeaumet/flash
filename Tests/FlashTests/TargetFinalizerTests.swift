@@ -1,5 +1,6 @@
 import CoreGraphics
 import FlashCore
+import FlashProviders
 import XCTest
 
 @testable import flash
@@ -117,14 +118,47 @@ final class TargetFinalizerTests: XCTestCase {
     XCTAssertEqual(finalized.count, 1)
   }
 
+  func testAPressableContainerNeverDisplacesTheControlItWraps() {
+    let visible = [CGRect(x: 0, y: 0, width: 1000, height: 1000)]
+    // A wrapper a hair smaller than its link: area order alone keeps the wrapper.
+    let link = candidate(
+      id: "link", frame: CGRect(x: 10, y: 10, width: 100, height: 20), role: "AXLink")
+    let wrapper = candidate(
+      id: "wrapper", frame: CGRect(x: 11, y: 11, width: 98, height: 18), role: "AXGroup")
+    XCTAssertEqual(
+      TargetFinalizer.finalize([wrapper, link], visibleRegions: visible).map(\.id), ["link"])
+
+    // A card around a small link adds its own target: both stay.
+    let card = candidate(
+      id: "card", frame: CGRect(x: 0, y: 0, width: 460, height: 92), role: "AXGroup")
+    XCTAssertEqual(
+      Set(TargetFinalizer.finalize([card, link], visibleRegions: visible).map(\.id)),
+      ["card", "link"])
+  }
+
+  func testPressContainersAreControlSizedNotPageRegions() {
+    let window = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    XCTAssertTrue(
+      AccessibilityProvider.pressContainerFits(
+        CGRect(x: 0, y: 0, width: 460, height: 92), in: window))
+    XCTAssertFalse(
+      AccessibilityProvider.pressContainerFits(
+        CGRect(x: 0, y: 0, width: 12, height: 40), in: window))
+    XCTAssertFalse(
+      AccessibilityProvider.pressContainerFits(
+        CGRect(x: 0, y: 0, width: 900, height: 700), in: window),
+      "a page-wide wrapper with a click listener is not a target")
+  }
+
   private func candidate(
     id: String,
     frame: CGRect,
+    role: String? = nil,
     priority: Int = 10,
     providerOrder: Int = 0
   ) -> TargetCandidate {
     TargetCandidate(
-      target: JumpTarget(id: id, frame: frame, pid: 42, providerID: "test"),
+      target: JumpTarget(id: id, frame: frame, role: role, pid: 42, providerID: "test"),
       priority: priority,
       providerOrder: providerOrder,
       ordinal: 0)

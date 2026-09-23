@@ -122,7 +122,7 @@ extension AppDelegate {
         registry.perform(.tabLast, in: context, completion: completion)
       },
       fallback: { [weak self] context, _ in
-        if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
+        if WebBrowsers.all.contains(context.bundleIdentifier) {
           self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_9), flags: .maskCommand)
         } else {
           FlashLog.debug(
@@ -277,7 +277,7 @@ extension AppDelegate {
         registry.perform(.tabReopen, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
-        if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
+        if WebBrowsers.all.contains(context.bundleIdentifier) {
           self?.sendNormalModeKey(
             CGKeyCode(kVK_ANSI_T),
             flags: [.maskCommand, .maskShift],
@@ -301,7 +301,7 @@ extension AppDelegate {
         registry.perform(.tabNew, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
-        guard BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) else {
+        guard WebBrowsers.all.contains(context.bundleIdentifier) else {
           FlashLog.debug(
             "[normal_mode] tab_new unsupported bundle=\(context.bundleIdentifier)")
           self?.applyModeOverlay()
@@ -401,8 +401,8 @@ extension AppDelegate {
     force: Bool,
     bundleIdentifier: String
   ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
-    if force, BrowserTabSources.safariBundleIdentifiers.contains(bundleIdentifier) {
+    guard WebBrowsers.all.contains(bundleIdentifier) else { return nil }
+    if force, WebBrowsers.safari.contains(bundleIdentifier) {
       return (CGKeyCode(kVK_ANSI_R), [.maskCommand, .maskAlternate])
     }
     return (
@@ -459,7 +459,7 @@ extension AppDelegate {
   }
 
   static func nativeBrowserTabIndexKey(index: Int, bundleIdentifier: String) -> CGKeyCode? {
-    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+    guard WebBrowsers.all.contains(bundleIdentifier) else { return nil }
     return tabIndexKeyCode(index)
   }
 
@@ -478,7 +478,7 @@ extension AppDelegate {
         : CGKeyCode(kVK_ANSI_LeftBracket)
       return (key, [.maskCommand, .maskShift])
     }
-    if BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) {
+    if WebBrowsers.all.contains(bundleIdentifier) {
       let key: CGKeyCode =
         direction == .forward
         ? CGKeyCode(kVK_ANSI_RightBracket)

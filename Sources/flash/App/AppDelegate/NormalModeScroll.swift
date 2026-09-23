@@ -113,7 +113,7 @@ extension AppDelegate {
     // huge-wheel-delta path only nudges Firefox a viewport at a time).
     // Everything else still goes through the AX scrollbar / wheel
     // hermetic fallback.
-    if BrowserTabSources.allBundleIdentifiers.contains(bundleID),
+    if WebBrowsers.all.contains(bundleID),
       kind == .top || kind == .bottom
     {
       let key: CGKeyCode =

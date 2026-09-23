@@ -1077,14 +1077,8 @@ enum WindowMover {
   ) -> Bool {
     return currentValue == true
       && isSettable
-      && !enhancedUserInterfaceToggleExcludedBundleIdentifiers.contains(bundleIdentifier ?? "")
+      && !WebBrowsers.firefox.contains(bundleIdentifier ?? "")
   }
-
-  private static let enhancedUserInterfaceToggleExcludedBundleIdentifiers: Set<String> = [
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-    "org.mozilla.nightly",
-  ]
 
   private static func setEnhancedUserInterface(_ enabled: Bool, on axApp: AXUIElement) {
     AXUIElementSetAttributeValue(

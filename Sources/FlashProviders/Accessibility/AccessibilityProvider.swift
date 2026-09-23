@@ -127,6 +127,19 @@ public final class AccessibilityProvider: FlashSource {
     "AXOption",
   ]
 
+  /// Generic web containers an app's own web UI makes clickable (see
+  /// `pressContainerFits`); never admitted on a browser page.
+  public static let webAppPressContainerRoles: Set<String> = ["AXGroup", "AXListItem"]
+
+  /// A pressable container is a control-sized card or row, not a page region:
+  /// at least 16 pt on each side and at most 35 % of the visible window.
+  public static func pressContainerFits(_ frame: CGRect, in visible: CGRect) -> Bool {
+    guard frame.width >= 16, frame.height >= 16 else { return false }
+    let visibleArea = visible.width * visible.height
+    guard visibleArea > 0 else { return false }
+    return frame.width * frame.height <= visibleArea * 0.35
+  }
+
   /// Roles whose descendant AXImage is considered decorative (already
   /// covered by the ancestor's hint). Hits the common Firefox case of
   /// `<a><img/>text</a>` exposing both AXLink and AXImage on the same
@@ -824,11 +837,27 @@ public final class AccessibilityProvider: FlashSource {
       insideWebArea
       && currentOrAncestorInsideExtensionDocument
       && (role.map { Self.webExtensionPopupPressRoles.contains($0) } ?? false)
+    // An app whose whole UI is a web view (Electron and other wrappers) makes
+    // its cards, list entries and clickable rows plain `AXGroup`/`AXListItem`
+    // elements with a press action — Slack's Activity feed, for one. A
+    // browser page keeps the Vimium-style allowlist above; an app's own web UI
+    // admits these through the deferred press check, sized like a control
+    // rather than a page region, and ranked below every semantic control in
+    // dedup so a wrapper never displaces the link it wraps.
+    var isAppWebPressContainer = false
+    if insideWebArea, !WebBrowsers.contains(bundleIdentifier),
+      let role, Self.webAppPressContainerRoles.contains(role),
+      let posV = posValue, let sizeV = sizeValue,
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+    {
+      isAppWebPressContainer = Self.pressContainerFits(frame, in: visible)
+    }
     let baseAllowlist = insideWebArea ? Self.webClickableRoles : Self.roles
     var roleAllowed =
       role.map { baseAllowlist.contains($0) } ?? false
       || (insideWebArea && isRowOrCellRole)
       || isExtensionPopupPressRole
+      || isAppWebPressContainer
     if roleAllowed, role == "AXImage", insideClickable {
       roleAllowed = false
     }
@@ -899,7 +928,9 @@ public final class AccessibilityProvider: FlashSource {
         // HTML <tr>/<td> stays filtered while Slack/Discord/Electron
         // channel rows (which expose AXPress) come through; everything
         // else is confirmed.
-        if role == "AXImage" || (insideWebArea && isRowOrCell) || isExtensionPopupPressRole {
+        if role == "AXImage" || (insideWebArea && isRowOrCell) || isExtensionPopupPressRole
+          || isAppWebPressContainer
+        {
           state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
         } else {
           state.confirmedTargets.append(candidate)

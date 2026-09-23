@@ -60,6 +60,10 @@ public enum TargetFinalizer {
     var kept: [TargetCandidate] = []
     kept.reserveCapacity(visible.count)
     let byDedupPreference = visible.sorted { lhs, rhs in
+      // A semantic control always beats a generic pressable container over
+      // the same area; the container survives only where it adds a target.
+      let lhsGeneric = lhs.target.isGenericContainer
+      if lhsGeneric != rhs.target.isGenericContainer { return !lhsGeneric }
       let lhsArea = area(lhs.target.frame)
       let rhsArea = area(rhs.target.frame)
       if lhsArea != rhsArea { return lhsArea < rhsArea }

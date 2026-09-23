@@ -93,8 +93,24 @@ plugin subscribes to `clipboard.changed`, the menu-bar reveal probe only while
 the pointer is in the band, the watchdog only while its level is logged, and
 the inspector broadcast only while a browser is listening.
 
+Visible regions subtract every higher window from the active one, except fully
+transparent windows. The frontmost app's window can sit under another app's
+normal-level window only while the window list lags an activation, so when that
+leaves it fully covered the regions are recomputed without those windows
+(`[discover] frontmost_window_covered`); floating layers still cover it. An
+activation result that is empty, or collapsed below a tenth of the app's last
+trusted count, is walked once more after 150 ms and the fuller result is served;
+a cached model judged the same way is a miss.
+
+Browser pages keep a Vimium-style semantic allowlist. Inside an app whose whole
+UI is a web view (Electron and other wrappers), a control-sized `AXGroup` or
+`AXListItem` with a press action is a target too — the cards and rows those
+apps build from clickable divs. Electron apps are woken like Chromium browsers,
+recognised by the `Electron Framework` they ship.
+
 Finalization rejects invalid geometry, filters visible regions and deduplicates
-overlap with smaller frames winning. Visual rows anchor their vertical tolerance
+overlap with smaller frames winning, except that a semantic control always beats
+a generic pressable container over the same area. Visual rows anchor their vertical tolerance
 to the row's topmost target, then sort horizontally with stable tie-breakers.
 A pairwise “within eight pixels” comparator is not transitive and must not be
 used as a sorting predicate.

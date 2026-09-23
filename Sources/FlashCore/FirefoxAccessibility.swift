@@ -10,14 +10,8 @@ import Foundation
 /// per-process lock: tree work wakes Firefox for the duration of the operation
 /// and restores the prior state before a window move can begin.
 public enum FirefoxAccessibility {
-  public static let bundleIdentifiers: Set<String> = [
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-    "org.mozilla.nightly",
-  ]
-
   public static func matches(bundleIdentifier: String?) -> Bool {
-    bundleIdentifier.map { bundleIdentifiers.contains($0) } ?? false
+    bundleIdentifier.map { WebBrowsers.firefox.contains($0) } ?? false
   }
 
   /// Run synchronous AX tree work while Firefox accessibility is active.
