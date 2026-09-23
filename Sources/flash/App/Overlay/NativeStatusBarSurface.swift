@@ -146,8 +146,9 @@ final class NativeStatusBarSurface {
     let laneReserve =
       reserve.isEmpty
       ? reserve
-      : max(0, reserve.lowerBound - marginColumns)
-        ..< min(availableColumns, reserve.upperBound + marginColumns)
+      : max(
+        0, reserve.lowerBound - marginColumns)..<min(
+          availableColumns, reserve.upperBound + marginColumns)
     layout = StatusFormatLayout.layout(
       Self.clampedLanes(
         Self.shrinkingDocument(

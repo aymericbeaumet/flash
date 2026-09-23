@@ -34,8 +34,10 @@ enum NativeMenuBarAutoHide {
     }
     // Already hidden by the user: adopt the state without claiming it, so
     // disabling the bar later cannot take their menu bar setting with it.
-    return current ? Reconciliation(write: nil, owned: owned) : Reconciliation(
-      write: true, owned: true)
+    return current
+      ? Reconciliation(write: nil, owned: owned)
+      : Reconciliation(
+        write: true, owned: true)
   }
 
   static func reconcile(hidden: Bool, defaults: UserDefaults = .standard) {

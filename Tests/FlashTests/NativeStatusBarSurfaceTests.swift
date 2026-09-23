@@ -421,7 +421,8 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(contracted.contains("…"))
     XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animation(forKey: cycleKey) == nil })
     // A new article still pushes.
-    redraw(surface, source(right: "CPU 10% MEM 40% NET 1.2MiB", url: "https://example.com/b"),
+    redraw(
+      surface, source(right: "CPU 10% MEM 40% NET 1.2MiB", url: "https://example.com/b"),
       columns: 50)
     let animated = surface.visibleRuns.indices.filter {
       surface.visibleRuns[$0].segment.cycle
@@ -533,15 +534,17 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     }
     XCTAssertEqual(
       surface.centreNotch.fillColor,
-      OverlayPanel.sunken(OverlayPanel.nordPolarNight0, by: OverlayPanel.statusBarNotchSink).cgColor)
+      OverlayPanel.sunken(OverlayPanel.nordPolarNight0, by: OverlayPanel.statusBarNotchSink).cgColor
+    )
     // The recess sits under the hover wash and the run containers.
     let sublayers = try XCTUnwrap(surface.backgroundLayer.sublayers)
     let notchIndex = try XCTUnwrap(sublayers.firstIndex { $0 === surface.centreNotch })
     let washIndex = try XCTUnwrap(sublayers.firstIndex { $0 === surface.hoverHighlight })
     XCTAssertLessThan(notchIndex, washIndex)
-    XCTAssertTrue(sublayers.suffix(from: washIndex + 1).allSatisfy { layer in
-      surface.runLayers.contains { $0.container === layer }
-    })
+    XCTAssertTrue(
+      sublayers.suffix(from: washIndex + 1).allSatisfy { layer in
+        surface.runLayers.contains { $0.container === layer }
+      })
     // The housing width is fixed: longer centred content is clipped to its
     // interior instead of widening it.
     redraw(
