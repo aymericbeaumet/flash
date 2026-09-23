@@ -335,4 +335,43 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertFalse(clips("", rows: 1), "a one-row popup has nothing left to show")
   }
 
+  /// Committing a left-click that has a handler closes the popup the pointer
+  /// is over: the click already answered why the popup was open. Drags and
+  /// clicks with no handler leave it alone.
+  func testLeftClickWithAHandlerClosesTheHoveredPopup() throws {
+    let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
+    var opened: [String] = []
+    var dismissals = 0
+    view.onLinkActivated = { dismissals += 1 }
+    view.onStatusBarAction = { opened.append($0) }
+    func click(upX: CGFloat = 30) throws {
+      let down = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: .leftMouseDown, location: CGPoint(x: 30, y: 12), modifierFlags: [],
+          timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+      let up = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: .leftMouseUp, location: CGPoint(x: upX, y: 12), modifierFlags: [],
+          timestamp: 0, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+      view.mouseDown(with: down)
+      view.mouseUp(with: up)
+    }
+    // No link under the pointer: nothing was handled, so nothing closes.
+    try click()
+    XCTAssertEqual(dismissals, 0)
+    // A plain link closes the popup exactly once per committed click.
+    view.links = [(view.bounds, URL(string: "https://example.com/article")!)]
+    try click()
+    XCTAssertEqual(dismissals, 1)
+    // A drag is not a click.
+    try click(upX: 80)
+    XCTAssertEqual(dismissals, 1)
+    // A named range action is a handler too.
+    let action = try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "user|1"))
+    view.links = [(view.bounds, action)]
+    try click()
+    XCTAssertEqual(dismissals, 2)
+    XCTAssertEqual(opened, ["user|1"])
+  }
+
 }

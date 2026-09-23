@@ -94,6 +94,9 @@ final class StatusBarClickView: NSView {
   /// coordinates. The overlay moves its popup layer on every event.
   var onPopupHover: ((StatusBarPopupRegion?, NSPoint) -> Void)?
   var onPopupClick: ((StatusBarPopupRegion, NSPoint) -> Void)?
+  /// A committed left-click found a handler (a link or a named range
+  /// action). The hovered popup has served its purpose, so it closes.
+  var onLinkActivated: (() -> Void)?
   /// Reports the hovered link or popup run (view coordinates, nil when the
   /// pointer is over plain text or has left) so the bar can wash it.
   var onHoverHighlight: ((CGRect?) -> Void)?
@@ -171,7 +174,10 @@ final class StatusBarClickView: NSView {
       onPopupClick?(popup, point)
       return
     }
-    if let url { activate(url: url) }
+    if let url {
+      onLinkActivated?()
+      activate(url: url)
+    }
     // Non-link clicks are intentionally not forwarded (no super call): the band
     // is Flash's while the menu bar is folded, so the click stops here instead
     // of leaking to the wallpaper or the window underneath.
@@ -578,6 +584,18 @@ extension OverlayPanel {
     statusPopupController.focus()
   }
 
+  /// Close the hovered popup because a left-click just ran a handler. The
+  /// pointer stays where it is, so the gate keeps that popup shut until the
+  /// pointer leaves its region; a pinned popup is left alone because it is no
+  /// longer tied to hover.
+  func dismissStatusBarPopupForClick() {
+    guard let name = statusPopupController.presentation.identity?.name,
+      !statusPopupController.presentation.isStandalone
+    else { return }
+    statusBarHoverGate = .dismissed(name)
+    hideStatusBarPopup(reason: "link_click")
+  }
+
   func hideStatusBarPopup(reason: String = "overlay_hidden") {
     statusBarHoverDwellWork?.cancel()
     statusBarHoverDwellWork = nil
@@ -674,6 +692,7 @@ extension OverlayPanel {
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
       view.onStatusBarAction = statusBarActionHandler
+      view.onLinkActivated = { [weak self] in self?.dismissStatusBarPopupForClick() }
       view.onPopupClick = { [weak self] popup, point in
         var screenPopup = popup
         screenPopup.rect = popup.rect.offsetBy(dx: band.minX, dy: band.minY)
