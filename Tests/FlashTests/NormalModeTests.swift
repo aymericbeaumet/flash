@@ -179,6 +179,21 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(lines, [7, -7, 31, -31])
   }
 
+  func testTerminalEdgesAreBoundedLineScrolls() {
+    let restore = NormalModeDispatcher.wheelEventPoster
+    defer { NormalModeDispatcher.wheelEventPoster = restore }
+    var events: [CGEvent] = []
+    NormalModeDispatcher.wheelEventPoster = { events.append($0) }
+    XCTAssertTrue(NormalModeDispatcher.scroll(.top, pid: -1, bundleID: "org.alacritty"))
+    XCTAssertTrue(NormalModeDispatcher.scroll(.bottom, pid: -1, bundleID: "org.alacritty"))
+    XCTAssertEqual(
+      events.map { $0.getIntegerValueField(.scrollWheelEventDeltaAxis1) },
+      [Int64(NormalModeDispatcher.edgeScrollLines), -Int64(NormalModeDispatcher.edgeScrollLines)])
+    XCTAssertEqual(
+      events.map { $0.getIntegerValueField(.scrollWheelEventIsContinuous) }, [0, 0],
+      "line units, like ctrl-u / ctrl-d")
+  }
+
   func testLineScrollCountsMultiplyStepAndPageLines() {
     XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .down, repeatCount: 4), -12)
     XCTAssertEqual(NormalModeDispatcher.scrollLineDelta(for: .up, repeatCount: 4), 12)

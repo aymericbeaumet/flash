@@ -36,6 +36,14 @@ extension NormalModeDispatcher {
         FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind) bundle=\(bundleID)")
         return true
       }
+      // A terminal refuses the huge pixel delta below; its edge is a bounded
+      // line scroll, delivered like ctrl-u / ctrl-d.
+      if pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundleID),
+        let lines = edgeLineDelta(for: kind), synthesizeLineScroll(lines: lines)
+      {
+        FlashLog.debug("[normal_mode] scroll method=edge_lines kind=\(kind) bundle=\(bundleID)")
+        return true
+      }
       // Wheel fallback for gg/G: a single huge delta sends apps that
       // honour wheel-delta proportionally (Firefox, most web/Electron
       // apps) all the way to the edge. Terminals never reach it — the
@@ -260,6 +268,19 @@ extension NormalModeDispatcher {
     case .left, .right, .top, .bottom: return nil
     }
     return lines * Int32(min(max(repeatCount, 1), 999))
+  }
+
+  /// Lines one `gg` / `G` scrolls where only line scrolling is safe: past
+  /// either end of any realistic scrollback, bounded so a program that
+  /// tracks the mouse receives a finite burst of wheel reports.
+  static let edgeScrollLines: Int32 = 1_000
+
+  static func edgeLineDelta(for kind: ScrollKind) -> Int32? {
+    switch kind {
+    case .top: return edgeScrollLines
+    case .bottom: return -edgeScrollLines
+    case .up, .down, .halfPageUp, .halfPageDown, .left, .right: return nil
+    }
   }
 
   @discardableResult

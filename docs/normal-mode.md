@@ -103,7 +103,12 @@ in every app, including terminals, at the current pointer position. They use
 no app-specific scrolling action or Accessibility scroll fallback. The receiving
 app handles the event just as it handles a physical wheel. `[mode] scroll_step`
 continues to set horizontal movement in pixels. `gg` and `G` retain their
-source-aware edge behavior; inside tmux they use history-top and cancel.
+source-aware edge behavior. Inside tmux they follow tmux's own wheel routing:
+a pane in a mode scrolls that mode (history-top, cancel); a program that
+tracks the mouse, such as a full-screen CLI, owns its scrolling and receives
+1,000 wheel reports; any other pane enters copy-mode at the top of its history
+and is already at its live bottom. Another terminal scrolls 1,000 lines as a
+line wheel, like the four vertical bindings.
 
 NORMAL is persistent by default; `enter_normal_mode` takes no persistence
 option. Opening Find, creating or switching tabs, and `focus_input` preserve

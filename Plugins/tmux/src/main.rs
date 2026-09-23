@@ -4161,32 +4161,130 @@ async fn pane_select(plugin: &Tmux, client: &TmuxClient, direction: &str) -> boo
         .is_some()
 }
 
-/// `gg` / `G` inside a pane. The host refuses to synthesize a scroll wheel
-/// into a terminal — a terminal with mouse tracking on re-encodes the wheel as
-/// an SGR report and writes it to the pty — so the extremes are driven through
-/// tmux itself: enter copy-mode and jump to the top of the history, or cancel
-/// copy-mode to snap back to the live bottom.
+/// `gg` / `G` inside a pane, routed the way tmux routes the wheel (its default
+/// `WheelUpPane` binding, which `ctrl-u` / `ctrl-d` go through): a pane in a
+/// mode scrolls that mode; a program that turned on mouse tracking owns its
+/// scrolling, so it receives wheel reports; any other pane scrolls tmux's
+/// history in copy-mode, whose bottom is the live pane. Driving copy-mode for
+/// a mouse-tracking program scrolled the shell history behind it instead, and
+/// `G` had no copy-mode to cancel.
 async fn scroll_extreme(plugin: &Tmux, client: &TmuxClient, top: bool) -> bool {
     let target = format!("{}:.", client.session);
-    if !top {
-        return run_tmux_for_client(
-            plugin,
-            client,
-            &["send-keys", "-X", "-t", &target, "cancel"],
-        )
-        .await
-        .is_some();
+    let Some(state) = run_tmux_for_client(
+        plugin,
+        client,
+        &["display-message", "-p", "-t", &target, PANE_SCROLL_FORMAT],
+    )
+    .await
+    .as_deref()
+    .and_then(PaneScrollState::parse) else {
+        return false;
+    };
+    match ScrollExtremePlan::new(&state, top) {
+        ScrollExtremePlan::ModeCommand(command) => {
+            run_tmux_for_client(plugin, client, &["send-keys", "-X", "-t", &target, command])
+                .await
+                .is_some()
+        }
+        ScrollExtremePlan::EnterHistoryTop => {
+            run_tmux_for_client(plugin, client, &["copy-mode", "-t", &target])
+                .await
+                .is_some()
+                && run_tmux_for_client(
+                    plugin,
+                    client,
+                    &["send-keys", "-X", "-t", &target, "history-top"],
+                )
+                .await
+                .is_some()
+        }
+        ScrollExtremePlan::AlreadyLive => true,
+        ScrollExtremePlan::WheelReports(report) => {
+            let count = EDGE_WHEEL_REPORTS.to_string();
+            run_tmux_for_client(
+                plugin,
+                client,
+                &["send-keys", "-t", &target, "-N", &count, "-l", &report],
+            )
+            .await
+            .is_some()
+        }
     }
-    run_tmux_for_client(plugin, client, &["copy-mode", "-t", &target])
-        .await
-        .is_some()
-        && run_tmux_for_client(
-            plugin,
-            client,
-            &["send-keys", "-X", "-t", &target, "history-top"],
-        )
-        .await
-        .is_some()
+}
+
+const PANE_SCROLL_FORMAT: &str =
+    "#{pane_in_mode} #{mouse_any_flag} #{mouse_sgr_flag} #{pane_width} #{pane_height}";
+
+/// Wheel reports one `gg` / `G` sends a mouse-tracking program: enough to
+/// reach either end of a long transcript, one small `send-keys -N` command.
+const EDGE_WHEEL_REPORTS: u32 = 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaneScrollState {
+    in_mode: bool,
+    mouse_tracking: bool,
+    sgr_mouse: bool,
+    width: u32,
+    height: u32,
+}
+
+impl PaneScrollState {
+    fn parse(line: &str) -> Option<Self> {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [in_mode, mouse, sgr, width, height] = fields.as_slice() else {
+            return None;
+        };
+        Some(Self {
+            in_mode: *in_mode == "1",
+            mouse_tracking: *mouse == "1",
+            sgr_mouse: *sgr == "1",
+            width: width.parse().ok()?,
+            height: height.parse().ok()?,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ScrollExtremePlan {
+    /// A copy-mode command inside the pane's current mode.
+    ModeCommand(&'static str),
+    /// Enter copy-mode, then jump to the top of the history.
+    EnterHistoryTop,
+    /// A pane outside any mode already shows its live bottom.
+    AlreadyLive,
+    /// One wheel report, sent `EDGE_WHEEL_REPORTS` times as literal text
+    /// (`send-keys -H` delivers nothing to the pane on tmux 3.7).
+    WheelReports(String),
+}
+
+impl ScrollExtremePlan {
+    fn new(state: &PaneScrollState, top: bool) -> Self {
+        if state.in_mode {
+            return Self::ModeCommand(if top { "history-top" } else { "cancel" });
+        }
+        if state.mouse_tracking {
+            return Self::WheelReports(wheel_report(state, top));
+        }
+        if top {
+            Self::EnterHistoryTop
+        } else {
+            Self::AlreadyLive
+        }
+    }
+}
+
+/// An xterm wheel report (button 64 up, 65 down) at the pane's centre, in
+/// the SGR encoding when the program asked for it, else the classic one,
+/// whose coordinates stay ASCII (so single-byte in its UTF-8 variant too).
+fn wheel_report(state: &PaneScrollState, up: bool) -> String {
+    let button: u32 = if up { 64 } else { 65 };
+    let x = (state.width / 2).max(1);
+    let y = (state.height / 2).max(1);
+    if state.sgr_mouse {
+        return format!("\x1b[<{button};{x};{y}M");
+    }
+    let classic = |value: u32| char::from_u32(32 + value.min(95)).unwrap_or(' ');
+    format!("\x1b[M{}{}{}", classic(button), classic(x), classic(y))
 }
 
 /// `[m` / `]m`: swap the focused window with its neighbour in the same
@@ -4788,6 +4886,68 @@ async fn restore_navigation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pane(in_mode: bool, mouse_tracking: bool, sgr_mouse: bool) -> PaneScrollState {
+        PaneScrollState {
+            in_mode,
+            mouse_tracking,
+            sgr_mouse,
+            width: 120,
+            height: 40,
+        }
+    }
+
+    #[test]
+    fn scroll_extremes_follow_tmux_wheel_routing() {
+        // A pane in a mode scrolls that mode, even over a mouse-tracking program.
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(true, true, true), true),
+            ScrollExtremePlan::ModeCommand("history-top")
+        );
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(true, false, false), false),
+            ScrollExtremePlan::ModeCommand("cancel")
+        );
+        // A mouse-tracking program owns its scrolling.
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, true, true), false),
+            ScrollExtremePlan::WheelReports("\x1b[<65;60;20M".to_string())
+        );
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, true, true), true),
+            ScrollExtremePlan::WheelReports("\x1b[<64;60;20M".to_string())
+        );
+        // Anything else scrolls tmux history; its bottom is the live pane.
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, false, false), true),
+            ScrollExtremePlan::EnterHistoryTop
+        );
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, false, false), false),
+            ScrollExtremePlan::AlreadyLive
+        );
+    }
+
+    #[test]
+    fn classic_wheel_reports_keep_single_byte_coordinates() {
+        let wide = PaneScrollState {
+            width: 400,
+            height: 300,
+            ..pane(false, true, false)
+        };
+        assert_eq!(wheel_report(&wide, false), "\x1b[Ma\x7f\x7f");
+        assert_eq!(wheel_report(&pane(false, true, false), true), "\x1b[M`\\4");
+    }
+
+    #[test]
+    fn pane_scroll_state_parses_the_display_format() {
+        assert_eq!(
+            PaneScrollState::parse("0 1 1 120 40\n"),
+            Some(pane(false, true, true))
+        );
+        assert_eq!(PaneScrollState::parse("0 1 1 120"), None);
+        assert_eq!(PaneScrollState::parse("0 1 1 wide 40"), None);
+    }
 
     #[test]
     fn extract_links_keeps_port_and_path() {
