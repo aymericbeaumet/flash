@@ -192,7 +192,7 @@ final class ModeReducerTests: XCTestCase {
   // MARK: Command / modal lifecycle + restore fidelity
 
   func testCommandLifecycleRestores() {
-    // Default exit is NORMAL (matches commandLineExitMode).
+    // Default exit is NORMAL.
     var (mode, _) = ModeReducer.reduce(
       .normal, .openCommand(restoreMode: false))
     XCTAssertEqual(mode, .command(restoreTo: .normal))

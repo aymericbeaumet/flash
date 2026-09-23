@@ -428,7 +428,6 @@ extension AppDelegate {
     nativeSurfaceSuspended = false
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
-    cancelNormalModeCaptureRecovery(reason: "new_recapture")
     guard shouldCaptureNormalModeInput else {
       FlashLog.trace("[mode] recapture_skip token=\(token) reason=state")
       return
@@ -475,7 +474,6 @@ extension AppDelegate {
     guard aboutWindowVisible != visible else { return }
     aboutWindowVisible = visible
     normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "about_window")
     applyModeOverlay()
     if !visible, flashMode == .normal {
       scheduleNormalModeRecapture()
@@ -494,7 +492,6 @@ extension AppDelegate {
     menuBarInteractionRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.menuBarInteractionRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "menu_bar_interaction")
     FlashLog.trace("[mode] menu_bar_interaction reason=\(reason) recapture_suppressed=true")
   }
 
@@ -502,7 +499,6 @@ extension AppDelegate {
     contextMenuInteractionRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.contextMenuInteractionRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "context_menu_interaction")
     FlashLog.trace("[mode] context_menu_interaction reason=\(reason) recapture_suppressed=true")
   }
 
@@ -512,7 +508,6 @@ extension AppDelegate {
     pointerInsertHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.pointerInsertHandoffRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "pointer_insert_handoff")
     FlashLog.trace(
       "[mode] pointer_insert_handoff reason=\(reason) token=\(pointerInsertHandoffToken) "
         + "recapture_suppressed=true")
@@ -632,13 +627,6 @@ extension AppDelegate {
     RecaptureSuppression.active(until, now: now)
   }
 
-  private func cancelNormalModeCaptureRecovery(reason: String) {
-    guard normalModeCaptureRecoveryRecaptureToken != nil else { return }
-    normalModeCaptureRecoveryToken &+= 1
-    normalModeCaptureRecoveryRecaptureToken = nil
-    FlashLog.trace("[mode] capture_recovery_cancel reason=\(reason)")
-  }
-
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
     if Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
@@ -745,7 +733,6 @@ extension AppDelegate {
   private static let normalModeKeyModifierMask: CGEventFlags = [
     .maskCommand, .maskControl, .maskAlternate, .maskShift,
   ]
-  static let normalModeCaptureRecoveryDelaysMs = [250, 750, 1_500, 3_000]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
   static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
@@ -810,37 +797,6 @@ extension AppDelegate {
     RecaptureSuppression.active(until, now: now)
   }
 
-  static func normalModeCaptureRecoveryShouldRetry(
-    mode: FlashMode,
-    overlayInputMode: OverlayInputMode,
-    hasHints: Bool,
-    activationInFlight: Bool,
-    keyboardCaptureIsActive: Bool,
-    menuBarInteractionRecaptureSuppressedUntil: Date?,
-    contextMenuInteractionRecaptureSuppressedUntil: Date?,
-    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
-    now: Date = Date()
-  ) -> Bool {
-    guard mode == .normal, !hasHints, !activationInFlight, !keyboardCaptureIsActive else {
-      return false
-    }
-    switch overlayInputMode {
-    case .commandLine:
-      return false
-    case .passive, .hints, .normal:
-      break
-    }
-    return !menuBarInteractionRecaptureSuppressionIsActive(
-      until: menuBarInteractionRecaptureSuppressedUntil,
-      now: now)
-      && !contextMenuInteractionRecaptureSuppressionIsActive(
-        until: contextMenuInteractionRecaptureSuppressedUntil,
-        now: now)
-      && !pointerInsertHandoffRecaptureSuppressionIsActive(
-        until: pointerInsertHandoffRecaptureSuppressedUntil,
-        now: now)
-  }
-
   var shouldCaptureNormalModeInput: Bool {
     return Self.normalModeShouldOwnKeyboardInput(
       mode: flashMode,
@@ -863,19 +819,6 @@ extension AppDelegate {
     if !force, overlay.keyboardCaptureIsActive, overlay.inputMode == .normal { return false }
     applyModeOverlay(captureOverride: true)
     return true
-  }
-
-  static func normalModeShouldRecaptureAfterActionDispatch(
-    mode: FlashMode,
-    overlayInputMode: OverlayInputMode,
-    hasHints: Bool,
-    activationInFlight: Bool
-  ) -> Bool {
-    normalModeShouldOwnKeyboardInput(
-      mode: mode,
-      overlayInputMode: overlayInputMode,
-      hasHints: hasHints,
-      activationInFlight: activationInFlight)
   }
 
   static func normalModeShouldOwnKeyboardInput(
@@ -1117,12 +1060,6 @@ extension AppDelegate {
     candidateFinderScope: CandidateScope? = nil,
     restoreMode: Bool = false
   ) {
-    guard
-      Self.commandLineEntryIsAllowed(
-        mode: flashMode,
-        hasHints: hintSession.isActive,
-        activationInFlight: activationInFlight)
-    else { return }
     let invocationTargetPID = finder.invocationTargetPID ?? normalModeDispatchContext()?.processID
     // Snapshot the entry mode *before* `transitionMode` runs anywhere
     // below so `finishCommandLineInteraction` can put the user back where
@@ -1154,21 +1091,6 @@ extension AppDelegate {
       }
     }
     refreshCommandLine(text: command, cursorIndex: command.count)
-  }
-
-  static func commandLineEntryIsAllowed(
-    mode: FlashMode,
-    hasHints: Bool,
-    activationInFlight: Bool
-  ) -> Bool {
-    switch mode {
-    case .normal, .insert:
-      return true
-    }
-  }
-
-  static func commandLineExitMode(currentMode: FlashMode) -> FlashMode {
-    .normal
   }
 
   /// `:help [topic]` — docs live in the HTTP dashboard's Docs tab, so open the

@@ -813,38 +813,6 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(inputMode: .hints))
   }
 
-  func testCommandLineEntryIsAllowedFromInsertAndNormalModeEvenWithTransientHints() {
-    XCTAssertTrue(
-      AppDelegate.commandLineEntryIsAllowed(
-        mode: .insert,
-        hasHints: false,
-        activationInFlight: false))
-    XCTAssertTrue(
-      AppDelegate.commandLineEntryIsAllowed(
-        mode: .normal,
-        hasHints: false,
-        activationInFlight: false))
-    XCTAssertTrue(
-      AppDelegate.commandLineEntryIsAllowed(
-        mode: .insert,
-        hasHints: true,
-        activationInFlight: false))
-    XCTAssertTrue(
-      AppDelegate.commandLineEntryIsAllowed(
-        mode: .normal,
-        hasHints: false,
-        activationInFlight: true))
-  }
-
-  func testCommandLineExitAlwaysReturnsToNormalMode() {
-    XCTAssertEqual(
-      AppDelegate.commandLineExitMode(currentMode: .insert),
-      .normal)
-    XCTAssertEqual(
-      AppDelegate.commandLineExitMode(currentMode: .normal),
-      .normal)
-  }
-
   func testNormalModeInputCaptureStaysOwnedDuringSourceResolution() {
     XCTAssertTrue(
       AppDelegate.normalModeShouldOwnKeyboardInput(
@@ -1111,145 +1079,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       AppDelegate.normalModeFocusChangingRecaptureDelaysMs.prefix(6), [0, 1, 4, 8, 16, 30])
     XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.last, 1_400)
-  }
-
-  func testNormalModeCaptureRecoveryScheduleIsBoundedAndStartsAfterFastRamp() {
-    XCTAssertEqual(AppDelegate.normalModeCaptureRecoveryDelaysMs, [250, 750, 1_500, 3_000])
-    XCTAssertGreaterThan(AppDelegate.normalModeCaptureRecoveryDelaysMs.first ?? 0, 0)
-    XCTAssertEqual(AppDelegate.normalModeCaptureRecoveryDelaysMs.count, 4)
-  }
-
-  func testNormalModeCaptureRecoveryRetriesOnlyWhenNormalCaptureIsStillMissing() {
-    let now = Date(timeIntervalSince1970: 1_000)
-
-    XCTAssertTrue(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertTrue(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .hints,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .insert,
-        overlayInputMode: .passive,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .commandLine,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: true,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: true,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: true,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-  }
-
-  func testNormalModeCaptureRecoveryRespectsNativeSurfaceSuppressions() {
-    let now = Date(timeIntervalSince1970: 1_000)
-    let activeSuppression = now.addingTimeInterval(0.5)
-    let expiredSuppression = now.addingTimeInterval(-0.1)
-
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: activeSuppression,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: activeSuppression,
-        pointerInsertHandoffRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        contextMenuInteractionRecaptureSuppressedUntil: nil,
-        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
-        now: now))
-    XCTAssertTrue(
-      AppDelegate.normalModeCaptureRecoveryShouldRetry(
-        mode: .normal,
-        overlayInputMode: .normal,
-        hasHints: false,
-        activationInFlight: false,
-        keyboardCaptureIsActive: false,
-        menuBarInteractionRecaptureSuppressedUntil: expiredSuppression,
-        contextMenuInteractionRecaptureSuppressedUntil: expiredSuppression,
-        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
-        now: now))
   }
 
   func testWorkspaceActivationRecaptureSkipsRecentMenuBarInteractions() {
@@ -2827,37 +2656,37 @@ final class NormalModeTests: XCTestCase {
 
   func testNormalModeActionDispatchRecapturesOnlyForIdleNormalSurfaces() {
     XCTAssertTrue(
-      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .normal,
         overlayInputMode: .normal,
         hasHints: false,
         activationInFlight: false))
     XCTAssertTrue(
-      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .normal,
         overlayInputMode: .hints,
         hasHints: false,
         activationInFlight: false))
     XCTAssertFalse(
-      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .insert,
         overlayInputMode: .normal,
         hasHints: false,
         activationInFlight: false))
     XCTAssertFalse(
-      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .normal,
         overlayInputMode: .commandLine,
         hasHints: false,
         activationInFlight: false))
     XCTAssertFalse(
-      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .normal,
         overlayInputMode: .normal,
         hasHints: true,
         activationInFlight: false))
     XCTAssertFalse(
-      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .normal,
         overlayInputMode: .normal,
         hasHints: false,

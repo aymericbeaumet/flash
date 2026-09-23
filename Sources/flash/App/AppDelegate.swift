@@ -207,8 +207,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var localNotificationTokens: [NSObjectProtocol] = []
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
-  var normalModeCaptureRecoveryToken: UInt64 = 0
-  var normalModeCaptureRecoveryRecaptureToken: UInt64?
   /// Consolidated recapture-suppression windows (was three parallel `Date?`
   /// fields). The named accessors below forward to it so existing call sites and
   /// tests keep their field names while the storage + predicate live in one
