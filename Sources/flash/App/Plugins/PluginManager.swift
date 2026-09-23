@@ -448,6 +448,14 @@ final class PluginManager {
     return latestRunningApplicationsSnapshot
   }
 
+  /// Touched only on `eventQueue`.
+  private var lastEmittedRunningApplicationsSignature: [String]?
+
+  /// What identifies a running-apps list: each app's pid and bundle id.
+  static func runningApplicationsSignature(_ applications: [[String: Any]]) -> [String] {
+    applications.map { "\($0["pid"] as? Int ?? 0):\($0["bundle_id"] as? String ?? "")" }.sorted()
+  }
+
   func cacheRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
     runningApplicationsLock.lock()
     latestRunningApplicationsSnapshot = applications
@@ -455,7 +463,10 @@ final class PluginManager {
   }
 
   /// Enumerating the running apps and encoding the full list is work for
-  /// `eventQueue`, not the focus change on main that triggers it.
+  /// `eventQueue`, not the focus change on main that triggers it. The event
+  /// fires only when the set of running apps changed: a focus change asks for
+  /// it too, and resending an identical list made listeners re-walk every
+  /// app on each Cmd-Tab.
   func emitRunningApplicationsChanged(
     reason: String, snapshot: @escaping () -> [[String: Any]]
   ) {
@@ -463,6 +474,9 @@ final class PluginManager {
       guard let self else { return }
       let applications = snapshot()
       self.cacheRunningApplicationsSnapshot(applications)
+      let signature = Self.runningApplicationsSignature(applications)
+      guard signature != self.lastEmittedRunningApplicationsSignature else { return }
+      self.lastEmittedRunningApplicationsSignature = signature
       self.emitOnEventQueue(
         PluginEvent(
           name: "core:apps.changed",
@@ -580,7 +594,9 @@ final class PluginManager {
       in: context,
       specificity: { $0.specificity(in: $1) })
     {
-      resolved = (target, subcommand, args)
+      // The registration matched case-insensitively; the plugin gets the
+      // name it registered, not the typed case (`:processes Refresh`).
+      resolved = (target, key.subcommand, args)
     } else if let target = Self.bestTarget(
       snapshot.wildcardCommandIndex[lcCommand] ?? [],
       in: context,
@@ -593,7 +609,7 @@ final class PluginManager {
     guard let resolved else { return false }
     performCommand(
       plugin: resolved.target.plugin,
-      command: command,
+      command: lcCommand,
       subcommand: resolved.subcommand,
       args: resolved.args,
       raw: raw,
