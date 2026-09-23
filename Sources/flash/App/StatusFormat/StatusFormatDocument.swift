@@ -152,6 +152,23 @@ struct StatusFormatDocument: Equatable {
     }.joined()
   }
 
+  /// The named popups a format's `#[…]` markers open (`popup=<name>`; inline
+  /// popups carry their own content and have no name).
+  static func popupNames(in format: String) -> Set<String> {
+    var names = Set<String>()
+    var rest = format[...]
+    while let open = rest.range(of: "#[") {
+      guard let close = rest[open.upperBound...].firstIndex(of: "]") else { break }
+      for token in StatusFormatStyleState.tokens(String(rest[open.upperBound..<close]))
+      where token.lowercased().hasPrefix("popup=") {
+        let name = String(token.dropFirst(6))
+        if !name.isEmpty, !name.lowercased().hasPrefix("inline:") { names.insert(name) }
+      }
+      rest = rest[rest.index(after: close)...]
+    }
+    return names
+  }
+
   static func stableID(_ source: String) -> String {
     var hash: UInt64 = 14_695_981_039_346_656_037
     for byte in source.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }

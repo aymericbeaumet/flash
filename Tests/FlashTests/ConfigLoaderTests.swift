@@ -325,6 +325,20 @@ final class ConfigLoaderTests: XCTestCase {
         .statusBar.observedPluginIDs, [], "a hidden bar observes nothing")
   }
 
+  func testShownPopupNamesComeFromTheEnabledBarsMarkers() {
+    let toml = """
+      [statusbar]
+      enabled = true
+      template = "#[popup=feed]x#[nopopup] #[fg=red,popup=cpu]y #[popup=inline:%41]z #{E:@date}"
+      [statusbar.options]
+      "@date" = "#[popup=date]%H:%M#[nopopup]"
+      """
+    XCTAssertEqual(ConfigLoader.parse(toml).statusBar.shownPopupNames, ["feed", "cpu", "date"])
+    XCTAssertEqual(
+      ConfigLoader.parse(toml.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
+        .statusBar.shownPopupNames, [])
+  }
+
   func testStatusBarEnabledIsTheSoleVisibilitySwitch() {
     // Off by default, and a template alone does NOT imply visibility —
     // `enabled` is the only condition for the bar to appear.

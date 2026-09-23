@@ -19,12 +19,16 @@ ends the pager and removes its private snapshot file.
 
 `persistent = true` starts a session after the login-shell environment resolves,
 even if the status bar is disabled or no template refers to it. Hiding it keeps
-the process and history. The default, `persistent = false`, starts on an
-explicit opening or on hover after a 150 ms dwell with the pointer still on the
-span (so sweeping across the bar never forks one child per span) and stops
-when dismissed. Continued hover
-reuses the existing process; re-entry starts a fresh one. One named session is
-shared across displays.
+the process and history. The default, `persistent = false`, gives every opening
+a fresh process and stops it when dismissed. A popup the enabled status bar
+shows is loaded ahead either way, so hovering only makes it visible: a
+nonpersistent one keeps its next process running hidden, started once the
+previous one is gone (a program holding a lock, such as newsboat's cache, can
+start again). A preloaded process that exits on its own is started again with
+the restart backoff below. Any other nonpersistent terminal starts on an
+explicit opening, or on hover after a 150 ms dwell with the pointer still on
+the span, so sweeping across the bar never forks one child per span. Continued
+hover reuses the existing process. One named session is shared across displays.
 
 ```toml
 [statusbar]

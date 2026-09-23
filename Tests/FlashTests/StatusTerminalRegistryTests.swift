@@ -148,6 +148,72 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNotEqual(registry.spareShellKey, direct)
   }
 
+  func testShownTerminalPopupIsPreloadedShownAsIsAndReplacedOnceDismissed() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var config = Config()
+    config.terminals["feed"] = .init(command: ["/bin/sleep", "30"])
+    config.terminals["top"] = .init(command: ["/bin/sleep", "30"], persistent: true)
+    registry.preloadPopups(named: ["feed", "top", "date"], configuration: config)
+    // Persistent terminals run from startup and text popups have no process.
+    XCTAssertEqual(registry.preloadedNames, ["feed"])
+    XCTAssertEqual(Set(registry.sessions.keys), ["feed"])
+    let preloaded = registry.sessions["feed"]
+    waitUntil {
+      if case .running = registry.sessions["feed"]?.state { return true }
+      return false
+    }
+    guard case .running(let firstPID) = preloaded?.state else { return XCTFail("not running") }
+
+    // Hovering shows the running process; nothing new starts.
+    XCTAssertEqual(registry.prepareTerminal(name: "feed", configuration: config), "feed")
+    XCTAssertTrue(registry.sessions["feed"] === preloaded)
+    XCTAssertTrue(registry.preloadedNames.isEmpty)
+
+    // Dismissal stops it and preloads a fresh process once it is gone.
+    registry.releaseTerminal(name: "feed")
+    waitUntil { registry.preloadedNames.contains("feed") }
+    XCTAssertFalse(registry.sessions["feed"] === preloaded)
+    XCTAssertTrue(kill(firstPID, 0) == -1 && errno == ESRCH, "the shown process is gone first")
+    waitUntil {
+      if case .running = registry.sessions["feed"]?.state { return true }
+      return false
+    }
+
+    // `terminal_show --name=feed` takes the preloaded process too.
+    let next = registry.sessions["feed"]
+    XCTAssertEqual(registry.openTerminal(name: "feed", configuration: config), "feed")
+    XCTAssertTrue(registry.sessions["feed"] === next)
+    registry.releaseTerminal(name: "feed")
+    waitUntil { registry.preloadedNames.contains("feed") }
+
+    // A bar that stops showing it stops the unshown process.
+    registry.preloadPopups(named: [], configuration: config)
+    XCTAssertNil(registry.sessions["feed"])
+    XCTAssertTrue(registry.preloadedNames.isEmpty)
+  }
+
+  func testPreloadedPopupThatExitsAtOnceBacksOffInsteadOfSpinning() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var starts = 0
+    let sink = FlashLog.addSink { record in
+      if record.message == "Status popup preloaded" { starts += 1 }
+    }
+    defer { FlashLog.removeSink(sink) }
+    var config = Config()
+    config.terminals["broken"] = .init(command: ["/usr/bin/true"])
+    registry.preloadPopups(named: ["broken"], configuration: config)
+    // The first retry waits 100 ms and the next one second.
+    let deadline = Date().addingTimeInterval(5)
+    while starts < 2, Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    }
+    XCTAssertEqual(starts, 2)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    XCTAssertEqual(starts, 2, "no retry storm")
+  }
+
   func testPopupPagerPromptDrawsNothingInsteadOfAStandoutBlock() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }

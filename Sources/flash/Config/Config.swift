@@ -403,6 +403,16 @@ struct Config {
           source: .sdk(.date)),
       ], options: Self.defaultOptions)
 
+    /// The popups the enabled bar's `#[popup=<name>]` markers open, in its
+    /// template or the options it expands. Configured terminals among them
+    /// are loaded ahead, so hovering only has to show them.
+    var shownPopupNames: Set<String> {
+      guard enabled else { return [] }
+      return ([template.template] + options.values).reduce(into: []) { names, format in
+        names.formUnion(StatusFormatDocument.popupNames(in: format))
+      }
+    }
+
     /// Plugins whose segments the enabled bar or one of its popups shows —
     /// the observers that keep a status-bound plugin resident
     /// (`PluginManifest.isStatusBound`). Options are compiled into every

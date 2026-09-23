@@ -89,6 +89,8 @@ extension AppDelegate {
       overlay.statusTerminals.apply(
         config.statusBar, terminals: config.terminals,
         invalidTerminalNames: config.invalidTerminalNames)
+      overlay.statusTerminals.preloadPopups(
+        named: config.statusBar.shownPopupNames, configuration: config)
       if Self.bindsFreshShell(config.mode) {
         overlay.statusTerminals.warmFreshShell(configuration: config)
       }
