@@ -1274,13 +1274,13 @@ final class StatusBarTests: XCTestCase {
   }
 
   func testWatchdogRunsOnlyWhileItsOutputIsReadable() {
-    let previous = FlashLog.emits(.debug)
+    let previous = FlashLog.wouldEmit(.debug)
     defer { FlashLog.setLevel(previous ? .debug : .info) }
     FlashLog.setLevel(.info)
-    XCTAssertFalse(FlashLog.emits(.debug))
-    XCTAssertTrue(FlashLog.emits(.warn))
+    XCTAssertFalse(FlashLog.wouldEmit(.debug))
+    XCTAssertTrue(FlashLog.wouldEmit(.warn))
     FlashLog.setLevel(.trace)
-    XCTAssertTrue(FlashLog.emits(.debug))
+    XCTAssertTrue(FlashLog.wouldEmit(.debug))
   }
 
   func testAXWindowGeometryConvertsIntoTheSameScreenSpaceAsTheWindowServerScan() {

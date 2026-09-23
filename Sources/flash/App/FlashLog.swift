@@ -77,9 +77,17 @@ enum FlashLog {
 
   typealias Sink = (Record) -> Void
 
+  /// An in-memory consumer (the HTTP inspector, tests) and the lowest level it
+  /// takes; `nil` follows the configured level, so the inspector never forces
+  /// trace messages on hot paths to be built.
+  private struct SinkEntry {
+    var minLevel: Level?
+    var sink: Sink
+  }
+
   private static let lock = NSLock()
   private static var minLevel: Level = .info
-  private static var sinks: [UUID: Sink] = [:]
+  private static var sinks: [UUID: SinkEntry] = [:]
   private static let pid = Int(getpid())
   /// Serial queue owning every byte of log output (stderr and file).
   private static let ioQueue = DispatchQueue(label: "flash.log.io", qos: .utility)
@@ -92,13 +100,13 @@ enum FlashLog {
     FlashLogFileWriter(url: $0, queue: ioQueue)
   }
 
-  /// Whether `level` currently reaches a sink or the log file. Diagnostic-only
-  /// machinery (the main-thread watchdog) uses this to stay off entirely when
-  /// nothing would read its output.
-  static func emits(_ level: Level) -> Bool {
+  /// Whether `level` currently reaches the log file or a sink. Diagnostic-only
+  /// machinery (the main-thread watchdog, pipeline summaries) uses this to
+  /// stay off entirely when nothing would read its output.
+  static func wouldEmit(_ level: Level) -> Bool {
     lock.lock()
     defer { lock.unlock() }
-    return level >= minLevel || !sinks.isEmpty
+    return level >= minLevel || sinksPass(level)
   }
 
   static func setLevel(_ level: Level) {
@@ -107,10 +115,11 @@ enum FlashLog {
     lock.unlock()
   }
 
-  static func addSink(_ sink: @escaping Sink) -> UUID {
+  /// `minLevel: nil` follows the configured level.
+  static func addSink(minLevel: Level? = .trace, _ sink: @escaping Sink) -> UUID {
     let id = UUID()
     lock.lock()
-    sinks[id] = sink
+    sinks[id] = SinkEntry(minLevel: minLevel, sink: sink)
     lock.unlock()
     return id
   }
@@ -121,10 +130,9 @@ enum FlashLog {
     lock.unlock()
   }
 
-  static func wouldEmit(_ level: Level) -> Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    return level >= minLevel || !sinks.isEmpty
+  /// Under `lock`.
+  private static func sinksPass(_ level: Level) -> Bool {
+    sinks.values.contains { level >= ($0.minLevel ?? minLevel) }
   }
 
   /// Block until every record emitted so far has been written out.
@@ -140,7 +148,7 @@ enum FlashLog {
 
   static func debug(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
+    fields: @autoclosure () -> [String: String] = [:],
     source: String? = nil,
     fileID: StaticString = #fileID,
     function: StaticString = #function
@@ -149,7 +157,7 @@ enum FlashLog {
   }
   static func trace(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
+    fields: @autoclosure () -> [String: String] = [:],
     source: String? = nil,
     fileID: StaticString = #fileID,
     function: StaticString = #function
@@ -158,7 +166,7 @@ enum FlashLog {
   }
   static func info(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
+    fields: @autoclosure () -> [String: String] = [:],
     source: String? = nil,
     fileID: StaticString = #fileID,
     function: StaticString = #function
@@ -167,18 +175,27 @@ enum FlashLog {
   }
   static func warn(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
+    fields: @autoclosure () -> [String: String] = [:],
     source: String? = nil,
     fileID: StaticString = #fileID,
     function: StaticString = #function
   ) {
     emit(.warn, source: source, fileID: fileID, function: function, fields: fields, message)
   }
+  static func error(
+    _ message: @autoclosure () -> String,
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
+  ) {
+    emit(.error, source: source, fileID: fileID, function: function, fields: fields, message)
+  }
   static func plugin(
     _ level: Level,
     pluginID: String,
     message: @autoclosure () -> String,
-    fields: [String: String] = [:]
+    fields: @autoclosure () -> [String: String] = [:]
   ) {
     emit(
       level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields,
@@ -190,26 +207,26 @@ enum FlashLog {
     source: String?,
     fileID: StaticString,
     function: StaticString,
-    fields: [String: String],
+    fields: () -> [String: String],
     _ message: () -> String
   ) {
     lock.lock()
     let pass = level >= minLevel
-    let hasSinks = !sinks.isEmpty
+    let sinkPass = !sinks.isEmpty && sinksPass(level)
     lock.unlock()
-    guard pass || hasSinks else { return }
+    guard pass || sinkPass else { return }
     let record = Record(
       level: level,
       source: source ?? coreSource(fileID: fileID, function: function),
       message: message(),
-      fields: fields,
+      fields: fields(),
       pid: pid,
       timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()))
-    if hasSinks {
+    if sinkPass {
       lock.lock()
-      let sinkSnapshot = Array(sinks.values)
+      let receivers = sinks.values.filter { level >= ($0.minLevel ?? minLevel) }.map(\.sink)
       lock.unlock()
-      for sink in sinkSnapshot {
+      for sink in receivers {
         sink(record)
       }
     }

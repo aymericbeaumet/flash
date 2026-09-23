@@ -775,10 +775,10 @@ final class SourceRegistry {
 
     func finish(_ result: SourceActionResult, handledBy: String) {
       FlashLog.trace(
-        "[source_action] cap=\(capability.rawValue) handled_by=\(handledBy) "
-          + "total_ms=\(Self.elapsedMs(since: startedNs)) "
-          + "did_perform=\(result.didPerform)")
-      completion(result)
+        "[source_action] action=\(capability.traceDescription) handled_by=\(handledBy) "
+          + "total_ms=\(Self.elapsedMs(since: startedNs)) disposition=\(result.disposition)"
+          + (result.failureReason.map { " reason=\($0)" } ?? ""))
+      completion(result.attributed(to: handledBy))
     }
 
     func attempt(_ index: Int) {

@@ -148,7 +148,6 @@ extension AppDelegate {
     // so a hot-reload of the config also propagates without needing
     // to touch `FlashLog` from two places.
     FlashLog.setLevel(cfg.debug.logLevel)
-    monitor.mainThreadWatchdog.setEnabled(FlashLog.emits(.debug))
     for diagnostic in cfg.loadingDiagnostics {
       FlashLog.warn("[config] \(diagnostic.logMessage)")
     }
@@ -190,6 +189,9 @@ extension AppDelegate {
         payload: [:],
         bundleID: nil))
     configureDebugServer(for: cfg)
+    // After the inspector's sink is added or removed: the ping watchdog runs
+    // only while debug output has a reader.
+    monitor.mainThreadWatchdog.setEnabled(FlashLog.wouldEmit(.debug))
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
     registry.scheduleRunningApplicationsRefresh()

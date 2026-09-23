@@ -119,3 +119,44 @@ final class MainThreadWatchdog {
     }
   }
 }
+
+/// Always-on stall detection at no idle cost. The main run loop reports when
+/// it wakes and when it is about to sleep again; the time between is one busy
+/// stretch — however many sources it served — and a stretch past the
+/// threshold is a stall the keyboard tap sat behind. Unlike the ping
+/// watchdog it needs no timer, so it runs at every log level; it reports once
+/// main is free again, with the activity labels that led up to it.
+final class MainRunLoopStallObserver {
+  static let stallThresholdMs = 250.0
+
+  private var observer: CFRunLoopObserver?
+  private var busySince: UInt64?
+
+  func start() {
+    guard observer == nil else { return }
+    let activities =
+      CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue
+    let observer = CFRunLoopObserverCreateWithHandler(
+      kCFAllocatorDefault, activities, true, CFIndex.max
+    ) { [weak self] _, activity in
+      self?.observe(activity, now: DispatchTime.now().uptimeNanoseconds)
+    }
+    CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    self.observer = observer
+  }
+
+  private func observe(_ activity: CFRunLoopActivity, now: UInt64) {
+    if activity == .afterWaiting {
+      busySince = now
+      return
+    }
+    guard let started = busySince else { return }
+    busySince = nil
+    let ms = Double(now &- started) / 1_000_000
+    guard ms >= Self.stallThresholdMs else { return }
+    let activity = MainThreadWatchdog.recentActivity()
+    FlashLog.warn(
+      String(format: "[watchdog] main_busy ms=%.0f", ms),
+      fields: ["last_activity_ms_ago": activity])
+  }
+}

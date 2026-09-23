@@ -28,6 +28,16 @@ enum PluginWireCodec {
     return data
   }
 
+  /// The request id a rejected frame answers, when it is recognisably a reply
+  /// (a positive integer `id`, no `method`) — so the host can fail that
+  /// request at once instead of letting it time out.
+  static func responseID(inMalformedFrame line: Data) -> Int? {
+    guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+      object["method"] == nil, let id = PluginJSON.integer(object["id"]), id > 0
+    else { return nil }
+    return id
+  }
+
   static func decodeFrame(_ line: Data) throws -> [String: Any] {
     guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any],
       Set(object.keys).isSubset(of: ["id", "method", "params", "result"])

@@ -31,7 +31,8 @@ extension AppDelegate {
       case .failed:
         FlashLog.warn(
           "[normal_mode] tab_select failed in claimed source "
-            + "bundle=\(context.bundleIdentifier) index=\(index)")
+            + "source=\(result.source ?? "?") bundle=\(context.bundleIdentifier) "
+            + "index=\(index) reason=\(result.failureReason ?? "none")")
         self.scheduleNormalModeRecapture()
       case .unhandled:
         guard let key = Self.tabIndexKeyCode(index) else {
@@ -105,7 +106,8 @@ extension AppDelegate {
           // `SourceActionResult.Disposition.failed`.
           FlashLog.warn(
             "[normal_mode] \(name.rawValue) failed in claimed source "
-              + "bundle=\(context.bundleIdentifier)")
+              + "source=\(result.source ?? "?") bundle=\(context.bundleIdentifier) "
+              + "reason=\(result.failureReason ?? "none")")
           self.scheduleNormalModeRecapture()
         case .unhandled:
           self.performUnhandledSourceAction(

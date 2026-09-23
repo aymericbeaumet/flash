@@ -14,6 +14,8 @@ import Foundation
 /// never spawn.
 final class PluginProcess {
   typealias RequestCompletion = ([String: Any]?) -> Void
+  private let stderrLock = NSLock()
+  private var stderrLines = PluginStderrLines()
   struct PendingRequest {
     let completion: RequestCompletion
     let settleOnStop: Bool
@@ -427,7 +429,9 @@ final class PluginProcess {
     process.terminationHandler = { [weak self] p in
       self?.queue.async {
         guard let self, self.process === p else { return }
-        self.recordError("[plugin] exited status=\(p.terminationStatus)")
+        // A signal (a crash, a kill) and an exit status are different stories.
+        let reason = p.terminationReason == .uncaughtSignal ? "signal" : "exit"
+        self.recordError("[plugin] exited reason=\(reason) status=\(p.terminationStatus)")
         self.applyLifecycle(.interrupted(self.lifecycle.generation))
       }
     }
@@ -1062,7 +1066,7 @@ final class PluginProcess {
       return (nil, nil)
     }
     let memoryBytes = Int(info.ri_resident_size)
-    let totalNs = info.ri_user_time &+ info.ri_system_time
+    let totalNs = MachTime.nanoseconds(fromTicks: info.ri_user_time &+ info.ri_system_time)
     var cpuPercent: Double?
     if let previous = lastCPUSample {
       let elapsed = now.timeIntervalSince(previous.at)
@@ -1252,8 +1256,9 @@ final class PluginProcess {
             FlashLog.plugin(
               .warn,
               pluginID: self.manifest.id,
-              message: "[plugin] request timed out method=\(method) elapsed_ms=\(elapsedMs)",
+              message: "[plugin] request timed out",
               fields: [
+                "id": "\(id)",
                 "method": method,
                 "elapsed_ms": elapsedMs,
               ])
@@ -1463,6 +1468,20 @@ final class PluginProcess {
       FlashLog.plugin(
         .warn, pluginID: manifest.id,
         message: "[plugin] undecodable IPC frame: \(error)")
+      // A malformed reply to a pending request settles that request now
+      // instead of leaving its caller to wait out the deadline.
+      if let id = PluginWireCodec.responseID(inMalformedFrame: line) {
+        queue.async { [weak self] in
+          guard let self, self.isTransportActive(generation),
+            let request = self.pending.removeValue(forKey: id)
+          else { return }
+          FlashLog.plugin(
+            .warn, pluginID: self.manifest.id,
+            message: "[plugin] malformed reply failed its request",
+            fields: ["id": "\(id)", "method": request.method])
+          request.completion(nil)
+        }
+      }
       return
     }
     guard let reservation = reserveTransport(.readFrames, bytes: line.count, generation: generation)
@@ -1498,13 +1517,23 @@ final class PluginProcess {
   }
 
   private func handleStderr(_ data: Data, generation: UInt64) {
-    guard isTransportActive(generation), !data.isEmpty,
-      let message = String(data: data, encoding: .utf8)?.trimmed,
-      !message.isEmpty
-    else { return }
+    guard isTransportActive(generation), !data.isEmpty else { return }
     // Drain diagnostics on the pipe callback. Enqueuing them on the lifecycle
     // queue lets a stderr flood retain unbounded data and delay shutdown.
-    FlashLog.plugin(.warn, pluginID: manifest.id, message: message)
+    // Whole lines, each capped, at a bounded rate: a chatty or crashing
+    // child can't flood the log.
+    let pluginID = manifest.id
+    stderrLock.lock()
+    let output = stderrLines.append(data, now: DispatchTime.now().uptimeNanoseconds)
+    stderrLock.unlock()
+    if output.suppressed > 0 {
+      FlashLog.plugin(
+        .warn, pluginID: pluginID, message: "[plugin] stderr suppressed",
+        fields: ["lines": "\(output.suppressed)"])
+    }
+    for line in output.lines {
+      FlashLog.plugin(.warn, pluginID: pluginID, message: "[plugin] stderr: \(line)")
+    }
   }
 
   private func handleProtocolMessage(_ object: [String: Any], generation: UInt64) {
@@ -1516,26 +1545,34 @@ final class PluginProcess {
     {
       let result = object["result"] as? [String: Any]
       guard let request = pending.removeValue(forKey: responseID) else {
-        // Responses to unknown ids are dropped silently (late replies after
-        // their deadline already settled the caller).
-        return
-      }
-      if let deadline = request.deadline, DispatchTime.now() >= deadline {
-        request.completion(nil)
+        // Its deadline already settled the caller (logged as a timeout).
+        FlashLog.plugin(
+          .debug, pluginID: manifest.id, message: "[plugin] late reply dropped",
+          fields: ["id": "\(responseID)"])
         return
       }
       let elapsedMsValue = Self.elapsedMillisecondsValue(since: request.startedAt)
       let elapsedMs = Self.elapsedMilliseconds(since: request.startedAt)
-      if elapsedMsValue > 1_000, request.method != "initialize", request.method != "perform" {
+      if let deadline = request.deadline, DispatchTime.now() >= deadline {
         FlashLog.plugin(
-          .warn,
-          pluginID: manifest.id,
-          message: "[plugin] slow request method=\(request.method) elapsed_ms=\(elapsedMs)",
-          fields: [
-            "method": request.method,
-            "elapsed_ms": elapsedMs,
-          ])
+          .debug, pluginID: manifest.id, message: "[plugin] reply after its deadline",
+          fields: ["id": "\(responseID)", "method": request.method, "elapsed_ms": elapsedMs])
+        request.completion(nil)
+        return
       }
+      // Startup is timed by the launch phases; every other request that
+      // takes over a second is worth a line, `perform` included.
+      let level: FlashLog.Level =
+        elapsedMsValue > 1_000 && request.method != "initialize" ? .warn : .debug
+      FlashLog.plugin(
+        level, pluginID: manifest.id,
+        message: level == .warn ? "[plugin] slow request" : "[plugin] request done",
+        fields: [
+          "id": "\(responseID)",
+          "method": request.method,
+          "elapsed_ms": elapsedMs,
+          "ok": result == nil ? "false" : "true",
+        ])
       request.completion(result)
       return
     }

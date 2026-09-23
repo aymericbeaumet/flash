@@ -51,6 +51,38 @@ final class FlashLogTests: XCTestCase {
     FlashLog.flush()
   }
 
+  func testSuppressedLevelLeavesFieldsUnevaluated() {
+    FlashLog.setLevel(.info)
+    var evaluated = false
+    func fields() -> [String: String] {
+      evaluated = true
+      return ["k": "v"]
+    }
+    FlashLog.debug("never formatted", fields: fields())
+    XCTAssertFalse(evaluated)
+    FlashLog.flush()
+  }
+
+  /// A sink following the configured level doesn't turn lower levels on,
+  /// so an open inspector never forces trace messages to be built.
+  func testASinkFollowingTheConfiguredLevelKeepsLowerLevelsOff() {
+    FlashLog.setLevel(.info)
+    var received: [String] = []
+    let sink = FlashLog.addSink(minLevel: nil) { received.append($0.message) }
+    defer { FlashLog.removeSink(sink) }
+    XCTAssertFalse(FlashLog.wouldEmit(.debug))
+    var evaluated = false
+    func message() -> String {
+      evaluated = true
+      return "debug"
+    }
+    FlashLog.debug(message())
+    XCTAssertFalse(evaluated)
+    FlashLog.info("info reaches the sink")
+    XCTAssertEqual(received, ["info reaches the sink"])
+    FlashLog.flush()
+  }
+
   func testDefaultSourceNamesTheCallSite() {
     let emitted = expectation(description: "call-site source")
     let sink = FlashLog.addSink { record in

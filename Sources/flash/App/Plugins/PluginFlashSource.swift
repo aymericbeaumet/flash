@@ -215,8 +215,8 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
       return .performed(pid: pid, navigationURL: navigationURL)
     case .unhandled:
       return .unhandled
-    case .failed:
-      return .failed
+    case .failed(let reason):
+      return .failed(reason: reason)
     }
   }
 

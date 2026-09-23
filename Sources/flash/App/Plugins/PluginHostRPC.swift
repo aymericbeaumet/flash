@@ -727,7 +727,7 @@ final class PluginHostRPC {
     }
     guard ok else { return nil }
     return PIDUsage(
-      cpuNs: info.ri_user_time &+ info.ri_system_time,
+      cpuNs: MachTime.nanoseconds(fromTicks: info.ri_user_time &+ info.ri_system_time),
       residentBytes: info.ri_resident_size,
       diskReadBytes: info.ri_diskio_bytesread,
       diskWriteBytes: info.ri_diskio_byteswritten,

@@ -89,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var statusBarController: FlashStatusBarController?
   var statusTerminalEnvironmentReady = false
   var terminalReturnApplicationPID: pid_t?
+  let mainRunLoopStallObserver = MainRunLoopStallObserver()
   var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
@@ -272,6 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // First, so the cached primary-screen height refreshes before any other
     // screen-parameter observer reads it.
     ScreenSpace.startObserving()
+    mainRunLoopStallObserver.start()
     // Resolve the login-shell environment once, off the main thread, so every
     // `script:`/`command:` task, mapping, and plugin inherits the same PATH
     // and tooling the user has in their terminal. A GUI launch from Finder/

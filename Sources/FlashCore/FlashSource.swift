@@ -491,17 +491,34 @@ public struct SourceActionResult: Sendable {
   public let targetPID: pid_t?
   public let disposition: Disposition
   public let navigationURL: URL?
+  /// Why a claimed action failed, as the source reported it (content-free).
+  public let failureReason: String?
+  /// The source that performed or failed the action, set by the registry.
+  public private(set) var source: String?
 
-  public init(targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil) {
+  public init(
+    targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil,
+    failureReason: String? = nil
+  ) {
     self.targetPID = targetPID
     self.disposition = disposition
     self.navigationURL = navigationURL
+    self.failureReason = failureReason
   }
 
   public var didPerform: Bool { disposition == .performed }
 
+  /// This result, attributed to the source that produced it.
+  public func attributed(to source: String) -> SourceActionResult {
+    var result = self
+    result.source = source
+    return result
+  }
+
   public static let unhandled = SourceActionResult(targetPID: nil, disposition: .unhandled)
-  public static let failed = SourceActionResult(targetPID: nil, disposition: .failed)
+  public static func failed(reason: String?) -> SourceActionResult {
+    SourceActionResult(targetPID: nil, disposition: .failed, failureReason: reason)
+  }
   public static func performed(pid: pid_t?, navigationURL: URL? = nil) -> SourceActionResult {
     SourceActionResult(targetPID: pid, disposition: .performed, navigationURL: navigationURL)
   }
