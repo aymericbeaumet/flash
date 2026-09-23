@@ -252,6 +252,7 @@ final class PluginManager {
     var verbIndex: [String: [VerbTarget]] = [:]
     var actionKeystrokeIndex: [SourceActionName: [ActionKeystrokeTarget]] = [:]
     var terminalEmulators: Set<String> = []
+    var onDemandHintApps: Set<String> = []
     var helpTopics: [HelpTopic] = []
     var order = 0
     for plugin in plugins {
@@ -322,6 +323,7 @@ final class PluginManager {
       }
 
       terminalEmulators.formUnion(manifest.terminalEmulators)
+      onDemandHintApps.formUnion(manifest.onDemandHints)
 
       for (name, chords) in manifest.actionKeystrokes {
         actionKeystrokeIndex[name, default: []].append(
@@ -385,7 +387,8 @@ final class PluginManager {
       helpTopics: helpTopics)
     // Declared before the snapshot is visible, so every selector resolved
     // against it already sees these apps as terminals.
-    TerminalEmulators.declare(terminalEmulators)
+    TerminalEmulators.declared.declare(terminalEmulators)
+    OnDemandHintApps.declared.declare(onDemandHintApps)
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
     hotSnapshotLock.unlock()

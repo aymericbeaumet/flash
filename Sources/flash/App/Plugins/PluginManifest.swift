@@ -594,6 +594,9 @@ struct PluginManifest: Decodable, Equatable {
   /// Bundle ids of apps this plugin declares as terminal emulators; the
   /// union across plugins is `TerminalEmulators`.
   var terminalEmulators: [String]
+  /// Bundle ids of apps whose accessibility tree is too costly to warm in the
+  /// background; the union across plugins is `OnDemandHintApps`.
+  var onDemandHints: [String]
   var priority: Int
   /// Global active-window selector for this plugin, compounded with
   /// mapping-entry selectors.
@@ -695,6 +698,7 @@ struct PluginManifest: Decodable, Equatable {
     case navigation, verbs
     case actionKeystrokes = "action_keystrokes"
     case terminalEmulators = "terminal_emulators"
+    case onDemandHints = "on_demand_hints"
   }
 
   init(
@@ -713,6 +717,7 @@ struct PluginManifest: Decodable, Equatable {
     verbs: [PluginVerbRegistration] = [],
     actionKeystrokes: [SourceActionName: [String: String]] = [:],
     terminalEmulators: [String] = [],
+    onDemandHints: [String] = [],
     priority: Int = 25,
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
@@ -739,6 +744,7 @@ struct PluginManifest: Decodable, Equatable {
     self.verbs = verbs
     self.actionKeystrokes = actionKeystrokes
     self.terminalEmulators = Self.uniqueTrimmed(terminalEmulators)
+    self.onDemandHints = Self.uniqueTrimmed(onDemandHints)
     self.priority = priority
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
@@ -780,6 +786,8 @@ struct PluginManifest: Decodable, Equatable {
     }
     self.terminalEmulators = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .terminalEmulators) ?? [])
+    self.onDemandHints = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .onDemandHints) ?? [])
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
@@ -977,9 +985,10 @@ struct PluginManifest: Decodable, Equatable {
     } else {
       // Manifest-only plugin: no child process ever runs, so any surface
       // that would need RPC into (or events delivered to) the plugin is
-      // invalid. Mappings, help topics, action keystrokes, terminal-emulator
-      // declarations, and verbs whose every dispatch resolves to a
-      // host-synthesized keystroke are the complete allowed surface.
+      // invalid. Mappings, help topics, action keystrokes, app declarations
+      // (terminal emulators, on-demand hints), and verbs whose every dispatch
+      // resolves to a host-synthesized keystroke are the complete allowed
+      // surface.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),
         ("hints", hints != nil),

@@ -351,8 +351,8 @@ read-denied, network and exec open), with its full output persisted for
 forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
-`mappings`, `help`, `action_keystrokes`, `terminal_emulators`, and `verbs`
-whose every entry declares a keystroke (the bundled `defaults` and `terminals` plugins are the
+`mappings`, `help`, `action_keystrokes`, `terminal_emulators`,
+`on_demand_hints`, and `verbs` whose every entry declares a keystroke (the bundled `defaults` and `terminals` plugins are the
 exemplars). Anything process-bound is
 rejected. Loading is strict — unknown top-level or nested keys and malformed
 known fields are rejected outright, and new manifest surface only ever
@@ -463,6 +463,11 @@ Section semantics:
   chord is refused rather than typed, pixel wheels are refused) and matches
   `only_terminals`. The bundled manifest-only `terminals` plugin declares the
   common emulators.
+- **`on_demand_hints`** — bundle ids of apps whose accessibility tree costs
+  too much to warm in the background. Across plugins, the union is walked
+  only when hints are requested and observed with the reduced notification
+  set that drives mode, border and focus. The bundled `defaults` plugin
+  declares Notes.
 - **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence

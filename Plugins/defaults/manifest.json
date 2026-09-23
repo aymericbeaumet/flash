@@ -2,7 +2,7 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path, and the shortcuts apps without a plugin of their own bind for Flash's built-in actions.",
+  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path; the shortcuts apps without a plugin of their own bind for Flash's built-in actions; and the apps whose accessibility tree is walked only on demand.",
   "verbs": [
     {
       "name": "app_save",
@@ -41,6 +41,9 @@
       "com.apple.MobileSMS": "ctrl+shift+tab"
     }
   },
+  "on_demand_hints": [
+    "com.apple.Notes"
+  ],
   "mappings": [
     {
       "key": "]t",

@@ -718,11 +718,20 @@ final class NormalModeTests: XCTestCase {
     monitor.cancelRefreshWork(for: pid)
   }
 
-  func testAutomaticPreparedModelRefreshSkipsNotes() {
+  func testAutomaticPreparedModelRefreshSkipsDeclaredOnDemandApps() {
+    let previous = OnDemandHintApps.declared.all
+    defer { OnDemandHintApps.declared.declare(previous) }
+    OnDemandHintApps.declared.declare(["com.example.heavy"])
     XCTAssertFalse(
-      AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.apple.Notes"))
+      AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.example.heavy"))
+    XCTAssertEqual(
+      AppMonitor.observedNotifications(forBundleIdentifier: "com.example.heavy"),
+      AppMonitor.lightObservedNotifications)
     XCTAssertTrue(
-      AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.apple.TextEdit"))
+      AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.example.light"))
+    XCTAssertEqual(
+      AppMonitor.observedNotifications(forBundleIdentifier: "com.example.light"),
+      AppMonitor.observedNotifications)
   }
 
   func testPreparedModelRefreshSkipsValueAndTitleChurn() {

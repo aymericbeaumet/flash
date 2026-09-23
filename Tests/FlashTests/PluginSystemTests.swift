@@ -1018,6 +1018,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(firefox.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
     let defaults = try manifest("defaults")
     XCTAssertEqual(defaults.actionKeystrokes[.tabNext]?["com.apple.MobileSMS"], "ctrl+tab")
+    XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])
     XCTAssertEqual(
       defaults.mappings.filter(\.repeatsOnFinalKey).map(\.key).sorted(), ["[t", "]t"])
     let terminals = try manifest("terminals")

@@ -17,6 +17,6 @@ enum TerminalEmulatorFixture {
   }()
 
   static func declareOfficial() {
-    TerminalEmulators.declare(official)
+    TerminalEmulators.declared.declare(official)
   }
 }

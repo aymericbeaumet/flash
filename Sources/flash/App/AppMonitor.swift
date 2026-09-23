@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import FlashCore
 import os
 
 /// Coordinates discovery + hint assignment for the focused app.
@@ -123,16 +124,13 @@ final class AppMonitor {
     max(1, axEventStormThresholdPerSecond * axEventStormWindowMs / 1000)
   }
 
-  /// Some native apps expose enough AX structure that background warming is
-  /// more disruptive than a cold on-demand hint walk. Keep activation explicit
-  /// for those apps: focus changes still invalidate stale models, but Flash
-  /// does not poke their AX tree just because they became frontmost.
-  static let automaticPreparedModelExcludedBundleIdentifiers: Set<String> = [
-    "com.apple.Notes"
-  ]
-
+  /// Some apps expose enough AX structure that background warming is more
+  /// disruptive than a cold on-demand hint walk; plugins declare them
+  /// (`OnDemandHintApps`). Keep activation explicit for those apps: focus
+  /// changes still invalidate stale models, but Flash does not poke their AX
+  /// tree just because they became frontmost.
   static func shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: String) -> Bool {
-    !automaticPreparedModelExcludedBundleIdentifiers.contains(bundleIdentifier)
+    !OnDemandHintApps.contains(bundleIdentifier)
   }
 
   init(registry: SourceRegistry, config: Config) {
@@ -315,14 +313,14 @@ final class AppMonitor {
     kAXRowCollapsedNotification,
   ]
 
-  /// Reduced set for bundles excluded from automatic model warming
-  /// (`automaticPreparedModelExcludedBundleIdentifiers`). For those apps a
+  /// Reduced set for apps excluded from automatic model warming
+  /// (`OnDemandHintApps`). For those apps a
   /// prepared model is only built on explicit activation and served within
   /// `modelFreshnessMs`, so churn-level invalidation (value / created /
   /// destroyed / layout / rows) buys almost nothing — while forcing the app
   /// to generate a notification on its main thread for every mutation.
-  /// Notes re-rendering its note list during an iCloud sync burst is
-  /// exactly the moment that cost hurts. Keep only what drives mode,
+  /// A notes app re-rendering its list during a sync burst is exactly the
+  /// moment that cost hurts. Keep only what drives mode,
   /// border, and focus behaviour.
   static let lightObservedNotifications: [String] = [
     kAXFocusedUIElementChangedNotification,
@@ -347,9 +345,7 @@ final class AppMonitor {
   ]
 
   static func observedNotifications(forBundleIdentifier bundleIdentifier: String?) -> [String] {
-    guard let bundleIdentifier,
-      automaticPreparedModelExcludedBundleIdentifiers.contains(bundleIdentifier)
-    else { return observedNotifications }
+    guard OnDemandHintApps.contains(bundleIdentifier) else { return observedNotifications }
     return lightObservedNotifications
   }
 
