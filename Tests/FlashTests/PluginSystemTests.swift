@@ -672,6 +672,38 @@ final class PluginSystemTests: XCTestCase {
       .manifestOnly)
   }
 
+  func testStatusBoundPluginIsResidentOnlyWhileObserved() throws {
+    func manifest(_ extra: String) throws -> PluginManifest {
+      try decodedManifest(
+        """
+        {
+          "id": "bound",
+          "name": "Bound",
+          "version": "1.0.0",
+          "description": "fixture"\(extra)
+        }
+        """
+      )
+    }
+    // Status, the listen subscriptions feeding it, and perform surfaces.
+    let bound = try manifest(
+      #", "exec": ["/usr/bin/true"], "status": ["state"], "listen": ["core:power.changed"], "#
+        + #""commands": [{"command": "x", "description": "x"}]"#)
+    XCTAssertTrue(bound.isStatusBound)
+    XCTAssertEqual(bound.activation(statusObserved: true), .resident)
+    XCTAssertEqual(bound.activation(statusObserved: false), .onDemand)
+    // Any other resident surface keeps the plugin resident regardless.
+    for extra in [
+      #", "sources": [{"name": "a.b"}]"#, #", "query": {}"#, #", "hints": {}"#,
+    ] {
+      let other = try manifest(#", "exec": ["/usr/bin/true"], "status": ["state"]"# + extra)
+      XCTAssertFalse(other.isStatusBound, extra)
+      XCTAssertEqual(other.activation(statusObserved: false), .resident, extra)
+    }
+    let listening = try manifest(#", "exec": ["/usr/bin/true"], "listen": ["core:apps.*"]"#)
+    XCTAssertEqual(listening.activation(statusObserved: false), .resident)
+  }
+
   // MARK: - Manifest schema
 
   func testManifestLoadsRequiredFields() throws {

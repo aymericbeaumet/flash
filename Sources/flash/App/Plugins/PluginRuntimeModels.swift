@@ -47,10 +47,11 @@ enum PluginRuntimeState: String {
 }
 
 /// How (and whether) a plugin's child process is scheduled. Derived from the
-/// manifest alone.
+/// manifest and, for a status-bound plugin, whether the status bar shows it.
 enum PluginActivation: String {
   /// Spawned at startup and kept running: the manifest declares `sources`,
-  /// `query`, `hints`, `status`, or `listen`.
+  /// `query`, `hints`, `status`, or `listen` — a status-bound plugin
+  /// (`PluginManifest.isStatusBound`) only while the enabled bar shows it.
   case resident
   /// Stays unspawned until its first `perform` (the perform deadline absorbs
   /// the startup budget), then remains running.

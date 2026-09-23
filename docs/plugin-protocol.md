@@ -51,6 +51,14 @@ which launches it (the `perform` deadline comfortably absorbs the startup
 budget) and then it stays running normally. Manifest-only plugins (no `exec`)
 never spawn at all.
 
+A *status-bound* plugin — `status` with no `sources`, `query` or `hints`, its
+`listen` subscriptions presumed to feed those segments — is resident only while
+the enabled status bar, its options or one of its popups shows one of its
+segments; otherwise it is on-demand. A config reload that starts showing it
+spawns it; one that stops keeps a running process (a command may have started
+it) and leaves it unspawned from its next start on. `:plugins` reports the
+effective activation.
+
 **Lifecycle state machine.**
 
 ```

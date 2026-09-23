@@ -402,6 +402,23 @@ struct Config {
           token: "flash.date",
           source: .sdk(.date)),
       ], options: Self.defaultOptions)
+
+    /// Plugins whose segments the enabled bar or one of its popups shows —
+    /// the observers that keep a status-bound plugin resident
+    /// (`PluginManifest.isStatusBound`). Options are compiled into every
+    /// template's variables, so they are covered.
+    var observedPluginIDs: Set<String> {
+      guard enabled else { return [] }
+      var ids = Set<String>()
+      for compiled in [template] + popups.values {
+        for variable in compiled.variables {
+          if case .plugin(.statusSegment(let pluginID, _)) = variable.source {
+            ids.insert(pluginID)
+          }
+        }
+      }
+      return ids
+    }
   }
   struct Mode: Equatable {
     struct Labels: Equatable {

@@ -157,7 +157,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
 
   private func makeProcess(
     _ fixture: PluginFixtureKit.Fixture,
-    store: PluginCatalogStore? = nil
+    store: PluginCatalogStore? = nil,
+    statusObserved: Bool = true
   ) throws -> PluginProcess {
     let manifest = try PluginManifest.load(from: fixture.root)
     let process = PluginProcess(
@@ -165,7 +166,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
       manifest: manifest,
       origin: .official,
       baseDataDir: fixture.baseDataDir,
-      watchFiles: false)
+      watchFiles: false,
+      statusObserved: statusObserved)
     process.catalogStore = store
     return process
   }
@@ -852,6 +854,31 @@ final class PluginProcessLifecycleTests: XCTestCase {
     }
     wait(for: [second], timeout: 8)
     XCTAssertEqual(fixture.spawnCount(), 1, "the second perform must not respawn")
+    process.stopAndWait(reason: "test")
+  }
+
+  func testStatusBoundPluginSpawnsOnceTheBarObservesItAndOutlivesTheObserver() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusbound",
+      manifest: PluginFixtureKit.manifest(id: "statusbound"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    XCTAssertEqual(process.activation, .onDemand)
+    process.start()
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 0, "unobserved status: no child after start()")
+
+    process.setStatusObserved(true)
+    XCTAssertEqual(process.activation, .resident)
+    waitUntilTrue("spawned once observed") { process.runtimeStateSnapshot() == .running }
+    XCTAssertEqual(process.statusSnapshot().activation, "resident")
+
+    process.setStatusObserved(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "a running process is kept")
+    XCTAssertEqual(process.statusSnapshot().activation, "on_demand")
+    XCTAssertEqual(fixture.spawnCount(), 1)
     process.stopAndWait(reason: "test")
   }
 

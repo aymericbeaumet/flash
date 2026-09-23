@@ -309,6 +309,22 @@ final class ConfigLoaderTests: XCTestCase {
       StatusFormatProgram.compile(source: c.statusBar.template.template).dependencies.containsJobs)
   }
 
+  func testObservedPluginsAreThoseTheEnabledBarOrItsPopupsShow() {
+    let toml = """
+      [statusbar]
+      enabled = true
+      template = "#{E:@right} #{flash.plugin.ready_count}"
+      [statusbar.options]
+      "@right" = "#{flash.plugin.cpu.summary}"
+      [statusbar.popup]
+      details = "#{flash.plugin.memory.details} #{flash.plugin.cpu.label}"
+      """
+    XCTAssertEqual(ConfigLoader.parse(toml).statusBar.observedPluginIDs, ["cpu", "memory"])
+    XCTAssertEqual(
+      ConfigLoader.parse(toml.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
+        .statusBar.observedPluginIDs, [], "a hidden bar observes nothing")
+  }
+
   func testStatusBarEnabledIsTheSoleVisibilitySwitch() {
     // Off by default, and a template alone does NOT imply visibility —
     // `enabled` is the only condition for the bar to appear.

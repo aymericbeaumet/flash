@@ -889,6 +889,7 @@ final class PluginManager {
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
+    let observedStatus = config.statusBar.observedPluginIDs
     for item in desired {
       do {
         let manifest = try PluginManifest.load(from: item.root)
@@ -906,10 +907,12 @@ final class PluginManager {
         }
         nextIDs.insert(manifest.id)
         let settings = config.plugins.settings[manifest.id] ?? [:]
+        let statusObserved = observedStatus.contains(manifest.id)
         let existing = pluginsByID[manifest.id]
         if existing?.root == item.root, existing?.manifest == manifest,
           existing?.settings == settings, existing?.watchesFiles == config.plugins.watchingEnabled
         {
+          existing?.setStatusObserved(statusObserved)
           if restartIDs.contains(manifest.id) { existing?.reload(reason: "definition_reload") }
           continue
         }
@@ -923,7 +926,8 @@ final class PluginManager {
           origin: item.origin,
           baseDataDir: baseDataDir,
           watchFiles: config.plugins.watchingEnabled,
-          settings: settings)
+          settings: settings,
+          statusObserved: statusObserved)
         plugin.catalogStore = catalogStore
         plugin.runningApplicationsProvider = { [weak self] in
           self?.runningApplicationsSnapshotValue() ?? []

@@ -686,6 +686,20 @@ struct PluginManifest: Decodable, Equatable {
     return resident ? .resident : .onDemand
   }
 
+  /// A plugin whose only resident surface is `status` — its `listen`
+  /// subscriptions, if any, feed those segments. Nothing reads the segments
+  /// unless an enabled status bar or popup shows one, so such a plugin is
+  /// resident only while observed and otherwise waits for its first
+  /// `perform` like an on-demand plugin.
+  var isStatusBound: Bool {
+    !status.isEmpty && sources.isEmpty && query == nil && hints == nil
+  }
+
+  /// `activation`, given whether the status bar shows this plugin's segments.
+  func activation(statusObserved: Bool) -> PluginActivation {
+    isStatusBound && !statusObserved ? .onDemand : activation
+  }
+
   enum CodingKeys: String, CodingKey, CaseIterable {
     case id, name, version, description, install, exec, sandbox, listen, priority
     case fetchURLs = "fetch_urls"

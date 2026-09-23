@@ -88,6 +88,9 @@ final class PluginProcess {
   private var publishedPID: pid_t?
   private var publishedStartDate: Date?
   private var publishedRestartCount = 0
+  /// Whether the enabled status bar shows this plugin's segments; decides a
+  /// status-bound plugin's activation. Guarded by `lock`.
+  private var statusObserved: Bool
   private var lifecycle = PluginLifecycle()
   private var restartWork: DispatchWorkItem?
   /// Set by a user-initiated reload so the lifecycle teardown keeps the
@@ -162,7 +165,8 @@ final class PluginProcess {
     origin: PluginOrigin,
     baseDataDir: URL,
     watchFiles: Bool = true,
-    settings: [String: PluginConfigValue] = [:]
+    settings: [String: PluginConfigValue] = [:],
+    statusObserved: Bool = true
   ) {
     self.root = root
     self.manifest = manifest
@@ -174,9 +178,37 @@ final class PluginProcess {
     self.writeQueue = DispatchQueue(label: "flash.plugin.\(manifest.id).write", qos: .utility)
     self.watchFiles = watchFiles
     self.settings = settings
+    self.statusObserved = statusObserved
   }
 
   var identifier: String { manifest.id }
+
+  /// The manifest's activation, on demand while a status-bound plugin is
+  /// unobserved.
+  var activation: PluginActivation {
+    lock.lock()
+    defer { lock.unlock() }
+    return manifest.activation(statusObserved: statusObserved)
+  }
+
+  /// The status bar started or stopped showing this plugin's segments. A
+  /// status-bound plugin that becomes observed spawns if it has not yet; one
+  /// that stops being observed keeps a running process — a command may have
+  /// started it, and on-demand plugins remain running once started — and is
+  /// left unspawned from its next start on.
+  func setStatusObserved(_ observed: Bool) {
+    lock.lock()
+    let changed = statusObserved != observed
+    statusObserved = observed
+    lock.unlock()
+    guard changed, manifest.isStatusBound else { return }
+    queue.async {
+      FlashLog.info(
+        "[plugin] status \(observed ? "observed" : "unobserved")",
+        fields: ["id": self.manifest.id])
+      if observed { self.applyLifecycle(.activate) }
+    }
+  }
 
   func reportDefinitionError(_ error: String) {
     queue.async { [weak self] in
@@ -188,7 +220,7 @@ final class PluginProcess {
 
   func start() {
     queue.async {
-      self.applyLifecycle(.start(resident: self.manifest.activation == .resident))
+      self.applyLifecycle(.start(resident: self.activation == .resident))
       if self.watchFiles { self.installFileWatchers() }
     }
   }
@@ -202,8 +234,9 @@ final class PluginProcess {
 
   func reload(reason: String) {
     queue.async {
-      self.preserveStatusOnTeardown = self.manifest.activation == .resident
-      self.applyLifecycle(.reload(resident: self.manifest.activation == .resident))
+      let resident = self.activation == .resident
+      self.preserveStatusOnTeardown = resident
+      self.applyLifecycle(.reload(resident: resident))
       if self.watchFiles { self.installFileWatchers() }
     }
   }
@@ -890,7 +923,7 @@ final class PluginProcess {
       case .stopped where self.lifecycle.state == .stopped:
         mainCompletion(.unhandled)
       case .stopped
-      where self.manifest.activation == .onDemand
+      where self.activation == .onDemand
         && (self.lifecycle.state == .idle || self.lifecycle.state == .initial):
         self.enqueueDeferredPerform(
           kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
@@ -1005,8 +1038,8 @@ final class PluginProcess {
     let lastLog = self.lastLog
     let now = Date()
     let usage = pid.map { sampleResourceUsageLocked(pid: $0, now: now) }
+    let activation = manifest.activation(statusObserved: statusObserved)
     lock.unlock()
-    let activation = manifest.activation
     return PluginStatus(
       id: manifest.id,
       name: manifest.name,

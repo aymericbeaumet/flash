@@ -29,16 +29,20 @@ final class PluginManagerReloadTests: XCTestCase {
     return config
   }
 
+  private static let residentSurfaces = #""listen": ["core:config.changed"]"#
+
   private func status(_ manager: PluginManager, _ id: String) -> PluginStatus? {
     manager.pluginStatuses().first { $0.id == id }
   }
 
+  /// Resident whatever the status bar shows: `listen` alone keeps a plugin
+  /// running (a status-only one waits for the bar to observe it).
   private func residentFixture(id: String, baseDataDir: URL? = nil) throws
     -> PluginFixtureKit.Fixture
   {
     try PluginFixtureKit.make(
       id: id,
-      manifest: PluginFixtureKit.manifest(id: id),
+      manifest: PluginFixtureKit.manifest(id: id, extra: Self.residentSurfaces),
       script: PluginFixtureKit.script(),
       baseDataDir: baseDataDir)
   }
@@ -86,6 +90,37 @@ final class PluginManagerReloadTests: XCTestCase {
     waitUntilTrue("enabled sibling running") { self.status(manager, "mgron")?.state == "running" }
     XCTAssertNil(status(manager, "mgroff"), "a disabled plugin is skipped, not failed")
     XCTAssertEqual(off.spawnCount(), 0, "no process may ever spawn for a disabled id")
+  }
+
+  // MARK: - status-bound activation
+
+  func testStatusOnlyPluginRunsWhileTheEnabledBarShowsIt() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "mgrbound",
+      manifest: PluginFixtureKit.manifest(id: "mgrbound"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(fixture.root.path)"])
+    config.statusBar.template = FlashStatusBarTemplate(
+      template: "#{flash.plugin.mgrbound.state}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.flash.plugin.mgrbound.state",
+          token: "flash.plugin.mgrbound.state",
+          source: .plugin(.statusSegment(pluginID: "mgrbound", name: "state")))
+      ], options: [:])
+    manager.start(config: config)
+    waitUntilTrue("registered") { self.status(manager, "mgrbound")?.activation == "on_demand" }
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 0, "the template shows it, but the bar is hidden")
+
+    config.statusBar.enabled = true
+    manager.updateConfig(config)
+    waitUntilTrue("observed plugin spawned") { self.status(manager, "mgrbound")?.state == "running" }
+    XCTAssertEqual(status(manager, "mgrbound")?.activation, "resident")
+    XCTAssertEqual(fixture.spawnCount(), 1)
   }
 
   // MARK: - action keystrokes
@@ -180,7 +215,8 @@ final class PluginManagerReloadTests: XCTestCase {
     let replacement = PluginFixtureKit.manifest(
       id: fixture.pluginID,
       extra:
-        #""status":["replacement"],"commands":[{"command":"newcommand","subcommand":"ping","description":"test"}]"#
+        Self.residentSurfaces
+        + #","commands":[{"command":"newcommand","subcommand":"ping","description":"test"}]"#
     ).replacingOccurrences(of: "1.0.0", with: "2.0.0")
     try replacement.write(to: manifestURL, atomically: true, encoding: .utf8)
     manager.reloadAll()
