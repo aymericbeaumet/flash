@@ -24,6 +24,30 @@ final class WindowSnapshotTests: XCTestCase {
     XCTAssertFalse(visible.contains { $0.contains(CGPoint(x: 50, y: 50)) })
   }
 
+  func testTheWalkedWindowIsTheSurfaceAndTheAppsTooltipOnlyCoversItsPatch() {
+    // Firefox's "Verified by" tooltip: a small same-app window at a popup level
+    // above the window the AX walk covers.
+    let main = WindowSnapshot.Entry(
+      pid: 42, layer: 0, nsBounds: CGRect(x: 0, y: 30, width: 2048, height: 1122))
+    let tooltip = WindowSnapshot.Entry(
+      pid: 42, layer: 101, nsBounds: CGRect(x: 280, y: 1060, width: 300, height: 26))
+
+    let frontmost = WindowSnapshot.build(entries: [tooltip, main], focusedPid: 42)
+    XCTAssertEqual(frontmost.activeWindowFrame, tooltip.nsBounds, "the old scoping")
+
+    let walked = WindowSnapshot.build(
+      entries: [tooltip, main], focusedPid: 42, walkedWindowFrame: main.nsBounds)
+    XCTAssertEqual(walked.activeWindowFrame, main.nsBounds)
+    let visible = walked.visibleRegions[42] ?? []
+    XCTAssertTrue(visible.contains { $0.contains(CGPoint(x: 1000, y: 500)) })
+    XCTAssertFalse(visible.contains { $0.contains(CGPoint(x: 400, y: 1070)) })
+
+    // A popup the walk covers (it has focus) stays the surface.
+    let popup = WindowSnapshot.build(
+      entries: [tooltip, main], focusedPid: 42, walkedWindowFrame: tooltip.nsBounds)
+    XCTAssertEqual(popup.activeWindowFrame, tooltip.nsBounds)
+  }
+
   func testTransparentWindowsCoverNothing() {
     let focused = WindowSnapshot.Entry(
       pid: 42, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))

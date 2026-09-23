@@ -701,6 +701,28 @@ public final class AccessibilityProvider: FlashSource {
     return state.confirmedTargets
   }
 
+  /// The frame (NSScreen coords) of the window a walk of `pid` covers — its
+  /// focused, main or first top-level surface — so the visible-area step can
+  /// scope hints to that same window rather than to whichever of the app's
+  /// windows is frontmost: a tooltip or hover card above it has no targets,
+  /// and clipping the walk to it left none at all.
+  public static func walkedWindowFrame(
+    pid: pid_t, bundleIdentifier: String?, screenH: CGFloat
+  ) -> CGRect? {
+    FirefoxAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { app in
+      guard let window = focusedOrFirstWindow(in: app) else { return nil }
+      var pos: CFTypeRef?
+      var size: CFTypeRef?
+      guard
+        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &pos) == .success,
+        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
+        let pos, let size, CFGetTypeID(pos) == AXValueGetTypeID(),
+        CFGetTypeID(size) == AXValueGetTypeID()
+      else { return nil }
+      return frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
+    }
+  }
+
   private static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
     for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
       if let window = elementAttribute(app, attribute as String),

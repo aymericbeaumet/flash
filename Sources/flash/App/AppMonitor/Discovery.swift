@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import FlashCore
+import FlashProviders
 
 /// Activation discovery pipeline. Activation-time providers run first; when a
 /// dynamically scoped provider explicitly declines with an empty result, Flash
@@ -497,10 +498,14 @@ extension AppMonitor {
         providerContext: context,
         visibleRegions: frame.isNull ? [] : [frame])
     }
+    // Scope to the window the walk covers, not merely the app's frontmost one.
+    let walked = AccessibilityProvider.walkedWindowFrame(
+      pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
     let snapshot = WindowSnapshot.build(
       primaryH: primaryH,
       onlyComputingVisibleRegionsFor: context.processID,
-      ignoringPids: [getpid()])
+      ignoringPids: [getpid()],
+      walkedWindowFrame: walked)
     let visible: [CGRect]
     if let regions = snapshot.visibleRegions[context.processID] {
       visible = regions

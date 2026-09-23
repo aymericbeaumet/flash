@@ -68,6 +68,9 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
     primary.frame = NSRect(x: 24, y: 528, width: 150, height: 34)
     primary.bezelStyle = .rounded
     primary.setAccessibilityIdentifier("flash-native-primary")
+    // A hover tooltip: a small window of this app above the main one, which
+    // must not become the hint surface.
+    primary.toolTip = "Runs the primary action"
     content.addSubview(primary)
 
     let toggle = NSButton(
