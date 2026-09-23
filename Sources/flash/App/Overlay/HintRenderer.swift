@@ -25,7 +25,7 @@ extension OverlayPanel {
     applyPanelFrame(frame)
 
     recycleAll()
-    hideAdjustment()
+    hideSelectionMarker()
     transientContentVisible = true
     commandPromptVisible = false
 
@@ -324,6 +324,7 @@ extension OverlayPanel {
       labelLayers.append(label)
     }
 
+    appendToastLayerIfNeeded(to: &newSublayers)
     contentLayer.sublayers = newSublayers
     if debugEnabled {
       rebuildDebugPath(visibleIndices: nil)
@@ -357,14 +358,8 @@ extension OverlayPanel {
 
   /// Render (or move) the `--adjust` marker: the matched target's outline plus
   /// a crosshair at the exact point the commit key will click. Coordinates are
-  /// NSScreen (bottom-left); layers live in panel-local space.
-  func showAdjustment(markerAt point: CGPoint, targetFrame: CGRect) {
-    adjustmentActive = true
-    showSelectionMarker(at: point, targetFrame: targetFrame)
-  }
-
-  /// The marker drawing alone, without entering the adjustment sub-state —
-  /// the `--search` selection highlight reuses it.
+  /// NSScreen (bottom-left); layers live in panel-local space. Drawn for the
+  /// `--adjust` point and the `--search` selection.
   func showSelectionMarker(at point: CGPoint, targetFrame: CGRect) {
     let origin = frame.origin
     let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
@@ -384,19 +379,26 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
     adjustmentMarkerLayer.isHidden = false
+    attachSelectionMarker()
     CATransaction.commit()
   }
 
-  func hideAdjustment() {
-    adjustmentActive = false
+  func hideSelectionMarker() {
     adjustmentMarkerLayer.isHidden = true
+  }
+
+  /// Every transient render rebuilds `contentLayer.sublayers` without the
+  /// marker, so each draw re-attaches it, above whatever it marks.
+  private func attachSelectionMarker() {
+    guard contentLayer.sublayers?.last !== adjustmentMarkerLayer else { return }
+    adjustmentMarkerLayer.removeFromSuperlayer()
+    contentLayer.addSublayer(adjustmentMarkerLayer)
   }
 
   /// Present pointer mode: frame + order the panel (so tap capture stays
   /// active — `keyboardCaptureIsActive` requires visibility), then draw the
   /// cursor ring. Subsequent moves go through `movePointerMarker`.
   func presentPointerMode(at point: CGPoint) {
-    pointerModeActive = true
     applyPanelFrame(OverlayPanel.unionScreenFrame())
     transientContentVisible = true
     movePointerMarker(to: point)
@@ -414,6 +416,7 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
     adjustmentMarkerLayer.isHidden = false
+    attachSelectionMarker()
     CATransaction.commit()
   }
 
@@ -423,9 +426,7 @@ extension OverlayPanel {
         + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
     // Belt-and-suspenders: never leave the cursor hidden once the overlay is gone.
     showHintCursor()
-    hideAdjustment()
-    pointerModeActive = false
-    searchModeActive = false
+    hideSelectionMarker()
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"
@@ -435,8 +436,11 @@ extension OverlayPanel {
     commandLineCursorIndex = 0
     candidateFinderQuery = ""
     recycleAll()
+    if let current = toast, !current.outlivesTeardown {
+      toast = nil
+      current.layer.removeFromSuperlayer()
+    }
     renderModeBadgeOnlyOrHide()
-    restoreActiveAlertIfNeeded()
   }
 
   /// Escalating delays for the command-line key-recovery ladder. Activation is

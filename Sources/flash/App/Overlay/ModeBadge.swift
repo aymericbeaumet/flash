@@ -44,7 +44,9 @@ extension OverlayPanel {
     defer { CATransaction.commit() }
 
     modeBadgeText = text
+    let styleChanged = modeBadgeStyle != style
     modeBadgeStyle = style
+    if styleChanged { restyleActiveWindowBorder() }
     modeBadgeVisible = visible
     modeBadgeCapturesInput = captureInput
     if style != .command {
@@ -81,6 +83,7 @@ extension OverlayPanel {
       }
       syncStatusBarWindow()
       appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
+      appendToastLayerIfNeeded(to: &sublayers)
       contentLayer.sublayers = sublayers
       if captureInput {
         captureKeyboardInput()
@@ -119,6 +122,7 @@ extension OverlayPanel {
     } else {
       sublayers.removeAll { $0 === candidateFinderResultsLayer }
     }
+    appendToastLayerIfNeeded(to: &sublayers)
     contentLayer.sublayers = sublayers
   }
 
@@ -211,7 +215,7 @@ extension OverlayPanel {
     defer { CATransaction.commit() }
 
     let frame = ensurePanelFrame()
-    let activeWindowBorderVisible = activeWindowBorderLayer.path != nil
+    let activeWindowBorderVisible = activeWindowBorderFrame != nil
     if modeBadgeVisible || activeWindowBorderVisible {
       configureModeBadge(panelFrame: frame)
       configureCommandPrompt(panelFrame: frame)
@@ -225,6 +229,7 @@ extension OverlayPanel {
       if candidateFinderResultsVisible {
         sublayers.append(candidateFinderResultsLayer)
       }
+      appendToastLayerIfNeeded(to: &sublayers)
       contentLayer.sublayers = sublayers
       if modeBadgeCapturesInput {
         captureKeyboardInput()
@@ -235,16 +240,20 @@ extension OverlayPanel {
         refreshWindowLevelForCurrentContent()
         orderFrontRegardless()
       }
-    } else if modeBadgeCapturesInput {
-      contentLayer.sublayers = nil
-      syncStatusBarWindow()
-      hideStatusBarClickWindows()
-      captureKeyboardInput()
     } else {
-      contentLayer.sublayers = nil
+      var sublayers: [CALayer] = []
+      appendToastLayerIfNeeded(to: &sublayers)
+      contentLayer.sublayers = sublayers.isEmpty ? nil : sublayers
       syncStatusBarWindow()
       hideStatusBarClickWindows()
-      orderOut(nil)
+      if modeBadgeCapturesInput {
+        captureKeyboardInput()
+      } else if toast != nil {
+        refreshWindowLevelForCurrentContent()
+        orderFrontRegardless()
+      } else {
+        orderOut(nil)
+      }
     }
   }
 
@@ -277,11 +286,12 @@ extension OverlayPanel {
   func orderOutIfNoPersistentContent() {
     guard
       !transientContentVisible,
+      toast == nil,
       !modeBadgeVisible,
       !modeBadgeCapturesInput,
       !commandPromptVisible,
       !candidateFinderResultsVisible,
-      activeWindowBorderLayer.path == nil
+      activeWindowBorderFrame == nil
     else { return }
     orderOut(nil)
   }
@@ -468,7 +478,7 @@ extension OverlayPanel {
       inputMode: inputMode,
       commandPromptVisible: commandPromptVisible,
       candidateFinderResultsVisible: candidateFinderResultsVisible,
-      transientContentVisible: transientContentVisible)
+      transientContentVisible: transientContentVisible || toast != nil)
     if level != target {
       level = target
     }

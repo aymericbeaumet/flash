@@ -303,19 +303,17 @@ extension AppDelegate {
     let preferredPoint = CGPoint(x: chipRect.midX, y: chipRect.midY)
     switch hintSession.command {
     case .adjust:
-      guard hintSession.adjustingHint == nil else { return }
-      hintSession.adjustingHint = hint
-      hintSession.adjustPoint = preferredPoint
-      overlay.showAdjustment(markerAt: preferredPoint, targetFrame: hint.target.frame)
+      guard case .labels = hintSession.phase else { return }
+      hintSession.phase = .adjusting(hint: hint, point: preferredPoint)
+      overlay.showSelectionMarker(at: preferredPoint, targetFrame: hint.target.frame)
     case .drag, .select:
-      if let source = hintSession.dragSourcePoint, let sourceHint = hintSession.dragSourceHint {
-        resolveHintPoints([(sourceHint.target, source), (hint.target, preferredPoint)]) {
+      if let anchor = hintSession.anchor, let sourceHint = anchor.hint {
+        resolveHintPoints([(sourceHint.target, anchor.point), (hint.target, preferredPoint)]) {
           owner, points in
           owner.performTwoPhaseGesture(from: points[0], to: points[1], clickModifiers: held)
         }
       } else {
-        hintSession.dragSourcePoint = preferredPoint
-        hintSession.dragSourceHint = hint
+        hintSession.phase = .labels(anchor: .init(point: preferredPoint, hint: hint))
         hintSession.prefix = ""
         overlay.filter(prefix: "", hints: hintSession.hints)
       }
@@ -683,13 +681,13 @@ extension AppDelegate {
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
     switch hintSession.command {
     case .drag, .select:
-      if let source = hintSession.dragSourcePoint {
-        performTwoPhaseGesture(from: source, to: point, clickModifiers: held)
+      if let anchor = hintSession.anchor {
+        performTwoPhaseGesture(from: anchor.point, to: point, clickModifiers: held)
       } else if let initial = hintSession.mouseGridInitialRegion {
         // Phase 1: remember the anchor point and restart the grid from its full
         // extent so the second point can land anywhere, not only inside the
         // drilled-down source cell.
-        hintSession.dragSourcePoint = point
+        hintSession.phase = .labels(anchor: .init(point: point, hint: nil))
         hintSession.mouseGridDepth = 0
         hintSession.prefix = ""
         displayMouseGridRegion(initial, depth: 0)
@@ -713,11 +711,11 @@ extension AppDelegate {
   }
 
   /// One keystroke of the `--search` sub-state (seek & click), forwarded by
-  /// the panel while `searchModeActive` is set: printable characters filter
-  /// the target set by visible text, Tab cycles the selection, Return commits
-  /// it through the standard click path.
+  /// the panel while the session is in its search phase: printable characters
+  /// filter the target set by visible text, Tab cycles the selection, Return
+  /// commits it through the standard click path.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {
-    guard hintSession.searchActive else {
+    guard var search = hintSession.search else {
       cancelOverlay()
       return
     }
@@ -725,60 +723,54 @@ extension AppDelegate {
     case .cancel:
       cancelOverlay()
     case .append(let char):
-      hintSession.searchQuery.append(char)
-      refreshSearchMatches()
+      search.query.append(char)
+      refreshSearchMatches(search)
     case .backspace:
-      guard !hintSession.searchQuery.isEmpty else { return }
-      hintSession.searchQuery.removeLast()
-      refreshSearchMatches()
+      guard !search.query.isEmpty else { return }
+      search.query.removeLast()
+      refreshSearchMatches(search)
     case .cycle:
       guard !hintSession.hints.isEmpty else { return }
-      hintSession.searchSelectionIndex =
-        (hintSession.searchSelectionIndex + 1) % hintSession.hints.count
+      search.selectionIndex = (search.selectionIndex + 1) % hintSession.hints.count
+      hintSession.phase = .search(search)
       updateSearchSelectionMarker()
     case .commit:
       guard !hintSession.hints.isEmpty else { return }
-      let index = min(hintSession.searchSelectionIndex, hintSession.hints.count - 1)
+      let index = min(search.selectionIndex, hintSession.hints.count - 1)
       let selected = hintSession.hints[index]
-      hintSession.searchActive = false
-      overlay.searchModeActive = false
-      overlay.hideAdjustment()
+      hintSession.phase = .labels(anchor: nil)
+      overlay.hideSelectionMarker()
       commit(hint: selected, clickModifiers: clickModifiers)
     }
   }
 
-  private func refreshSearchMatches() {
-    let matches = HintSearchInterpreter.filter(
-      hintSession.searchAllHints, query: hintSession.searchQuery)
-    hintSession.searchSelectionIndex = 0
+  private func refreshSearchMatches(_ search: HintSession.Search) {
+    var search = search
+    let matches = HintSearchInterpreter.filter(search.allHints, query: search.query)
+    search.selectionIndex = 0
+    hintSession.phase = .search(search)
     hintSession.hints = matches
     overlay.display(hints: matches)
-    // display() re-arms hint-prefix routing state on the panel; restore the
-    // search flag it does not know about.
-    overlay.searchModeActive = true
     updateSearchSelectionMarker()
-    FlashLog.trace(
-      "[search] query_len=\(hintSession.searchQuery.count) matches=\(matches.count)")
+    FlashLog.trace("[search] query_len=\(search.query.count) matches=\(matches.count)")
   }
 
   func updateSearchSelectionMarker() {
-    guard hintSession.searchActive || hintSession.command.isSearch,
-      !hintSession.hints.isEmpty
-    else {
-      overlay.hideAdjustment()
+    guard let search = hintSession.search, !hintSession.hints.isEmpty else {
+      overlay.hideSelectionMarker()
       return
     }
-    let index = min(hintSession.searchSelectionIndex, hintSession.hints.count - 1)
+    let index = min(search.selectionIndex, hintSession.hints.count - 1)
     let frame = hintSession.hints[index].target.frame
     overlay.showSelectionMarker(
       at: CGPoint(x: frame.midX, y: frame.midY), targetFrame: frame)
   }
 
   /// One keystroke of the `--adjust` sub-state, forwarded by the panel while
-  /// `adjustmentActive` is set: move/snap keys update the marker; the commit
+  /// the session is adjusting: move/snap keys update the marker; the commit
   /// key fires the pending action at the refined point.
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {
-    guard let hint = hintSession.adjustingHint, let point = hintSession.adjustPoint else {
+    guard case .adjusting(let hint, let point) = hintSession.phase else {
       cancelOverlay()
       return
     }
@@ -791,8 +783,8 @@ extension AppDelegate {
       }
     case .snapLeft, .snapRight, .snapTop, .snapBottom, .interpolate, .reset:
       let updated = HintAdjustmentInterpreter.apply(command, to: point, in: hint.target.frame)
-      hintSession.adjustPoint = updated
-      overlay.showAdjustment(markerAt: updated, targetFrame: hint.target.frame)
+      hintSession.phase = .adjusting(hint: hint, point: updated)
+      overlay.showSelectionMarker(at: updated, targetFrame: hint.target.frame)
     }
   }
 

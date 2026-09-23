@@ -23,46 +23,97 @@ struct HintSession {
   var sourceAppPID: pid_t?
   var mouseGridRegion: MouseGrid.Region?
   var mouseGridDepth: Int = 0
-  /// Two-phase gestures (`--drag`): the point the first commit selected,
-  /// nil while the session is still choosing it. Cleared with the session,
-  /// so Escape mid-gesture can't leak a grab point into the next activation.
-  var dragSourcePoint: CGPoint?
-  var dragSourceHint: AssignedHint?
   var statusBarPopupSnapshots: [String: StatusBarPopupRegion] = [:]
   /// The full-extent grid region captured at activation, so a grid drag can
   /// restart the destination phase from the top instead of the drilled-down
   /// cell the source phase ended on.
   var mouseGridInitialRegion: MouseGrid.Region?
-  /// `--adjust` sub-state: the matched hint whose click point is being
-  /// refined, and the current point the commit key will click.
-  var adjustingHint: AssignedHint?
-  var adjustPoint: CGPoint?
-  /// Pointer mode (`mouse_pointer`): freestyle cursor control session with
-  /// autorepeat acceleration bookkeeping and the drag-toggle button state.
-  var pointerModeActive = false
-  private(set) var pointerDragActive = false
-  var pointerMoveStreak = 0
-  var pointerLastMoveAt: Date?
-  /// `--search` (seek & click): the typed filter, the current selection
-  /// index into the filtered set, and the unfiltered master hint set so
-  /// backspace can widen again.
-  var searchActive = false
-  var searchQuery = ""
-  var searchSelectionIndex = 0
-  var searchAllHints: [AssignedHint] = []
 
+  /// The first point of a two-phase gesture (`--drag`, `--select`).
+  struct Anchor {
+    var point: CGPoint
+    /// The hint it came from; nil when a grid cell chose it.
+    var hint: AssignedHint?
+  }
+
+  /// `--search` (seek & click): the typed filter, the selection index into
+  /// the filtered set, and the unfiltered set so backspace can widen again.
+  struct Search {
+    var query = ""
+    var selectionIndex = 0
+    var allHints: [AssignedHint] = []
+  }
+
+  /// `mouse_pointer`: autorepeat acceleration bookkeeping and the button the
+  /// drag toggle holds.
+  struct Pointer {
+    var moveStreak = 0
+    var lastMoveAt: Date?
+    fileprivate(set) var dragActive = false
+  }
+
+  /// What keys do in this session. The phases exclude one another — a session
+  /// types labels, filters by text, refines a matched point, or steers the
+  /// pointer — so they are one value, never a set of flags.
+  enum Phase {
+    /// Typing hint labels; `anchor` once a two-phase gesture chose its first
+    /// point.
+    case labels(anchor: Anchor?)
+    case search(Search)
+    /// `--adjust`: the matched hint and the point the commit key clicks.
+    case adjusting(hint: AssignedHint, point: CGPoint)
+    case pointer(Pointer)
+  }
+
+  var phase = Phase.labels(anchor: nil)
+
+  /// How the overlay routes keys; a projection of `phase`.
+  var keyRoute: HintKeyRoute {
+    switch phase {
+    case .labels: return .labels
+    case .search: return .search
+    case .adjusting: return .adjustment
+    case .pointer: return .pointer
+    }
+  }
+
+  var anchor: Anchor? {
+    if case .labels(let anchor) = phase { return anchor }
+    return nil
+  }
+
+  var search: Search? {
+    if case .search(let search) = phase { return search }
+    return nil
+  }
+
+  var pointer: Pointer? {
+    if case .pointer(let pointer) = phase { return pointer }
+    return nil
+  }
+
+  var pointerDragActive: Bool { pointer?.dragActive ?? false }
+
+  /// Search, adjustment and pointer phases own the keyboard even with no hint
+  /// on screen; typing labels needs hints.
   var isActive: Bool {
-    !hints.isEmpty || pointerModeActive || searchActive || adjustingHint != nil
+    if case .labels = phase { return !hints.isEmpty }
+    return true
   }
 
   enum ExitEffect: Equatable { case releasePrimaryButton }
 
-  mutating func didPressPrimaryButton() { pointerDragActive = true }
+  mutating func didPressPrimaryButton() {
+    guard case .pointer(var pointer) = phase else { return }
+    pointer.dragActive = true
+    phase = .pointer(pointer)
+  }
 
   /// Consume ownership before emitting the release, including reentrant teardown.
   mutating func releasePrimaryButton() -> ExitEffect? {
-    guard pointerDragActive else { return nil }
-    pointerDragActive = false
+    guard case .pointer(var pointer) = phase, pointer.dragActive else { return nil }
+    pointer.dragActive = false
+    phase = .pointer(pointer)
     return .releasePrimaryButton
   }
 

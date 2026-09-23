@@ -7,11 +7,11 @@ import FlashCore
 /// Return or space clicks and returns to NORMAL; Escape (or `q`) exits.
 /// Runs as a hint-session variant:
 /// `inputMode` stays `.hints` so the capture policy is untouched, and the
-/// panel's `pointerModeActive` flag routes keys to `PointerModeInterpreter`.
+/// session's pointer phase routes keys to `PointerModeInterpreter`.
 extension AppDelegate {
   func enterPointerMode() {
     guard prepareHintActivation(.pointer) else { return }
-    hintSession.pointerModeActive = true
+    hintSession.phase = .pointer(.init())
     applyModeOverlay()
     // `.hints` hides the cursor for chip picking; pointer mode is the
     // opposite — the cursor IS the interface.
@@ -21,7 +21,7 @@ extension AppDelegate {
   }
 
   func overlayDidPointer(_ command: PointerModeCommand) {
-    guard hintSession.pointerModeActive else {
+    guard var pointer = hintSession.pointer else {
       cancelOverlay()
       return
     }
@@ -36,13 +36,12 @@ extension AppDelegate {
       cancelOverlay()
     case .move(let dx, let dy, let fine):
       let now = Date()
-      let sinceMs = hintSession.pointerLastMoveAt.map {
-        Int(now.timeIntervalSince($0) * 1000)
-      }
+      let sinceMs = pointer.lastMoveAt.map { Int(now.timeIntervalSince($0) * 1000) }
       let streak = PointerModeInterpreter.nextStreak(
-        previous: hintSession.pointerMoveStreak, sinceLastMoveMs: sinceMs)
-      hintSession.pointerMoveStreak = streak
-      hintSession.pointerLastMoveAt = now
+        previous: pointer.moveStreak, sinceLastMoveMs: sinceMs)
+      pointer.moveStreak = streak
+      pointer.lastMoveAt = now
+      hintSession.phase = .pointer(pointer)
       let step = PointerModeInterpreter.step(streak: streak, fine: fine)
       let target = Self.clampToScreens(
         CGPoint(x: location.x + CGFloat(dx) * step, y: location.y + CGFloat(dy) * step))

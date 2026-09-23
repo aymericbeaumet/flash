@@ -816,10 +816,39 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(thin.maxY + 0.5, thick.maxY + 1.5, accuracy: 0.001)
   }
 
+  func testActiveWindowBorderIsStrokedInTheStyleOfTheBadgeShown() {
+    let panel = OverlayPanel()
+    defer {
+      panel.setActiveWindowBorder(around: nil)
+      panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    }
+    panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    let window = CGRect(x: 10, y: 10, width: 300, height: 200)
+    panel.setActiveWindowBorder(around: window)
+    XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordAuroraGreenCG)
+    XCTAssertEqual(panel.activeWindowBorderLayer.lineWidth, 1)
+
+    // A badge change re-strokes the shown border at once, including the
+    // command surface, which never goes through the border's own update path.
+    panel.updateModeBadge(text: "INSERT", visible: false, captureInput: false, style: .insert)
+    XCTAssertEqual(panel.activeWindowBorderFrame, window)
+    XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordFrost2CG)
+    XCTAssertEqual(panel.activeWindowBorderLayer.lineWidth, 2)
+    XCTAssertGreaterThan(panel.activeWindowBorderLayer.shadowOpacity, 0)
+    panel.updateModeBadge(text: "COMMAND", visible: false, captureInput: false, style: .command)
+    XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordAuroraPurpleCG)
+    XCTAssertEqual(panel.activeWindowBorderLayer.shadowOpacity, 0)
+
+    // A hidden border stays hidden across badge changes.
+    panel.setActiveWindowBorder(around: nil)
+    panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    XCTAssertNil(panel.activeWindowBorderFrame)
+    XCTAssertNil(panel.activeWindowBorderLayer.path)
+  }
+
   func testActiveWindowBorderStaysBehindCommandAndCandidateLayers() {
     let panel = OverlayPanel()
-    panel.activeWindowBorderLayer.path = CGPath(
-      rect: CGRect(x: 0, y: 0, width: 100, height: 100), transform: nil)
+    panel.setActiveWindowBorder(around: CGRect(x: 0, y: 0, width: 100, height: 100))
     var layers: [CALayer] = [panel.commandPromptLayer, panel.candidateFinderResultsLayer]
 
     panel.appendActiveWindowBorderLayerIfNeeded(to: &layers)

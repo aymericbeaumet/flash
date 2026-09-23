@@ -18,6 +18,16 @@ enum OverlayInputMode: Equatable {
   case candidateFinder
 }
 
+/// Which interpreter owns keys while a hint session is up: label typing, or
+/// the one sub-state the session is in. A projection of `HintSession.phase`,
+/// pushed by the coordinator whenever the session changes.
+enum HintKeyRoute: Equatable {
+  case labels
+  case search
+  case adjustment
+  case pointer
+}
+
 /// One keystroke inside the `--adjust` sub-state: after a hint label matches,
 /// the click point can be snapped to the target's bounding-box edges,
 /// interpolated across its width, or nudged back to centre before the commit
@@ -428,9 +438,13 @@ extension OverlayPanel {
       return handleCandidateFinderKeyEvent(event)
     }
 
-    // The `--search` sub-state owns every key while active — same rule as the
-    // pointer and adjustment sub-states below (all mutually exclusive).
-    if searchModeActive {
+    // A sub-state owns every key while active — including chords that would
+    // otherwise hit the Carbon mapping registry, so a stray mapping can't fire
+    // mid-session.
+    switch hintKeyRoute {
+    case .labels:
+      break
+    case .search:
       if let command = HintSearchInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -443,11 +457,7 @@ extension OverlayPanel {
         coordinator.overlayDidSearch(command, clickModifiers: clickModifiers)
       }
       return true
-    }
-
-    // Pointer mode owns every key while active — same total-ownership rule as
-    // the adjustment sub-state below.
-    if pointerModeActive {
+    case .pointer:
       if let command = PointerModeInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -456,12 +466,7 @@ extension OverlayPanel {
         coordinator.overlayDidPointer(command)
       }
       return true
-    }
-
-    // The `--adjust` sub-state owns every key once a hint has matched —
-    // including chords that would otherwise hit the Carbon mapping registry —
-    // so a stray mapping can't fire mid-adjustment.
-    if adjustmentActive {
+    case .adjustment:
       if let command = HintAdjustmentInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: event.charactersIgnoringModifiers)

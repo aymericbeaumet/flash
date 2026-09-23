@@ -4,7 +4,9 @@ import FlashCore
 
 // Active-window border: paints a colored stroke around the focused app's
 // frontmost window so the user always knows which window is active — a thin
-// green stroke in normal mode, a thicker blue one in insert. Especially useful
+// green stroke in normal mode, a thicker blue one in insert. This file decides
+// where the stroke goes; `OverlayPanel` owns the drawn frame and derives the
+// colour from the badge it shows. Especially useful
 // for apps with several windows. Focused-window AX and workspace lifecycle
 // notifications drive immediate updates; bounded one-shot WindowServer checks
 // after those events absorb delayed state propagation without a resident poll.
@@ -184,17 +186,12 @@ extension AppDelegate {
   }
 
   private func applyActiveWindowBorder(frame: CGRect?) {
-    let style = resolvedActiveWindowBorderStyle()
-    overlay.setActiveWindowBorder(
-      around: frame, color: style.color, lineWidth: style.lineWidth,
-      glow: style.glow)
-    activeWindowBorderTrackedFrame = frame
+    overlay.setActiveWindowBorder(around: frame)
   }
 
   func hideActiveWindowBorder(reason: String) {
     activeWindowBorderUpdateGeneration &+= 1
     overlay.setActiveWindowBorder(around: nil)
-    activeWindowBorderTrackedFrame = nil
     cancelActiveWindowBorderReconciliations(reason: reason)
   }
 
@@ -248,7 +245,7 @@ extension AppDelegate {
 
   private func applyActiveWindowBorderReconciliation(frame: CGRect?, reason: String) {
     switch Self.activeWindowBorderReconciliationAction(
-      trackedFrame: activeWindowBorderTrackedFrame,
+      trackedFrame: overlay.activeWindowBorderFrame,
       currentFrame: frame,
       tolerance: Self.activeWindowBorderFrameTolerance)
     {
@@ -256,14 +253,10 @@ extension AppDelegate {
       return
     case .hide:
       FlashLog.trace("[mode] active_border_reconcile action=hide reason=\(reason)")
-      activeWindowBorderTrackedFrame = nil
       overlay.setActiveWindowBorder(around: nil)
     case .redraw:
       FlashLog.trace("[mode] active_border_reconcile action=redraw reason=\(reason)")
-      activeWindowBorderTrackedFrame = frame
-      let style = resolvedActiveWindowBorderStyle()
-      overlay.setActiveWindowBorder(
-        around: frame, color: style.color, lineWidth: style.lineWidth, glow: style.glow)
+      overlay.setActiveWindowBorder(around: frame)
     }
   }
 
@@ -332,43 +325,6 @@ extension AppDelegate {
     guard let bundleIdentifier else { return false }
     return bundleIdentifier == "com.apple.loginwindow"
       || bundleIdentifier.hasPrefix("com.apple.ScreenSaver")
-  }
-
-  /// Border stroke style per badge style: a thin green stroke in normal, a thin
-  /// purple one in command (the mode-badge accents), and a thicker,
-  /// softly-glowing blue one in insert. Normal and command share insert's outer
-  /// edge — only insert grows inward (see `activeWindowBorderLocalRect`).
-  static func activeWindowBorderStyle(
-    for badgeStyle: OverlayModeBadgeStyle,
-    sizeOverride: Double = 0,
-    colorOverride: CGColor? = nil
-  )
-    -> (color: CGColor, lineWidth: CGFloat, glow: Bool)
-  {
-    var style: (color: CGColor, lineWidth: CGFloat, glow: Bool)
-    switch badgeStyle {
-    case .normal: style = (OverlayPanel.nordAuroraGreenCG, 1, false)
-    case .insert: style = (OverlayPanel.nordFrost2CG, 2, true)
-    case .command: style = (OverlayPanel.nordAuroraPurpleCG, 1, false)
-    }
-    // `[overlay] window_border_size` / `window_border_color` apply across
-    // every mode; the defaults (0 / nil) keep the per-mode identity above.
-    if sizeOverride > 0 { style.lineWidth = sizeOverride }
-    if let colorOverride { style.color = colorOverride }
-    return style
-  }
-
-  /// The configured style for the current mode: the per-mode defaults with
-  /// `[overlay]` size/color overrides applied.
-  func resolvedActiveWindowBorderStyle() -> (color: CGColor, lineWidth: CGFloat, glow: Bool) {
-    let cfg = overlay.overlayConfig
-    let colorOverride =
-      cfg.windowBorderColor.isEmpty
-      ? nil : overlay.nsColor(fromHex: cfg.windowBorderColor)?.cgColor
-    return Self.activeWindowBorderStyle(
-      for: modeStore.mode.badgeStyle,
-      sizeOverride: cfg.windowBorderSize,
-      colorOverride: colorOverride)
   }
 
   static func activeWindowBorderFramesApproximatelyEqual(

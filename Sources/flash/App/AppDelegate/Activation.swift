@@ -180,9 +180,7 @@ extension AppDelegate {
       if command.isSearch {
         // Seek & click: the panel routes subsequent keys to the search
         // interpreter instead of hint-prefix typing.
-        self.hintSession.searchActive = true
-        self.hintSession.searchAllHints = displayHints
-        self.overlay.searchModeActive = true
+        self.hintSession.phase = .search(.init(allHints: displayHints))
         self.updateSearchSelectionMarker()
       }
       FlashLog.debug(

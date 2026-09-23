@@ -12,27 +12,15 @@ extension OverlayPanel {
   /// Accessibility denied) — staying within the "transparent hint overlay only" UI rule.
   func displayBanner(_ text: String, durationMs: Int? = nil) {
     let durationMs = durationMs ?? FlashTunables.bannerDurationMs
-    transientDisplayToken &+= 1
-    let myToken = transientDisplayToken
-
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer {
-      CATransaction.commit()
-      refreshWindowLevelForCurrentContent()
-      orderFrontRegardless()
-    }
-
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let frame = snapshot.unionFrame
     applyPanelFrame(frame)
-    recycleAll()
 
     let fontSize = max(CGFloat(overlayConfig.fontSize), 16)
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     let longestLine = lines.map(\.count).max() ?? text.count
 
-    let label = dequeueLabelLayer()
+    let label = makeLabelLayer()
     label.string = text
     label.fontSize = fontSize
     label.foregroundColor = (nsColor(fromHex: overlayConfig.hintFG) ?? .black).cgColor
@@ -54,7 +42,7 @@ extension OverlayPanel {
       centerY = (contentView?.bounds.midY ?? 0)
     }
 
-    let chip = dequeueHintLayer()
+    let chip = makeChipLayer()
     chip.frame = CGRect(
       x: centerX - approxWidth / 2, y: centerY - chipHeight / 2, width: approxWidth,
       height: chipHeight)
@@ -68,20 +56,51 @@ extension OverlayPanel {
     label.frame = CGRect(
       x: 8, y: (chipHeight - textHeight) / 2, width: approxWidth - 16, height: textHeight)
     chip.sublayers = [label]
-    var sublayers: [CALayer] = [chip]
-    syncStatusBarForTransientRender(appendingPromptLayersTo: &sublayers, panelFrame: frame)
-    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
-    contentLayer.sublayers = sublayers
-    transientContentVisible = true
-    hintLayers.append(chip)
-    labelLayers.append(label)
+    presentToast(chip, durationMs: durationMs, outlivesTeardown: false)
+  }
+}
 
-    if durationMs > 0 {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(durationMs)) { [weak self] in
-        // Only hide if a newer banner hasn't replaced us — otherwise we'd hide it early.
-        guard let self, self.transientDisplayToken == myToken else { return }
-        self.hide()
+extension OverlayPanel {
+  /// Show `layer` as the toast, above every other overlay layer, replacing
+  /// only a previous toast. `durationMs` of zero or nil keeps it until
+  /// `dismissToast` or a teardown.
+  func presentToast(_ layer: CALayer, durationMs: Int?, outlivesTeardown: Bool) {
+    toastToken &+= 1
+    let token = toastToken
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    toast?.layer.removeFromSuperlayer()
+    toast = Toast(layer: layer, token: token, outlivesTeardown: outlivesTeardown)
+    var sublayers = contentLayer.sublayers ?? []
+    appendToastLayerIfNeeded(to: &sublayers)
+    contentLayer.sublayers = sublayers
+    CATransaction.commit()
+    refreshWindowLevelForCurrentContent()
+    orderFrontRegardless()
+    if let durationMs, durationMs > 0 {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(durationMs)) {
+        [weak self] in self?.dismissToast(token: token)
       }
     }
+  }
+
+  /// Remove the toast — only the one with `token` when given, so an expiry
+  /// never removes a newer toast.
+  func dismissToast(token: UInt64? = nil) {
+    guard let current = toast, token == nil || current.token == token else { return }
+    toast = nil
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    current.layer.removeFromSuperlayer()
+    CATransaction.commit()
+    refreshWindowLevelForCurrentContent()
+    orderOutIfNoPersistentContent()
+  }
+
+  /// Every rebuild of `contentLayer.sublayers` keeps the toast, on top.
+  func appendToastLayerIfNeeded(to sublayers: inout [CALayer]) {
+    guard let layer = toast?.layer else { return }
+    sublayers.removeAll { $0 === layer }
+    sublayers.append(layer)
   }
 }

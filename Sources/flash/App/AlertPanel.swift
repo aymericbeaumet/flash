@@ -6,22 +6,21 @@ extension OverlayPanel {
     let fillColor: NSColor
     let strokeColor: NSColor
     let textColor: NSColor
-    /// Whether the toast re-renders itself when a transient overlay teardown
-    /// (an app switch, a mode change, a dismiss observer) wipes the layer
-    /// tree. An error has to survive long enough to be read; an informational
-    /// toast keeps the old behaviour and gets out of the way.
-    let restoresAfterHide: Bool
+    /// Whether the toast survives a transient overlay teardown (an app switch,
+    /// a mode change, a dismiss observer). An error has to stay long enough to
+    /// be read; an informational toast gets out of the way.
+    let outlivesTeardown: Bool
 
     static let standard = AlertStyle(
       fillColor: NSColor.black.withAlphaComponent(0.75),
       strokeColor: .white,
       textColor: .white,
-      restoresAfterHide: false)
+      outlivesTeardown: false)
     static let error = AlertStyle(
       fillColor: NSColor.systemRed.withAlphaComponent(0.92),
       strokeColor: NSColor.white.withAlphaComponent(0.95),
       textColor: .white,
-      restoresAfterHide: true)
+      outlivesTeardown: true)
 
     static func from(_ style: AlertCommand.Style) -> AlertStyle {
       switch style {
@@ -46,28 +45,10 @@ extension OverlayPanel {
     style: AlertStyle = .standard
   ) {
     let duration = duration ?? Self.alertDisplayDuration
-    transientDisplayToken &+= 1
-    let myToken = transientDisplayToken
-    activeAlert =
-      style.restoresAfterHide
-      ? ActiveAlert(
-        message: message, style: style,
-        until: DispatchTime.now() + .milliseconds(Int(duration * 1000)))
-      : nil
-
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer {
-      CATransaction.commit()
-      refreshWindowLevelForCurrentContent()
-      orderFrontRegardless()
-    }
-
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let frame = snapshot.unionFrame
     let screenFrame = snapshot.mainFrame ?? frame
     applyPanelFrame(frame)
-    recycleAll()
 
     let padding = Self.alertTextSize / 2
     let maxTextWidth = max(
@@ -83,7 +64,7 @@ extension OverlayPanel {
       width: boxSize.width,
       height: boxSize.height)
 
-    let label = dequeueLabelLayer()
+    let label = makeLabelLayer()
     label.string = message
     label.font = NSFont.systemFont(ofSize: Self.alertTextSize)
     label.fontSize = Self.alertTextSize
@@ -97,7 +78,7 @@ extension OverlayPanel {
       width: textSize.width + Self.alertTextGutter,
       height: textSize.height)
 
-    let box = dequeueHintLayer()
+    let box = makeChipLayer()
     box.frame = boxFrame
     box.colors = nil
     box.backgroundColor = style.fillColor.cgColor
@@ -107,43 +88,13 @@ extension OverlayPanel {
     box.masksToBounds = true
     box.contentsScale = snapshot.mainScale
     box.sublayers = [label]
-
-    var sublayers: [CALayer] = [box]
-    syncStatusBarForTransientRender(appendingPromptLayersTo: &sublayers, panelFrame: frame)
-    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
-    contentLayer.sublayers = sublayers
-    transientContentVisible = true
-    hintLayers.append(box)
-    labelLayers.append(label)
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-      guard let self, self.transientDisplayToken == myToken else { return }
-      self.activeAlert = nil
-      self.hide()
-    }
+    presentToast(
+      box, durationMs: Int((duration * 1000).rounded()),
+      outlivesTeardown: style.outlivesTeardown)
   }
 
   func dismissAlert() {
-    transientDisplayToken &+= 1
-    activeAlert = nil
-    hide()
-  }
-
-  /// Re-render an alert that a transient teardown wiped before its dwell ran
-  /// out, so the message is on screen for the time it asked for rather than
-  /// flashing for whatever is left of the current event loop. Called at the
-  /// end of `hide()`; the expiry path clears `activeAlert` first so this
-  /// cannot resurrect a toast that simply ran its course.
-  func restoreActiveAlertIfNeeded() {
-    guard let alert = activeAlert else { return }
-    let now = DispatchTime.now()
-    guard alert.until > now else {
-      activeAlert = nil
-      return
-    }
-    let remaining =
-      Double(alert.until.uptimeNanoseconds - now.uptimeNanoseconds) / 1_000_000_000
-    displayAlert(alert.message, duration: remaining, style: alert.style)
+    dismissToast()
   }
 
   private static func alertTextSize(for message: String, maxWidth: CGFloat) -> CGSize {

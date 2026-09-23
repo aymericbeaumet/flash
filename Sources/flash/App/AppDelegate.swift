@@ -111,7 +111,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var configErrorAlertVisible = false
 
   /// Owns transient hint content and any primary button held by pointer mode.
-  var hintSession = HintSession()
+  /// The overlay's key routing and the focus border's visibility are
+  /// projections of it, pushed here on every change so neither keeps a copy
+  /// that could disagree.
+  var hintSession = HintSession() {
+    didSet {
+      guard let overlay else { return }
+      overlay.hintKeyRoute = hintSession.keyRoute
+      if oldValue.isActive != hintSession.isActive {
+        updateActiveWindowBorder(
+          reason: hintSession.isActive ? "hint_session_started" : "hint_session_ended")
+      }
+    }
+  }
   /// The single source of truth for the app's mode. Every UI-facing fact
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
   /// projection of `modeStore.mode`; transitions go through `dispatchMode`.
@@ -221,7 +233,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var keyboardCaptureTap: KeyboardCaptureTap?
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderUpdateGeneration: UInt64 = 0
-  var activeWindowBorderTrackedFrame: CGRect?
   /// The authoritative front-window read queued for the next main turn.
   var activeWindowBorderPendingRead: ActiveWindowBorderRead?
   /// Last frame observed for each app's front window, fed by the AX geometry
@@ -294,7 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         statusBarMonitor: self.config.statusBar.monitor)
       // A launching app activates before it has a window, so the stroke found
       // nothing; its focused window resolving is the first sign one exists.
-      if self.activeWindowBorderTrackedFrame == nil {
+      if self.overlay.activeWindowBorderFrame == nil {
         self.updateActiveWindowBorder(reason: "focused_window_resolved")
       }
     }

@@ -886,8 +886,8 @@ final class NormalModeTests: XCTestCase {
   func testActiveWindowBorderStyleIsGreenInNormalAndBlueInInsert() {
     // Normal = thin green (no glow); insert = thicker, glowing blue. Both share
     // the same outer edge — insert grows inward.
-    let normal = AppDelegate.activeWindowBorderStyle(for: .normal)
-    let insert = AppDelegate.activeWindowBorderStyle(for: .insert)
+    let normal = OverlayPanel.activeWindowBorderStyle(for: .normal)
+    let insert = OverlayPanel.activeWindowBorderStyle(for: .insert)
     XCTAssertEqual(normal.color, OverlayPanel.nordAuroraGreenCG)
     XCTAssertEqual(normal.lineWidth, 1)
     XCTAssertFalse(normal.glow)
@@ -897,7 +897,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertGreaterThan(insert.lineWidth, normal.lineWidth)
 
     // Command = thin purple (1px like normal), no glow.
-    let command = AppDelegate.activeWindowBorderStyle(for: .command)
+    let command = OverlayPanel.activeWindowBorderStyle(for: .command)
     XCTAssertEqual(command.color, OverlayPanel.nordAuroraPurpleCG)
     XCTAssertEqual(command.lineWidth, 1)
     XCTAssertFalse(command.glow)
@@ -907,18 +907,18 @@ final class NormalModeTests: XCTestCase {
     // `[overlay] window_border_size` / `window_border_color` apply across
     // every mode; glow (insert's identity) is untouched.
     let red = NSColor.systemRed.cgColor
-    let normal = AppDelegate.activeWindowBorderStyle(
+    let normal = OverlayPanel.activeWindowBorderStyle(
       for: .normal, sizeOverride: 4, colorOverride: red)
     XCTAssertEqual(normal.color, red)
     XCTAssertEqual(normal.lineWidth, 4)
     XCTAssertFalse(normal.glow)
-    let insert = AppDelegate.activeWindowBorderStyle(
+    let insert = OverlayPanel.activeWindowBorderStyle(
       for: .insert, sizeOverride: 4, colorOverride: red)
     XCTAssertEqual(insert.color, red)
     XCTAssertEqual(insert.lineWidth, 4)
     XCTAssertTrue(insert.glow)
     // Zero size / nil color = keep the per-mode defaults.
-    let untouched = AppDelegate.activeWindowBorderStyle(
+    let untouched = OverlayPanel.activeWindowBorderStyle(
       for: .insert, sizeOverride: 0, colorOverride: nil)
     XCTAssertEqual(untouched.color, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(untouched.lineWidth, 2)

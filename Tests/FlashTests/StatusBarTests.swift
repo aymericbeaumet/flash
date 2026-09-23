@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -1136,34 +1137,55 @@ final class StatusBarTests: XCTestCase {
       panel.dismissAlert()
       panel.orderOut(nil)
     }
+    XCTAssertTrue(OverlayPanel.AlertStyle.error.outlivesTeardown)
+    XCTAssertFalse(OverlayPanel.AlertStyle.standard.outlivesTeardown)
+
     // An error has to stay readable: a dismiss observer firing during the
     // restart churn used to wipe it within the same event loop.
-    XCTAssertTrue(OverlayPanel.AlertStyle.error.restoresAfterHide)
-    XCTAssertFalse(OverlayPanel.AlertStyle.standard.restoresAfterHide)
-
     panel.displayAlert("Something broke", duration: 30, style: .error)
-    XCTAssertNotNil(panel.activeAlert)
+    let error = try? XCTUnwrap(panel.toast?.layer)
     panel.hide()
-    XCTAssertNotNil(panel.activeAlert, "an unexpired error must re-render itself")
-    XCTAssertTrue(panel.transientContentVisible)
-
-    // Its own expiry clears the record, so the restore cannot resurrect it.
-    panel.activeAlert = nil
-    panel.hide()
-    XCTAssertNil(panel.activeAlert)
-    XCTAssertFalse(panel.transientContentVisible)
+    XCTAssertTrue(panel.toast?.layer === error, "an error outlives a transient teardown")
+    XCTAssertTrue(panel.contentLayer.sublayers?.last === error, "and stays on top")
+    panel.dismissAlert()
+    XCTAssertNil(panel.toast)
+    XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === error } ?? false)
 
     // An informational toast keeps the get-out-of-the-way behaviour.
     panel.displayAlert("Sleep ON", duration: 30, style: .standard)
-    XCTAssertNil(panel.activeAlert)
+    XCTAssertNotNil(panel.toast)
     panel.hide()
-    XCTAssertFalse(panel.transientContentVisible)
+    XCTAssertNil(panel.toast)
+  }
 
-    // An alert whose dwell already elapsed is dropped rather than re-shown.
-    panel.activeAlert = OverlayPanel.ActiveAlert(
-      message: "stale", style: .error, until: DispatchTime.now())
-    panel.hide()
-    XCTAssertNil(panel.activeAlert)
+  func testAToastNeverTearsDownTheHintsItAppearsOver() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.hide()
+      panel.orderOut(nil)
+    }
+    let hint = AssignedHint(
+      target: JumpTarget(
+        id: "a", frame: CGRect(x: 40, y: 40, width: 60, height: 20), role: "AXButton", pid: 42,
+        providerID: "test"),
+      label: "a")
+    panel.display(hints: [hint])
+    let chips = panel.hintLayers
+    XCTAssertFalse(chips.isEmpty)
+
+    panel.displayBanner("Copied", durationMs: 0)
+    XCTAssertTrue(panel.transientContentVisible, "the hint session is still on screen")
+    XCTAssertTrue(
+      chips.allSatisfy { chip in panel.contentLayer.sublayers?.contains { $0 === chip } ?? false })
+    XCTAssertTrue(panel.contentLayer.sublayers?.last === panel.toast?.layer)
+
+    // Expiry removes the toast alone.
+    panel.dismissToast(token: panel.toast?.token)
+    XCTAssertNil(panel.toast)
+    XCTAssertTrue(panel.transientContentVisible)
+    XCTAssertTrue(
+      chips.allSatisfy { chip in panel.contentLayer.sublayers?.contains { $0 === chip } ?? false })
   }
 
   func testPagerPromptRowIsClippedOnlyForNoninteractivePreviews() {

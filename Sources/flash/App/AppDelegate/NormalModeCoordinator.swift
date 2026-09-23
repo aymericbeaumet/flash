@@ -372,12 +372,13 @@ extension AppDelegate {
     if case .command = mode, !overlay.commandPromptVisible {
       return
     }
-    updateActiveWindowBorder(reason: "apply_mode_overlay")
+    // The badge first: the border's colour is derived from the badge style.
     overlay.setModeBadge(
       text: text,
       visible: mode.badgeVisibleIntrinsic && statusBarVisible,
       captureInput: capture,
       style: mode.badgeStyle)
+    updateActiveWindowBorder(reason: "apply_mode_overlay")
   }
 
   static func commandSurfaceModeLabel(labels: Config.Mode.Labels) -> String {
@@ -1129,7 +1130,6 @@ extension AppDelegate {
       self.finder.scope = .all
       clearCandidateFinderState()
     }
-    overlay.setActiveWindowBorder(around: nil)
     let command = Self.commandLineBuffer(from: initialText)
     // The flashlight is just the command line pre-filled with `:flashlight ` —
     // render it on the native command-line surface (native editing + a blinking

@@ -58,6 +58,17 @@ dropped it and left the stroke on a window that was gone. An app focused while
 still launching refuses AX registrations (`kAXErrorCannotComplete`); they are
 retried on a bounded ladder, or the app would stay unobserved for its life.
 
+Overlay states that exclude one another are one value, never parallel flags.
+The overlay owns the border's drawn frame and derives its stroke from the badge
+style the status-bar pill is painted from, re-stroking when that style changes,
+so the border and the pill cannot show different modes. A hint session's phase
+(typing labels, searching, adjusting, steering the pointer) is one enum; the
+overlay's key route is its projection, pushed on every session change together
+with the border's visibility, which is hidden for the whole session. A toast is
+its own layer above everything else: it never recycles hint chips or closes the
+command line, and its expiry removes only itself. One resident runs per user; a
+second one finds the resident lock held and exits.
+
 What genuinely cannot be driven by an event goes through `PollScheduler`, the
 one periodic clock in the process — there is no second timer. Core watchers and
 plugins register there instead of arming their own, so twenty pollers cost one

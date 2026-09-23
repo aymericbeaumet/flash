@@ -64,7 +64,7 @@ extension OverlayPanel {
     // worst in scroll-heavy apps like Notes. Once the first scroll dismisses the
     // hints, `transientContentVisible` flips false and the rest of the gesture is
     // dropped here too.
-    if event.type == .scrollWheel, !transientContentVisible {
+    if event.type == .scrollWheel, !transientContentVisible, toast == nil {
       return
     }
     let intent: OverlayPointerIntent =
@@ -78,7 +78,7 @@ extension OverlayPanel {
     // Transient surfaces (hint chips, banner, modal-without-text) all
     // dismiss on pointer input. Normal-mode capture also dismisses,
     // matching the previous "pointerIntent" gate.
-    if transientContentVisible { return true }
+    if transientContentVisible || toast != nil { return true }
     return Self.pointerIntentMonitorShouldRun(
       inputMode: inputMode,
       modeBadgeVisible: modeBadgeVisible,

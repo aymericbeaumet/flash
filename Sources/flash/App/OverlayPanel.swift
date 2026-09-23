@@ -123,14 +123,18 @@ final class OverlayPanel: NSPanel {
   var activeStatusBarPopupName: String?
   var activeStatusBarPopupContent: String?
   var activeStatusBarPopupVisibleFrame: CGRect?
-  /// An alert that must outlive a transient teardown; see
-  /// `restoreActiveAlertIfNeeded`.
-  struct ActiveAlert {
-    var message: String
-    var style: AlertStyle
-    var until: DispatchTime
+  /// A banner or alert. It sits above whatever else the overlay shows and
+  /// never replaces it: a toast arriving mid-hint-session or over the command
+  /// line leaves both intact, and its expiry removes only itself.
+  struct Toast {
+    let layer: CALayer
+    let token: UInt64
+    /// Errors stay for their whole dwell; informational toasts go with the
+    /// next transient teardown (`hide`).
+    let outlivesTeardown: Bool
   }
-  var activeAlert: ActiveAlert?
+  var toast: Toast?
+  var toastToken: UInt64 = 0
   /// Whether the shared-clock probe that lowers the bar window and makes the
   /// click windows click-through while the native (auto-hidden) menu bar is
   /// revealed under the pointer is currently registered. macOS publishes no
@@ -180,18 +184,17 @@ final class OverlayPanel: NSPanel {
   let candidateFinderResultsLabel = CATextLayer()
   var candidateFinderResultRowLayers: [CATextLayer] = []
   let activeWindowBorderLayer = CAShapeLayer()
+  /// The window frame the border currently strokes; nil while it is hidden.
+  /// The one record of whether the border shows, written only by
+  /// `setActiveWindowBorder`. Its style is derived from `modeBadgeStyle` on
+  /// every stroke, never stored.
+  var activeWindowBorderFrame: CGRect?
   /// Bounding box + crosshair for the `--adjust` sub-state: outlines the
   /// matched target and marks the exact point the commit key will click.
   let adjustmentMarkerLayer = CAShapeLayer()
-  /// True while an `--adjust` hint session is in its post-match phase; routes
-  /// hints-mode keys to `HintAdjustmentInterpreter` instead of prefix typing.
-  var adjustmentActive = false
-  /// True while a `mouse_pointer` session owns the keyboard; routes hints-mode
-  /// keys to `PointerModeInterpreter`.
-  var pointerModeActive = false
-  /// True while a `--search` (seek & click) session owns the keyboard; routes
-  /// hints-mode keys to `HintSearchInterpreter`.
-  var searchModeActive = false
+  /// Which interpreter hints-mode keys reach; set only from the coordinator's
+  /// `HintSession.keyRoute`.
+  var hintKeyRoute = HintKeyRoute.labels
   var modeBadgeVisible = false
   var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
   var statusBarHintSnapshot = StatusBarHintSnapshot.live
@@ -205,7 +208,6 @@ final class OverlayPanel: NSPanel {
   var candidateFinderResultsItems: [CandidateDisplayItem] = []
   var candidateFinderResultsShowsEmptyMessage = false
   var activeWindowBorderToken: UInt64 = 0
-  var transientDisplayToken: UInt64 = 0
   var transientContentVisible = false
   var suppressCommandTextFieldChange = false
 
@@ -219,7 +221,10 @@ final class OverlayPanel: NSPanel {
   weak var coordinator: OverlayCoordinator?
 
   var overlayConfig: Config.Overlay = .init() {
-    didSet { statusBarLayoutRevision &+= 1 }
+    didSet {
+      statusBarLayoutRevision &+= 1
+      restyleActiveWindowBorder()
+    }
   }
   var debugConfig: Config.Debug = .init()
   var mouseGridOpacity: Float = 0.5
@@ -771,12 +776,12 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
   /// One keystroke of the `--adjust` sub-state (edge snap, interpolation,
-  /// commit, cancel). Only called while `adjustmentActive` is set.
+  /// commit, cancel). Only called while `hintKeyRoute` is `.adjustment`.
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers)
-  /// One keystroke of pointer mode. Only called while `pointerModeActive`.
+  /// One keystroke of pointer mode. Only called while `hintKeyRoute` is `.pointer`.
   func overlayDidPointer(_ command: PointerModeCommand)
   /// One keystroke of the `--search` sub-state. Only called while
-  /// `searchModeActive`.
+  /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
   /// `<space>` in the hints surface. Commits the mouse grid's centre cell
   /// and returns `true` when mouse-grid mode is active; returns `false`
