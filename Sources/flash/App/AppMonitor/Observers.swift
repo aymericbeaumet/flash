@@ -205,7 +205,6 @@ extension AppMonitor {
 
     let appEl = AXApp.make(pid: pid)
     let ctx = ObserverContext(monitor: self, pid: pid)
-    let refcon = Unmanaged.passUnretained(ctx).toOpaque()
 
     let notifications = Self.observedNotifications(
       forBundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
@@ -224,15 +223,50 @@ extension AppMonitor {
     // after the app launches, exactly when it's busiest (cold start,
     // Notes' initial iCloud sync). N registrations inline here was a
     // multi-second main-thread stall waiting to happen; axQueue already
-    // hosts the walk's AX IPC. `ctx` is captured strongly so the refcon
-    // stays valid even if teardown drops the entry mid-registration —
-    // stragglers then die with the observer's port on release.
-    axQueue.async { [weak self, ctx, entry = observers[pid]!] in
-      _ = ctx
-      for n in notifications {
-        _ = AXObserverAddNotification(observer, appEl, n as CFString, refcon)
-      }
-      self?.replaceFocusedWindowObservation(in: entry)
+    // hosts the walk's AX IPC. The entry, and with it the context the refcon
+    // points at, is captured strongly so the refcon stays valid even if
+    // teardown drops the entry mid-registration — stragglers then die with
+    // the observer's port on release.
+    axQueue.async { [weak self, entry = observers[pid]!] in
+      self?.registerApplicationNotifications(notifications, in: entry, attempt: 0)
+    }
+  }
+
+  /// Delays before re-registering what an app refused because it was not
+  /// ready — `kAXErrorCannotComplete`, typically on the first focus of an app
+  /// that is still launching. Nothing else retries: the entry exists, so later
+  /// focus changes only refresh the window, and the app stayed unobserved for
+  /// its whole life — no move, close or minimize ever reached the border.
+  static let observerRegistrationRetryDelaysMs = [250, 1_000, 3_000]
+
+  /// Register `notifications` on the application element, then (re)resolve the
+  /// focused window, retrying the refused ones on a bounded ladder. `entry`
+  /// holds the context the refcon points at, so capturing it keeps that alive.
+  /// Runs on `axQueue`.
+  private func registerApplicationNotifications(
+    _ notifications: [String], in entry: ObserverEntry, attempt: Int
+  ) {
+    guard !entry.isTornDown else { return }
+    let refcon = Unmanaged.passUnretained(entry.context).toOpaque()
+    let refused = notifications.filter {
+      AXObserverAddNotification(entry.observer, entry.appElement, $0 as CFString, refcon)
+        == .cannotComplete
+    }
+    replaceFocusedWindowObservation(in: entry)
+    guard !refused.isEmpty else { return }
+    let pid = entry.context.pid
+    guard attempt < Self.observerRegistrationRetryDelaysMs.count else {
+      FlashLog.warn(
+        "[ax] observer_registration_gave_up pid=\(pid) refused=\(refused.count)")
+      return
+    }
+    FlashLog.debug(
+      "[ax] observer_registration_retry pid=\(pid) refused=\(refused.count) "
+        + "attempt=\(attempt + 1)")
+    axQueue.asyncAfter(
+      deadline: .now() + .milliseconds(Self.observerRegistrationRetryDelaysMs[attempt])
+    ) { [weak self] in
+      self?.registerApplicationNotifications(refused, in: entry, attempt: attempt + 1)
     }
   }
 
@@ -286,6 +320,7 @@ extension AppMonitor {
     // keeps observer/element/refcon alive until the removals finish.
     AXObserverThread.shared.remove(AXObserverGetRunLoopSource(entry.observer))
     axQueue.async {
+      entry.isTornDown = true
       if let window = entry.focusedWindow {
         for n in Self.focusedWindowObservedNotifications {
           _ = AXObserverRemoveNotification(entry.observer, window, n as CFString)

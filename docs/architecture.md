@@ -51,7 +51,12 @@ A move or resize names the window that changed, so its frame comes from one AX
 read on that element and is applied with no settle tick — the border rides a
 drag rather than trailing a WindowServer scan. Only events that change which
 window is on top fall back to a window-list pass and schedule bounded recovery
-checks.
+checks. Those events update the border whenever they come from the active app,
+judged by identity: a closed or minimized window leaves its app active with
+another app's window on top, so matching the event against the window list
+dropped it and left the stroke on a window that was gone. An app focused while
+still launching refuses AX registrations (`kAXErrorCannotComplete`); they are
+retried on a bounded ladder, or the app would stay unobserved for its life.
 
 What genuinely cannot be driven by an event goes through `PollScheduler`, the
 one periodic clock in the process — there is no second timer. Core watchers and

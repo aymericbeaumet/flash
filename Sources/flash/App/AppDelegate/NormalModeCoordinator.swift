@@ -200,11 +200,12 @@ extension AppDelegate {
     notification: String,
     observedWindow: AXUIElement?
   ) {
-    if AppMonitor.isWindowGeometryNotification(notification), let observedWindow,
-      let app = currentNonFlashRunningApplication(), app.processIdentifier == pid
-    {
-      // Identity only here — resolving the window context would scan every
-      // on-screen window on the main thread for each event of a drag.
+    // Identity only — resolving the window context would scan every on-screen
+    // window on the main thread, once per event of a drag.
+    guard let app = currentNonFlashRunningApplication(), app.processIdentifier == pid else {
+      return
+    }
+    if AppMonitor.isWindowGeometryNotification(notification), let observedWindow {
       observedWindowGeometryDidChange(
         pid: pid, window: observedWindow, notification: notification,
         statusBarReservesSpace: statusBarVisible,
@@ -218,8 +219,32 @@ extension AppDelegate {
       }
       return
     }
-    guard let context = currentNonFlashContext(), context.processID == pid else { return }
-    if let observedWindow, notification == kAXUIElementDestroyedNotification as String {
+    let isFocusChange =
+      notification == kAXFocusedWindowChangedNotification as String
+      || notification == kAXMainWindowChangedNotification as String
+    if isFocusChange {
+      scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
+    }
+    // The stroke goes first and depends on nothing below. Window AX
+    // notifications are delivered after the operation: resolve the
+    // authoritative WindowServer frame now and replace (or clear) the stroke
+    // in one transaction. It used to wait behind the window-list context
+    // match below, and a closed or minimized window leaves its app active
+    // with some other app's window on top, so that match dropped the event
+    // and the stroke stayed on a window that was gone.
+    updateActiveWindowBorder(reason: notification)
+    scheduleActiveWindowBorderReconciliation(
+      delaysMs: Self.activeWindowBorderEventSettleDelaysMs, reason: notification)
+
+    let destroyedWindow =
+      notification == kAXUIElementDestroyedNotification as String ? observedWindow : nil
+    let emitsAXChanged = pluginManager.hasListener(for: "core:ax.changed")
+    let emitsFocusChange =
+      isFocusChange && pluginManager.hasListener(for: "core:window.focus.changed")
+    guard destroyedWindow != nil || emitsAXChanged || emitsFocusChange,
+      let context = currentNonFlashContext(), context.processID == pid
+    else { return }
+    if let observedWindow = destroyedWindow {
       windowLayoutManager.observedWindowFrameChange(
         pid: pid,
         window: observedWindow,
@@ -228,7 +253,7 @@ extension AppDelegate {
         statusBarReservesSpace: statusBarVisible,
         statusBarMonitor: config.statusBar.monitor)
     }
-    if pluginManager.hasListener(for: "core:ax.changed") {
+    if emitsAXChanged {
       pluginManager.emit(
         PluginEvent(
           name: "core:ax.changed",
@@ -242,43 +267,25 @@ extension AppDelegate {
     // `core:ax.changed` fires for any AX mutation, so it's too noisy for that
     // use case; this dedicated event carries the focused window's frame and
     // pid so subscribers can filter on it directly.
-    let isFocusChange =
-      notification == kAXFocusedWindowChangedNotification as String
-      || notification == kAXMainWindowChangedNotification as String
-    if isFocusChange {
-      var payload: [String: Any] = [
-        "pid": Int(pid),
-        "bundle_id": context.bundleIdentifier,
-      ]
+    if emitsFocusChange {
       let frame = context.frontWindowFrame
-      payload["front_window_frame"] = [
-        "x": Double(frame.origin.x),
-        "y": Double(frame.origin.y),
-        "width": Double(frame.size.width),
-        "height": Double(frame.size.height),
-      ]
       pluginManager.emit(
         PluginEvent(
           name: "core:window.focus.changed",
-          payload: payload,
+          payload: [
+            "pid": Int(pid),
+            "bundle_id": context.bundleIdentifier,
+            "front_window_frame": [
+              "x": Double(frame.origin.x),
+              "y": Double(frame.origin.y),
+              "width": Double(frame.size.width),
+              "height": Double(frame.size.height),
+            ],
+          ],
           bundleID: context.bundleIdentifier,
-          frontWindowFrame: context.frontWindowFrame,
+          frontWindowFrame: frame,
           pid: pid))
     }
-    if isFocusChange {
-      // A window FOCUS change (switching windows/apps) is not a move — redraw
-      // the insert border at the newly-focused window in place. Routing focus
-      // changes through the move/resize "hide during change" path is what made
-      // the border flicker off (appear-then-vanish) on every app switch and on
-      // insert entry.
-      scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
-    }
-    // Window AX notifications are delivered after the operation. Resolve the
-    // authoritative WindowServer frame now and replace (or clear) the stroke in
-    // one transaction; delaying behind a quiet period leaves a stale border.
-    updateActiveWindowBorder(reason: notification)
-    scheduleActiveWindowBorderReconciliation(
-      delaysMs: [Self.activeWindowBorderEventSettleDelayMs], reason: notification)
   }
 
   private func resetModeInputState() {
@@ -730,8 +737,13 @@ extension AppDelegate {
   // focus would sit on it while the badge still reads NORMAL — the exact
   // "shown but not capturing" inconsistency we want to make impossible.
   static let pointerFocusLossRecaptureDeferralMs = 120
-  static let activeWindowBorderEventSettleDelayMs = 80
-  static let activeWindowBorderRecoveryDelaysMs = [80, 250, 750]
+  /// Follow-up reads after a window AX event. The event arrives while a closing
+  /// window is still fading out of the window list, which drops it 35–45 ms
+  /// after the close; the second read catches a slower app.
+  static let activeWindowBorderEventSettleDelaysMs = [45, 150]
+  /// Follow-up reads after an activation or display change. A launching app's
+  /// first window reaches the window list somewhere past the first step.
+  static let activeWindowBorderRecoveryDelaysMs = [80, 150, 250, 750]
   static let activeWindowBorderFrameTolerance: CGFloat = 1
 
   private static func pointerFocusLossTarget() -> String {

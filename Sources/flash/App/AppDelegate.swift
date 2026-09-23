@@ -222,11 +222,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderUpdateGeneration: UInt64 = 0
   var activeWindowBorderTrackedFrame: CGRect?
+  /// The authoritative front-window read queued for the next main turn.
+  var activeWindowBorderPendingRead: ActiveWindowBorderRead?
   /// Last frame observed for each app's front window, fed by the AX geometry
-  /// notifications Flash already subscribes to. On an app switch the
-  /// WindowServer scan can block for half a second, which is exactly how long
-  /// the stroke used to sit on the window the user just left; the cache paints
-  /// the right rectangle on the activation itself and the scan corrects it.
+  /// notifications Flash already subscribes to, so an app switch paints the
+  /// right rectangle on the activation itself and the window-list read on the
+  /// next main turn corrects it.
   var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>()
@@ -604,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.cancelOverlay()
       self.overlay.reassertStatusBar(reason: "space_changed")
       self.scheduleActiveWindowBorderReconciliation(
-        delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
+        delaysMs: [0] + Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
       self.pluginManager.emit(
         PluginEvent(
           name: "core:space.changed", payload: [:], bundleID: nil))

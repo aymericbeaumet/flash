@@ -188,6 +188,9 @@ final class AppMonitor {
     /// notifications are emitted by the window element, not the application
     /// element, so the focused window needs its own registrations.
     var focusedWindow: AXUIElement?
+    /// Accessed only on `axQueue`. Set by teardown so a pending registration
+    /// retry stops instead of registering on an observer that is gone.
+    var isTornDown = false
 
     init(
       observer: AXObserver,

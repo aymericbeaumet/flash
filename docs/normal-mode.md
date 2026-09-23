@@ -182,10 +182,18 @@ share the main run loop. Treat that loop as the input latency budget:
   only the chords that differ between the two scopes are unregistered or
   registered. Each `ModeMapping` parses its native chord once at construction.
   Reconcile the registry only when the effective mappings change.
-- A mode transition never takes a WindowServer snapshot on main: mode-entry
+- A mode transition never takes a WindowServer snapshot synchronously: mode-entry
   bookkeeping and INSERT target activation resolve the app by identity, and
-  the active-window border resolves its frame on `AppMonitor.geometryQueue`
-  and applies it one hop later under a generation token. Scroll verbs resolve
+  the active-window border paints its cached frame at once, then reads the
+  window list on the next main-queue turn, coalescing a burst of updates into
+  one read (about a millisecond, 20 ms at worst during an activation). That
+  read must stay on main. `CGWindowListCopyWindowInfo` synchronizes with the
+  process's pending Core Animation transaction while holding the WindowServer
+  connection lock, so from another queue it deadlocks against a main-thread
+  commit that carries WindowServer actions until SkyLight's 500 ms timeout,
+  freezing the main thread with it. Hint discovery, system-surface hints and
+  the menu-bar reveal probe still read the window list off main and share that
+  exposure. Scroll verbs resolve
   the wheel target frame on the AX queue and do not re-render the mode surface
   afterwards. `configureModeBadge` is memoized on its inputs
   (`ModeBadgeLayoutStamp`), so re-applying an unchanged mode surface skips the

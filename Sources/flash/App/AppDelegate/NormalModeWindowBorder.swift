@@ -11,6 +11,17 @@ import FlashCore
 // The static helpers below are pure decision functions so NormalModeTests can
 // exercise the visibility / equality logic without spinning up an `AppDelegate`.
 
+/// One authoritative front-window read for the stroke; see
+/// `scheduleActiveWindowBorderRead`.
+struct ActiveWindowBorderRead {
+  let pid: pid_t
+  let reason: String
+  let generation: UInt64
+  /// Apply through the reconciliation diff (redraw or hide only on change)
+  /// rather than repainting unconditionally.
+  let reconciles: Bool
+}
+
 enum ActiveWindowBorderSessionSuspension: Hashable {
   case session
   case screens
@@ -46,42 +57,64 @@ extension AppDelegate {
       return
     }
     FlashLog.trace("[mode] active_border_update reason=\(reason) mode=\(flashMode)")
-    // Identity resolves on main; the WindowServer frame lookup is a
-    // synchronous round trip, so it runs on the geometry queue and the stroke
-    // is applied one hop later unless a newer update or hide superseded it.
     activeWindowBorderUpdateGeneration &+= 1
-    let generation = activeWindowBorderUpdateGeneration
     guard let app = activeWindowBorderApplication(activated: activated) else {
       applyActiveWindowBorder(frame: nil)
       return
     }
     let pid = app.processIdentifier
-    let primaryH = monitor.primaryScreenHeight()
-    let monitor: AppMonitor = self.monitor
     // Paint what the AX notifications last told us about this app right away.
-    // The authoritative read below supersedes it a hop later, under the same
-    // generation, so a stale entry self-corrects instead of persisting.
+    // The authoritative read below supersedes it under the same generation, so
+    // a stale entry self-corrects instead of persisting.
     if let cached = activeWindowBorderFrameCache[pid] {
       FlashLog.trace(
         "[mode] active_border_cached reason=\(reason) pid=\(pid) frame=\(Self.describe(cached))")
       applyActiveWindowBorder(frame: cached)
     }
-    let requestedAt = DispatchTime.now().uptimeNanoseconds
-    monitor.geometryQueue.async { [weak self] in
-      let startedAt = DispatchTime.now().uptimeNanoseconds
-      let frame = AppMonitor.topApplicationWindowFrame(for: pid, primaryH: primaryH)
-      let readAt = DispatchTime.now().uptimeNanoseconds
-      DispatchQueue.main.async {
-        guard let self, self.activeWindowBorderUpdateGeneration == generation else { return }
-        FlashLog.trace(
-          "[mode] active_border_frame reason=\(reason) pid=\(pid) "
-            + "queue_wait_ms=\(Self.elapsedMs(requestedAt, startedAt)) "
-            + "read_ms=\(Self.elapsedMs(startedAt, readAt)) "
-            + "total_ms=\(Self.elapsedMs(requestedAt, DispatchTime.now().uptimeNanoseconds)) "
-            + "frame=\(Self.describe(frame))")
-        self.applyActiveWindowBorder(frame: frame)
-        self.rememberActiveWindowBorderFrame(frame, for: pid)
-      }
+    scheduleActiveWindowBorderRead(
+      ActiveWindowBorderRead(
+        pid: pid, reason: reason, generation: activeWindowBorderUpdateGeneration,
+        reconciles: false))
+  }
+
+  /// Read the authoritative front-window frame on the next main-queue turn,
+  /// coalescing every request made before then into one read: the latest wins.
+  ///
+  /// The read runs on main on purpose. `CGWindowListCopyWindowInfo` first
+  /// synchronizes with this process's pending Core Animation transaction while
+  /// holding the WindowServer connection lock; a main-thread commit carrying
+  /// WindowServer actions (the status-bar render every app switch performs)
+  /// needs that same lock. Issued from another queue the two waited on each
+  /// other until SkyLight's 500 ms timeout (sampled:
+  /// `SLSConnectionSynchronizeSLSCATransaction` against
+  /// `SLSConnectionSetLastSLSCATransaction`), freezing the main thread and
+  /// leaving the stroke on the previous window for half a second on every
+  /// switch. On main the read can never overlap a commit, and costs about a
+  /// millisecond.
+  private func scheduleActiveWindowBorderRead(_ read: ActiveWindowBorderRead) {
+    let alreadyScheduled = activeWindowBorderPendingRead != nil
+    activeWindowBorderPendingRead = read
+    guard !alreadyScheduled else { return }
+    DispatchQueue.main.async { [weak self] in self?.performActiveWindowBorderRead() }
+  }
+
+  private func performActiveWindowBorderRead() {
+    guard let read = activeWindowBorderPendingRead else { return }
+    activeWindowBorderPendingRead = nil
+    // A hide, a geometry event or a newer identity superseded it.
+    guard read.generation == activeWindowBorderUpdateGeneration else { return }
+    let startedAt = DispatchTime.now().uptimeNanoseconds
+    let frame = AppMonitor.topApplicationWindowFrame(
+      for: read.pid, primaryH: monitor.primaryScreenHeight())
+    FlashLog.trace(
+      "[mode] active_border_frame reason=\(read.reason) pid=\(read.pid) "
+        + "read_ms=\(Self.elapsedMs(startedAt, DispatchTime.now().uptimeNanoseconds)) "
+        + "frame=\(Self.describe(frame))")
+    rememberActiveWindowBorderFrame(frame, for: read.pid)
+    if read.reconciles {
+      applyActiveWindowBorderReconciliation(frame: frame, reason: read.reason)
+    } else {
+      applyActiveWindowBorder(frame: frame)
     }
   }
 
@@ -190,11 +223,6 @@ extension AppDelegate {
     }
   }
 
-  /// Reconciliation ticks run on the main thread, so the WindowServer lookup
-  /// they need must not. That scan blocks for half a second whenever an app
-  /// activation has the window list in flux — measured repeatedly at ~500 ms
-  /// — and on main that stalls keyboard handling and every overlay redraw
-  /// along with the stroke it was trying to place.
   func reconcileActiveWindowBorder(reason: String) {
     guard
       Self.activeWindowBorderShouldBeVisible(
@@ -208,21 +236,14 @@ extension AppDelegate {
     }
 
     activeWindowBorderUpdateGeneration &+= 1
-    let generation = activeWindowBorderUpdateGeneration
     guard let app = activeWindowBorderApplication() else {
       applyActiveWindowBorderReconciliation(frame: nil, reason: reason)
       return
     }
-    let pid = app.processIdentifier
-    let primaryH = monitor.primaryScreenHeight()
-    monitor.geometryQueue.async { [weak self] in
-      let frame = AppMonitor.topApplicationWindowFrame(for: pid, primaryH: primaryH)
-      DispatchQueue.main.async {
-        guard let self, self.activeWindowBorderUpdateGeneration == generation else { return }
-        self.rememberActiveWindowBorderFrame(frame, for: pid)
-        self.applyActiveWindowBorderReconciliation(frame: frame, reason: reason)
-      }
-    }
+    scheduleActiveWindowBorderRead(
+      ActiveWindowBorderRead(
+        pid: app.processIdentifier, reason: reason,
+        generation: activeWindowBorderUpdateGeneration, reconciles: true))
   }
 
   private func applyActiveWindowBorderReconciliation(frame: CGRect?, reason: String) {
