@@ -13,9 +13,9 @@ final class ModeReducerTests: XCTestCase {
     .disabled,
     .insert,
     .normal,
-    .command(scope: .commandLine, restoreTo: .normal),
-    .command(scope: .finder(all: true), restoreTo: .insert),
-    .command(scope: .finder(all: false), restoreTo: .disabled),
+    .command(restoreTo: .normal),
+    .command(restoreTo: .insert),
+    .command(restoreTo: .disabled),
     .terminal(restoreTo: .normal),
     .terminal(restoreTo: .insert),
     .terminal(restoreTo: .disabled),
@@ -27,8 +27,8 @@ final class ModeReducerTests: XCTestCase {
     .enterNormal(targetPID: 7),
     .leaveMode(hasHints: false, targetPID: nil),
     .leaveMode(hasHints: true, targetPID: 7),
-    .openCommand(scope: .commandLine, restoreMode: false),
-    .openCommand(scope: .finder(all: true), restoreMode: true),
+    .openCommand(restoreMode: false),
+    .openCommand(restoreMode: true),
     .closeCommand(reason: "submit"),
     .openTerminal,
     .closeTerminal(targetPID: nil),
@@ -146,7 +146,7 @@ final class ModeReducerTests: XCTestCase {
     }
 
     for restoreMode in [false, true] {
-      mode = ModeReducer.reduce(mode, .openCommand(scope: .commandLine, restoreMode: restoreMode)).0
+      mode = ModeReducer.reduce(mode, .openCommand(restoreMode: restoreMode)).0
       mode = ModeReducer.reduce(mode, .focusedAppChanged(pid: 7)).0
       mode = ModeReducer.reduce(mode, .closeCommand(reason: "submit")).0
       XCTAssertEqual(mode, .normal)
@@ -194,21 +194,21 @@ final class ModeReducerTests: XCTestCase {
   func testCommandLifecycleRestores() {
     // Default exit is NORMAL (matches commandLineExitMode).
     var (mode, _) = ModeReducer.reduce(
-      .normal, .openCommand(scope: .commandLine, restoreMode: false))
-    XCTAssertEqual(mode, .command(scope: .commandLine, restoreTo: .normal))
+      .normal, .openCommand(restoreMode: false))
+    XCTAssertEqual(mode, .command(restoreTo: .normal))
     XCTAssertEqual(ModeReducer.reduce(mode, .closeCommand(reason: "x")).0, .normal)
 
     // restoreMode preserves the entry mode (here: insert).
     (mode, _) = ModeReducer.reduce(
-      .insert, .openCommand(scope: .finder(all: true), restoreMode: true))
-    XCTAssertEqual(mode, .command(scope: .finder(all: true), restoreTo: .insert))
+      .insert, .openCommand(restoreMode: true))
+    XCTAssertEqual(mode, .command(restoreTo: .insert))
     XCTAssertEqual(ModeReducer.reduce(mode, .closeCommand(reason: "x")).0, .insert)
 
     // Flashlight from disabled (advanced off) returns to disabled, never a
     // phantom NORMAL.
     (mode, _) = ModeReducer.reduce(
-      .disabled, .openCommand(scope: .finder(all: false), restoreMode: false))
-    XCTAssertEqual(mode, .command(scope: .finder(all: false), restoreTo: .disabled))
+      .disabled, .openCommand(restoreMode: false))
+    XCTAssertEqual(mode, .command(restoreTo: .disabled))
     XCTAssertEqual(ModeReducer.reduce(mode, .closeCommand(reason: "x")).0, .disabled)
   }
 
@@ -223,11 +223,11 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testLeaveModeRestoresEveryCommandSurface() {
-    for scope in [CommandScope.commandLine, .finder(all: true), .finder(all: false)] {
+    do {
       for origin in [Mode.normal, .insert, .disabled] {
         for restoreMode in [false, true] {
           let (opened, _) = ModeReducer.reduce(
-            origin, .openCommand(scope: scope, restoreMode: restoreMode))
+            origin, .openCommand(restoreMode: restoreMode))
           let expected = ModeReducer.reduce(opened, .closeCommand(reason: "cancel"))
           let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: nil))
           XCTAssertEqual(actual.0, expected.0)
@@ -274,8 +274,7 @@ final class ModeReducerTests: XCTestCase {
 
   func testEnterNormalClosesEveryCommandSurface() {
     let commandStates: [Mode] = [
-      .command(scope: .commandLine, restoreTo: .insert),
-      .command(scope: .finder(all: true), restoreTo: .insert),
+      .command(restoreTo: .insert)
     ]
     let expectedEffects = ModeReducer.enterEffects(for: .normal, targetPID: nil)
     XCTAssertTrue(expectedEffects.contains(.clearTransientHintState))
@@ -291,8 +290,8 @@ final class ModeReducerTests: XCTestCase {
 
   func testDisabledEligibilitySurvivesExplicitRequestsInsideEverySurface() {
     let surfaces: [ModeEvent] = [
-      .openCommand(scope: .commandLine, restoreMode: false),
-      .openCommand(scope: .finder(all: true), restoreMode: true),
+      .openCommand(restoreMode: false),
+      .openCommand(restoreMode: true),
       .openTerminal,
     ]
     for open in surfaces {
@@ -308,8 +307,8 @@ final class ModeReducerTests: XCTestCase {
 
   func testEnablingAdvancedModeReconcilesEveryTransientReturn() {
     for open in [
-      ModeEvent.openCommand(scope: .commandLine, restoreMode: false),
-      .openCommand(scope: .finder(all: false), restoreMode: true),
+      ModeEvent.openCommand(restoreMode: false),
+      .openCommand(restoreMode: true),
       .openTerminal,
     ] {
       let opened = ModeReducer.reduce(.disabled, open).0
@@ -322,8 +321,7 @@ final class ModeReducerTests: XCTestCase {
   func testConfigRefreshPreservesExplicitInsertAndItsTransientReturn() {
     let states: [Mode] = [
       .insert,
-      .command(scope: .commandLine, restoreTo: .insert),
-      .command(scope: .finder(all: true), restoreTo: .insert),
+      .command(restoreTo: .insert),
       .terminal(restoreTo: .insert),
     ]
     for state in states {
@@ -370,7 +368,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertFalse(insert.contains(.scheduleRecapture), "insert must not grab the keyboard")
 
     let command = ModeReducer.enterEffects(
-      for: .command(scope: .commandLine, restoreTo: .normal), targetPID: nil)
+      for: .command(restoreTo: .normal), targetPID: nil)
     XCTAssertEqual(
       command, [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture])
   }
@@ -381,35 +379,37 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.disabled.flashMode, .insert)
     XCTAssertEqual(Mode.insert.flashMode, .insert)
     XCTAssertEqual(Mode.normal.flashMode, .normal)
-    XCTAssertEqual(Mode.command(scope: .commandLine, restoreTo: .normal).flashMode, .normal)
+    XCTAssertEqual(Mode.command(restoreTo: .normal).flashMode, .normal)
 
     XCTAssertEqual(Mode.disabled.label, .insert)
     XCTAssertEqual(Mode.insert.label, .insert)
     XCTAssertEqual(Mode.normal.label, .normal)
-    XCTAssertEqual(Mode.command(scope: .commandLine, restoreTo: .normal).label, .command)
+    XCTAssertEqual(Mode.command(restoreTo: .normal).label, .command)
 
-    // overlay input mode (idle, no hints / activation)
+    // overlay input mode (idle, no hints / activation): INSERT and disabled
+    // are passive until a hint session or its walk takes the keys.
     XCTAssertEqual(
-      Mode.insert.overlayInputMode(hasHints: false, activationInFlight: false),
-      .hints)
+      Mode.insert.overlayInputMode(hasHints: false, activationInFlight: false), .passive)
+    XCTAssertEqual(
+      Mode.disabled.overlayInputMode(hasHints: false, activationInFlight: false), .passive)
+    XCTAssertEqual(Mode.insert.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
+    XCTAssertEqual(
+      Mode.disabled.overlayInputMode(hasHints: false, activationInFlight: true), .hints)
     XCTAssertEqual(
       Mode.normal.overlayInputMode(hasHints: false, activationInFlight: false), .normal)
     // normal with hints up routes hint letters, not commands
     XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
     XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: false, activationInFlight: true), .hints)
     XCTAssertEqual(
-      Mode.command(scope: .commandLine, restoreTo: .normal)
+      Mode.command(restoreTo: .normal)
         .overlayInputMode(hasHints: false, activationInFlight: false), .commandLine)
-    XCTAssertEqual(
-      Mode.command(scope: .finder(all: true), restoreTo: .normal)
-        .overlayInputMode(hasHints: false, activationInFlight: false), .candidateFinder)
 
     XCTAssertFalse(
       Mode.insert.ownsKeyboard(hasHints: false, activationInFlight: false))
     XCTAssertTrue(Mode.normal.ownsKeyboard(hasHints: false, activationInFlight: false))
     XCTAssertFalse(Mode.normal.ownsKeyboard(hasHints: true, activationInFlight: false))
     XCTAssertTrue(
-      Mode.command(scope: .commandLine, restoreTo: .normal)
+      Mode.command(restoreTo: .normal)
         .ownsKeyboard(hasHints: false, activationInFlight: false))
 
     // Native-surface suspension (context menu up): never capture, in any base
@@ -419,7 +419,7 @@ final class ModeReducerTests: XCTestCase {
       Mode.normal.ownsKeyboard(
         hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true))
     XCTAssertFalse(
-      Mode.command(scope: .commandLine, restoreTo: .normal)
+      Mode.command(restoreTo: .normal)
         .ownsKeyboard(hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true))
     XCTAssertEqual(
       Mode.normal.overlayInputMode(
@@ -432,8 +432,7 @@ final class ModeReducerTests: XCTestCase {
   /// The "COMMAND is a lie" regression: the command surface must produce the
   /// `.command` badge style from the MODE, and base modes must never produce it.
   func testCommandBadgeStyleComesFromMode() {
-    XCTAssertEqual(Mode.command(scope: .commandLine, restoreTo: .normal).badgeStyle, .command)
-    XCTAssertEqual(Mode.command(scope: .finder(all: true), restoreTo: .normal).badgeStyle, .command)
+    XCTAssertEqual(Mode.command(restoreTo: .normal).badgeStyle, .command)
     XCTAssertEqual(Mode.normal.badgeStyle, .normal)
     XCTAssertEqual(Mode.insert.badgeStyle, .insert)
     XCTAssertEqual(Mode.disabled.badgeStyle, .insert)

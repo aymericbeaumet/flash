@@ -66,17 +66,14 @@ extension Mode {
     if nativeSurfaceSuspended, case .normal = self { return .normal }
     switch self {
     case .disabled, .insert:
-      return .hints
+      return hasHints || activationInFlight ? .hints : .passive
     case .terminal:
       return .normal
     case .normal:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
-    case .command(let scope, _):
-      switch scope {
-      case .commandLine: return .commandLine
-      case .finder: return .candidateFinder
-      }
+    case .command:
+      return .commandLine
     }
   }
 

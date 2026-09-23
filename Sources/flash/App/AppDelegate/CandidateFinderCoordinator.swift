@@ -274,7 +274,7 @@ extension AppDelegate {
   /// since the store is already current when the tick lands.
   func handlePluginCatalogsChanged() {
     switch overlay.inputMode {
-    case .commandLine, .candidateFinder: break
+    case .commandLine: break
     default: return
     }
     var surfaced: [String: FlashSource] = [:]
@@ -390,7 +390,7 @@ extension AppDelegate {
   ) {
     guard generation == finder.sessionGeneration else { return }
     switch overlay.inputMode {
-    case .commandLine, .candidateFinder: break
+    case .commandLine: break
     default: return
     }
     if finder.initialBarrier != nil {
@@ -449,8 +449,6 @@ extension AppDelegate {
       overlay.syncCommandLineCursorFromField()
       refreshCommandLine(
         text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
-    case .candidateFinder:
-      refreshCandidateFinder(query: overlay.candidateFinderQuery)
     default:
       break
     }
@@ -461,11 +459,6 @@ extension AppDelegate {
       finder.queryEvaluationInFlightGeneration = nil
     }
     replayDeferredCandidateSubmissionIfReady()
-  }
-
-  func refreshCandidateFinder(query: String) {
-    updateCandidateMatches(query: query)
-    overlay.displayCandidateFinder(query: query, items: candidateFinderDisplayItems())
   }
 
   /// Translate the `!<token>` range from the candidate-finder query into
@@ -1000,7 +993,7 @@ extension AppDelegate {
         exactText == self.finder.queryEvaluationText
       else { return }
       switch self.overlay.inputMode {
-      case .commandLine, .candidateFinder: break
+      case .commandLine: break
       default: return
       }
       self.finder.queryAnswers = candidates
@@ -1587,8 +1580,6 @@ extension AppDelegate {
     case .commandLine:
       return NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText)
         ?? finder.currentQuery
-    case .candidateFinder:
-      return overlay.candidateFinderQuery
     default:
       return finder.currentQuery
     }
@@ -1673,7 +1664,6 @@ extension AppDelegate {
     finder.invocationTargetPID = nil
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
-    overlay.candidateFinderQuery = ""
     finder.scope = .all
     clearCandidateFinderState()
     clearCommandLineCompletionState()
@@ -1682,7 +1672,6 @@ extension AppDelegate {
 
   func clearCandidateFinderState() {
     cancelCandidateFinderSessionWork()
-    overlay.candidateFinderQuery = ""
     finder.candidates = []
     finder.matches = []
     finder.selectedIndex = 0

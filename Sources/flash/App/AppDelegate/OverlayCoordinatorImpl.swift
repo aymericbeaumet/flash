@@ -1047,53 +1047,6 @@ extension AppDelegate {
     submitCommandLine(command)
   }
 
-  func overlayDidCancelCandidateFinder() {
-    clearCandidateFinderState()
-    overlay.hide()
-    applyModeOverlay()
-  }
-
-  func overlayDidUpdateCandidateFinderQuery(_ query: String) {
-    finder.selectedIndex = 0
-    refreshCandidateFinder(query: query)
-  }
-
-  func overlayDidMoveCandidateFinderSelection(_ delta: Int) {
-    guard !finder.matches.isEmpty else {
-      refreshCandidateFinder(query: overlay.candidateFinderQuery)
-      return
-    }
-    finder.selectedIndex = min(
-      max(finder.selectedIndex + delta, 0),
-      finder.matches.count - 1)
-    // Just rerender with the new selection; re-scoring an unchanged query is
-    // unnecessary work.
-    overlay.displayCandidateFinder(
-      query: overlay.candidateFinderQuery,
-      items: candidateFinderDisplayItems())
-  }
-
-  func overlayDidSubmitCandidateFinder() {
-    guard !finder.matches.isEmpty else {
-      overlayDidCancelCandidateFinder()
-      return
-    }
-    let candidate = finder.matches[
-      min(finder.selectedIndex, finder.matches.count - 1)
-    ]
-    .candidate
-    // A bang row carries its token in `sourcePayload`; the selection always
-    // wins, so arrowing onto a non-bang result opens it even when the query
-    // still starts with `!`.
-    if dispatchBangCandidate(candidate, query: finder.currentQuery) {
-      clearCandidateFinderState()
-      overlay.hide()
-      applyModeOverlay()
-      return
-    }
-    openSourceItem(candidate, insertionTargetPID: finder.invocationTargetPID)
-  }
-
   func openSourceItem(matching target: String) {
     sourceItemResolutionGeneration &+= 1
     let generation = sourceItemResolutionGeneration

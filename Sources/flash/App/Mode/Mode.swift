@@ -28,19 +28,12 @@ enum Mode: Equatable {
   /// The overlay owns the keyboard and interprets keys as commands.
   case normal
 
-  /// Command line / flashlight surface. `restoreTo` records where to land when
-  /// the surface closes.
-  case command(scope: CommandScope, restoreTo: ReturnMode)
+  /// The command line (`:`, flashlight included). `restoreTo` records where
+  /// to land when it closes.
+  case command(restoreTo: ReturnMode)
 
   /// A popup's local terminal view owns keyboard input; global mappings are suspended.
   case terminal(restoreTo: ReturnMode)
-}
-
-/// Which command surface is active. `finder` is the flashlight candidate picker
-/// (`:` flashlight seed); `commandLine` is the plain `:` prompt.
-enum CommandScope: Equatable {
-  case commandLine
-  case finder(all: Bool)
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.
@@ -68,7 +61,7 @@ extension Mode {
     case .insert: return .insert
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(_, let restoreTo), .terminal(let restoreTo): return restoreTo
+    case .command(let restoreTo), .terminal(let restoreTo): return restoreTo
     }
   }
 

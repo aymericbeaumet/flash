@@ -125,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let overlay else { return }
       overlay.hintKeyRoute = hintSession.keyRoute
       if oldValue.isActive != hintSession.isActive {
+        refreshOverlayInputRouting()
         updateActiveWindowBorder(
           reason: hintSession.isActive ? "hint_session_started" : "hint_session_ended")
       }
@@ -228,8 +229,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
   /// re-established (recapture or any mode transition). Keeps `overlay.inputMode`
   /// and the badge's capture flag from drifting away from the mode.
-  var nativeSurfaceSuspended = false
-  var aboutWindowVisible = false
+  var nativeSurfaceSuspended = false {
+    didSet { if oldValue != nativeSurfaceSuspended { refreshOverlayInputRouting() } }
+  }
+  var aboutWindowVisible = false {
+    didSet { if oldValue != aboutWindowVisible { refreshOverlayInputRouting() } }
+  }
   var normalModePendingCommandToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
@@ -247,7 +252,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// next main turn corrects it.
   var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
-  var activationLifecycle = ActivationLifecycle<HintActivationRequest>()
+  var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
+    didSet {
+      if oldValue.inFlight != activationLifecycle.inFlight { refreshOverlayInputRouting() }
+    }
+  }
   var activationInFlight: Bool { activationLifecycle.inFlight }
   var activationGen: UInt64 { activationLifecycle.generation }
   /// AX trust is checked once per session — until we observe `true`, we
@@ -957,6 +966,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// type into their own fields, so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
     if case .terminal = modeStore.mode { return false }
+    // A hint session owns the keyboard in every base mode (see
+    // `KeyboardCaptureTap.shouldSwallow`); a secure field still keeps its keys.
+    if overlay.inputMode == .hints, !(aboutWindowVisible || nativeSurfaceSuspended) {
+      return !IsSecureEventInputEnabled()
+    }
     // INSERT is transparent so typing flows to the focused app. But a modified
     // chord bound to an active mapping (`[mode.all]` / `[mode.insert]`) must
     // still fire Flash's action. Historically that went only through a Carbon
@@ -1034,18 +1048,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashLog.debug(
       "[latency] tap_to_route key=\(event.keyCode) ms="
         + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
-    // A chord the tap swallowed in INSERT is an active mapping (see
-    // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
-    // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.
-    if flashMode == .insert {
+    switch overlay.inputMode {
+    case .passive:
+      // A chord the tap swallowed in INSERT is an active mapping (see
+      // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
+      // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.
       _ = mappings.handle(event: event)
       return
-    }
-    if overlay.inputMode == .normal {
+    case .normal:
       let strict = event.modifierFlags.intersection([.command, .control, .option])
-      if !strict.isEmpty {
-        if mappings.handle(event: event) { return }
-      }
+      if !strict.isEmpty, mappings.handle(event: event) { return }
+    case .hints, .commandLine:
+      break
     }
     overlay.handleTapCapturedKey(event)
   }

@@ -12,10 +12,13 @@ enum OverlayKeyAction: Equatable {
 }
 
 enum OverlayInputMode: Equatable {
+  /// INSERT or disabled with nothing of Flash's on screen: keys belong to the
+  /// focused app, and only mapped chords reach Flash.
+  case passive
+  /// A hint session (or its discovery walk) owns every key, in any base mode.
   case hints
   case normal
   case commandLine
-  case candidateFinder
 }
 
 /// Which interpreter owns keys while a hint session is up: label typing, or
@@ -336,10 +339,6 @@ extension OverlayPanel {
       if handleCommandLineEditingShortcut(event) { return true }
       return super.performKeyEquivalent(with: event)
     }
-    if inputMode == .candidateFinder {
-      return handleCandidateFinderKeyEvent(event)
-    }
-
     if coordinator?.overlayDidHandleMapping(event) == true {
       return true
     }
@@ -434,9 +433,6 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine { return false }
-    if inputMode == .candidateFinder {
-      return handleCandidateFinderKeyEvent(event)
-    }
 
     // A sub-state owns every key while active — including chords that would
     // otherwise hit the Carbon mapping registry, so a stray mapping can't fire
@@ -590,66 +586,6 @@ extension OverlayPanel {
     default:
       return false
     }
-    return true
-  }
-
-  @discardableResult
-  private func handleCandidateFinderKeyEvent(_ event: NSEvent) -> Bool {
-    guard let coordinator = coordinator else { return false }
-    if coordinator.overlayDidHandleMapping(event) { return true }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let ignoredChar =
-      NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
-      .lowercased().first
-    if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      candidateFinderQuery = ""
-      FlashLog.trace("[input] candidate_finder cancel key=\(event.keyCode)")
-      coordinator.overlayDidCancelCandidateFinder()
-      return true
-    }
-    if modifiers.contains(.control) {
-      switch ignoredChar {
-      case "n":
-        // Best match is at the TOP of the panel and ranks descend downward.
-        // Ctrl-N (emacs "next") moves visually downward → next-worse match →
-        // higher index → delta +1. Same logic for the arrows below.
-        coordinator.overlayDidMoveCandidateFinderSelection(1)
-        return true
-      case "p":
-        coordinator.overlayDidMoveCandidateFinderSelection(-1)
-        return true
-      default:
-        return true
-      }
-    }
-
-    switch event.keyCode {
-    case 36, 76:  // return / keypad enter
-      coordinator.overlayDidSubmitCandidateFinder()
-      return true
-    case 51:  // delete
-      if !candidateFinderQuery.isEmpty {
-        candidateFinderQuery.removeLast()
-        coordinator.overlayDidUpdateCandidateFinderQuery(candidateFinderQuery)
-      }
-      return true
-    case 125:  // down
-      coordinator.overlayDidMoveCandidateFinderSelection(1)
-      return true
-    case 126:  // up
-      coordinator.overlayDidMoveCandidateFinderSelection(-1)
-      return true
-    default:
-      break
-    }
-
-    if !modifiers.intersection([.command, .control, .option]).isEmpty {
-      return true
-    }
-    guard let chars = event.characters, !chars.isEmpty else { return true }
-    candidateFinderQuery.append(contentsOf: chars.filter { !$0.isNewline })
-    FlashLog.trace("[input] candidate_finder length=\(candidateFinderQuery.count)")
-    coordinator.overlayDidUpdateCandidateFinderQuery(candidateFinderQuery)
     return true
   }
 }

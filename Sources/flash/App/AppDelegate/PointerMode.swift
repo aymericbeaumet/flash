@@ -13,9 +13,6 @@ extension AppDelegate {
     guard prepareHintActivation(.pointer) else { return }
     hintSession.phase = .pointer(.init())
     applyModeOverlay()
-    // `.hints` hides the cursor for chip picking; pointer mode is the
-    // opposite — the cursor IS the interface.
-    overlay.showHintCursor()
     overlay.presentPointerMode(at: NSEvent.mouseLocation)
     FlashLog.trace("[pointer_mode] enter")
   }

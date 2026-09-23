@@ -55,6 +55,27 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertFalse(session.pointerDragActive)
   }
 
+  func testInsertRoutingNeverOutlivesTheSessionOrWalkThatOwnedTheKeys() {
+    let delegate = AppDelegate()
+    delegate.overlay = OverlayPanel()
+    delegate.modeStore.dispatch(.startup(advancedEnabled: true))
+    delegate.modeStore.dispatch(.enterInsert(targetPID: nil))
+    delegate.refreshOverlayInputRouting()
+    XCTAssertEqual(delegate.overlay.inputMode, .passive)
+
+    // A discovery walk takes the keys, and gives them back when it ends —
+    // whichever path ends it, with no re-render call.
+    let token = delegate.activationLifecycle.begin()
+    XCTAssertEqual(delegate.overlay.inputMode, .hints)
+    delegate.activationLifecycle.complete(token: token)
+    XCTAssertEqual(delegate.overlay.inputMode, .passive)
+
+    delegate.hintSession.hints = [hint("a")]
+    XCTAssertEqual(delegate.overlay.inputMode, .hints)
+    delegate.hintSession = HintSession()
+    XCTAssertEqual(delegate.overlay.inputMode, .passive, "a stale .hints swallows every key")
+  }
+
   func testOverlayRoutingAndFocusBorderFollowTheSession() {
     let delegate = AppDelegate()
     delegate.overlay = OverlayPanel()

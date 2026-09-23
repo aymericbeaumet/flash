@@ -95,7 +95,7 @@ extension OverlayPanel {
     // underlying app via `ignoresMouseEvents = true`, and the global
     // monitor lets us recognise it as an "interact with something else"
     // signal worth tearing the prompt down for.
-    if inputMode == .commandLine || inputMode == .candidateFinder {
+    if inputMode == .commandLine {
       return true
     }
     // Idle NORMAL must run the monitor so a click on the focused app (e.g. a

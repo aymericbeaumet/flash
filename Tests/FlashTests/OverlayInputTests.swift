@@ -11,7 +11,7 @@ final class OverlayInputTests: XCTestCase {
         keyCode: kVK_ANSI_LeftBracket, characters: "[", modifierFlags: [.command, .control]),
       try keyEvent(keyCode: kVK_Return, characters: "\r", modifierFlags: [.command]),
     ]
-    for mode in [OverlayInputMode.commandLine, .candidateFinder] {
+    for mode in [OverlayInputMode.commandLine] {
       for event in events {
         let panel = OverlayPanel()
         let coordinator = SpyOverlayCoordinator()
@@ -563,11 +563,6 @@ final class OverlayInputTests: XCTestCase {
         inputMode: .commandLine,
         modeBadgeVisible: false,
         modeBadgeCapturesInput: false))
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .candidateFinder,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: false))
   }
 
   func testConfiguredModifiedNormalMappingDoesNotLockOutBracketTabSequence() throws {
@@ -816,6 +811,24 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(thin.maxY + 0.5, thick.maxY + 1.5, accuracy: 0.001)
   }
 
+  func testCursorHidesOnlyWhileHintLabelsOwnTheKeys() {
+    let panel = OverlayPanel()
+    for mode in [OverlayInputMode.passive, .normal, .commandLine] {
+      panel.inputMode = mode
+      XCTAssertFalse(panel.hintCursorShouldHide, "\(mode)")
+    }
+    panel.inputMode = .hints
+    for route in [HintKeyRoute.labels, .search, .adjustment] {
+      panel.hintKeyRoute = route
+      XCTAssertTrue(panel.hintCursorShouldHide, "\(route)")
+    }
+    // Pointer mode steers the cursor; it must stay visible.
+    panel.hintKeyRoute = .pointer
+    XCTAssertFalse(panel.hintCursorShouldHide)
+    panel.inputMode = .passive
+    panel.hintKeyRoute = .labels
+  }
+
   func testActiveWindowBorderIsStrokedInTheStyleOfTheBadgeShown() {
     let panel = OverlayPanel()
     defer {
@@ -967,10 +980,6 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     submittedCommands.append(command)
   }
   func overlayDidForceSubmitCommandLineSelection() {}
-  func overlayDidCancelCandidateFinder() {}
-  func overlayDidUpdateCandidateFinderQuery(_ query: String) {}
-  func overlayDidMoveCandidateFinderSelection(_ delta: Int) {}
-  func overlayDidSubmitCandidateFinder() {}
   func overlayExpandFlashlightAlias(
     _ text: String,
     cursorIndex: Int

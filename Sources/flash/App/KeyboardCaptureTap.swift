@@ -66,11 +66,14 @@ final class KeyboardCaptureTap {
     nativeSurfaceOwnsKeyboard: Bool = false
   ) -> Bool {
     if nativeSurfaceOwnsKeyboard { return hasMapping }
-    guard flashMode == .normal else { return false }
     switch inputMode {
-    case .normal, .hints:
+    case .hints:
+      // A hint session owns every key whatever the base mode: hints opened
+      // from INSERT or with advanced mode off must still get their labels.
       return true
-    case .commandLine, .candidateFinder:
+    case .normal:
+      return flashMode == .normal
+    case .passive, .commandLine:
       return false
     }
   }

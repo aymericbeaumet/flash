@@ -53,7 +53,7 @@ enum NormalModePointerPolicy {
       // it) must NOT tear it down — the user dismisses it with Esc. Hints are
       // different: a scroll there means "let me read the page", so the
       // transient hints get out of the way.
-      if overlayInputMode == .commandLine || overlayInputMode == .candidateFinder {
+      if overlayInputMode == .commandLine {
         return .passThrough
       }
       if hasHints {

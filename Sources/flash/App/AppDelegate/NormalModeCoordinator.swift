@@ -51,7 +51,7 @@ extension AppDelegate {
   /// A mode mapping that closes the open command bar is a cancel: nothing ran,
   /// so activation goes back to the app the bar covered.
   private func returnActivationIfClosingCommandBar(reason: String) {
-    guard overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder else { return }
+    guard overlay.inputMode == .commandLine else { return }
     returnActivationToCoveredApp(reason: reason)
   }
 
@@ -107,6 +107,7 @@ extension AppDelegate {
         if hintSession.hints.isEmpty { overlay.hide() }
       }
     }
+    refreshOverlayInputRouting()
   }
 
   /// Per-base-mode bookkeeping that must run before the surface is rendered.
@@ -294,7 +295,6 @@ extension AppDelegate {
     overlay.normalModeRepeatAnchor = nil
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
-    overlay.candidateFinderQuery = ""
     finder.candidates = []
     finder.matches = []
     finder.selectedIndex = 0
@@ -309,11 +309,7 @@ extension AppDelegate {
       overlay.resignCommandTextFieldFocus()
       resetCommandLineState()
       overlay.hide()
-    case .candidateFinder:
-      FlashLog.trace("[mode] close_modal input=candidate_finder reason=\(reason)")
-      clearCandidateFinderState()
-      overlay.hide()
-    case .hints, .normal:
+    case .passive, .hints, .normal:
       break
     }
   }
@@ -338,6 +334,37 @@ extension AppDelegate {
     NormalModePointerPolicy.pointerScrollShouldPassThrough(mode: mode, hasHints: hasHints)
   }
 
+  /// Whether a native surface (a context menu, the About window) owns the
+  /// keyboard, so Flash must not capture it.
+  var nativeKeyboardOwnerActive: Bool {
+    nativeSurfaceSuspended
+      || Self.aboutWindowShouldOwnNativeKeyboard(
+        visible: aboutWindowVisible,
+        hasTransientInput: hintSession.isActive,
+        activationInFlight: activationInFlight)
+  }
+
+  /// The overlay's key routing, a pure projection of the mode, the hint
+  /// session, the activation walk and native keyboard owners.
+  var projectedOverlayInputMode: OverlayInputMode {
+    modeStore.mode.overlayInputMode(
+      hasHints: hintSession.isActive, activationInFlight: activationInFlight,
+      nativeSurfaceSuspended: nativeKeyboardOwnerActive)
+  }
+
+  /// Re-derive the overlay's key routing. Called whenever one of its inputs
+  /// changes — a mode transition, the hint session or activation walk
+  /// starting or ending, a native surface taking or releasing the keyboard —
+  /// so routing can never outlive the state it was derived from. In INSERT a
+  /// stale `.hints` would swallow every key.
+  func refreshOverlayInputRouting() {
+    guard let overlay else { return }
+    let routed = projectedOverlayInputMode
+    guard overlay.inputMode != routed else { return }
+    FlashLog.trace("[mode] input_route from=\(overlay.inputMode) to=\(routed)")
+    overlay.inputMode = routed
+  }
+
   func applyModeOverlay(captureOverride: Bool? = nil) {
     MainThreadWatchdog.note("mode_overlay")
     let mode = modeStore.mode
@@ -345,14 +372,8 @@ extension AppDelegate {
     // transient overlay owns input (`.hints`) and NORMAL's own capture is off.
     let hasHints = hintSession.isActive
     let inFlight = activationInFlight
-    let suspended =
-      nativeSurfaceSuspended
-      || Self.aboutWindowShouldOwnNativeKeyboard(
-        visible: aboutWindowVisible,
-        hasTransientInput: hasHints,
-        activationInFlight: inFlight)
-    let inputMode = mode.overlayInputMode(
-      hasHints: hasHints, activationInFlight: inFlight, nativeSurfaceSuspended: suspended)
+    let suspended = nativeKeyboardOwnerActive
+    let inputMode = projectedOverlayInputMode
     // A native-surface suspension forces capture off even when a caller passes
     // `captureOverride: true` (e.g. a recapture attempt that raced a menu open).
     let capture =
@@ -413,12 +434,11 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip token=\(token) reason=state")
       return
     }
-    // Flip `overlay.inputMode` to `.normal` synchronously before
-    // scheduling the retries. The 0 ms entry below is still a
-    // `DispatchQueue.main.asyncAfter` — it doesn't run until the next
-    // runloop turn — so set the routing mode before any later recapture
-    // attempt can see stale `.hints` state left over from `commit()`'s
-    // pre-dispatch `applyModeOverlay(captureOverride: false)`.
+    // Re-derive routing (`.normal` here) synchronously before scheduling the
+    // retries. The 0 ms entry below is still a `DispatchQueue.main.asyncAfter`
+    // — it doesn't run until the next runloop turn — so routing is current
+    // before any later recapture attempt looks at it.
+    refreshOverlayInputRouting()
     overlay.recaptureNormalModeKeyboardInput()
     // The session tap owns capture independently of panel focus. Once routing is
     // `.normal`, retrying on nine future run-loop turns cannot improve anything;
@@ -446,6 +466,7 @@ extension AppDelegate {
           return
         }
         FlashLog.trace("[mode] recapture_apply token=\(token) delay=\(delayMs)")
+        self.refreshOverlayInputRouting()
         self.overlay.recaptureNormalModeKeyboardInput()
       }
     }
@@ -814,9 +835,9 @@ extension AppDelegate {
       return false
     }
     switch overlayInputMode {
-    case .commandLine, .candidateFinder:
+    case .commandLine:
       return false
-    case .hints, .normal:
+    case .passive, .hints, .normal:
       break
     }
     return !menuBarInteractionRecaptureSuppressionIsActive(
@@ -875,9 +896,9 @@ extension AppDelegate {
   ) -> Bool {
     guard mode == .normal, !hasHints, !activationInFlight else { return false }
     switch overlayInputMode {
-    case .hints, .normal:
+    case .passive, .hints, .normal:
       return true
-    case .commandLine, .candidateFinder:
+    case .commandLine:
       return false
     }
   }
@@ -1131,14 +1152,11 @@ extension AppDelegate {
       clearCandidateFinderState()
     }
     let command = Self.commandLineBuffer(from: initialText)
-    // The flashlight is just the command line pre-filled with `:flashlight ` —
-    // render it on the native command-line surface (native editing + a blinking
-    // caret + arrow/Ctrl-N-P candidate navigation) instead of the bespoke
-    // `.finder` surface that drew a static `|`. The candidate scope is tracked
-    // separately via `self.finder.scope` / `openCandidateFinderSession`,
-    // so the suggestion pool is unaffected.
-    let scope: CommandScope = .commandLine
-    dispatchMode(.openCommand(scope: scope, restoreMode: restoreMode))
+    // The flashlight is just the command line pre-filled with `:flashlight ` on
+    // the native command-line surface (native editing, a blinking caret,
+    // arrow/Ctrl-N-P candidate navigation). The candidate scope is tracked
+    // separately via `self.finder.scope` / `openCandidateFinderSession`.
+    dispatchMode(.openCommand(restoreMode: restoreMode))
     if let candidateFinderScope {
       openCandidateFinderSession(scope: candidateFinderScope)
       if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {

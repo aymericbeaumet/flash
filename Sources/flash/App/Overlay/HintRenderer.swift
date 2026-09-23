@@ -424,8 +424,7 @@ extension OverlayPanel {
     FlashLog.trace(
       "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
         + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
-    // Belt-and-suspenders: never leave the cursor hidden once the overlay is gone.
-    showHintCursor()
+    scheduleCursorVisibilityUpdate()
     hideSelectionMarker()
     transientContentVisible = false
     commandPromptVisible = false
@@ -434,7 +433,6 @@ extension OverlayPanel {
     clearCandidateFinderResults()
     commandLineText = ""
     commandLineCursorIndex = 0
-    candidateFinderQuery = ""
     recycleAll()
     if let current = toast, !current.outlivesTeardown {
       toast = nil
@@ -520,6 +518,11 @@ extension OverlayPanel {
     // controls and there's no activation race to leak a key. Just float the
     // overlay above the content. (Command-line / modal still take the key
     // window below for their text fields, as does the no-tap fallback.)
+    // Passive input never takes the keyboard from the focused app.
+    if inputMode == .passive {
+      orderFrontRegardless()
+      return
+    }
     if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
       orderFrontRegardless()
       // If we still hold activation from a prior command-line / modal (which do

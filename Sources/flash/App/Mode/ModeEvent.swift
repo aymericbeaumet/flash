@@ -23,7 +23,7 @@ enum ModeEvent: Equatable {
   /// `:` / flashlight / `enterCommand`. `restoreMode` mirrors the old
   /// `restore_mode=1` verbs: when true the surface returns to the entry mode,
   /// otherwise it returns to NORMAL (or to disabled when advanced mode is off).
-  case openCommand(scope: CommandScope, restoreMode: Bool)
+  case openCommand(restoreMode: Bool)
 
   /// Command-line submit or cancel — both close the surface to its `restoreTo`.
   case closeCommand(reason: String)

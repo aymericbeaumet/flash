@@ -24,15 +24,13 @@ final class KeyboardCaptureTapTests: XCTestCase {
   }
 
   func testNormalModeNeverSwallowsKeyWindowSurfaces() {
-    // Command-line / candidate-finder own the key window and type into their
-    // own fields — the tap must pass those through untouched.
+    // The command line owns the key window and types into its own field — the
+    // tap must pass it through untouched.
     XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .commandLine))
-    XCTAssertFalse(
-      KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .candidateFinder))
   }
 
   func testNativeSurfacePassesUnmappedInputButSwallowsMappings() {
-    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .candidateFinder] {
+    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine] {
       XCTAssertFalse(
         KeyboardCaptureTap.shouldSwallow(
           flashMode: .normal,
@@ -53,13 +51,20 @@ final class KeyboardCaptureTapTests: XCTestCase {
         nativeSurfaceOwnsKeyboard: true))
   }
 
-  func testInsertModeNeverSwallows() {
-    // INSERT is invisible to the tap regardless of overlay input mode — keys
-    // flow straight to the focused app.
-    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .candidateFinder] {
+  func testInsertModeSwallowsOnlyForAHintSession() {
+    // INSERT is invisible to the tap — keys flow straight to the focused app —
+    // until a hint session opens over it: the labels must reach the hints.
+    for inputMode: OverlayInputMode in [.passive, .normal, .commandLine] {
       XCTAssertFalse(
         KeyboardCaptureTap.shouldSwallow(flashMode: .insert, inputMode: inputMode),
-        "insert mode should never swallow (inputMode=\(inputMode))")
+        "insert mode should not swallow (inputMode=\(inputMode))")
+    }
+    XCTAssertTrue(KeyboardCaptureTap.shouldSwallow(flashMode: .insert, inputMode: .hints))
+  }
+
+  func testPassiveInputNeverSwallows() {
+    for flashMode: FlashMode in [.normal, .insert] {
+      XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: flashMode, inputMode: .passive))
     }
   }
   /// A release whose press NORMAL swallowed must be swallowed too: a terminal

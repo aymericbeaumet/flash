@@ -838,7 +838,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(
       AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .insert,
-        overlayInputMode: .hints,
+        overlayInputMode: .passive,
         hasHints: false,
         activationInFlight: false))
   }
@@ -1130,7 +1130,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(
       AppDelegate.normalModeCaptureRecoveryShouldRetry(
         mode: .insert,
-        overlayInputMode: .hints,
+        overlayInputMode: .passive,
         hasHints: false,
         activationInFlight: false,
         keyboardCaptureIsActive: false,

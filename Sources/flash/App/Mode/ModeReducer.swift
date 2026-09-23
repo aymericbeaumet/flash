@@ -44,9 +44,9 @@ enum ModeReducer {
         return (state, enterEffects(for: state, targetPID: targetPID))
       }
 
-    case .openCommand(let scope, let restoreMode):
+    case .openCommand(let restoreMode):
       let restoreTo = restoreMode ? state.asReturnMode : defaultSurfaceReturn(from: state)
-      let next = Mode.command(scope: scope, restoreTo: restoreTo)
+      let next = Mode.command(restoreTo: restoreTo)
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: nil))
 
     case .openTerminal:
@@ -64,7 +64,7 @@ enum ModeReducer {
       return (restoreTo.mode, [.hideTerminalPopup] + activation + effects)
 
     case .closeCommand:
-      guard case .command(_, let restoreTo) = state else { return (state, []) }
+      guard case .command(let restoreTo) = state else { return (state, []) }
       let next = restoreTo.mode
       return (next, enterEffects(for: next, targetPID: nil))
 
@@ -80,9 +80,9 @@ enum ModeReducer {
       return (state, [.scheduleRecapture])
 
     case .advancedModeChanged(let enabled):
-      if case .command(let scope, let restoreTo) = state {
+      if case .command(let restoreTo) = state {
         let base: ReturnMode = enabled ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
-        return (.command(scope: scope, restoreTo: base), [.renderSurface])
+        return (.command(restoreTo: base), [.renderSurface])
       }
       if case .terminal(let restoreTo) = state {
         let base: ReturnMode =

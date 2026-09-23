@@ -194,7 +194,9 @@ final class OverlayPanel: NSPanel {
   let adjustmentMarkerLayer = CAShapeLayer()
   /// Which interpreter hints-mode keys reach; set only from the coordinator's
   /// `HintSession.keyRoute`.
-  var hintKeyRoute = HintKeyRoute.labels
+  var hintKeyRoute = HintKeyRoute.labels {
+    didSet { if hintKeyRoute != oldValue { scheduleCursorVisibilityUpdate() } }
+  }
   var modeBadgeVisible = false
   var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
   var statusBarHintSnapshot = StatusBarHintSnapshot.live
@@ -232,28 +234,37 @@ final class OverlayPanel: NSPanel {
     didSet { statusBarLayoutRevision &+= 1 }
   }
   var magicModifiers: ClickModifiers = .defaultMagic
-  var inputMode: OverlayInputMode = .hints {
-    didSet {
-      guard inputMode != oldValue else { return }
-      // Hide the mouse cursor while hints are on screen so it can't obscure a
-      // chip or distract from picking one; restore it for every other surface
-      // (normal, flashlight, command line, modal) and on dismissal.
-      if inputMode == .hints {
-        hideHintCursor()
-      } else {
-        showHintCursor()
-      }
+  var inputMode: OverlayInputMode = .passive {
+    didSet { if inputMode != oldValue { scheduleCursorVisibilityUpdate() } }
+  }
+
+  /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
+  /// a chip or distract from picking one. Pointer mode is the exception — the
+  /// cursor is its interface. A projection of `inputMode` and `hintKeyRoute`.
+  var hintCursorShouldHide: Bool { inputMode == .hints && hintKeyRoute != .pointer }
+
+  /// Apply `hintCursorShouldHide` once, at the end of the current turn: routing
+  /// can pass through intermediate values while a walk hands the keys to its
+  /// hints, and the cursor must not flicker through them.
+  func scheduleCursorVisibilityUpdate() {
+    guard !cursorVisibilityUpdateScheduled else { return }
+    cursorVisibilityUpdateScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.cursorVisibilityUpdateScheduled = false
+      if self.hintCursorShouldHide { self.hideHintCursor() } else { self.showHintCursor() }
     }
   }
+  private var cursorVisibilityUpdateScheduled = false
   /// Guards the ref-counted `CGDisplayHideCursor`/`CGDisplayShowCursor` so the
   /// cursor can never get stuck hidden across repeated hint renders.
   private var hintCursorHidden = false
-  func hideHintCursor() {
+  private func hideHintCursor() {
     guard !hintCursorHidden else { return }
     CGDisplayHideCursor(CGMainDisplayID())
     hintCursorHidden = true
   }
-  func showHintCursor() {
+  private func showHintCursor() {
     guard hintCursorHidden else { return }
     CGDisplayShowCursor(CGMainDisplayID())
     hintCursorHidden = false
@@ -282,7 +293,6 @@ final class OverlayPanel: NSPanel {
   var commandLineCursorIndex: Int = 0 {
     didSet { commandLineCursorIndex = min(max(commandLineCursorIndex, 0), commandLineText.count) }
   }
-  var candidateFinderQuery: String = ""
 
   // Fallback border colour when the configured `hint_border` is malformed.
   static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -686,6 +696,7 @@ final class OverlayPanel: NSPanel {
     // NORMAL / hints capture is owned by the keyboard tap, which doesn't depend
     // on key-window focus — being visible is enough. (The recapture machinery
     // keys off this, so reporting "active" here keeps it from churning.)
+    if inputMode == .passive { return false }
     if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
       return isVisible
     }
@@ -796,10 +807,6 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidInsertCommandLineSelection() -> Bool
   func overlayDidSubmitCommandLine(_ command: String)
   func overlayDidForceSubmitCommandLineSelection()
-  func overlayDidCancelCandidateFinder()
-  func overlayDidUpdateCandidateFinderQuery(_ query: String)
-  func overlayDidMoveCandidateFinderSelection(_ delta: Int)
-  func overlayDidSubmitCandidateFinder()
   /// `[flashlight.aliases]` lookup hook. Returns the rewritten buffer +
   /// cursor when the latest keystroke landed on `<space>` after a
   /// registered shorthand bang (`!g ` → `!google `), `nil` otherwise.

@@ -126,11 +126,11 @@ extension OverlayPanel {
     contentLayer.sublayers = sublayers
   }
 
-  /// Reassert NORMAL routing without relaying out the persistent status bar or
-  /// querying window geometry. With the session tap, changing `inputMode` is
-  /// the capture operation; the key-window fallback still needs the full call.
+  /// Reassert NORMAL capture without relaying out the persistent status bar or
+  /// querying window geometry. Routing is already `.normal` (the coordinator
+  /// re-derives it before calling); with the session tap that is the capture
+  /// operation, and the key-window fallback still needs the full call.
   func recaptureNormalModeKeyboardInput() {
-    inputMode = .normal
     modeBadgeCapturesInput = true
     guard !keyboardCaptureActive else { return }
     captureKeyboardInput()
@@ -494,7 +494,6 @@ extension OverlayPanel {
       || commandPromptVisible
       || candidateFinderResultsVisible
       || inputMode == .commandLine
-      || inputMode == .candidateFinder
     {
       return transientOverlayWindowLevel
     }
