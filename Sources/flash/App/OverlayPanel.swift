@@ -9,6 +9,24 @@ enum OverlayModeBadgeStyle {
   case command
 }
 
+/// What the overlay shows for the current mode, as one value. Only the mode
+/// executor writes it (`setModeSurface`); the bar, the pill, the border colour
+/// and capture all read it, so none of them can show a different mode.
+struct ModeSurface: Equatable {
+  /// The pill's text: the configured label for the mode.
+  var label: String
+  var style: OverlayModeBadgeStyle
+  /// `[statusbar] enabled`: whether the bar window is on screen. The command
+  /// line and the focus border render whether or not it is.
+  var barVisible: Bool
+  /// The overlay owns the keyboard as a command surface (idle NORMAL, the
+  /// command line).
+  var capturesInput: Bool
+
+  static let initial = ModeSurface(
+    label: "INSERT", style: .insert, barVisible: false, capturesInput: false)
+}
+
 struct CandidateDisplayItem: Equatable {
   var title: String
   var highlightedRanges: [Range<Int>] = []
@@ -186,7 +204,7 @@ final class OverlayPanel: NSPanel {
   let activeWindowBorderLayer = CAShapeLayer()
   /// The window frame the border currently strokes; nil while it is hidden.
   /// The one record of whether the border shows, written only by
-  /// `setActiveWindowBorder`. Its style is derived from `modeBadgeStyle` on
+  /// `setActiveWindowBorder`. Its style is derived from `modeSurface.style` on
   /// every stroke, never stored.
   var activeWindowBorderFrame: CGRect?
   /// Bounding box + crosshair for the `--adjust` sub-state: outlines the
@@ -197,12 +215,9 @@ final class OverlayPanel: NSPanel {
   var hintKeyRoute = HintKeyRoute.labels {
     didSet { if hintKeyRoute != oldValue { scheduleCursorVisibilityUpdate() } }
   }
-  var modeBadgeVisible = false
+  var modeSurface = ModeSurface.initial
   var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
   var statusBarHintSnapshot = StatusBarHintSnapshot.live
-  var modeBadgeText = "INSERT"
-  var modeBadgeStyle: OverlayModeBadgeStyle = .insert
-  var modeBadgeCapturesInput = false
   var commandPromptVisible = false
   var commandPromptPrefix = ":"
   var candidateFinderResultsVisible = false
@@ -677,12 +692,21 @@ final class OverlayPanel: NSPanel {
     // blinking caret in a key window, so when we key while a command bar is open,
     // (re)focus the field and restart its blink — otherwise a cancel→reopen left
     // the caret missing until the next keystroke.
-    if inputMode == .commandLine {
+    if commandTextFieldIsLaidOut {
       commandTextField.isHidden = false
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
       rearmCommandLineCaret()
     }
+  }
+
+  /// The command field may take focus only once its prompt is on screen and it
+  /// has been placed on it. Routing turns `.commandLine` a moment before the
+  /// first paint, and focusing the field before then showed it — and macOS's
+  /// input-source / caps-lock indicator, which anchors to the caret — at its
+  /// unplaced frame in the screen's bottom-left corner.
+  var commandTextFieldIsLaidOut: Bool {
+    inputMode == .commandLine && commandPromptVisible && !commandTextField.frame.isEmpty
   }
 
   /// True once the global keyboard tap is installed. NORMAL / hints capture then

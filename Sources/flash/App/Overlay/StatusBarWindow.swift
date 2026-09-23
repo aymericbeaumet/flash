@@ -51,7 +51,7 @@ extension OverlayPanel {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
-    guard modeBadgeVisible else {
+    guard modeSurface.barVisible else {
       statusBarWindow.contentLayer.sublayers = nil
       statusBarWindow.orderOut(nil)
       return
@@ -115,9 +115,9 @@ extension OverlayPanel {
     case .held: hintSnapshot = "held"
     }
     return [
-      "badge_visible": modeBadgeVisible,
-      "badge_text": modeBadgeText,
-      "badge_style": String(describing: modeBadgeStyle),
+      "bar_visible": modeSurface.barVisible,
+      "badge_text": modeSurface.label,
+      "badge_style": String(describing: modeSurface.style),
       "hint_snapshot": hintSnapshot,
       "yields_to_native_menu_bar": statusBarYieldsToNativeMenuBar,
       "document_runs": statusBarModel.document.runs.count,

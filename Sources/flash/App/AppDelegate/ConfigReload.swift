@@ -337,6 +337,18 @@ extension AppDelegate {
       "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),
       "statusbar": overlay?.statusBarDiagnostics() ?? [:],
+      "windows": NSApp.windows.map { window -> [String: Any] in
+        [
+          "class": String(describing: type(of: window)),
+          "frame": [
+            Double(window.frame.minX), Double(window.frame.minY), Double(window.frame.width),
+            Double(window.frame.height),
+          ],
+          "visible": window.isVisible,
+          "level": window.level.rawValue,
+          "number": window.windowNumber,
+        ]
+      },
       "plugins": statuses.map(\.jsonObject),
     ]
   }

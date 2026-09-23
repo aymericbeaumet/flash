@@ -11,7 +11,7 @@ struct ActiveWindowBorderStyle: Equatable {
 /// Active-window border ("we're focused here"). The frame is supplied by
 /// `AppDelegate` from `AppMonitor`'s focused-window frame and re-painted
 /// whenever AX fires a window-move/resize. The colour is not supplied: it is
-/// derived from `modeBadgeStyle`, the same value the status-bar pill is painted
+/// derived from `modeSurface.style`, the same value the status-bar pill is painted
 /// from, and re-derived whenever that changes, so the border and the pill can
 /// never show different modes.
 extension OverlayPanel {
@@ -43,7 +43,7 @@ extension OverlayPanel {
       overlayConfig.windowBorderColor.isEmpty
       ? nil : nsColor(fromHex: overlayConfig.windowBorderColor)?.cgColor
     return Self.activeWindowBorderStyle(
-      for: modeBadgeStyle, sizeOverride: overlayConfig.windowBorderSize,
+      for: modeSurface.style, sizeOverride: overlayConfig.windowBorderSize,
       colorOverride: colorOverride)
   }
 

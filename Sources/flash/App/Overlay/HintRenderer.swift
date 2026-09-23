@@ -422,8 +422,8 @@ extension OverlayPanel {
 
   func hide() {
     FlashLog.trace(
-      "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
-        + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
+      "[overlay] hide transient=\(transientContentVisible) bar=\(modeSurface.barVisible) "
+        + "capture=\(modeSurface.capturesInput) input=\(inputMode)")
     scheduleCursorVisibilityUpdate()
     hideSelectionMarker()
     transientContentVisible = false
@@ -438,7 +438,7 @@ extension OverlayPanel {
       toast = nil
       current.layer.removeFromSuperlayer()
     }
-    renderModeBadgeOnlyOrHide()
+    renderPersistentContent()
   }
 
   /// Escalating delays for the command-line key-recovery ladder. Activation is
@@ -567,7 +567,7 @@ extension OverlayPanel {
     makeKeyAndOrderFront(nil)
     makeKey()
     let responderDescription: String
-    if inputMode == .commandLine {
+    if commandTextFieldIsLaidOut {
       commandTextField.isHidden = false
       // The field editor is reused across open/close cycles, and a reused one
       // arrives carrying the previous session's insertion-point state. When

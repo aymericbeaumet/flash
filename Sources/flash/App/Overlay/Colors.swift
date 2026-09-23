@@ -85,7 +85,7 @@ extension OverlayPanel {
     borderCG: nordAuroraPurpleCG)
 
   func modeBadgePalette() -> ModeBadgePalette {
-    switch modeBadgeStyle {
+    switch modeSurface.style {
     case .insert: return Self.insertPalette
     case .normal: return Self.normalPalette
     case .command: return Self.commandPaletteValue

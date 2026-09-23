@@ -98,12 +98,4 @@ extension Mode {
     case .terminal: return .command
     }
   }
-
-  /// Whether the mode badge is intrinsically shown. The executor ANDs this with
-  /// `statusBarVisible` so `[statusbar] enabled` independently gates the bar.
-  var badgeVisibleIntrinsic: Bool {
-    // Advanced mode keeps the badge in both NORMAL and INSERT; with advanced
-    // off the bar still shows "INSERT" when the status bar is enabled.
-    true
-  }
 }

@@ -79,31 +79,25 @@ extension OverlayPanel {
     // dismiss on pointer input. Normal-mode capture also dismisses,
     // matching the previous "pointerIntent" gate.
     if transientContentVisible || toast != nil { return true }
-    return Self.pointerIntentMonitorShouldRun(
-      inputMode: inputMode,
-      modeBadgeVisible: modeBadgeVisible,
-      modeBadgeCapturesInput: modeBadgeCapturesInput)
+    return Self.pointerIntentMonitorShouldRun(inputMode: inputMode)
   }
 
-  static func pointerIntentMonitorShouldRun(
-    inputMode: OverlayInputMode,
-    modeBadgeVisible: Bool,
-    modeBadgeCapturesInput: Bool
-  ) -> Bool {
-    // Command line + candidate finder both dismiss on any click outside
-    // their (mouse-event-ignoring) panel — the click reaches the
-    // underlying app via `ignoresMouseEvents = true`, and the global
-    // monitor lets us recognise it as an "interact with something else"
-    // signal worth tearing the prompt down for.
-    if inputMode == .commandLine {
+  static func pointerIntentMonitorShouldRun(inputMode: OverlayInputMode) -> Bool {
+    switch inputMode {
+    case .commandLine:
+      // The command line dismisses on any click outside its (mouse-event-
+      // ignoring) panel: the click reaches the underlying app via
+      // `ignoresMouseEvents = true`, and the global monitor recognises it as
+      // an "interact with something else" signal worth closing the prompt for.
       return true
+    case .normal:
+      // Idle NORMAL runs the monitor so a click on the focused app (e.g. a
+      // website text field) is recognised and enters insert — whether or not
+      // the status bar is enabled, and while capture is briefly suppressed.
+      return true
+    case .passive, .hints:
+      return false
     }
-    // Idle NORMAL must run the monitor so a click on the focused app (e.g. a
-    // website text field) is recognised and enters insert. It is intentionally
-    // NOT gated on `modeBadgeCapturesInput` because capture can be temporarily
-    // suppressed while the mode surface still needs click-intent classification.
-    _ = modeBadgeCapturesInput
-    return inputMode == .normal && modeBadgeVisible
   }
 
   private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {

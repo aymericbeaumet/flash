@@ -26,74 +26,71 @@ enum StatusBarHintSnapshot {
 extension OverlayPanel {
   static let statusBarEdgePadding: CGFloat = 13
 
-  func setModeBadge(text: String, visible: Bool, captureInput: Bool, style: OverlayModeBadgeStyle) {
+  /// The one write path for what the overlay shows for the mode; only the
+  /// mode executor calls it. `render: false` records the surface without
+  /// painting it, for command entry, whose first paint (`displayCommandLine`)
+  /// follows in the same turn.
+  func setModeSurface(_ surface: ModeSurface, render: Bool = true) {
     FlashLog.trace(
-      "[overlay] set_mode_badge text=\(text) visible=\(visible) capture=\(captureInput) "
-        + "style=\(style) input=\(inputMode)")
-    updateModeBadge(text: text, visible: visible, captureInput: captureInput, style: style)
-  }
-
-  func updateModeBadge(
-    text: String,
-    visible: Bool,
-    captureInput: Bool,
-    style: OverlayModeBadgeStyle
-  ) {
+      "[overlay] set_mode_surface label=\(surface.label) style=\(surface.style) "
+        + "bar=\(surface.barVisible) capture=\(surface.capturesInput) input=\(inputMode)")
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
-
-    modeBadgeText = text
-    let styleChanged = modeBadgeStyle != style
-    modeBadgeStyle = style
-    if styleChanged { restyleActiveWindowBorder() }
-    modeBadgeVisible = visible
-    modeBadgeCapturesInput = captureInput
-    if style != .command {
+    let previous = modeSurface
+    modeSurface = surface
+    if previous.style != surface.style { restyleActiveWindowBorder() }
+    if surface.style != .command {
       commandPromptVisible = false
       hideCommandTextField()
       clearCandidateFinderResults()
     }
+    if render { renderModeSurface() }
+  }
 
-    if transientContentVisible {
-      var sublayers = contentLayer.sublayers ?? []
-      if visible {
-        let frame = ensurePanelFrame()
-        configureModeBadge(panelFrame: frame)
-        configureCommandPrompt(panelFrame: frame)
-        configureCandidateFinderResults(panelFrame: frame)
-        if commandPromptVisible,
-          !sublayers.contains(where: { $0 === commandPromptLayer })
-        {
-          sublayers.append(commandPromptLayer)
-        } else if !commandPromptVisible {
-          sublayers.removeAll { $0 === commandPromptLayer }
-        }
-        if candidateFinderResultsVisible,
-          !sublayers.contains(where: { $0 === candidateFinderResultsLayer })
-        {
-          sublayers.append(candidateFinderResultsLayer)
-        } else if !candidateFinderResultsVisible {
-          sublayers.removeAll { $0 === candidateFinderResultsLayer }
-        }
-      } else {
-        sublayers.removeAll { $0 === commandPromptLayer }
-        sublayers.removeAll { $0 === candidateFinderResultsLayer }
-        hideStatusBarClickWindows()
-      }
-      syncStatusBarWindow()
-      appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
-      appendToastLayerIfNeeded(to: &sublayers)
-      contentLayer.sublayers = sublayers
-      if captureInput {
-        captureKeyboardInput()
-      } else {
-        refreshWindowLevelForCurrentContent()
-      }
+  /// Paint the current `modeSurface`: the bar window (when the bar is enabled),
+  /// the command prompt and its results (when shown), the focus border and any
+  /// toast, then capture or order the panel.
+  func renderModeSurface() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+    guard transientContentVisible else {
+      renderPersistentContent()
       return
     }
+    // Hint chips are up: keep them, and restack the persistent layers above.
+    var sublayers = contentLayer.sublayers ?? []
+    let frame = ensurePanelFrame()
+    if modeSurface.barVisible {
+      configureModeBadge(panelFrame: frame)
+    } else {
+      hideStatusBarClickWindows()
+    }
+    syncStatusBarWindow()
+    sublayers.removeAll { $0 === commandPromptLayer || $0 === candidateFinderResultsLayer }
+    appendCommandSurfaceLayers(to: &sublayers, panelFrame: frame)
+    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
+    appendToastLayerIfNeeded(to: &sublayers)
+    contentLayer.sublayers = sublayers
+    if modeSurface.capturesInput {
+      captureKeyboardInput()
+    } else {
+      refreshWindowLevelForCurrentContent()
+    }
+  }
 
-    renderModeBadgeOnlyOrHide()
+  /// Configure and stack the command prompt and its results, each only while
+  /// shown; neither depends on the bar being enabled.
+  private func appendCommandSurfaceLayers(to sublayers: inout [CALayer], panelFrame: CGRect) {
+    if commandPromptVisible {
+      configureCommandPrompt(panelFrame: panelFrame)
+      sublayers.append(commandPromptLayer)
+    }
+    if candidateFinderResultsVisible {
+      configureCandidateFinderResults(panelFrame: panelFrame)
+      sublayers.append(candidateFinderResultsLayer)
+    }
   }
 
   /// Repaint only the editable command surface after a keystroke. The status
@@ -131,7 +128,7 @@ extension OverlayPanel {
   /// re-derives it before calling); with the session tap that is the capture
   /// operation, and the key-window fallback still needs the full call.
   func recaptureNormalModeKeyboardInput() {
-    modeBadgeCapturesInput = true
+    modeSurface.capturesInput = true
     guard !keyboardCaptureActive else { return }
     captureKeyboardInput()
   }
@@ -146,11 +143,11 @@ extension OverlayPanel {
     statusBarPopupTexts = model.popupTexts
     statusBarPopupDocuments = model.popupDocuments
     statusBarLayoutRevision &+= 1
-    guard modeBadgeVisible || commandPromptVisible || candidateFinderResultsVisible else {
+    guard modeSurface.barVisible || commandPromptVisible || candidateFinderResultsVisible else {
       return
     }
     let frame = ensurePanelFrame()
-    configureModeBadge(panelFrame: frame)
+    if modeSurface.barVisible { configureModeBadge(panelFrame: frame) }
     if commandPromptVisible {
       configureCommandPrompt(panelFrame: frame)
     }
@@ -160,7 +157,7 @@ extension OverlayPanel {
     // A published model must reach the screen: if the bar layer lost its
     // parent or the bar window is not on screen, re-host the layers and
     // re-order the window instead of waiting for the next mode transition.
-    if modeBadgeVisible, modeBadgeLayer.superlayer == nil || !statusBarWindow.isVisible {
+    if modeSurface.barVisible, modeBadgeLayer.superlayer == nil || !statusBarWindow.isVisible {
       FlashLog.warn(
         "[statusbar] reattach layer_attached=\(modeBadgeLayer.superlayer != nil) "
           + "window_visible=\(statusBarWindow.isVisible)")
@@ -183,17 +180,13 @@ extension OverlayPanel {
   /// went off screen is redrawn rather than trusted: a render only redraws
   /// the runs whose value changed.
   func reassertStatusBar(reason: String) {
-    guard modeBadgeVisible else { return }
+    guard modeSurface.barVisible else { return }
     FlashLog.trace("[statusbar] reassert reason=\(reason)")
     primaryStatusBarSurface.invalidateDrawnRuns()
     for bar in secondaryStatusBars { bar.invalidateDrawnRuns() }
     lastModeBadgeLayoutStamp = nil
     OverlayPanel.invalidateScreenSnapshot()
-    updateModeBadge(
-      text: modeBadgeText,
-      visible: modeBadgeVisible,
-      captureInput: modeBadgeCapturesInput,
-      style: modeBadgeStyle)
+    renderModeSurface()
   }
 
   /// Each display-change recovery pass re-reads the native menu bars before it
@@ -209,51 +202,36 @@ extension OverlayPanel {
     statusBarDidChangeScreenParameters()
   }
 
-  func renderModeBadgeOnlyOrHide() {
+  /// Rebuild the panel's layers from the persistent content alone (no hint
+  /// chips): the focus border, the command surface and any toast. The panel
+  /// stays ordered in while any of them, the bar or capture needs it.
+  func renderPersistentContent() {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
 
     let frame = ensurePanelFrame()
-    let activeWindowBorderVisible = activeWindowBorderFrame != nil
-    if modeBadgeVisible || activeWindowBorderVisible {
+    if modeSurface.barVisible {
       configureModeBadge(panelFrame: frame)
-      configureCommandPrompt(panelFrame: frame)
-      configureCandidateFinderResults(panelFrame: frame)
-      syncStatusBarWindow()
-      var sublayers: [CALayer] = []
-      appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
-      if commandPromptVisible {
-        sublayers.append(commandPromptLayer)
-      }
-      if candidateFinderResultsVisible {
-        sublayers.append(candidateFinderResultsLayer)
-      }
-      appendToastLayerIfNeeded(to: &sublayers)
-      contentLayer.sublayers = sublayers
-      if modeBadgeCapturesInput {
-        captureKeyboardInput()
-      } else {
-        if isKeyWindow {
-          orderOut(nil)
-        }
-        refreshWindowLevelForCurrentContent()
-        orderFrontRegardless()
-      }
     } else {
-      var sublayers: [CALayer] = []
-      appendToastLayerIfNeeded(to: &sublayers)
-      contentLayer.sublayers = sublayers.isEmpty ? nil : sublayers
-      syncStatusBarWindow()
       hideStatusBarClickWindows()
-      if modeBadgeCapturesInput {
-        captureKeyboardInput()
-      } else if toast != nil {
-        refreshWindowLevelForCurrentContent()
-        orderFrontRegardless()
-      } else {
+    }
+    syncStatusBarWindow()
+    var sublayers: [CALayer] = []
+    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
+    appendCommandSurfaceLayers(to: &sublayers, panelFrame: frame)
+    appendToastLayerIfNeeded(to: &sublayers)
+    contentLayer.sublayers = sublayers.isEmpty ? nil : sublayers
+    if modeSurface.capturesInput {
+      captureKeyboardInput()
+    } else if !sublayers.isEmpty || modeSurface.barVisible {
+      if isKeyWindow {
         orderOut(nil)
       }
+      refreshWindowLevelForCurrentContent()
+      orderFrontRegardless()
+    } else {
+      orderOut(nil)
     }
   }
 
@@ -276,19 +254,15 @@ extension OverlayPanel {
     } else {
       hideStatusBarPopup()
     }
-    updateModeBadge(
-      text: modeBadgeText,
-      visible: modeBadgeVisible,
-      captureInput: modeBadgeCapturesInput,
-      style: modeBadgeStyle)
+    renderModeSurface()
   }
 
   func orderOutIfNoPersistentContent() {
     guard
       !transientContentVisible,
       toast == nil,
-      !modeBadgeVisible,
-      !modeBadgeCapturesInput,
+      !modeSurface.barVisible,
+      !modeSurface.capturesInput,
       !commandPromptVisible,
       !candidateFinderResultsVisible,
       activeWindowBorderFrame == nil
@@ -302,17 +276,11 @@ extension OverlayPanel {
   func syncStatusBarForTransientRender(
     appendingPromptLayersTo sublayers: inout [CALayer], panelFrame: CGRect
   ) {
-    guard modeBadgeVisible else { return }
-    configureModeBadge(panelFrame: panelFrame)
-    syncStatusBarWindow()
-    if commandPromptVisible {
-      configureCommandPrompt(panelFrame: panelFrame)
-      sublayers.append(commandPromptLayer)
+    if modeSurface.barVisible {
+      configureModeBadge(panelFrame: panelFrame)
+      syncStatusBarWindow()
     }
-    if candidateFinderResultsVisible {
-      configureCandidateFinderResults(panelFrame: panelFrame)
-      sublayers.append(candidateFinderResultsLayer)
-    }
+    appendCommandSurfaceLayers(to: &sublayers, panelFrame: panelFrame)
   }
 
   /// Everything `configureModeBadge` reads, so an unchanged input set skips
@@ -330,7 +298,7 @@ extension OverlayPanel {
 
   private func configureModeBadge(panelFrame: CGRect) {
     let stamp = ModeBadgeLayoutStamp(
-      text: modeBadgeText, style: modeBadgeStyle, visible: modeBadgeVisible,
+      text: modeSurface.label, style: modeSurface.style, visible: modeSurface.barVisible,
       panelFrame: panelFrame, layoutRevision: statusBarLayoutRevision,
       screenRevision: Self.screenSnapshotRevision)
     guard stamp != lastModeBadgeLayoutStamp else { return }
@@ -368,7 +336,7 @@ extension OverlayPanel {
         barFrame: Self.statusBarFrame(
           screenFrame: screen, visibleFrame: visible, panelFrame: panelFrame, fontSize: fontSize),
         screenFrame: screen, scale: scale, notch: notch, font: font, labels: modeLabels,
-        palette: modeBadgePalette(), modeStyle: modeBadgeStyle, modeText: modeBadgeText,
+        palette: modeBadgePalette(), modeStyle: modeSurface.style, modeText: modeSurface.label,
         notchWidth: snapshot.referenceNotchWidth)
       let hits = surface.interactionRects(
         panelFrame: panelFrame, popupTexts: statusBarPopupTexts,
@@ -397,7 +365,7 @@ extension OverlayPanel {
         surface, screen: screen.frame, visible: screen.visibleFrame, scale: screen.scale,
         notch: screen.notch)
     }
-    if modeBadgeVisible {
+    if modeSurface.barVisible {
       statusBarInteractionsByScreen = interactions
       syncStatusBarClickWindows(
         bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),

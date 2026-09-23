@@ -387,18 +387,17 @@ extension AppDelegate {
     statusBarController?.updateModeLabel(text)
     overlay.inputMode = inputMode
     // Command entry paints its text and suggestions immediately after the mode
-    // transition. Avoid laying out an empty command surface here only to replace
-    // it in the same event-handler turn; `displayCommandLine` performs the one
-    // complete first paint.
-    if case .command = mode, !overlay.commandPromptVisible {
-      return
-    }
-    // The badge first: the border's colour is derived from the badge style.
-    overlay.setModeBadge(
-      text: text,
-      visible: mode.badgeVisibleIntrinsic && statusBarVisible,
-      captureInput: capture,
-      style: mode.badgeStyle)
+    // transition. Record the surface but don't lay out an empty command surface
+    // here only to replace it in the same turn; `displayCommandLine` performs
+    // the one complete first paint.
+    var entersCommand = false
+    if case .command = mode { entersCommand = !overlay.commandPromptVisible }
+    // The surface first: the border's colour is derived from its style.
+    overlay.setModeSurface(
+      ModeSurface(
+        label: text, style: mode.badgeStyle, barVisible: statusBarVisible,
+        capturesInput: capture),
+      render: !entersCommand)
     updateActiveWindowBorder(reason: "apply_mode_overlay")
   }
 
@@ -678,11 +677,7 @@ extension AppDelegate {
       handleAppPointerDecision(decision, click: click)
       return
     }
-    if Self.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
-      inputMode: overlay.inputMode,
-      modeBadgeVisible: overlay.modeBadgeVisible,
-      modeBadgeCapturesInput: overlay.modeBadgeCapturesInput)
-    {
+    if Self.pointerFocusLossShouldDeferRecaptureForPointerMonitor(inputMode: overlay.inputMode) {
       deferNormalModeRecaptureAfterPointerFocusLoss(reason: "await_pointer_monitor")
       return
     }
@@ -789,14 +784,9 @@ extension AppDelegate {
   }
 
   static func pointerFocusLossShouldDeferRecaptureForPointerMonitor(
-    inputMode: OverlayInputMode,
-    modeBadgeVisible: Bool,
-    modeBadgeCapturesInput: Bool
+    inputMode: OverlayInputMode
   ) -> Bool {
-    OverlayPanel.pointerIntentMonitorShouldRun(
-      inputMode: inputMode,
-      modeBadgeVisible: modeBadgeVisible,
-      modeBadgeCapturesInput: modeBadgeCapturesInput)
+    OverlayPanel.pointerIntentMonitorShouldRun(inputMode: inputMode)
   }
 
   static func pointIsInMenuBar(_ point: CGPoint) -> Bool {

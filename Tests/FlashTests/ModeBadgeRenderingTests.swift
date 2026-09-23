@@ -30,8 +30,8 @@ final class ModeBadgeRenderingTests: XCTestCase {
         (labels.terminal, .command, OverlayPanel.commandPaletteValue),
         (labels.normal, .normal, OverlayPanel.normalPalette),
       ] {
-        panel.modeBadgeText = text
-        panel.modeBadgeStyle = style
+        panel.modeSurface.label = text
+        panel.modeSurface.style = style
         let label = text.trimmingCharacters(in: .whitespacesAndNewlines)
         for _ in 0..<2 {
           panel.setStatusBarModel(staleModel)
@@ -66,6 +66,6 @@ final class ModeBadgeRenderingTests: XCTestCase {
       }
     }
     XCTAssertFalse(panel.isVisible)
-    XCTAssertFalse(panel.modeBadgeVisible)
+    XCTAssertFalse(panel.modeSurface.barVisible)
   }
 }

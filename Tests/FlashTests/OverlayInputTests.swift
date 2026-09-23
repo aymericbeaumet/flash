@@ -31,22 +31,19 @@ final class OverlayInputTests: XCTestCase {
       OverlayPanel.commandLineCanRefreshInPlace(
         inputMode: .commandLine,
         commandPromptVisible: true,
-        modeBadgeVisible: true,
-        modeBadgeStyle: .command,
+        surfaceStyle: .command,
         panelVisible: true))
     XCTAssertFalse(
       OverlayPanel.commandLineCanRefreshInPlace(
         inputMode: .normal,
         commandPromptVisible: true,
-        modeBadgeVisible: true,
-        modeBadgeStyle: .command,
+        surfaceStyle: .command,
         panelVisible: true))
     XCTAssertFalse(
       OverlayPanel.commandLineCanRefreshInPlace(
         inputMode: .commandLine,
         commandPromptVisible: false,
-        modeBadgeVisible: true,
-        modeBadgeStyle: .command,
+        surfaceStyle: .command,
         panelVisible: true))
   }
   func testPlainLetterCommitsHintCharacter() {
@@ -529,40 +526,14 @@ final class OverlayInputTests: XCTestCase {
     }
   }
 
-  func testPointerIntentMonitorRunsForCapturingNormalModeBadge() {
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .normal,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: true))
-    XCTAssertFalse(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .hints,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: true))
-    XCTAssertFalse(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .normal,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: true))
-    // Idle NORMAL runs the monitor even when keyboard capture is temporarily
-    // suppressed, so a click on the focused app can still enter insert.
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .normal,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: false))
-  }
-
-  func testPointerIntentMonitorRunsForCommandLineAndCandidateFinder() {
-    // Clicking outside the command bar / candidate list must dismiss
-    // them, regardless of mode-badge visibility — those input modes are
-    // never on screen without a panel the user can click out of.
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .commandLine,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: false))
+  func testPointerIntentMonitorRunsForIdleNormalAndTheCommandLine() {
+    // Idle NORMAL runs the monitor — with or without the status bar, and while
+    // keyboard capture is suppressed — so a click on the focused app enters
+    // insert; clicking outside the command line dismisses it.
+    XCTAssertTrue(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .normal))
+    XCTAssertTrue(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .commandLine))
+    XCTAssertFalse(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .hints))
+    XCTAssertFalse(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .passive))
   }
 
   func testConfiguredModifiedNormalMappingDoesNotLockOutBracketTabSequence() throws {
@@ -833,9 +804,11 @@ final class OverlayInputTests: XCTestCase {
     let panel = OverlayPanel()
     defer {
       panel.setActiveWindowBorder(around: nil)
-      panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+      panel.setModeSurface(
+        .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
     }
-    panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
     let window = CGRect(x: 10, y: 10, width: 300, height: 200)
     panel.setActiveWindowBorder(around: window)
     XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordAuroraGreenCG)
@@ -843,18 +816,21 @@ final class OverlayInputTests: XCTestCase {
 
     // A badge change re-strokes the shown border at once, including the
     // command surface, which never goes through the border's own update path.
-    panel.updateModeBadge(text: "INSERT", visible: false, captureInput: false, style: .insert)
+    panel.setModeSurface(
+      .init(label: "INSERT", style: .insert, barVisible: false, capturesInput: false))
     XCTAssertEqual(panel.activeWindowBorderFrame, window)
     XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(panel.activeWindowBorderLayer.lineWidth, 2)
     XCTAssertGreaterThan(panel.activeWindowBorderLayer.shadowOpacity, 0)
-    panel.updateModeBadge(text: "COMMAND", visible: false, captureInput: false, style: .command)
+    panel.setModeSurface(
+      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false))
     XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordAuroraPurpleCG)
     XCTAssertEqual(panel.activeWindowBorderLayer.shadowOpacity, 0)
 
     // A hidden border stays hidden across badge changes.
     panel.setActiveWindowBorder(around: nil)
-    panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
     XCTAssertNil(panel.activeWindowBorderFrame)
     XCTAssertNil(panel.activeWindowBorderLayer.path)
   }

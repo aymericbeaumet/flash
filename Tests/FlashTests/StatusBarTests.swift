@@ -886,7 +886,8 @@ final class StatusBarTests: XCTestCase {
     // re-anchor must snap the panel back onto the current union frame.
     let panel = OverlayPanel()
     panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: true, capturesInput: false))
 
     // Strand the panel on a stale, wrong frame (as if a monitor it spanned was
     // just removed). A small on-screen rect is never constrained away.
@@ -896,7 +897,7 @@ final class StatusBarTests: XCTestCase {
     panel.statusBarDidChangeScreenParameters()
 
     XCTAssertEqual(panel.frame, OverlayPanel.unionScreenFrame())
-    XCTAssertTrue(panel.modeBadgeVisible)
+    XCTAssertTrue(panel.modeSurface.barVisible)
   }
 
   func testCommandPromptLayerHasWindowSeparatingShadow() {
@@ -959,11 +960,13 @@ final class StatusBarTests: XCTestCase {
     let panel = OverlayPanel()
     panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
     defer {
-      panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+      panel.setModeSurface(
+        .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
       panel.orderOut(nil)
     }
 
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: true, capturesInput: false))
     XCTAssertTrue(panel.modeBadgeLayer.superlayer === panel.statusBarWindow.contentLayer)
     XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === panel.modeBadgeLayer } ?? false)
     XCTAssertTrue(panel.statusBarWindow.isVisible)
@@ -989,7 +992,8 @@ final class StatusBarTests: XCTestCase {
     panel.stopMenuBarRevealTracking()
     XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
 
-    panel.updateModeBadge(text: "NORMAL", visible: false, captureInput: false, style: .normal)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
     XCTAssertFalse(panel.statusBarWindow.isVisible)
     XCTAssertNil(panel.modeBadgeLayer.superlayer)
   }
@@ -1156,6 +1160,45 @@ final class StatusBarTests: XCTestCase {
     XCTAssertNotNil(panel.toast)
     panel.hide()
     XCTAssertNil(panel.toast)
+  }
+
+  func testCommandLineRendersWithTheBarDisabledAndLeavesItOff() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.setModeSurface(
+        .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+      panel.orderOut(nil)
+    }
+    panel.setModeSurface(
+      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false),
+      render: false)
+    panel.displayCommandLine(":help")
+
+    XCTAssertTrue(
+      panel.contentLayer.sublayers?.contains { $0 === panel.commandPromptLayer } ?? false)
+    XCTAssertFalse(panel.statusBarWindow.isVisible, "the command line does not force the bar on")
+    XCTAssertFalse(panel.modeSurface.barVisible)
+  }
+
+  func testCommandFieldIsNotFocusedBeforeItsPromptIsLaidOut() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer { panel.orderOut(nil) }
+    // Routing turns `.commandLine` a moment before the first paint.
+    panel.inputMode = .commandLine
+    XCTAssertFalse(panel.commandTextFieldIsLaidOut)
+    panel.becomeKey()
+    XCTAssertTrue(panel.commandTextField.isHidden, "an unplaced field would sit in the corner")
+    XCTAssertNil(panel.commandTextField.currentEditor())
+
+    panel.setModeSurface(
+      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false),
+      render: false)
+    panel.displayCommandLine(":help")
+    XCTAssertTrue(panel.commandTextFieldIsLaidOut)
+    XCTAssertFalse(panel.commandTextField.frame.isEmpty)
+    panel.inputMode = .passive
   }
 
   func testClearingAnOlderToastLeavesTheCurrentOne() {

@@ -773,27 +773,11 @@ final class NormalModeTests: XCTestCase {
 
   func testPointerFocusLossDefersRecaptureWhilePointerMonitorCanClassifyClick() {
     XCTAssertTrue(
-      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
-        inputMode: .normal,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: true))
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(inputMode: .normal))
     XCTAssertTrue(
-      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
-        inputMode: .commandLine,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: false))
-    // Idle NORMAL classifies clicks via the monitor even when keyboard capture
-    // is temporarily suppressed.
-    XCTAssertTrue(
-      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
-        inputMode: .normal,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: false))
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(inputMode: .commandLine))
     XCTAssertFalse(
-      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
-        inputMode: .hints,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: true))
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(inputMode: .hints))
   }
 
   func testCommandLineEntryIsAllowedFromInsertAndNormalModeEvenWithTransientHints() {
