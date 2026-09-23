@@ -28,9 +28,7 @@ extension AppDelegate {
     let generation = finder.sessionGeneration
     finder.fetchedNonLocationSourceIDs.removeAll()
     finder.deferredNonLocationSnapshots.removeAll()
-    finder.initialDeadlineWork?.cancel()
-    finder.initialDeadlineWork = nil
-    finder.initialSnapshotReady = false
+    finder.resetInitialSnapshot()
     finder.submissionDeferral.cancel()
     finder.candidates = []
     finder.matches = []
@@ -44,10 +42,11 @@ extension AppDelegate {
       sourcesByID[source.identifier] = source
     }
     let sources = sourcesByID.values.sorted { $0.identifier < $1.identifier }
-    finder.initialBarrier = CandidateSnapshotBarrier(
-      generation: generation,
-      startedNs: startedNs,
-      expectedSourceIDs: sources.map(\.identifier))
+    finder.beginInitialSnapshot(
+      CandidateSnapshotBarrier(
+        generation: generation,
+        startedNs: startedNs,
+        expectedSourceIDs: sources.map(\.identifier)))
 
     let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
     FlashLog.trace(
@@ -88,7 +87,7 @@ extension AppDelegate {
       self?.finalizeInitialCandidateSnapshot(
         generation: generation, reason: .firstPaintBudget)
     }
-    finder.initialDeadlineWork = deadline
+    finder.armInitialDeadline(deadline)
     DispatchQueue.main.asyncAfter(
       deadline: .now() + .milliseconds(remainingMs),
       execute: deadline)
@@ -141,7 +140,7 @@ extension AppDelegate {
       sourceID: sourceID,
       candidates: candidates,
       latencyMs: latencyMs)
-    finder.initialBarrier = barrier
+    finder.updateInitialBarrier(barrier)
     switch result {
     case .accepted:
       FlashLog.trace(
@@ -183,13 +182,12 @@ extension AppDelegate {
       let snapshot = barrier.finalize(reason: reason)
     else { return }
 
-    finder.initialDeadlineWork?.cancel()
-    finder.initialDeadlineWork = nil
     // Keep the finalized barrier installed while the raw snapshot is prepared
     // off-main. `refreshCommandLine` continues to show a live empty prompt and
     // late opt-in replies are buffered rather than overwriting this first
     // deterministic publication.
-    finder.initialBarrier = barrier
+    finder.cancelInitialDeadline()
+    finder.updateInitialBarrier(barrier)
     if !snapshot.missingSourceIDs.isEmpty {
       FlashLog.warn(
         "[candidate_finder] snapshot_budget_missed generation=\(generation) "
@@ -214,8 +212,7 @@ extension AppDelegate {
 
         self.finder.candidates = frozen
         self.finder.selectedIndex = 0
-        self.finder.initialBarrier = nil
-        self.finder.initialSnapshotReady = true
+        self.finder.publishInitialSnapshot()
         self.publishDeferredNonLocationSnapshots(generation: generation)
 
         let elapsedMs = Int(
@@ -1686,10 +1683,7 @@ extension AppDelegate {
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
     invalidateCandidateQueryEvaluation()
-    finder.initialDeadlineWork?.cancel()
-    finder.initialDeadlineWork = nil
-    finder.initialBarrier = nil
-    finder.initialSnapshotReady = false
+    finder.resetInitialSnapshot()
     finder.submissionDeferral.cancel()
     finder.fetchedNonLocationSourceIDs.removeAll()
     finder.deferredNonLocationSnapshots.removeAll()

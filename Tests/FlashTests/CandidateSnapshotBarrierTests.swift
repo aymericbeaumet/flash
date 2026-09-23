@@ -114,4 +114,37 @@ final class CandidateSnapshotBarrierTests: XCTestCase {
       bundleIdentifier: "",
       url: nil)
   }
+
+  func testInitialGatherIsIdleGatheringOrReadyAndNeverLeavesADeadlineBehind() {
+    let session = CandidateFinderSession()
+    XCTAssertNil(session.initialBarrier)
+    XCTAssertFalse(session.initialSnapshotReady)
+
+    session.beginInitialSnapshot(
+      CandidateSnapshotBarrier(generation: 1, startedNs: 0, expectedSourceIDs: ["a"]))
+    XCTAssertEqual(session.initialBarrier?.generation, 1)
+    let deadline = DispatchWorkItem {}
+    session.armInitialDeadline(deadline)
+    XCTAssertFalse(session.initialSnapshotReady)
+
+    session.publishInitialSnapshot()
+    XCTAssertNil(session.initialBarrier)
+    XCTAssertTrue(session.initialSnapshotReady)
+    XCTAssertTrue(deadline.isCancelled, "a published gather has no first-paint deadline left")
+
+    // A deadline can only belong to a gather.
+    let stray = DispatchWorkItem {}
+    session.armInitialDeadline(stray)
+    session.resetInitialSnapshot()
+    XCTAssertFalse(stray.isCancelled)
+    XCTAssertFalse(session.initialSnapshotReady)
+
+    session.beginInitialSnapshot(
+      CandidateSnapshotBarrier(generation: 2, startedNs: 0, expectedSourceIDs: []))
+    let second = DispatchWorkItem {}
+    session.armInitialDeadline(second)
+    session.resetInitialSnapshot()
+    XCTAssertTrue(second.isCancelled)
+    XCTAssertNil(session.initialBarrier)
+  }
 }

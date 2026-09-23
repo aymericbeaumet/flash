@@ -105,14 +105,60 @@ final class CandidateFinderSession {
   /// the first-paint deadline capture this value so work from a closed or
   /// superseded session cannot publish a stale snapshot.
   var sessionGeneration: UInt64 = 0
-  /// Initial location rows are collected behind a session-local fan-in barrier.
-  /// The prompt renders while this exists, but the result list stays hidden
-  /// until the barrier publishes one frozen snapshot.
-  var initialBarrier: CandidateSnapshotBarrier?
-  var initialDeadlineWork: DispatchWorkItem?
-  /// Distinguishes a valid empty frozen snapshot from a session that has not
-  /// started gathering yet.
-  var initialSnapshotReady = false
+  /// The session's initial catalog gather. Rows are collected behind a
+  /// session-local fan-in barrier; the prompt renders while gathering, but the
+  /// result list stays hidden until the barrier publishes one frozen snapshot.
+  /// `ready` tells a valid empty snapshot from a gather that never started.
+  enum InitialSnapshot {
+    case idle
+    /// `deadline` is the first-paint budget, armed once the sources start.
+    case gathering(CandidateSnapshotBarrier, deadline: DispatchWorkItem?)
+    case ready
+  }
+
+  private(set) var initialSnapshot = InitialSnapshot.idle
+
+  var initialBarrier: CandidateSnapshotBarrier? {
+    if case .gathering(let barrier, _) = initialSnapshot { return barrier }
+    return nil
+  }
+
+  var initialSnapshotReady: Bool {
+    if case .ready = initialSnapshot { return true }
+    return false
+  }
+
+  func beginInitialSnapshot(_ barrier: CandidateSnapshotBarrier) {
+    cancelInitialDeadline()
+    initialSnapshot = .gathering(barrier, deadline: nil)
+  }
+
+  func armInitialDeadline(_ work: DispatchWorkItem) {
+    guard case .gathering(let barrier, let previous) = initialSnapshot else { return }
+    previous?.cancel()
+    initialSnapshot = .gathering(barrier, deadline: work)
+  }
+
+  func updateInitialBarrier(_ barrier: CandidateSnapshotBarrier) {
+    guard case .gathering(_, let deadline) = initialSnapshot else { return }
+    initialSnapshot = .gathering(barrier, deadline: deadline)
+  }
+
+  func cancelInitialDeadline() {
+    guard case .gathering(let barrier, let deadline) = initialSnapshot else { return }
+    deadline?.cancel()
+    initialSnapshot = .gathering(barrier, deadline: nil)
+  }
+
+  func publishInitialSnapshot() {
+    cancelInitialDeadline()
+    initialSnapshot = .ready
+  }
+
+  func resetInitialSnapshot() {
+    cancelInitialDeadline()
+    initialSnapshot = .idle
+  }
   /// Return/Tab/Cmd-Return pressed during either the initial catalog gather or
   /// the at-most-50-ms query evaluator fan-in is replayed against the exact
   /// completed query generation.
