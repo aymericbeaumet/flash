@@ -5,6 +5,13 @@ import XCTest
 
 @testable import flash
 
+/// A weak reference both Swift 6.1 (no `weak let`) and 6.3 (no `weak var`
+/// that is never reassigned) accept under `-warnings-as-errors`.
+private final class WeakReference<Object: AnyObject> {
+  weak var object: Object?
+  init(_ object: Object?) { self.object = object }
+}
+
 final class OneShotTerminalTests: XCTestCase {
   override func setUp() {
     super.setUp()
@@ -44,7 +51,7 @@ final class OneShotTerminalTests: XCTestCase {
       }
       let name = try XCTUnwrap(registry.openTerminal(name: nil, configuration: Config()))
       var session = try XCTUnwrap(registry.sessions[name]) as TerminalSession?
-      weak let retired = session
+      let retired = WeakReference(session)
       show(controller, name: name)
       waitUntil("unnamed shell running") {
         if case .running = session?.state { return true }
@@ -66,7 +73,7 @@ final class OneShotTerminalTests: XCTestCase {
       waitUntil("one-shot child and presentation retired after \(action)") {
         registry.sessions[name] == nil && !controller.isVisible && kill(pid, 0) == -1
       }
-      waitUntil("retired session released") { retired == nil }
+      waitUntil("retired session released") { retired.object == nil }
       XCTAssertEqual(dismissals, 1)
       XCTAssertEqual(
         focusDismissalReasons, [action == "hide" ? "terminal_closed" : "terminal_removed"])
