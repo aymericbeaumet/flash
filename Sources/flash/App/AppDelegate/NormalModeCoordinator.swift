@@ -849,13 +849,18 @@ extension AppDelegate {
     }
     performMappingCommand(action)
     guard wasNormal else { return }
+    recaptureAfterNormalAction(action)
+  }
+
+  /// A NORMAL action may have moved keyboard focus (an app switch, a shell
+  /// command): re-assert capture, on the longer ramp when it could have.
+  func recaptureAfterNormalAction(_ action: MappingCommand) {
     let focusChanging = Self.normalModeActionMayChangeKeyboardFocus(action)
-    if guardNormalModeInputAfterActionDispatch(force: focusChanging) {
-      scheduleNormalModeRecapture(
-        delaysMs: focusChanging
-          ? Self.normalModeFocusChangingRecaptureDelaysMs
-          : Self.normalModeRecaptureDelaysMs)
-    }
+    guard guardNormalModeInputAfterActionDispatch(force: focusChanging) else { return }
+    scheduleNormalModeRecapture(
+      delaysMs: focusChanging
+        ? Self.normalModeFocusChangingRecaptureDelaysMs
+        : Self.normalModeRecaptureDelaysMs)
   }
 
   static func normalModeActionMayChangeKeyboardFocus(_ action: MappingCommand) -> Bool {
@@ -1052,7 +1057,7 @@ extension AppDelegate {
   }
 
   func normalizedRepeatCount(_ repeatCount: Int) -> Int {
-    min(max(repeatCount, 1), 999)
+    RepeatCount.clamp(repeatCount)
   }
 
   func enterCommandLineMode(

@@ -267,7 +267,7 @@ extension NormalModeDispatcher {
     case .halfPageDown: lines = -FlashTunables.scrollPageLines
     case .left, .right, .top, .bottom: return nil
     }
-    return lines * Int32(min(max(repeatCount, 1), 999))
+    return lines * Int32(RepeatCount.clamp(repeatCount))
   }
 
   /// Lines one `gg` / `G` scrolls where only line scrolling is safe: past

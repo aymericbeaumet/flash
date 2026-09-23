@@ -61,7 +61,7 @@ extension AppDelegate {
           at: location, action: .rightClick, modifiers: [],
           completion: finished)
       } completion: { owner in
-        owner.pointerModeSuspendForContextMenu()
+        owner.suspendNormalCaptureForNativeSurface(reason: "pointer_mode_right_click")
       }
     case .toggleDrag:
       if hintSession.pointerDragActive {
@@ -119,12 +119,6 @@ extension AppDelegate {
       guard owner.flashMode == .normal else { return }
       owner.restoreNormalModeAfterCommit(action: .leftClick, at: location)
     }
-  }
-
-  private func pointerModeSuspendForContextMenu() {
-    noteContextMenuInteraction(reason: "pointer_mode_right_click")
-    nativeSurfaceSuspended = true
-    applyModeOverlay()
   }
 
   static func clampToScreens(_ point: CGPoint) -> CGPoint {

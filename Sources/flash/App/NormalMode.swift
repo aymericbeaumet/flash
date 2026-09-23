@@ -25,7 +25,7 @@ struct NormalModeTransition: Equatable {
     NormalModeTransition(
       pending: "",
       action: action,
-      repeatCount: max(1, repeatCount),
+      repeatCount: RepeatCount.clamp(repeatCount),
       repeatAnchor: repeatAnchor)
   }
 
@@ -43,8 +43,18 @@ struct PendingNormalModeCommand: Equatable {
   var repeatAnchor: String?
 }
 
+/// A NORMAL count prefix (`3]t`): at least one, at most `max`, everywhere a
+/// count is typed, carried or applied.
+enum RepeatCount {
+  static let max = 999
+
+  static func clamp(_ count: Int) -> Int {
+    Swift.min(Swift.max(count, 1), max)
+  }
+}
+
 enum NormalModeInterpreter {
-  private static let maxRepeatCount = 999
+  private static let maxRepeatCount = RepeatCount.max
   static let sequenceTimeoutMs = 1000
 
   private struct PendingState {

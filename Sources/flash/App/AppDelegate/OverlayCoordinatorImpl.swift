@@ -183,13 +183,7 @@ extension AppDelegate {
           format: "%.2f",
           Double(DispatchTime.now().uptimeNanoseconds - dispatchStartedAt.uptimeNanoseconds)
             / 1_000_000))
-    let focusChanging = Self.normalModeActionMayChangeKeyboardFocus(action)
-    if guardNormalModeInputAfterActionDispatch(force: focusChanging) {
-      scheduleNormalModeRecapture(
-        delaysMs: focusChanging
-          ? Self.normalModeFocusChangingRecaptureDelaysMs
-          : Self.normalModeRecaptureDelaysMs)
-    }
+    recaptureAfterNormalAction(action)
   }
 
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {
@@ -554,7 +548,7 @@ extension AppDelegate {
     scheduleNormalModeRecapture()
   }
 
-  private func suspendNormalCaptureForNativeSurface(reason: String) {
+  func suspendNormalCaptureForNativeSurface(reason: String) {
     noteContextMenuInteraction(reason: reason)
     // Record the native surface as mode context and let the single
     // projection-driven writer set inputMode + capture — no direct `overlay.*`
