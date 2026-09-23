@@ -21,7 +21,7 @@ tokio = { version = "1", default-features = false, features = [
   "time",
   "sync",
 ] }
-toml = "0.8"
+toml = "1.1"
 
 # Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
 # (fully-unoptimized tokio is visibly slow under the plugin latency contracts),

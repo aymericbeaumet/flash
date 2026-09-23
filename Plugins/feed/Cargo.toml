@@ -11,9 +11,9 @@ path = "src/main.rs"
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 flash_plugin = { path = "../_flash_plugin_rust" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 roxmltree = "0.21"
-scraper = { version = "0.24", default-features = false }
+scraper = { version = "0.27", default-features = false }
 serde_json = "1"
 # The SDK feature set plus `net`: reqwest needs tokio's TCP driver.
 tokio = { version = "1", default-features = false, features = [

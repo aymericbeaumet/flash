@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use flash_plugin::{Context, PollHandle};
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
@@ -207,7 +207,7 @@ fn read_cube(
     as_of: &mut String,
     rates: &mut BTreeMap<String, f64>,
 ) -> Result<(), String> {
-    if element.local_name().as_ref() != b"Cube" {
+    if element.local_name().as_ref() != "Cube" {
         return Ok(());
     }
     let mut currency = None;
@@ -215,13 +215,13 @@ fn read_cube(
     for attribute in element.attributes() {
         let attribute = attribute.map_err(|error| error.to_string())?;
         let value = attribute
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|error| error.to_string())?
             .into_owned();
         match attribute.key.as_ref() {
-            b"time" => *as_of = value,
-            b"currency" => currency = Some(value),
-            b"rate" => rate = value.parse::<f64>().ok(),
+            "time" => *as_of = value,
+            "currency" => currency = Some(value),
+            "rate" => rate = value.parse::<f64>().ok(),
             _ => {}
         }
     }
