@@ -49,7 +49,6 @@ extension OverlayPanel {
     modeBadgeCapturesInput = captureInput
     if style != .command {
       commandPromptVisible = false
-      commandCaretLayer.isHidden = true
       hideCommandTextField()
       clearCandidateFinderResults()
     }

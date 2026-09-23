@@ -429,7 +429,6 @@ extension OverlayPanel {
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"
-    commandCaretLayer.isHidden = true
     hideCommandTextField()
     clearCandidateFinderResults()
     commandLineText = ""
@@ -485,12 +484,15 @@ extension OverlayPanel {
     return isKeyWindow || NSApp.keyWindow === self
   }
 
-  /// Re-place Flash's caret layer. Idempotent: it reads the position back from
-  /// the field editor's own layout, so repeating it neither moves the caret nor
-  /// disturbs the text.
+  /// Restart the field editor's insertion-point blink. The caret is AppKit's
+  /// own; Flash draws none. Idempotent, and it does not move the caret — the
+  /// selection is owned by `syncCommandTextFieldSelection` — so it is safe to
+  /// repeat.
   func rearmCommandLineCaret() {
-    guard inputMode == .commandLine else { return }
-    updateCommandCaretLayer()
+    guard inputMode == .commandLine,
+      let editor = commandTextField.currentEditor() as? NSTextView
+    else { return }
+    editor.updateInsertionPointStateAndRestartTimer(true)
   }
 
   /// Delays for the post-open caret re-arm. Two turns: the next one, and one
@@ -582,8 +584,10 @@ extension OverlayPanel {
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
       rearmCommandLineCaret()
-      // Placing it once is not enough: the field editor finishes laying out
-      // after this pass, and late candidate merges relay it out again.
+      // Arming once is not enough. The blink only starts if AppKit considers
+      // the panel key at that instant, and this pass usually runs before the
+      // activation it just requested has settled. Re-arm once the turn has
+      // settled.
       scheduleCommandLineCaretRearm()
       responderDescription = hadEditor ? "command(rebuilt)" : "command(new)"
       FlashLog.trace(
@@ -824,7 +828,6 @@ extension OverlayPanel {
     // alert/banner/hide ran, so it stayed gone until the next geometry event.
     // Transient renderers re-attach it via
     // `appendActiveWindowBorderLayerIfNeeded`.
-    commandCaretLayer.isHidden = true
     clearCandidateFinderResults()
     lastTargetLocalRects.removeAll(keepingCapacity: true)
   }
