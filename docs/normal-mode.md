@@ -19,7 +19,9 @@ document-URL and mark commands remain available for explicit mappings.
   leave Cmd-R unbound, so there both do nothing rather than typing an `r`.
 - `[a` / `]a` cycle previous/next app in MRU order.
 - `[t` / `]t` send Cmd-Shift-[ / Cmd-Shift-] directly in every app, including
-  terminals. Repeat the final `t` to keep switching tabs.
+  terminals. Repeat the final `t` to keep switching tabs. WhatsApp binds the
+  chord to its previous/next chat; Messages, which leaves it unbound, receives
+  its own Control-(Shift-)Tab conversation chord instead.
 - `t` sends Cmd-T directly. `g1`–`g9` send Cmd-1…Cmd-9 directly, including in
   terminals and tmux. These shortcuts preserve NORMAL.
 - `g0` / `g^` go to the first tab and `g$` to the last. tmux and plugin
@@ -80,6 +82,11 @@ only explicit mappings act. A chord the focused app should receive is bound
 to `send_key`, or the user enters INSERT first. The release of a swallowed
 key is swallowed with it, because a terminal running the Kitty keyboard
 protocol encodes key releases to its pty.
+
+A synthesized chord reaches an iOS app (Mac Catalyst or iPad) with its
+modifiers pressed and released around the key, as a keyboard sends it: UIKit
+matches key commands against the modifier state it tracks from those presses
+and ignores a lone key event carrying modifier flags.
 
 Hermeticity also bounds what NORMAL synthesizes. A terminal emulator does not
 ignore a Command chord it has no binding for: its encoder falls through to the

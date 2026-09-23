@@ -1358,6 +1358,8 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
+    let (key, flags) = Self.appChord(
+      key: key, flags: flags, bundleIdentifier: target.bundleIdentifier)
     let count = normalizedRepeatCount(repeatCount)
     let activationDelayMs =
       activateNormalModeKeyTargetIfNeeded(
@@ -1368,7 +1370,7 @@ extension AppDelegate {
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
         // Note the synthesized chord so a `postToPid` event that loops back
         // through the Carbon dispatcher can't re-trigger our own hotkey for
-        // the same combo (e.g. the `⌘⇧]` Messages tab-traversal fallback).
+        // the same combo (e.g. a `⌘⇧]` tab-traversal chord).
         self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
         NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
       }
@@ -1447,6 +1449,9 @@ extension AppDelegate {
           + "flags=\(unsafe.1.rawValue) bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
       return
+    }
+    let keys = keys.map {
+      Self.appChord(key: $0.0, flags: $0.1, bundleIdentifier: target.bundleIdentifier)
     }
     let count = normalizedRepeatCount(repeatCount)
     var offsetMs =

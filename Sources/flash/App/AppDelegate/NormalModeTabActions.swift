@@ -482,15 +482,11 @@ extension AppDelegate {
     bundleIdentifier: String
   ) -> (key: CGKeyCode, flags: CGEventFlags)? {
     if messagesBundleIdentifiers.contains(bundleIdentifier) {
-      // macOS Sequoia+ rebound conversation traversal in Messages to
-      // ⌘⇧]/⌘⇧[, matching the Safari/Notes convention. The earlier
-      // Ctrl+Tab pair is no longer registered, which is why `[t`/`]t`
-      // stopped switching discussions.
-      let key: CGKeyCode =
-        direction == .forward
-        ? CGKeyCode(kVK_ANSI_RightBracket)
-        : CGKeyCode(kVK_ANSI_LeftBracket)
-      return (key, [.maskCommand, .maskShift])
+      // Messages binds Window > Go to Next / Previous Conversation to
+      // ⌃⇥ / ⌃⇧⇥ and leaves ⌘⇧] / ⌘⇧[ unbound.
+      return (
+        CGKeyCode(kVK_Tab), direction == .forward ? .maskControl : [.maskControl, .maskShift]
+      )
     }
     if WebBrowsers.all.contains(bundleIdentifier) {
       let key: CGKeyCode =
@@ -500,6 +496,30 @@ extension AppDelegate {
       return (key, [.maskCommand, .maskShift])
     }
     return nil
+  }
+
+  /// The chord `bundleIdentifier` answers for the intent of `key`+`flags`. The
+  /// standard next / previous tab chord (⌘⇧] / ⌘⇧[, what `]t` / `[t` send)
+  /// becomes the app's own traversal chord where it binds another one
+  /// (`nativeTabTraversalShortcut`); every other chord is delivered as is.
+  static func appChord(
+    key: CGKeyCode,
+    flags: CGEventFlags,
+    bundleIdentifier: String
+  ) -> (key: CGKeyCode, flags: CGEventFlags) {
+    let direction: NavigationDirection
+    switch Int(key) {
+    case kVK_ANSI_RightBracket: direction = .forward
+    case kVK_ANSI_LeftBracket: direction = .back
+    default: return (key, flags)
+    }
+    guard
+      flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+        == [.maskCommand, .maskShift],
+      let native = nativeTabTraversalShortcut(
+        direction: direction, bundleIdentifier: bundleIdentifier)
+    else { return (key, flags) }
+    return native
   }
 
   private static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {

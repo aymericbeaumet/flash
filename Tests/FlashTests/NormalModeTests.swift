@@ -2421,10 +2421,10 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.nativeTabTraversalShortcut(
         direction: .forward,
         bundleIdentifier: "com.apple.MobileSMS"))
-    XCTAssertEqual(messagesPrevious.key, CGKeyCode(kVK_ANSI_LeftBracket))
-    XCTAssertEqual(messagesPrevious.flags, [.maskCommand, .maskShift])
-    XCTAssertEqual(messagesNext.key, CGKeyCode(kVK_ANSI_RightBracket))
-    XCTAssertEqual(messagesNext.flags, [.maskCommand, .maskShift])
+    XCTAssertEqual(messagesPrevious.key, CGKeyCode(kVK_Tab))
+    XCTAssertEqual(messagesPrevious.flags, [.maskControl, .maskShift])
+    XCTAssertEqual(messagesNext.key, CGKeyCode(kVK_Tab))
+    XCTAssertEqual(messagesNext.flags, .maskControl)
     XCTAssertNil(
       AppDelegate.nativeTabTraversalShortcut(
         direction: .back,
@@ -2433,6 +2433,42 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.nativeTabTraversalShortcut(
         direction: .forward,
         bundleIdentifier: "com.example.TextEditor"))
+  }
+
+  func testMessagesAnswersTheTabChordWithItsConversationChord() {
+    func chord(_ key: Int, _ flags: CGEventFlags, _ bundle: String) -> [UInt64] {
+      let result = AppDelegate.appChord(
+        key: CGKeyCode(key), flags: flags, bundleIdentifier: bundle)
+      return [UInt64(result.key), result.flags.rawValue]
+    }
+    let next = [UInt64(kVK_Tab), CGEventFlags.maskControl.rawValue]
+    let previous = [UInt64(kVK_Tab), CGEventFlags([.maskControl, .maskShift]).rawValue]
+    XCTAssertEqual(
+      chord(kVK_ANSI_RightBracket, [.maskCommand, .maskShift], "com.apple.MobileSMS"), next)
+    XCTAssertEqual(
+      chord(kVK_ANSI_LeftBracket, [.maskCommand, .maskShift], "com.apple.MobileSMS"), previous)
+    // Every other chord reaches Messages as sent, and every other app keeps the tab chord.
+    let back = [UInt64(kVK_ANSI_LeftBracket), CGEventFlags.maskCommand.rawValue]
+    XCTAssertEqual(chord(kVK_ANSI_LeftBracket, .maskCommand, "com.apple.MobileSMS"), back)
+    let reopen = [UInt64(kVK_ANSI_T), CGEventFlags([.maskCommand, .maskShift]).rawValue]
+    XCTAssertEqual(chord(kVK_ANSI_T, [.maskCommand, .maskShift], "com.apple.MobileSMS"), reopen)
+    let tab = [UInt64(kVK_ANSI_RightBracket), CGEventFlags([.maskCommand, .maskShift]).rawValue]
+    for bundle in ["net.whatsapp.WhatsApp", "org.mozilla.firefox", "org.alacritty"] {
+      XCTAssertEqual(chord(kVK_ANSI_RightBracket, [.maskCommand, .maskShift], bundle), tab, bundle)
+    }
+  }
+
+  func testUIKitAppsGetEachChordWithItsModifierPresses() {
+    XCTAssertTrue(UIKitApps.hostsUIKit(infoDictionary: ["UIDeviceFamily": [2]]))
+    XCTAssertFalse(
+      UIKitApps.hostsUIKit(infoDictionary: ["CFBundleIdentifier": "org.mozilla.firefox"]))
+    XCTAssertEqual(
+      UIKitApps.modifierKeys(in: [.maskCommand, .maskShift]).map(\.key),
+      [CGKeyCode(kVK_Shift), CGKeyCode(kVK_Command)])
+    XCTAssertEqual(
+      UIKitApps.modifierKeys(in: [.maskControl, .maskAlternate]).map(\.key),
+      [CGKeyCode(kVK_Control), CGKeyCode(kVK_Option)])
+    XCTAssertTrue(UIKitApps.modifierKeys(in: [.maskSecondaryFn, .maskNumericPad]).isEmpty)
   }
 
   func testTerminalTargetsKeepTheirExistingPixelWheelFallbackPolicy() {

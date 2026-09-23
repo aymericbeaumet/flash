@@ -37,13 +37,36 @@ extension NormalModeDispatcher {
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
     else { return false }
+    let modifiers =
+      flags.isEmpty || !UIKitApps.hostsUIKit(pid: pid) ? [] : UIKitApps.modifierKeys(in: flags)
+    var held: CGEventFlags = []
+    for modifier in modifiers {
+      held.insert(modifier.flag)
+      postModifierKey(modifier.key, down: true, flags: held, source: source, to: pid)
+    }
     down.flags = flags
     up.flags = flags
     down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     down.postToPid(pid)
     up.postToPid(pid)
+    for modifier in modifiers.reversed() {
+      held.remove(modifier.flag)
+      postModifierKey(modifier.key, down: false, flags: held, source: source, to: pid)
+    }
     return true
+  }
+
+  /// A modifier key's own press or release (see `UIKitApps`); `flags` is the
+  /// modifier state after it.
+  private static func postModifierKey(
+    _ key: CGKeyCode, down: Bool, flags: CGEventFlags, source: CGEventSource?, to pid: pid_t
+  ) {
+    guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
+    else { return }
+    event.flags = flags
+    event.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    event.postToPid(pid)
   }
 
   /// Post one modifier chord to the session event stream so macOS can handle
