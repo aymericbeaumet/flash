@@ -18,6 +18,23 @@ if CommandLine.arguments.count > 1 {
   exit(FlashCLI.run(args: Array(CommandLine.arguments.dropFirst())))
 }
 
+// Held for the process lifetime; see `ResidentLock`.
+let residentLock: ResidentLock?
+switch ResidentLock.acquire() {
+case .acquired(let lock):
+  residentLock = lock
+case .heldByAnother(let pid):
+  let holder = pid.map(String.init) ?? "unknown"
+  FileHandle.standardError.write(
+    Data("flash: another Flash resident is already running (pid \(holder)); exiting\n".utf8))
+  FlashLog.warn("[resident] duplicate_exit holder_pid=\(holder)")
+  FlashLog.flush()
+  exit(0)
+case .unavailable(let code):
+  residentLock = nil
+  FlashLog.warn("[resident] lock_unavailable errno=\(code)")
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

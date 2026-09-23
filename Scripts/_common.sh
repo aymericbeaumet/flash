@@ -63,6 +63,8 @@ kill_all_flash() {
     "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
     true
   pkill -f "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" 2>/dev/null || true
+  # A resident started through the CLI symlink with no arguments.
+  pkill -fx "$CLI_LINK_PATH" 2>/dev/null || true
   killall "$APP_NAME 🧪" 2>/dev/null || true
   osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 &
   local quit_pid=$!
