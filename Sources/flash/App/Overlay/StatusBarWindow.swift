@@ -79,3 +79,68 @@ extension OverlayPanel {
     if statusBarWindow.level != target { statusBarWindow.level = target }
   }
 }
+
+extension OverlayPanel {
+  /// What the bar window and its layers look like right now, for the HTTP
+  /// inspector: enough to tell a bar that is drawn but not shown (window
+  /// hidden, occluded, lowered, layers detached, text faded or never drawn)
+  /// from a bar whose model is empty.
+  func statusBarDiagnostics() -> [String: Any] {
+    func opacity(_ layer: CALayer) -> Double {
+      Double(layer.presentation()?.opacity ?? layer.opacity)
+    }
+    func rect(_ r: CGRect) -> [Double] {
+      [Double(r.minX), Double(r.minY), Double(r.width), Double(r.height)]
+    }
+    let surface = primaryStatusBarSurface
+    let background = surface.backgroundLayer
+    let runs = zip(surface.visibleRuns, surface.runLayers).map { run, layers -> [String: Any] in
+      [
+        "text": String(run.segment.text.prefix(24)),
+        "container_hidden": layers.container.isHidden,
+        "container_attached": layers.container.superlayer === background,
+        "container_frame": rect(layers.container.frame),
+        "container_opacity": opacity(layers.container),
+        "text_hidden": layers.text.isHidden,
+        "text_drawn": layers.text.contents != nil,
+        "text_string_empty": (layers.text.string as? NSAttributedString)?.length ?? 0 == 0,
+        "text_opacity": opacity(layers.text),
+        "text_frame": rect(layers.text.frame),
+        "text_animations": layers.text.animationKeys() ?? [],
+      ]
+    }
+    let hintSnapshot: String
+    switch statusBarHintSnapshot {
+    case .live: hintSnapshot = "live"
+    case .held: hintSnapshot = "held"
+    }
+    return [
+      "badge_visible": modeBadgeVisible,
+      "badge_text": modeBadgeText,
+      "badge_style": String(describing: modeBadgeStyle),
+      "hint_snapshot": hintSnapshot,
+      "yields_to_native_menu_bar": statusBarYieldsToNativeMenuBar,
+      "document_runs": statusBarModel.document.runs.count,
+      "window": [
+        "visible": statusBarWindow.isVisible,
+        "occlusion_visible": statusBarWindow.occlusionState.contains(.visible),
+        "on_active_space": statusBarWindow.isOnActiveSpace,
+        "level": statusBarWindow.level.rawValue,
+        "alpha": Double(statusBarWindow.alphaValue),
+        "frame": rect(statusBarWindow.frame),
+        "hosted_layers": statusBarWindow.contentLayer.sublayers?.count ?? 0,
+      ],
+      "background": [
+        "attached": background.superlayer === statusBarWindow.contentLayer,
+        "hidden": background.isHidden,
+        "opacity": opacity(background),
+        "frame": rect(background.frame),
+      ],
+      "render": [
+        "visible": surface.lastRenderStats.visible,
+        "changed": surface.lastRenderStats.changed,
+      ],
+      "runs": runs,
+    ]
+  }
+}

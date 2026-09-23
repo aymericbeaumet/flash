@@ -81,6 +81,16 @@ final class NativeStatusBarSurface {
     backgroundLayer.insertSublayer(hoverHighlight, at: 2)
   }
 
+  /// Forget what every run layer last drew, so the next `render` redraws each
+  /// run's text instead of only the runs whose value changed.
+  func invalidateDrawnRuns() {
+    for layers in runLayers {
+      layers.previous = nil
+      layers.previousFont = nil
+      layers.previousForeground = nil
+    }
+  }
+
   /// `notchWidth` fixes the centre reservation (and the recess drawn behind
   /// it) to the real camera housing's width; zero keeps the reservation
   /// hugging the centred content.

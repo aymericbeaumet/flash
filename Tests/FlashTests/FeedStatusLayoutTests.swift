@@ -56,6 +56,31 @@ final class FeedStatusLayoutTests: XCTestCase {
       })
   }
 
+  func testInvalidatedSurfaceRedrawsEveryRunNotJustChangedOnes() {
+    let source = "left #[fg=red]middle#[default] right"
+    let surface = render(source)
+    let drawn = surface.lastRenderStats.visible
+    XCTAssertGreaterThan(drawn, 1)
+    XCTAssertEqual(surface.lastRenderStats.changed, drawn)
+
+    rerender(surface, source)
+    XCTAssertEqual(surface.lastRenderStats.changed, 0, "an unchanged render redraws nothing")
+
+    surface.invalidateDrawnRuns()
+    rerender(surface, source)
+    XCTAssertEqual(surface.lastRenderStats.changed, drawn, "a repaint redraws every run")
+  }
+
+  private func rerender(_ surface: NativeStatusBarSurface, _ source: String) {
+    surface.render(
+      document: StatusFormatDocument.parse(source),
+      barFrame: CGRect(x: 0, y: 0, width: 1000, height: 26),
+      screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 900), scale: 2, notch: nil,
+      font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
+      labels: .init(normal: "N", insert: "INSERT", command: "COMMAND"),
+      palette: OverlayPanel.normalPalette, modeStyle: .normal, modeText: "N")
+  }
+
   private func render(_ source: String, notch: CGRect? = nil) -> NativeStatusBarSurface {
     let surface = NativeStatusBarSurface()
     let frame = CGRect(x: 0, y: 0, width: 1000, height: 26)

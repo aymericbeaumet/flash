@@ -172,12 +172,18 @@ extension OverlayPanel {
     if let pending = statusBarHintSnapshot.release() { setStatusBarModel(pending) }
   }
 
-  /// Re-anchor and re-order the bar after a space change or wake. Display
-  /// geometry may have changed without `didChangeScreenParameters`, and the
-  /// bar window's z-order is only reasserted by `orderFrontRegardless`.
+  /// Re-anchor, re-order and repaint the bar after a space change, a wake, an
+  /// unlock, or the bar window coming back on screen. Display geometry may have
+  /// changed without `didChangeScreenParameters`, the bar window's z-order is
+  /// only reasserted by `orderFrontRegardless`, and text drawn before the bar
+  /// went off screen is redrawn rather than trusted: a render only redraws
+  /// the runs whose value changed.
   func reassertStatusBar(reason: String) {
     guard modeBadgeVisible else { return }
     FlashLog.trace("[statusbar] reassert reason=\(reason)")
+    primaryStatusBarSurface.invalidateDrawnRuns()
+    for bar in secondaryStatusBars { bar.invalidateDrawnRuns() }
+    lastModeBadgeLayoutStamp = nil
     OverlayPanel.invalidateScreenSnapshot()
     updateModeBadge(
       text: modeBadgeText,

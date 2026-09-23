@@ -521,6 +521,7 @@ final class OverlayPanel: NSPanel {
   // build them once and reuse.
 
   private var screenParametersObserver: NSObjectProtocol?
+  private var statusBarOcclusionObserver: NSObjectProtocol?
 
   init() {
     let frame = OverlayPanel.unionScreenFrame()
@@ -549,6 +550,18 @@ final class OverlayPanel: NSPanel {
         OverlayPanel.invalidateScreenSnapshot(remeasuringNativeMenuBars: true)
         self?.statusBarDidChangeScreenParameters()
       }
+    }
+    // Coming back on screen (display wake, unlock, a full-screen cover gone)
+    // repaints the whole bar; see `reassertStatusBar`.
+    statusBarOcclusionObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification,
+      object: statusBarWindow,
+      queue: .main
+    ) { [weak self] _ in
+      guard let self else { return }
+      let visible = self.statusBarWindow.occlusionState.contains(.visible)
+      FlashLog.trace("[statusbar] occlusion visible=\(visible)")
+      if visible { self.reassertStatusBar(reason: "occlusion_visible") }
     }
     self.level = Self.persistentStatusWindowLevel
     self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -620,7 +633,7 @@ final class OverlayPanel: NSPanel {
   }
 
   deinit {
-    if let observer = screenParametersObserver {
+    for observer in [screenParametersObserver, statusBarOcclusionObserver].compactMap({ $0 }) {
       NotificationCenter.default.removeObserver(observer)
     }
     removePointerMonitors()

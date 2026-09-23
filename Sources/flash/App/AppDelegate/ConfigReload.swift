@@ -336,6 +336,7 @@ extension AppDelegate {
       "activation_in_flight": activationInFlight,
       "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),
+      "statusbar": overlay?.statusBarDiagnostics() ?? [:],
       "plugins": statuses.map(\.jsonObject),
     ]
   }
