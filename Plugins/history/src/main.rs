@@ -1,6 +1,6 @@
 use flash_plugin::{run, Candidate, CommandRequest, Context, PerformResponse, RefreshGate};
 use rusqlite::{Connection, OpenFlags};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -127,8 +127,9 @@ impl FlashPlugin for History {
     }
 }
 
-/// Rebuild and publish the combined catalog. Returns whether a snapshot was
-/// published this cycle (a transient failure keeps the last-good snapshot).
+/// Rebuild and publish the combined catalog. Returns whether the published
+/// snapshot is current this cycle (a transient failure keeps the last-good
+/// snapshot).
 async fn refresh_catalog(ctx: &Context) -> bool {
     REFRESH_GATE
         .run(ctx, |ctx, _running| async move {
@@ -138,8 +139,22 @@ async fn refresh_catalog(ctx: &Context) -> bool {
                 log_refresh(&ctx, "empty", 0, started_at);
                 return true;
             };
-            let firefox = firefox_rows(&ctx, &home).await;
-            let chrome = chrome_rows(&ctx, &home).await;
+            let places = newest_places_db(&home).await;
+            let chrome = chrome_profile(&home);
+            let inputs = Inputs::read(places.as_deref(), &chrome, SystemTime::now()).await;
+            let published = PUBLISHED_FROM.lock().ok().and_then(|slot| {
+                slot.as_ref()
+                    .filter(|(from, _)| *from == inputs)
+                    .map(|(_, count)| *count)
+            });
+            if let Some(count) = published {
+                // Nothing the catalog is built from changed: the host already
+                // holds this exact snapshot.
+                log_refresh(&ctx, "unchanged", count, started_at);
+                return true;
+            }
+            let firefox = firefox_rows(&ctx, places).await;
+            let chrome = chrome_rows(&ctx, &chrome).await;
             let (Some(firefox), Some(chrome)) = (firefox, chrome) else {
                 // Transient store failure: don't publish — the host keeps
                 // its last-good catalog.
@@ -150,6 +165,9 @@ async fn refresh_catalog(ctx: &Context) -> bool {
             let count = candidates.len();
             record_source_counts(&candidates);
             ctx.publish(candidates);
+            if let Ok(mut slot) = PUBLISHED_FROM.lock() {
+                *slot = Some((inputs, count));
+            }
             log_refresh(
                 &ctx,
                 if count == 0 { "empty" } else { "ok" },
@@ -162,11 +180,52 @@ async fn refresh_catalog(ctx: &Context) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Change detection
+// ---------------------------------------------------------------------------
+
+/// A file's length and modification time; `None` when it is absent.
+type FileStamp = Option<(u64, SystemTime)>;
+
+async fn stamp(path: &Path) -> FileStamp {
+    let metadata = tokio::fs::metadata(path).await.ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// Everything a catalog is built from: each store file a refresh reads and
+/// the day the recency window ends on. Equal inputs build an equal catalog.
+#[derive(Debug, PartialEq, Eq)]
+struct Inputs {
+    files: Vec<(PathBuf, FileStamp)>,
+    cutoff_day: u64,
+}
+
+impl Inputs {
+    async fn read(places: Option<&Path>, chrome: &Path, now: SystemTime) -> Self {
+        let mut paths: Vec<PathBuf> = places
+            .map(|places| vec![places.to_path_buf(), sibling(places, "-wal")])
+            .unwrap_or_default();
+        paths.extend(["History", "History-wal", "Bookmarks"].map(|file| chrome.join(file)));
+        let mut files = Vec::with_capacity(paths.len());
+        for path in paths {
+            let stamp = stamp(&path).await;
+            files.push((path, stamp));
+        }
+        let cutoff_day = now
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() / 86_400);
+        Self { files, cutoff_day }
+    }
+}
+
+/// The inputs of the catalog last published, and its row count.
+static PUBLISHED_FROM: Mutex<Option<(Inputs, usize)>> = Mutex::new(None);
+
+// ---------------------------------------------------------------------------
 // Firefox
 // ---------------------------------------------------------------------------
 
-async fn firefox_rows(ctx: &Context, home: &Path) -> BrowserRows {
-    let Some(places) = newest_places_db(home).await else {
+async fn firefox_rows(ctx: &Context, places: Option<PathBuf>) -> BrowserRows {
+    let Some(places) = places else {
         return Some((Vec::new(), Vec::new()));
     };
     let Some(db) = snapshot_sqlite(ctx, &places, "firefox-places.sqlite").await else {
@@ -229,14 +288,16 @@ async fn newest_places_db(home: &Path) -> Option<PathBuf> {
 // Chrome
 // ---------------------------------------------------------------------------
 
-async fn chrome_rows(ctx: &Context, home: &Path) -> BrowserRows {
-    let profile = home
-        .join("Library")
+fn chrome_profile(home: &Path) -> PathBuf {
+    home.join("Library")
         .join("Application Support")
         .join("Google")
         .join("Chrome")
-        .join("Default");
-    if tokio::fs::metadata(&profile).await.is_err() {
+        .join("Default")
+}
+
+async fn chrome_rows(ctx: &Context, profile: &Path) -> BrowserRows {
+    if tokio::fs::metadata(profile).await.is_err() {
         return Some((Vec::new(), Vec::new()));
     }
     let bookmarks = match tokio::fs::read(profile.join("Bookmarks")).await {
@@ -324,10 +385,23 @@ fn collect_chrome_bookmarks(node: &serde_json::Value, depth: usize, rows: &mut V
 
 /// Copy a browser-owned SQLite database (plus its `-wal` sibling when present)
 /// into the plugin cache dir under `name`. The live database stays locked by
-/// the browser; SQLite only ever opens our private copy.
+/// the browser; SQLite only ever opens our private copy. A copy whose source
+/// files are unchanged since it was taken is reused as is.
 async fn snapshot_sqlite(ctx: &Context, src: &Path, name: &str) -> Option<PathBuf> {
     let dst = ctx.cache_dir().join(name);
     let src_wal = sibling(src, "-wal");
+    let taken_from = (src.to_path_buf(), [stamp(src).await, stamp(&src_wal).await]);
+    let unchanged = taken_from.1[0].is_some()
+        && COPIED_FROM
+            .lock()
+            .is_ok_and(|copies| copies.get(name) == Some(&taken_from));
+    if unchanged && tokio::fs::metadata(&dst).await.is_ok() {
+        return Some(dst);
+    }
+    // A copy that fails halfway must not be reused as current.
+    if let Ok(mut copies) = COPIED_FROM.lock() {
+        copies.remove(name);
+    }
     let dst_wal = sibling(&dst, "-wal");
     // Stale sidecars from a previous cycle must never pair with a fresh copy.
     let _ = tokio::fs::remove_file(&dst_wal).await;
@@ -336,8 +410,17 @@ async fn snapshot_sqlite(ctx: &Context, src: &Path, name: &str) -> Option<PathBu
     if tokio::fs::metadata(&src_wal).await.is_ok() {
         tokio::fs::copy(&src_wal, &dst_wal).await.ok()?;
     }
+    if let Ok(mut copies) = COPIED_FROM.lock() {
+        copies.insert(name.to_string(), taken_from);
+    }
     Some(dst)
 }
+
+/// The source path and `[database, -wal]` stamps each private copy was taken
+/// from, by copy name.
+type CopySource = (PathBuf, [FileStamp; 2]);
+static COPIED_FROM: LazyLock<Mutex<HashMap<String, CopySource>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut os = path.as_os_str().to_os_string();
@@ -584,6 +667,81 @@ mod tests {
                 row("https://other.example/", "Other"),
             ]
         );
+    }
+
+    async fn scratch_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "flash-history-{label}-{}-{:?}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+        ));
+        tokio::fs::create_dir_all(&dir).await.expect("scratch dir");
+        dir
+    }
+
+    #[tokio::test]
+    async fn inputs_change_with_any_store_file_or_the_day() {
+        let dir = scratch_dir("inputs").await;
+        let places = dir.join("places.sqlite");
+        let chrome = dir.join("Default");
+        tokio::fs::create_dir_all(&chrome).await.unwrap();
+        tokio::fs::write(&places, b"db").await.unwrap();
+        tokio::fs::write(chrome.join("History"), b"history")
+            .await
+            .unwrap();
+        let today = UNIX_EPOCH + Duration::from_secs(20_000 * 86_400 + 60);
+
+        let read = || Inputs::read(Some(&places), &chrome, today);
+        let before = read().await;
+        assert_eq!(before, read().await);
+        tokio::fs::write(sibling(&places, "-wal"), b"frames")
+            .await
+            .unwrap();
+        let after_wal = read().await;
+        assert_ne!(before, after_wal, "a new WAL is a change");
+        tokio::fs::write(chrome.join("Bookmarks"), b"{}")
+            .await
+            .unwrap();
+        assert_ne!(
+            after_wal,
+            read().await,
+            "a Chrome bookmark edit is a change"
+        );
+        let tomorrow = today + Duration::from_secs(86_400);
+        assert_ne!(
+            read().await,
+            Inputs::read(Some(&places), &chrome, tomorrow).await,
+            "the recency window moves daily"
+        );
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_store_reuses_its_private_copy() {
+        let harness = flash_plugin::testing::Harness::new("history");
+        let ctx = harness.context();
+        tokio::fs::create_dir_all(ctx.cache_dir()).await.unwrap();
+        let dir = scratch_dir("copy").await;
+        let src = dir.join("History");
+        tokio::fs::write(&src, b"v1").await.unwrap();
+
+        let copy = snapshot_sqlite(&ctx, &src, "reuse.sqlite").await.unwrap();
+        assert_eq!(tokio::fs::read(&copy).await.unwrap(), b"v1");
+        tokio::fs::write(&copy, b"ours").await.unwrap();
+        snapshot_sqlite(&ctx, &src, "reuse.sqlite").await.unwrap();
+        assert_eq!(
+            tokio::fs::read(&copy).await.unwrap(),
+            b"ours",
+            "unchanged: no copy"
+        );
+
+        tokio::fs::write(&src, b"v2 longer").await.unwrap();
+        snapshot_sqlite(&ctx, &src, "reuse.sqlite").await.unwrap();
+        assert_eq!(tokio::fs::read(&copy).await.unwrap(), b"v2 longer");
+        let _ = tokio::fs::remove_dir_all(dir).await;
+        let _ = tokio::fs::remove_dir_all(harness.data_dir()).await;
     }
 
     #[test]
