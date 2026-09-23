@@ -43,9 +43,8 @@ extension AppDelegate {
     let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
     let screenH = ActionDispatcher.primaryScreenHeight()
     applyModeOverlay()
+    let raw = WindowSnapshot.windowList() ?? []
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-      let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
       let targets = Self.statusItemTargets(raw, ownPID: ownPID, screenH: screenH)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }

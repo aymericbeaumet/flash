@@ -746,11 +746,10 @@ extension OverlayPanel {
 
   // MARK: Reveal-aware yielding
 
-  /// Serial utility queue the reveal probe runs on. Everything the probe
-  /// touches is a thread-safe C call (`CGEvent(source:)`, `CGDisplayBounds`,
-  /// `CGWindowListCopyWindowInfo`), so none of its work belongs on the main
-  /// run loop — which owns the keyboard event tap and must never share it
-  /// with a 12.5 Hz window-server scan.
+  /// Serial utility queue the reveal probe runs on. The pointer checks are
+  /// thread-safe C calls (`CGEvent(source:)`, `CGDisplayBounds`) and stay off
+  /// the main run loop; the window-list read hops to main through
+  /// `WindowSnapshot.windowList`, and only while the pointer is in the band.
   private static let menuBarRevealProbeQueue = DispatchQueue(
     label: "flash.status_bar.reveal", qos: .utility)
   static let menuBarRevealClientID = "core:menu_bar_reveal"
@@ -845,8 +844,7 @@ extension OverlayPanel {
   /// Screen Recording permission.
   static func nativeMenuBarIsRevealed(mainScreenWidth: CGFloat) -> Bool {
     guard
-      let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
-        as? [[String: Any]]
+      let infos = WindowSnapshot.windowList([.optionOnScreenOnly])
     else { return false }
     let menuLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
     for info in infos {
@@ -862,4 +860,3 @@ extension OverlayPanel {
     return false
   }
 }
-

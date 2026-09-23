@@ -39,6 +39,23 @@ struct WindowSnapshot {
   /// returned targets against `visibleRegions` afterward.
   let activeWindowFrame: CGRect?
 
+  /// The one door to `CGWindowListCopyWindowInfo`, and it always opens on main.
+  ///
+  /// The call synchronizes with this process's pending Core Animation
+  /// transaction while holding the WindowServer connection lock. Issued from a
+  /// background thread it deadlocks against a main-thread commit that carries
+  /// WindowServer actions until SkyLight's 500 ms timeout, freezing main with
+  /// it (sampled: `SLSConnectionSynchronizeSLSCATransaction` against
+  /// `SLSConnectionSetLastSLSCATransaction`). On main the two can never
+  /// overlap. Background callers hop with `DispatchQueue.main.sync`, so main
+  /// must never wait synchronously on a queue that reads the window list.
+  static func windowList(
+    _ options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+  ) -> [[String: Any]]? {
+    guard Thread.isMainThread else { return DispatchQueue.main.sync { windowList(options) } }
+    return CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+  }
+
   static func build(
     primaryH: CGFloat,
     onlyComputingVisibleRegionsFor focusedPid: pid_t,
@@ -47,7 +64,7 @@ struct WindowSnapshot {
     -> WindowSnapshot
   {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+    guard let info = WindowSnapshot.windowList(opts) else {
       return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
     let entries = entries(from: info, primaryH: primaryH)

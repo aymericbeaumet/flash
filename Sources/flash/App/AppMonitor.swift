@@ -35,9 +35,9 @@ final class AppMonitor {
   let registry: SourceRegistry
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
-  /// WindowServer geometry lookups that must not wait behind an AX walk on
-  /// `axQueue` and must never run on main (`CGWindowListCopyWindowInfo` is a
-  /// synchronous WindowServer round trip).
+  /// AX geometry reads for the active-window border that must not wait behind
+  /// an AX walk on `axQueue`. Window-list reads never run here; see
+  /// `WindowSnapshot.windowList`.
   let geometryQueue = DispatchQueue(label: "flash.window_geometry", qos: .userInitiated)
   let mainThreadWatchdog = MainThreadWatchdog()
   var focusedElementDidChange: ((pid_t, String) -> Void)?

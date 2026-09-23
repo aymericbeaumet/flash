@@ -166,7 +166,7 @@ extension AppMonitor {
       NSScreen.screens.first { $0.frame.intersects(focusedContext.frontWindowFrame) }?.frame
       ?? NSScreen.main?.frame ?? .zero
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+    let info = WindowSnapshot.windowList(options) ?? []
     let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
       .filter { $0.pid != getpid() }
     var orderedPids: [pid_t] = []
@@ -241,6 +241,7 @@ extension AppMonitor {
     context: AppContext,
     providers: [FlashSource],
     cfg: Config,
+    primaryH: CGFloat,
     dirtyToken: UInt64,
     configRevision: UInt64
   ) -> PreparedModel {
@@ -248,6 +249,7 @@ extension AppMonitor {
       reason: "prepared_model",
       context: context,
       cfg: cfg,
+      primaryH: primaryH,
       providers: providers)
     return PreparedModel(
       pid: context.processID,
@@ -280,12 +282,14 @@ extension AppMonitor {
     completion: @escaping (DiscoveryResult) -> Void
   ) {
     let cfg = snapshotConfig()
+    let primaryH = primaryScreenHeight()
     axQueue.async { [weak self] in
       guard let self else { return }
       let result = self.runAndAssign(
         reason: "activation",
         context: context,
         cfg: cfg,
+        primaryH: primaryH,
         providers: providers,
         targetFilter: targetFilter)
       DispatchQueue.main.async {
@@ -294,17 +298,20 @@ extension AppMonitor {
     }
   }
 
+  /// Runs on `axQueue`; `primaryH` is read on main beforehand because
+  /// `NSScreen` is main-affine.
   private func runAndAssign(
     reason: String,
     context: AppContext,
     cfg: Config,
+    primaryH: CGFloat,
     providers: [FlashSource],
     targetFilter: ((JumpTarget) -> Bool)? = nil
   ) -> DiscoveryResult {
     let startedAt = DispatchTime.now()
     configureRuntime(for: cfg)
     let frameStartedAt = DispatchTime.now()
-    let frame = resolveDiscoveryFrame(for: context)
+    let frame = resolveDiscoveryFrame(for: context, primaryH: primaryH)
     let frameEndedAt = DispatchTime.now()
     guard !frame.visibleRegions.isEmpty else {
       logDiscoveryPipeline(
@@ -427,7 +434,7 @@ extension AppMonitor {
     )
   }
 
-  private func resolveDiscoveryFrame(for context: AppContext) -> DiscoveryFrame {
+  private func resolveDiscoveryFrame(for context: AppContext, primaryH: CGFloat) -> DiscoveryFrame {
     if context.processID == getpid() {
       let frame = context.frontWindowFrame
       return DiscoveryFrame(
@@ -435,7 +442,7 @@ extension AppMonitor {
         visibleRegions: frame.isNull ? [] : [frame])
     }
     let snapshot = WindowSnapshot.build(
-      primaryH: primaryScreenHeight(),
+      primaryH: primaryH,
       onlyComputingVisibleRegionsFor: context.processID,
       ignoringPids: [getpid()])
     let visible: [CGRect]

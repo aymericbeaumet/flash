@@ -8,10 +8,7 @@ struct HintWindowSnapshot: Equatable {
   static func current(
     pid: pid_t, primaryHeight: CGFloat, windowNumber: CGWindowID? = nil
   ) -> Self? {
-    guard
-      let info = CGWindowListCopyWindowInfo(
-        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-    else { return nil }
+    guard let info = WindowSnapshot.windowList() else { return nil }
     return resolve(info, pid: pid, primaryHeight: primaryHeight, windowNumber: windowNumber)
   }
 

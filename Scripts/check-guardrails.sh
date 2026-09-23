@@ -62,6 +62,16 @@ check_absent_except \
   'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
+# `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
+# main-thread Core Animation commit until SkyLight's 500 ms timeout, freezing
+# main with it. `WindowSnapshot.windowList` is the one door and always runs the
+# read on main.
+check_absent_except \
+  "window-list reads go through WindowSnapshot.windowList (main thread only)" \
+  "CGWindowListCopyWindowInfo\\(" \
+  '/WindowSnapshot\.swift:' \
+  "${PROD_SWIFT[@]}"
+
 # Every production app AX element must carry a bounded messaging timeout, or a
 # wedged app beachballs Flash's main thread for the 6s system default. The
 # AXApp.make factory applies the timeout; nothing else may call the raw API.

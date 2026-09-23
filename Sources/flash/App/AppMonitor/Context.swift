@@ -52,7 +52,7 @@ extension AppMonitor {
     excludingBundleIdentifier ignoredBundleIdentifier: String
   ) -> AppContext? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
     guard
       let entry = WindowSnapshot.topInteractionEntry(
@@ -134,7 +134,7 @@ extension AppMonitor {
   /// geometry on `geometryQueue`; `primaryH` is read on main beforehand.
   static func topWindowFrame(for pid: pid_t, primaryH: CGFloat) -> CGRect? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
     let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
     // Match `WindowSnapshot.build`: a layer-0 card anchored over the app's main
@@ -157,7 +157,7 @@ extension AppMonitor {
   /// Thread-safe counterpart of `appWindowContext(for:)`'s frame lookup.
   static func topApplicationWindowFrame(for pid: pid_t, primaryH: CGFloat) -> CGRect? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
     return WindowSnapshot.topApplicationWindowFrame(
       entries: WindowSnapshot.entries(from: info, primaryH: primaryH),
@@ -168,7 +168,7 @@ extension AppMonitor {
     excludingBundleIdentifier ignoredBundleIdentifier: String
   ) -> AppContext? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
 
     for entry in WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()) {

@@ -170,6 +170,7 @@ extension AppMonitor {
     if completion == nil {
       modelScheduler.noteRefreshStarted(pid: pid, now: DispatchTime.now().uptimeNanoseconds)
     }
+    let primaryH = primaryScreenHeight()
 
     axQueue.async { [weak self] in
       guard let self else { return }
@@ -178,6 +179,7 @@ extension AppMonitor {
         context: context,
         providers: providers,
         cfg: cfg,
+        primaryH: primaryH,
         dirtyToken: startToken,
         configRevision: revision)
       let rebuildEndedAt = DispatchTime.now()

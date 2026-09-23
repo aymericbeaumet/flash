@@ -448,8 +448,7 @@ final class OverlayPanel: NSPanel {
   /// `.optionAll` because an auto-hidden bar is off-screen.
   private static func measureNativeMenuBarHeights() -> [CGDirectDisplayID: CGFloat] {
     guard
-      let infos = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID)
-        as? [[String: Any]]
+      let infos = WindowSnapshot.windowList([.optionAll])
     else { return [:] }
     let menuLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
     let ownPID = Int(getpid())

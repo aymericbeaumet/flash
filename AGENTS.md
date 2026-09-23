@@ -101,7 +101,8 @@ Surface requests that would violate these constraints before implementing them.
   element that fired, never a WindowServer scan, and schedules no settle tick.
 - `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
   main-thread Core Animation commit for SkyLight's 500 ms timeout, freezing
-  main too. Do not add off-main callers; see the normal-mode guide.
+  main too. Read the window list only through `WindowSnapshot.windowList`
+  (guardrail-enforced), and never make main wait on a queue that calls it.
 - Polling is a last resort and goes through `PollScheduler`, the one clock in
   the process; never arm a `DispatchSourceTimer`, a `tokio` sleep loop, or a
   `Timer` for a recurring job in core or plugin code. Use `register` for a fixed
