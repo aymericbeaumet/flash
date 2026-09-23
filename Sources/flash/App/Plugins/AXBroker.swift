@@ -156,7 +156,9 @@ final class AXBroker {
         }
         // A walk cut short by its deadline still answers with the nodes it
         // reached — breadth first, so the shallowest.
-        return expired ? ["ok": true, "nodes": nodes, "truncated": true] : ["ok": true, "nodes": nodes]
+        var result: [String: Any] = ["ok": true, "nodes": nodes]
+        if expired { result["truncated"] = true }
+        return result
       }
       reply(response)
     }

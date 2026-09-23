@@ -118,7 +118,9 @@ final class PluginManagerReloadTests: XCTestCase {
 
     config.statusBar.enabled = true
     manager.updateConfig(config)
-    waitUntilTrue("observed plugin spawned") { self.status(manager, "mgrbound")?.state == "running" }
+    waitUntilTrue("observed plugin spawned") {
+      self.status(manager, "mgrbound")?.state == "running"
+    }
     XCTAssertEqual(status(manager, "mgrbound")?.activation, "resident")
     XCTAssertEqual(fixture.spawnCount(), 1)
   }

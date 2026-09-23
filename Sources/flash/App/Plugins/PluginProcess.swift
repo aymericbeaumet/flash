@@ -1328,11 +1328,11 @@ final class PluginProcess {
   }
 
   /// Whole milliseconds left before `deadline`, at least 1.
-  static func remainingMilliseconds(until deadline: DispatchTime, now: DispatchTime = .now()) -> Int
-  {
-    let left = deadline.uptimeNanoseconds > now.uptimeNanoseconds
-      ? deadline.uptimeNanoseconds - now.uptimeNanoseconds : 0
-    return max(1, Int(left / 1_000_000))
+  static func remainingMilliseconds(
+    until deadline: DispatchTime, now: DispatchTime = .now()
+  ) -> Int {
+    guard deadline.uptimeNanoseconds > now.uptimeNanoseconds else { return 1 }
+    return max(1, Int((deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1_000_000))
   }
 
   private func routeHostRequest(id: Int, method: String, params: [String: Any], generation: UInt64)
