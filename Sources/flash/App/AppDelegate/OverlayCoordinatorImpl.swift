@@ -411,7 +411,7 @@ extension AppDelegate {
     /// `--multi` on targets: keep the hint set up for the next selection.
     case rearmHints
     /// `--multi` on the grid: restart it at its full extent.
-    case rearmGrid(MouseGrid.Region?)
+    case rearmGrid(MouseGrid.Region?, NormalModePointerPolicy.ClickTarget)
     /// Drags and selections have no typing intent: recapture NORMAL.
     case recapture
   }
@@ -509,9 +509,11 @@ extension AppDelegate {
       // non-advanced mode capture rides on panel key status, and the app
       // activation above may have taken it.
       overlay.display(hints: hintSession.hints)
-    case .rearmGrid(let initial):
-      if flashMode == .normal {
-        completeHintClick(target: .grid, action: action, at: gesture.point, pid: nil)
+    case .rearmGrid(let initial, let target):
+      if flashMode == .normal,
+        NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
+      {
+        completeHintClick(target: target, action: action, at: gesture.point, pid: nil)
         return
       }
       if let initial {
@@ -700,13 +702,16 @@ extension AppDelegate {
     case .move:
       movePointerAndFinish(to: point)
     case .click, .multi, .adjust, .search:
-      performPointerGesture(
-        PointerGesture(
-          kind: .click(hintSession.command.action), point: point,
-          modifiers: hintSession.command.modifiers.union(held),
-          target: nil, pid: hintSession.sourceAppPID),
-        followUp: hintSession.command.isMulti
-          ? .rearmGrid(hintSession.mouseGridInitialRegion) : .finish(.grid))
+      let command = hintSession.command
+      let initialRegion = hintSession.mouseGridInitialRegion
+      let pid = hintSession.sourceAppPID
+      resolveGridClickTarget(at: point) { owner, target in
+        owner.performPointerGesture(
+          PointerGesture(
+            kind: .click(command.action), point: point,
+            modifiers: command.modifiers.union(held), target: nil, pid: pid),
+          followUp: command.isMulti ? .rearmGrid(initialRegion, target) : .finish(target))
+      }
     }
   }
 

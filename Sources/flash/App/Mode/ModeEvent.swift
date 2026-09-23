@@ -34,8 +34,8 @@ enum ModeEvent: Equatable {
   /// Restore the base mode; an explicit dismissal can reactivate its prior app.
   case closeTerminal(targetPID: pid_t?)
 
-  /// A click resolved by its source: physical and mouse-grid clicks enter
-  /// INSERT; primary semantic hints honor `JumpTarget.entersInsertMode`.
+  /// A click resolved by its source: physical clicks enter INSERT; primary
+  /// hint and mouse-grid clicks enter it on a text input.
   /// From INSERT this never leaves insert.
   case clickResolved(entersInsert: Bool, targetPID: pid_t?)
 

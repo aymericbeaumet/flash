@@ -383,7 +383,7 @@ leader = "\\"
 # Every unmapped key or chord is swallowed in NORMAL.
 # Use repeat = true to repeat a sequence by pressing its final key again.
 # NORMAL persists. INSERT requires enter_insert_mode, a physical app click,
-# a primary hint click on an input, or a mouse-grid click.
+# or a primary hint or mouse-grid click on an input.
 "h" = ["flash", "scroll_left"]
 "l" = ["flash", "scroll_right"]
 "ctrl+e" = ["flash", "scroll_down"]

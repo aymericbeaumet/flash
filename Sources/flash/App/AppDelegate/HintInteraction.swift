@@ -51,6 +51,27 @@ extension AppDelegate {
     }
   }
 
+  /// Judge a grid point the way discovery judges a hint target — is it a text
+  /// input? — before the click lands, so `F` enters INSERT under `f`'s rule.
+  /// The AX hit-test runs on the geometry queue under the same commit token as
+  /// `resolveHintPoints`, so a cancelled or replaced session drops it.
+  func resolveGridClickTarget(
+    at point: CGPoint,
+    completion: @escaping (AppDelegate, NormalModePointerPolicy.ClickTarget) -> Void
+  ) {
+    guard !activationLifecycle.inFlight else { return }
+    let token = activationLifecycle.begin()
+    let topLeft = CGPoint(x: point.x, y: ActionDispatcher.primaryScreenHeight() - point.y)
+    monitor.geometryQueue.async { [weak self] in
+      let entersInsert = AXTextInputProbe.isTextInput(at: topLeft)
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        FlashLog.trace("[commit] grid_target text_input=\(entersInsert)")
+        completion(self, .grid(entersInsertMode: entersInsert))
+      }
+    }
+  }
+
   func prepareHintActivation(_ request: HintActivationRequest) -> Bool {
     guard activationLifecycle.requestReplacement(request) else { return false }
     switch modeStore.mode {

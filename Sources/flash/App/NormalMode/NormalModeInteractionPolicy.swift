@@ -1,22 +1,30 @@
 import FlashCore
 
 enum NormalModePointerPolicy {
-  enum ClickTarget {
+  /// What a committed click landed on. `f` knows its target's role from
+  /// discovery; `F` hit-tests the grid point before clicking. Either way
+  /// `entersInsertMode` is the same text-input judgement.
+  enum ClickTarget: Equatable {
     case hint(entersInsertMode: Bool)
-    case grid
+    case grid(entersInsertMode: Bool)
+
+    var entersInsertMode: Bool {
+      switch self {
+      case .hint(let enters), .grid(let enters): return enters
+      }
+    }
   }
 
+  /// One rule for `f` and `F`: a primary, double or triple click on a text
+  /// input enters INSERT; anything else — another target, a secondary or
+  /// middle click — keeps NORMAL.
   static func clickShouldEnterInsert(target: ClickTarget, action: JumpAction) -> Bool {
-    switch target {
-    case .grid:
+    guard target.entersInsertMode else { return false }
+    switch action {
+    case .leftClick, .doubleClick, .tripleClick:
       return true
-    case .hint(let entersInsertMode):
-      switch action {
-      case .leftClick, .doubleClick, .tripleClick:
-        return entersInsertMode
-      case .rightClick, .middleClick:
-        return false
-      }
+    case .rightClick, .middleClick:
+      return false
     }
   }
 

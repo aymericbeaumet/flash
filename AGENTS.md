@@ -59,7 +59,7 @@ contracts before changing a subsystem:
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
 9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
-   app clicks, primary hint clicks on input targets, or mouse-grid clicks. Other
+   app clicks, or primary hint and mouse-grid clicks on input targets. Other
    commands, including tabs, Find and `focus_input`, preserve NORMAL; never add
    editable-focus follow-up or mode changes on app activation. Hint input intent
    comes from target metadata, not whichever field is focused after the click.

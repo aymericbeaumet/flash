@@ -100,8 +100,10 @@ option. Opening Find, creating or switching tabs, and `focus_input` preserve
 NORMAL even when the app focuses an editable field. Accessibility focus
 notifications never change the mode. A primary `f` hint click enters INSERT
 only when its selected target is an input; other hint targets keep NORMAL.
-A mouse-grid click always enters INSERT. Physical app clicks and an explicit
-`enter_insert_mode` mapping also hand typing to the app.
+`F` follows the same rule: the grid point is hit-tested before the click, and
+only a primary, double or triple click on a text input enters INSERT. Physical
+app clicks and an explicit `enter_insert_mode` mapping also hand typing to the
+app.
 
 The status pill resolves its mode label and palette from the current mode
 together. Background status evaluations preserve the live `#{flash.mode}`
@@ -320,8 +322,8 @@ INSERT is entered by:
 
 - a configured `enter_insert_mode` mapping;
 - a physical primary click while NORMAL is capturing;
-- a primary hint click on an input target;
-- a mouse-grid click, regardless of the target.
+- a primary hint or mouse-grid click on an input target (the same rule for
+  `f` and `F`).
 
 Other normal commands, focus changes and app activation preserve NORMAL.
 Moving the pointer, dragging, or selecting with the grid does not request INSERT.

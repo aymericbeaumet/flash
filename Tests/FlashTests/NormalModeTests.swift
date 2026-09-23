@@ -1284,11 +1284,30 @@ final class NormalModeTests: XCTestCase {
     }
   }
 
-  func testGridClicksAlwaysEnterInsert() {
+  func testGridClicksFollowTheHintRule() {
+    // `F` enters INSERT exactly when `f` would on the same element.
     for action in [JumpAction.leftClick, .doubleClick, .tripleClick, .rightClick, .middleClick] {
-      XCTAssertTrue(
-        NormalModePointerPolicy.clickShouldEnterInsert(target: .grid, action: action))
+      for enters in [false, true] {
+        XCTAssertEqual(
+          NormalModePointerPolicy.clickShouldEnterInsert(
+            target: .grid(entersInsertMode: enters), action: action),
+          NormalModePointerPolicy.clickShouldEnterInsert(
+            target: .hint(entersInsertMode: enters), action: action),
+          "\(action) enters=\(enters)")
+      }
     }
+  }
+
+  func testGridHitTestJudgesTextInputsLikeDiscovery() {
+    XCTAssertTrue(AXTextInputProbe.isTextInput(roles: ["AXTextField"]))
+    // A web editor's text run under the pointer belongs to its text area.
+    XCTAssertTrue(AXTextInputProbe.isTextInput(roles: ["AXStaticText", "AXGroup", "AXTextArea"]))
+    XCTAssertFalse(AXTextInputProbe.isTextInput(roles: ["AXButton", "AXGroup", "AXWindow"]))
+    XCTAssertFalse(AXTextInputProbe.isTextInput(roles: []))
+    // Only a few ancestors count: a whole-window editor far above is not the target.
+    let deep =
+      Array(repeating: "AXGroup", count: AXTextInputProbe.ancestorLimit + 1) + ["AXTextArea"]
+    XCTAssertFalse(AXTextInputProbe.isTextInput(roles: deep))
   }
 
   func testNormalModePointerPolicyMatrixForAppClicks() {
