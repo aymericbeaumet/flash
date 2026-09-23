@@ -145,4 +145,15 @@ final class PreparedModelStoreTests: XCTestCase {
   ) -> JumpTarget {
     JumpTarget(id: id, frame: frame, pid: 42, providerID: "test")
   }
+
+  func testDegenerateDiscoveryIsEmptyOrACollapseOfALargeApp() {
+    XCTAssertTrue(AppMonitor.discoveryLooksDegenerate(targets: 0, lastHealthy: nil))
+    XCTAssertTrue(AppMonitor.discoveryLooksDegenerate(targets: 0, lastHealthy: 3))
+    // The logged Firefox collapse: 1 target where the same view had 98.
+    XCTAssertTrue(AppMonitor.discoveryLooksDegenerate(targets: 1, lastHealthy: 98))
+    XCTAssertFalse(AppMonitor.discoveryLooksDegenerate(targets: 12, lastHealthy: 98))
+    // A small app is never judged by ratio, and a first walk has nothing to compare.
+    XCTAssertFalse(AppMonitor.discoveryLooksDegenerate(targets: 1, lastHealthy: 12))
+    XCTAssertFalse(AppMonitor.discoveryLooksDegenerate(targets: 1, lastHealthy: nil))
+  }
 }

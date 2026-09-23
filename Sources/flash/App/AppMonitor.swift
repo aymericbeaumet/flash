@@ -170,6 +170,9 @@ final class AppMonitor {
   /// activation lands while a walk is in flight, it overwrites the
   /// first instead of stacking.
   var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
+  /// The last trusted target count per app: what a later walk of the same app
+  /// is judged against (`discoveryLooksDegenerate`).
+  var healthyTargetCounts: [pid_t: Int] = [:]
   var workspaceObservers: [NSObjectProtocol] = []
   var localObservers: [NSObjectProtocol] = []
   /// `installObserver` runs on every focus change; this gates the

@@ -74,7 +74,13 @@ extension AppMonitor {
       // while the status bar's own hints still appear. Measured on Slack: 5 of
       // 39 activations returned zero targets in 0.13 ms from this cache, while
       // a refresh on the same window finds about 92. Fall through and refresh.
-      if let model = lookupPreparedModel(for: pid), !model.targets.isEmpty {
+      // A degenerate one is the same kind of miss: a Chromium or Firefox tree
+      // caught mid-build once gave 1 target for a view that had 98.
+      if let model = lookupPreparedModel(for: pid),
+        !Self.discoveryLooksDegenerate(
+          targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
+      {
+        noteHealthyTargets(model.targets.count, pid: pid)
         if let targetFilter {
           let cfg = snapshotConfig()
           let targets = model.targets.filter(targetFilter)
@@ -94,10 +100,7 @@ extension AppMonitor {
         return
       }
 
-      runModelRefresh(
-        pid: pid,
-        reason: "activation"
-      ) { [weak self] model in
+      refreshForActivation(pid: pid) { [weak self] model in
         guard let self else { return }
         if let model {
           if let targetFilter {
@@ -141,6 +144,59 @@ extension AppMonitor {
         discoverPreparedFallback()
       } else {
         complete(path: "activation_uncached", hints: result.hints)
+      }
+    }
+  }
+
+  /// A walk to distrust: empty, or collapsed below a tenth of the last trusted
+  /// result for the same app — a Chromium or Firefox tree caught mid-build, or
+  /// a window read during an activation. Small apps (under 20 targets) are
+  /// never judged by ratio.
+  static func discoveryLooksDegenerate(targets: Int, lastHealthy: Int?) -> Bool {
+    if targets == 0 { return true }
+    guard let lastHealthy, lastHealthy >= 20 else { return false }
+    return targets * 10 < lastHealthy
+  }
+
+  static let activationRetryDelayMs = 150
+
+  func noteHealthyTargets(_ count: Int, pid: pid_t) {
+    guard count > 0 else { return }
+    healthyTargetCounts[pid] = count
+  }
+
+  /// The activation refresh, with one repair: a degenerate result is walked
+  /// again after a short settle, and the fuller of the two is served. Bounded
+  /// to a single retry so an app that is genuinely empty costs one extra walk.
+  private func refreshForActivation(
+    pid: pid_t, completion: @escaping (PreparedModel?) -> Void
+  ) {
+    runModelRefresh(pid: pid, reason: "activation") { [weak self] first in
+      guard let self else { return }
+      guard let first else { return completion(nil) }
+      let lastHealthy = self.healthyTargetCounts[pid]
+      guard Self.discoveryLooksDegenerate(targets: first.targets.count, lastHealthy: lastHealthy)
+      else {
+        self.noteHealthyTargets(first.targets.count, pid: pid)
+        return completion(first)
+      }
+      FlashLog.info(
+        "[discover] retry pid=\(pid) targets=\(first.targets.count) "
+          + "last_healthy=\(lastHealthy.map(String.init) ?? "none")")
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.activationRetryDelayMs)) {
+        self.runModelRefresh(pid: pid, reason: "activation_retry") { retried in
+          let best = [first, retried].compactMap { $0 }.max { $0.targets.count < $1.targets.count }
+          FlashLog.info(
+            "[discover] retry_result pid=\(pid) first=\(first.targets.count) "
+              + "retried=\(retried.map { String($0.targets.count) } ?? "none")")
+          if let best,
+            !Self.discoveryLooksDegenerate(
+              targets: best.targets.count, lastHealthy: lastHealthy)
+          {
+            self.noteHealthyTargets(best.targets.count, pid: pid)
+          }
+          completion(best)
+        }
       }
     }
   }

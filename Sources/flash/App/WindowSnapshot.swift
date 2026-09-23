@@ -23,6 +23,10 @@ struct WindowSnapshot {
     let layer: Int
     /// NSScreen-coord bounds (origin bottom-left of primary).
     let nsBounds: CGRect
+    /// A fully transparent window covers nothing.
+    var alpha: Double = 1
+
+    var occludes: Bool { alpha > 0.05 }
   }
 
   /// All on-screen windows in z-order (front-most first).
@@ -63,15 +67,38 @@ struct WindowSnapshot {
   )
     -> WindowSnapshot
   {
-    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = WindowSnapshot.windowList(opts) else {
+    // One main-thread hop for both: the window list and who is frontmost.
+    let read = { () -> ([[String: Any]]?, pid_t?) in
+      (
+        WindowSnapshot.windowList([.optionOnScreenOnly, .excludeDesktopElements]),
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+      )
+    }
+    let (info, frontmostPID) = Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+    guard let info else {
       return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
     let entries = entries(from: info, primaryH: primaryH)
       .filter { !ignoringPids.contains($0.pid) }
-    return build(
-      entries: entries,
-      focusedPid: focusedPid)
+    let snapshot = build(entries: entries, focusedPid: focusedPid)
+    guard focusedPid == frontmostPID, snapshot.activeWindowFrame != nil,
+      snapshot.visibleRegions[focusedPid]?.isEmpty ?? true
+    else { return snapshot }
+    // The frontmost app's window sits above every other app's normal-level
+    // window, so finding it fully covered by them means the window list still
+    // has the previous app on top — a z-order lag that left every hint request
+    // made just after an app switch empty. Recompute without those; floating
+    // and higher layers still cover it.
+    let repaired = build(entries: entries, focusedPid: focusedPid, frontmostLayerLag: true)
+    let covering = entries.prefix {
+      $0.nsBounds != snapshot.activeWindowFrame || $0.pid != focusedPid
+    }
+    .filter { $0.occludes && $0.nsBounds.intersects(snapshot.activeWindowFrame ?? .null) }
+    .map { "\($0.pid):\($0.layer)" }
+    FlashLog.warn(
+      "[discover] frontmost_window_covered pid=\(focusedPid) covering=\(covering) "
+        + "repaired=\(!(repaired.visibleRegions[focusedPid]?.isEmpty ?? true))")
+    return repaired
   }
 
   static func entries(from info: [[String: Any]], primaryH: CGFloat) -> [Entry] {
@@ -92,12 +119,18 @@ struct WindowSnapshot {
         width: cgBounds.width,
         height: cgBounds.height
       )
-      entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns))
+      let alpha = (w[kCGWindowAlpha as String] as? Double) ?? 1
+      entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns, alpha: alpha))
     }
     return entries
   }
 
-  static func build(entries: [Entry], focusedPid: pid_t) -> WindowSnapshot {
+  /// `frontmostLayerLag` drops other apps' layer-0 windows from the occluders:
+  /// only for the frontmost app, whose window can be under them only while the
+  /// window list lags an activation.
+  static func build(
+    entries: [Entry], focusedPid: pid_t, frontmostLayerLag: Bool = false
+  ) -> WindowSnapshot {
     // The "active window" is the front-most interaction surface owned by the
     // focused pid. CGWindowList returns windows in z-order, so the first hit
     // is the right one. Every other window — including other windows of the
@@ -148,6 +181,8 @@ struct WindowSnapshot {
           byPid[e.pid, default: []].append(contentsOf: fragments)
         }
       }
+      guard e.occludes else { continue }
+      if frontmostLayerLag, e.pid != focusedPid, e.layer == 0 { continue }
       occluders.append(e.nsBounds)
     }
 
@@ -202,7 +237,7 @@ struct WindowSnapshot {
           byPid[entry.pid, default: []].append(contentsOf: fragments)
         }
       }
-      occluders.append(entry.nsBounds)
+      if entry.occludes { occluders.append(entry.nsBounds) }
     }
     return byPid
   }
