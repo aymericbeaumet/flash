@@ -22,6 +22,14 @@ enum StatusPopupPresentation: Equatable {
     }
   }
 
+  /// The popup the pointer summoned and nothing else holds: a click
+  /// elsewhere or a focus change closes it. A focused popup closes when it
+  /// loses key instead, and a standalone terminal popup stays until dismissed.
+  var ephemeralName: String? {
+    if case .preview(let name, _) = self { return name }
+    return nil
+  }
+
   var isStandalone: Bool {
     if case .terminal = self { return true }
     return false

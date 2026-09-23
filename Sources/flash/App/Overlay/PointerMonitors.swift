@@ -20,6 +20,12 @@ extension OverlayPanel {
     ]
     pointerGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
       [weak self] event in
+      // A press in another app, the desktop or the menu bar ends a hover
+      // preview. Presses on Flash's own bar and popup are local events their
+      // views handle (a link click, pinning a popup).
+      if event.type != .scrollWheel {
+        self?.dismissEphemeralStatusBarPopup(reason: "pointer_click")
+      }
       self?.deliverPointerIntent(for: event)
     }
     pointerLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {

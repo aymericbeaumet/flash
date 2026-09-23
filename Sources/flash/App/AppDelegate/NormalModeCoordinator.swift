@@ -224,6 +224,7 @@ extension AppDelegate {
       notification == kAXFocusedWindowChangedNotification as String
       || notification == kAXMainWindowChangedNotification as String
     if isFocusChange {
+      overlay.dismissEphemeralStatusBarPopup(reason: "window_focus_changed")
       scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
     }
     // The stroke goes first and depends on nothing below. Window AX

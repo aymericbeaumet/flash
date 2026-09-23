@@ -872,6 +872,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     observedFocusedAppPID = app.processIdentifier
     refreshFocusDependentState(for: app)
     if emitFocusEvent {
+      overlay.dismissEphemeralStatusBarPopup(reason: "focus_changed")
       pluginManager.emit(
         PluginEvent(
           name: "core:focus.changed",
