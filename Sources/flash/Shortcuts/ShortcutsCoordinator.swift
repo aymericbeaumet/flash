@@ -45,11 +45,24 @@ final class MappingsCoordinator {
     mappingDispatch = dispatch
   }
 
+  /// Swaps the table the tap reads (`hasMapping`, `handle`) synchronously and
+  /// leaves the Carbon (un)registrations — a system round-trip per chord —
+  /// to the next main turn, coalesced: a key-path app reconcile calls this
+  /// from inside the synchronous tap callback, which must never wait on it.
   func apply(mode: Config.Mode) {
     configuredMode = mode
-    reconcileAllMappings()
-    reconcileScopedMappings(for: lastAppliedScope)
+    activeMappings = Self.activeMappingTable(in: mode, scope: lastAppliedScope)
+    guard !registrationReconcileQueued else { return }
+    registrationReconcileQueued = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.registrationReconcileQueued = false
+      self.reconcileAllMappings()
+      self.reconcileScopedMappings(for: self.lastAppliedScope)
+    }
   }
+
+  private var registrationReconcileQueued = false
 
   /// All-mode Carbon registrations stay installed; callbacks resolve the
   /// current scope's winning action for their chord. Terminal input suspends
@@ -72,11 +85,7 @@ final class MappingsCoordinator {
 
   private func reconcileScopedMappings(for mappingScope: MappingScope) {
     lastAppliedScope = mappingScope
-    activeMappings = Dictionary(
-      uniqueKeysWithValues:
-        Self.nativeMappings(in: configuredMode, scope: mappingScope).compactMap { mapping in
-          mapping.nativeHotkey.map { ($0, mapping) }
-        })
+    activeMappings = Self.activeMappingTable(in: configuredMode, scope: mappingScope)
     reconcile(
       Self.scopedNativeMappings(in: configuredMode, scope: mappingScope), with: scopedHotkeys,
       label: "\(mappingScope)")
@@ -109,6 +118,15 @@ final class MappingsCoordinator {
     case .normal: return scope == .all || scope == .normal
     case .insert: return scope == .all || scope == .insert
     }
+  }
+
+  static func activeMappingTable(in mode: Config.Mode, scope: MappingScope)
+    -> [ParsedHotkey: ModeMapping]
+  {
+    Dictionary(
+      uniqueKeysWithValues: nativeMappings(in: mode, scope: scope).compactMap { mapping in
+        mapping.nativeHotkey.map { ($0, mapping) }
+      })
   }
 
   static func nativeMappings(in mode: Config.Mode, scope: MappingScope) -> [ModeMapping] {
