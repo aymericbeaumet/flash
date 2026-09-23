@@ -543,36 +543,31 @@ final class WindowMoverTests: XCTestCase {
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: true,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: false,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: false,
         isSettable: true,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: nil,
         isSettable: true,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: true,
-        bundleIdentifier: "org.mozilla.firefox"))
-    XCTAssertFalse(
+        engine: .gecko))
+    XCTAssertTrue(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: true,
-        bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
-    XCTAssertFalse(
-      WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
-        currentValue: true,
-        isSettable: true,
-        bundleIdentifier: "org.mozilla.nightly"))
+        engine: .chromium))
   }
 }

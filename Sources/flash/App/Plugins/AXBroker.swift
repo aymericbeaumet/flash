@@ -240,7 +240,7 @@ final class AXBroker {
     app: AXUIElement? = nil,
     _ operation: (AXUIElement) -> T
   ) -> T {
-    FirefoxAccessibility.withTree(
+    GeckoAccessibility.withTree(
       pid: pid,
       bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
       app: app,

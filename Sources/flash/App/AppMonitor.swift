@@ -415,11 +415,11 @@ final class AppMonitor {
   }
 
   private func wakeChromiumAccessibilityForAllRunningApps() {
-    ChromiumAccessibilityWaker.wakeAllRunningApps(on: axQueue)
+    AccessibilityWaker.wakeAllRunningApps(on: axQueue)
   }
 
   func maybeWakeChromiumAccessibility(for app: NSRunningApplication) {
-    ChromiumAccessibilityWaker.maybeWake(app: app, on: axQueue)
+    AccessibilityWaker.maybeWake(app: app, on: axQueue)
   }
 
   func stop() {

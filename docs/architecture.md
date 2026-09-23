@@ -102,16 +102,25 @@ activation result that is empty, or collapsed below a tenth of the app's last
 trusted count, is walked once more after 150 ms and the fuller result is served;
 a cached model judged the same way is a miss.
 
-Browser pages keep a Vimium-style semantic allowlist. Inside an app whose whole
-UI is a web view (Electron and other wrappers), a control-sized `AXGroup` or
-`AXListItem` with a press action is a target too — the cards and rows those
-apps build from clickable divs. Electron apps are woken like Chromium browsers,
-recognised by the `Electron Framework` they ship. Inside UIKit content (the
-`iOSContentGroup` a Mac Catalyst or iPad app's window hosts, as in Messages
-and WhatsApp), each conversation row or message is one leaf `AXStaticText`, and
-every element there carries a press action; a control-sized leaf is a target,
-ranked like a generic container. A text-input role there enters INSERT only
-when its focus is settable, which excludes read-only message bubbles.
+The core reasons about an app's traits, read once from its bundle
+(`AppTraits`), never about its name: a web browser declares the `http` and
+`https` URL schemes; Gecko ships `Contents/MacOS/XUL`; Chromium (browsers,
+Electron and CEF apps) ships renderer helper apps; Flutter ships
+`FlutterMacOS.framework`. App-specific knowledge — shortcuts, which apps are
+terminal emulators — is plugin data. Browser pages keep a Vimium-style
+semantic allowlist. Inside any other app's web view, a control-sized `AXGroup`
+or `AXListItem` with a press action is a target too — the cards and rows those
+apps build from clickable divs. Chromium and Flutter build their accessibility
+tree only after an assistive client sets the enhanced-UI flags, so Flash sets
+them at launch and on each walk; every other app builds its tree on demand and
+never gets them, and Gecko's are scoped to each AX operation.
+
+Inside UIKit content (the `iOSContentGroup` a Mac Catalyst or iPad app's
+window hosts, as in Messages and WhatsApp), each conversation row or message
+is one leaf `AXStaticText`, and every element there carries a press action; a
+control-sized leaf is a target, ranked like a generic container. A text-input
+role there enters INSERT only when its focus is settable, which excludes
+read-only message bubbles.
 
 Finalization rejects invalid geometry, filters visible regions and deduplicates
 overlap with smaller frames winning, except that a semantic control always beats

@@ -311,7 +311,7 @@ final class WindowLayoutManager {
       let bundleIdentifier =
         NSRunningApplication(processIdentifier: layout.pid)?.bundleIdentifier
       let axApp = AXApp.make(pid: layout.pid)
-      let didRestore = FirefoxAccessibility.withWindowManagement(
+      let didRestore = GeckoAccessibility.withWindowManagement(
         pid: layout.pid,
         bundleIdentifier: bundleIdentifier,
         app: axApp
@@ -459,7 +459,7 @@ enum WindowMover {
     let axApp = AXApp.make(pid: targetPID)
     let bundleIdentifier =
       NSRunningApplication(processIdentifier: targetPID)?.bundleIdentifier
-    return FirefoxAccessibility.withWindowManagement(
+    return GeckoAccessibility.withWindowManagement(
       pid: targetPID,
       bundleIdentifier: bundleIdentifier,
       app: axApp
@@ -965,10 +965,12 @@ enum WindowMover {
 
     let previousEnhanced = enhancedUserInterface(of: axApp)
     let enhancedUserInterfaceIsSettable = isEnhancedUserInterfaceSettable(on: axApp)
+    var pid: pid_t = 0
+    AXUIElementGetPid(axApp, &pid)
     let temporarilyDisableEnhancedUserInterface = shouldTemporarilyDisableEnhancedUserInterface(
       currentValue: previousEnhanced,
       isSettable: enhancedUserInterfaceIsSettable,
-      bundleIdentifier: bundleIdentifier)
+      engine: AppTraits.of(bundleIdentifier: bundleIdentifier, pid: pid).engine)
     if temporarilyDisableEnhancedUserInterface {
       setEnhancedUserInterface(false, on: axApp)
     }
@@ -1073,11 +1075,12 @@ enum WindowMover {
   static func shouldTemporarilyDisableEnhancedUserInterface(
     currentValue: Bool?,
     isSettable: Bool,
-    bundleIdentifier: String?
+    engine: AppTraits.Engine?
   ) -> Bool {
+    // Gecko's own enhanced-UI state is scoped by `GeckoAccessibility`.
     return currentValue == true
       && isSettable
-      && !WebBrowsers.firefox.contains(bundleIdentifier ?? "")
+      && engine != .gecko
   }
 
   private static func setEnhancedUserInterface(_ enabled: Bool, on axApp: AXUIElement) {

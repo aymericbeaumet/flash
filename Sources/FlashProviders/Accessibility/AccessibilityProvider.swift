@@ -173,14 +173,6 @@ public final class AccessibilityProvider: FlashSource {
 
   public init() {}
 
-  /// Firefox uses a scoped role-read wake below. Leaving
-  /// `AXEnhancedUserInterface` enabled outside that scope makes Accessibility
-  /// window moves animate slowly and often land incorrectly.
-  public static func shouldExplicitlyWakeAccessibility(bundleIdentifier: String) -> Bool {
-    !bundleIdentifier.hasPrefix("com.apple.")
-      && !FirefoxAccessibility.matches(bundleIdentifier: bundleIdentifier)
-  }
-
   public func supports(_ context: AppContext) -> Bool { true }
 
   public func performAction(
@@ -210,7 +202,7 @@ public final class AccessibilityProvider: FlashSource {
     // restore is needed.
     DispatchQueue.global(qos: .userInitiated).async {
       let app = AXApp.make(pid: pid)
-      let selected = FirefoxAccessibility.withTree(
+      let selected = GeckoAccessibility.withTree(
         pid: pid,
         bundleIdentifier: bundleIdentifier,
         app: app
@@ -237,7 +229,7 @@ public final class AccessibilityProvider: FlashSource {
 
   public func documentURL(in context: AppContext) -> String? {
     let app = AXApp.make(pid: context.processID)
-    return FirefoxAccessibility.withTree(
+    return GeckoAccessibility.withTree(
       pid: context.processID,
       bundleIdentifier: context.bundleIdentifier,
       app: app
@@ -544,7 +536,7 @@ public final class AccessibilityProvider: FlashSource {
       accessibilityLabel: snapshot.title ?? snapshot.description ?? snapshot.value,
       url: snapshot.url, pid: pid,
       resolveClickPoint: { preferred in
-        FirefoxAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { _ in
+        GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { _ in
           resolveHintPoint(
             element: element, captured: snapshot, preferred: preferred,
             pid: pid, screenH: screenH, insideWebArea: false,
@@ -605,6 +597,17 @@ public final class AccessibilityProvider: FlashSource {
     case keyboardFocus
   }
 
+  /// What stays constant across one walk.
+  private struct WalkEnvironment {
+    let screenH: CGFloat
+    let visible: CGRect
+    let pid: pid_t
+    let bundleIdentifier: String
+    /// A web browser's web areas are pages, held to the semantic allowlist;
+    /// any other app's are its own interface.
+    let webAreasArePages: Bool
+  }
+
   private struct WalkItem {
     let element: AXUIElement
     let depth: Int
@@ -618,7 +621,7 @@ public final class AccessibilityProvider: FlashSource {
 
   public func discover(in context: AppContext) throws -> [JumpTarget] {
     let app = AXApp.make(pid: context.processID)
-    return try FirefoxAccessibility.withTree(
+    return try GeckoAccessibility.withTree(
       pid: context.processID,
       bundleIdentifier: context.bundleIdentifier,
       app: app
@@ -637,12 +640,13 @@ public final class AccessibilityProvider: FlashSource {
     // ones. Best-effort: errors are ignored because most apps don't
     // recognise these attributes and that's fine.
     //
-    // Skipped for Apple's own apps and Firefox. The flag is process-sticky for
-    // these apps and tells them an assistive client is permanently watching.
-    // SwiftUI-heavy apps like Notes respond with eager accessibility
-    // bookkeeping; Firefox is instead activated and restored by the scoped
-    // `FirefoxAccessibility.withTree` call above.
-    if Self.shouldExplicitlyWakeAccessibility(bundleIdentifier: context.bundleIdentifier) {
+    // Only runtimes that need it (`AppTraits.needsAccessibilityWake`). The
+    // flag is process-sticky and tells an app an assistive client is
+    // permanently watching: SwiftUI-heavy apps respond with eager
+    // accessibility bookkeeping, and Gecko is instead activated and restored
+    // by the scoped `GeckoAccessibility.withTree` call above.
+    let traits = AppTraits.of(bundleIdentifier: context.bundleIdentifier, pid: context.processID)
+    if traits.needsAccessibilityWake {
       let trueRef = kCFBooleanTrue as CFTypeRef
       _ = AXUIElementSetAttributeValue(
         app, "AXEnhancedUserInterface" as CFString, trueRef)
@@ -687,10 +691,12 @@ public final class AccessibilityProvider: FlashSource {
     walk(
       focusedWindow,
       depth: 0,
-      screenH: screenH,
-      visible: clip,
-      pid: context.processID,
-      bundleIdentifier: context.bundleIdentifier,
+      environment: WalkEnvironment(
+        screenH: screenH,
+        visible: clip,
+        pid: context.processID,
+        bundleIdentifier: context.bundleIdentifier,
+        webAreasArePages: traits.isWebBrowser),
       insideClickable: false,
       insideWebArea: false,
       insideExtensionDocument: false,
@@ -720,7 +726,7 @@ public final class AccessibilityProvider: FlashSource {
   public static func walkedWindowFrame(
     pid: pid_t, bundleIdentifier: String?, screenH: CGFloat
   ) -> CGRect? {
-    FirefoxAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { app in
+    GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { app in
       guard let window = focusedOrFirstWindow(in: app) else { return nil }
       var pos: CFTypeRef?
       var size: CFTypeRef?
@@ -778,10 +784,7 @@ public final class AccessibilityProvider: FlashSource {
   private func walk(
     _ element: AXUIElement,
     depth: Int,
-    screenH: CGFloat,
-    visible: CGRect,
-    pid: pid_t,
-    bundleIdentifier: String,
+    environment: WalkEnvironment,
     insideClickable: Bool,
     insideWebArea: Bool,
     insideExtensionDocument: Bool,
@@ -801,26 +804,20 @@ public final class AccessibilityProvider: FlashSource {
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget))
     while let item = worklist.pop() {
-      walkNode(
-        item,
-        screenH: screenH,
-        visible: visible,
-        pid: pid,
-        bundleIdentifier: bundleIdentifier,
-        worklist: &worklist,
-        state: &state)
+      walkNode(item, environment: environment, worklist: &worklist, state: &state)
     }
   }
 
   private func walkNode(
     _ item: WalkItem,
-    screenH: CGFloat,
-    visible: CGRect,
-    pid: pid_t,
-    bundleIdentifier: String,
+    environment: WalkEnvironment,
     worklist: inout AXTraversalWorklist<WalkItem>,
     state: inout WalkState
   ) {
+    let screenH = environment.screenH
+    let visible = environment.visible
+    let pid = environment.pid
+    let bundleIdentifier = environment.bundleIdentifier
     let element = item.element
     let depth = item.depth
     let insideClickable = item.insideClickable
@@ -881,7 +878,7 @@ public final class AccessibilityProvider: FlashSource {
     // rather than a page region, and ranked below every semantic control in
     // dedup so a wrapper never displaces the link it wraps.
     var isAppWebPressContainer = false
-    if insideWebArea, !WebBrowsers.contains(bundleIdentifier),
+    if insideWebArea, !environment.webAreasArePages,
       let role, Self.webAppPressContainerRoles.contains(role),
       let posV = posValue, let sizeV = sizeValue,
       let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
@@ -950,7 +947,7 @@ public final class AccessibilityProvider: FlashSource {
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
       let snapshot = Self.hintSnapshot(vals, frame: frame)
       let resolveClickPoint: (CGPoint) -> CGPoint? = { preferred in
-        FirefoxAccessibility.withTree(
+        GeckoAccessibility.withTree(
           pid: pid,
           bundleIdentifier: bundleIdentifier
         ) { _ in
@@ -1071,9 +1068,6 @@ public final class AccessibilityProvider: FlashSource {
     // case; deeper than that the dispatch overhead dominates. Single-
     // child case falls through to the serial loop below.
     if fanoutBudget > 0, children.count > 1 {
-      let captureScreenH = screenH
-      let captureVisible = visible
-      let capturePid = pid
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
       let captureInsideExtensionDocument = nowInsideExtensionDocument
@@ -1105,10 +1099,7 @@ public final class AccessibilityProvider: FlashSource {
             self.walk(
               childrenSnapshot[i],
               depth: captureDepth + 1,
-              screenH: captureScreenH,
-              visible: captureVisible,
-              pid: capturePid,
-              bundleIdentifier: bundleIdentifier,
+              environment: environment,
               insideClickable: captureInsideClickable,
               insideWebArea: captureInsideWebArea,
               insideExtensionDocument: captureInsideExtensionDocument,

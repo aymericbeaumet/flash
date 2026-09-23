@@ -25,21 +25,42 @@ final class ProviderReadinessTests: XCTestCase {
     XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXSlider"))
   }
 
-  func testAccessibilityWakeDoesNotPoisonFirefoxWindowManagement() {
-    XCTAssertFalse(
-      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
-        bundleIdentifier: "org.mozilla.firefox"))
-    XCTAssertFalse(
-      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
-        bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
-    XCTAssertFalse(
-      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
-        bundleIdentifier: "org.mozilla.nightly"))
-    XCTAssertFalse(
-      AccessibilityProvider.shouldExplicitlyWakeAccessibility(bundleIdentifier: "com.apple.Notes"))
-    XCTAssertTrue(
-      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
-        bundleIdentifier: "com.google.Chrome"))
+  /// The enhanced-UI flags go only to runtimes that gate their tree on them:
+  /// Gecko is scoped per operation, and native apps never get them.
+  func testAccessibilityWakeFollowsTheRuntimeNotTheApp() {
+    XCTAssertTrue(AppTraits(engine: .chromium).needsAccessibilityWake)
+    XCTAssertTrue(AppTraits(engine: .flutter).needsAccessibilityWake)
+    XCTAssertFalse(AppTraits(engine: .gecko).needsAccessibilityWake)
+    XCTAssertFalse(AppTraits().needsAccessibilityWake)
+  }
+
+  func testRuntimeIsReadFromTheBundleLayout() {
+    func engine(xul: Bool = false, _ frameworks: [String], helpers: [String: [String]] = [:])
+      -> AppTraits.Engine?
+    {
+      AppTraits.engine(hasXUL: xul, frameworks: frameworks) { helpers[$0] ?? [] }
+    }
+    XCTAssertEqual(engine(xul: true, []), .gecko)
+    XCTAssertEqual(
+      engine(
+        ["Google Chrome Framework.framework"],
+        helpers: ["Google Chrome Framework.framework": ["Google Chrome Helper (Renderer).app"]]),
+      .chromium, "a browser keeps its renderer helpers inside its framework")
+    XCTAssertEqual(
+      engine(["Electron Framework.framework", "Slack Helper (Renderer).app"]), .chromium,
+      "an Electron app keeps them beside it")
+    XCTAssertEqual(engine(["FlutterMacOS.framework"]), .flutter)
+    XCTAssertNil(engine(["Sparkle.framework"], helpers: ["Sparkle.framework": ["Updater.app"]]))
+  }
+
+  func testWebBrowsersAreAppsThatHandleBothWebSchemes() {
+    func info(_ schemes: [String]) -> [String: Any] {
+      ["CFBundleURLTypes": [["CFBundleURLSchemes": schemes]]]
+    }
+    XCTAssertTrue(AppTraits.handlesWebURLs(infoDictionary: info(["file", "HTTP", "https"])))
+    XCTAssertFalse(AppTraits.handlesWebURLs(infoDictionary: info(["slack"])))
+    XCTAssertFalse(AppTraits.handlesWebURLs(infoDictionary: info(["https"])))
+    XCTAssertFalse(AppTraits.handlesWebURLs(infoDictionary: [:]))
   }
 
   func testExtensionPopupRolesStayScopedToExtensionDocuments() {

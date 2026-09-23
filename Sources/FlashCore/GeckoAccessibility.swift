@@ -1,21 +1,21 @@
 import ApplicationServices
 import Foundation
 
-/// Keeps Firefox's lazily-created AX tree available only while Flash is
+/// Keeps a Gecko app's lazily-created AX tree available only while Flash is
 /// actively reading or acting on it.
 ///
-/// Firefox enables accessibility when its application role is read, but that
+/// Gecko enables accessibility when its application role is read, but that
 /// mode also changes programmatic window moves into a slow, often incomplete
 /// animation. The mode is process-wide, so every Flash AX client must share a
-/// per-process lock: tree work wakes Firefox for the duration of the operation
+/// per-process lock: tree work wakes the app for the duration of the operation
 /// and restores the prior state before a window move can begin.
-public enum FirefoxAccessibility {
-  public static func matches(bundleIdentifier: String?) -> Bool {
-    bundleIdentifier.map { WebBrowsers.firefox.contains($0) } ?? false
+public enum GeckoAccessibility {
+  public static func matches(bundleIdentifier: String?, pid: pid_t) -> Bool {
+    AppTraits.of(bundleIdentifier: bundleIdentifier, pid: pid).engine == .gecko
   }
 
-  /// Run synchronous AX tree work while Firefox accessibility is active.
-  /// Apps outside the Firefox family pass through without locking or mutation.
+  /// Run synchronous AX tree work while Gecko accessibility is active.
+  /// Apps outside the Gecko family pass through without locking or mutation.
   public static func withTree<T>(
     pid: pid_t,
     bundleIdentifier: String?,
@@ -23,7 +23,7 @@ public enum FirefoxAccessibility {
     _ operation: (AXUIElement) throws -> T
   ) rethrows -> T {
     let app = suppliedApp ?? AXApp.make(pid: pid)
-    guard matches(bundleIdentifier: bundleIdentifier) else {
+    guard matches(bundleIdentifier: bundleIdentifier, pid: pid) else {
       return try operation(app)
     }
 
@@ -36,7 +36,7 @@ public enum FirefoxAccessibility {
     _ = AXUIElementCopyAttributeValue(app, kAXRoleAttribute as CFString, &role)
     defer {
       // Preserve accessibility that was already active before Flash entered
-      // the scope (VoiceOver and other assistive clients may own it). Firefox
+      // the scope (VoiceOver and other assistive clients may own it). Gecko
       // reports `.cannotComplete` for this setter even though it applies the
       // value, so the resulting state matters more than the return code.
       if wasEnhanced != true {
@@ -46,7 +46,7 @@ public enum FirefoxAccessibility {
     return try operation(app)
   }
 
-  /// Serialize a window operation against Firefox AX-tree work. Firefox's tree
+  /// Serialize a window operation against Gecko AX-tree work. Gecko's tree
   /// is woken long enough to resolve the target window and read its frame; the
   /// supplied callback then restores the fast geometry state immediately
   /// before the caller writes position or size.
@@ -60,7 +60,7 @@ public enum FirefoxAccessibility {
     app suppliedApp: AXUIElement? = nil,
     _ operation: (AXUIElement, _ prepareGeometry: () -> Void) throws -> T
   ) rethrows -> T {
-    guard matches(bundleIdentifier: bundleIdentifier) else {
+    guard matches(bundleIdentifier: bundleIdentifier, pid: pid) else {
       return try operation(suppliedApp ?? AXApp.make(pid: pid), {})
     }
     let lock = locks.lock(for: pid)
@@ -101,10 +101,10 @@ public enum FirefoxAccessibility {
       enabled ? kCFBooleanTrue : kCFBooleanFalse)
   }
 
-  private static let locks = FirefoxAccessibilityLockStore()
+  private static let locks = GeckoAccessibilityLockStore()
 }
 
-private final class FirefoxAccessibilityLockStore: @unchecked Sendable {
+private final class GeckoAccessibilityLockStore: @unchecked Sendable {
   private let guardLock = NSLock()
   private var processLocks: [pid_t: NSRecursiveLock] = [:]
 
