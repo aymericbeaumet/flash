@@ -13,7 +13,7 @@ jobs:
     name: Format
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Show swift-format version
         run: swift format --version
       - name: Check formatting
@@ -28,7 +28,7 @@ jobs:
     name: Lint
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Show swift-format version
         run: swift format --version
       - name: Lint
@@ -38,7 +38,7 @@ jobs:
     name: Guardrails
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check hard-rule guardrails
         run: ./Scripts/check-guardrails.sh
 
@@ -48,9 +48,9 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache Cargo registry + plugin target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -59,7 +59,7 @@ jobs:
           key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - name: Plugin gate
         # Scripts/test-plugins.sh --lane all is the whole Rust gate: `lint`
         # (fmt --check + clippy -D warnings) and `units` (the plugin-publication
@@ -75,10 +75,10 @@ jobs:
     name: Build
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
       - name: Cache libghostty-vt
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/ghostty
           key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
@@ -87,7 +87,7 @@ jobs:
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .build
           key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
@@ -103,12 +103,12 @@ jobs:
       TMUX_ORACLE: ${{ github.workspace }}/build/tmux-oracle/bin/tmux
       FLASH_REQUIRE_TMUX_ORACLE: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
       - name: Install tmux oracle build dependencies
         run: brew install libevent ncurses pkg-config
       - name: Cache pinned tmux oracle
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/tmux-oracle
           key: ${{ runner.os }}-${{ runner.arch }}-tmux-oracle-${{ hashFiles('Scripts/build-tmux-oracle.sh') }}
@@ -119,7 +119,7 @@ jobs:
       - name: Check native format expansion oracle
         run: python3 Scripts/test-status-format-oracle.py
       - name: Cache libghostty-vt
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/ghostty
           key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
@@ -128,14 +128,14 @@ jobs:
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .build
           key: ${{ runner.os }}-spm-test-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-test-
       - name: Cache Cargo registry + plugin target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -159,13 +159,13 @@ jobs:
     name: Inspector
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
-          version: 9
-      - uses: actions/setup-node@v4
+          version: 10
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           cache-dependency-path: Inspector/pnpm-lock.yaml
       - name: Install inspector deps
@@ -190,7 +190,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -223,7 +223,7 @@ jobs:
           echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
           echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - name: Package Flash.app
         id: package
         if: steps.meta.outputs.deploy == 'true'
@@ -270,7 +270,7 @@ jobs:
 
       - name: Checkout Homebrew tap
         if: steps.meta.outputs.deploy == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aymericbeaumet/homebrew-tap
           path: homebrew-tap
