@@ -278,7 +278,7 @@ final class StatusPopupController {
     /// document, so that row is a blank strip under the text; clip it instead
     /// of showing it. A focused pager keeps it — that is where `/` search
     /// input and less's own messages appear.
-    var hidesPagerPromptRow = false
+    var clipsTrailingRow = false
     var exitText = ""
     var footerHeight: CGFloat = 0
     var sourceKind = "terminal"
@@ -302,6 +302,9 @@ final class StatusPopupController {
       rows = min(
         max(1, Int((visibleFrame.height - inset * 2 - footerHeight) / cell.height)), definition.rows
       )
+      clipsTrailingRow = Self.hidesBlankTerminalRow(
+        lastRow: Self.lastRowText(of: session.frame), rows: rows,
+        interactive: presentation.isFocused || presentation.isStandalone)
       terminalView.bind(session: session)
       session.resize(columns: columns, rows: rows)
     } else {
@@ -315,7 +318,7 @@ final class StatusPopupController {
         text: text, availableColumns: available, maximumRows: max(1, maximumRows - 1))
       columns = available
       rows = min(maximumRows, grid.rows + 1)
-      hidesPagerPromptRow = Self.hidesPagerPromptRow(
+      clipsTrailingRow = Self.hidesPagerPromptRow(
         rows: rows, interactive: presentation.isFocused || presentation.isStandalone)
       let session: TerminalSession
       if let existing = terminals.sessions[region.name], presentation.isFocused || isContentSnapshot
@@ -332,7 +335,7 @@ final class StatusPopupController {
     content = region.content
     // The session keeps every row; only the drawn height shrinks, so the
     // clipped prompt row never reaches the screen.
-    let visibleRows = rows - (hidesPagerPromptRow ? 1 : 0)
+    let visibleRows = rows - (clipsTrailingRow ? 1 : 0)
     let layout = OverlayPanel.statusBarPopupLayout(
       textSize: CGSize(
         width: CGFloat(columns) * cell.width,
@@ -437,6 +440,25 @@ final class StatusPopupController {
   /// there is nothing left to show otherwise.
   static func hidesPagerPromptRow(rows: Int, interactive: Bool) -> Bool {
     rows > 1 && !interactive
+  }
+
+  /// The same rule for a configured terminal: a full-screen program keeps its
+  /// last row for messages and prompts, and leaves it blank the rest of the
+  /// time (newsboat's message line, for instance). A hover preview clips that
+  /// blank strip; a focused or pinned popup keeps it, because that is where an
+  /// interactive program reports errors and takes `/` input. Only a row that
+  /// is actually empty is clipped, so a program using every row is untouched.
+  static func hidesBlankTerminalRow(lastRow: String?, rows: Int, interactive: Bool) -> Bool {
+    guard !interactive, rows > 1, let lastRow else { return false }
+    return lastRow.trimmingCharacters(in: .whitespaces).isEmpty
+  }
+
+  /// The drawn text of a frame's last row, or nil before the first frame.
+  static func lastRowText(of frame: TerminalFrame?) -> String? {
+    guard let frame, frame.rows > 0, frame.columns > 0 else { return nil }
+    let start = (frame.rows - 1) * frame.columns
+    guard start >= 0, start + frame.columns <= frame.cells.count else { return nil }
+    return frame.cells[start..<(start + frame.columns)].map(\.text).joined()
   }
 
   static func documentGrid(text: String, availableColumns: Int, maximumRows: Int) -> (

@@ -319,4 +319,20 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertEqual(StatusBarClickView.hoverWashRect(link: row, popup: title), title)
   }
 
+  /// A hover preview clips the blank last row a full-screen program keeps for
+  /// its messages; a focused popup keeps it, and a program that fills the row
+  /// keeps it either way.
+  func testHoverPreviewClipsOnlyAnEmptyTrailingTerminalRow() {
+    func clips(_ lastRow: String?, rows: Int = 30, interactive: Bool = false) -> Bool {
+      StatusPopupController.hidesBlankTerminalRow(
+        lastRow: lastRow, rows: rows, interactive: interactive)
+    }
+    XCTAssertTrue(clips(""), "newsboat leaves its message row blank while idle")
+    XCTAssertTrue(clips("     "), "a row of spaces is still blank")
+    XCTAssertFalse(clips("Error: feed contains no items!"), "a message must stay visible")
+    XCTAssertFalse(clips("", interactive: true), "a focused popup keeps its input row")
+    XCTAssertFalse(clips(nil), "no frame yet means nothing to clip")
+    XCTAssertFalse(clips("", rows: 1), "a one-row popup has nothing left to show")
+  }
+
 }
