@@ -50,6 +50,10 @@ final class PluginHostRPC {
   // validated call without opening browsers or signaling processes; the
   // defaults ARE the production behavior.
   static var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+  /// The bundle id of the app LaunchServices hands `url` to.
+  static var urlHandler: (URL) -> String? = { url in
+    NSWorkspace.shared.urlForApplication(toOpen: url).flatMap { Bundle(url: $0)?.bundleIdentifier }
+  }
   static var appOpener: (String, @escaping (String?) -> Void) -> Void = { bundleID, done in
     guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
     else {
@@ -440,7 +444,9 @@ final class PluginHostRPC {
   }
 
   /// `host.open`: hand a URL or bundle id to LaunchServices host-side, so
-  /// plugins never fork `/usr/bin/open` and keep fork-free profiles.
+  /// plugins never fork `/usr/bin/open` and keep fork-free profiles. A URL
+  /// reply names the app that handles it (`bundle_id`), so a plugin can check
+  /// that app still has focus before acting on it.
   private func hostOpen(
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
@@ -452,7 +458,9 @@ final class PluginHostRPC {
         // Response law: ok:false always carries a non-empty, content-free
         // error (a bare {"ok": false} is a spec violation).
         if Self.urlOpener(url) {
-          reply(["ok": true])
+          var result: [String: Any] = ["ok": true]
+          result["bundle_id"] = Self.urlHandler(url)
+          reply(result)
         } else {
           reply(["ok": false, "error": "open failed"])
         }

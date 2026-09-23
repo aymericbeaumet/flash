@@ -313,7 +313,10 @@ RPC open. The method returns
 plugin per second). `host.storage_get`/`host.storage_set` are a host-managed
 KV store persisted to `storage.json` in the plugin's data dir (`{"key"}` /
 `{"key", "value" | null}`; keys ≤ 128 B, values ≤ 64 KiB, 256 entries; null
-deletes). `host.post_global_key` accepts one `{key_code, modifiers}` chord
+deletes). `host.open` takes `{"url"}` or `{"bundle_id"}`; a URL's reply also
+names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
+plugin can confirm that app still has focus before acting on it.
+`host.post_global_key` accepts one `{key_code, modifiers}` chord
 posted through the host's session event stream for macOS-owned shortcuts and
 rejects unmodified input. The AX broker exists because `AXUIElement` cannot
 cross a process boundary: `host.ax_snapshot` BFS-walks a subtree (default

@@ -169,9 +169,11 @@ final class PluginHostRPCArmTests: XCTestCase {
 
   func testHostOpenRoutesURLsAndBundleIDsThroughTheSeams() {
     let originalURLOpener = PluginHostRPC.urlOpener
+    let originalURLHandler = PluginHostRPC.urlHandler
     let originalAppOpener = PluginHostRPC.appOpener
     defer {
       PluginHostRPC.urlOpener = originalURLOpener
+      PluginHostRPC.urlHandler = originalURLHandler
       PluginHostRPC.appOpener = originalAppOpener
     }
     var openedURLs: [URL] = []
@@ -182,6 +184,8 @@ final class PluginHostRPCArmTests: XCTestCase {
       openedURLs.append(url)
       return urlOpenSucceeds
     }
+    var handler: String? = "com.example.browser"
+    PluginHostRPC.urlHandler = { _ in handler }
     PluginHostRPC.appOpener = { bundleID, done in
       openedBundles.append(bundleID)
       done(appOpenError)
@@ -191,7 +195,13 @@ final class PluginHostRPCArmTests: XCTestCase {
     let urlReply = hostReply(
       rpc, "host.open", ["url": "https://example.com/x"], capabilities: [.open])
     XCTAssertEqual(urlReply["ok"] as? Bool, true)
+    XCTAssertEqual(urlReply["bundle_id"] as? String, "com.example.browser")
     XCTAssertEqual(openedURLs, [URL(string: "https://example.com/x")])
+    handler = nil
+    let unnamed = hostReply(
+      rpc, "host.open", ["url": "https://example.com/x"], capabilities: [.open])
+    XCTAssertEqual(unnamed["ok"] as? Bool, true)
+    XCTAssertNil(unnamed["bundle_id"], "an unresolved handler is omitted, not empty")
 
     // Response law: an opener failure carries a non-empty error, never a
     // bare {"ok": false}.
@@ -214,7 +224,7 @@ final class PluginHostRPCArmTests: XCTestCase {
 
     let neither = hostReply(rpc, "host.open", [:], capabilities: [.open])
     XCTAssertEqual(neither["error"] as? String, "host.open requires url or bundle_id")
-    XCTAssertEqual(openedURLs.count, 2, "a rejected call must not reach the opener")
+    XCTAssertEqual(openedURLs.count, 3, "a rejected call must not reach the opener")
   }
 
   // MARK: - host.post_media_key (mediaKeyPoster seam)

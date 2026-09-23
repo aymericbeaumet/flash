@@ -33,7 +33,22 @@ use tokio::process::Command;
 use tokio::sync::{OnceCell, RwLock};
 
 const AUTOSEND_DELAY: Duration = Duration::from_millis(2_500);
-const AUTOSEND_SCRIPT: &str = r#"tell application "System Events" to key code 36"#;
+
+/// Return, pressed only while the app the page opened in still has focus:
+/// by the time the page has loaded the user may be typing elsewhere, where
+/// a stray Return would submit or run whatever is there. `None` for a bundle
+/// id that could not be spliced into AppleScript verbatim.
+fn autosend_script(bundle_id: &str) -> Option<String> {
+    let valid = !bundle_id.is_empty()
+        && bundle_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    valid.then(|| {
+        format!(
+            r#"tell application "System Events" to if bundle identifier of (first application process whose frontmost is true) is "{bundle_id}" then key code 36"#
+        )
+    })
+}
 
 const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
 const ANTHROPIC_USAGE_TTL: u64 = 600;
@@ -1213,9 +1228,13 @@ impl FlashPlugin for AiProviders {
                 .unwrap_or("host.open failed");
             return PerformResponse::fail(error);
         }
-        if !query.is_empty() {
+        let handler = opened.get("bundle_id").and_then(serde_json::Value::as_str);
+        if let Some(script) = handler
+            .filter(|_| !query.is_empty())
+            .and_then(autosend_script)
+        {
             tokio::time::sleep(AUTOSEND_DELAY).await;
-            let _ = run_osascript(&ctx, AUTOSEND_SCRIPT, Duration::from_secs(10)).await;
+            let _ = run_osascript(&ctx, &script, Duration::from_secs(10)).await;
         }
         PerformResponse::ok()
     }
@@ -1289,12 +1308,16 @@ mod tests {
     }
 
     #[test]
-    fn autosend_preserves_the_load_delay_and_return_key() {
+    fn autosend_presses_return_only_in_the_app_the_page_opened_in() {
         assert_eq!(AUTOSEND_DELAY, Duration::from_millis(2_500));
         assert_eq!(
-            AUTOSEND_SCRIPT,
-            r#"tell application "System Events" to key code 36"#
+            autosend_script("com.google.Chrome").as_deref(),
+            Some(
+                r#"tell application "System Events" to if bundle identifier of (first application process whose frontmost is true) is "com.google.Chrome" then key code 36"#
+            )
         );
+        assert_eq!(autosend_script(""), None);
+        assert_eq!(autosend_script(r#"x" then key code 36 --"#), None);
     }
 
     #[test]
