@@ -406,6 +406,9 @@ leader = "\\"
 "g7" = ["flash", "send_key", "--keys=cmd+7"]
 "g8" = ["flash", "send_key", "--keys=cmd+8"]
 "g9" = ["flash", "send_key", "--keys=cmd+9"]
+"g0" = ["flash", "tab_first"]
+"g^" = ["flash", "tab_first"]
+"g$" = ["flash", "tab_last"]
 "[m" = { command = ["flash", "tab_move_previous"], repeat = true }
 "]m" = { command = ["flash", "tab_move_next"], repeat = true }
 "ctrl+o" = ["flash", "movement_back"]

@@ -1040,7 +1040,7 @@ extension AppDelegate {
     case .tabPrev:
       tabPrevInNormalMode(repeatCount: repeatCount)
     case .tabFirst:
-      tabSelectInNormalMode(index: 1)
+      tabFirstInNormalMode()
     case .tabLast:
       tabLastInNormalMode()
     case .tabSelect(let explicitIndex):

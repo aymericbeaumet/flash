@@ -41,12 +41,20 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(chars: "r", flags: [.control]), .redo)
   }
 
+  func testFirstAndLastTabHaveVimMappings() {
+    let actions = Dictionary(
+      Config.Mode.defaultNormalMappings.map { ($0.key, $0.action) }, uniquingKeysWith: { a, _ in a }
+    )
+    XCTAssertEqual(actions[key("g0")], .flashCommand(.tabFirst))
+    XCTAssertEqual(actions[key("g^")], .flashCommand(.tabFirst))
+    XCTAssertEqual(actions[key("g$")], .flashCommand(.tabLast))
+  }
+
   func testApplicationSpecificActionsHaveNoDefaultMappings() {
     let mappingKeys = Set(Config.Mode.defaultNormalMappings.map(\.key))
     let removedKeys = [
       "d", "j", "k", "H", "L", "[h", "]h", "]b", "[B", "]B",
       "[e", "]e", "[s", "]s", "[w", "]w", "ctrl+tab", "ctrl+shift+tab",
-      "g^", "g$", "g0",
       "gt", "gT", "J", "K", "e", "n", "N", "yy",
     ]
     for removedKey in removedKeys {

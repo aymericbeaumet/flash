@@ -110,10 +110,24 @@ extension AppDelegate {
       })
   }
 
+  /// Jump to the first tab: a source's own first window (tmux `{start}`,
+  /// whatever its `base-index`), else ⌘1 as `g1` sends.
+  func tabFirstInNormalMode() {
+    performTabSourceAction(
+      name: "tab_first",
+      repeatCount: 1,
+      action: { registry, context, completion in
+        registry.perform(.tabFirst, in: context, completion: completion)
+      },
+      fallback: { [weak self] _, _ in
+        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_1), flags: .maskCommand)
+      })
+  }
+
   /// Jump to the last tab. Browsers map ⌘9 to "last tab" by convention
   /// (Chrome, Safari, Firefox), so for those bundles the fast path is a
   /// single synthesized ⌘9. Plugin-backed sources expose this through
-  /// the `tab_last` source action (the tmux plugin uses `last-window`).
+  /// the `tab_last` source action (tmux selects `{end}`).
   func tabLastInNormalMode() {
     performTabSourceAction(
       name: "tab_last",

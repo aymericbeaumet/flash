@@ -22,6 +22,9 @@ document-URL and mark commands remain available for explicit mappings.
   terminals. Repeat the final `t` to keep switching tabs.
 - `t` sends Cmd-T directly. `g1`–`g9` send Cmd-1…Cmd-9 directly, including in
   terminals and tmux. These shortcuts preserve NORMAL.
+- `g0` / `g^` go to the first tab and `g$` to the last. tmux and plugin
+  sources select their own first and last windows; otherwise the first tab is
+  Cmd-1, and the last is Cmd-9 in browsers.
 - `[m` / `]m` move the current tab left/right; repeat `m` to continue moving it.
   Tmux reorders its window, and Firefox receives Control-Shift-Page Up/Down.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
