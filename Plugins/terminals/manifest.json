@@ -1,0 +1,26 @@
+{
+  "id": "terminals",
+  "name": "Terminals",
+  "version": "0.1.0",
+  "description": "Shortcuts terminal emulators bind for Flash's built-in pane actions, used where no tmux client hosts the focused terminal.",
+  "action_keystrokes": {
+    "pane_next": {
+      "com.mitchellh.ghostty": "cmd+]",
+      "com.googlecode.iterm2": "cmd+]"
+    },
+    "pane_previous": {
+      "com.mitchellh.ghostty": "cmd+[",
+      "com.googlecode.iterm2": "cmd+["
+    }
+  },
+  "help": {
+    "topics": [
+      {
+        "name": "terminals",
+        "title": "Terminals",
+        "summary": "Terminal emulator shortcuts for built-in pane actions.",
+        "body": "# Terminals\n\nThis bundled manifest-only plugin declares the chords terminal emulators bind for Flash's built-in actions. `pane_next` / `pane_previous` (`]p` / `[p` when mapped) send Cmd-] / Cmd-[ in Ghostty and iTerm2 when no tmux client hosts the focused terminal; tmux still owns its panes first.\n"
+      }
+    ]
+  }
+}

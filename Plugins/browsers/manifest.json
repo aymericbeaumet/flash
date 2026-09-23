@@ -91,5 +91,36 @@
     "tab_select",
     "tab_new",
     "tab_close"
-  ]
+  ],
+  "action_keystrokes": {
+    "tab_next": {
+      "": "cmd+shift+]"
+    },
+    "tab_previous": {
+      "": "cmd+shift+["
+    },
+    "tab_last": {
+      "": "cmd+9"
+    },
+    "tab_new": {
+      "": "cmd+t"
+    },
+    "tab_reopen": {
+      "": "cmd+shift+t"
+    },
+    "app_reload": {
+      "": "cmd+r"
+    },
+    "app_reload_force": {
+      "": "cmd+shift+r",
+      "com.apple.Safari": "cmd+option+r",
+      "com.apple.SafariTechnologyPreview": "cmd+option+r"
+    },
+    "scroll_top": {
+      "": "cmd+up"
+    },
+    "scroll_bottom": {
+      "": "cmd+down"
+    }
+  }
 }

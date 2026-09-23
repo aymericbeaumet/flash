@@ -969,7 +969,7 @@ extension AppDelegate {
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
     case .reload(let force):
-      reloadInNormalMode(force: force, repeatCount: repeatCount)
+      performSourceAction(force ? .appReloadForce : .appReload, repeatCount: repeatCount)
     case .sendKey(_, let keyCode, let flagsRawValue):
       sendNormalModeKey(
         keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)
@@ -989,15 +989,15 @@ extension AppDelegate {
         flags: [.maskCommand, .maskShift],
         repeatCount: repeatCount)
     case .archive:
-      archiveInNormalMode(repeatCount: repeatCount)
+      performSourceAction(.resourceArchive, repeatCount: repeatCount)
     case .resourceNext:
       resourceNavigationInNormalMode(direction: .next, repeatCount: repeatCount)
     case .resourcePrevious:
       resourceNavigationInNormalMode(direction: .previous, repeatCount: repeatCount)
     case .close:
-      windowCloseInNormalMode(repeatCount: repeatCount)
+      closeInNormalMode(.windowClose, repeatCount: repeatCount)
     case .tabClose:
-      tabCloseInNormalMode(repeatCount: repeatCount)
+      closeInNormalMode(.tabClose, repeatCount: repeatCount)
     case .find:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
@@ -1036,31 +1036,31 @@ extension AppDelegate {
     case .paste(let register):
       pasteRegister(register, repeatCount: repeatCount)
     case .tabNext:
-      tabNextInNormalMode(repeatCount: repeatCount)
+      performSourceAction(.tabNext, repeatCount: repeatCount)
     case .tabPrev:
-      tabPrevInNormalMode(repeatCount: repeatCount)
+      performSourceAction(.tabPrevious, repeatCount: repeatCount)
     case .tabFirst:
       tabFirstInNormalMode()
     case .tabLast:
-      tabLastInNormalMode()
+      performSourceAction(.tabLast)
     case .tabSelect(let explicitIndex):
       tabSelectInNormalMode(index: explicitIndex ?? repeatCount)
     case .tabMovePrev:
-      tabMoveInNormalMode(direction: .previous, repeatCount: repeatCount)
+      performSourceAction(.tabMovePrevious, repeatCount: repeatCount)
     case .tabMoveNext:
-      tabMoveInNormalMode(direction: .next, repeatCount: repeatCount)
+      performSourceAction(.tabMoveNext, repeatCount: repeatCount)
     case .paneNext:
-      paneNavigateInNormalMode(direction: .next, repeatCount: repeatCount)
+      performSourceAction(.paneNext, repeatCount: repeatCount)
     case .panePrev:
-      paneNavigateInNormalMode(direction: .previous, repeatCount: repeatCount)
+      performSourceAction(.panePrevious, repeatCount: repeatCount)
     case .paneSplitVertical:
-      paneSplitInNormalMode(vertical: true, repeatCount: repeatCount)
+      performSourceAction(.paneSplitVertical, repeatCount: repeatCount)
     case .paneSplitHorizontal:
-      paneSplitInNormalMode(vertical: false, repeatCount: repeatCount)
+      performSourceAction(.paneSplitHorizontal, repeatCount: repeatCount)
     case .paneClose:
-      paneCloseInNormalMode(repeatCount: repeatCount)
+      performSourceAction(.paneClose, repeatCount: repeatCount)
     case .tabReopen:
-      tabReopenInNormalMode(repeatCount: repeatCount)
+      performSourceAction(.tabReopen, repeatCount: repeatCount)
     case .historyBack:
       navigateTargetHistory(direction: .back, repeatCount: repeatCount)
     case .historyForward:
@@ -1081,7 +1081,7 @@ extension AppDelegate {
         self?.performMappedCommand(.quitApp(force: force))
       }
     case .tabNew:
-      tabNewInNormalMode(repeatCount: repeatCount)
+      performSourceAction(.tabNew, repeatCount: repeatCount)
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:
@@ -1349,17 +1349,13 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    if Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-      key: key, flags: flags, bundleIdentifier: target.bundleIdentifier)
-    {
+    if commandChordTypesText(key: key, flags: flags, bundleIdentifier: target.bundleIdentifier) {
       FlashLog.debug(
         "[normal_mode] suppress unbound terminal command chord key=\(key) "
           + "flags=\(flags.rawValue) bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
       return
     }
-    let (key, flags) = Self.appChord(
-      key: key, flags: flags, bundleIdentifier: target.bundleIdentifier)
     let count = normalizedRepeatCount(repeatCount)
     let activationDelayMs =
       activateNormalModeKeyTargetIfNeeded(
@@ -1441,17 +1437,13 @@ extension AppDelegate {
     // One unbound chord would type its character, so the whole sequence is
     // refused rather than half-delivered.
     if let unsafe = keys.first(where: {
-      Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        key: $0.0, flags: $0.1, bundleIdentifier: target.bundleIdentifier)
+      commandChordTypesText(key: $0.0, flags: $0.1, bundleIdentifier: target.bundleIdentifier)
     }) {
       FlashLog.debug(
         "[normal_mode] suppress unbound terminal command chord key=\(unsafe.0) "
           + "flags=\(unsafe.1.rawValue) bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
       return
-    }
-    let keys = keys.map {
-      Self.appChord(key: $0.0, flags: $0.1, bundleIdentifier: target.bundleIdentifier)
     }
     let count = normalizedRepeatCount(repeatCount)
     var offsetMs =
@@ -1545,33 +1537,39 @@ extension AppDelegate {
     CGKeyCode(kVK_ANSI_7), CGKeyCode(kVK_ANSI_8), CGKeyCode(kVK_ANSI_9),
   ]
 
-  /// Terminals whose defaults put split traversal on the bare bracket chords.
-  /// Elsewhere `cmd+[` / `cmd+]` are unbound and would type a bracket.
-  private static let splitTraversalTerminalBundles: Set<String> = [
-    "com.mitchellh.ghostty", "com.googlecode.iterm2",
-  ]
-
-  /// Whether synthesizing `key`+`flags` into `bundleIdentifier` would type a
+  /// Whether synthesizing `key`+`flags` into a terminal would type a
   /// character instead of running a shortcut. Shift-bracket is the macOS
-  /// standard tab traversal and is bound everywhere; the bare brackets are
-  /// only safe where splits live on them.
-  static func normalModeCommandKeyShortcutIsUnsafeInTerminal(
+  /// standard tab traversal and every emulator binds it, as it binds
+  /// `terminalBoundCommandChords`; any other Command chord is safe only where
+  /// a plugin declares it as one of that emulator's action keystrokes (split
+  /// traversal on the bare brackets, for one). `isDeclared` is asked last.
+  static func commandChordTypesTextInTerminal(
     key: CGKeyCode,
     flags: CGEventFlags,
-    bundleIdentifier: String
+    isDeclared: () -> Bool
   ) -> Bool {
-    guard TerminalBundles.identifiers.contains(bundleIdentifier) else { return false }
     let modifiers = flags.intersection(normalModeKeyModifierMask)
     guard modifiers.contains(.maskCommand) else { return false }
     let bracket = key == CGKeyCode(kVK_ANSI_LeftBracket) || key == CGKeyCode(kVK_ANSI_RightBracket)
-    if bracket {
-      if modifiers == [.maskCommand, .maskShift] { return false }
-      return
-        !(modifiers == [.maskCommand]
-        && splitTraversalTerminalBundles.contains(bundleIdentifier))
+    let boundEverywhere =
+      bracket
+      ? modifiers == [.maskCommand, .maskShift]
+      : modifiers.subtracting([.maskCommand, .maskShift]).isEmpty
+        && terminalBoundCommandChords.contains(key)
+    return !boundEverywhere && !isDeclared()
+  }
+
+  /// `commandChordTypesTextInTerminal` for the app `bundleIdentifier`; any app
+  /// but a terminal emulator ignores a Command chord it doesn't bind.
+  func commandChordTypesText(
+    key: CGKeyCode, flags: CGEventFlags, bundleIdentifier: String
+  ) -> Bool {
+    guard TerminalBundles.identifiers.contains(bundleIdentifier) else { return false }
+    return Self.commandChordTypesTextInTerminal(key: key, flags: flags) {
+      pluginManager.declaresActionKeystroke(
+        key: key, flags: flags.intersection(Self.normalModeKeyModifierMask),
+        in: PluginSelectorContext(bundleID: bundleIdentifier))
     }
-    guard modifiers.subtracting([.maskCommand, .maskShift]).isEmpty else { return true }
-    return !terminalBoundCommandChords.contains(key)
   }
 
   /// `y` — copy the focused app's current selection into `register`. Reads the

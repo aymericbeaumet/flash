@@ -351,8 +351,9 @@ read-denied, network and exec open), with its full output persisted for
 forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
-`mappings`, `help`, and `verbs` whose every entry declares a keystroke (the
-bundled `defaults` plugin is the exemplar). Anything process-bound is
+`mappings`, `help`, `action_keystrokes`, and `verbs` whose every entry
+declares a keystroke (the bundled `defaults` and `terminals` plugins are the
+exemplars). Anything process-bound is
 rejected. Loading is strict — unknown top-level or nested keys and malformed
 known fields are rejected outright, and new manifest surface only ever
 arrives together with a protocol change, so "unknown key" always means "typo
@@ -391,6 +392,10 @@ or stale host", never ambiguity.
   "verbs": [
     { "name": "example_save", "keystrokes": { "": "cmd+s" } }
   ],
+  "action_keystrokes": {
+    "tab_next": { "": "cmd+shift+]" },
+    "app_reload_force": { "": "cmd+shift+r", "com.apple.Safari": "cmd+option+r" }
+  },
   "mappings": [
     {
       "key": "R",
@@ -439,9 +444,23 @@ Section semantics:
 - **`status`** — status-bar segment names fed by the `status` notification.
 - **`verbs`** — CLI/mapping verbs; `keystrokes` lets the host handle fixed
   keystroke verbs without any plugin RPC.
+- **`action_keystrokes`** — the chords an app binds for Flash's built-in
+  source actions: action name → bundle id → chord, where `""` covers every
+  app the root selector matches. The host sends the chord when no source
+  performs the action in the focused app; an app's own entry beats a
+  plugin-wide one, then selector specificity and `priority` decide. Names are
+  `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_new`,
+  `tab_close`, `tab_reopen`, `tab_move_next`, `tab_move_previous`,
+  `window_close`, `pane_next`, `pane_previous`, `pane_split_vertical`,
+  `pane_split_horizontal`, `pane_close`, `app_reload`, `app_reload_force`,
+  `resource_archive`, `resource_next`, `resource_previous`, `scroll_top` and
+  `scroll_bottom`; an unknown name or unparseable chord rejects the manifest.
+  Manifest-only plugins may declare it. App knowledge lives here, never in
+  the host.
 - **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
-  may scope with `only_bundle_ids`. Terminal mappings are local to a focused
+  may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
+  when its final key is pressed again, as in config. Terminal mappings are local to a focused
   status popup. Every global mapping registration is suspended while that view
   owns input; only winning INSERT-active `enter_normal_mode` bindings are
   inherited as terminal defaults, and explicit terminal bindings override them.

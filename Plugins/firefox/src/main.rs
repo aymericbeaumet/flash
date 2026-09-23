@@ -35,6 +35,7 @@ const MAX_SESSION_TABS: usize = 100_000;
 const BRIDGE_FRESHNESS: Duration = Duration::from_secs(300);
 const FIREFOX: &str = "org.mozilla.firefox";
 const FIREFOX_DEV: &str = "org.mozilla.firefoxdeveloperedition";
+const FIREFOX_NIGHTLY: &str = "org.mozilla.nightly";
 const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 /// Debounce latch: one pending coalesced event refresh at a time.
@@ -548,7 +549,7 @@ fn start_refresh_poll(ctx: &Context) {
 }
 
 fn is_firefox(bundle: &str) -> bool {
-    bundle == FIREFOX || bundle == FIREFOX_DEV
+    bundle == FIREFOX || bundle == FIREFOX_DEV || bundle == FIREFOX_NIGHTLY
 }
 
 /// Plugin sources follow `<plugin>.<subsource>`. The release vs

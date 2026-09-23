@@ -765,7 +765,7 @@ private func sendKeyCommand(_ a: VerbArgs) -> URLCommand? {
   return .sendKey(
     keys: keys,
     keyCode: CGKeyCode(parsed.virtualKey),
-    flagsRawValue: cgEventFlags(carbon: parsed.modifiers).rawValue)
+    flagsRawValue: parsed.eventFlags.rawValue)
 }
 
 /// `flash send_keys --keys=<hotkey,hotkey,...>` synthesizes a short key sequence
@@ -783,20 +783,9 @@ private func sendKeysCommand(_ a: VerbArgs) -> URLCommand? {
       return nil
     }
     keyCodes.append(CGKeyCode(parsed.virtualKey))
-    flagsRawValues.append(cgEventFlags(carbon: parsed.modifiers).rawValue)
+    flagsRawValues.append(parsed.eventFlags.rawValue)
   }
   return .sendKeys(keys: keys, keyCodes: keyCodes, flagsRawValues: flagsRawValues)
-}
-
-/// Translate Carbon modifier flags (as `HotkeySyntax` emits) into the
-/// `CGEventFlags` the synthesizer consumes.
-private func cgEventFlags(carbon: UInt32) -> CGEventFlags {
-  var flags: CGEventFlags = []
-  if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
-  if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
-  if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
-  if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
-  return flags
 }
 
 private func windowMoveCommand(_ a: VerbArgs) -> URLCommand? {

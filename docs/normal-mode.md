@@ -20,15 +20,18 @@ document-URL and mark commands remain available for explicit mappings.
 - `[a` / `]a` cycle previous/next app in MRU order.
 - `[t` / `]t` send Cmd-Shift-[ / Cmd-Shift-] directly in every app, including
   terminals. Repeat the final `t` to keep switching tabs. WhatsApp binds the
-  chord to its previous/next chat; Messages, which leaves it unbound, receives
-  its own Control-(Shift-)Tab conversation chord instead.
+  chord to its previous/next chat; in Messages, which leaves it unbound, the
+  `defaults` plugin maps `[t` / `]t` to `tab_previous` / `tab_next`, whose
+  Messages chord is Control-(Shift-)Tab.
 - `t` sends Cmd-T directly. `g1`–`g9` send Cmd-1…Cmd-9 directly, including in
   terminals and tmux. These shortcuts preserve NORMAL.
 - `g0` / `g^` go to the first tab and `g$` to the last. tmux and plugin
   sources select their own first and last windows; otherwise the first tab is
-  Cmd-1, and the last is Cmd-9 in browsers.
+  Cmd-1, and the last is the chord an app's plugin declares (Cmd-9 in
+  browsers).
 - `[m` / `]m` move the current tab left/right; repeat `m` to continue moving it.
-  Tmux reorders its window, and Firefox receives Control-Shift-Page Up/Down.
+  Tmux reorders its window; the firefox plugin declares Firefox's
+  Control-Shift-Page Up/Down.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
 - Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
   screen position through the grid. A lowercase prefix picks the click on
@@ -69,6 +72,19 @@ destination. Apps without a more precise source restore application focus.
 The stack does not capture page scroll positions, editor cursor positions, or
 terminal scrollback offsets. History is in memory and bounded to 20 stops in
 each direction.
+
+## Source actions
+
+Tab, pane, reload, archive and `gg` / `G` verbs are source actions. Each runs
+one policy that knows no app by name: a source that performs the action in the
+focused app (tmux, a browser plugin, the accessibility tab strip); else the
+chord a plugin manifest declares for the action in that app
+(`action_keystrokes`, see [plugin protocol](plugin-protocol.md)); else the
+platform convention the core owns for a few actions (Cmd-W closes a tab or
+window, Cmd-1 selects the first tab, `resource_next` / `resource_previous`
+scroll, `gg` / `G` use the focused-window scroller); else nothing. A terminal
+treats a Command chord a plugin declares for it as bound, like the chords
+every emulator binds.
 
 ## Shared mode exit
 

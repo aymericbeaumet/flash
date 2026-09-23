@@ -115,7 +115,28 @@ final class PluginManager {
     var shebangCandidateIndex: [ShebangCandidateTarget] = []
     var wildcardShebangTargets: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
+    var actionKeystrokeIndex: [SourceActionName: [ActionKeystrokeTarget]] = [:]
     var helpTopics: [HelpTopic] = []
+  }
+
+  /// One plugin's chords for one built-in action, parsed at publish time.
+  private struct ActionKeystrokeTarget {
+    let selector: PluginSelectorStack
+    let priority: Int
+    /// Bundle id, or `""` for every app the selector matches, → chord.
+    let chords: [String: ParsedHotkey]
+
+    /// The chord for `context` and how specific its claim is: a bundle's own
+    /// entry beats the plugin-wide one, then the more specific selector and
+    /// the higher priority win.
+    func resolve(in context: PluginSelectorContext) -> (chord: ParsedHotkey, rank: [Int])? {
+      guard let specificity = selector.specificity(in: context) else { return nil }
+      if let bundleID = context.bundleID, let exact = chords[bundleID] {
+        return (exact, [1, specificity, priority])
+      }
+      guard let fallback = chords[""] else { return nil }
+      return (fallback, [0, specificity, priority])
+    }
   }
 
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
@@ -229,6 +250,7 @@ final class PluginManager {
     var shebangCandidates: [ShebangCandidateTarget] = []
     var wildcardShebangs: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
+    var actionKeystrokeIndex: [SourceActionName: [ActionKeystrokeTarget]] = [:]
     var helpTopics: [HelpTopic] = []
     var order = 0
     for plugin in plugins {
@@ -298,6 +320,14 @@ final class PluginManager {
             selector: rootSelector))
       }
 
+      for (name, chords) in manifest.actionKeystrokes {
+        actionKeystrokeIndex[name, default: []].append(
+          ActionKeystrokeTarget(
+            selector: rootSelector,
+            priority: manifest.priority,
+            chords: chords.compactMapValues { HotkeySyntax.parse(hotkey: $0) }))
+      }
+
       for registration in manifest.mappings {
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(registration.key) else {
           FlashLog.warn(
@@ -316,7 +346,9 @@ final class PluginManager {
             selector: PluginSelectorStack([manifest.selector, registration.selector]),
             priority: registration.priority ?? manifest.priority,
             scope: registration.scope,
-            mapping: ModeMapping(key: canonical, action: action)))
+            mapping: ModeMapping(
+              key: canonical, action: action,
+              repeatsOnFinalKey: registration.repeatsOnFinalKey)))
       }
 
       // Topic names collide on a first-wins basis with the host's topics
@@ -346,6 +378,7 @@ final class PluginManager {
       shebangCandidateIndex: shebangCandidates,
       wildcardShebangTargets: wildcardShebangs,
       verbIndex: verbIndex,
+      actionKeystrokeIndex: actionKeystrokeIndex,
       helpTopics: helpTopics)
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
@@ -686,15 +719,6 @@ final class PluginManager {
       .map(\.candidate)
   }
 
-  private static func cgEventFlags(carbon: UInt32) -> CGEventFlags {
-    var flags: CGEventFlags = []
-    if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
-    if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
-    if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
-    if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
-    return flags
-  }
-
   /// Command registrations available for completion in the active-window
   /// context. More specific registrations are listed first.
   func commandRegistrations(in context: PluginSelectorContext = PluginSelectorContext())
@@ -712,6 +736,35 @@ final class PluginManager {
         return $0.order < $1.order
       }
       .map(\.registration)
+  }
+
+  /// The chord a plugin declares for `action` in the focused app, sent when
+  /// no source performs the action there.
+  func actionKeystroke(
+    _ action: SourceActionName, in context: PluginSelectorContext
+  ) -> ParsedHotkey? {
+    var best: (chord: ParsedHotkey, rank: [Int])?
+    for target in readHotSnapshot().actionKeystrokeIndex[action] ?? [] {
+      guard let candidate = target.resolve(in: context) else { continue }
+      // Highest rank wins; an exact tie keeps the first plugin by id.
+      if best.map({ $0.rank.lexicographicallyPrecedes(candidate.rank) }) ?? true {
+        best = candidate
+      }
+    }
+    return best?.chord
+  }
+
+  /// Whether some plugin declares `chord` as an action keystroke of the
+  /// focused app: the app binds it, so synthesizing it runs a shortcut.
+  func declaresActionKeystroke(
+    key: CGKeyCode, flags: CGEventFlags, in context: PluginSelectorContext
+  ) -> Bool {
+    readHotSnapshot().actionKeystrokeIndex.values.contains { targets in
+      targets.contains { target in
+        guard let chord = target.resolve(in: context)?.chord else { return false }
+        return chord.keyCode == key && chord.eventFlags == flags
+      }
+    }
   }
 
   /// Dispatch a plugin verb. Returns true when a plugin claims the verb (and
@@ -740,8 +793,8 @@ final class PluginManager {
       let parsed = HotkeySyntax.parse(hotkey: keystroke)
     {
       let ok = NormalModeDispatcher.sendKey(
-        virtualKey: CGKeyCode(parsed.virtualKey),
-        flags: Self.cgEventFlags(carbon: parsed.modifiers),
+        virtualKey: parsed.keyCode,
+        flags: parsed.eventFlags,
         to: pid)
       FlashLog.debug(
         "[plugin_verb] keystroke name=\(lcName) keys=\(keystroke) "

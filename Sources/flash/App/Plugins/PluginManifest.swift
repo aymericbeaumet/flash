@@ -363,19 +363,24 @@ struct PluginMappingRegistration: Decodable, Hashable {
   var command: [String]
   var selector: PluginSelector
   var priority: Int?
+  /// Pressing the sequence's final key again repeats it, as `repeat = true`
+  /// does for a config mapping.
+  var repeatsOnFinalKey: Bool
 
   init(
     key: String,
     mode: String = "normal",
     command: [String],
     selector: PluginSelector = PluginSelector(),
-    priority: Int? = nil
+    priority: Int? = nil,
+    repeatsOnFinalKey: Bool = false
   ) {
     self.key = key
     self.mode = mode
     self.command = command
     self.selector = selector
     self.priority = priority
+    self.repeatsOnFinalKey = repeatsOnFinalKey
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
@@ -383,6 +388,7 @@ struct PluginMappingRegistration: Decodable, Hashable {
     case onlyBundleIDs = "only_bundle_ids"
     case onlyTerminals = "only_terminals"
     case priority
+    case repeatsOnFinalKey = "repeat"
   }
 
   init(from decoder: Decoder) throws {
@@ -394,6 +400,7 @@ struct PluginMappingRegistration: Decodable, Hashable {
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
       onlyTerminals: try c.decodeIfPresent(Bool.self, forKey: .onlyTerminals) ?? false)
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.repeatsOnFinalKey = try c.decodeIfPresent(Bool.self, forKey: .repeatsOnFinalKey) ?? false
   }
 
   /// `mode` string → `ModeScope`. Loaded manifests validate the value before
@@ -580,6 +587,11 @@ struct PluginManifest: Decodable, Equatable {
   /// `perform {kind: "navigate"}`.
   var navigation: [String]
   var verbs: [PluginVerbRegistration]
+  /// Chords for built-in actions, per app: action name → bundle id (`""` for
+  /// every app the plugin's selector matches) → chord. The host sends the
+  /// chord when no source performs the action in that app, so an app's own
+  /// shortcuts live in the plugin that knows the app, never in the host.
+  var actionKeystrokes: [SourceActionName: [String: String]]
   var priority: Int
   /// Global active-window selector for this plugin, compounded with
   /// mapping-entry selectors.
@@ -679,6 +691,7 @@ struct PluginManifest: Decodable, Equatable {
     case actions
     case sources
     case navigation, verbs
+    case actionKeystrokes = "action_keystrokes"
   }
 
   init(
@@ -695,6 +708,7 @@ struct PluginManifest: Decodable, Equatable {
     bangsBlock: PluginBangs? = nil,
     navigation: [String] = [],
     verbs: [PluginVerbRegistration] = [],
+    actionKeystrokes: [SourceActionName: [String: String]] = [:],
     priority: Int = 25,
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
@@ -719,6 +733,7 @@ struct PluginManifest: Decodable, Equatable {
     self.bangsBlock = bangsBlock
     self.navigation = navigation
     self.verbs = verbs
+    self.actionKeystrokes = actionKeystrokes
     self.priority = priority
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
@@ -749,6 +764,15 @@ struct PluginManifest: Decodable, Equatable {
     self.bangsBlock = try c.decodeIfPresent(PluginBangs.self, forKey: .bangs)
     self.navigation = try c.decodeIfPresent([String].self, forKey: .navigation) ?? []
     self.verbs = try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .verbs) ?? []
+    let keystrokes =
+      try c.decodeIfPresent([String: [String: String]].self, forKey: .actionKeystrokes) ?? [:]
+    self.actionKeystrokes = try keystrokes.reduce(into: [:]) { table, entry in
+      guard let name = SourceActionName(rawValue: entry.key) else {
+        throw PluginError.failure(
+          "manifest.json action_keystrokes names an unknown action: \(entry.key)")
+      }
+      table[name] = entry.value
+    }
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
@@ -923,6 +947,13 @@ struct PluginManifest: Decodable, Equatable {
         "manifest.json sources must be all-warm or all-live; mixing modes in one plugin "
           + "is not supported")
     }
+    for (name, chords) in actionKeystrokes {
+      for (bundle, chord) in chords where HotkeySyntax.parse(hotkey: chord) == nil {
+        throw PluginError.failure(
+          "manifest.json action_keystrokes \(name.rawValue) for \"\(bundle)\" is not a chord: "
+            + chord)
+      }
+    }
     if let sandbox {
       // Absolute paths pass through; bare tool names (no slash) resolve
       // through mise/login-PATH at spawn. Relative paths are neither.
@@ -939,9 +970,9 @@ struct PluginManifest: Decodable, Equatable {
     } else {
       // Manifest-only plugin: no child process ever runs, so any surface
       // that would need RPC into (or events delivered to) the plugin is
-      // invalid. Mappings, help topics, and verbs whose every dispatch
-      // resolves to a host-synthesized keystroke are the complete allowed
-      // surface.
+      // invalid. Mappings, help topics, action keystrokes, and verbs whose
+      // every dispatch resolves to a host-synthesized keystroke are the
+      // complete allowed surface.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),
         ("hints", hints != nil),

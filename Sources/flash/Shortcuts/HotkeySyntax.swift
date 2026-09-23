@@ -19,6 +19,18 @@ import Foundation
 struct ParsedHotkey: Hashable {
   let modifiers: UInt32  // Carbon modifier flags
   let virtualKey: UInt32  // Carbon virtual key code
+
+  var keyCode: CGKeyCode { CGKeyCode(virtualKey) }
+
+  /// The Carbon modifiers as the `CGEventFlags` the key synthesizer consumes.
+  var eventFlags: CGEventFlags {
+    var flags: CGEventFlags = []
+    if modifiers & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
+    if modifiers & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
+    if modifiers & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
+    if modifiers & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
+    return flags
+  }
 }
 
 enum HotkeySyntax {

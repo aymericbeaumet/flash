@@ -408,6 +408,60 @@ public enum SourceAction: Sendable, Equatable {
   }
 }
 
+/// A normal-mode action a source may perform, named as users map it. The
+/// name is also a key of a plugin manifest's `action_keystrokes` table: the
+/// chord the host sends in an app when no source performs the action there.
+public enum SourceActionName: String, CaseIterable, Sendable {
+  case tabNext = "tab_next"
+  case tabPrevious = "tab_previous"
+  case tabFirst = "tab_first"
+  case tabLast = "tab_last"
+  case tabNew = "tab_new"
+  case tabClose = "tab_close"
+  case tabReopen = "tab_reopen"
+  case tabMoveNext = "tab_move_next"
+  case tabMovePrevious = "tab_move_previous"
+  case windowClose = "window_close"
+  case paneNext = "pane_next"
+  case panePrevious = "pane_previous"
+  case paneSplitVertical = "pane_split_vertical"
+  case paneSplitHorizontal = "pane_split_horizontal"
+  case paneClose = "pane_close"
+  case appReload = "app_reload"
+  case appReloadForce = "app_reload_force"
+  case resourceArchive = "resource_archive"
+  case resourceNext = "resource_next"
+  case resourcePrevious = "resource_previous"
+  case scrollTop = "scroll_top"
+  case scrollBottom = "scroll_bottom"
+
+  public var action: SourceAction {
+    switch self {
+    case .tabNext: return .tabNext
+    case .tabPrevious: return .tabPrev
+    case .tabFirst: return .tabFirst
+    case .tabLast: return .tabLast
+    case .tabNew: return .tabNew
+    case .tabClose, .windowClose: return .tabClose
+    case .tabReopen: return .tabReopen
+    case .tabMoveNext: return .tabMoveNext
+    case .tabMovePrevious: return .tabMovePrev
+    case .paneNext: return .paneNext
+    case .panePrevious: return .panePrev
+    case .paneSplitVertical: return .paneSplitVertical
+    case .paneSplitHorizontal: return .paneSplitHorizontal
+    case .paneClose: return .paneClose
+    case .appReload: return .reload(force: false)
+    case .appReloadForce: return .reload(force: true)
+    case .resourceArchive: return .archive
+    case .resourceNext: return .resourceNext
+    case .resourcePrevious: return .resourcePrevious
+    case .scrollTop: return .scrollTop
+    case .scrollBottom: return .scrollBottom
+    }
+  }
+}
+
 public struct SourceActionResult: Sendable {
   public enum Disposition: Sendable {
     /// The source performed the action.

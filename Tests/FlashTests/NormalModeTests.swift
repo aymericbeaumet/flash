@@ -104,11 +104,10 @@ final class NormalModeTests: XCTestCase {
       guard case .sendKey(_, let keyCode, let flags) = command else {
         return XCTFail("Tab defaults must send the standard app shortcut directly")
       }
-      for bundle in TerminalBundles.identifiers {
-        XCTAssertFalse(
-          AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-            key: keyCode, flags: CGEventFlags(rawValue: flags), bundleIdentifier: bundle), bundle)
-      }
+      XCTAssertFalse(
+        AppDelegate.commandChordTypesTextInTerminal(
+          key: keyCode, flags: CGEventFlags(rawValue: flags)
+        ) { false })
     }
   }
 
@@ -117,15 +116,10 @@ final class NormalModeTests: XCTestCase {
       guard case .sendKey(_, let keyCode, let flags) = command else {
         return XCTFail("Reload defaults must send the standard app shortcut directly")
       }
-      for bundle in TerminalBundles.identifiers {
-        XCTAssertTrue(
-          AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-            key: keyCode, flags: CGEventFlags(rawValue: flags), bundleIdentifier: bundle), bundle)
-      }
-      XCTAssertFalse(
-        AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-          key: keyCode, flags: CGEventFlags(rawValue: flags),
-          bundleIdentifier: "org.mozilla.firefox"))
+      XCTAssertTrue(
+        AppDelegate.commandChordTypesTextInTerminal(
+          key: keyCode, flags: CGEventFlags(rawValue: flags)
+        ) { false })
     }
   }
 
@@ -2357,125 +2351,34 @@ final class NormalModeTests: XCTestCase {
   /// so NORMAL refuses to synthesize one: `n` (find next, cmd+g) must never
   /// type a `g` into the shell.
   func testTerminalTargetsRefuseCommandChordsTheEmulatorWouldType() {
-    func unsafe(_ key: Int, _ flags: CGEventFlags, _ bundle: String) -> Bool {
-      AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        key: CGKeyCode(key), flags: flags, bundleIdentifier: bundle)
+    func unsafe(_ key: Int, _ flags: CGEventFlags, declared: Bool = false) -> Bool {
+      AppDelegate.commandChordTypesTextInTerminal(key: CGKeyCode(key), flags: flags) { declared }
     }
     // The reported bug: `n` / `N` resolve to cmd+g / cmd+shift+g, which no
     // terminal binds.
-    XCTAssertTrue(unsafe(kVK_ANSI_G, .maskCommand, "org.alacritty"))
-    XCTAssertTrue(unsafe(kVK_ANSI_G, [.maskCommand, .maskShift], "org.alacritty"))
+    XCTAssertTrue(unsafe(kVK_ANSI_G, .maskCommand))
+    XCTAssertTrue(unsafe(kVK_ANSI_G, [.maskCommand, .maskShift]))
     // Undo/redo stay refused, as they were before the gate became chord-shaped.
-    XCTAssertTrue(unsafe(kVK_ANSI_Z, .maskCommand, "org.alacritty"))
-    XCTAssertTrue(unsafe(kVK_ANSI_Z, [.maskCommand, .maskShift], "com.apple.Terminal"))
+    XCTAssertTrue(unsafe(kVK_ANSI_Z, .maskCommand))
+    XCTAssertTrue(unsafe(kVK_ANSI_Z, [.maskCommand, .maskShift]))
     // Cut and the window-cycle backtick are unbound in terminals too.
-    XCTAssertTrue(unsafe(kVK_ANSI_X, .maskCommand, "com.apple.Terminal"))
-    XCTAssertTrue(unsafe(kVK_ANSI_Grave, .maskCommand, "org.alacritty"))
+    XCTAssertTrue(unsafe(kVK_ANSI_X, .maskCommand))
+    XCTAssertTrue(unsafe(kVK_ANSI_Grave, .maskCommand))
     // Chords every emulator binds still go through.
-    for key in [kVK_ANSI_C, kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_T, kVK_ANSI_N, kVK_ANSI_F] {
-      XCTAssertFalse(unsafe(key, .maskCommand, "org.alacritty"), "cmd chord \(key)")
+    for key in [kVK_ANSI_C, kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_T, kVK_ANSI_N, kVK_ANSI_F, kVK_ANSI_3]
+    {
+      XCTAssertFalse(unsafe(key, .maskCommand), "cmd chord \(key)")
     }
-    XCTAssertFalse(unsafe(kVK_ANSI_3, .maskCommand, "com.googlecode.iterm2"))
     // Shift-bracket is the macOS tab traversal; the bare brackets are split
-    // traversal only where the emulator binds them.
-    XCTAssertFalse(unsafe(kVK_ANSI_LeftBracket, [.maskCommand, .maskShift], "org.alacritty"))
-    XCTAssertTrue(unsafe(kVK_ANSI_RightBracket, .maskCommand, "org.alacritty"))
-    XCTAssertFalse(unsafe(kVK_ANSI_RightBracket, .maskCommand, "com.mitchellh.ghostty"))
-    XCTAssertFalse(unsafe(kVK_ANSI_LeftBracket, .maskCommand, "com.googlecode.iterm2"))
-    // Non-terminals and unmodified keys are never gated.
-    XCTAssertFalse(unsafe(kVK_ANSI_G, .maskCommand, "org.mozilla.firefox"))
-    XCTAssertFalse(unsafe(kVK_ANSI_G, [], "org.alacritty"))
-    XCTAssertFalse(unsafe(kVK_ANSI_G, .maskControl, "org.alacritty"))
-    // The Firefox reorder chord carries no Command, so the gate never sees it.
-    XCTAssertFalse(unsafe(kVK_PageDown, [.maskControl, .maskShift], "org.alacritty"))
-  }
-
-  func testBrowserIndexedTabSelectionUsesNativeShortcut() {
-    XCTAssertEqual(
-      AppDelegate.nativeBrowserTabIndexKey(
-        index: 1,
-        bundleIdentifier: "org.mozilla.firefox"),
-      CGKeyCode(kVK_ANSI_1))
-    XCTAssertEqual(
-      AppDelegate.nativeBrowserTabIndexKey(
-        index: 3,
-        bundleIdentifier: "com.apple.Safari"),
-      CGKeyCode(kVK_ANSI_3))
-    XCTAssertEqual(
-      AppDelegate.nativeBrowserTabIndexKey(
-        index: 9,
-        bundleIdentifier: "com.google.Chrome"),
-      CGKeyCode(kVK_ANSI_9))
-  }
-
-  func testNativeBrowserIndexedTabSelectionDoesNotHandleOtherApps() {
-    XCTAssertNil(
-      AppDelegate.nativeBrowserTabIndexKey(
-        index: 1,
-        bundleIdentifier: "org.alacritty"))
-    XCTAssertNil(
-      AppDelegate.nativeBrowserTabIndexKey(
-        index: 10,
-        bundleIdentifier: "org.mozilla.firefox"))
-  }
-
-  func testNativeTabTraversalShortcutSupportsBrowsersAndMessages() throws {
-    let firefoxPrevious = try XCTUnwrap(
-      AppDelegate.nativeTabTraversalShortcut(
-        direction: .back,
-        bundleIdentifier: "org.mozilla.firefox"))
-    let safariNext = try XCTUnwrap(
-      AppDelegate.nativeTabTraversalShortcut(
-        direction: .forward,
-        bundleIdentifier: "com.apple.Safari"))
-
-    XCTAssertEqual(firefoxPrevious.key, CGKeyCode(kVK_ANSI_LeftBracket))
-    XCTAssertEqual(firefoxPrevious.flags, [.maskCommand, .maskShift])
-    XCTAssertEqual(safariNext.key, CGKeyCode(kVK_ANSI_RightBracket))
-    XCTAssertEqual(safariNext.flags, [.maskCommand, .maskShift])
-    let messagesPrevious = try XCTUnwrap(
-      AppDelegate.nativeTabTraversalShortcut(
-        direction: .back,
-        bundleIdentifier: "com.apple.MobileSMS"))
-    let messagesNext = try XCTUnwrap(
-      AppDelegate.nativeTabTraversalShortcut(
-        direction: .forward,
-        bundleIdentifier: "com.apple.MobileSMS"))
-    XCTAssertEqual(messagesPrevious.key, CGKeyCode(kVK_Tab))
-    XCTAssertEqual(messagesPrevious.flags, [.maskControl, .maskShift])
-    XCTAssertEqual(messagesNext.key, CGKeyCode(kVK_Tab))
-    XCTAssertEqual(messagesNext.flags, .maskControl)
-    XCTAssertNil(
-      AppDelegate.nativeTabTraversalShortcut(
-        direction: .back,
-        bundleIdentifier: "org.alacritty"))
-    XCTAssertNil(
-      AppDelegate.nativeTabTraversalShortcut(
-        direction: .forward,
-        bundleIdentifier: "com.example.TextEditor"))
-  }
-
-  func testMessagesAnswersTheTabChordWithItsConversationChord() {
-    func chord(_ key: Int, _ flags: CGEventFlags, _ bundle: String) -> [UInt64] {
-      let result = AppDelegate.appChord(
-        key: CGKeyCode(key), flags: flags, bundleIdentifier: bundle)
-      return [UInt64(result.key), result.flags.rawValue]
-    }
-    let next = [UInt64(kVK_Tab), CGEventFlags.maskControl.rawValue]
-    let previous = [UInt64(kVK_Tab), CGEventFlags([.maskControl, .maskShift]).rawValue]
-    XCTAssertEqual(
-      chord(kVK_ANSI_RightBracket, [.maskCommand, .maskShift], "com.apple.MobileSMS"), next)
-    XCTAssertEqual(
-      chord(kVK_ANSI_LeftBracket, [.maskCommand, .maskShift], "com.apple.MobileSMS"), previous)
-    // Every other chord reaches Messages as sent, and every other app keeps the tab chord.
-    let back = [UInt64(kVK_ANSI_LeftBracket), CGEventFlags.maskCommand.rawValue]
-    XCTAssertEqual(chord(kVK_ANSI_LeftBracket, .maskCommand, "com.apple.MobileSMS"), back)
-    let reopen = [UInt64(kVK_ANSI_T), CGEventFlags([.maskCommand, .maskShift]).rawValue]
-    XCTAssertEqual(chord(kVK_ANSI_T, [.maskCommand, .maskShift], "com.apple.MobileSMS"), reopen)
-    let tab = [UInt64(kVK_ANSI_RightBracket), CGEventFlags([.maskCommand, .maskShift]).rawValue]
-    for bundle in ["net.whatsapp.WhatsApp", "org.mozilla.firefox", "org.alacritty"] {
-      XCTAssertEqual(chord(kVK_ANSI_RightBracket, [.maskCommand, .maskShift], bundle), tab, bundle)
-    }
+    // traversal only where a plugin declares them for the emulator.
+    XCTAssertFalse(unsafe(kVK_ANSI_LeftBracket, [.maskCommand, .maskShift]))
+    XCTAssertTrue(unsafe(kVK_ANSI_RightBracket, .maskCommand))
+    XCTAssertFalse(unsafe(kVK_ANSI_RightBracket, .maskCommand, declared: true))
+    // Unmodified keys and chords without Command are never gated; the Firefox
+    // reorder chord carries no Command.
+    XCTAssertFalse(unsafe(kVK_ANSI_G, []))
+    XCTAssertFalse(unsafe(kVK_ANSI_G, .maskControl))
+    XCTAssertFalse(unsafe(kVK_PageDown, [.maskControl, .maskShift]))
   }
 
   func testUIKitAppsGetEachChordWithItsModifierPresses() {
@@ -2520,54 +2423,6 @@ final class NormalModeTests: XCTestCase {
     }
     // Only the edges' bounded line scrolls; no pixel wheel reaches a terminal.
     XCTAssertEqual(continuous, [0, 0])
-  }
-
-  /// Firefox reorders a tab with Control-Shift-Page, never Command-Shift:
-  /// Gecko disqualifies its control-shift branch while Command is held, so
-  /// the Command form reached no handler at all and the mapping did nothing.
-  func testNativeTabMoveShortcutUsesFirefoxControlShiftPageChords() throws {
-    let next = try XCTUnwrap(
-      AppDelegate.nativeTabMoveShortcut(
-        direction: .next, bundleIdentifier: "org.mozilla.firefox"))
-    XCTAssertEqual(next.key, CGKeyCode(kVK_PageDown))
-    XCTAssertEqual(next.flags, [.maskControl, .maskShift])
-    XCTAssertFalse(next.flags.contains(.maskCommand))
-    let previous = try XCTUnwrap(
-      AppDelegate.nativeTabMoveShortcut(
-        direction: .previous, bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
-    XCTAssertEqual(previous.key, CGKeyCode(kVK_PageUp))
-    XCTAssertEqual(previous.flags, [.maskControl, .maskShift])
-    XCTAssertNotNil(
-      AppDelegate.nativeTabMoveShortcut(
-        direction: .next, bundleIdentifier: "org.mozilla.nightly"))
-    // Browsers with no portable reorder chord keep the warning branch.
-    for bundle in ["com.apple.Safari", "com.google.Chrome", "org.alacritty"] {
-      XCTAssertNil(
-        AppDelegate.nativeTabMoveShortcut(direction: .next, bundleIdentifier: bundle), bundle)
-    }
-  }
-
-  func testBrowserReloadFallbackIsBrowserOnlyAndUsesSafariHardRefreshChord() {
-    XCTAssertNil(
-      AppDelegate.browserReloadFallbackShortcut(
-        force: false,
-        bundleIdentifier: "com.apple.MobileSMS"))
-    XCTAssertNil(
-      AppDelegate.browserReloadFallbackShortcut(
-        force: false,
-        bundleIdentifier: "org.alacritty"))
-
-    let chrome = AppDelegate.browserReloadFallbackShortcut(
-      force: true,
-      bundleIdentifier: "com.google.Chrome")
-    XCTAssertEqual(chrome?.key, CGKeyCode(kVK_ANSI_R))
-    XCTAssertEqual(chrome?.flags, [.maskCommand, .maskShift])
-
-    let safari = AppDelegate.browserReloadFallbackShortcut(
-      force: true,
-      bundleIdentifier: "com.apple.Safari")
-    XCTAssertEqual(safari?.key, CGKeyCode(kVK_ANSI_R))
-    XCTAssertEqual(safari?.flags, [.maskCommand, .maskAlternate])
   }
 
   func testHelpTextListsNormalModeMappings() {

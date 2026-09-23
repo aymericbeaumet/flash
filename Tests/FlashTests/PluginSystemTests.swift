@@ -925,7 +925,8 @@ final class PluginSystemTests: XCTestCase {
               "mode": "insert",
               "command": ["flash", "hints_dismiss"],
               "only_bundle_ids": ["com.spotify.client"],
-              "priority": 40
+              "priority": 40,
+              "repeat": true
             },
             {
               "key": "cmd+r",
@@ -946,13 +947,81 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(first.scope, .normal)
     XCTAssertTrue(first.selector.onlyBundleIDs.isEmpty, "only_bundle_ids defaults to []")
     XCTAssertNil(first.priority, "priority is optional")
+    XCTAssertFalse(first.repeatsOnFinalKey, "repeat defaults to false")
 
     let second = manifest.mappings[1]
     XCTAssertEqual(second.mode, "insert")
     XCTAssertEqual(second.scope, .insert)
     XCTAssertEqual(second.selector.onlyBundleIDs, ["com.spotify.client"])
     XCTAssertEqual(second.priority, 40)
+    XCTAssertTrue(second.repeatsOnFinalKey)
     XCTAssertEqual(manifest.mappings[2].scope, .terminal)
+  }
+
+  func testManifestDecodesActionKeystrokesAndRejectsUnknownActionsOrChords() throws {
+    let valid = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "chords",
+          "name": "Chords",
+          "version": "1.0.0",
+          "description": "Action keystrokes",
+          "only_bundle_ids": ["com.example.browser", "com.example.other"],
+          "action_keystrokes": {
+            "tab_next": { "": "cmd+shift+]" },
+            "app_reload_force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" }
+          }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: valid) }
+    let manifest = try PluginManifest.load(from: valid)
+    XCTAssertEqual(manifest.activation, .manifestOnly, "action keystrokes need no process")
+    XCTAssertEqual(manifest.actionKeystrokes[.tabNext], ["": "cmd+shift+]"])
+    XCTAssertEqual(manifest.actionKeystrokes[.appReloadForce]?["com.example.other"], "cmd+option+r")
+
+    for (fragment, message) in [
+      (#""tab_sideways": { "": "cmd+k" }"#, "unknown action: tab_sideways"),
+      (#""tab_next": { "": "cmd+shift+nope" }"#, "is not a chord"),
+    ] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "badchords",
+            "name": "Bad chords",
+            "version": "1.0.0",
+            "description": "Invalid action keystrokes",
+            "action_keystrokes": { \(fragment) }
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+        XCTAssertTrue(String(describing: error).contains(message), "\(error)")
+      }
+    }
+  }
+
+  /// App shortcuts are plugin data: the browsers and firefox plugins own the
+  /// browser chords (Safari's own hard reload included), `defaults` Messages'
+  /// conversation chord, `terminals` the emulators' split traversal.
+  func testOfficialManifestsOwnEveryAppSpecificChord() throws {
+    func manifest(_ id: String) throws -> PluginManifest {
+      try PluginManifest.load(
+        from: try XCTUnwrap(officialPluginRoots().first { $0.lastPathComponent == id }))
+    }
+    let browsers = try manifest("browsers")
+    XCTAssertEqual(browsers.actionKeystrokes[.tabNext]?[""], "cmd+shift+]")
+    XCTAssertEqual(browsers.actionKeystrokes[.scrollBottom]?[""], "cmd+down")
+    XCTAssertEqual(browsers.actionKeystrokes[.appReloadForce]?["com.apple.Safari"], "cmd+option+r")
+    let firefox = try manifest("firefox")
+    XCTAssertTrue(firefox.onlyBundleIDs.contains("org.mozilla.nightly"))
+    XCTAssertEqual(firefox.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
+    let defaults = try manifest("defaults")
+    XCTAssertEqual(defaults.actionKeystrokes[.tabNext]?["com.apple.MobileSMS"], "ctrl+tab")
+    XCTAssertEqual(
+      defaults.mappings.filter(\.repeatsOnFinalKey).map(\.key).sorted(), ["[t", "]t"])
+    let terminals = try manifest("terminals")
+    XCTAssertEqual(terminals.activation, .manifestOnly)
+    XCTAssertEqual(terminals.actionKeystrokes[.paneNext]?["com.mitchellh.ghostty"], "cmd+]")
   }
 
   func testManifestRejectsInvalidMappingMode() throws {

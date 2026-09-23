@@ -1,6 +1,5 @@
 import AppKit
 import ApplicationServices
-import Carbon.HIToolbox
 import FlashCore
 
 // Vertical step/page keys post mouse-wheel lines directly. Horizontal and edge
@@ -19,34 +18,33 @@ extension AppDelegate {
       }
       return
     }
-    // gg/G: try a `scrollExtremes` source first (e.g. the tmux plugin
-    // runs `tmux send-keys -X history-top` / `-X cancel`, which moves
-    // *inside* the live buffer rather than blasting wheel ticks at a
-    // pane that's already at the bottom). Falls through to the
-    // hermetic Scroller path when no source claims it.
+    // gg/G run the source-action policy: a source such as tmux scrolls inside
+    // its own buffer, else an app's declared chord (a browser's Cmd-Up), else
+    // the focused-window scroller.
     if kind == .top || kind == .bottom {
-      guard let context = normalModeContext() else {
-        FlashLog.debug("[normal_mode] no target app for \(kind)")
-        applyModeOverlay()
-        return
+      performSourceAction(kind == .top ? .scrollTop : .scrollBottom) { [weak self] context, count in
+        self?.scrollViaScroller(kind, context: context, repeats: count)
       }
-      performScrollExtreme(kind, context: context, repeatCount: repeatCount)
       return
     }
-    // Horizontal scrolling resolves its target window off the main thread.
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(kind)")
       applyModeOverlay()
       return
     }
-    // Run the scroll off the main thread: `NormalModeDispatcher.scroll` walks the
-    // AX tree (up to ~600 nodes) to find the scrollable pane before synthesizing
-    // a wheel event, and main hosts the keyboard-capture tap — doing it inline
-    // stalled input on a slow app. The scroll only touches
-    // thread-safe AX + CGEvent APIs, so hop to `axQueue`. Rapid repeats
-    // serialize on the queue instead of blocking main. The mode surface is
-    // untouched by a scroll, so nothing re-renders afterwards.
-    let repeats = normalizedRepeatCount(repeatCount)
+    scrollViaScroller(kind, context: context, repeats: normalizedRepeatCount(repeatCount))
+  }
+
+  /// The focused-window scroller walks the AX tree (up to ~600 nodes) for the
+  /// scrollable pane and reads the window list for its frame, so it runs on
+  /// `axQueue`, never on main where the keyboard tap lives. Rapid repeats
+  /// serialize on the queue instead of blocking input. The mode surface is
+  /// untouched by a scroll, so nothing re-renders afterwards.
+  func scrollViaScroller(
+    _ kind: NormalModeDispatcher.ScrollKind,
+    context: AppContext,
+    repeats: Int
+  ) {
     let pid = context.processID
     let bundleID = context.bundleIdentifier
     let fallbackFrame = context.frontWindowFrame
@@ -67,79 +65,4 @@ extension AppDelegate {
       }
     }
   }
-
-  func performScrollExtreme(
-    _ kind: NormalModeDispatcher.ScrollKind,
-    context: AppContext,
-    repeatCount: Int
-  ) {
-    let registry: SourceRegistry = self.registry
-    let bundleID = context.bundleIdentifier
-    let pid = context.processID
-    let windowFrame = context.frontWindowFrame
-    let normalized = normalizedRepeatCount(repeatCount)
-    let monitor: AppMonitor = self.monitor
-    let completion: (SourceActionResult) -> Void = { [weak self] result in
-      guard let self else { return }
-      switch result.disposition {
-      case .performed:
-        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll_extreme")
-      case .failed:
-        // Source claimed but the underlying command failed — don't
-        // double-fire with the Scroller wheel fallback (it would just
-        // confuse the user with extra motion). Surface and stop.
-        FlashLog.debug("[normal_mode] scroll_extreme failed kind=\(kind) bundle=\(bundleID)")
-      case .unhandled:
-        self.scrollViaScroller(
-          kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame, repeats: normalized)
-      }
-    }
-    if kind == .top {
-      registry.perform(.scrollTop, in: context, completion: completion)
-    } else {
-      registry.perform(.scrollBottom, in: context, completion: completion)
-    }
-  }
-
-  func scrollViaScroller(
-    _ kind: NormalModeDispatcher.ScrollKind,
-    pid: pid_t,
-    bundleID: String,
-    windowFrame: CGRect?,
-    repeats: Int
-  ) {
-    // gg/G outside a claiming source: in browsers, `cmd+up` /
-    // `cmd+down` is the dependable scroll-to-edge gesture (the
-    // huge-wheel-delta path only nudges Firefox a viewport at a time).
-    // Everything else still goes through the AX scrollbar / wheel
-    // hermetic fallback.
-    if WebBrowsers.all.contains(bundleID),
-      kind == .top || kind == .bottom
-    {
-      let key: CGKeyCode =
-        kind == .top ? CGKeyCode(kVK_UpArrow) : CGKeyCode(kVK_DownArrow)
-      var didScroll = false
-      for _ in 0..<repeats {
-        if NormalModeDispatcher.sendKey(virtualKey: key, flags: .maskCommand, to: pid) {
-          didScroll = true
-        }
-      }
-      if didScroll {
-        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll_browser_edge")
-      }
-      return
-    }
-    var didScroll = false
-    for _ in 0..<repeats {
-      if NormalModeDispatcher.scroll(
-        kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame)
-      {
-        didScroll = true
-      }
-    }
-    if didScroll {
-      monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
-    }
-  }
-
 }

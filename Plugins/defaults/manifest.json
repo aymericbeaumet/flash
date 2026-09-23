@@ -2,7 +2,7 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Provides Flash's default plugin-layer behavior. Today this registers the canonical app keystroke verbs (app_save, app_print, document_open, window_new) with keystroke shortcuts so they bypass plugin RPC on the hot path.",
+  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path, and the shortcuts apps without a plugin of their own bind for Flash's built-in actions.",
   "verbs": [
     {
       "name": "app_save",
@@ -31,6 +31,38 @@
       "keystrokes": {
         "": "cmd+n"
       }
+    }
+  ],
+  "action_keystrokes": {
+    "tab_next": {
+      "com.apple.MobileSMS": "ctrl+tab"
+    },
+    "tab_previous": {
+      "com.apple.MobileSMS": "ctrl+shift+tab"
+    }
+  },
+  "mappings": [
+    {
+      "key": "]t",
+      "command": [
+        "flash",
+        "tab_next"
+      ],
+      "repeat": true,
+      "only_bundle_ids": [
+        "com.apple.MobileSMS"
+      ]
+    },
+    {
+      "key": "[t",
+      "command": [
+        "flash",
+        "tab_previous"
+      ],
+      "repeat": true,
+      "only_bundle_ids": [
+        "com.apple.MobileSMS"
+      ]
     }
   ],
   "help": {

@@ -18,7 +18,8 @@
   ],
   "only_bundle_ids": [
     "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition"
+    "org.mozilla.firefoxdeveloperedition",
+    "org.mozilla.nightly"
   ],
   "listen": [
     "core:apps.changed",
@@ -47,5 +48,40 @@
   ],
   "actions": [
     "tab_select"
-  ]
+  ],
+  "action_keystrokes": {
+    "tab_next": {
+      "": "cmd+shift+]"
+    },
+    "tab_previous": {
+      "": "cmd+shift+["
+    },
+    "tab_last": {
+      "": "cmd+9"
+    },
+    "tab_new": {
+      "": "cmd+t"
+    },
+    "tab_reopen": {
+      "": "cmd+shift+t"
+    },
+    "app_reload": {
+      "": "cmd+r"
+    },
+    "app_reload_force": {
+      "": "cmd+shift+r"
+    },
+    "scroll_top": {
+      "": "cmd+up"
+    },
+    "scroll_bottom": {
+      "": "cmd+down"
+    },
+    "tab_move_previous": {
+      "": "ctrl+shift+pageup"
+    },
+    "tab_move_next": {
+      "": "ctrl+shift+pagedown"
+    }
+  }
 }

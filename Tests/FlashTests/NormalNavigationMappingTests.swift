@@ -25,12 +25,11 @@ final class NormalNavigationMappingTests: XCTestCase {
       XCTAssertEqual(flags, CGEventFlags.maskCommand.rawValue)
       XCTAssertEqual(transition.pending, "")
       XCTAssertNil(transition.repeatAnchor)
-      for bundle in TerminalBundles.identifiers {
-        XCTAssertFalse(
-          AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-            key: key, flags: CGEventFlags(rawValue: flags), bundleIdentifier: bundle),
-          "g\(index) in \(bundle)")
-      }
+      XCTAssertFalse(
+        AppDelegate.commandChordTypesTextInTerminal(
+          key: key, flags: CGEventFlags(rawValue: flags)
+        ) { false },
+        "g\(index) in a terminal")
     }
   }
 

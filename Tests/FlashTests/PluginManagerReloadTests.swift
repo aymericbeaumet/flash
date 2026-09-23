@@ -88,6 +88,56 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(off.spawnCount(), 0, "no process may ever spawn for a disabled id")
   }
 
+  // MARK: - action keystrokes
+
+  /// A bundle's own chord beats a plugin-wide one across plugins; a declared
+  /// chord marks the emulator as binding it.
+  func testActionKeystrokesResolvePerAppFromManifestOnlyPlugins() throws {
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-mgr-keystrokes-\(UUID().uuidString)")
+    let root = base.appendingPathComponent("wide")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    try """
+    {
+      "id": "wide",
+      "name": "Wide",
+      "version": "1.0.0",
+      "description": "Plugin-wide chords",
+      "only_bundle_ids": ["com.example.app", "com.apple.MobileSMS"],
+      "action_keystrokes": { "tab_next": { "": "cmd+option+right" } }
+    }
+    """.write(
+      to: root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    let manager = PluginManager(baseDataDir: base)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(root.path)"])
+    config.plugins.disabled.subtract(["defaults", "terminals"])
+    manager.start(config: config)
+
+    func chord(_ action: SourceActionName, _ bundle: String) -> ParsedHotkey? {
+      manager.actionKeystroke(action, in: PluginSelectorContext(bundleID: bundle))
+    }
+    waitUntilTrue("manifests published") { chord(.tabNext, "com.example.app") != nil }
+    XCTAssertEqual(
+      chord(.tabNext, "com.example.app"), HotkeySyntax.parse(hotkey: "cmd+option+right"))
+    XCTAssertEqual(
+      chord(.tabNext, "com.apple.MobileSMS"), HotkeySyntax.parse(hotkey: "ctrl+tab"),
+      "Messages' own entry in defaults beats the other plugin's plugin-wide chord")
+    XCTAssertNil(chord(.tabNext, "com.example.elsewhere"))
+    XCTAssertNil(chord(.tabLast, "com.example.app"))
+
+    let bracket = try XCTUnwrap(HotkeySyntax.parse(hotkey: "cmd+]"))
+    XCTAssertTrue(
+      manager.declaresActionKeystroke(
+        key: bracket.keyCode, flags: bracket.eventFlags,
+        in: PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
+    XCTAssertFalse(
+      manager.declaresActionKeystroke(
+        key: bracket.keyCode, flags: bracket.eventFlags,
+        in: PluginSelectorContext(bundleID: "org.alacritty")))
+  }
+
   // MARK: - reloadAll
 
   func testReloadAllRestartsRunningPluginsWithoutBlockingTheMainThread() throws {

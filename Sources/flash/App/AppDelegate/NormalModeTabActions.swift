@@ -3,11 +3,14 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 
-// Tab- and window-action surface for normal mode: `gN`, `[t`/`]t`, `[m`/`]m`,
-// `T`, `t`, `x`, plus the per-bundle fallback keystrokes when no source claims
-// the action. Pulled out of NormalModeCoordinator to keep the per-source
-// dispatch + fallback policy in one place, separate from mode transitions
-// and command-line bookkeeping.
+// Tab-, pane- and window-action surface for normal mode. Every action runs
+// one policy, with no knowledge of any particular app:
+//   1. a source that performs the action in the focused app (tmux, a browser
+//      plugin, the accessibility tab strip);
+//   2. else the chord a plugin manifest declares for the action in that app
+//      (`action_keystrokes`: a browser's Cmd-Shift-], Firefox's tab move);
+//   3. else the platform convention the core owns for a few actions (Cmd-W
+//      closes, Cmd-1 is the first tab), or nothing.
 
 extension AppDelegate {
   func tabSelectInNormalMode(index: Int) {
@@ -15,13 +18,6 @@ extension AppDelegate {
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for tab_select index=\(index)")
       applyModeOverlay()
-      return
-    }
-    if let key = Self.nativeBrowserTabIndexKey(
-      index: index,
-      bundleIdentifier: context.bundleIdentifier)
-    {
-      sendNormalModeKey(key, flags: .maskCommand)
       return
     }
     registry.perform(.tabSelect(index: index), in: context) { [weak self] result in
@@ -48,396 +44,43 @@ extension AppDelegate {
     }
   }
 
-  func tabNextInNormalMode(repeatCount: Int) {
-    if let bundleIdentifier = normalModeDispatchContext()?.bundleIdentifier,
-      let shortcut = Self.nativeTabTraversalShortcut(
-        direction: .forward,
-        bundleIdentifier: bundleIdentifier)
-    {
-      sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: repeatCount)
-      return
-    }
-    performTabSourceAction(
-      name: "tab_next",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.tabNext, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        guard let self else { return }
-        guard
-          let shortcut = Self.nativeTabTraversalShortcut(
-            direction: .forward,
-            bundleIdentifier: context.bundleIdentifier)
-        else {
-          FlashLog.debug(
-            "[normal_mode] tab_next unsupported bundle=\(context.bundleIdentifier)")
-          self.applyModeOverlay()
-          return
-        }
-        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
-      })
-  }
-
-  func tabPrevInNormalMode(repeatCount: Int) {
-    if let bundleIdentifier = normalModeDispatchContext()?.bundleIdentifier,
-      let shortcut = Self.nativeTabTraversalShortcut(
-        direction: .back,
-        bundleIdentifier: bundleIdentifier)
-    {
-      sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: repeatCount)
-      return
-    }
-    performTabSourceAction(
-      name: "tab_previous",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.tabPrev, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        guard let self else { return }
-        guard
-          let shortcut = Self.nativeTabTraversalShortcut(
-            direction: .back,
-            bundleIdentifier: context.bundleIdentifier)
-        else {
-          FlashLog.debug(
-            "[normal_mode] tab_previous unsupported bundle=\(context.bundleIdentifier)")
-          self.applyModeOverlay()
-          return
-        }
-        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
-      })
-  }
-
-  /// Jump to the first tab: a source's own first window (tmux `{start}`,
-  /// whatever its `base-index`), else ⌘1 as `g1` sends.
+  /// Cmd-1 is the platform's first tab.
   func tabFirstInNormalMode() {
-    performTabSourceAction(
-      name: "tab_first",
-      repeatCount: 1,
-      action: { registry, context, completion in
-        registry.perform(.tabFirst, in: context, completion: completion)
-      },
-      fallback: { [weak self] _, _ in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_1), flags: .maskCommand)
-      })
-  }
-
-  /// Jump to the last tab. Browsers map ⌘9 to "last tab" by convention
-  /// (Chrome, Safari, Firefox), so for those bundles the fast path is a
-  /// single synthesized ⌘9. Plugin-backed sources expose this through
-  /// the `tab_last` source action (tmux selects `{end}`).
-  func tabLastInNormalMode() {
-    performTabSourceAction(
-      name: "tab_last",
-      repeatCount: 1,
-      action: { registry, context, completion in
-        registry.perform(.tabLast, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, _ in
-        if WebBrowsers.all.contains(context.bundleIdentifier) {
-          self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_9), flags: .maskCommand)
-        } else {
-          FlashLog.debug(
-            "[normal_mode] tab_last unsupported bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-        }
-      })
-  }
-
-  /// Reorder the focused window's current tab. Tmux runs `swap-window`
-  /// across the source action; Firefox slides the active tab inside its
-  /// strip with ⌃⇧Page Up/Down, so the host falls back to that chord
-  /// when the plugin layer doesn't claim the action. Browsers
-  /// without a portable shortcut (Safari, Chromium today) get a
-  /// `warn`-level log naming the bundle so the user knows the mapping
-  /// fired but couldn't reach the app — they can bind their own
-  /// shortcut and override `[m`/`]m` in flash.toml.
-  func tabMoveInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
-    let actionName = direction == .next ? "tab_move_next" : "tab_move_previous"
-    performTabSourceAction(
-      name: actionName,
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        if direction == .next {
-          registry.perform(.tabMoveNext, in: context, completion: completion)
-        } else {
-          registry.perform(.tabMovePrev, in: context, completion: completion)
-        }
-      },
-      fallback: { [weak self] context, count in
-        guard let self else { return }
-        if let shortcut = Self.nativeTabMoveShortcut(
-          direction: direction, bundleIdentifier: context.bundleIdentifier)
-        {
-          self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
-          return
-        }
-        FlashLog.warn(
-          "[normal_mode] \(actionName) has no native shortcut on "
-            + "bundle=\(context.bundleIdentifier); bind via a tab-mover "
-            + "extension or override `[m`/`]m` in flash.toml")
-        self.applyModeOverlay()
-      })
-  }
-
-  /// `[p` / `]p`: cycle the active split inside the focused terminal window.
-  /// Routed through the `pane_next`/`pane_previous` source action — only tmux
-  /// claims it today (`select-pane -t :.+`/`.-`). When a terminal is focused
-  /// but no tmux client hosts it, the host re-emits the terminal's native
-  /// ⌘] / ⌘[ split chord (kitty, Ghostty, iTerm2). Outside terminals the pair
-  /// is a deliberate no-op: ⌘[ / ⌘] means back/forward or indent elsewhere,
-  /// and a pane mapping must never navigate a browser.
-  func paneNavigateInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
-    let actionName = direction == .next ? "pane_next" : "pane_previous"
-    performTabSourceAction(
-      name: actionName,
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        if direction == .next {
-          registry.perform(.paneNext, in: context, completion: completion)
-        } else {
-          registry.perform(.panePrev, in: context, completion: completion)
-        }
-      },
-      fallback: { [weak self] context, count in
-        guard TerminalBundles.identifiers.contains(context.bundleIdentifier) else {
-          FlashLog.debug(
-            "[normal_mode] \(actionName) ignored bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-          return
-        }
-        let key: CGKeyCode =
-          direction == .next
-          ? CGKeyCode(kVK_ANSI_RightBracket) : CGKeyCode(kVK_ANSI_LeftBracket)
-        self?.sendNormalModeKey(key, flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  /// Create a split inside the focused terminal when a source explicitly owns
-  /// that pane model. Today tmux is the only owner. There is no generic
-  /// fallback chord because `cmd+d` means unrelated things in terminal hosts
-  /// and non-terminal apps; if tmux is not detected, the mapping is a no-op
-  /// with a diagnostic.
-  func paneSplitInNormalMode(vertical: Bool, repeatCount: Int) {
-    let actionName = vertical ? "pane_split_vertical" : "pane_split_horizontal"
-    performTabSourceAction(
-      name: actionName,
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        if vertical {
-          registry.perform(.paneSplitVertical, in: context, completion: completion)
-        } else {
-          registry.perform(.paneSplitHorizontal, in: context, completion: completion)
-        }
-      },
-      fallback: { [weak self] context, _ in
-        FlashLog.debug(
-          "[normal_mode] \(actionName) unsupported bundle=\(context.bundleIdentifier)")
-        self?.applyModeOverlay()
-      })
-  }
-
-  /// Close the active split inside the focused terminal. This is intentionally
-  /// distinct from `tab_close`: tmux `cmd+w` should close the current pane,
-  /// while normal-mode `x` still closes the tmux window.
-  func paneCloseInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "pane_close",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.paneClose, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, _ in
-        FlashLog.debug(
-          "[normal_mode] pane_close unsupported bundle=\(context.bundleIdentifier)")
-        self?.applyModeOverlay()
-      })
-  }
-
-  /// Bundles that reorder the current tab with Firefox's own chord.
-  private static let firefoxStyleTabMoveBundles: Set<String> = [
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-    "org.mozilla.nightly",
-  ]
-
-  /// ⌃⇧Page Up / ⌃⇧Page Down — Gecko's move-tab-backward / move-tab-forward.
-  /// The chord is Control-Shift and never Command: Gecko disqualifies its
-  /// control-shift branch outright while a Command key is held on macOS, so
-  /// the ⌘⇧Page chord this used to send reached no handler at all. Shaped
-  /// like `nativeTabTraversalShortcut` so each verb's fallback policy stays
-  /// one pure, testable function.
-  static func nativeTabMoveShortcut(
-    direction: SourceTabDirection,
-    bundleIdentifier: String
-  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    guard firefoxStyleTabMoveBundles.contains(bundleIdentifier) else { return nil }
-    let key: CGKeyCode = direction == .next ? CGKeyCode(kVK_PageDown) : CGKeyCode(kVK_PageUp)
-    return (key, [.maskControl, .maskShift])
-  }
-
-  /// Reopen the most recently closed tab. Cross-browser standard is
-  /// ⌘⇧T; the plugin source action gets first refusal (tmux returns
-  /// `.unhandled` because there's no concept of a closed tab to reopen)
-  /// so the keystroke fallback only runs in non-terminal contexts that
-  /// actually honour the chord.
-  func tabReopenInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_reopen",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.tabReopen, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        if WebBrowsers.all.contains(context.bundleIdentifier) {
-          self?.sendNormalModeKey(
-            CGKeyCode(kVK_ANSI_T),
-            flags: [.maskCommand, .maskShift],
-            repeatCount: count)
-        } else {
-          FlashLog.debug(
-            "[normal_mode] tab_reopen unsupported bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-        }
-      })
-  }
-
-  /// A new tab or window exists to be typed into (a browser focuses its
-  /// address bar, tmux a fresh shell), so a successful `tab_new` hands the
-  /// keyboard over by entering INSERT. An unsupported app keeps NORMAL.
-  func tabNewInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_new",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.tabNew, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        guard WebBrowsers.all.contains(context.bundleIdentifier) else {
-          FlashLog.debug(
-            "[normal_mode] tab_new unsupported bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-          return
-        }
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  func reloadInNormalMode(force: Bool, repeatCount: Int) {
-    performTabSourceAction(
-      name: force ? "app_reload_force" : "app_reload",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.reload(force: force), in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        guard
-          let shortcut = Self.browserReloadFallbackShortcut(
-            force: force,
-            bundleIdentifier: context.bundleIdentifier)
-        else {
-          FlashLog.debug(
-            "[normal_mode] app_reload unsupported bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-          return
-        }
-        self?.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
-      })
-  }
-
-  func archiveInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "resource_archive",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.archive, in: context, completion: completion)
-      },
-      fallback: { [weak self] context, _ in
-        FlashLog.debug(
-          "[normal_mode] resource_archive unsupported bundle=\(context.bundleIdentifier)")
-        self?.applyModeOverlay()
-      })
-  }
-
-  func resourceNavigationInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
-    let actionName = direction == .next ? "resource_next" : "resource_previous"
-    let action: SourceAction = direction == .next ? .resourceNext : .resourcePrevious
-    let fallbackScroll: NormalModeDispatcher.ScrollKind = direction == .next ? .down : .up
-    performTabSourceAction(
-      name: actionName,
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(action, in: context, completion: completion)
-      },
-      fallback: { [weak self] _, count in
-        self?.scrollNormalMode(fallbackScroll, repeatCount: count)
-      })
-  }
-
-  func tabCloseInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_close",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.tabClose, in: context, completion: completion)
-      },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  /// `window_close` inside a terminal hosting tmux must close the *tmux*
-  /// window, not the terminal's OS window — sending ⌘W to e.g. Alacritty
-  /// quits the whole terminal, yanking the user out of the app and off
-  /// their tmux session. Route through the tmux source action (it picks
-  /// the next window in the same session itself) and only fall back to
-  /// ⌘W for apps no source claims (browsers, native windows).
-  func windowCloseInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "window_close",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.perform(.tabClose, in: context, completion: completion)
-      },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  static let messagesBundleIdentifiers: Set<String> = [
-    "com.apple.MobileSMS",
-    "com.apple.Messages",
-  ]
-
-  static func browserReloadFallbackShortcut(
-    force: Bool,
-    bundleIdentifier: String
-  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    guard WebBrowsers.all.contains(bundleIdentifier) else { return nil }
-    if force, WebBrowsers.safari.contains(bundleIdentifier) {
-      return (CGKeyCode(kVK_ANSI_R), [.maskCommand, .maskAlternate])
+    performSourceAction(.tabFirst) { [weak self] _, _ in
+      self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_1), flags: .maskCommand)
     }
-    return (
-      CGKeyCode(kVK_ANSI_R),
-      force ? [.maskCommand, .maskShift] : .maskCommand
-    )
   }
 
-  func performTabSourceAction(
-    name: String,
-    repeatCount: Int,
-    action:
-      @escaping (
-        SourceRegistry,
-        AppContext,
-        @escaping (SourceActionResult) -> Void
-      ) -> Void,
-    fallback: @escaping (AppContext, Int) -> Void
+  /// Cmd-W closes the focused tab, or window, of any app. `window_close`
+  /// inside a terminal hosting tmux closes the tmux window instead: Cmd-W
+  /// would quit the terminal itself and drop the user off their session.
+  func closeInNormalMode(_ name: SourceActionName, repeatCount: Int) {
+    performSourceAction(name, repeatCount: repeatCount) { [weak self] _, count in
+      self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
+    }
+  }
+
+  /// `resource_next` / `resource_previous` scroll where no source navigates.
+  func resourceNavigationInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
+    let fallbackScroll: NormalModeDispatcher.ScrollKind = direction == .next ? .down : .up
+    performSourceAction(
+      direction == .next ? .resourceNext : .resourcePrevious, repeatCount: repeatCount
+    ) { [weak self] _, count in
+      self?.scrollNormalMode(fallbackScroll, repeatCount: count)
+    }
+  }
+
+  /// Runs `name` in the focused app `repeatCount` times through the policy
+  /// above. `fallback` is the core's platform convention for the action, if
+  /// it has one.
+  func performSourceAction(
+    _ name: SourceActionName,
+    repeatCount: Int = 1,
+    context resolvedContext: AppContext? = nil,
+    fallback: ((AppContext, Int) -> Void)? = nil
   ) {
-    guard let context = normalModeDispatchContext() else {
-      FlashLog.debug("[normal_mode] no target app for \(name)")
+    guard let context = resolvedContext ?? normalModeDispatchContext() else {
+      FlashLog.debug("[normal_mode] no target app for \(name.rawValue)")
       applyModeOverlay()
       return
     }
@@ -448,7 +91,7 @@ extension AppDelegate {
         scheduleNormalModeRecapture()
         return
       }
-      action(registry, context) { [weak self] result in
+      registry.perform(name.action, in: context) { [weak self] result in
         guard let self else { return }
         switch result.disposition {
         case .performed:
@@ -461,10 +104,12 @@ extension AppDelegate {
           // keystroke fallback must not fire here — see
           // `SourceActionResult.Disposition.failed`.
           FlashLog.warn(
-            "[normal_mode] \(name) failed in claimed source bundle=\(context.bundleIdentifier)")
+            "[normal_mode] \(name.rawValue) failed in claimed source "
+              + "bundle=\(context.bundleIdentifier)")
           self.scheduleNormalModeRecapture()
         case .unhandled:
-          fallback(context, remaining)
+          self.performUnhandledSourceAction(
+            name, context: context, repeatCount: remaining, fallback: fallback)
         }
       }
     }
@@ -472,69 +117,33 @@ extension AppDelegate {
     attempt(count)
   }
 
-  static func nativeBrowserTabIndexKey(index: Int, bundleIdentifier: String) -> CGKeyCode? {
-    guard WebBrowsers.all.contains(bundleIdentifier) else { return nil }
-    return tabIndexKeyCode(index)
+  private func performUnhandledSourceAction(
+    _ name: SourceActionName,
+    context: AppContext,
+    repeatCount: Int,
+    fallback: ((AppContext, Int) -> Void)?
+  ) {
+    if let chord = pluginManager.actionKeystroke(
+      name, in: PluginSelectorContext(bundleID: context.bundleIdentifier))
+    {
+      sendNormalModeKey(chord.keyCode, flags: chord.eventFlags, repeatCount: repeatCount)
+      return
+    }
+    guard let fallback else {
+      FlashLog.debug(
+        "[normal_mode] \(name.rawValue) unsupported bundle=\(context.bundleIdentifier)")
+      applyModeOverlay()
+      return
+    }
+    fallback(context, repeatCount)
   }
 
-  static func nativeTabTraversalShortcut(
-    direction: NavigationDirection,
-    bundleIdentifier: String
-  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    if messagesBundleIdentifiers.contains(bundleIdentifier) {
-      // Messages binds Window > Go to Next / Previous Conversation to
-      // ⌃⇥ / ⌃⇧⇥ and leaves ⌘⇧] / ⌘⇧[ unbound.
-      return (
-        CGKeyCode(kVK_Tab), direction == .forward ? .maskControl : [.maskControl, .maskShift]
-      )
-    }
-    if WebBrowsers.all.contains(bundleIdentifier) {
-      let key: CGKeyCode =
-        direction == .forward
-        ? CGKeyCode(kVK_ANSI_RightBracket)
-        : CGKeyCode(kVK_ANSI_LeftBracket)
-      return (key, [.maskCommand, .maskShift])
-    }
-    return nil
+  static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {
+    let digits = [
+      kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5,
+      kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9,
+    ]
+    guard (1...digits.count).contains(index) else { return nil }
+    return CGKeyCode(digits[index - 1])
   }
-
-  /// The chord `bundleIdentifier` answers for the intent of `key`+`flags`. The
-  /// standard next / previous tab chord (⌘⇧] / ⌘⇧[, what `]t` / `[t` send)
-  /// becomes the app's own traversal chord where it binds another one
-  /// (`nativeTabTraversalShortcut`); every other chord is delivered as is.
-  static func appChord(
-    key: CGKeyCode,
-    flags: CGEventFlags,
-    bundleIdentifier: String
-  ) -> (key: CGKeyCode, flags: CGEventFlags) {
-    let direction: NavigationDirection
-    switch Int(key) {
-    case kVK_ANSI_RightBracket: direction = .forward
-    case kVK_ANSI_LeftBracket: direction = .back
-    default: return (key, flags)
-    }
-    guard
-      flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
-        == [.maskCommand, .maskShift],
-      let native = nativeTabTraversalShortcut(
-        direction: direction, bundleIdentifier: bundleIdentifier)
-    else { return (key, flags) }
-    return native
-  }
-
-  private static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {
-    switch index {
-    case 1: return CGKeyCode(kVK_ANSI_1)
-    case 2: return CGKeyCode(kVK_ANSI_2)
-    case 3: return CGKeyCode(kVK_ANSI_3)
-    case 4: return CGKeyCode(kVK_ANSI_4)
-    case 5: return CGKeyCode(kVK_ANSI_5)
-    case 6: return CGKeyCode(kVK_ANSI_6)
-    case 7: return CGKeyCode(kVK_ANSI_7)
-    case 8: return CGKeyCode(kVK_ANSI_8)
-    case 9: return CGKeyCode(kVK_ANSI_9)
-    default: return nil
-    }
-  }
-
 }
