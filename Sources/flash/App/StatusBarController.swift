@@ -44,6 +44,10 @@ final class FlashStatusBarController {
         inputs: FlashStatusBarTemplateEngine.EvaluationInputs
       )?
     var jobs: [StatusFormatJobRequest] = []
+    /// The `#()` output this surface last evaluated with, by raw command: it
+    /// keeps showing its own previous output while a changed expansion runs,
+    /// as tmux keeps a client's job output until the new command answers.
+    var jobValues: [String: String] = [:]
     var sources: Set<String> = []
     var needsClock = false
 
@@ -63,8 +67,29 @@ final class FlashStatusBarController {
           dependencies: dependencies, native: native)
       )
       self.jobs = jobs
+      jobValues = jobs.reduce(into: [:]) { values, job in
+        if let value = native.jobs[job.rawCommand] { values[job.rawCommand] = value }
+      }
       (sources, needsClock) = FlashStatusBarTemplateEngine.requirements(of: dependencies)
     }
+  }
+
+  /// The registry key of a `#()` job: its raw text and its expansion. Surfaces
+  /// that expand the same text identically share one process; a different
+  /// expansion (another widget name, local option) is its own job.
+  private static func shellKey(_ job: StatusFormatJobRequest) -> String {
+    job.rawCommand + "\u{0}" + job.command
+  }
+
+  /// The job output `surface` evaluates with: the current output of each job
+  /// it required, over what it showed last.
+  private func jobValues(for surface: SurfaceState?) -> [String: String] {
+    guard let surface else { return [:] }
+    var values = surface.jobValues
+    for job in surface.jobs {
+      if let value = shellRecords[Self.shellKey(job)]?.value { values[job.rawCommand] = value }
+    }
+    return values
   }
 
   private struct WidgetState {
@@ -383,10 +408,9 @@ final class FlashStatusBarController {
         values["flash.history.\(name)"] = record.history.joined(separator: " ")
       }
     }
-    let jobValues = shellRecords.compactMapValues(\.value)
-    // The shared context is built once; each surface layers its options on it.
-    let native = FlashStatusBarTemplateEngine.formatContext(
-      context, dynamicValues: values, jobValues: jobValues)
+    // The shared context is built once; each surface layers its options and
+    // its own job output on it.
+    let native = FlashStatusBarTemplateEngine.formatContext(context, dynamicValues: values)
     if bar != nil { publishBar(native: native, context: context) }
     for name in widgets.keys.sorted() where widgets[name]?.visible == true {
       publishWidget(name, native: native)
@@ -401,6 +425,7 @@ final class FlashStatusBarController {
   private func publishBar(native shared: StatusFormatContext, context: FlashStatusBarContext) {
     var native = shared
     native.options = options.merging(template.options) { _, local in local }
+    native.jobs = jobValues(for: bar)
     // Nothing the template or its popups read has changed since the last
     // evaluation: the bar keeps what it required.
     guard bar?.isCurrent(native) == false else { return }
@@ -423,6 +448,7 @@ final class FlashStatusBarController {
     native.values["flash.widget.name"] = name
     native.values["flash.widget.columns"] = String(spec.columns)
     native.options = options.merging(spec.template.options) { _, local in local }
+    native.jobs = jobValues(for: widgets[name]?.surface)
     guard widgets[name]?.surface.isCurrent(native) == false else { return }
     let result = FlashStatusBarTemplateEngine.evaluateDocument(
       spec.template, native: native, lineBreaksResetAlignment: true)
@@ -466,9 +492,10 @@ final class FlashStatusBarController {
       sources.formUnion(surface.sources)
       let cadence = Self.cadence(interval)
       for job in surface.jobs {
-        if jobs[job.rawCommand] == nil { jobs[job.rawCommand] = job }
-        let current = cadences[job.rawCommand]
-        cadences[job.rawCommand] =
+        let key = Self.shellKey(job)
+        if jobs[key] == nil { jobs[key] = job }
+        let current = cadences[key]
+        cadences[key] =
           current.map { $0 == 0 ? cadence : (cadence == 0 ? $0 : min($0, cadence)) } ?? cadence
       }
     }
@@ -592,7 +619,7 @@ final class FlashStatusBarController {
   }
 
   private func startShell(_ request: StatusFormatJobRequest, token: UInt64) {
-    let key = request.rawCommand
+    let key = Self.shellKey(request)
     do {
       shellRecords[key]?.job = try makeJob(
         StatusCommandInvocation(

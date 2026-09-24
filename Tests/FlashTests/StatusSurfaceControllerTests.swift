@@ -167,6 +167,24 @@ final class StatusSurfaceControllerTests: XCTestCase {
     XCTAssertEqual(harness.nextWakeup, 130, "the bar alone refreshes it at its own interval")
   }
 
+  func testSurfacesExpandingOneJobDifferentlyRunAndShowTheirOwnCommands() {
+    let template = "#(echo #{flash.widget.name})"
+    let harness = Harness(bar: nil, widgets: ["a": widget(template), "b": widget(template)])
+    defer { harness.controller.stop() }
+    XCTAssertEqual(harness.running("echo a").count, 1)
+    XCTAssertEqual(harness.running("echo b").count, 1)
+    harness.queue.sync {
+      for name in ["a", "b"] {
+        let task = harness.running("echo \(name)")[0]
+        task.line("out-\(name)")
+        task.completion(0, "out-\(name)")
+      }
+    }
+    harness.tick()
+    XCTAssertEqual(harness.widgetText("a"), ["out-a"])
+    XCTAssertEqual(harness.widgetText("b"), ["out-b"])
+  }
+
   func testSurfacesSkipEvaluationIndependently() {
     let a = FlashStatusBarSourceDefinition(command: ["/bin/a"], intervalSeconds: 60)
     let b = FlashStatusBarSourceDefinition(command: ["/bin/b"], intervalSeconds: 60)
