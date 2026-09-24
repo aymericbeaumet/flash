@@ -71,7 +71,8 @@ extension AppDelegate {
     let screens = NSScreen.screens.map(\.frame)
     // The flashlight or the command bar may hold activation; the menus on
     // screen belong to the app that owns the menu bar.
-    let menuOwner = NSWorkspace.shared.menuBarOwningApplication
+    let menuOwner =
+      NSWorkspace.shared.menuBarOwningApplication
       .flatMap { $0.processIdentifier == ownPID ? nil : $0 }
       ?? currentNonFlashRunningApplication()
     let ownerPID = menuOwner?.processIdentifier

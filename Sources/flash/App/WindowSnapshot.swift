@@ -211,16 +211,21 @@ struct WindowSnapshot {
   /// surface of EVERY pid in `focusedPids` is hintable (occluded by all
   /// higher-z windows); everything else purely occludes. Same painter's
   /// algorithm, anchored-card promotion, and fragmentation guard as the
-  /// single-pid build.
+  /// single-pid build. `excludingIndexes` are surfaces of their own
+  /// (`ScreenScopeSurfaces`, a browser's Picture in Picture player), never
+  /// their app's front surface; they still occlude.
   static func buildMultiSurfaceVisibleRegions(
     entries: [Entry],
-    focusedPids: Set<pid_t>
+    focusedPids: Set<pid_t>,
+    excludingIndexes: Set<Int> = []
   ) -> [pid_t: [CGRect]] {
     var activeIndexes = Set<Int>()
     for pid in focusedPids {
       let layer0App = entries.filter { $0.pid == pid && $0.layer == 0 }.map(\.nsBounds)
       for (idx, entry) in entries.enumerated()
-      where entry.pid == pid && isInteractionSurfaceLayer(entry.layer) {
+      where entry.pid == pid && isInteractionSurfaceLayer(entry.layer)
+        && !excludingIndexes.contains(idx)
+      {
         if entry.layer == 0, isAnchoredCard(entry.nsBounds, amongLayer0App: layer0App) {
           continue
         }
@@ -233,20 +238,7 @@ struct WindowSnapshot {
     occluders.reserveCapacity(entries.count)
     for (idx, entry) in entries.enumerated() {
       if activeIndexes.contains(idx) {
-        var fragments: [CGRect] = [entry.nsBounds]
-        for occluder in occluders {
-          if fragments.isEmpty { break }
-          var next: [CGRect] = []
-          next.reserveCapacity(fragments.count * 2)
-          for frag in fragments {
-            subtract(frag, hole: occluder, into: &next)
-          }
-          if next.count > 32 {
-            fragments = next
-            break
-          }
-          fragments = next
-        }
+        let fragments = visibleFragments(of: entry.nsBounds, under: occluders)
         if !fragments.isEmpty {
           byPid[entry.pid, default: []].append(contentsOf: fragments)
         }
@@ -254,6 +246,34 @@ struct WindowSnapshot {
       if entry.occludes { occluders.append(entry.nsBounds) }
     }
     return byPid
+  }
+
+  /// The visible part of the window at `index`: its bounds minus every
+  /// occluding window in front of it. Empty when it is out of range or fully
+  /// covered.
+  static func visibleRegions(ofEntryAt index: Int, in entries: [Entry]) -> [CGRect] {
+    guard entries.indices.contains(index) else { return [] }
+    let occluders = entries[..<index].filter(\.occludes).map(\.nsBounds)
+    return visibleFragments(of: entries[index].nsBounds, under: occluders)
+  }
+
+  /// `rect` minus `occluders`, with the same fragmentation guard as `build`.
+  private static func visibleFragments(of rect: CGRect, under occluders: [CGRect]) -> [CGRect] {
+    var fragments: [CGRect] = [rect]
+    for occluder in occluders {
+      if fragments.isEmpty { break }
+      var next: [CGRect] = []
+      next.reserveCapacity(fragments.count * 2)
+      for frag in fragments {
+        subtract(frag, hole: occluder, into: &next)
+      }
+      if next.count > 32 {
+        fragments = next
+        break
+      }
+      fragments = next
+    }
+    return fragments
   }
 
   static func topApplicationWindowFrame(entries: [Entry], focusedPid: pid_t) -> CGRect? {

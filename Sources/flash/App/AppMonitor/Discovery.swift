@@ -211,7 +211,9 @@ extension AppMonitor {
   /// prefix-free assignment. Never deadline-truncated: each app's walk either
   /// completes or that app is dropped whole, so the complete-or-discard
   /// determinism contract holds per surface. The prepared model stays
-  /// focused-app-only; this path always walks fresh.
+  /// focused-app-only; this path always walks fresh. Picture in Picture
+  /// players and the Stage Manager strip (`ScreenScopeSurfaces`) are walked
+  /// too, each by its frame with the Accessibility provider alone.
   func discoverScreenAsync(
     focusedContext: AppContext,
     maxApps: Int = 6,
@@ -236,6 +238,28 @@ extension AppMonitor {
       orderedPids.append(entry.pid)
       if orderedPids.count >= maxApps { break }
     }
+    var owners: [pid_t: (app: NSRunningApplication, owner: ScreenScopeSurfaces.Owner)] = [:]
+    let auxiliary = ScreenScopeSurfaces.auxiliary(entries: entries, screen: screenFrame) { pid in
+      if let known = owners[pid] { return known.owner }
+      guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+        let bundleIdentifier = app.bundleIdentifier
+      else { return nil }
+      let owner = ScreenScopeSurfaces.Owner(
+        bundleIdentifier: bundleIdentifier, isRegularApp: app.activationPolicy == .regular)
+      owners[pid] = (app, owner)
+      return owner
+    }
+    let auxiliaryContexts = auxiliary.compactMap {
+      surface -> (surface: ScreenScopeSurfaces.Surface, keepsPID: Bool, context: AppContext)? in
+      guard let (app, owner) = owners[surface.pid] else { return nil }
+      return (
+        surface, ScreenScopeSurfaces.keepsPID(owner),
+        AppContext(
+          bundleIdentifier: owner.bundleIdentifier, processID: surface.pid, runningApp: app,
+          frontWindowFrame: surface.frame, allScreensFrame: focusedContext.allScreensFrame,
+          walkRoot: .elementsInFrame)
+      )
+    }
     var contexts: [AppContext] = []
     for pid in orderedPids {
       guard let app = NSRunningApplication(processIdentifier: pid),
@@ -250,12 +274,13 @@ extension AppMonitor {
           frontWindowFrame: surface,
           allScreensFrame: focusedContext.allScreensFrame))
     }
-    guard !contexts.isEmpty else {
+    guard !contexts.isEmpty || !auxiliaryContexts.isEmpty else {
       completion([])
       return
     }
     let visibleByPid = WindowSnapshot.buildMultiSurfaceVisibleRegions(
-      entries: entries, focusedPids: Set(contexts.map(\.processID)))
+      entries: entries, focusedPids: Set(contexts.map(\.processID)),
+      excludingIndexes: Set(auxiliary.map(\.entryIndex)))
     axQueue.async { [weak self] in
       guard let self else { return }
       self.configureRuntime(for: cfg)
@@ -272,18 +297,47 @@ extension AppMonitor {
         merged.append(contentsOf: finalized.targets)
         walked += 1
       }
+      var auxiliaryTargets = 0
+      for (ordinal, entry) in auxiliaryContexts.enumerated() {
+        let regions = WindowSnapshot.visibleRegions(
+          ofEntryAt: entry.surface.entryIndex, in: entries)
+        guard !regions.isEmpty else { continue }
+        // Only the generic walk knows how to start from a frame; plugin
+        // providers describe their app's own windows.
+        let plan = self.registry.hintProviderPlan(for: entry.context)
+        let providers = (plan.uncachedProviders + plan.preparedProviders).filter {
+          $0.identifier == Self.accessibilityProviderID
+        }
+        guard !providers.isEmpty else { continue }
+        let collection = Self.collectFocusedTargets(context: entry.context, providers: providers)
+        let finalized = TargetFinalizer.finalizeWithStats(
+          collection.targets, visibleRegions: regions)
+        merged.append(
+          contentsOf: finalized.targets.map {
+            ScreenScopeSurfaces.retarget(
+              $0, surface: entry.surface, ordinal: ordinal, keepsPID: entry.keepsPID)
+          })
+        auxiliaryTargets += finalized.targets.count
+      }
       let hints = self.assignTargets(merged, cfg: cfg)
       FlashLog.debug(
         "[discover] screen_scope complete",
         fields: [
           "apps": "\(walked)",
           "candidate_apps": "\(contexts.count)",
+          "auxiliary_surfaces": auxiliaryContexts.map { $0.surface.kind.rawValue }
+            .joined(separator: ","),
+          "auxiliary_targets": "\(auxiliaryTargets)",
           "targets": "\(merged.count)",
           "hints": "\(hints.count)",
         ])
       DispatchQueue.main.async { completion(hints) }
     }
   }
+
+  /// `AccessibilityProvider.identifier`, the provider that walks a surface
+  /// from its frame.
+  static let accessibilityProviderID = "accessibility"
 
   private struct DiscoveryResult {
     let targets: [JumpTarget]

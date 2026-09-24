@@ -70,6 +70,14 @@ the others make their own requests or run the CLI tools named here.
   only when you run them, keep what they read for that hint session only, and
   write none of it to disk. While the hints are up, the local inspector's
   state lists them like any other hints.
+- **Picture in Picture and Stage Manager:** `mouse_target --scope=screen`
+  finds players and the Stage Manager strip from WindowServer geometry (which
+  app owns a window, its level and bounds, never its contents) and reads
+  their controls through Accessibility, like any other hint target. The
+  system player and Stage Manager belong to macOS agents
+  (`com.apple.PIPAgent`, `com.apple.WindowManager`), whose controls Flash then
+  reads too. Nothing is kept past that hint session.
+- **Appearance:** `[overlay.dark]` follows whether macOS is in dark mode.
 - **AI provider quotas:** Claude Code's OAuth token from its Keychain item or
   `~/.claude/.credentials.json`, and the Codex CLI's session (`aiproviders`).
   Flash only reads the Claude token; when it expires, the quota shows as stale
@@ -91,6 +99,13 @@ from the tap. Flash respects it: a hint session started then takes Flash's own
 key window instead, so the labels you type go to Flash and never to the
 password field. `[app] keyboard_layout` reads which input source is selected
 and its key layout, to match keys to hint labels; it records neither.
+
+## Screen capture
+
+`[overlay] screen_capture = "hide"` asks macOS to leave Flash's overlay, status
+bar and popups out of screenshots, recordings and screen sharing. It is a
+request other capture tools may ignore; recent macOS capture APIs can still
+record those windows.
 
 ## Local CLI replies
 

@@ -24,6 +24,9 @@ flash mouse_dock                         # hint the Dock's items
 flash mouse_menubar                      # hint the focused app's menu titles and the status items
 flash mouse_notifications                # hint Notification Center's banners, alerts and buttons
 flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
+flash mouse_button --state=down          # press the primary button where the pointer is
+flash mouse_button --state=up            # release it
+flash mouse_button --state=toggle --secondary # press or release the secondary button (or --middle)
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position (keyboard-shaped grid)
@@ -89,6 +92,28 @@ when there is any, or 2 when the file cannot be read. Environment overrides are
 not applied.
 
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
+
+`mouse_button --state=down|up|toggle` presses or releases a button where the
+pointer is, the primary one unless `--secondary` or `--middle` says otherwise.
+While it is held, every pointer move Flash makes is a drag of that button:
+`mouse_target --move` (`mf`), `mouse_grid --move` (`mF`), `mouse_pointer`
+movement and grid cursor-follow. So a keyboard drag in any app is `down`, a
+move to the drop point, then `up`. One button is held at a time: pressing
+another releases the first, and `up` for a button that is not held does
+nothing. Cancelling a Flash overlay (Escape, or any other key that cancels
+hints, the grid, `mouse_pointer` or the command line), `leave_mode` and
+quitting Flash release it, and so does a committed click, drag or selection,
+which presses buttons of its own.
+`mouse_pointer`'s `v` toggles the same hold.
+
+`mouse_target --scope=screen` also hints Picture in Picture players and the
+Stage Manager strip on that screen. Flash picks them from WindowServer
+geometry: every window of the system player (`com.apple.PIPAgent`), an app's
+player-sized window at the floating level (a browser's own player), and the
+thumbnail-sized windows of Stage Manager (`com.apple.WindowManager`). It then
+walks each one through Accessibility by its frame. The Accessibility shapes of
+these surfaces vary across macOS versions and have not been verified on every
+release, so a player or strip that exposes nothing pressable stays silent.
 
 `mouse_grid` takes the click flags of `mouse_target` except `--adjust` and
 `--search`, plus `--bisect` and `--zoom-to-depth=N` (N ≥ 1), which combine with

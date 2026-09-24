@@ -35,21 +35,26 @@ final class SystemSurfaceHintsTests: XCTestCase {
                     "banner", "AXGroup", frame: banner, pressable: true,
                     [
                       node("title", "AXStaticText"),
-                      node("close", "AXButton", frame: CGRect(x: 1492, y: 958, width: 18, height: 18)),
                       node(
-                        "options", "AXMenuButton", frame: CGRect(x: 1800, y: 930, width: 40, height: 20)),
+                        "close", "AXButton", frame: CGRect(x: 1492, y: 958, width: 18, height: 18)),
+                      node(
+                        "options", "AXMenuButton",
+                        frame: CGRect(x: 1800, y: 930, width: 40, height: 20)),
                       // The same banner again as an inner pressable wrapper.
                       node("banner-body", "AXGroup", frame: banner, pressable: true),
                     ]),
                   node(
                     "stack", "AXGroup", frame: stack, pressable: true,
-                    [node("stacked", "AXGroup", frame: stack.insetBy(dx: 0, dy: 10), pressable: true)]),
+                    [
+                      node(
+                        "stacked", "AXGroup", frame: stack.insetBy(dx: 0, dy: 10), pressable: true)
+                    ]),
                   node("inert", "AXGroup", frame: CGRect(x: 1500, y: 700, width: 350, height: 60)),
                   node(
                     "hidden", "AXGroup", hidden: true, pressable: true,
                     [node("hidden-button", "AXButton")]),
                   node("frameless", "AXButton", frame: nil),
-                ]),
+                ])
             ])
         ])
     ]

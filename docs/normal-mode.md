@@ -9,7 +9,8 @@ document-URL and mark commands remain available for explicit mappings.
 
 - `h` / `l` scroll left/right. `ctrl+e` / `ctrl+y` send a mouse-wheel scroll
   down/up by 3 lines; `ctrl+d` / `ctrl+u` send 20 lines down/up. Configure these
-  amounts with `[mode] scroll_step_lines` and `scroll_page_lines`.
+  amounts with `[mode] scroll_step_lines` and `scroll_page_lines`, and set
+  `scroll_smooth_ms` to spread each scroll over that many milliseconds.
 - `gg` / `G` go to the top/bottom.
 - `u` undoes and `ctrl+r` redoes. Bare `d`, `j` and `k` are unbound.
 - `y` copies immediately, `p` pastes and `/` opens Find.
@@ -120,6 +121,23 @@ on both sides, or on `return`; the other grid keys work as above.
 pointer, on the pointer's display, stopping while one selection remains;
 Backspace walks back out.
 
+## Holding a mouse button
+
+`mouse_button --state=down|up|toggle [--secondary|--middle]` presses or
+releases a button where the pointer is; it ships unbound. While a button is
+held, every pointer move Flash makes drags it — `mf`, `mF`, `mouse_pointer`
+movement, grid cursor-follow — so a keyboard drag works in any app:
+
+```toml
+[mode.normal.mappings]
+"<leader>v" = ["flash", "mouse_button", "--state=toggle"]
+```
+
+Press `<leader>v` over what to grab, `mf` (or `mF`) to the drop point, then
+`<leader>v` again to drop. `mouse_pointer`'s `v` toggles the same held
+button. Cancelling a Flash overlay (Escape), `leave_mode` and quitting Flash
+release it, as does a committed click, drag or selection.
+
 ## Movement history
 
 `ctrl+o` and `ctrl+i` move backward and forward across apps and source locations,
@@ -182,7 +200,12 @@ nothing and NORMAL stays.
 The four vertical scroll bindings synthesize line-based mouse-wheel events
 in every app, including terminals, at the current pointer position. They use
 no app-specific scrolling action or Accessibility scroll fallback. The receiving
-app handles the event just as it handles a physical wheel. `[mode] scroll_step`
+app handles the event just as it handles a physical wheel. With
+`[mode] scroll_smooth_ms` set, one keypress becomes several smaller line
+events spread over that duration (at most 300 ms): the first moves at once,
+the rest follow at least a frame apart on the click queue, and they add up to
+the same lines, so terminals scroll exactly as far. A new scroll, including
+`gg` / `G` and `h` / `l`, drops what the previous one has left. `[mode] scroll_step`
 continues to set horizontal movement in pixels. `gg` and `G` retain their
 source-aware edge behavior. Inside tmux they follow tmux's own wheel routing:
 a pane in a mode scrolls that mode (history-top, cancel); a program that
@@ -365,10 +388,15 @@ latest queued activation runs. Cancellation suppresses the old gesture's mode
 and UI outcome; an old completion cannot clear a newer operation's state. Dock
 and scroll-area discovery use the same ownership tokens as ordinary hints.
 
-`HintSession` owns the selected action, target data, and pointer drag. Every
-reset, replacement, mode exit, and application shutdown consumes any held
-primary button exactly once before forgetting the session. Shutdown also waits
-for finite synthetic gestures to post their release events. Click repetition
+`HintSession` owns the selected action and target data. `ActionDispatcher`
+owns the one button `mouse_button` or `mouse_pointer`'s `v` holds: a pure
+`MouseButtonHold` decides which press and release events each transition
+posts, so a press is released exactly once. While it is held, every pointer
+move Flash makes posts that button's dragged event; a session reset or
+replacement keeps it, so `mouse_button --state=down` then `mf` drags to a
+hint. Cancelling a Flash overlay, `leave_mode`, application shutdown and a
+committed click, drag or selection release it. Shutdown also waits for finite
+synthetic gestures to post their release events. Click repetition
 records a pending click only when its generation is still current and input
 actually starts.
 

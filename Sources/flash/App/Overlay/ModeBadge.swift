@@ -224,7 +224,7 @@ extension OverlayPanel {
     contentLayer.sublayers = sublayers.isEmpty ? nil : sublayers
     if modeSurface.capturesInput {
       captureKeyboardInput()
-    } else if !sublayers.isEmpty || modeSurface.barVisible {
+    } else if !sublayers.isEmpty || modeSurface.barVisible || clickFeedbackRingsInFlight > 0 {
       if isKeyWindow {
         orderOut(nil)
       }
@@ -265,7 +265,8 @@ extension OverlayPanel {
       !modeSurface.capturesInput,
       !commandPromptVisible,
       !candidateFinderResultsVisible,
-      activeWindowBorderFrame == nil
+      activeWindowBorderFrame == nil,
+      clickFeedbackRingsInFlight == 0
     else { return }
     orderOut(nil)
   }
@@ -446,7 +447,8 @@ extension OverlayPanel {
       inputMode: inputMode,
       commandPromptVisible: commandPromptVisible,
       candidateFinderResultsVisible: candidateFinderResultsVisible,
-      transientContentVisible: transientContentVisible || toast != nil)
+      transientContentVisible: transientContentVisible || toast != nil
+        || clickFeedbackRingsInFlight > 0)
     if level != target {
       level = target
     }

@@ -12,6 +12,9 @@ enum FlashTunables {
   static var scrollStepLines: Int32 = 3
   /// `[mode] scroll_page_lines` — wheel lines per ctrl+d/u step.
   static var scrollPageLines: Int32 = 20
+  /// `[mode] scroll_smooth_ms` — spread of one vertical line scroll; 0 is
+  /// instant.
+  static var scrollSmoothMs: Int = 0
   /// `[mode] click_hold_ms` — synthesized mouse-down→up hold.
   static var clickHoldMs: Int = 18
   /// `[mode] send_key_interval_ms` — spacing between send_key chords.
@@ -42,6 +45,7 @@ enum FlashTunables {
     scrollStepPixels = Int32(config.mode.scrollStep)
     scrollStepLines = Int32(config.mode.scrollStepLines)
     scrollPageLines = Int32(config.mode.scrollPageLines)
+    scrollSmoothMs = config.mode.scrollSmoothMs
     clickHoldMs = config.mode.clickHoldMs
     sendKeyIntervalMs = config.mode.sendKeyIntervalMs
     alertDuration = config.overlay.alertDuration

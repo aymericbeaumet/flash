@@ -74,7 +74,8 @@ extension AppMonitor {
       processID: context.processID,
       runningApp: context.runningApp,
       frontWindowFrame: frame.isNull ? context.frontWindowFrame : frame,
-      allScreensFrame: context.allScreensFrame
+      allScreensFrame: context.allScreensFrame,
+      walkRoot: context.walkRoot
     )
   }
 

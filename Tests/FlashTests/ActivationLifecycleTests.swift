@@ -60,25 +60,11 @@ final class ActivationLifecycleTests: XCTestCase {
     XCTAssertNil(lifecycle.completeCommit(token: click))
   }
 
-  func testFinishingHintSessionReleasesHeldInputExactlyOnce() {
-    var session = HintSession()
-    session.phase = .pointer(.init())
-    session.didPressPrimaryButton()
-    XCTAssertEqual(session.finish(), [.releasePrimaryButton])
-    XCTAssertEqual(session.finish(), [])
-    XCTAssertNil(session.pointer)
-    XCTAssertFalse(session.pointerDragActive)
-    session.phase = .pointer(.init())
-    session.didPressPrimaryButton()
-    XCTAssertEqual(session.releasePrimaryButton(), .releasePrimaryButton)
-    XCTAssertEqual(session.finish(), [])
-  }
-
   func testSearchWithNoMatchesStillOwnsItsInteractionUntilReset() {
     var session = HintSession()
     session.phase = .search(.init())
     XCTAssertTrue(session.isActive)
-    XCTAssertEqual(session.finish(), [])
+    session = HintSession()
     XCTAssertFalse(session.isActive)
   }
 }

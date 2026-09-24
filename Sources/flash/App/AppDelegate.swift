@@ -89,6 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var monitor: AppMonitor!
   var debugServer: DebugServer?
   var overlay: OverlayPanel!
+  /// Pushes the system appearance to the overlay for `[overlay.dark]`.
+  var appearanceObserver: AppearanceObserver?
   var statusBarController: FlashStatusBarController?
   var statusTerminalEnvironmentReady = false
   var terminalReturnApplicationPID: pid_t?
@@ -388,6 +390,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay = OverlayPanel()
     overlay.coordinator = self
     overlay.overlayConfig = config.overlay
+    appearanceObserver = AppearanceObserver(NSApplication.shared) { [weak self] dark in
+      self?.overlay.darkAppearance = dark
+    }
     overlay.debugConfig = config.debug
     overlay.statusBarPopupStyle = config.statusBar.popupStyle
     overlay.modeLabels = config.mode.labels
@@ -476,6 +481,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMouseRepeat()
     case .mousePointer:
       enterPointerMode()
+    case .mouseButton(let request):
+      performMouseButton(request)
     case .focusInput:
       focusTextInputInNormalMode(index: 1)
     case .scrollTarget:
@@ -1112,6 +1119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationWillTerminate(_ notification: Notification) {
     activationLifecycle.invalidate()
     clearHintSessionState()
+    releaseHeldMouseButton(reason: "quit")
     ActionDispatcher.waitForPendingMouseEvents()
     activeWindowBorderReconciliationGeneration &+= 1
     for token in workspaceTokens {

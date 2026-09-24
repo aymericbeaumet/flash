@@ -40,21 +40,6 @@ final class HintSessionPhaseTests: XCTestCase {
     }
   }
 
-  func testOnlyPointerModeCanHoldTheButton() {
-    var session = HintSession()
-    session.didPressPrimaryButton()
-    XCTAssertFalse(session.pointerDragActive)
-    XCTAssertNil(session.releasePrimaryButton())
-
-    session.phase = .pointer(.init())
-    session.didPressPrimaryButton()
-    XCTAssertTrue(session.pointerDragActive)
-    // Leaving pointer mode drops the held button with the phase; teardown
-    // releases it through `finish`, never twice.
-    XCTAssertEqual(session.finish(), [.releasePrimaryButton])
-    XCTAssertFalse(session.pointerDragActive)
-  }
-
   func testInsertRoutingNeverOutlivesTheSessionOrWalkThatOwnedTheKeys() {
     let delegate = AppDelegate()
     delegate.overlay = OverlayPanel()
@@ -83,7 +68,7 @@ final class HintSessionPhaseTests: XCTestCase {
 
     delegate.hintSession.capture = .keyWindow
     XCTAssertEqual(delegate.overlay.hintSessionCapture, .keyWindow)
-    _ = delegate.hintSession.finish()
+    delegate.hintSession = HintSession()
     XCTAssertEqual(delegate.hintSession.capture, .tap, "the next session decides afresh")
     XCTAssertEqual(delegate.overlay.hintSessionCapture, .tap)
   }

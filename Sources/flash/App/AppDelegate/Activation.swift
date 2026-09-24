@@ -356,6 +356,9 @@ extension AppDelegate {
     // A session that took the key window (secure input) hands activation
     // back to the app it covered; a commit does so by raising its target.
     let returnsActivation = hintSession.capture == .keyWindow && keyboardCaptureTap != nil
+    // Escape out of a hint, grid, pointer, search or adjust session lets go
+    // of a button `mouse_button` or `v` holds.
+    releaseHeldMouseButton(reason: "overlay_cancel")
     invalidateActivation(reason: "cancel_overlay")
     overlay.hide()
     clearHintSessionState()

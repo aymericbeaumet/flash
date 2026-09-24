@@ -32,6 +32,7 @@ extension NormalModeDispatcher {
         - `ctrl-e` / `ctrl-y` wheel down/up by `mode.scroll_step_lines` (default 3).
         - `ctrl-d` / `ctrl-u` wheel down/up by `mode.scroll_page_lines` (default 20).
         - Vertical wheel events act at the mouse cursor in every app, including terminals.
+          `mode.scroll_smooth_ms` spreads each step over that many milliseconds.
         - `gg` scrolls to the top.
         - `G` scrolls to the bottom.
         - Counts prefix actions: `10u`, `2[a`, and similar forms repeat the action.
@@ -62,6 +63,9 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
+        - `mouse_button --state=down|up|toggle` holds a button at the pointer,
+          so moves (`mf`, `mF`, `mouse_pointer`) drag; Escape, `leave_mode`
+          or `--state=up` releases it.
 
         ## Mouse Grid
 

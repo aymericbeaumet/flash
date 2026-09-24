@@ -942,7 +942,8 @@ extension AppDelegate {
     let restore = ActionDispatcher.PointerRestore.afterCommit(
       restorePointer: config.hints.restorePointer, gridOrigin: nil)
     let origin = NSEvent.mouseLocation
-    performHintCommit(awaitingFrontmost: needsHandoff ? last.pid : nil) { finished in
+    performHintCommit(awaitingFrontmost: needsHandoff ? last.pid : nil, feedbackAt: last.point) {
+      finished in
       for index in 1...count {
         let isLast = index == count
         _ = ActionDispatcher.synthesizeClick(
@@ -993,6 +994,7 @@ extension AppDelegate {
   }
 
   func overlayDidCancelCommandLine() {
+    releaseHeldMouseButton(reason: "command_cancel")
     returnActivationToCoveredApp(reason: "command_cancel")
     finishCommandLineInteraction(reason: "command_cancel")
   }

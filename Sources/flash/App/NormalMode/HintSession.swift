@@ -55,12 +55,11 @@ struct HintSession {
     var allHints: [AssignedHint] = []
   }
 
-  /// `mouse_pointer`: autorepeat acceleration bookkeeping and the button the
-  /// drag toggle holds.
+  /// `mouse_pointer`: autorepeat acceleration bookkeeping. The button its
+  /// drag toggle holds is `ActionDispatcher`'s, shared with `mouse_button`.
   struct Pointer {
     var moveStreak = 0
     var lastMoveAt: Date?
-    fileprivate(set) var dragActive = false
   }
 
   /// What keys do in this session. The phases exclude one another — a session
@@ -106,8 +105,6 @@ struct HintSession {
     return nil
   }
 
-  var pointerDragActive: Bool { pointer?.dragActive ?? false }
-
   /// Search, adjustment and pointer phases own the keyboard even with no hint
   /// on screen; typing labels needs hints.
   var isActive: Bool {
@@ -137,27 +134,5 @@ struct HintSession {
     phase = .labels(anchor: nil)
     grid = source
     return true
-  }
-
-  enum ExitEffect: Equatable { case releasePrimaryButton }
-
-  mutating func didPressPrimaryButton() {
-    guard case .pointer(var pointer) = phase else { return }
-    pointer.dragActive = true
-    phase = .pointer(pointer)
-  }
-
-  /// Consume ownership before emitting the release, including reentrant teardown.
-  mutating func releasePrimaryButton() -> ExitEffect? {
-    guard case .pointer(var pointer) = phase, pointer.dragActive else { return nil }
-    pointer.dragActive = false
-    phase = .pointer(pointer)
-    return .releasePrimaryButton
-  }
-
-  mutating func finish() -> [ExitEffect] {
-    let effects = releasePrimaryButton().map { [$0] } ?? []
-    self = HintSession()
-    return effects
   }
 }

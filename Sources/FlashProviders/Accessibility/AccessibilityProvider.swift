@@ -681,30 +681,44 @@ public final class AccessibilityProvider: FlashSource {
     // app launches and in some automated Firefox sessions), fall back to the
     // first reported app surface. This keeps the walk scoped to one
     // foreground-app surface without broadening to app/menu-bar children.
-    guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
+    // A surface that is not the focused window (a Picture in Picture player,
+    // the Stage Manager strip) is found by its frame instead, and never falls
+    // back to the focused window, whose targets would leak into its frame.
+    let roots: [AXUIElement]
+    switch context.walkRoot {
+    case .focusedWindow:
+      guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
+      roots = [focusedWindow]
+    case .elementsInFrame:
+      roots = Self.topLevelElements(in: app, meeting: clip, screenH: screenH)
+    }
 
     var state = WalkState()
+    let environment = WalkEnvironment(
+      screenH: screenH,
+      visible: clip,
+      pid: context.processID,
+      bundleIdentifier: context.bundleIdentifier,
+      webAreasArePages: traits.isWebBrowser)
     // The root walk uses the "r" prefix; concurrent fan-out workers use
     // "w<i>" (see depth-0 fan-out below). This keeps target IDs unique
     // across the focused window's own target (if it's hinted) and the
-    // per-worker subtree results.
-    walk(
-      focusedWindow,
-      depth: 0,
-      environment: WalkEnvironment(
-        screenH: screenH,
-        visible: clip,
-        pid: context.processID,
-        bundleIdentifier: context.bundleIdentifier,
-        webAreasArePages: traits.isWebBrowser),
-      insideClickable: false,
-      insideWebArea: false,
-      insideExtensionDocument: false,
-      insideIOSContent: false,
-      idPrefix: "r",
-      fanoutBudget: Self.maxFanoutLevels,
-      state: &state
-    )
+    // per-worker subtree results. Further roots use "r<n>", whose workers
+    // become "r<n>w<i>".
+    for (index, root) in roots.enumerated() {
+      walk(
+        root,
+        depth: 0,
+        environment: environment,
+        insideClickable: false,
+        insideWebArea: false,
+        insideExtensionDocument: false,
+        insideIOSContent: false,
+        idPrefix: index == 0 ? "r" : "r\(index)",
+        fanoutBudget: Self.maxFanoutLevels,
+        state: &state
+      )
+    }
 
     // Parallel resolution of pending action-name checks. These are
     // tentative targets the walker buffered instead of paying an inline
@@ -756,6 +770,45 @@ public final class AccessibilityProvider: FlashSource {
       return windows.first { isTopLevelInteractionSurface($0) }
     }
     return nil
+  }
+
+  /// The app's windows whose frames meet `clip` — at least half of the
+  /// smaller of the two overlapping — or, for an agent that exposes none
+  /// there, its other top-level children that do (never its menu bar).
+  static func topLevelElements(
+    in app: AXUIElement, meeting clip: CGRect, screenH: CGFloat
+  ) -> [AXUIElement] {
+    func meetsClip(_ element: AXUIElement) -> Bool {
+      guard let frame = axFrame(of: element, screenH: screenH) else { return false }
+      let overlap = frame.intersection(clip)
+      guard !overlap.isNull, frame.width > 0, frame.height > 0 else { return false }
+      let smaller = min(frame.width * frame.height, clip.width * clip.height)
+      return overlap.width * overlap.height >= smaller / 2
+    }
+    var raw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) == .success,
+      let windows = raw as? [AXUIElement]
+    {
+      let matching = windows.filter(meetsClip)
+      if !matching.isEmpty { return matching }
+    }
+    raw = nil
+    guard AXUIElementCopyAttributeValue(app, kAXChildrenAttribute as CFString, &raw) == .success,
+      let children = raw as? [AXUIElement]
+    else { return [] }
+    return children.filter { role(of: $0) != (kAXMenuBarRole as String) && meetsClip($0) }
+  }
+
+  private static func axFrame(of element: AXUIElement, screenH: CGFloat) -> CGRect? {
+    var pos: CFTypeRef?
+    var size: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &pos) == .success,
+      AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+      let pos, let size, CFGetTypeID(pos) == AXValueGetTypeID(),
+      CFGetTypeID(size) == AXValueGetTypeID()
+    else { return nil }
+    return frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
   }
 
   private static func isTopLevelInteractionSurface(_ element: AXUIElement) -> Bool {

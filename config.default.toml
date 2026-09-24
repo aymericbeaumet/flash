@@ -124,6 +124,36 @@ window_border_color = ""
 alert_duration = 2.0
 # Milliseconds a transient banner (command output, "Copied: ...") stays up.
 banner_duration_ms = 700
+# Where a hint chip sits relative to its target: "corner" (the target's
+# top-left corner, centred on a target barely larger than the chip),
+# "center", "above" (on the target's top edge) or "below" (under its bottom
+# edge). Chips stay on the target's screen. Only the chip moves: the click
+# aims at the same point whatever the placement.
+hint_placement = "corner"
+# Draw a short ring where each committed click lands (hint, grid,
+# mouse_pointer and mouse_repeat clicks). It never delays the click or the
+# next key. Handy for demos and screencasts.
+click_feedback = false
+# "hide" asks macOS to keep the overlay, status bar and popup windows out of
+# screenshots, recordings and screen sharing (NSWindow.sharingType = none).
+# Best effort: recent macOS capture APIs may still record them.
+screen_capture = "show"
+
+[overlay.dark]
+# The chip colours above, used while macOS is in dark mode. An empty value
+# keeps the [overlay] colour, so an empty table draws the same chips in both
+# appearances. For example:
+#   hint_bg_top = "#4C566A"
+#   hint_bg_bottom = "#3B4252"
+#   hint_fg = "#ECEFF4"
+hint_fg = ""
+hint_bg_top = ""
+hint_bg_bottom = ""
+hint_border = ""
+important_hint_fg = ""
+important_hint_bg_top = ""
+important_hint_bg_bottom = ""
+important_hint_border = ""
 
 [open]
 # App candidates hidden from :open and the `app_open --name=...` verb.
@@ -368,6 +398,12 @@ scroll_step = 60
 # These scroll at the cursor in every app, including terminals.
 scroll_step_lines = 3
 scroll_page_lines = 20
+# Spread each of those vertical scrolls over this many milliseconds (at
+# most 300) as several smaller line events, so the content glides instead of
+# jumping. Still line events, so terminals scroll the same distance. A new
+# scroll cancels what is left of the previous one; gg / G stay instant.
+# 0 (the default) scrolls at once.
+scroll_smooth_ms = 0
 # Mouse-down-to-up hold on synthesized clicks (ms); some apps need a
 # non-zero press to register.
 click_hold_ms = 18

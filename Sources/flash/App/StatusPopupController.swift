@@ -52,6 +52,11 @@ final class StatusPopupController {
   var inputInterceptor: ((NSEvent) -> Bool)?
 
   var frame: CGRect { panel.frame }
+  /// `[overlay] screen_capture` for the popup panel.
+  var sharingType: NSWindow.SharingType {
+    get { panel.sharingType }
+    set { panel.sharingType = newValue }
+  }
   var exitStatusText: String { exitLabel.stringValue }
   var isVisible: Bool { presentation.identity != nil }
   var focusedName: String? { presentation.isFocused ? presentation.identity?.name : nil }

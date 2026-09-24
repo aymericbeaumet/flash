@@ -19,7 +19,7 @@ and dispatch in-process. Other mapping executables receive an argv array.
 | `KeyboardLayoutMonitor` | `[app] keyboard_layout`'s reference table, rebuilt on input-source changes and config loads |
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
-| `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture |
+| `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture; the one held mouse button (`mouse_button`, pointer mode's `v`) and smooth-scroll steps |
 | `PluginManager` / `PluginProcess` | Manifest reconciliation, owned child generations, transport and RPC |
 | `FlashStatusBarController` | Reconciled source/job records and the next necessary wakeup |
 

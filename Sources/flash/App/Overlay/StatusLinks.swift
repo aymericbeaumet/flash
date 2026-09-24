@@ -666,7 +666,9 @@ extension OverlayPanel {
       statusBarClickWindows.removeLast().orderOut(nil)
     }
     while statusBarClickWindows.count < bandRects.count {
-      statusBarClickWindows.append(StatusBarClickPanel())
+      let window = StatusBarClickPanel()
+      window.sharingType = overlayConfig.screenCapture.sharingType
+      statusBarClickWindows.append(window)
     }
     for (window, band) in zip(statusBarClickWindows, bandRects) {
       window.level = OverlayPanel.statusBarClickWindowLevel

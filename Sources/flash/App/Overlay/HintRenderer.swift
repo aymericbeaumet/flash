@@ -29,11 +29,17 @@ extension OverlayPanel {
     transientContentVisible = true
     commandPromptVisible = false
 
-    let bgTop = nsColor(fromHex: overlayConfig.hintBGTop) ?? .systemYellow
-    let bgBottom = nsColor(fromHex: overlayConfig.hintBGBottom) ?? bgTop
-    let fg = nsColor(fromHex: overlayConfig.hintFG) ?? .black
-    let border = nsColor(fromHex: overlayConfig.hintBorder)
+    // `[overlay.dark]` over `[overlay]` while the system appearance is dark.
+    let colors = hintColors
+    let bgTop = nsColor(fromHex: colors.bgTop) ?? .systemYellow
+    let bgBottom = nsColor(fromHex: colors.bgBottom) ?? bgTop
+    let fg = nsColor(fromHex: colors.fg) ?? .black
+    let border = nsColor(fromHex: colors.border)
     let fontSize = CGFloat(overlayConfig.fontSize)
+    // `[overlay] hint_placement` moves target chips, kept on their screen;
+    // grid cells and status-bar chips keep their own geometry.
+    let placement = overlayConfig.hintPlacement
+    let screenFrames = snapshot.screens.map(\.frame)
     // Resolve per-screen backing scale per chip below — but precompute
     // a sorted list of (screen, frameInPanelLocal) pairs once so the
     // per-chip lookup is a tight linear scan over (usually) one or two
@@ -75,13 +81,13 @@ extension OverlayPanel {
     // the chip looking like a normal `f` hint instead of a black
     // sentinel block.
     let importantBgTop =
-      nsColor(fromHex: overlayConfig.importantHintBGTop) ?? bgTop
+      nsColor(fromHex: colors.importantBGTop) ?? bgTop
     let importantBgBottom =
-      nsColor(fromHex: overlayConfig.importantHintBGBottom) ?? bgBottom
+      nsColor(fromHex: colors.importantBGBottom) ?? bgBottom
     let importantBorder =
-      nsColor(fromHex: overlayConfig.importantHintBorder) ?? border
+      nsColor(fromHex: colors.importantBorder) ?? border
     let importantFG =
-      nsColor(fromHex: overlayConfig.importantHintFG) ?? fg
+      nsColor(fromHex: colors.importantFG) ?? fg
     let importantGradientColors: [CGColor] = [
       importantBgBottom.cgColor, importantBgTop.cgColor,
     ]
@@ -195,10 +201,17 @@ extension OverlayPanel {
       // regular hints both use a centred fixed-size chip — the final
       // chip's targetFrame already IS the chip rect, so `chipFrame`
       // centres a fixed-size chip on it identical to the regular path.
-      let chipGlobal: CGRect =
-        (isMouseGridHint && !isMouseGridFinalChip)
-        ? targetFrame
-        : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
+      let chipGlobal: CGRect
+      if isMouseGridHint && !isMouseGridFinalChip {
+        chipGlobal = targetFrame
+      } else if isMouseGridHint || hint.target.providerID == "statusbar" {
+        chipGlobal = Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
+      } else {
+        chipGlobal = placement.chipFrame(
+          target: targetFrame, size: CGSize(width: chipW, height: chipHeight),
+          screen: screenFrames.count == 1
+            ? screenFrames[0] : HintPlacement.screen(for: targetFrame, among: screenFrames))
+      }
       let chipLocal = CGRect(
         x: chipGlobal.minX - frame.minX,
         y: chipGlobal.minY - frame.minY,
@@ -706,8 +719,9 @@ extension OverlayPanel {
     let prefixLen = upper.count
     let labelFont = NSFont.monospacedSystemFont(
       ofSize: CGFloat(overlayConfig.fontSize), weight: .bold)
-    let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
-    let importantFGNS = nsColor(fromHex: overlayConfig.importantHintFG) ?? fgNS
+    let colors = hintColors
+    let fgNS = nsColor(fromHex: colors.fg) ?? .black
+    let importantFGNS = nsColor(fromHex: colors.importantFG) ?? fgNS
     let tracksBounds = debugConfig.showHintsBounds
     var visible = Set<Int>()
     for (idx, hint) in hints.enumerated() {
@@ -846,7 +860,9 @@ extension OverlayPanel {
   }
 
   /// Chip's bounding rect in global NSScreen coordinates, for a target
-  /// rect + uniform chip size.
+  /// rect + uniform chip size: the `corner` placement, which is also where
+  /// every hint's click aims (`[overlay] hint_placement` only moves the
+  /// drawn chip, `HintPlacement.chipFrame`).
   ///
   /// Centring is gated on height first:
   ///  - If the target's height is under 130 % of the chip height, the

@@ -25,7 +25,8 @@ extension OverlayPanel {
     let label = makeLabelLayer()
     label.string = text
     label.fontSize = fontSize
-    label.foregroundColor = (nsColor(fromHex: overlayConfig.hintFG) ?? .black).cgColor
+    let colors = hintColors
+    label.foregroundColor = (nsColor(fromHex: colors.fg) ?? .black).cgColor
     label.alignmentMode = .center
     label.isWrapped = true
     label.contentsScale = snapshot.mainScale
@@ -48,12 +49,12 @@ extension OverlayPanel {
     chip.frame = CGRect(
       x: centerX - approxWidth / 2, y: centerY - chipHeight / 2, width: approxWidth,
       height: chipHeight)
-    let bannerTop = nsColor(fromHex: overlayConfig.hintBGTop) ?? .systemYellow
-    let bannerBottom = nsColor(fromHex: overlayConfig.hintBGBottom) ?? bannerTop
+    let bannerTop = nsColor(fromHex: colors.bgTop) ?? .systemYellow
+    let bannerBottom = nsColor(fromHex: colors.bgBottom) ?? bannerTop
     chip.colors = [bannerBottom.cgColor, bannerTop.cgColor]
     chip.cornerRadius = 6
     chip.borderColor =
-      nsColor(fromHex: overlayConfig.hintBorder)?.cgColor ?? OverlayPanel.fallbackBorderCGColor
+      nsColor(fromHex: colors.border)?.cgColor ?? OverlayPanel.fallbackBorderCGColor
     let textHeight = lineHeight * CGFloat(lines.count)
     label.frame = CGRect(
       x: 8, y: (chipHeight - textHeight) / 2, width: approxWidth - 16, height: textHeight)

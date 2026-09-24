@@ -29,6 +29,9 @@ enum URLCommand: Hashable {
   case mouseRepeat
   /// Freestyle keyboard cursor control (pointer mode).
   case mousePointer
+  /// Press, release or toggle a button at the pointer; moves drag while it
+  /// is held.
+  case mouseButton(MouseButtonRequest)
   /// Focus the first (or count-th) editable text input in the focused window
   /// while preserving the current mode.
   case focusInput
@@ -506,6 +509,22 @@ final class URLEventHandler: NSObject {
 
     "mouse_pointer": .init(parse: { a in a.args.isEmpty ? .mousePointer : nil }),
 
+    "mouse_button": .init(
+      [
+        .text("state", "down|up|toggle", required: true), .flag("secondary"), .flag("middle"),
+      ],
+      parse: { a in
+        guard let state = a.value("state").flatMap(MouseButtonState.init(rawValue:)) else {
+          return nil
+        }
+        switch (a.bool("secondary"), a.bool("middle")) {
+        case (false, false): return .mouseButton(.init(state: state, button: .primary))
+        case (true, false): return .mouseButton(.init(state: state, button: .secondary))
+        case (false, true): return .mouseButton(.init(state: state, button: .middle))
+        case (true, true): return nil
+        }
+      }),
+
     "focus_input": .init(parse: { a in a.args.isEmpty ? .focusInput : nil }),
 
     "scroll_target": .init(parse: { a in a.args.isEmpty ? .scrollTarget : nil }),
@@ -749,6 +768,8 @@ extension URLEventHandler {
       click. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
       the status items) and `mouse_notifications` (Notification Center's
       banners, alerts and buttons) hint surfaces outside the focused window.
+      `mouse_button --state=down|up|toggle` holds a button where the pointer
+      is, so Flash's pointer moves drag until it is released.
 
       `window_move` accepts either a named `position` or a complete
       percentage frame (`x`, `y`, `width`, and `height`, each suffixed with

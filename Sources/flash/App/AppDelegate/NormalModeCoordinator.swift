@@ -35,6 +35,7 @@ extension AppDelegate {
   }
 
   func leaveMode() {
+    releaseHeldMouseButton(reason: "leave_mode")
     if modeStore.mode.isTerminal {
       suppressDismissedTerminalHover()
       dismissTerminal()
@@ -970,6 +971,8 @@ extension AppDelegate {
       performMouseRepeat(repeatCount: repeatCount)
     case .mousePointer:
       enterPointerMode()
+    case .mouseButton(let request):
+      performMouseButton(request)
     case .focusInput:
       focusTextInputInNormalMode(index: repeatCount)
     case .scrollTarget:

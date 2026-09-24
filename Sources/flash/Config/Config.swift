@@ -124,6 +124,27 @@ enum PluginConfigValue: Equatable {
   }
 }
 
+/// `[overlay] hint_placement`: where a hint chip sits relative to its target
+/// frame. The geometry is `HintPlacement.chipFrame`.
+enum HintPlacement: String, CaseIterable, Equatable {
+  /// On the target's top-left corner, centred on a target barely larger than
+  /// the chip: the long-standing placement.
+  case corner
+  /// Centred on the target.
+  case center
+  /// Just above the target's top edge.
+  case above
+  /// Just below the target's bottom edge.
+  case below
+}
+
+/// `[overlay] screen_capture`: whether capture and sharing see Flash's
+/// windows.
+enum ScreenCaptureVisibility: String, CaseIterable, Equatable {
+  case show
+  case hide
+}
+
 struct Config {
   struct App: Equatable {
     /// macOS menu-bar icon (see `StatusItemController.swift`, the single
@@ -198,6 +219,61 @@ struct Config {
     /// Milliseconds a transient banner (command output, "Copied: …")
     /// stays up.
     var bannerDurationMs: Int = 700
+    /// Where a hint chip sits relative to its target. Only the chip moves:
+    /// the click aims at the same point whatever the placement.
+    var hintPlacement: HintPlacement = .corner
+    /// `[overlay.dark]`: chip colours drawn while the system appearance is
+    /// dark. An empty value keeps its `[overlay]` counterpart.
+    var dark = DarkHintColors()
+    /// Draw a short ring where each committed click lands (demos,
+    /// screencasts).
+    var clickFeedback = false
+    /// Whether screen capture and sharing see Flash's overlay, status bar
+    /// and popup windows. Best effort: `hide` sets `NSWindow.sharingType`
+    /// to none, which recent macOS capture APIs may ignore.
+    var screenCapture: ScreenCaptureVisibility = .show
+
+    /// `[overlay.dark]`: the colour keys of `[overlay]`, each empty until set.
+    struct DarkHintColors: Equatable {
+      var hintFG = ""
+      var hintBGTop = ""
+      var hintBGBottom = ""
+      var hintBorder = ""
+      var importantHintFG = ""
+      var importantHintBGTop = ""
+      var importantHintBGBottom = ""
+      var importantHintBorder = ""
+    }
+
+    /// The chip colours to draw with. Under a dark appearance every
+    /// non-empty `[overlay.dark]` value replaces its `[overlay]`
+    /// counterpart, one key at a time.
+    func hintColors(dark isDark: Bool) -> HintColors {
+      func pick(_ darkValue: String, _ lightValue: String) -> String {
+        isDark && !darkValue.isEmpty ? darkValue : lightValue
+      }
+      return HintColors(
+        fg: pick(dark.hintFG, hintFG),
+        bgTop: pick(dark.hintBGTop, hintBGTop),
+        bgBottom: pick(dark.hintBGBottom, hintBGBottom),
+        border: pick(dark.hintBorder, hintBorder),
+        importantFG: pick(dark.importantHintFG, importantHintFG),
+        importantBGTop: pick(dark.importantHintBGTop, importantHintBGTop),
+        importantBGBottom: pick(dark.importantHintBGBottom, importantHintBGBottom),
+        importantBorder: pick(dark.importantHintBorder, importantHintBorder))
+    }
+  }
+
+  /// One appearance's resolved chip colours, as hex strings.
+  struct HintColors: Equatable {
+    var fg: String
+    var bgTop: String
+    var bgBottom: String
+    var border: String
+    var importantFG: String
+    var importantBGTop: String
+    var importantBGBottom: String
+    var importantBorder: String
   }
   /// Tunables for the `:flashlight` command-line surface.
   struct Flashlight: Equatable {
@@ -504,6 +580,9 @@ struct Config {
     var scrollStepLines: Int = 3
     /// Mouse-wheel lines per ctrl+d/ctrl+u scroll step.
     var scrollPageLines: Int = 20
+    /// Spread each vertical line scroll over this many milliseconds as
+    /// several smaller line events (`SmoothScroll`); 0 posts it at once.
+    var scrollSmoothMs: Int = 0
     /// Mouse-down→up hold on synthesized clicks; some apps need a
     /// non-zero press to register.
     var clickHoldMs: Int = 18
@@ -805,6 +884,7 @@ struct Config {
       ],
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
+      "scroll_smooth_ms": mode.scrollSmoothMs,
     ]
     return compactJSON([
       "debug": [
@@ -837,11 +917,24 @@ struct Config {
         "ignored_apps": open.ignoredApps
       ],
       "overlay": [
+        "click_feedback": overlay.clickFeedback,
+        "dark": [
+          "hint_bg_bottom": overlay.dark.hintBGBottom,
+          "hint_bg_top": overlay.dark.hintBGTop,
+          "hint_border": overlay.dark.hintBorder,
+          "hint_fg": overlay.dark.hintFG,
+          "important_hint_bg_bottom": overlay.dark.importantHintBGBottom,
+          "important_hint_bg_top": overlay.dark.importantHintBGTop,
+          "important_hint_border": overlay.dark.importantHintBorder,
+          "important_hint_fg": overlay.dark.importantHintFG,
+        ],
         "font_size": overlay.fontSize,
         "hint_bg_bottom": overlay.hintBGBottom,
         "hint_bg_top": overlay.hintBGTop,
         "hint_border": overlay.hintBorder,
         "hint_fg": overlay.hintFG,
+        "hint_placement": overlay.hintPlacement.rawValue,
+        "screen_capture": overlay.screenCapture.rawValue,
       ],
       "plugins": [
         "disabled": plugins.disabled.sorted(),
@@ -957,6 +1050,7 @@ extension URLCommand {
       return verb("mouse_grid", command.argTokens)
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
+    case .mouseButton(let request): return verb("mouse_button", request.argTokens)
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")
     case .mouseDock: return verb("mouse_dock")

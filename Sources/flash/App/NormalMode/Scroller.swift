@@ -39,7 +39,7 @@ extension NormalModeDispatcher {
       // A terminal refuses the huge pixel delta below; its edge is a bounded
       // line scroll, delivered like ctrl-u / ctrl-d.
       if pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundleID),
-        let lines = edgeLineDelta(for: kind), synthesizeLineScroll(lines: lines)
+        let lines = edgeLineDelta(for: kind), synthesizeLineScroll(lines: lines, spread: false)
       {
         FlashLog.debug("[normal_mode] scroll method=edge_lines kind=\(kind) bundle=\(bundleID)")
         return true
@@ -283,8 +283,22 @@ extension NormalModeDispatcher {
     }
   }
 
+  /// A vertical step as line wheel events at the cursor. With
+  /// `[mode] scroll_smooth_ms` set, `spread` splits it over that duration on
+  /// the click queue, and every line scroll — spread or not, like a terminal
+  /// `gg` / `G` — first drops what a previous smooth scroll has left.
   @discardableResult
-  static func synthesizeLineScroll(lines: Int32) -> Bool {
+  static func synthesizeLineScroll(lines: Int32, spread: Bool = true) -> Bool {
+    let smoothMs = FlashTunables.scrollSmoothMs
+    guard smoothMs > 0 else { return postLineScroll(lines: lines) }
+    ActionDispatcher.postWheelSteps(
+      SmoothScroll.steps(lines: lines, durationMs: spread ? smoothMs : 0)
+    ) { postLineScroll(lines: $0) }
+    return true
+  }
+
+  @discardableResult
+  private static func postLineScroll(lines: Int32) -> Bool {
     let source = CGEventSource(stateID: .combinedSessionState)
     guard
       let event = CGEvent(

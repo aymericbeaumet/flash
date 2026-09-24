@@ -207,18 +207,28 @@ extension AppDelegate {
     ) { finish(false) }
   }
 
+  /// `feedbackAt` is where `[overlay] click_feedback` draws its ring; a
+  /// recorded click draws it at its own point.
   func performHintCommit(
     awaitingFrontmost awaitedPID: pid_t? = nil,
     recording click: LastCommittedClick? = nil,
+    feedbackAt feedbackPoint: CGPoint? = nil,
     action: @escaping (@escaping () -> Void) -> Void,
     completion: @escaping (AppDelegate) -> Void
   ) {
     MainThreadWatchdog.note("hint_commit")
     guard let token = activationLifecycle.prepareCommit() else { return }
     applyModeOverlay(captureOverride: false)
+    let feedbackPoint = feedbackPoint ?? click?.point
     let start = { [weak self] in
       guard let self, self.activationLifecycle.startCommit(token: token) else { return }
       if let click { self.lastCommittedClick = click }
+      // The ring follows the click onto the queue, never ahead of it.
+      defer {
+        if let feedbackPoint, self.config.overlay.clickFeedback {
+          self.overlay.showClickFeedback(at: feedbackPoint)
+        }
+      }
       action { [weak self] in
         guard let self,
           let result = self.activationLifecycle.completeCommit(token: token)
@@ -239,13 +249,11 @@ extension AppDelegate {
     }
   }
 
+  /// Forget the session. A button `mouse_button` or pointer mode's `v`
+  /// holds survives it — a `--move` commit or a replacing activation carries
+  /// the drag on — until Escape, `leave_mode` or quit releases it.
   func clearHintSessionState(preservingStatusBarSnapshot: Bool = false) {
-    for effect in hintSession.finish() {
-      switch effect {
-      case .releasePrimaryButton:
-        _ = ActionDispatcher.releasePrimaryButton(at: NSEvent.mouseLocation)
-      }
-    }
+    hintSession = HintSession()
     if !preservingStatusBarSnapshot, !activationLifecycle.isCommitting {
       overlay.releaseStatusBarHintSnapshot()
     }

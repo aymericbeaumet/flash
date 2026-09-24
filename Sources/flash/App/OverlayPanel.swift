@@ -130,7 +130,11 @@ final class OverlayPanel: NSPanel {
   /// mirrored bars. Empty while the bar is hidden.
   var statusBarInteractionsByScreen: [StatusBarScreenInteractions] = []
   let statusTerminals = StatusTerminalRegistry()
-  lazy var statusPopupController = StatusPopupController(terminals: statusTerminals)
+  lazy var statusPopupController: StatusPopupController = {
+    let controller = StatusPopupController(terminals: statusTerminals)
+    controller.sharingType = overlayConfig.screenCapture.sharingType
+    return controller
+  }()
   var statusBarPopupStyle = Config.StatusBar.PopupStyle() {
     didSet {
       if oldValue != statusBarPopupStyle { statusPopupController.updateStyle(statusBarPopupStyle) }
@@ -230,6 +234,13 @@ final class OverlayPanel: NSPanel {
   let debugShapeLayer = CAShapeLayer()
   var lastTargetLocalRects: [CGRect] = []
 
+  /// Hosts `[overlay] click_feedback` rings in a layer-hosting view of its
+  /// own, above the drawing view, so rebuilding `contentLayer.sublayers`
+  /// never cuts a ring short.
+  let clickFeedbackLayer = CALayer()
+  /// Rings still animating; the panel stays ordered in until they finish.
+  var clickFeedbackRingsInFlight = 0
+
   weak var coordinator: OverlayCoordinator?
 
   /// Set at launch and on config reload. An unchanged value keeps the
@@ -239,9 +250,15 @@ final class OverlayPanel: NSPanel {
       guard overlayConfig != oldValue else { return }
       statusBarLayoutRevision &+= 1
       restyleActiveWindowBorder()
+      if overlayConfig.screenCapture != oldValue.screenCapture { applyScreenCaptureSharing() }
     }
   }
   var debugConfig: Config.Debug = .init()
+  /// Whether macOS draws in dark mode, pushed by `AppearanceObserver` from
+  /// `NSApp.effectiveAppearance`. Selects `[overlay.dark]` at the next draw.
+  var darkAppearance = false
+  /// The chip colours for the current appearance.
+  var hintColors: Config.HintColors { overlayConfig.hintColors(dark: darkAppearance) }
   var mouseGridOpacity: Float = 0.5
   var modeLabels: Config.Mode.Labels = .init() {
     didSet { statusBarLayoutRevision &+= 1 }
@@ -618,6 +635,13 @@ final class OverlayPanel: NSPanel {
     view.addSubview(drawingView)
     contentLayer.frame = drawingView.bounds
     contentLayer.actions = OverlayPanel.noActions
+    let clickFeedbackView = NSView(frame: view.bounds)
+    clickFeedbackView.layer = clickFeedbackLayer
+    clickFeedbackView.wantsLayer = true
+    clickFeedbackView.autoresizingMask = [.width, .height]
+    view.addSubview(clickFeedbackView)
+    clickFeedbackLayer.frame = clickFeedbackView.bounds
+    clickFeedbackLayer.actions = OverlayPanel.noActions
 
     debugShapeLayer.fillColor = NSColor.clear.cgColor
     debugShapeLayer.strokeColor = NSColor.systemPink.cgColor

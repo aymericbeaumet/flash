@@ -18,6 +18,9 @@ extension AppDelegate {
       }
       return
     }
+    // Whatever a smooth line scroll still has to post would move the page
+    // after this scroll lands.
+    if FlashTunables.scrollSmoothMs > 0 { ActionDispatcher.cancelWheelSteps() }
     // gg/G run the source-action policy: a source such as tmux scrolls inside
     // its own buffer, else an app's declared chord (a browser's Cmd-Up), else
     // the focused-window scroller.

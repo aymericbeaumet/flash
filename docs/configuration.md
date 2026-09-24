@@ -100,12 +100,50 @@ Vertical NORMAL scrolling sends mouse-wheel events at the pointer in every app.
 `[mode] scroll_step_lines = 3` controls Ctrl-E/Y and `scroll_page_lines = 20`
 controls Ctrl-D/U; both accept integers from 1 to 1000. `scroll_step = 60`
 continues to control horizontal scroll distance in pixels.
+`[mode] scroll_smooth_ms = 0` (0 to 300) spreads each of those vertical
+scrolls over that many milliseconds as several smaller line events, the
+larger shares first and at least a frame apart, so the content glides instead
+of jumping. They stay line events, so terminals scroll the same distance. The
+steps run on the click queue without blocking it, and any new scroll,
+`gg` / `G` included, drops what the previous one has left; `gg` and `G` stay
+instant.
 
 `[hints] restore_pointer = false` leaves the pointer on the target after a
 committed click, as a real click does. `true` puts it back where it was after
 every committed hint or grid click, drag and selection and after
 `mouse_repeat`, with a tagged move so hover follows; `--move` and
 `mouse_pointer` still move it. Scrolling then stays where the pointer was.
+
+## Overlay appearance
+
+`[overlay] hint_placement = "corner"` places each target's chip on the
+target's top-left corner, centred on a target barely larger than the chip.
+`"center"` centres it, `"above"` puts it on the target's top edge and
+`"below"` under its bottom edge; the last two align with the target's leading
+edge, or centre on a narrow target. Every chip stays on its target's display.
+Only the chip moves: the click aims at the same point whatever the placement.
+Grid cells and status-bar chips keep their own geometry.
+
+`[overlay.dark]` takes the colour keys of `[overlay]` (`hint_fg`,
+`hint_bg_top`, `hint_bg_bottom`, `hint_border` and their `important_hint_*`
+counterparts). While macOS is in dark mode each non-empty key replaces its
+`[overlay]` colour, one key at a time; an empty key, or an empty table, keeps
+the `[overlay]` colour. Flash follows the appearance through key-value
+observation of the app's effective appearance, including the automatic
+schedule, and uses it at the next draw; nothing polls.
+
+`[overlay] click_feedback = true` draws a short ring (about 220 ms) where each
+committed click lands: hint and grid clicks, `mouse_pointer` clicks and
+`mouse_repeat`. The ring is the overlay's one deliberate animation. It is
+explicit, lives on a layer of its own and starts after the click is queued, so
+it never delays the click or the next key. It suits demos and screencasts.
+
+`[overlay] screen_capture = "hide"` asks macOS to keep the overlay, the status
+bar, its click windows and status/terminal popups out of screenshots,
+recordings and screen sharing (`NSWindow.sharingType = .none`). It is best
+effort: capture through ScreenCaptureKit on recent macOS may still include
+them. The window server keeps a window hidden once asked, so switching back to
+`"show"` fully applies after Flash restarts.
 
 ## Mapping examples
 

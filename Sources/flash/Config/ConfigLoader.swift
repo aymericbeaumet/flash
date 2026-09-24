@@ -467,14 +467,15 @@ enum ConfigLoader {
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
-        "scroll_step", "scroll_step_lines", "scroll_page_lines", "click_hold_ms",
-        "send_key_interval_ms",
+        "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
+        "click_hold_ms", "send_key_interval_ms",
       ],
       "overlay": [
         "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
         "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
         "important_hint_border", "window_border", "window_border_size",
-        "window_border_color", "alert_duration", "banner_duration_ms",
+        "window_border_color", "alert_duration", "banner_duration_ms", "hint_placement",
+        "dark", "click_feedback", "screen_capture",
       ],
       "debug": [
         "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
@@ -1322,6 +1323,15 @@ enum ConfigLoader {
         config.mode.scrollPageLines = value
       })
     applyInt(
+      table["scroll_smooth_ms"], path: ["mode", "scroll_smooth_ms"],
+      message:
+        "mode.scroll_smooth_ms must be an integer between 0 and \(SmoothScroll.maxDurationMs) (ms; 0 scrolls at once)",
+      locations: locations, into: &config,
+      validate: { (0...SmoothScroll.maxDurationMs).contains($0) },
+      assign: { value, config in
+        config.mode.scrollSmoothMs = value
+      })
+    applyInt(
       table["click_hold_ms"], path: ["mode", "click_hold_ms"],
       message: "mode.click_hold_ms must be an integer between 0 and 200 (ms)",
       locations: locations, into: &config, validate: { (0...200).contains($0) },
@@ -1537,6 +1547,66 @@ enum ConfigLoader {
       assign: { value, config in
         config.overlay.bannerDurationMs = value
       })
+    applyString(
+      table["hint_placement"], path: ["overlay", "hint_placement"],
+      message: "overlay.hint_placement must be one of "
+        + HintPlacement.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", "),
+      locations: locations, into: &config, validate: { HintPlacement(rawValue: $0) != nil },
+      assign: { value, config in
+        if let placement = HintPlacement(rawValue: value) {
+          config.overlay.hintPlacement = placement
+        }
+      })
+    applyBool(
+      table["click_feedback"], path: ["overlay", "click_feedback"],
+      message: "overlay.click_feedback must be true or false", locations: locations,
+      into: &config
+    ) { value, config in
+      config.overlay.clickFeedback = value
+    }
+    applyString(
+      table["screen_capture"], path: ["overlay", "screen_capture"],
+      message: "overlay.screen_capture must be \"show\" or \"hide\"",
+      locations: locations, into: &config,
+      validate: { ScreenCaptureVisibility(rawValue: $0) != nil },
+      assign: { value, config in
+        if let visibility = ScreenCaptureVisibility(rawValue: value) {
+          config.overlay.screenCapture = visibility
+        }
+      })
+    applyDarkOverlay(
+      sectionTable(table["dark"], name: "overlay.dark", locations: locations, into: &config),
+      locations: locations, into: &config)
+  }
+
+  /// `[overlay.dark]`: the colour keys of `[overlay]`, drawn under a dark
+  /// appearance. Empty keeps the `[overlay]` colour.
+  private static func applyDarkOverlay(
+    _ table: TOMLTable?,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    let keys: [(String, WritableKeyPath<Config.Overlay.DarkHintColors, String>)] = [
+      ("hint_fg", \.hintFG), ("hint_bg_top", \.hintBGTop), ("hint_bg_bottom", \.hintBGBottom),
+      ("hint_border", \.hintBorder), ("important_hint_fg", \.importantHintFG),
+      ("important_hint_bg_top", \.importantHintBGTop),
+      ("important_hint_bg_bottom", \.importantHintBGBottom),
+      ("important_hint_border", \.importantHintBorder),
+    ]
+    for (key, field) in keys {
+      applyString(
+        table[key], path: ["overlay", "dark", key],
+        message:
+          "overlay.dark.\(key) must be a hex color like #RRGGBB or #RRGGBBAA (empty keeps overlay.\(key))",
+        locations: locations, into: &config, validate: { $0.isEmpty || isValidHexColor($0) },
+        assign: { value, config in
+          config.overlay.dark[keyPath: field] = value
+        })
+    }
+    warnUnknownKeys(
+      in: table, known: Set(keys.map(\.0)), path: ["overlay", "dark"], locations: locations,
+      into: &config)
   }
 
   private static func applyDebug(
