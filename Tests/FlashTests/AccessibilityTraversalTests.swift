@@ -34,6 +34,42 @@ final class AccessibilityTraversalTests: XCTestCase {
 
     XCTAssertEqual(visited, [0, 1, 4, 5, 2, 6, 3])
   }
+
+  /// A native table walks only its visible rows: every other child (columns,
+  /// header, rows AX already dropped from `AXRows`) keeps its place, and the
+  /// scrolled-off rows cost no batched read at all.
+  func testTableWalksVisibleRowsInsteadOfEveryRow() {
+    let rows = (0..<5_000).map { "row\($0)" }
+    let children = ["header"] + rows + ["column"]
+    let visible = Array(rows[40..<60])
+    XCTAssertEqual(
+      AccessibilityProvider.tableChildren(children: children, rows: rows, visibleRows: visible),
+      ["header"] + visible + ["column"])
+  }
+
+  func testVirtualisedTableAppendsVisibleRowsItsChildrenLack() {
+    // Some outlines expose their rows only through `AXVisibleRows`.
+    XCTAssertEqual(
+      AccessibilityProvider.tableChildren(
+        children: ["column"], rows: ["a", "b", "c"], visibleRows: ["b", "c"]),
+      ["column", "b", "c"])
+    XCTAssertEqual(
+      AccessibilityProvider.tableChildren(
+        children: ["column", "b"], rows: nil, visibleRows: ["b", "c"]),
+      ["column", "b", "c"], "unreadable AXRows keeps every child and adds the missing rows")
+  }
+
+  func testTableWithoutAVisibleRowListKeepsItsChildren() {
+    // An empty or unreadable visible-row list is no evidence that a row is
+    // off screen, so nothing is dropped.
+    let children = ["header", "a", "b"]
+    XCTAssertEqual(
+      AccessibilityProvider.tableChildren(children: children, rows: ["a", "b"], visibleRows: nil),
+      children)
+    XCTAssertEqual(
+      AccessibilityProvider.tableChildren(children: children, rows: ["a", "b"], visibleRows: []),
+      children)
+  }
 }
 
 final class HintPointCandidateTests: XCTestCase {

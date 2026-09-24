@@ -42,11 +42,11 @@ struct AXTraversalWorklist<Element> {
 ///     `AXUIElementCopyMultipleAttributeValues`, plus one single-attribute
 ///     re-query only when the batch returned an error placeholder for the
 ///     child list.
-///   - Walks the full `kAXChildrenAttribute` tree, then supplements native
-///     table/outline containers with `kAXVisibleRowsAttribute` when available.
-///     This keeps the complete tree path deterministic while still catching
-///     virtualised native lists that expose rows only through the visible-row
-///     attribute.
+///   - Walks the full `kAXChildrenAttribute` tree, except that a native
+///     table/outline walks its `kAXVisibleRowsAttribute` rows instead of every
+///     `kAXRowsAttribute` row (`tableChildren`): a scrolled-off row costs no
+///     batched read, and virtualised lists that expose rows only through the
+///     visible-row attribute are still caught.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
 ///   - Serial descent uses an explicit depth-first worklist rather than Swift
@@ -1023,9 +1023,8 @@ public final class AccessibilityProvider: FlashSource {
       return
     }
 
-    // Always walk `kAXChildrenAttribute`. Native table/outline views sometimes
-    // expose their virtualised rows only through `kAXVisibleRowsAttribute`, so
-    // add that list as a supplement instead of replacing the child walk.
+    // Walk `kAXChildrenAttribute`, with a table's or outline's rows narrowed to
+    // its visible ones (`tableChildren`).
     //
     // **Single-attribute children fallback**: the batched IPC can
     // occasionally drop `kAXChildrenAttribute` (returns an error
@@ -1044,9 +1043,10 @@ public final class AccessibilityProvider: FlashSource {
         children = arr
       }
     }
-    children = Self.childrenIncludingVisibleRows(
-      for: element,
+    children = Self.tableChildren(
+      of: element,
       role: role,
+      insideWebArea: insideWebArea,
       children: children)
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
@@ -1195,28 +1195,55 @@ public final class AccessibilityProvider: FlashSource {
     "safari-web-extension",
   ]
 
-  private static func childrenIncludingVisibleRows(
-    for element: AXUIElement,
+  /// The children a table or outline is walked through. A native table's
+  /// scrolled-off rows (`kAXRowsAttribute` minus `kAXVisibleRowsAttribute`) are
+  /// left out: they lie outside the table's clip, so they could only yield
+  /// targets the user cannot see, and each would otherwise cost one batched
+  /// read before the offscreen prune dropped it — a 5,000-row list paid 5,000.
+  /// Two list reads replace them. Web tables keep every child: a page lays out
+  /// and reports its rows its own way.
+  private static func tableChildren(
+    of element: AXUIElement,
     role: String?,
+    insideWebArea: Bool,
     children: [AXUIElement]
   ) -> [AXUIElement] {
-    guard role == "AXTable" || role == "AXOutline" else { return children }
-    var rawRows: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(element, kAXVisibleRowsAttribute as CFString, &rawRows)
-        == .success,
-      let rows = rawRows as? [AXUIElement],
-      !rows.isEmpty
+    guard role == "AXTable" || role == "AXOutline",
+      let visibleRows = elementsAttribute(element, kAXVisibleRowsAttribute as String),
+      !visibleRows.isEmpty
     else { return children }
+    let rows = insideWebArea ? nil : elementsAttribute(element, kAXRowsAttribute as String)
+    return tableChildren(children: children, rows: rows, visibleRows: visibleRows)
+  }
 
-    var seen = Set<CFHashCode>()
-    var combined: [AXUIElement] = []
-    combined.reserveCapacity(children.count + rows.count)
-    for child in children + rows {
-      guard seen.insert(CFHash(child)).inserted else { continue }
+  /// `children` without the rows missing from `visibleRows`, then any visible
+  /// row the children lack (virtualised lists report rows only there), each
+  /// element once, in child order. An empty or unknown `visibleRows` is no
+  /// evidence that a row is off screen, so it drops nothing; unknown `rows`
+  /// drops nothing either.
+  static func tableChildren<Element: Hashable>(
+    children: [Element], rows: [Element]?, visibleRows: [Element]?
+  ) -> [Element] {
+    guard let visibleRows, !visibleRows.isEmpty else { return children }
+    let offscreen = Set(rows ?? []).subtracting(visibleRows)
+    var seen = Set<Element>()
+    var combined: [Element] = []
+    combined.reserveCapacity(visibleRows.count)
+    for child in children where !offscreen.contains(child) && seen.insert(child).inserted {
       combined.append(child)
     }
+    for row in visibleRows where seen.insert(row).inserted {
+      combined.append(row)
+    }
     return combined
+  }
+
+  private static func elementsAttribute(_ element: AXUIElement, _ name: String) -> [AXUIElement]? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success else {
+      return nil
+    }
+    return raw as? [AXUIElement]
   }
 
   private static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {

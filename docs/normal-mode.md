@@ -44,7 +44,12 @@ document-URL and mark commands remain available for explicit mappings.
   then fires on its second key with no timeout.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. A hint click moves the pointer to the target and leaves it there;
-  `m` (move) moves it without clicking.
+  `m` (move) moves it without clicking. With `[hints] restore_pointer = true`,
+  every committed click, drag or selection — hint or grid, and `mouse_repeat`
+  — puts the pointer back where it was; `m` and `mouse_pointer` still move it.
+  NORMAL's vertical scroll keys act at the pointer, so with the option on they
+  keep scrolling where the pointer was, not in the area you just clicked; use
+  `mf` or `scroll_target` to move it there.
 - Terminal link hints add Shift, so `f` opens the link through the terminal.
   The hover and click carry the same modifiers.
 - Modifiers held on the final hint key ride the click (`hints.magic_modifiers`,
@@ -440,7 +445,11 @@ INSERT is entered by:
 
 Other normal commands, focus changes and app activation preserve NORMAL.
 Moving the pointer, dragging, or selecting with the grid does not request INSERT.
-A multi-click session ends when its click enters INSERT.
+A multi-click session ends when its click enters INSERT. Otherwise
+`mouse_target --multi` discovers the app's targets again after each click, so
+controls the click revealed get hints and removed ones lose theirs; a target
+that is still there keeps its label. The previous labels stay drawn until the
+new set replaces them, and an app left with no targets ends the session.
 Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 
 ```toml

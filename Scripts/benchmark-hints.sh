@@ -14,6 +14,7 @@ set -euo pipefail
 # Usage:
 #   ./Scripts/benchmark-hints.sh [--runs=N] [--class=native|browser|electron|all]
 #                                [--trigger=key|cli] [--skip-npm-ci]
+#                                [--large-table=ROWS]
 #
 #   --runs=N        measured activations per class (default 30), after two
 #                   unmeasured warm-up runs
@@ -21,6 +22,8 @@ set -euo pipefail
 #   --trigger=key   press f in NORMAL (default; needs advanced mode), or
 #   --trigger=cli   run `flash mouse_target`
 #   --skip-npm-ci   reuse the Electron fixture's installed dependencies
+#   --large-table=ROWS  native only: time the fixture's ROWS-row table window
+#                   instead of its control window
 #
 # Requirements: an installed resident (Scripts/install.sh --dev), the debug
 # inspector enabled ([debug] http_inspector_enabled = true, or run :logs once),
@@ -35,14 +38,16 @@ RUNS=30
 CLASS=all
 TRIGGER=key
 SKIP_NPM_CI=0
+LARGE_TABLE=
 for arg in "$@"; do
   case "$arg" in
     --runs=*) RUNS="${arg#--runs=}" ;;
     --class=*) CLASS="${arg#--class=}" ;;
     --trigger=*) TRIGGER="${arg#--trigger=}" ;;
     --skip-npm-ci) SKIP_NPM_CI=1 ;;
+    --large-table=*) LARGE_TABLE="${arg#--large-table=}" ;;
     -h | --help)
-      sed -n '4,30p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '4,32p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -54,6 +59,10 @@ done
 
 if ! [[ "$RUNS" =~ ^[1-9][0-9]*$ ]]; then
   echo "--runs must be a positive integer" >&2
+  exit 2
+fi
+if [[ -n "$LARGE_TABLE" ]] && ! [[ "$LARGE_TABLE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--large-table must be a positive integer" >&2
   exit 2
 fi
 case "$CLASS" in
@@ -100,6 +109,9 @@ for class in "${CLASSES[@]}"; do
   bench_args=("--bench=$RUNS" "--bench-trigger=$TRIGGER")
   if [[ "$class" == electron && $SKIP_NPM_CI -eq 1 ]]; then
     bench_args+=(--skip-npm-ci)
+  fi
+  if [[ "$class" == native && -n "$LARGE_TABLE" ]]; then
+    bench_args+=(--fixture-large-table "$LARGE_TABLE")
   fi
   output="$(mktemp -t "flash-bench-$class")"
   "./Scripts/test-integration-$class.sh" "${bench_args[@]}" | tee "$output"

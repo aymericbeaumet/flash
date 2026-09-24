@@ -1344,6 +1344,23 @@ final class ConfigLoaderTests: XCTestCase {
       .mouseGrid(.init(.click(.leftClick, modifiers: []), zoomToDepth: 2, bisect: true)))
   }
 
+  func testRestorePointerParsesValidatesAndResolves() throws {
+    XCTAssertFalse(Config().hints.restorePointer, "a click leaves the pointer on its target")
+    let enabled = ConfigLoader.parse("[hints]\nrestore_pointer = true")
+    XCTAssertEqual(enabled.warnings, [])
+    XCTAssertTrue(enabled.hints.restorePointer)
+    let hints = try XCTUnwrap(
+      try Self.parseJSONObject(enabled.resolvedConfigJSON)?["hints"] as? [String: Any])
+    XCTAssertEqual(hints["restore_pointer"] as? Bool, true)
+
+    let invalid = ConfigLoader.parse("[hints]\nrestore_pointer = \"yes\"")
+    XCTAssertFalse(invalid.hints.restorePointer)
+    XCTAssertTrue(
+      invalid.loadingDiagnostics.contains {
+        $0.message.contains("hints.restore_pointer must be true or false")
+      }, "\(invalid.loadingDiagnostics.map(\.message))")
+  }
+
   func testMouseGridKeysAndCursorFollowParseAndResolve() throws {
     let c = ConfigLoader.parse(
       """

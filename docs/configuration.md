@@ -101,6 +101,12 @@ Vertical NORMAL scrolling sends mouse-wheel events at the pointer in every app.
 controls Ctrl-D/U; both accept integers from 1 to 1000. `scroll_step = 60`
 continues to control horizontal scroll distance in pixels.
 
+`[hints] restore_pointer = false` leaves the pointer on the target after a
+committed click, as a real click does. `true` puts it back where it was after
+every committed hint or grid click, drag and selection and after
+`mouse_repeat`, with a tagged move so hover follows; `--move` and
+`mouse_pointer` still move it. Scrolling then stays where the pointer was.
+
 ## Mapping examples
 
 ```toml

@@ -15,13 +15,14 @@ flash mouse_target --drag                # pick a grab point, then a drop point
 flash mouse_grid --drag                  # drag between two grid positions
 flash mouse_target --select              # click a start point, shift-click an end point
 flash mouse_grid --select                # select text between two grid positions
-flash mouse_target --multi               # click several targets; Escape ends the session
+flash mouse_target --multi               # click several targets, rediscovered after each click; Escape ends
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_target --search              # type visible text to pick the target (seek & click)
 flash mouse_target --scope=screen        # hints across every app on the screen
 flash mouse_dock                         # hint the Dock's items
-flash mouse_statusbar                    # hint the menu-bar status items
+flash mouse_menubar                      # hint the focused app's menu titles and the status items
+flash mouse_notifications                # hint Notification Center's banners, alerts and buttons
 flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.

@@ -107,7 +107,9 @@ a cached model judged the same way is a miss.
 The core reasons about an app's traits, read once from its bundle
 (`AppTraits`), never about its name: a web browser declares the `http` and
 `https` URL schemes; Gecko ships `Contents/MacOS/XUL`; Chromium (browsers,
-Electron and CEF apps) ships renderer helper apps; Flutter ships
+Electron and CEF apps) ships renderer helper apps, and a browser's installed
+web app (PWA) is a shim whose executable is `app_mode_loader` or whose
+Info.plist carries `CrAppModeShortcutID`; Flutter ships
 `FlutterMacOS.framework`. App-specific knowledge — shortcuts, which apps are
 terminal emulators — is plugin data. Browser pages keep a Vimium-style
 semantic allowlist. Inside any other app's web view, a control-sized `AXGroup`

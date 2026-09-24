@@ -263,9 +263,8 @@ extension AppDelegate {
       overlay.releaseStatusBarHintSnapshot()
       return
     }
-    let chipRect = OverlayPanel.chipFrame(
+    let preferredPoint = Self.hintCommitPoint(
       for: hint, fontSize: CGFloat(config.overlay.fontSize))
-    let preferredPoint = CGPoint(x: chipRect.midX, y: chipRect.midY)
     switch hintSession.command {
     case .adjust:
       guard case .labels = hintSession.phase else { return }
@@ -293,8 +292,9 @@ extension AppDelegate {
     }
   }
 
-  /// A resolved click on a discovered target. `--multi` keeps the hint set up
-  /// afterwards; every other session ends with this click.
+  /// A resolved click on a discovered target. `--multi` keeps the session up
+  /// and discovers the targets again afterwards; every other session ends
+  /// with this click.
   private func performTargetClick(
     hint: AssignedHint, at point: CGPoint, clickModifiers held: ClickModifiers
   ) {
@@ -311,8 +311,8 @@ extension AppDelegate {
     let followUp: PointerCommitFollowUp
     if hintSession.command.isMulti {
       followUp = .rearmHints
-    } else if target.role == AppDelegate.statusItemHintRole {
-      followUp = .statusItemMenu
+    } else if Self.hintOpensMenuBarMenu(target) {
+      followUp = .menuBarMenu
     } else {
       followUp = .finish(.hint(entersInsertMode: target.entersInsertMode))
     }
@@ -371,9 +371,9 @@ extension AppDelegate {
   enum PointerCommitFollowUp {
     /// The session is over: enter INSERT per the pointer policy, else recapture.
     case finish(NormalModePointerPolicy.ClickTarget)
-    /// A status item's menu now owns the keyboard.
-    case statusItemMenu
-    /// `--multi` on targets: keep the hint set up for the next selection.
+    /// A menu-bar title's or status item's menu now owns the keyboard.
+    case menuBarMenu
+    /// `--multi` on targets: discover again for the next selection.
     case rearmHints
     /// `--multi` on the grid: restart it at its full extent.
     case rearmGrid(MouseGrid.Navigation?, NormalModePointerPolicy.ClickTarget)
@@ -387,6 +387,10 @@ extension AppDelegate {
   /// mode back.
   private func performPointerGesture(_ gesture: PointerGesture, followUp: PointerCommitFollowUp) {
     let wasNormalMode = flashMode == .normal
+    // Read before the session is torn down below: cursor-follow's origin lives
+    // on the grid navigation.
+    let restore = ActionDispatcher.PointerRestore.afterCommit(
+      restorePointer: config.hints.restorePointer, gridOrigin: hintSession.grid?.pointerOrigin)
     FlashLog.trace(
       "[commit] kind=\(gesture.kind) role=\(gesture.target?.role ?? "-") "
         + "provider=\(gesture.target?.providerID ?? "-") "
@@ -402,7 +406,7 @@ extension AppDelegate {
       applyModeOverlay(captureOverride: false)
     }
     switch followUp {
-    case .finish, .statusItemMenu, .recapture:
+    case .finish, .menuBarMenu, .recapture:
       overlay.hide()
       clearHintSessionState(preservingStatusBarSnapshot: true)
     case .rearmHints:
@@ -433,13 +437,16 @@ extension AppDelegate {
       switch gesture.kind {
       case .click(let action):
         ActionDispatcher.synthesizeClick(
-          at: gesture.point, action: action, modifiers: gesture.modifiers, completion: finished)
+          at: gesture.point, action: action, modifiers: gesture.modifiers, restoring: restore,
+          completion: finished)
       case .drag(let source):
         ActionDispatcher.synthesizeDrag(
-          from: source, to: gesture.point, modifiers: gesture.modifiers, completion: finished)
+          from: source, to: gesture.point, modifiers: gesture.modifiers, restoring: restore,
+          completion: finished)
       case .select(let source):
         ActionDispatcher.synthesizeSelection(
-          from: source, to: gesture.point, modifiers: gesture.modifiers, completion: finished)
+          from: source, to: gesture.point, modifiers: gesture.modifiers, restoring: restore,
+          completion: finished)
       }
     } completion: { owner in
       owner.finishPointerGesture(gesture, followUp: followUp, wasNormalMode: wasNormalMode)
@@ -454,9 +461,9 @@ extension AppDelegate {
     case .finish(let target):
       guard wasNormalMode, flashMode == .normal else { return }
       completeHintClick(target: target, action: action, at: gesture.point, pid: gesture.pid)
-    case .statusItemMenu:
+    case .menuBarMenu:
       guard wasNormalMode, flashMode == .normal else { return }
-      suspendNormalCaptureForNativeSurface(reason: "status_item_menu")
+      suspendNormalCaptureForNativeSurface(reason: "menu_bar_menu")
     case .recapture:
       guard wasNormalMode, flashMode == .normal else { return }
       scheduleNormalModeRecapture()
@@ -470,10 +477,7 @@ extension AppDelegate {
         return
       }
       guard !hintSession.hints.isEmpty else { return }
-      // Re-present the surviving hint set so the panel re-keys: in
-      // non-advanced mode capture rides on panel key status, and the app
-      // activation above may have taken it.
-      overlay.display(hints: hintSession.hints)
+      rediscoverMultiTargets()
     case .rearmGrid(let fresh, let target):
       if flashMode == .normal,
         NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
@@ -486,6 +490,41 @@ extension AppDelegate {
       } else {
         cancelOverlay()
       }
+    }
+  }
+
+  /// `--multi`: the click may have changed the app, so its targets are
+  /// discovered again rather than the old set shown once more. The walk is
+  /// fresh — the click is a user action that invalidates the prepared model —
+  /// and targets that persist keep their labels. The old set stays drawn until
+  /// the new one replaces it; a commit waits for the walk like any other
+  /// activation, and Escape cancels it. An app left with no targets ends the
+  /// session silently.
+  private func rediscoverMultiTargets() {
+    guard let pid = hintSession.sourceAppPID, let context = monitor.context(for: pid) else {
+      cancelOverlay()
+      return
+    }
+    let previous = hintSession.hints
+    // Re-present the current set so the panel re-keys: in non-advanced mode
+    // capture rides on panel key status, and the app activation above may
+    // have taken it.
+    overlay.display(hints: previous)
+    monitor.invalidateAfterUserAction(pid: pid, reason: "multi_click")
+    let token = activationLifecycle.begin()
+    applyModeOverlay()
+    monitor.discoverAsync(context: context) { [weak self] hints, _ in
+      guard let self, self.activationLifecycle.complete(token: token) else { return }
+      guard !hints.isEmpty else {
+        FlashLog.debug("[multi] no_targets pid=\(pid)")
+        self.cancelOverlay()
+        return
+      }
+      let relabelled = self.assignHints(hints.map(\.target), preserving: previous)
+      self.hintSession.hints = relabelled
+      self.hintSession.prefix = ""
+      self.overlay.display(hints: relabelled)
+      FlashLog.debug("[multi] rediscovered pid=\(pid) hints=\(relabelled.count)")
     }
   }
 
@@ -897,15 +936,21 @@ extension AppDelegate {
       "[mouse_repeat] point=(\(Int(last.point.x)),\(Int(last.point.y))) "
         + "action=\(last.action) count=\(max(1, repeatCount))")
     // The click queue is serial, so posting the repeats back-to-back keeps
-    // them ordered; only the final one carries the recapture completion.
+    // them ordered; only the final one carries the recapture completion and
+    // restores the pointer, to where it was before the first repeat.
     let count = max(1, repeatCount)
+    let restore = ActionDispatcher.PointerRestore.afterCommit(
+      restorePointer: config.hints.restorePointer, gridOrigin: nil)
+    let origin = NSEvent.mouseLocation
     performHintCommit(awaitingFrontmost: needsHandoff ? last.pid : nil) { finished in
       for index in 1...count {
+        let isLast = index == count
         _ = ActionDispatcher.synthesizeClick(
           at: last.point,
           action: last.action,
           modifiers: last.modifiers,
-          completion: index < count ? nil : finished)
+          restoring: isLast && restore != .stay ? .point(origin) : .stay,
+          completion: isLast ? finished : nil)
       }
     } completion: { owner in
       if wasNormalMode, owner.flashMode == .normal {

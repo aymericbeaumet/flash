@@ -270,7 +270,17 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_dock"])?.command, .mouseDock)
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "mouse_statusbar"])?.command, .mouseStatusBar)
+      parseMappingCommand(argv: ["flash", "mouse_menubar"])?.command, .mouseMenuBar)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_notifications"])?.command, .mouseNotifications)
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "mouse_statusbar"]),
+      "mouse_menubar replaced it; no alias remains")
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_menubar", "--secondary"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_notifications", "--multi"]))
+    XCTAssertEqual(URLCommand.mouseMenuBar.diagnosticDescription, "flash mouse_menubar")
+    XCTAssertEqual(
+      URLCommand.mouseNotifications.diagnosticDescription, "flash mouse_notifications")
   }
 
   func testParseEnterCommandRestoreMode() {

@@ -37,8 +37,12 @@ enum URLCommand: Hashable {
   case scrollTarget
   /// Hint-label the Dock's items (apps, minimized windows, trash).
   case mouseDock
-  /// Hint-label the menu-bar status items (WindowServer geometry only).
-  case mouseStatusBar
+  /// Hint-label the menu bar: the focused app's menu titles (AX) and the
+  /// status items (WindowServer geometry only).
+  case mouseMenuBar
+  /// Hint-label what Notification Center shows: banners, alerts and their
+  /// buttons, and the panel when it is open.
+  case mouseNotifications
   case normalMode
   case leaveMode
   case terminalShow(name: String?)
@@ -508,7 +512,9 @@ final class URLEventHandler: NSObject {
 
     "mouse_dock": .init(parse: { a in a.args.isEmpty ? .mouseDock : nil }),
 
-    "mouse_statusbar": .init(parse: { a in a.args.isEmpty ? .mouseStatusBar : nil }),
+    "mouse_menubar": .init(parse: { a in a.args.isEmpty ? .mouseMenuBar : nil }),
+
+    "mouse_notifications": .init(parse: { a in a.args.isEmpty ? .mouseNotifications : nil }),
 
     "enter_normal_mode": .init(parse: { _ in .normalMode }),
 
@@ -739,6 +745,10 @@ extension URLEventHandler {
       `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its
       cell. `--bisect` halves the region instead (h/j/k/l, or y/u/b/n for a
       quadrant); `--zoom-to-depth=N` starts N steps deep under the pointer.
+      `--multi` keeps clicking, discovering the targets again after each
+      click. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
+      the status items) and `mouse_notifications` (Notification Center's
+      banners, alerts and buttons) hint surfaces outside the focused window.
 
       `window_move` accepts either a named `position` or a complete
       percentage frame (`x`, `y`, `width`, and `height`, each suffixed with

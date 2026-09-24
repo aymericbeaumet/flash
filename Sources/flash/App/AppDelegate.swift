@@ -482,8 +482,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateScrollTargetHints()
     case .mouseDock:
       activateDockHints()
-    case .mouseStatusBar:
-      activateStatusItemHints()
+    case .mouseMenuBar:
+      activateMenuBarHints()
+    case .mouseNotifications:
+      activateNotificationHints()
     case .normalMode:
       enterNormalMode()
     case .leaveMode:

@@ -27,7 +27,7 @@ Every hint activation logs one line when its hints reach the screen:
   (any app that handles http and https), `electron` (other Chromium apps) and
   `other`.
 - `surface` names the activation: `targets` (`mouse_target`), `screen`,
-  `scroll`, `grid`, `mouse_dock`, `mouse_statusbar`.
+  `scroll`, `grid`, `mouse_dock`, `mouse_menubar`, `mouse_notifications`.
 
 The line is logged at `info`, once per activation, and carries the
 interaction's trace id. The probe runs after the hints are drawn; nothing is
@@ -103,6 +103,60 @@ Almost all of a walk is the Accessibility collection itself (`collect_ms`);
 visibility filtering, deduplication and label assignment add well under a
 millisecond. That is why Flash walks ahead of time: when the prepared model
 is fresh, an activation only draws.
+
+## Long native tables
+
+A native table or outline is walked through its visible rows
+(`AXVisibleRows`) instead of every row. A scrolled-off row used to cost one
+batched Accessibility read before the offscreen prune dropped it, so a long
+list paid for all of its rows on every walk; now it costs two list reads
+(`AXRows` and `AXVisibleRows`) however long it is. Web tables keep every
+row. The hints are the same, except that a row the table has scrolled out of
+its clip but which still lies inside the window (under a toolbar, say) no
+longer gets a hint over the control that covers it.
+
+The native fixture has a 5,000-row table for measuring this: with
+`--large-table=ROWS` the benchmark opens it in front of the fixture's control
+window, scrolled to the middle, and times `f` over it. Compare a build before
+and after the change:
+
+```sh
+./Scripts/benchmark-hints.sh --class=native --runs=30 --large-table=5000
+```
+
+Results: TBD.
+
+## Experiment: pruning offscreen web subtrees (not adopted)
+
+The walk skips a native element whose frame lies wholly outside the visible
+clip, with all of its descendants. Inside an `AXWebArea` it never does, because
+a web node can render outside the frame it reports (CSS transforms,
+`overflow: visible`, fixed and sticky positioning), so a pruned container
+could hide a visible link. The candidate change lets that prune run inside web
+areas for Chromium and WebKit, where long pages (feeds, reference docs) spend
+most of a walk on offscreen containers. Gecko stays unpruned. The walk's
+behaviour is unchanged until the change passes the checks below.
+
+Validate a build carrying the candidate:
+
+```sh
+./Scripts/test-integration-browser.sh                      # every Tests/BrowserSnapshots fixture
+./Scripts/test-integration-browser.sh --update-allow-list  # must suggest no new entry
+./Scripts/test-integration-electron.sh                     # Chromium web areas, real clicks
+./Scripts/benchmark-hints.sh --class=browser --runs=30     # before and after
+./Scripts/benchmark-hints.sh --class=electron --runs=30    # before and after
+```
+
+The browser oracle compares Flash with Vimium-FF in Firefox, so for this
+experiment build the prune for Gecko too; the same rule then meets every
+fixture in `Tests/BrowserSnapshots`. The Electron oracle is the Chromium
+check. There is no WebKit oracle: open the same fixture pages in Safari and
+compare the hints by hand.
+
+Adopt it only with zero new misses: no new `vimiumOnly` divergence on any
+fixture, no new allow-list entry, and every expected Electron target still
+found and clicked. It must also make the browser or Electron walks measurably
+faster. A single new miss rejects it.
 
 ## Not measured, by design
 

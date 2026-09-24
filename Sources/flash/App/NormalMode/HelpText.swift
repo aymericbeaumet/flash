@@ -57,6 +57,11 @@ extension NormalModeDispatcher {
         - `sf` / `sF` right-click a target or a grid position.
         - `df` / `dF` double-click a target or a grid position.
         - `mf` / `mF` move the cursor to a target or a grid position.
+        - A click leaves the pointer on its target; `hints.restore_pointer`
+          puts it back after every committed click, drag or selection.
+        - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
+          items) and `mouse_notifications` hint surfaces outside the window;
+          bind them to use them.
 
         ## Mouse Grid
 

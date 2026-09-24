@@ -48,6 +48,13 @@ min_length = 1
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
+# Put the pointer back where it was after a committed click, drag or
+# selection, from hints and the grid alike, and after `mouse_repeat`. Off,
+# the pointer stays on the target as with a real click. `--move` and
+# `mouse_pointer` always move it. NORMAL's scroll keys act at the pointer, so
+# with this on they keep scrolling where the pointer was, not the clicked area.
+restore_pointer = false
+
 # The `mouse_grid` verb splits the screen like the left half of your
 # keyboard: 4 rows x 5 columns, each cell labelled with the key at the same
 # position. On QWERTY that is

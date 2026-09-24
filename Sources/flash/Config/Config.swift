@@ -152,6 +152,10 @@ struct Config {
     var mouseGridKeys: [String] = []
     /// Move the pointer to the grid region's centre after every step.
     var mouseGridCursorFollow = false
+    /// Put the pointer back where it was after a committed hint or grid
+    /// click, drag or selection, and after `mouse_repeat` (`--move` and
+    /// `mouse_pointer` still move it).
+    var restorePointer = false
     /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
     /// can still see what's underneath the precision overlay. 1.0 is
     /// fully opaque, 0.0 invisible. Default 0.5 — the underlying window
@@ -820,6 +824,7 @@ struct Config {
         "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
         "mouse_grid_opacity": hints.mouseGridOpacity,
         "mouse_grid_steps": hints.mouseGridSteps,
+        "restore_pointer": hints.restorePointer,
       ],
       "flashlight": [
         "aliases": flashlight.aliases,
@@ -955,7 +960,8 @@ extension URLCommand {
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")
     case .mouseDock: return verb("mouse_dock")
-    case .mouseStatusBar: return verb("mouse_statusbar")
+    case .mouseMenuBar: return verb("mouse_menubar")
+    case .mouseNotifications: return verb("mouse_notifications")
     case .normalMode: return verb("enter_normal_mode")
     case .leaveMode: return verb("leave_mode")
     case .terminalShow(let name):

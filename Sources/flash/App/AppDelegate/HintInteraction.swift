@@ -10,7 +10,8 @@ enum HintActivationRequest {
   case pointer
   case scroll
   case dock
-  case statusItems
+  case menuBar
+  case notifications
   case repeatLast(Int)
 }
 
@@ -148,7 +149,8 @@ extension AppDelegate {
     case .pointer: enterPointerMode()
     case .scroll: activateScrollTargetHints()
     case .dock: activateDockHints()
-    case .statusItems: activateStatusItemHints()
+    case .menuBar: activateMenuBarHints()
+    case .notifications: activateNotificationHints()
     case .repeatLast(let count): performMouseRepeat(repeatCount: count)
     }
   }

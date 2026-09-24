@@ -18,7 +18,10 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
 {
   private let stateURL: URL?
   private let opensMenuOnLaunch: Bool
+  private let largeTableRows: Int?
   private var window: NSWindow?
+  private var largeTableWindow: NSWindow?
+  private var largeTableSource: LargeTableSource?
   private var statusItem: NSStatusItem?
   private var statusPopover: NSPopover?
   private let rows = ["Row Alpha", "Row Beta", "Row Gamma"]
@@ -33,13 +36,14 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
     "toggle": 0,
   ]
 
-  init(statePath: String?, opensMenuOnLaunch: Bool) {
+  init(statePath: String?, opensMenuOnLaunch: Bool, largeTableRows: Int?) {
     if let statePath {
       self.stateURL = URL(fileURLWithPath: statePath)
     } else {
       self.stateURL = nil
     }
     self.opensMenuOnLaunch = opensMenuOnLaunch
+    self.largeTableRows = largeTableRows
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -210,12 +214,46 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     installStatusItem()
+    if let largeTableRows { showLargeTable(rows: largeTableRows) }
 
     if opensMenuOnLaunch {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(600)) { [weak self] in
         self?.showFixtureMenu(anchor: openMenuButton)
       }
     }
+  }
+
+  /// `--large-table <rows>`: a separate key window holding one long
+  /// view-based table, for measuring how hint discovery scales with rows
+  /// that are scrolled off screen. Off by default so the oracle's window and
+  /// its expected targets stay unchanged.
+  private func showLargeTable(rows: Int) {
+    let window = NSWindow(
+      contentRect: NSRect(x: 160, y: 160, width: 420, height: 520),
+      styleMask: [.titled, .closable, .resizable],
+      backing: .buffered,
+      defer: false)
+    window.title = "Flash Native Large Table"
+    window.isReleasedWhenClosed = false
+    let source = LargeTableSource(count: rows)
+    let table = NSTableView(frame: NSRect(x: 0, y: 0, width: 400, height: 500))
+    table.setAccessibilityIdentifier("flash-native-large-table")
+    table.headerView = nil
+    table.delegate = source
+    table.dataSource = source
+    let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+    column.width = 380
+    table.addTableColumn(column)
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 520))
+    scroll.autoresizingMask = [.width, .height]
+    scroll.documentView = table
+    scroll.hasVerticalScroller = true
+    window.contentView = scroll
+    // Start mid-list so rows are scrolled off above and below.
+    table.scrollRowToVisible(rows / 2)
+    largeTableSource = source
+    largeTableWindow = window
+    window.makeKeyAndOrderFront(nil)
   }
 
   func numberOfRows(in tableView: NSTableView) -> Int {
@@ -360,6 +398,36 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 }
 
+/// Rows `Large Row 0…N-1` for `--large-table`.
+final class LargeTableSource: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+  private let count: Int
+
+  init(count: Int) {
+    self.count = count
+  }
+
+  func numberOfRows(in tableView: NSTableView) -> Int {
+    count
+  }
+
+  func tableView(
+    _ tableView: NSTableView,
+    viewFor tableColumn: NSTableColumn?,
+    row: Int
+  ) -> NSView? {
+    let identifier = NSUserInterfaceItemIdentifier("large-cell")
+    let text: NSTextField
+    if let reused = tableView.makeView(withIdentifier: identifier, owner: nil) as? NSTextField {
+      text = reused
+    } else {
+      text = NSTextField(labelWithString: "")
+      text.identifier = identifier
+    }
+    text.stringValue = "Large Row \(row)"
+    return text
+  }
+}
+
 private func makeIconImage() -> NSImage {
   let image = NSImage(size: NSSize(width: 18, height: 18))
   image.lockFocus()
@@ -375,7 +443,8 @@ private func makeIconImage() -> NSImage {
 
 let delegate = NativeFixtureDelegate(
   statePath: argumentValue("--state-file"),
-  opensMenuOnLaunch: hasArgument("--open-menu-on-launch"))
+  opensMenuOnLaunch: hasArgument("--open-menu-on-launch"),
+  largeTableRows: argumentValue("--large-table").flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil })
 let app = NSApplication.shared
 app.delegate = delegate
 app.run()

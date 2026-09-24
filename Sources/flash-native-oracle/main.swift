@@ -17,6 +17,9 @@ private struct Args {
   /// `--bench=N [--bench-trigger=key|cli]`: time hint activations on the
   /// fixture instead of running the oracle (`Scripts/benchmark-hints.sh`).
   var bench: ResidentHintBenchmark?
+  /// `--fixture-large-table <rows>` (bench only): the fixture opens its
+  /// long-table window in front, so the benchmark times a walk over it.
+  var fixtureLargeTableRows: Int?
 }
 
 private func parseArgs() -> Args {
@@ -38,6 +41,12 @@ private func parseArgs() -> Args {
       args.statePath = iter.next() ?? args.statePath
     case "--timings":
       args.timingsPath = iter.next()
+    case "--fixture-large-table":
+      guard let rows = iter.next().flatMap(Int.init), rows > 0 else {
+        fputs("--fixture-large-table needs a positive row count\n", stderr)
+        exit(2)
+      }
+      args.fixtureLargeTableRows = rows
     case let arg where ResidentHintBenchmark.owns(arg):
       continue
     case "--help", "-h":
@@ -46,7 +55,8 @@ private func parseArgs() -> Args {
         flash-native-oracle [--fixture-app <path>] [--state-file <path>] [--timings <path>]
                             [--flash-cli <path>] [--flash-state-url <url>]
                             [--skip-resident-mode-tests]
-                            [--bench=<runs> [--bench-trigger=key|cli]]
+                            [--bench=<runs> [--bench-trigger=key|cli]
+                             [--fixture-large-table <rows>]]
 
         Launches the Flash native AppKit fixture, compares Flash's generic
         AX targets against expected native controls, verifies host clicks,
@@ -63,6 +73,10 @@ private func parseArgs() -> Args {
     args.bench = try ResidentHintBenchmark.parse(Array(CommandLine.arguments.dropFirst()))
   } catch {
     fputs("\(error)\n", stderr)
+    exit(2)
+  }
+  if args.fixtureLargeTableRows != nil, args.bench == nil {
+    fputs("--fixture-large-table only applies with --bench\n", stderr)
     exit(2)
   }
   return args
@@ -1106,7 +1120,8 @@ do {
   let app = try launchFixture(
     appPath: args.fixtureAppPath,
     bundleID: args.fixtureBundleID,
-    arguments: ["--state-file", args.statePath],
+    arguments: ["--state-file", args.statePath]
+      + (args.fixtureLargeTableRows.map { ["--large-table", "\($0)"] } ?? []),
     timer: timer)
   defer { terminateRunningFixture(bundleID: args.fixtureBundleID) }
 

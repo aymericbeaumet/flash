@@ -62,6 +62,14 @@ the others make their own requests or run the CLI tools named here.
 - **Files:** Spotlight queries (`files`).
 - **Terminals:** tmux through the `tmux` CLI; kitty through its remote-control
   socket when you enable it in kitty.
+- **Menu bar and Notification Center:** `mouse_menubar` reads the focused
+  app's menu titles through Accessibility, and where the status items sit from
+  WindowServer geometry. `mouse_notifications` reads the banners, alerts and
+  Notification Center panel on screen through Accessibility: their roles,
+  positions and labels, which can include a notification's text. Both read
+  only when you run them, keep what they read for that hint session only, and
+  write none of it to disk. While the hints are up, the local inspector's
+  state lists them like any other hints.
 - **AI provider quotas:** Claude Code's OAuth token from its Keychain item or
   `~/.claude/.credentials.json`, and the Codex CLI's session (`aiproviders`).
   Flash only reads the Claude token; when it expires, the quota shows as stale

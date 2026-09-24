@@ -448,7 +448,7 @@ enum ConfigLoader {
       "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
       "hints": [
         "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
-        "mouse_grid_keys", "mouse_grid_cursor_follow",
+        "mouse_grid_keys", "mouse_grid_cursor_follow", "restore_pointer",
       ],
       "open": ["ignored_apps", "app_directories"],
       "plugins": [
@@ -611,6 +611,13 @@ enum ConfigLoader {
       locations: locations, into: &config,
       assign: { value, config in
         config.hints.mouseGridCursorFollow = value
+      })
+    applyBool(
+      table["restore_pointer"], path: ["hints", "restore_pointer"],
+      message: "hints.restore_pointer must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.restorePointer = value
       })
   }
 

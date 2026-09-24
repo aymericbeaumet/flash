@@ -35,12 +35,18 @@ final class ProviderReadinessTests: XCTestCase {
   }
 
   func testRuntimeIsReadFromTheBundleLayout() {
-    func engine(xul: Bool = false, _ frameworks: [String], helpers: [String: [String]] = [:])
-      -> AppTraits.Engine?
-    {
-      AppTraits.engine(hasXUL: xul, frameworks: frameworks) { helpers[$0] ?? [] }
+    func engine(
+      xul: Bool = false, shim: Bool = false, _ frameworks: [String],
+      helpers: [String: [String]] = [:]
+    ) -> AppTraits.Engine? {
+      AppTraits.engine(hasXUL: xul, isChromiumAppShim: shim, frameworks: frameworks) {
+        helpers[$0] ?? []
+      }
     }
     XCTAssertEqual(engine(xul: true, []), .gecko)
+    XCTAssertEqual(
+      engine(shim: true, []), .chromium,
+      "a Chromium app shim embeds no framework: the browser renders its windows")
     XCTAssertEqual(
       engine(
         ["Google Chrome Framework.framework"],
@@ -51,6 +57,50 @@ final class ProviderReadinessTests: XCTestCase {
       "an Electron app keeps them beside it")
     XCTAssertEqual(engine(["FlutterMacOS.framework"]), .flutter)
     XCTAssertNil(engine(["Sparkle.framework"], helpers: ["Sparkle.framework": ["Updater.app"]]))
+  }
+
+  /// Installed web apps (PWAs) are small shim bundles Chrome, Edge or Brave
+  /// write from the browser's `app_mode-Info.plist` template: the executable
+  /// is the browser's `app_mode_loader`, and the plist names the shortcut.
+  func testChromiumWebAppShimsWakeAccessibility() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-app-traits-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    func bundle(_ name: String, executable: String, info: [String: Any]) throws -> URL {
+      let url = root.appendingPathComponent("\(name).app")
+      let macOS = url.appendingPathComponent("Contents/MacOS")
+      try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+      FileManager.default.createFile(
+        atPath: macOS.appendingPathComponent(executable).path, contents: Data())
+      var plist = info
+      plist["CFBundleExecutable"] = executable
+      plist["CFBundleIdentifier"] = "com.example.\(name)"
+      try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        .write(to: url.appendingPathComponent("Contents/Info.plist"))
+      return url
+    }
+
+    let shim = try bundle(
+      "Shim", executable: "app_mode_loader",
+      info: ["CrAppModeShortcutID": "abcdefghijklmnop", "CrAppModeShortcutURL": "https://x.test"])
+    XCTAssertEqual(AppTraits.read(bundleURL: shim).engine, .chromium)
+    XCTAssertTrue(AppTraits.read(bundleURL: shim).needsAccessibilityWake)
+
+    let renamedLoader = try bundle(
+      "Renamed", executable: "Web App", info: ["CrAppModeShortcutID": "abcdefghijklmnop"])
+    XCTAssertEqual(
+      AppTraits.read(bundleURL: renamedLoader).engine, .chromium,
+      "the shortcut key alone identifies a shim")
+
+    let loaderOnly = try bundle("LoaderOnly", executable: "app_mode_loader", info: [:])
+    XCTAssertEqual(
+      AppTraits.read(bundleURL: loaderOnly).engine, .chromium,
+      "the loader alone identifies a shim")
+
+    let native = try bundle("Native", executable: "Native", info: [:])
+    XCTAssertNil(AppTraits.read(bundleURL: native).engine)
+    XCTAssertFalse(AppTraits.read(bundleURL: native).needsAccessibilityWake)
   }
 
   func testWebBrowsersAreAppsThatHandleBothWebSchemes() {

@@ -36,22 +36,43 @@ enum ActionDispatcher {
     ScreenSpace.primaryHeight
   }
 
+  /// Where the pointer is left once a committed gesture has been posted.
+  enum PointerRestore: Equatable {
+    /// On the gesture's last point, as a hardware click leaves it.
+    case stay
+    /// Back where it was when the gesture started posting.
+    case gestureStart
+    /// Back on this NSScreen point: where the mouse grid found the pointer
+    /// before cursor-follow moved it.
+    case point(CGPoint)
+
+    /// The restore a committed hint or grid gesture gets:
+    /// `[hints] restore_pointer`, returning to the grid's origin when
+    /// cursor-follow moved the pointer before the gesture.
+    static func afterCommit(restorePointer: Bool, gridOrigin: CGPoint?) -> PointerRestore {
+      guard restorePointer else { return .stay }
+      return gridOrigin.map(PointerRestore.point) ?? .gestureStart
+    }
+  }
+
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
   /// origin of primary screen). The pointer moves to the target and stays
-  /// there, as with a hardware click. Every committed hint — Alacritty/tmux
-  /// links, browser and native controls, plugin targets, grid cells — is
-  /// delivered this way and interpreted by the app itself; there is
-  /// deliberately no provider-owned activation or AXPress fallback.
+  /// there, as with a hardware click, unless `restoring` sends it back. Every
+  /// committed hint — Alacritty/tmux links, browser and native controls,
+  /// plugin targets, grid cells — is delivered this way and interpreted by the
+  /// app itself; there is deliberately no provider-owned activation or AXPress
+  /// fallback.
   ///
   /// Returns `true` once the click is enqueued. The blocking posting (settle +
   /// mouse-down-hold sleeps, ~40–60ms) runs on `clickQueue`, off the main run
   /// loop, so it no longer starves the keyboard tap; `completion` (if supplied)
-  /// runs on main after the click has been posted.
+  /// runs on main after the click has been posted and the pointer restored.
   @discardableResult
   static func synthesizeClick(
     at screenPoint: CGPoint,
     action: JumpAction,
     modifiers: ClickModifiers = [],
+    restoring restore: PointerRestore = .stay,
     completion: (() -> Void)? = nil
   ) -> Bool {
     // NSScreen / NSWorkspace are main-affine; resolve them on the calling thread
@@ -59,9 +80,10 @@ enum ActionDispatcher {
     let screenH = primaryScreenHeight()
     let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     clickQueue.async {
-      postSynthesizedClick(
+      let start = postSynthesizedClick(
         screenPoint: screenPoint, screenH: screenH, action: action, modifiers: modifiers,
         frontmostBundleID: frontmostBundleID)
+      restorePointer(restore, gestureStart: start, screenH: screenH)
       if let completion { DispatchQueue.main.async(execute: completion) }
     }
     return true
@@ -69,13 +91,16 @@ enum ActionDispatcher {
 
   /// The blocking body of `synthesizeClick`, run on `clickQueue`: builds and
   /// posts the CGEvents with the inter-event sleeps the receiving app expects.
+  /// Returns where the pointer was before the click (event space), nil when
+  /// nothing was posted.
+  @discardableResult
   private static func postSynthesizedClick(
     screenPoint: CGPoint,
     screenH: CGFloat,
     action: JumpAction,
     modifiers: ClickModifiers,
     frontmostBundleID: String
-  ) {
+  ) -> CGPoint? {
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
 
     let source = CGEventSource(stateID: .combinedSessionState)
@@ -86,7 +111,7 @@ enum ActionDispatcher {
         at: cgPoint, from: originalCursor, action: action, modifiers: modifiers, source: source)
     else {
       FlashLog.warn("[click] could not create CGEvent for synthesized click")
-      return
+      return nil
     }
     warpCursor(to: cgPoint)
     events[0].post(tap: .cghidEventTap)
@@ -105,6 +130,61 @@ enum ActionDispatcher {
         + "modifiers=cmd:\(modifiers.contains(.command)) "
         + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
         + "alt:\(modifiers.contains(.option)) frontmost=\(frontmostBundleID)")
+    return originalCursor
+  }
+
+  /// Put the pointer back after a posted gesture (`[hints] restore_pointer`),
+  /// run on `clickQueue` behind the gesture's last event. The warp alone is
+  /// invisible to the app under the pointer, so a tagged `mouseMoved` follows
+  /// it, like `moveCursor`. Modifier flags are cleared: a magic modifier still
+  /// held from the final hint key must not turn the move into a modified hover.
+  private static func restorePointer(
+    _ restore: PointerRestore, gestureStart: CGPoint?, screenH: CGFloat
+  ) {
+    guard let gestureStart,
+      let destination = restoreDestination(restore, gestureStart: gestureStart, screenH: screenH)
+    else { return }
+    // Let the release reach the app before the pointer leaves the target.
+    usleep(20_000)
+    let source = CGEventSource(stateID: .combinedSessionState)
+    let current = CGEvent(source: source)?.location ?? destination
+    warpCursor(to: destination)
+    guard let move = pointerMoveEvent(to: destination, from: current, source: source) else {
+      return
+    }
+    move.flags = []
+    move.post(tap: .cghidEventTap)
+    FlashLog.trace(
+      "[click] restore_pointer to=(\(Int(destination.x)),\(Int(screenH - destination.y)))")
+  }
+
+  /// Where `restore` puts the pointer, in event space (top-left origin); nil
+  /// when it stays. `gestureStart` is already in event space.
+  static func restoreDestination(
+    _ restore: PointerRestore, gestureStart: CGPoint, screenH: CGFloat
+  ) -> CGPoint? {
+    switch restore {
+    case .stay: return nil
+    case .gestureStart: return gestureStart
+    case .point(let point): return CGPoint(x: point.x, y: screenH - point.y)
+    }
+  }
+
+  /// A tagged `mouseMoved` at `point` carrying the real delta from `origin`,
+  /// both in event space, which the window server hit-tests like a genuine
+  /// move (hover, tracking-area enter/exit).
+  static func pointerMoveEvent(
+    to point: CGPoint, from origin: CGPoint, source: CGEventSource?
+  ) -> CGEvent? {
+    guard
+      let move = CGEvent(
+        mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point,
+        mouseButton: .left)
+    else { return nil }
+    move.setIntegerValueField(.mouseEventDeltaX, value: Int64((point.x - origin.x).rounded()))
+    move.setIntegerValueField(.mouseEventDeltaY, value: Int64((point.y - origin.y).rounded()))
+    move.setIntegerValueField(.eventSourceUserData, value: syntheticMouseEventTag)
+    return move
   }
 
   static func clickEvents(
@@ -183,7 +263,8 @@ enum ActionDispatcher {
   /// Synthesize a continuous left-button drag from `from` to `to` (both
   /// NSScreen, bottom-left origin). Drop targets light up from the
   /// interpolated `leftMouseDragged` stream exactly as they do for a hardware
-  /// drag, and the pointer stays at the drop point. `modifiers` are held on every event so option-drag copy / cmd-drag
+  /// drag, and the pointer stays at the drop point unless `restoring` sends it
+  /// back. `modifiers` are held on every event so option-drag copy / cmd-drag
   /// semantics reach the receiving app.
   ///
   /// `completion` runs on the main thread after the gesture has been posted.
@@ -192,23 +273,26 @@ enum ActionDispatcher {
     from: CGPoint,
     to: CGPoint,
     modifiers: ClickModifiers = [],
+    restoring restore: PointerRestore = .stay,
     completion: (() -> Void)? = nil
   ) -> Bool {
     let screenH = primaryScreenHeight()
     clickQueue.async {
-      postSynthesizedDrag(from: from, to: to, screenH: screenH, modifiers: modifiers)
+      let start = postSynthesizedDrag(from: from, to: to, screenH: screenH, modifiers: modifiers)
+      restorePointer(restore, gestureStart: start, screenH: screenH)
       if let completion { DispatchQueue.main.async(execute: completion) }
     }
     return true
   }
 
-  /// The blocking body of `synthesizeDrag`, run on `clickQueue`.
+  /// The blocking body of `synthesizeDrag`, run on `clickQueue`. Returns where
+  /// the pointer was before the drag (event space).
   private static func postSynthesizedDrag(
     from: CGPoint,
     to: CGPoint,
     screenH: CGFloat,
     modifiers: ClickModifiers
-  ) {
+  ) -> CGPoint {
     let start = CGPoint(x: from.x, y: screenH - from.y)
     let end = CGPoint(x: to.x, y: screenH - to.y)
     let source = CGEventSource(stateID: .combinedSessionState)
@@ -257,6 +341,7 @@ enum ActionDispatcher {
     FlashLog.trace(
       "[drag] synthesize from=(\(Int(from.x)),\(Int(from.y))) "
         + "to=(\(Int(to.x)),\(Int(to.y))) flags=\(flags.rawValue)")
+    return previous
   }
 
   /// Synthesize a two-click text selection: a plain click at `from` sets the
@@ -264,7 +349,8 @@ enum ActionDispatcher {
   /// macOS gesture, so it survives line wraps and never turns into an
   /// accidental drag of an already-selected range (which a down→dragged→up
   /// stream starting on a selection would). `modifiers` are applied to both
-  /// clicks; shift is forced onto the second. The pointer stays at `to`.
+  /// clicks; shift is forced onto the second. The pointer stays at `to` unless
+  /// `restoring` sends it back to where it was before the first click.
   ///
   /// `completion` runs on the main thread after both clicks have been posted.
   @discardableResult
@@ -272,12 +358,13 @@ enum ActionDispatcher {
     from: CGPoint,
     to: CGPoint,
     modifiers: ClickModifiers = [],
+    restoring restore: PointerRestore = .stay,
     completion: (() -> Void)? = nil
   ) -> Bool {
     let screenH = primaryScreenHeight()
     let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     clickQueue.async {
-      postSynthesizedClick(
+      let start = postSynthesizedClick(
         screenPoint: from, screenH: screenH, action: .leftClick, modifiers: modifiers,
         frontmostBundleID: frontmostBundleID)
       // Let the caret placement settle before extending — text views that are
@@ -288,6 +375,7 @@ enum ActionDispatcher {
         screenPoint: to, screenH: screenH, action: .leftClick,
         modifiers: modifiers.union(.shift),
         frontmostBundleID: frontmostBundleID)
+      restorePointer(restore, gestureStart: start, screenH: screenH)
       if let completion { DispatchQueue.main.async(execute: completion) }
     }
     return true
@@ -381,22 +469,9 @@ enum ActionDispatcher {
     let screenH = primaryScreenHeight()
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     let previous = CGEvent(source: nil)?.location ?? cgPoint
-    CGWarpMouseCursorPosition(cgPoint)
-    CGAssociateMouseAndMouseCursorPosition(1)
+    warpCursor(to: cgPoint)
     let source = CGEventSource(stateID: .combinedSessionState)
-    if let move = CGEvent(
-      mouseEventSource: source,
-      mouseType: .mouseMoved,
-      mouseCursorPosition: cgPoint,
-      mouseButton: .left)
-    {
-      move.setIntegerValueField(
-        .mouseEventDeltaX, value: Int64((cgPoint.x - previous.x).rounded()))
-      move.setIntegerValueField(
-        .mouseEventDeltaY, value: Int64((cgPoint.y - previous.y).rounded()))
-      move.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
-      move.post(tap: .cghidEventTap)
-    }
+    pointerMoveEvent(to: cgPoint, from: previous, source: source)?.post(tap: .cghidEventTap)
     return true
   }
 

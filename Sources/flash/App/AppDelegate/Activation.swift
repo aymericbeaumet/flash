@@ -173,14 +173,18 @@ extension AppDelegate {
   /// Assign prefix-free hint labels over `targets` using the active alphabet —
   /// the same policy `AppMonitor` uses, so a re-assembled hint set (app targets
   /// + status-bar links) stays consistent with a plain discovery result.
-  func assignHints(_ targets: [JumpTarget]) -> [AssignedHint] {
+  /// `previous` keeps the labels of targets that persist (`--multi`).
+  func assignHints(
+    _ targets: [JumpTarget], preserving previous: [AssignedHint] = []
+  ) -> [AssignedHint] {
     let resolved = config.resolvedAlphabet
     return HintAssigner.assign(
       targets: targets,
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
-      minLength: config.hints.minLength)
+      minLength: config.hints.minLength,
+      preserving: previous)
   }
 
   /// Hint targets for clickable and hover-popup spans on the Flash status bar

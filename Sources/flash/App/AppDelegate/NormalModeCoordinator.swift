@@ -976,8 +976,10 @@ extension AppDelegate {
       activateScrollTargetHints()
     case .mouseDock:
       activateDockHints()
-    case .mouseStatusBar:
-      activateStatusItemHints()
+    case .mouseMenuBar:
+      activateMenuBarHints()
+    case .mouseNotifications:
+      activateNotificationHints()
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()

@@ -10,8 +10,9 @@ public struct AppTraits: Equatable, Sendable {
     /// animates programmatic window moves, so Flash scopes it to each
     /// operation (`GeckoAccessibility`).
     case gecko
-    /// Chromium (Electron and CEF apps included) builds its accessibility
-    /// tree only once an assistive client sets the enhanced-UI flags.
+    /// Chromium (Electron and CEF apps included, and the browsers' installed
+    /// web-app shims) builds its accessibility tree only once an assistive
+    /// client sets the enhanced-UI flags.
     case chromium
     /// Flutter builds its semantics tree only on the enhanced-UI flag.
     case flutter
@@ -68,11 +69,15 @@ public struct AppTraits: Equatable, Sendable {
     let contents = bundleURL.appendingPathComponent("Contents")
     let frameworks = contents.appendingPathComponent("Frameworks")
     let fileManager = FileManager.default
+    let infoDictionary = Bundle(url: bundleURL)?.infoDictionary ?? [:]
     return AppTraits(
-      isWebBrowser: handlesWebURLs(
-        infoDictionary: Bundle(url: bundleURL)?.infoDictionary ?? [:]),
+      isWebBrowser: handlesWebURLs(infoDictionary: infoDictionary),
       engine: engine(
         hasXUL: fileManager.fileExists(atPath: contents.appendingPathComponent("MacOS/XUL").path),
+        isChromiumAppShim: isChromiumAppShim(
+          hasAppModeLoader: fileManager.fileExists(
+            atPath: contents.appendingPathComponent("MacOS/app_mode_loader").path),
+          infoDictionary: infoDictionary),
         frameworks: (try? fileManager.contentsOfDirectory(atPath: frameworks.path)) ?? [],
         frameworkHelpers: { framework in
           (try? fileManager.contentsOfDirectory(
@@ -90,13 +95,27 @@ public struct AppTraits: Equatable, Sendable {
     return schemes.isSuperset(of: ["http", "https"])
   }
 
+  /// A web app a Chromium browser installed (a PWA): a shim bundle built from
+  /// the browser's `app_mode-Info.plist` template, whose executable is the
+  /// browser's `app_mode_loader` and whose plist names the shortcut
+  /// (`CrAppModeShortcutID`). The shim embeds no framework; its windows are
+  /// drawn by the browser and need the same accessibility wake.
+  public static func isChromiumAppShim(
+    hasAppModeLoader: Bool, infoDictionary: [String: Any]
+  ) -> Bool {
+    hasAppModeLoader || infoDictionary["CrAppModeShortcutID"] != nil
+  }
+
   /// Gecko ships `Contents/MacOS/XUL`; Flutter its `FlutterMacOS` framework;
   /// Chromium renderer helper apps, beside its framework in an Electron app
-  /// and inside the framework's `Helpers` in a browser.
+  /// and inside the framework's `Helpers` in a browser, or is a browser's
+  /// web-app shim.
   public static func engine(
-    hasXUL: Bool, frameworks: [String], frameworkHelpers: (String) -> [String]
+    hasXUL: Bool, isChromiumAppShim: Bool, frameworks: [String],
+    frameworkHelpers: (String) -> [String]
   ) -> Engine? {
     if hasXUL { return .gecko }
+    if isChromiumAppShim { return .chromium }
     if frameworks.contains("FlutterMacOS.framework") { return .flutter }
     if frameworks.contains(where: isRendererHelper) { return .chromium }
     for framework in frameworks where framework.hasSuffix(".framework") {
