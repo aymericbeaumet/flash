@@ -92,7 +92,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[activation] dispatch_discover gen=\(myGen) pid=\(context.processID) "
         + "bundle=\(context.bundleIdentifier)")
-    monitor.discoverAsync(context: context) { [weak self] hints in
+    monitor.discoverAsync(context: context) { [weak self] hints, preparedHit in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       FlashLog.trace(
@@ -153,7 +153,9 @@ extension AppDelegate {
       self.hintSession.hints = displayHints
       self.hintSession.prefix = ""
       if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
-      self.overlay.display(hints: displayHints)
+      self.presentHints(
+        displayHints, prepared: preparedHit ? .hit : .miss, pid: context.processID,
+        surface: "targets")
       if command.isSearch {
         // Seek & click: the panel routes subsequent keys to the search
         // interpreter instead of hint-prefix typing.
@@ -267,7 +269,7 @@ extension AppDelegate {
       }
       self.hintSession.hints = hints
       self.hintSession.prefix = ""
-      self.overlay.display(hints: hints)
+      self.presentHints(hints, prepared: .miss, pid: context.processID, surface: "screen")
       FlashLog.debug("[screen_scope] displayed hints=\(hints.count)")
     }
   }
@@ -314,7 +316,7 @@ extension AppDelegate {
         self.activationLifecycle.invalidate()
         self.hintSession.hints = hints
         self.applyModeOverlay()
-        self.overlay.display(hints: hints)
+        self.presentHints(hints, prepared: .miss, pid: pid, surface: "scroll")
         FlashLog.debug("[scroll_target] displayed pid=\(pid) areas=\(hints.count)")
       }
     }
@@ -347,10 +349,14 @@ extension AppDelegate {
       applyModeOverlay(captureOverride: captureOverride)
       return
     }
+    // A session that took the key window (secure input) hands activation
+    // back to the app it covered; a commit does so by raising its target.
+    let returnsActivation = hintSession.capture == .keyWindow && keyboardCaptureTap != nil
     invalidateActivation(reason: "cancel_overlay")
     overlay.hide()
     clearHintSessionState()
     applyModeOverlay()
+    if returnsActivation { returnActivationToCoveredApp(reason: "key_window_hints_cancel") }
   }
 
   func promptForAccessibility() {

@@ -321,6 +321,68 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.cancelCount, 0, "the grid owns its cancel")
   }
 
+  /// Under a Russian source the F key types "а"; with a reference layout
+  /// every positional interpreter reads it as `f`, while `--search` keeps
+  /// the typed text it matches against.
+  func testAReferenceLayoutFeedsEveryPositionalInterpreterButSearch() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .hints
+    defer { panel.inputMode = .passive }
+
+    panel.hintKeyRoute = .labels
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    XCTAssertEqual(coordinator.committedPrefixes, ["f", "f"])
+
+    panel.hintKeyRoute = .grid(
+      .keyboard(Alphabet.gridKeys(layoutName: "qwerty")), cursorFollows: false)
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_Q, characters: "й"))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_1, characters: "!", modifierFlags: [.shift]))
+    XCTAssertEqual(coordinator.gridCommands, [.cell("q", []), .cell("1", [.shift])])
+
+    panel.hintKeyRoute = .pointer
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_H, characters: "р"))
+    XCTAssertEqual(coordinator.pointerCommands, [.move(dx: -1, dy: 0, fine: false)])
+
+    panel.hintKeyRoute = .adjustment
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_L, characters: "д"))
+    XCTAssertEqual(coordinator.adjustCommands, [.snapRight])
+
+    panel.hintKeyRoute = .search
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    XCTAssertEqual(coordinator.searchCommands, [.append("а")])
+  }
+
+  func testAReferenceLayoutFeedsNormalMode() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .normal
+    defer { panel.inputMode = .passive }
+
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_G, characters: "п"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_G, characters: "п"))
+    XCTAssertEqual(
+      coordinator.normalModeActions.map { $0.0?.command },
+      [.mouseTarget(.click(.leftClick, modifiers: [])), .scroll(.top)])
+  }
+
+  func testWithoutAReferenceLayoutKeysReadAsTyped() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .hints
+    defer { panel.inputMode = .passive }
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    XCTAssertEqual(coordinator.committedPrefixes, ["а"])
+  }
+
   func testCommandLineUsesNativeTextFieldResponder() {
     XCTAssertTrue(CommandLineTextField(frame: .zero).acceptsFirstResponder)
   }
@@ -941,13 +1003,23 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var normalModeActions: [(MappingCommand?, Int)] = []
   var cancelCount = 0
   var gridCommands: [MouseGridKeyCommand] = []
+  var committedPrefixes: [String] = []
+  var adjustCommands: [HintAdjustmentCommand] = []
+  var pointerCommands: [PointerModeCommand] = []
+  var searchCommands: [HintSearchCommand] = []
 
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
-  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
-  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {}
-  func overlayDidPointer(_ command: PointerModeCommand) {}
-  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {}
+  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {
+    committedPrefixes.append(prefix)
+  }
+  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {
+    adjustCommands.append(command)
+  }
+  func overlayDidPointer(_ command: PointerModeCommand) { pointerCommands.append(command) }
+  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {
+    searchCommands.append(command)
+  }
   func overlayDidGrid(_ command: MouseGridKeyCommand) { gridCommands.append(command) }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {

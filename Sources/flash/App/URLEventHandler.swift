@@ -294,12 +294,26 @@ struct MoveWindowParams: Hashable {
 }
 
 final class URLEventHandler: NSObject {
+  /// The resident's answers to `flash status` and `flash doctor`: UTF-8 JSON
+  /// the CLI reads from the reply's direct object. A table of its own, apart
+  /// from the verb table, so neither a mapping nor a plugin can reach it.
+  struct QueryAnswers {
+    var status: () -> Data
+    /// Completes on the main thread once its checks finish.
+    var doctor: (@escaping (Data) -> Void) -> Void
+  }
+
   private let handler: (URLCommand) -> Bool
   private let rejected: (String) -> Void
+  private let queries: QueryAnswers
 
-  init(handler: @escaping (URLCommand) -> Bool, rejected: @escaping (String) -> Void) {
+  init(
+    handler: @escaping (URLCommand) -> Bool, rejected: @escaping (String) -> Void,
+    queries: QueryAnswers
+  ) {
     self.handler = handler
     self.rejected = rejected
+    self.queries = queries
     super.init()
     NSAppleEventManager.shared().setEventHandler(
       self,
@@ -313,11 +327,17 @@ final class URLEventHandler: NSObject {
     _ event: NSAppleEventDescriptor,
     withReplyEvent reply: NSAppleEventDescriptor
   ) {
+    // An activation dates from the event's arrival (`[latency] hints_visible`).
+    let arrivedAt = ProcessInfo.processInfo.systemUptime
     guard
       let verb = event.paramDescriptor(forKeyword: FlashCLI.verbKey)?.stringValue,
       !verb.isEmpty
     else { return }
     let argsJSON = event.paramDescriptor(forKeyword: FlashCLI.argsKey)?.stringValue ?? "{}"
+    if let query = FlashQuery(rawValue: verb) {
+      answer(query, argsJSON: argsJSON, reply: reply)
+      return
+    }
     // CLI / AppleEvent path uses `parseOrPluginVerb` so a `flash <verb>`
     // call can reach plugin-registered verbs. Config-load goes through
     // strict `parse` instead, so a stale verb in `[mode.*.mappings]`
@@ -337,7 +357,45 @@ final class URLEventHandler: NSObject {
       Self.reject(reply: reply, message: message)
       return
     }
-    if !handler(cmd) { Self.reject(reply: reply, message: message) }
+    if !Trace.triggered(at: arrivedAt, { handler(cmd) }) {
+      Self.reject(reply: reply, message: message)
+    }
+  }
+
+  /// Reply to a query with its JSON. `doctor` suspends the event while its
+  /// checks run off the main thread and resumes it with the report.
+  private func answer(_ query: FlashQuery, argsJSON: String, reply: NSAppleEventDescriptor) {
+    guard query.answeredByResident else {
+      Self.reject(
+        reply: reply, message: "flash \(query.rawValue) runs in the flash CLI, not the resident")
+      return
+    }
+    // Output options such as `--json` belong to the CLI; the resident's
+    // answer takes none.
+    guard Self.decodeArgs(json: argsJSON)?.isEmpty == true else {
+      Self.reject(reply: reply, message: "flash \(query.rawValue) takes no resident arguments")
+      return
+    }
+    switch query {
+    case .status:
+      Self.setDirectObject(queries.status(), on: reply)
+    case .doctor:
+      let manager = NSAppleEventManager.shared()
+      guard let suspension = manager.suspendCurrentAppleEvent() else { return }
+      queries.doctor { data in
+        Self.setDirectObject(data, on: manager.replyAppleEvent(forSuspensionID: suspension))
+        manager.resume(withSuspensionID: suspension)
+      }
+    case .configCheck:
+      break
+    }
+  }
+
+  static func setDirectObject(_ json: Data, on reply: NSAppleEventDescriptor) {
+    guard
+      let descriptor = NSAppleEventDescriptor(descriptorType: DescType(typeUTF8Text), data: json)
+    else { return }
+    reply.setParam(descriptor, forKeyword: AEKeyword(keyDirectObject))
   }
 
   static func rejectionMessage(_ invocation: String) -> String {
@@ -374,7 +432,7 @@ final class URLEventHandler: NSObject {
   /// into no-op plugin calls.
   static func parseOrPluginVerb(verb: String, args: [String: String]) -> URLCommand? {
     if Self.commands[verb] != nil { return Self.parse(verb: verb, args: args) }
-    if Self.looksLikePluginVerb(verb) {
+    if FlashQuery(rawValue: verb) == nil, Self.looksLikePluginVerb(verb) {
       return .pluginVerb(name: verb, args: args)
     }
     return nil
@@ -670,6 +728,10 @@ extension URLEventHandler {
       the `flash` CLI (which AppleEvents the verb to the resident) and by
       mapping config (which writes `["flash", "<verb>", "--key=value", ...]`
       arrays and resolves them in-process).
+
+      `flash status`, `flash doctor` and `flash config_check` are CLI queries,
+      not verbs: they report (as text, or JSON with `--json`) and cannot be
+      mapped. `:doctor` runs the doctor's checks from the command line.
 
       `mouse_target` selects an app-discovered target. `mouse_grid` selects
       a precise screen position: the screen splits like the left half of

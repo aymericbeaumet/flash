@@ -15,6 +15,19 @@
 menu_bar_icon = true
 autostart = true
 
+# Which keyboard layout hint labels, mouse-grid keys and NORMAL mappings are
+# read on. Keys are matched by where they sit on that layout, so labels keep
+# working while a non-Latin input source (Russian, Greek, Hebrew, a CJK input
+# method) is selected.
+#   "auto"  read keys as typed while the selected source can type Latin
+#           letters; otherwise read them on the Latin layout macOS pairs with
+#           it (ABC or U.S.), or US-ANSI when there is none.
+#   an ID   always read keys on that input source, whatever is selected, e.g.
+#           "com.apple.keylayout.US" or "com.apple.keylayout.Colemak".
+# The table is rebuilt when the input source changes. `--search` still matches
+# the text you actually type. `flash status` shows the source and reference.
+keyboard_layout = "auto"
+
 # The active file is watched for live reload.
 
 [hints]
@@ -412,7 +425,9 @@ leader = "\\"
 # and [m / ]m to reorder through the source or supported native shortcut.
 # Other tab, split, browser-history, reload, archive, URL and mark commands remain
 # available for explicit mappings. Bare d, j and k are unbound.
-# Entries extend the defaults; reusing a key overrides that mapping.
+# Entries extend the defaults; reusing a key overrides that mapping, and
+# "<key>" = false removes it (a later layer may map it again). A removed key
+# also drops plugin mappings on it; removal applies to this table only.
 # Every unmapped key or chord is swallowed in NORMAL.
 # Use repeat = true to repeat a sequence by pressing its final key again.
 # NORMAL persists. INSERT requires enter_insert_mode, a physical app click,
@@ -455,7 +470,10 @@ leader = "\\"
 # click without a binding of its own. A prefix letter must not also be a
 # mapping on its own, or that mapping waits for sequence_timeout_ms before
 # it fires -- which is why triple click ships unbound: "tf" would stall the
-# bare "t" above. Add "tf"/"tF" yourself if you want it, and drop "t".
+# bare "t" above. To add it, remove "t" first:
+#   "t" = false
+#   "tf" = ["flash", "mouse_target", "--triple"]
+#   "tF" = ["flash", "mouse_grid", "--triple"]
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_grid"]
 "sf" = ["flash", "mouse_target", "--secondary"]

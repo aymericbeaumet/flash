@@ -493,6 +493,62 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(modified.pending, "")
   }
 
+  /// `gg` and `f` typed under a Russian source, read on US-ANSI.
+  func testNormalMappingsMatchPhysicalKeysUnderANonLatinSource() {
+    func russian(_ keyCode: Int, _ typed: String) -> KeyCharacters {
+      KeyCharacters.read(
+        layout: .usANSI, keyCode: UInt16(keyCode), modifierFlags: [], characters: typed,
+        ignoringModifiers: typed, unshifted: { nil })
+    }
+    let f = russian(kVK_ANSI_F, "а")
+    XCTAssertEqual(
+      command(keyCode: kVK_ANSI_F, chars: f.characters ?? "", ignoring: f.ignoringModifiers),
+      .mouseTarget(.click(.leftClick, modifiers: [])))
+    let g = russian(kVK_ANSI_G, "п")
+    let first = transition(
+      keyCode: kVK_ANSI_G, chars: g.characters ?? "", ignoring: g.ignoringModifiers)
+    XCTAssertEqual(first.pending, "g")
+    XCTAssertEqual(
+      command(
+        pending: first.pending, keyCode: kVK_ANSI_G, chars: g.characters ?? "",
+        ignoring: g.ignoringModifiers),
+      .scroll(.top))
+    // Read as typed, the same keys match nothing.
+    XCTAssertNil(command(keyCode: kVK_ANSI_F, chars: "а"))
+  }
+
+  func testRemovingTLetsTripleClickFireWithoutTheSequenceTimeout() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "t" = false
+      "tf" = ["flash", "mouse_target", "--triple"]
+      """)
+    XCTAssertTrue(config.loadingDiagnostics.isEmpty, "\(config.loadingDiagnostics.map(\.message))")
+    let mappings = config.mode.normal
+    let first = transition(chars: "t", mappings: mappings)
+    XCTAssertNil(first.command)
+    XCTAssertEqual(first.pending, "t")
+    // Nothing is parked on the bare `t`, so the sequence timeout has nothing
+    // to fire: the prefix only waits for its next key.
+    XCTAssertNil(
+      NormalModeInterpreter.pendingCommand(
+        pending: first.pending, mappings: CompiledMappings(mappings)))
+    XCTAssertEqual(
+      command(pending: first.pending, chars: "f", mappings: mappings),
+      .mouseTarget(.click(.tripleClick, modifiers: [])))
+
+    // With the default `t` kept, the same prefix parks Cmd-T for the timeout.
+    let kept = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "tf" = ["flash", "mouse_target", "--triple"]
+      """
+    ).mode.normal
+    XCTAssertNotNil(
+      NormalModeInterpreter.pendingCommand(pending: "t", mappings: CompiledMappings(kept)))
+  }
+
   func testPendingPrefixBrokenByUnmappableKeyFallsBackToFreshInterpretation() {
     // An invalid continuation is interpreted as a fresh key.
     XCTAssertEqual(command(pending: "[", chars: "u"), .undo)
@@ -1474,6 +1530,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       NormalModeDispatcher.commandLineCommand(":plugins reload"), .plugins(.reload))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins bogus"))
+    XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins doctor"))
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":doctor"), .doctor)
     XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins reload extra"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":mappings"), .mappings)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":map"), .mappings)
@@ -1880,7 +1938,7 @@ final class NormalModeTests: XCTestCase {
         pluginSubcommands: [:]))
     XCTAssertEqual(context.prefix, ":plugins ")
     XCTAssertEqual(context.query, "")
-    XCTAssertEqual(Set(context.items.map(\.label)), ["doctor", "reload"])
+    XCTAssertEqual(Set(context.items.map(\.label)), ["reload"])
     XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginSubcommand })
   }
 

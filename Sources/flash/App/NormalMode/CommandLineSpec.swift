@@ -28,6 +28,9 @@ extension NormalModeDispatcher {
     case logs
     case commands
     case about
+    /// `:doctor` — `flash doctor`'s checks (permissions, capture, config,
+    /// hotkeys, plugins, layout), logged in full with a toast summary.
+    case doctor
   }
 
   enum PluginsSubcommand: Equatable {
@@ -35,9 +38,6 @@ extension NormalModeDispatcher {
     case modal
     /// `:plugins reload` — stop and restart every loaded plugin.
     case reload
-    /// `:plugins doctor` — checkhealth: manifest/exec/sandbox/lifecycle
-    /// diagnosis per plugin, logged in full with a toast summary.
-    case doctor
   }
 
   static func commandLineCommand(_ raw: String) -> CommandLineCommand? {
@@ -69,8 +69,6 @@ extension NormalModeDispatcher {
     switch args[0] {
     case "reload":
       return .plugins(.reload)
-    case "doctor":
-      return .plugins(.doctor)
     default:
       return nil
     }
@@ -389,6 +387,11 @@ extension NormalModeDispatcher {
     CommandLineSpec(
       names: ["about"], description: "Open the About Flash window", bangPolicy: .rejected
     ) { _ in .about },
+    CommandLineSpec(
+      names: ["doctor"],
+      description: "Check permissions, key capture, config, hotkeys and plugins",
+      bangPolicy: .rejected
+    ) { _ in .doctor },
   ]
 
   private static let argumentCommandDescriptions: [String: String] = [
@@ -557,7 +560,7 @@ extension NormalModeDispatcher {
 
   /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
   /// with `pluginsCommand(_:)`.
-  static let pluginsBuiltinSubcommands: [String] = ["doctor", "reload"]
+  static let pluginsBuiltinSubcommands: [String] = ["reload"]
 
   /// Whether typing `query` is enough to actually invoke the command shown
   /// as `label`, per vim's abbreviation rule. `:q` invokes `quit` (min `q`)

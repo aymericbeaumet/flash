@@ -42,6 +42,9 @@ enum FlashCLI {
   static let usage = """
     Usage:
       flash <verb> [--name=value | --flag ...]
+      flash status [--json]            the resident's state
+      flash doctor [--json]            check permissions, capture, config, plugins
+      flash config_check [--file=path] validate a config file without the resident
 
     Examples:
       flash mouse_target
@@ -70,6 +73,9 @@ enum FlashCLI {
     let argEntries = Array(args.dropFirst())
     do {
       let argDict = try CommandArguments.parse(argEntries)
+      if let query = FlashQuery(rawValue: verb) {
+        return runQuery(query, args: argDict)
+      }
       guard URLEventHandler.parseOrPluginVerb(verb: verb, args: argDict) != nil else {
         FileHandle.standardError.write(
           Data("flash: invalid command or arguments for '\(verb)'\n".utf8))
@@ -84,6 +90,115 @@ enum FlashCLI {
   }
 
   private static func sendVerb(_ verb: String, args: [String: String]) -> Int32 {
+    guard let (status, reply) = send(verb, args: args) else { return 1 }
+    let result = response(verb: verb, status: status, reply: reply)
+    if let message = result.message {
+      FileHandle.standardError.write(Data("flash: \(message)\n".utf8))
+    }
+    return result.exitCode
+  }
+
+  /// `status` and `doctor` ask the resident; `config_check` runs here.
+  private static func runQuery(_ query: FlashQuery, args: [String: String]) -> Int32 {
+    guard let options = queryOptions(query, args: args) else {
+      FileHandle.standardError.write(
+        Data("flash: invalid arguments for '\(query.rawValue)'\n\(usage)\n".utf8))
+      return 2
+    }
+    let result: (exitCode: Int32, output: String?, message: String?)
+    switch query {
+    case .configCheck:
+      let url =
+        options.file.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+        ?? ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
+      let check = ConfigCheck.run(
+        fileURL: url.resolvingSymlinksInPath(),
+        text: (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) },
+        defaultLayer: ConfigLoader.embeddedDefaultLayer(in: appBundle))
+      result = (
+        check.exitCode, check.lines.isEmpty ? nil : check.lines.joined(separator: "\n"), nil
+      )
+    case .status, .doctor:
+      // The doctor compiles every sandboxed plugin's profile: seconds, not ticks.
+      let timeout = query == .doctor ? 60 * 60 : 5 * 60
+      guard let (status, reply) = send(query.rawValue, args: [:], timeoutTicks: timeout) else {
+        return 1
+      }
+      result = queryOutcome(query, json: options.json, status: status, reply: reply)
+    }
+    if let output = result.output { print(output) }
+    if let message = result.message {
+      FileHandle.standardError.write(Data("flash: \(message)\n".utf8))
+    }
+    return result.exitCode
+  }
+
+  /// The app bundle this executable lives in. Run through the
+  /// `~/.local/bin/flash` symlink, `Bundle.main` is the symlink's directory,
+  /// so the bundle is found from the executable's resolved path.
+  static var appBundle: Bundle {
+    guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
+      return .main
+    }
+    return appBundle(containing: executable) ?? .main
+  }
+
+  /// `…/Flash.app` for `…/Flash.app/Contents/MacOS/flash`; nil outside a bundle.
+  static func appBundle(containing executable: URL) -> Bundle? {
+    let macOS = executable.deletingLastPathComponent()
+    let contents = macOS.deletingLastPathComponent()
+    let app = contents.deletingLastPathComponent()
+    guard macOS.lastPathComponent == "MacOS", contents.lastPathComponent == "Contents",
+      app.pathExtension == "app"
+    else { return nil }
+    return Bundle(url: app)
+  }
+
+  /// `--json` for `status` / `doctor`, `--file=<path>` for `config_check`;
+  /// nil for anything else.
+  static func queryOptions(_ query: FlashQuery, args: [String: String]) -> (
+    json: Bool, file: String?
+  )? {
+    switch query {
+    case .status, .doctor:
+      guard args.keys.allSatisfy({ $0 == "json" }), args["json"].map({ $0 == "1" }) ?? true
+      else { return nil }
+      return (args["json"] != nil, nil)
+    case .configCheck:
+      guard args.keys.allSatisfy({ $0 == "file" }), args["file"].map({ !$0.isEmpty }) ?? true
+      else { return nil }
+      return (false, args["file"])
+    }
+  }
+
+  /// A query's reply: the JSON in its direct object, printed as-is with
+  /// `--json` or rendered as text. `doctor` exits 1 when it found an issue.
+  static func queryOutcome(
+    _ query: FlashQuery, json: Bool, status: OSStatus, reply: NSAppleEventDescriptor
+  ) -> (exitCode: Int32, output: String?, message: String?) {
+    let transport = response(verb: query.rawValue, status: status, reply: reply)
+    guard transport.exitCode == 0 else { return (transport.exitCode, nil, transport.message) }
+    guard
+      let text = reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+      let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+    else { return (1, nil, "the resident's \(query.rawValue) reply carried no JSON") }
+    let output: String
+    if json {
+      let data = try? JSONSerialization.data(
+        withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+      output = data.flatMap { String(data: $0, encoding: .utf8) } ?? text
+    } else {
+      output = query == .doctor ? Doctor.render(object) : FlashStatusReport.render(object)
+    }
+    let failed = query == .doctor && (object["issues"] as? Int ?? 0) > 0
+    return (failed ? 1 : 0, output, nil)
+  }
+
+  /// Send `verb` to the resident and wait for its reply; nil (after a
+  /// diagnostic) when the event could not even be built.
+  private static func send(_ verb: String, args: [String: String], timeoutTicks: Int = 5 * 60)
+    -> (OSStatus, NSAppleEventDescriptor)?
+  {
     let bundleID = "com.flash.app"
     var targetAddr = AEAddressDesc()
     guard
@@ -96,7 +211,7 @@ enum FlashCLI {
     else {
       FileHandle.standardError.write(
         "flash: could not address \(bundleID)\n".data(using: .utf8) ?? Data())
-      return 1
+      return nil
     }
     defer { AEDisposeDesc(&targetAddr) }
 
@@ -113,7 +228,7 @@ enum FlashCLI {
     else {
       FileHandle.standardError.write(
         "flash: could not build apple event\n".data(using: .utf8) ?? Data())
-      return 1
+      return nil
     }
     defer { AEDisposeDesc(&event) }
 
@@ -131,18 +246,16 @@ enum FlashCLI {
     var reply = AppleEvent()
     // Quit tears down the resident before a reply can be sent.
     let sendMode = verb == "quit" ? kAENoReply : kAEWaitReply
-    let status = AESendMessage(&event, &reply, AESendMode(sendMode), 5 * 60)
-    let replyDescriptor = NSAppleEventDescriptor(aeDescNoCopy: &reply)
-    let result = response(verb: verb, status: status, reply: replyDescriptor)
-    if let message = result.message {
-      FileHandle.standardError.write(Data("flash: \(message)\n".utf8))
-    }
-    return result.exitCode
+    let status = AESendMessage(&event, &reply, AESendMode(sendMode), timeoutTicks)
+    return (status, NSAppleEventDescriptor(aeDescNoCopy: &reply))
   }
 
   static func response(
     verb: String, status: OSStatus, reply: NSAppleEventDescriptor
   ) -> (exitCode: Int32, message: String?) {
+    if status == procNotFound {
+      return (1, "Flash is not running")
+    }
     if status != noErr {
       return (1, "could not send \(verb) (OSStatus=\(status))")
     }

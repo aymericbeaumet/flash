@@ -21,6 +21,27 @@ characters (compared lowercased) without whitespace or the reserved `` ` ``;
 a malformed one is reported and keeps the previous value.
 Resolving configuration again is idempotent and does not accumulate warnings.
 
+## Keyboard layout
+
+Hint labels, grid keys and NORMAL mappings are characters, matched against the
+key you press. `[app] keyboard_layout` picks the layout that match reads keys
+on:
+
+- `"auto"` (default) reads keys as typed while the selected input source can
+  type Latin letters. Under a non-Latin source (Russian, Greek, Hebrew, a CJK
+  input method) it reads each key on the ASCII-capable layout macOS pairs with
+  that source, or on US-ANSI when there is none, so `f` still opens hints under
+  ЙЦУКЕН.
+- An input-source ID, such as `"com.apple.keylayout.US"`, always reads keys on
+  that layout, whatever is selected. An ID that is not installed falls back to
+  US-ANSI; `flash doctor` reports it.
+
+The table is rebuilt when the selected input source changes and on every
+config load, never on a keypress; the keyboard tap's swallow decision does not
+read it. `--search` still matches the text you actually type, since it filters
+by visible text. `flash status` shows the selected source and the reference
+layout.
+
 ## Environment overrides
 
 Supported names are the uppercased field path with dots replaced by underscores,
@@ -110,7 +131,25 @@ Mapping values are argv arrays, or inline tables with a `command` argv array and
 optional `repeat` metadata. `repeat = true` repeats a completed normal-mode
 sequence whenever its final key is pressed again. Arrays beginning with `"flash"`
 dispatch in-process; any other executable launches directly. Arguments receive
-home/environment expansion, with no implicit shell.
+home/environment expansion, with no implicit shell. The CLI queries
+`status`, `doctor` and `config_check` are not verbs and cannot be mapped.
+
+Entries extend the defaults layer by layer: reusing a key replaces its mapping,
+and `false` removes it.
+
+```toml
+[mode.normal.mappings]
+"t" = false                                   # drop the default Cmd-T
+"tf" = ["flash", "mouse_target", "--triple"]  # now fires without a timeout
+```
+
+Layers apply in order and the last one to mention a key wins: a removal takes
+out a key an earlier layer mapped, and a mapping in a later layer restores it.
+A removal applies to its own table: `"t" = false` under
+`[mode.normal.mappings]` leaves an `[mode.all.mappings]` entry for `t` in place.
+It also drops plugin mappings on that key in that table, including a chord
+spelled another way (`cmd+shift+]` and `cmd+shift+}`). `true` and
+`{ command = false }` are rejected.
 
 NORMAL persists across commands and focus changes. Its unmapped keys are swallowed;
 use `send_key` to pass a chosen chord to the app. INSERT entry rules and complete

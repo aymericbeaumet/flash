@@ -1233,6 +1233,31 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  func testQueryNamesAreReservedAgainstPluginVerbs() throws {
+    for name in ["status", "doctor", "config_check"] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "reserved",
+            "name": "Reserved",
+            "version": "1.0.0",
+            "description": "fixture",
+            "install": "true",
+            "verbs": [
+              { "name": "\(name)", "keystrokes": { "": "cmd+s" } }
+            ]
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root), name) { error in
+        XCTAssertTrue(
+          String(describing: error).contains("plugin verb \(name) is reserved"),
+          String(describing: error))
+      }
+      XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: name, args: [:]), name)
+    }
+  }
+
   func testFetchURLsAndNetworkFetchCapabilityMustPair() throws {
     for manifest in [
       // fetch_urls without the capability.

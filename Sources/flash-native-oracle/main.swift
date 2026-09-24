@@ -14,6 +14,9 @@ private struct Args {
   var skipResidentModeTests = false
   var statePath: String = "/tmp/flash-native-fixture-state.json"
   var timingsPath: String?
+  /// `--bench=N [--bench-trigger=key|cli]`: time hint activations on the
+  /// fixture instead of running the oracle (`Scripts/benchmark-hints.sh`).
+  var bench: ResidentHintBenchmark?
 }
 
 private func parseArgs() -> Args {
@@ -35,12 +38,15 @@ private func parseArgs() -> Args {
       args.statePath = iter.next() ?? args.statePath
     case "--timings":
       args.timingsPath = iter.next()
+    case let arg where ResidentHintBenchmark.owns(arg):
+      continue
     case "--help", "-h":
       print(
         """
         flash-native-oracle [--fixture-app <path>] [--state-file <path>] [--timings <path>]
                             [--flash-cli <path>] [--flash-state-url <url>]
                             [--skip-resident-mode-tests]
+                            [--bench=<runs> [--bench-trigger=key|cli]]
 
         Launches the Flash native AppKit fixture, compares Flash's generic
         AX targets against expected native controls, verifies host clicks,
@@ -52,6 +58,12 @@ private func parseArgs() -> Args {
       fputs("Unknown argument: \(arg)\n", stderr)
       exit(2)
     }
+  }
+  do {
+    args.bench = try ResidentHintBenchmark.parse(Array(CommandLine.arguments.dropFirst()))
+  } catch {
+    fputs("\(error)\n", stderr)
+    exit(2)
   }
   return args
 }
@@ -1097,6 +1109,14 @@ do {
     arguments: ["--state-file", args.statePath],
     timer: timer)
   defer { terminateRunningFixture(bundleID: args.fixtureBundleID) }
+
+  if var bench = args.bench {
+    bench.flashCLIPath = args.flashCLIPath
+    if let url = URL(string: args.flashStateURL) { bench.stateURL = url }
+    try bench.run(activate: { app.activate() }, log: recorder.info)
+    recorder.info("PASS native hint benchmark")
+    exit(0)
+  }
 
   let targets = waitForTargets(
     app: app,

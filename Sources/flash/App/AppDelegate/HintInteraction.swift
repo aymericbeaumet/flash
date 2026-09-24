@@ -1,5 +1,7 @@
 import AppKit
+import Carbon.HIToolbox
 import FlashCore
+import QuartzCore
 
 enum HintActivationRequest {
   case target(MouseCommand, AppContext?)
@@ -81,7 +83,57 @@ extension AppDelegate {
     cancelPointerInsertHandoff(reason: "hint_replaced")
     overlay.hide()
     clearHintSessionState()
+    beginHintSession()
     return true
+  }
+
+  /// Fix how the new session reads keys, and arm its latency probe while
+  /// still inside the interaction that asked for it.
+  private func beginHintSession() {
+    let secure = IsSecureEventInputEnabled()
+    noteSecureInput(secure)
+    hintSession.capture = KeyboardCaptureTap.sessionCapture(
+      tapInstalled: keyboardCaptureTap != nil, secureInputEnabled: secure)
+    if secure, keyboardCaptureTap != nil {
+      FlashLog.info("[activation] capture=key_window reason=secure_input")
+    }
+    hintSession.latencyProbe = HintLatencyProbe.arm(Trace.currentTrigger)
+  }
+
+  /// Draw an activation's hints. The first display of an activation also
+  /// logs `[latency] hints_visible`, from the completion of the Core
+  /// Animation transaction that commits them.
+  func presentHints(
+    _ hints: [AssignedHint], prepared: HintLatencyProbe.Prepared, pid: pid_t?, surface: String
+  ) {
+    guard let probe = hintSession.latencyProbe else {
+      overlay.display(hints: hints)
+      return
+    }
+    hintSession.latencyProbe = nil
+    let bundleIdentifier = pid.flatMap { NSRunningApplication(processIdentifier: $0) }?
+      .bundleIdentifier
+    let appClass = HintLatencyProbe.appClass(AppTraits.cached(bundleIdentifier: bundleIdentifier))
+    let targets = hints.count
+    CATransaction.begin()
+    CATransaction.setCompletionBlock {
+      let line = probe.line(
+        visibleAt: ProcessInfo.processInfo.systemUptime, prepared: prepared, targets: targets,
+        appClass: appClass, surface: surface)
+      Trace.run(in: probe.trace) { FlashLog.info(line) }
+    }
+    overlay.display(hints: hints)
+    CATransaction.commit()
+  }
+
+  /// Whether secure input was on the last time Flash looked — at a hint
+  /// activation, or when the tap read it for a keystroke. Published as
+  /// `#{flash.secure_input}`; never polled.
+  func noteSecureInput(_ enabled: Bool) {
+    guard enabled != secureInputObserved else { return }
+    secureInputObserved = enabled
+    FlashLog.debug("[input] secure_input=\(enabled ? "on" : "off")")
+    statusBarController?.updateSecureInput(enabled)
   }
 
   private func performHintActivation(_ request: HintActivationRequest) {

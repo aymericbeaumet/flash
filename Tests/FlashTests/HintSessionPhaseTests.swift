@@ -76,6 +76,18 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertEqual(delegate.overlay.inputMode, .passive, "a stale .hints swallows every key")
   }
 
+  func testTheCapturePathIsFixedPerSessionAndPushedToTheOverlay() {
+    let delegate = AppDelegate()
+    delegate.overlay = OverlayPanel()
+    XCTAssertEqual(HintSession().capture, .tap)
+
+    delegate.hintSession.capture = .keyWindow
+    XCTAssertEqual(delegate.overlay.hintSessionCapture, .keyWindow)
+    _ = delegate.hintSession.finish()
+    XCTAssertEqual(delegate.hintSession.capture, .tap, "the next session decides afresh")
+    XCTAssertEqual(delegate.overlay.hintSessionCapture, .tap)
+  }
+
   func testOverlayRoutingAndFocusBorderFollowTheSession() {
     let delegate = AppDelegate()
     delegate.overlay = OverlayPanel()

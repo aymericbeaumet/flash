@@ -89,6 +89,10 @@ struct ConfigLocation: Equatable {
 struct ConfigDiagnostic: Equatable {
   let message: String
   let location: ConfigLocation?
+  /// The file whose value raised it, when one did: the user's config for
+  /// its own entries, the bundled defaults for theirs. `flash config_check`
+  /// prints it as the `path` of `path:line:col`.
+  var file: String? = nil
 
   var logMessage: String {
     guard let location else { return message }
@@ -130,6 +134,11 @@ struct Config {
     /// Login-item registration through SMAppService, reconciled on every
     /// launch and config reload. `[app] autostart = false` unregisters.
     var autostart: Bool = true
+    /// The layout keys are read against for hint labels, the grid and
+    /// NORMAL (`KeyboardLayout.Setting`): "auto" reads them on the paired
+    /// ASCII-capable layout while a non-Latin source is selected, an
+    /// input-source ID always reads them on that layout.
+    var keyboardLayout: String = "auto"
   }
   struct Hints: Equatable {
     var keys: String = Alphabet.defaultKeys
@@ -452,6 +461,19 @@ struct Config {
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
+    /// Keys a `"<key>" = false` entry removed, per table, after every layer.
+    /// A later layer mapping the key again takes it back out. Plugin
+    /// mappings on these keys are dropped too (`EffectiveMappings.merge`).
+    var unmapped: [ModeScope: Set<String>] = [:]
+
+    /// Whether a `false` entry in `scope` removed `mapping`'s key, compared
+    /// by physical chord so `cmd+shift+]` also removes `cmd+shift+}`.
+    func removes(_ mapping: ModeMapping, in scope: ModeScope) -> Bool {
+      guard let keys = unmapped[scope], !keys.isEmpty else { return false }
+      if keys.contains(mapping.key) { return true }
+      guard let chord = mapping.nativeHotkey else { return false }
+      return keys.contains { ModeMapping.parseNativeHotkey($0) == chord }
+    }
 
     /// The proportional layouts `window_move` mappings apply, in any scope.
     var declaredWindowLayouts: [WindowLayout] {
@@ -550,7 +572,7 @@ struct Config {
         // of a longer one until `sequence_timeout_ms` elapses, so binding `t`
         // here would make a bare `t` (new tab) wait a full second. Triple
         // click is deliberately unbound for that reason — add `"tf"` in your
-        // own config if you want it, and drop your `t` mapping to match.
+        // own config if you want it, and remove `t` with `"t" = false`.
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
         ("F", .flashCommand(.mouseGrid(.init(.click(.leftClick, modifiers: []))))),
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
@@ -629,6 +651,7 @@ struct Config {
         let identity = CompiledMappings.physicalIdentity(for: $0.key)
         return insertClaimed.insert(identity).inserted
           && ($0.action.command == .normalMode || $0.action.command == .leaveMode)
+          && !removes($0, in: .terminal)
           && claimed.insert(identity).inserted
       }
       return explicit + inherited
@@ -708,8 +731,10 @@ struct Config {
     valueLocations.removeValue(forKey: path)
   }
 
-  mutating func addDiagnostic(_ message: String, location: ConfigLocation? = nil) {
-    diagnostics.append(ConfigDiagnostic(message: message, location: location))
+  mutating func addDiagnostic(
+    _ message: String, location: ConfigLocation? = nil, file: String? = nil
+  ) {
+    diagnostics.append(ConfigDiagnostic(message: message, location: location, file: file))
   }
 
   mutating func removeDiagnostics(where predicate: (String) -> Bool) {

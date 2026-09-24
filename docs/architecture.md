@@ -2,7 +2,8 @@
 
 Flash is one resident macOS application. Its executable also implements the CLI:
 arguments invoke a verb by custom AppleEvent (`Flsh` / `Cmd `); no arguments start
-the resident. Configured mappings resolve through the same command definitions
+the resident. `flash status` and `flash doctor` travel the same event and read
+JSON from its reply; `flash config_check` never leaves the CLI. Configured mappings resolve through the same command definitions
 and dispatch in-process. Other mapping executables receive an argv array.
 
 ## Boundaries
@@ -14,7 +15,8 @@ and dispatch in-process. Other mapping executables receive an argv array.
 | `AppMonitor` | Focus observation, provider selection, complete prepared models and refresh scheduling |
 | `ModeStore` / `ModeReducer` | Serialized mode transitions and ordered effects |
 | `ActivationLifecycle` | Discovery, delayed commit, active gesture and replacement ownership |
-| `HintSession` | Hint/search/pointer interaction state and reset; the mouse grid's pure `MouseGrid.Navigation` (display, step and undo history), key shape and drag anchor |
+| `HintSession` | Hint/search/pointer interaction state and reset; the mouse grid's pure `MouseGrid.Navigation` (display, step and undo history), key shape and drag anchor; the session's capture path and latency probe |
+| `KeyboardLayoutMonitor` | `[app] keyboard_layout`'s reference table, rebuilt on input-source changes and config loads |
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
 | `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture |

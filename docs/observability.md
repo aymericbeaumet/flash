@@ -29,6 +29,14 @@ reassembles the whole interaction across the host and its plugins. Timers,
 AX notifications and background refreshes belong to no interaction and carry
 no id.
 
+## Latency
+
+Every hint activation logs `[latency] hints_visible` at `info`: milliseconds
+from its trigger to the Core Animation commit that shows the hints, with the
+origin, whether the prepared model served it, the target count and the app
+class. `Scripts/benchmark-hints.sh` aggregates these lines; see
+[performance](performance.md).
+
 ## HTTP inspector
 
 `[debug] http_inspector_enabled = true` serves a loopback-only inspector

@@ -247,6 +247,10 @@ final class OverlayPanel: NSPanel {
     didSet { statusBarLayoutRevision &+= 1 }
   }
   var magicModifiers: ClickModifiers = .defaultMagic
+  /// `[app] keyboard_layout`'s reference table, or nil while keys read as
+  /// typed. Set only by `KeyboardLayoutMonitor`; the key path reads it once
+  /// per key (`keyCharacters(for:)`).
+  var keyboardLayout: KeyboardLayout?
   var inputMode: OverlayInputMode = .passive {
     didSet { if inputMode != oldValue { scheduleCursorVisibilityUpdate() } }
   }
@@ -720,12 +724,28 @@ final class OverlayPanel: NSPanel {
   /// key-window path is used — if the tap could not be created.
   var keyboardCaptureActive = false
 
+  /// The current hint session's capture path; pushed from
+  /// `HintSession.capture` with the rest of the session's projections.
+  var hintSessionCapture = KeyboardCaptureTap.SessionCapture.tap
+
+  /// Whether the tap routes the current input mode's keys: NORMAL, and a
+  /// hint session that did not start under secure input. Everything else
+  /// reads keys through the key window.
+  var tapCapturesInput: Bool {
+    guard keyboardCaptureActive else { return false }
+    switch inputMode {
+    case .normal: return true
+    case .hints: return hintSessionCapture == .tap
+    case .passive, .commandLine: return false
+    }
+  }
+
   var keyboardCaptureIsActive: Bool {
     // NORMAL / hints capture is owned by the keyboard tap, which doesn't depend
     // on key-window focus — being visible is enough. (The recapture machinery
     // keys off this, so reporting "active" here keeps it from churning.)
     if inputMode == .passive { return false }
-    if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
+    if tapCapturesInput {
       return isVisible
     }
     if inputMode == .commandLine {

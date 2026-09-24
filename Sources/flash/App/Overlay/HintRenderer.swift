@@ -523,7 +523,7 @@ extension OverlayPanel {
       orderFrontRegardless()
       return
     }
-    if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
+    if tapCapturesInput {
       orderFrontRegardless()
       // If we still hold activation from a prior command-line / modal (which do
       // take the key window for their text fields), hand it back so the focused

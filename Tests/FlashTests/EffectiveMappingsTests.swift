@@ -30,6 +30,31 @@ final class EffectiveMappingsTests: XCTestCase {
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
   }
 
+  func testPluginMappingOnAKeyTheConfigRemovedIsDropped() {
+    var base = mode(normal: [ModeMapping(key: "q", action: .flashCommand(.undo))])
+    base.unmapped[.normal] = ["t", "cmd+shift+]"]
+    let effective = EffectiveMappings.merge(
+      base: base,
+      plugin: [
+        (
+          priority: 25, scope: .normal, mapping: ModeMapping(key: "t", action: .flashCommand(.redo))
+        ),
+        // The same physical chord spelled another way is the same key.
+        (
+          priority: 25, scope: .normal,
+          mapping: ModeMapping(key: "cmd+shift+}", action: .flashCommand(.tabNext))
+        ),
+        // A removal is per table: the insert scope keeps its plugin mapping.
+        (
+          priority: 25, scope: .insert, mapping: ModeMapping(key: "t", action: .flashCommand(.redo))
+        ),
+      ])
+    XCTAssertNil(effective.compiledNormal.mapping(for: "t"))
+    XCTAssertTrue(effective.normal.allSatisfy { $0.key != "cmd+shift+}" })
+    XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .undo)
+    XCTAssertEqual(effective.compiledInsert.mapping(for: "t")?.action.command, .redo)
+  }
+
   func testNegativePriorityDefersToBuiltinDefault() {
     let base = mode(normal: [ModeMapping(key: "q", action: .flashCommand(.undo))])
     let effective = EffectiveMappings.merge(

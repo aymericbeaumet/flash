@@ -75,9 +75,9 @@ enum ConfigLoader {
   /// The default config bundled into the app (`Resources/config.default.toml`
   /// at build time). nil in unit tests and non-bundle contexts — the Swift
   /// struct defaults then stand alone, as before.
-  static func embeddedDefaultLayer() -> Layer? {
+  static func embeddedDefaultLayer(in bundle: Bundle = .main) -> Layer? {
     guard
-      let url = Bundle.main.url(forResource: "config.default", withExtension: "toml"),
+      let url = bundle.url(forResource: "config.default", withExtension: "toml"),
       let text = try? String(contentsOf: url, encoding: .utf8)
     else { return nil }
     return Layer(
@@ -129,12 +129,13 @@ enum ConfigLoader {
       } catch {
         config.addDiagnostic("TOML parse error: \(error)")
       }
-      if let label = layer.diagnosticLabel {
-        for index in diagnosticsBefore..<config.diagnostics.count {
-          config.diagnostics[index] = ConfigDiagnostic(
-            message: "\(label): \(config.diagnostics[index].message)",
-            location: config.diagnostics[index].location)
-        }
+      for index in diagnosticsBefore..<config.diagnostics.count {
+        let diagnostic = config.diagnostics[index]
+        config.diagnostics[index] = ConfigDiagnostic(
+          message: layer.diagnosticLabel.map { "\($0): \(diagnostic.message)" }
+            ?? diagnostic.message,
+          location: diagnostic.location,
+          file: diagnostic.file ?? layer.sourceURL?.path)
       }
     }
 
@@ -331,14 +332,17 @@ enum ConfigLoader {
     var scope: ModeScope
     var rawKey: String
     var key: String
-    var action: MappingCommand
-    var repeatsOnFinalKey: Bool
+    var value: ParsedModeMappingValue
     var location: ConfigLocation
+    /// The file that defined it, for diagnostics raised after every layer.
+    var file: String?
   }
 
-  private struct ParsedModeMappingValue {
-    var action: MappingCommand
-    var repeatsOnFinalKey: Bool
+  /// A mapping entry's value: a command, or `false`, which removes the key
+  /// from its table.
+  private enum ParsedModeMappingValue {
+    case mapping(MappingCommand, repeatsOnFinalKey: Bool)
+    case removal
   }
 
   private enum ModeMappingValueError: Error {
@@ -346,20 +350,26 @@ enum ConfigLoader {
     case invalidCommandValue
     case invalidRepeat
     case invalidCommand(String)
+    case queryCommand(String)
     case unknownOption(String)
 
     func message(mappingKey: String) -> String {
       switch self {
       case .invalidShape:
         return
-          "mapping \"\(mappingKey)\" must be a non-empty string array or "
-          + "{ command = [\"flash\", \"<verb>\", ...], repeat = true }"
+          "mapping \"\(mappingKey)\" must be a non-empty string array, "
+          + "{ command = [\"flash\", \"<verb>\", ...], repeat = true }, or false to remove it"
       case .invalidCommandValue:
         return
           "mapping \"\(mappingKey)\".command must be a non-empty string array — "
-          + "[\"flash\", \"<verb>\", ...] or [<argv>...]"
+          + "[\"flash\", \"<verb>\", ...] or [<argv>...]; write "
+          + "\"\(mappingKey)\" = false to remove it"
       case .invalidCommand(let command):
         return "mapping \"\(mappingKey)\": " + URLEventHandler.rejectionMessage(command)
+      case .queryCommand(let verb):
+        return
+          "mapping \"\(mappingKey)\": \(FlashQuery.reservationMessage(verb) ?? verb), "
+          + "not from a mapping"
       case .invalidRepeat:
         return "mapping \"\(mappingKey)\".repeat must be true or false"
       case .unknownOption(let option):
@@ -435,7 +445,7 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     let sectionKeys: [String: Set<String>] = [
-      "app": ["menu_bar_icon", "autostart"],
+      "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
       "hints": [
         "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
         "mouse_grid_keys", "mouse_grid_cursor_follow",
@@ -812,6 +822,14 @@ enum ConfigLoader {
     ) { value, config in
       config.app.autostart = value
     }
+    applyString(
+      table["keyboard_layout"], path: ["app", "keyboard_layout"],
+      message:
+        "app.keyboard_layout must be \"auto\" or an input-source ID such as "
+        + "\"com.apple.keylayout.US\"",
+      locations: locations, into: &config,
+      validate: { KeyboardLayout.Setting($0) != nil },
+      assign: { value, config in config.app.keyboardLayout = value })
   }
 
   private static func applyStatusBarTail(
@@ -1609,9 +1627,9 @@ enum ConfigLoader {
             scope: scope,
             rawKey: key,
             key: canonical,
-            action: parsed.action,
-            repeatsOnFinalKey: parsed.repeatsOnFinalKey,
-            location: location ?? ConfigLocation(line: 1, column: 1)))
+            value: parsed,
+            location: location ?? ConfigLocation(line: 1, column: 1),
+            file: sourceURL?.path))
       case .failure(let error):
         config.addDiagnostic(
           error.message(mappingKey: key),
@@ -1771,6 +1789,15 @@ enum ConfigLoader {
       key: key,
       action: action,
       repeatsOnFinalKey: repeatsOnFinalKey)
+    // Mapping a key a lower layer removed takes it back.
+    if let removed = config.mode.unmapped[scope] {
+      let remaining = removed.filter {
+        $0 != key
+          && (mapping.nativeHotkey == nil
+            || ModeMapping.parseNativeHotkey($0) != mapping.nativeHotkey)
+      }
+      config.mode.unmapped[scope] = remaining.isEmpty ? nil : remaining
+    }
     switch scope {
     case .all:
       config.mode.all.removeAll { $0.key == key }
@@ -1790,6 +1817,25 @@ enum ConfigLoader {
     }
   }
 
+  /// `"<key>" = false`: delete the key from its table, including a chord
+  /// spelled another way, and remember it so plugin mappings stay off it.
+  private static func removeModeMapping(scope: ModeScope, key: String, into config: inout Config) {
+    config.mode.unmapped[scope, default: []].insert(key)
+    let chord = ModeMapping.parseNativeHotkey(key)
+    let removed: (ModeMapping) -> Bool = { mapping in
+      mapping.key == key || (chord != nil && mapping.nativeHotkey == chord)
+    }
+    switch scope {
+    case .all: config.mode.all.removeAll(where: removed)
+    case .normal: config.mode.normal.removeAll(where: removed)
+    case .insert: config.mode.insert.removeAll(where: removed)
+    case .terminal: config.mode.terminal.removeAll(where: removed)
+    case .command: config.mode.command.removeAll(where: removed)
+    }
+  }
+
+  /// Every layer's entries in layer order, so a later layer's removal or
+  /// re-mapping of a key wins.
   private static func applyPendingModeMappings(
     _ mappings: [PendingModeMapping],
     into config: inout Config
@@ -1798,29 +1844,32 @@ enum ConfigLoader {
       if mapping.key.contains("<leader>"), mapping.scope != .normal {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" uses <leader> outside [mode.normal.mappings]",
-          location: mapping.location)
+          location: mapping.location, file: mapping.file)
         continue
       }
       guard let key = resolvedMappingKey(mapping.key, scope: mapping.scope, config: config) else {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" uses <leader> but mode.normal.leader is not set",
-          location: mapping.location)
+          location: mapping.location, file: mapping.file)
         continue
       }
-      if mapping.scope == .command,
-        ModeMapping(key: key, action: mapping.action).nativeHotkey == nil
-      {
+      if mapping.scope == .command, ModeMapping.parseNativeHotkey(key) == nil {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" in [mode.command.mappings] must be a single modified key",
-          location: mapping.location)
+          location: mapping.location, file: mapping.file)
         continue
       }
-      setModeMapping(
-        scope: mapping.scope,
-        key: key,
-        action: mapping.action,
-        repeatsOnFinalKey: mapping.repeatsOnFinalKey,
-        into: &config)
+      switch mapping.value {
+      case .mapping(let action, let repeatsOnFinalKey):
+        setModeMapping(
+          scope: mapping.scope,
+          key: key,
+          action: action,
+          repeatsOnFinalKey: repeatsOnFinalKey,
+          into: &config)
+      case .removal:
+        removeModeMapping(scope: mapping.scope, key: key, into: &config)
+      }
     }
   }
 
@@ -1937,6 +1986,10 @@ enum ConfigLoader {
     _ value: any TOMLValueConvertible,
     sourceURL: URL?
   ) -> Result<ParsedModeMappingValue, ModeMappingValueError> {
+    // `false` removes the key; `true` means nothing.
+    if let flag = value.bool {
+      return flag ? .failure(.invalidShape) : .success(.removal)
+    }
     if let table = value.table {
       if let unknown = table.keys.sorted().first(where: { $0 != "command" && $0 != "repeat" }) {
         return .failure(.unknownOption(unknown))
@@ -1947,7 +2000,7 @@ enum ConfigLoader {
         if let commandValue = table["command"], let argv = stringArrayValue(commandValue),
           !argv.isEmpty
         {
-          return .failure(.invalidCommand(argv.joined(separator: " ")))
+          return .failure(commandError(argv))
         }
         return .failure(.invalidCommandValue)
       }
@@ -1958,16 +2011,26 @@ enum ConfigLoader {
       } else {
         repeatsOnFinalKey = false
       }
-      return .success(
-        ParsedModeMappingValue(action: action, repeatsOnFinalKey: repeatsOnFinalKey))
+      return .success(.mapping(action, repeatsOnFinalKey: repeatsOnFinalKey))
     }
     guard let action = parseMappingCommandValue(value, sourceURL: sourceURL) else {
       if let argv = stringArrayValue(value), let head = argv.first, !head.isEmpty {
-        return .failure(.invalidCommand(argv.joined(separator: " ")))
+        return .failure(commandError(argv))
       }
       return .failure(.invalidShape)
     }
-    return .success(ParsedModeMappingValue(action: action, repeatsOnFinalKey: false))
+    return .success(.mapping(action, repeatsOnFinalKey: false))
+  }
+
+  /// Why a non-empty argv did not resolve: a CLI query named as a Flash
+  /// verb, or an unknown verb or invalid arguments.
+  private static func commandError(_ argv: [String]) -> ModeMappingValueError {
+    if argv.count >= 2, mappingCommandHeadNamesFlash(argv[0]),
+      FlashQuery(rawValue: argv[1]) != nil
+    {
+      return .queryCommand(argv[1])
+    }
+    return .invalidCommand(argv.joined(separator: " "))
   }
 
   private static func parseMappingCommandValue(

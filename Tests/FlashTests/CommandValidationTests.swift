@@ -46,7 +46,7 @@ final class CommandValidationTests: XCTestCase {
         dispatched = true
         return true
       },
-      rejected: { rejected.append($0) })
+      rejected: { rejected.append($0) }, queries: noQueries)
     let reply = event("reply")
     handler.handleFlashEvent(
       event("leave_mode", arguments: "{\"unexpected\":\"1\"}"),
@@ -58,12 +58,48 @@ final class CommandValidationTests: XCTestCase {
   }
 
   func testUnclaimedPluginCommandReturnsAnErrorReply() {
-    let handler = URLEventHandler(handler: { _ in false }, rejected: { _ in })
+    let handler = URLEventHandler(
+      handler: { _ in false }, rejected: { _ in }, queries: noQueries)
     let reply = event("reply")
     handler.handleFlashEvent(event("missing_plugin_verb"), withReplyEvent: reply)
     XCTAssertTrue(
       reply.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?.stringValue?
         .contains("missing_plugin_verb") == true)
+  }
+
+  /// `flash status` is answered from the query table with JSON in the reply's
+  /// direct object; it never reaches the verb handler, so no mapping or plugin
+  /// can stand in for it.
+  func testStatusIsAnsweredFromTheQueryTableWithJSON() {
+    var dispatched = false
+    let handler = URLEventHandler(
+      handler: { _ in
+        dispatched = true
+        return true
+      },
+      rejected: { _ in },
+      queries: URLEventHandler.QueryAnswers(
+        status: { Data(#"{"schema":1}"#.utf8) }, doctor: { $0(Data()) }))
+    let reply = event("reply")
+    handler.handleFlashEvent(event("status"), withReplyEvent: reply)
+    XCTAssertFalse(dispatched)
+    XCTAssertEqual(
+      reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+      #"{"schema":1}"#)
+
+    for (verb, arguments) in [("status", #"{"json":"1"}"#), ("config_check", "{}")] {
+      let rejected = event("reply")
+      handler.handleFlashEvent(event(verb, arguments: arguments), withReplyEvent: rejected)
+      XCTAssertNil(rejected.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)), verb)
+      XCTAssertEqual(
+        rejected.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value,
+        Int32(errAEEventNotHandled), verb)
+    }
+    XCTAssertFalse(dispatched)
+  }
+
+  private var noQueries: URLEventHandler.QueryAnswers {
+    URLEventHandler.QueryAnswers(status: { Data() }, doctor: { $0(Data()) })
   }
 
   private func event(_ verb: String, arguments: String = "{}") -> NSAppleEventDescriptor {

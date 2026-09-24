@@ -172,6 +172,9 @@ extension AppDelegate {
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
+    // Rebuilt on every load: the setting may have changed, and so may the
+    // installed layouts an explicit input-source ID names.
+    keyboardLayoutMonitor.apply(setting: KeyboardLayout.Setting(cfg.app.keyboardLayout) ?? .auto)
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
       popupTemplates: cfg.statusBar.popups,

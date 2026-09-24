@@ -39,8 +39,9 @@ document-URL and mark commands remain available for explicit mappings.
   So `df` double-clicks an element and `dF` double-clicks a grid position.
 - A prefix letter must not also be a mapping of its own, or that mapping waits
   for `sequence_timeout_ms` before it fires. Triple click therefore ships
-  unbound, because `tf` would stall the bare `t` (new tab). Bind `tf` / `tF`
-  in your own config if you want it, and drop your `t` mapping to match.
+  unbound, because `tf` would stall the bare `t` (new tab). To bind `tf` /
+  `tF`, remove the default `t` with `"t" = false` in the same table; `tf`
+  then fires on its second key with no timeout.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. A hint click moves the pointer to the target and leaves it there;
   `m` (move) moves it without clicking.
@@ -242,6 +243,21 @@ Startup resolves tap availability before entering NORMAL or a capturing surface.
 Starting the tap after NORMAL renders would activate Flash through the fallback
 path and leave the previous app inactive until another app switch.
 
+Each hint or grid session fixes its capture path when it starts
+(`KeyboardCaptureTap.sessionCapture`). Under secure input (a focused password
+field) macOS hides keys from every tap, so that session takes the key window
+instead and typed labels reach Flash, never the password field. A commit hands
+focus back by raising its target; a cancel yields activation to the covered
+app. `#{flash.secure_input}` and `flash status` show the state, which the tap
+refreshes when it reads it for a key; there is no banner and no poll.
+
+Interpreters read keys through `[app] keyboard_layout`'s reference table
+(`KeyCharacters.read`, one lookup per key): labels, the grid, pointer and
+adjustment keys and NORMAL mappings match by key position under a non-Latin
+input source, while `--search` keeps the typed text. The table is rebuilt on
+input-source changes and config loads, never per key, and the swallow decision
+never reads it.
+
 Handing activation back needs the cooperative API: `NSApp.yieldActivation(to:)`
 then `app.activate(from: .current)`. `NSApp.deactivate()` and a bare
 `activate(options:)` are ignored on current macOS, and they leave Flash active
@@ -329,7 +345,9 @@ evidence of main-thread work that needs moving or narrowing.
 Two debug-level probes measure the path itself: `[latency] tap_to_route` is the
 delay from the HID timestamp to the main-thread turn that routes a swallowed
 key, and `[latency] normal_dispatch` is the synchronous cost of one normal-mode
-action. `Scripts/measure-footprint.sh` samples the resident and its children
+action. At `info`, `[latency] hints_visible` times each hint activation from
+its trigger to the Core Animation commit that shows it; see
+[performance](performance.md). `Scripts/measure-footprint.sh` samples the resident and its children
 (CPU, idle wakeups, memory, descriptors) and summarises stalls and log volume
 for a before/after comparison.
 

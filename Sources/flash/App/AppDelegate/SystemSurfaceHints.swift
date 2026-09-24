@@ -111,7 +111,7 @@ extension AppDelegate {
     activationLifecycle.invalidate()
     hintSession.hints = hints
     applyModeOverlay()
-    overlay.display(hints: hints)
+    presentHints(hints, prepared: .miss, pid: pid, surface: surface)
     FlashLog.debug("[\(surface)] displayed targets=\(hints.count)")
   }
 

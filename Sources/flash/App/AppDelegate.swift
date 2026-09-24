@@ -71,6 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   var config = Config.default
   let pluginManager = PluginManager()
+  /// `[app] keyboard_layout`'s reference table, rebuilt off the key path and
+  /// handed to the overlay.
+  let keyboardLayoutMonitor = KeyboardLayoutMonitor()
   let wifiInfoProvider = WiFiInfoProvider()
   let statusItemController = StatusItemController()
   /// Flat-JSON frecency persistence — keyed by stable item key
@@ -128,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     didSet {
       guard let overlay else { return }
       overlay.hintKeyRoute = hintSession.keyRoute
+      overlay.hintSessionCapture = hintSession.capture
       if oldValue.isActive != hintSession.isActive {
         refreshOverlayInputRouting()
         updateActiveWindowBorder(
@@ -247,6 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// (no grant) falls back to the legacy key-window capture in
   /// `captureKeyboardInput`.
   var keyboardCaptureTap: KeyboardCaptureTap?
+  /// See `noteSecureInput`.
+  var secureInputObserved = false
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderUpdateGeneration: UInt64 = 0
   /// The authoritative front-window read queued for the next main turn.
@@ -387,6 +393,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
+    keyboardLayoutMonitor.onChange = { [weak self] state in
+      self?.overlay.keyboardLayout = state.reference.table
+    }
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
@@ -403,6 +412,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.pluginManager.statusBarInfos() ?? []
       })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
+    // Once at launch; afterwards the tap and hint activations refresh it.
+    noteSecureInput(IsSecureEventInputEnabled())
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
@@ -413,7 +424,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     urlHandler = URLEventHandler(
       handler: { [weak self] cmd in Trace.ensure(.cli) { self?.handleURLCommand(cmd) ?? false } },
-      rejected: { [weak self] command in self?.warnUnsupportedCommand(command) })
+      rejected: { [weak self] command in self?.warnUnsupportedCommand(command) },
+      queries: URLEventHandler.QueryAnswers(
+        status: { [weak self] in self?.statusReport().data ?? Data("{}".utf8) },
+        doctor: { [weak self] reply in
+          guard let self else { return reply(Data("{}".utf8)) }
+          self.runDoctor { reply($0.data) }
+        }))
     mappings.start(
       dispatch: { [weak self] action in
         self?.dispatchNativeMappingAction(action)
@@ -992,15 +1009,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .pass:
       return false
     case .swallow:
-      return !IsSecureEventInputEnabled()
+      return !tapReadsSecureInput()
     case .swallowIfInsertChordIsMapped:
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       reconcileFrontmostApplication(
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
       guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
-      return !IsSecureEventInputEnabled()
+      return !tapReadsSecureInput()
     case .closeEphemeralPopup:
-      guard !IsSecureEventInputEnabled() else { return false }
+      guard !tapReadsSecureInput() else { return false }
       tapEscapeClosedPopup = true
       // Out of the synchronous tap callback: hiding a panel is AppKit work.
       DispatchQueue.main.async { [weak self] in
@@ -1008,10 +1025,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return true
     case .swallowIfNativeSurfaceKeyIsMapped:
-      guard !IsSecureEventInputEnabled() else { return false }
+      guard !tapReadsSecureInput() else { return false }
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       return keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
     }
+  }
+
+  /// The swallow decision's secure-input read. Every swallow yields to a
+  /// focused password field; a change it sees is published on the next
+  /// turn, outside the synchronous tap callback.
+  private func tapReadsSecureInput() -> Bool {
+    let enabled = IsSecureEventInputEnabled()
+    if enabled != secureInputObserved {
+      DispatchQueue.main.async { [weak self] in self?.noteSecureInput(enabled) }
+    }
+    return enabled
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {
@@ -1036,7 +1064,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       tapEscapeClosedPopup = false
       return
     }
-    Trace.begin(.key) { routeTracedKey(event) }
+    Trace.begin(.key, triggeredAt: event.timestamp) { routeTracedKey(event) }
   }
 
   private func routeTracedKey(_ event: NSEvent) {

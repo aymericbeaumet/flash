@@ -110,6 +110,23 @@ final class KeyboardCaptureTap {
     return shouldSwallow(flashMode: flashMode, inputMode: inputMode) ? .swallow : .pass
   }
 
+  /// How one hint session receives its keys.
+  enum SessionCapture: String, Equatable {
+    /// This tap swallows and routes them.
+    case tap
+    /// The overlay takes the key window and reads them through `keyDown`.
+    case keyWindow = "key_window"
+  }
+
+  /// Decided once, when a hint or grid session starts. Secure input (a
+  /// focused password field) keeps keys from every event tap, so a session
+  /// opened under it takes the key window: the labels the user types then
+  /// land in Flash instead of the password field. Without a tap the key
+  /// window is the only capture.
+  static func sessionCapture(tapInstalled: Bool, secureInputEnabled: Bool) -> SessionCapture {
+    tapInstalled && !secureInputEnabled ? .tap : .keyWindow
+  }
+
   /// NORMAL and hints capture every key; INSERT and key-window surfaces are
   /// left untouched.
   static func shouldSwallow(flashMode: FlashMode, inputMode: OverlayInputMode) -> Bool {

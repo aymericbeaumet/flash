@@ -254,7 +254,7 @@ corpus at `Plugins/_flash_plugin_rust/fixtures/wire-values.fixture`;
 `Plugins/_flash_plugin_rust/protocol.json` pins the constants both assert
 against.
 
-If a plugin will not load, run `:plugins doctor`. It checks manifest loading,
+If a plugin will not load, run `:doctor`. It checks manifest loading,
 runtime state, executable resolution, and whether the generated Seatbelt
 profile compiles. Use `:plugins reload` after correcting the problem or to
 restart a process parked by its restart budget.

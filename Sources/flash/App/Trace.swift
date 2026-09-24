@@ -22,26 +22,70 @@ enum Trace {
     case commandLine = "command_line"
   }
 
+  /// Where and when an interaction started: the input's own timestamp in
+  /// `ProcessInfo.systemUptime` seconds — a tap event's, a Carbon hotkey
+  /// event's, an AppleEvent's arrival — so a probe can measure from it.
+  struct Trigger: Equatable {
+    let id: ID
+    let origin: Origin
+    let uptime: TimeInterval
+  }
+
   private static var counter: UInt64 = {
     // Unique across relaunches within a log file's lifetime.
     UInt64(Date().timeIntervalSince1970 * 1000) << 12
   }()
   private static var mainCurrent: ID?
+  private static var mainTrigger: Trigger?
+  /// Set by `triggered(at:)` for the interaction its body begins.
+  private static var pendingTriggerUptime: TimeInterval?
 
   /// The interaction the main thread is serving; nil on other threads.
   static var current: ID? {
     Thread.isMainThread ? mainCurrent : nil
   }
 
+  /// The trigger of the interaction being served synchronously from its
+  /// input; nil once the work has hopped a turn (re-entered with `run(in:)`)
+  /// or off the main thread, where "since the trigger" means nothing.
+  static var currentTrigger: Trigger? {
+    guard Thread.isMainThread, let trigger = mainTrigger, trigger.id == mainCurrent else {
+      return nil
+    }
+    return trigger
+  }
+
   /// Run `body` as a new interaction from `origin`. Main thread only.
+  /// `triggeredAt` is the input's own timestamp (systemUptime seconds);
+  /// without it the interaction dates from `triggered(at:)`, or now.
   @discardableResult
-  static func begin<T>(_ origin: Origin, _ body: () throws -> T) rethrows -> T {
+  static func begin<T>(
+    _ origin: Origin, triggeredAt: TimeInterval? = nil, _ body: () throws -> T
+  ) rethrows -> T {
     counter &+= 1
     let id = ID(value: counter)
+    let enclosingTrigger = mainTrigger
+    mainTrigger = Trigger(
+      id: id, origin: origin,
+      uptime: triggeredAt ?? pendingTriggerUptime ?? ProcessInfo.processInfo.systemUptime)
+    defer { mainTrigger = enclosingTrigger }
     return try run(in: id) {
       FlashLog.debug("[trace] begin", fields: ["origin": origin.rawValue])
       return try body()
     }
+  }
+
+  /// Run `body` knowing when its input arrived: an interaction it begins
+  /// dates from `uptime` rather than from `begin`. For inputs whose
+  /// timestamp is read before the code that begins the interaction (a
+  /// Carbon hotkey event, an AppleEvent). Main thread only.
+  @discardableResult
+  static func triggered<T>(at uptime: TimeInterval, _ body: () throws -> T) rethrows -> T {
+    guard Thread.isMainThread else { return try body() }
+    let enclosing = pendingTriggerUptime
+    pendingTriggerUptime = uptime
+    defer { pendingTriggerUptime = enclosing }
+    return try body()
   }
 
   /// Run `body` as a new interaction unless one is already running (a

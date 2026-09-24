@@ -21,6 +21,11 @@ struct HintSession {
   var hints: [AssignedHint] = []
   var prefix: String = ""
   var sourceAppPID: pid_t?
+  /// How this session's keys arrive, fixed when it starts
+  /// (`KeyboardCaptureTap.sessionCapture`).
+  var capture = KeyboardCaptureTap.SessionCapture.tap
+  /// Armed when the activation starts, spent by its first display.
+  var latencyProbe: HintLatencyProbe?
   var statusBarPopupSnapshots: [String: StatusBarPopupRegion] = [:]
   /// Where the mouse grid is and how it got there; nil outside the grid.
   var grid: MouseGrid.Navigation?

@@ -112,6 +112,7 @@ enum FlashStatusBarSDKValue: Equatable {
   case activeAppName
   case activeBundleIdentifier
   case modeLabel
+  case secureInput
   case date
   case calendar
   case host
@@ -243,6 +244,8 @@ struct FlashStatusBarContext {
   var activeAppName: String
   var activeBundleIdentifier: String
   var modeLabel: String
+  /// Secure input was on when Flash last looked (`noteSecureInput`).
+  var secureInput: Bool
   var now: Date
   var calendar: Calendar
   var locale: Locale
@@ -256,6 +259,7 @@ struct FlashStatusBarContext {
     activeAppName: String = "",
     activeBundleIdentifier: String = "",
     modeLabel: String = "INSERT",
+    secureInput: Bool = false,
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),
@@ -268,6 +272,7 @@ struct FlashStatusBarContext {
     self.activeAppName = activeAppName
     self.activeBundleIdentifier = activeBundleIdentifier
     self.modeLabel = modeLabel
+    self.secureInput = secureInput
     self.now = now
     self.calendar = calendar
     self.locale = locale
@@ -521,6 +526,7 @@ enum FlashStatusBarTemplateEngine {
   static func sdkValue(for token: String) -> FlashStatusBarSDKValue? {
     switch token {
     case "flash.mode": return .modeLabel
+    case "flash.secure_input": return .secureInput
     case "flash.active_app_name": return .activeAppName
     case "flash.active_bundle_identifier": return .activeBundleIdentifier
     case "flash.date": return .date
@@ -546,6 +552,7 @@ enum FlashStatusBarTemplateEngine {
     let host = context.hostName.trimmed
     native.values = [
       "flash.mode": context.modeLabel.trimmed,
+      "flash.secure_input": context.secureInput ? "1" : "",
       "flash.active_app_name": context.activeAppName.trimmed.isEmpty
         ? context.activeBundleIdentifier.trimmed : context.activeAppName.trimmed,
       "flash.active_bundle_identifier": context.activeBundleIdentifier.trimmed,

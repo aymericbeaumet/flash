@@ -17,6 +17,7 @@ contracts before changing a subsystem:
   [status popups](docs/status-popups.md), [terminal popups](docs/terminal-popups.md),
   [help](docs/help.md).
 - [Privacy and permissions](docs/privacy.md).
+- [Performance and latency benchmarks](docs/performance.md).
 
 ## Hard constraints
 

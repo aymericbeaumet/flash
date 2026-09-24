@@ -740,7 +740,7 @@ extension AppDelegate {
     // Single projection-driven writer (yields `.hints` with the grid hints up),
     // not a direct `overlay.inputMode` poke.
     applyModeOverlay()
-    overlay.display(hints: hints)
+    presentHints(hints, prepared: .none, pid: hintSession.sourceAppPID, surface: "grid")
     followMouseGridIfNeeded()
   }
 

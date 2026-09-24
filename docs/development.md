@@ -41,4 +41,16 @@ resident probes also require Automation permission for the signed oracle to
 send commands to Flash. The oracle bundle declares that usage; a native
 AppleEvent error reports its OSStatus rather than an invalid Flash command.
 
+The same fixtures time the installed resident's hint activations (see
+[performance](performance.md)):
+
+```bash
+./Scripts/benchmark-hints.sh --class=all --runs=30
+python3 Scripts/test-hints-latency-summary.py   # the log parser's unit tests
+```
+
+`flash doctor` checks an installed resident's permissions, key capture, config,
+hotkeys and plugins; `flash config_check --file=<path>` validates a config file
+without it.
+
 `swift build` alone does not update the resident app in `/Applications`. See [AGENTS.md](../AGENTS.md) for the architecture, source contracts, and repository guardrails.

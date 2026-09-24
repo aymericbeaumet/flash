@@ -447,6 +447,29 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
+  func testSecureInputIsAFlashValueThatReadsOneOrEmpty() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{?flash.secure_input,SECURE,}"
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertEqual(
+      c.statusBar.template.variables.first { $0.token == "flash.secure_input" }?.source,
+      .sdk(.secureInput))
+    for secure in [true, false] {
+      let model = FlashStatusBarTemplateEngine.evaluate(
+        template: c.statusBar.template, context: FlashStatusBarContext(secureInput: secure)
+      ).model
+      XCTAssertEqual(
+        (model.modeText + model.appText + model.rightText).contains("SECURE"), secure,
+        "secure=\(secure)")
+    }
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.formatContext(FlashStatusBarContext(secureInput: true))
+        .values["flash.secure_input"], "1")
+  }
+
   func testNativeTmuxValuesWithoutFlashContextAreValidAndEmpty() {
     for token in [
       "session_name", "window_name", "window_index", "pane_index", "pane_id", "sesion_name",
@@ -536,6 +559,31 @@ final class ConfigLoaderTests: XCTestCase {
       c.loadingDiagnostics.contains {
         $0.message.contains("mode.labels must be")
       })
+  }
+
+  func testKeyboardLayoutIsAutoOrAnInputSourceID() {
+    XCTAssertEqual(ConfigLoader.parse("").app.keyboardLayout, "auto")
+    let explicit = ConfigLoader.parse(
+      """
+      [app]
+      keyboard_layout = "com.apple.keylayout.Colemak"
+      """)
+    XCTAssertTrue(explicit.loadingDiagnostics.isEmpty)
+    XCTAssertEqual(explicit.app.keyboardLayout, "com.apple.keylayout.Colemak")
+
+    for invalid in ["\"qwerty\"", "\"\"", "true"] {
+      let c = ConfigLoader.parse(
+        """
+        [app]
+        keyboard_layout = \(invalid)
+        """)
+      XCTAssertEqual(c.app.keyboardLayout, "auto", invalid)
+      XCTAssertTrue(
+        c.loadingDiagnostics.contains {
+          $0.message.contains("app.keyboard_layout must be \"auto\" or an input-source ID")
+            && $0.location?.line == 2
+        }, invalid)
+    }
   }
 
   func testParsesHintsSection() {
@@ -1127,6 +1175,101 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(bareVerb.warnings.count, 1)
     XCTAssertTrue(bareVerb.warnings[0].contains("\"j\""))
     XCTAssertNil(bareVerb.mode.normal.first(where: { $0.key == "j" }))
+  }
+
+  func testFalseRemovesADefaultMapping() {
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "t" = false
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "t" }))
+    XCTAssertNil(c.mode.compiledNormal.mapping(for: "t"))
+    XCTAssertEqual(c.mode.unmapped[.normal], ["t"])
+    // Only that key goes: the rest of the defaults stay.
+    XCTAssertNotNil(c.mode.compiledNormal.mapping(for: key("[t")))
+    XCTAssertEqual(c.mode.compiledNormal.mapping(for: "u")?.action.command, .undo)
+  }
+
+  func testLaterLayerRemovesAndAnotherLayerReaddsAMapping() {
+    let bundled = ConfigLoader.Layer(
+      text: """
+        [mode.normal.mappings]
+        "t" = ["flash", "send_key", "--keys=cmd+t"]
+        """,
+      diagnosticLabel: "config.default.toml")
+    let user = ConfigLoader.Layer(
+      text: """
+        [mode.normal.mappings]
+        "t" = false
+        """)
+    let removed = ConfigLoader.parseLayers([bundled, user])
+    XCTAssertNil(removed.mode.compiledNormal.mapping(for: "t"))
+    XCTAssertEqual(removed.mode.unmapped[.normal], ["t"])
+
+    let override = ConfigLoader.Layer(
+      text: """
+        [mode.normal.mappings]
+        "t" = ["flash", "tab_new"]
+        """,
+      diagnosticLabel: "FLASH_TEST")
+    let readded = ConfigLoader.parseLayers([bundled, user, override])
+    XCTAssertEqual(readded.mode.compiledNormal.mapping(for: "t")?.action.command, .tabNew)
+    XCTAssertEqual(readded.mode.unmapped[.normal] ?? [], [])
+    XCTAssertTrue(readded.loadingDiagnostics.isEmpty)
+  }
+
+  func testRemovalIsScopedToItsTableAndResolvesTheLeader() {
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = ","
+      [mode.normal.mappings]
+      ",x" = ["flash", "app_undo"]
+      "<leader>x" = false
+      [mode.terminal.mappings]
+      "cmd+q" = false
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertNil(c.mode.compiledNormal.mapping(for: key(",x")))
+    XCTAssertNil(c.mode.terminal.first(where: { $0.key == key("cmd+q") }))
+    XCTAssertNotNil(c.mode.terminal.first(where: { $0.key == key("cmd+w") }))
+  }
+
+  func testTrueAndCommandFalseAreRejectedWithTheRemovalSpelling() {
+    let bare = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "t" = true
+      """)
+    XCTAssertEqual(bare.warnings.count, 1)
+    XCTAssertTrue(bare.warnings[0].contains("\"t\""), bare.warnings[0])
+    XCTAssertTrue(bare.warnings[0].contains("false to remove it"), bare.warnings[0])
+    XCTAssertNotNil(bare.mode.compiledNormal.mapping(for: "t"), "an invalid value removes nothing")
+
+    let table = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "t" = { command = false }
+      """)
+    XCTAssertEqual(table.warnings.count, 1)
+    XCTAssertTrue(table.warnings[0].contains("false to remove it"), table.warnings[0])
+    XCTAssertNotNil(table.mode.compiledNormal.mapping(for: "t"))
+  }
+
+  func testQueryVerbsCannotBeMapped() {
+    for verb in ["status", "doctor", "config_check"] {
+      let c = ConfigLoader.parse(
+        """
+        [mode.normal.mappings]
+        "zq" = ["flash", "\(verb)"]
+        """)
+      XCTAssertEqual(c.warnings.count, 1, verb)
+      XCTAssertTrue(c.warnings[0].contains("flash \(verb)"), c.warnings[0])
+      XCTAssertTrue(c.warnings[0].contains("CLI"), c.warnings[0])
+      XCTAssertNil(c.mode.compiledNormal.mapping(for: key("zq")))
+    }
   }
 
   func testParsesModeMappings() {

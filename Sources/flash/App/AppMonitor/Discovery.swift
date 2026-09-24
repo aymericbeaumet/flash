@@ -12,10 +12,12 @@ extension AppMonitor {
   /// Activation hot path. Dynamically scoped uncached providers (tmux) get the
   /// first chance to claim the context. Their explicit empty-result fallback
   /// can then use the prepared AX model without merging provider results.
+  /// `completion` receives the hints and whether they came straight from
+  /// the focused app's prepared model (a hit) rather than a fresh walk.
   func discoverAsync(
     context: AppContext,
     targetFilter: ((JumpTarget) -> Bool)? = nil,
-    completion: @escaping ([AssignedHint]) -> Void
+    completion: @escaping (_ hints: [AssignedHint], _ preparedHit: Bool) -> Void
   ) {
     let pid = context.processID
     let startedAt = DispatchTime.now()
@@ -39,7 +41,7 @@ extension AppMonitor {
         }
         FlashLog.debug("[discover] complete", fields: fields)
       }
-      completion(hints)
+      completion(hints, path == "prepared_model" || path == "prepared_model_filter")
     }
 
     let plan = registry.hintProviderPlan(for: context)

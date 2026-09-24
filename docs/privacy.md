@@ -78,6 +78,24 @@ it or passes it to the app; the tap never stores or logs keys. Modified global
 hotkeys use the standard macOS hotkey API. Flash does not request Input
 Monitoring.
 
+While a password field has focus, macOS turns on secure input and hides keys
+from the tap. Flash respects it: a hint session started then takes Flash's own
+key window instead, so the labels you type go to Flash and never to the
+password field. `[app] keyboard_layout` reads which input source is selected
+and its key layout, to match keys to hint labels; it records neither.
+
+## Local CLI replies
+
+`flash status` and `flash doctor` answer the `flash` command through the same
+local Apple Event that carries every other command, with JSON printed in your
+terminal. The reply describes Flash itself: its version, mode, permissions,
+key-capture path, input source ID, config path and diagnostic lines, plugin
+health, and, for `doctor`, the name and process ID of an app holding secure
+input and whether Screen Recording is granted. It never contains clipboard
+contents, typed keys, window titles or hint targets, and nothing is sent over
+a network or written to disk. `flash config_check` runs entirely in the
+`flash` process and does not contact the resident.
+
 ## Plugin isolation
 
 Plugins are child processes that talk to Flash through JSON lines on stdin and

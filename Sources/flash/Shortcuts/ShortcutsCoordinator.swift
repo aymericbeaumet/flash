@@ -91,6 +91,15 @@ final class MappingsCoordinator {
       label: "\(mappingScope)")
   }
 
+  /// Mapping keys macOS refused to register, per registration set. A refused
+  /// chord stays desired, so every reconcile retries it and this is the
+  /// current set; `flash doctor` reports it.
+  private var refusedKeys: [ObjectIdentifier: [String]] = [:]
+
+  var refusedHotkeys: [String] {
+    Array(Set(refusedKeys.values.joined())).sorted()
+  }
+
   private func reconcile(_ mappings: [ModeMapping], with hotkeys: HotKeyManager, label: String) {
     var keysByChord: [ParsedHotkey: String] = [:]
     for mapping in mappings {
@@ -99,6 +108,7 @@ final class MappingsCoordinator {
     let result = hotkeys.reconcile(desired: Set(keysByChord.keys)) { [weak self] chord in
       self?.handle(hotkey: chord)
     }
+    refusedKeys[ObjectIdentifier(hotkeys)] = result.refused.map { keysByChord[$0] ?? "?" }
     for chord in result.refused {
       FlashLog.warn(
         "[mappings] could not register \"\(keysByChord[chord] ?? "?")\" — "

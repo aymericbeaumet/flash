@@ -76,6 +76,7 @@ final class FlashStatusBarController {
   private var activeAppName = ""
   private var activeBundleIdentifier = ""
   private var modeLabel = "INSERT"
+  private var secureInput = false
   private(set) var lastPublishedModel: FlashStatusBarModel?
   /// Inputs of the last evaluation; an identical capture skips the evaluation.
   private var lastEvaluation:
@@ -153,6 +154,15 @@ final class FlashStatusBarController {
     queue.async { [weak self] in
       self?.modeLabel = label
       self?.publishCurrentModel()
+    }
+  }
+
+  /// `#{flash.secure_input}`: "1" while secure input is on, else "".
+  func updateSecureInput(_ enabled: Bool) {
+    queue.async { [weak self] in
+      guard let self, self.secureInput != enabled else { return }
+      self.secureInput = enabled
+      self.publishCurrentModel()
     }
   }
 
@@ -255,7 +265,8 @@ final class FlashStatusBarController {
     let now = clock()
     let context = FlashStatusBarContext(
       activeAppName: activeAppName, activeBundleIdentifier: activeBundleIdentifier,
-      modeLabel: modeLabel, pluginStatuses: resolvedPluginStatuses(now: now))
+      modeLabel: modeLabel, secureInput: secureInput,
+      pluginStatuses: resolvedPluginStatuses(now: now))
     var values = sourceRecords.compactMapValues(\.value)
     for (name, record) in sourceRecords {
       if let cycle = record.cycle { values[name] = "#[cyc]" + cycle.visibleLine + "#[nocyc]" }

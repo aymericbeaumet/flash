@@ -157,7 +157,8 @@ final class HotKeyEventRouter {
     guard result == noErr, hotKeyID.signature == Self.signature,
       let callback = callbacks[hotKeyID.id]
     else { return OSStatus(eventNotHandledErr) }
-    callback()
+    // The hotkey's interaction dates from the key event, not this dispatch.
+    Trace.triggered(at: GetEventTime(event)) { callback() }
     return noErr
   }
 }

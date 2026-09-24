@@ -450,13 +450,14 @@ extension OverlayPanel {
           + "timeout_ms=\(normalModeSequenceTimeoutMs)")
       normalModeRepeatAnchor = nil
     }
+    let keys = keyCharacters(for: event)
     let transition = NormalModeInterpreter.interpret(
       pending: normalModePending,
       repeatAnchor: normalModeRepeatAnchor,
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
-      characters: event.characters,
-      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      characters: keys.characters,
+      charactersIgnoringModifiers: keys.ignoringModifiers,
       mappings: normalModeMappings)
     FlashLog.trace(
       // No key codes or characters: NORMAL swallows whatever the user types,
@@ -505,6 +506,10 @@ extension OverlayPanel {
 
     if inputMode == .commandLine { return false }
 
+    // Labels, the grid, pointer and adjustment read keys by position on the
+    // reference layout; search matches visible text, so it keeps what was
+    // actually typed.
+    let keys = keyCharacters(for: event)
     // A sub-state owns every key while active — including chords that would
     // otherwise hit the Carbon mapping registry, so a stray mapping can't fire
     // mid-session.
@@ -519,8 +524,8 @@ extension OverlayPanel {
       let shiftHeld = flags.contains(.shift)
       let typed = Self.gridTypedCharacters(
         shiftHeld: shiftHeld,
-        unshifted: shiftHeld ? event.characters(byApplyingModifiers: []) : nil,
-        ignoringModifiers: event.charactersIgnoringModifiers)
+        unshifted: keys.unshifted,
+        ignoringModifiers: keys.ignoringModifiers)
       coordinator.overlayDidGrid(
         MouseGridInputInterpreter.command(
           keyCode: event.keyCode, modifierFlags: flags, typed: typed, shape: shape,
@@ -542,7 +547,7 @@ extension OverlayPanel {
     case .pointer:
       if let command = PointerModeInterpreter.command(
         keyCode: event.keyCode,
-        charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+        charactersIgnoringModifiers: keys.ignoringModifiers,
         modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
       {
         coordinator.overlayDidPointer(command)
@@ -551,7 +556,7 @@ extension OverlayPanel {
     case .adjustment:
       if let command = HintAdjustmentInterpreter.command(
         keyCode: event.keyCode,
-        charactersIgnoringModifiers: event.charactersIgnoringModifiers)
+        charactersIgnoringModifiers: keys.ignoringModifiers)
       {
         let clickAllowed = magicModifiers.union(.shift)
         let clickModifiers = ClickModifiers(
@@ -575,7 +580,7 @@ extension OverlayPanel {
     switch OverlayInputInterpreter.action(
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
-      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      charactersIgnoringModifiers: keys.ignoringModifiers,
       magicModifiers: magicModifiers)
     {
     case .cancel:
@@ -590,6 +595,15 @@ extension OverlayPanel {
     case .ignore:
       return swallowIgnored
     }
+  }
+
+  /// How the interpreters read `event`: its own characters, or those of
+  /// `[app] keyboard_layout`'s reference layout (one table lookup).
+  func keyCharacters(for event: NSEvent) -> KeyCharacters {
+    KeyCharacters.read(
+      layout: keyboardLayout, keyCode: event.keyCode, modifierFlags: event.modifierFlags,
+      characters: event.characters, ignoringModifiers: event.charactersIgnoringModifiers,
+      unshifted: { event.characters(byApplyingModifiers: []) })
   }
 
   /// The character a grid key selects. With Shift held the event's

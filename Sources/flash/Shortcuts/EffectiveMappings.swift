@@ -11,12 +11,15 @@ import Foundation
 ///
 /// The merge is per scope. Mode-specific mappings override `all` fallbacks;
 /// plugin priority resolves collisions within each scope. Command mappings
-/// are config-owned and are preserved unchanged.
+/// are config-owned and are preserved unchanged. A key the config removed
+/// from a scope (`"<key>" = false`) stays removed: plugin mappings on it are
+/// dropped.
 enum EffectiveMappings {
   static func merge(
     base: Config.Mode,
     plugin: [(priority: Int, scope: ModeScope, mapping: ModeMapping)]
   ) -> Config.Mode {
+    let plugin = plugin.filter { !base.removes($0.mapping, in: $0.scope) }
     guard !plugin.isEmpty else { return base }
     var effective = base
     effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)

@@ -1040,6 +1040,13 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure(
         "manifest.json id must be lowercase [a-z0-9._-] and not contain \"..\"")
     }
+    for verb in verbs {
+      // `flash status` / `doctor` / `config_check` are CLI queries: a plugin
+      // verb of the same name could never be reached.
+      if let reason = FlashQuery.reservationMessage(verb.name) {
+        throw PluginError.failure("plugin verb \(verb.name) is reserved: \(reason)")
+      }
+    }
     for command in commands {
       // An empty subcommand registers a *top-level* command (`:copy`), and
       // `"*"` registers a wildcard that consumes the remainder (`:calc 2 + 2`).

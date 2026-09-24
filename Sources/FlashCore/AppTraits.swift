@@ -55,6 +55,15 @@ public struct AppTraits: Equatable, Sendable {
     return traits
   }
 
+  /// The traits `of(bundleIdentifier:)` already read, without touching the
+  /// bundle; nil when nothing has read them yet.
+  public static func cached(bundleIdentifier: String?) -> AppTraits? {
+    guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return nil }
+    cacheLock.lock()
+    defer { cacheLock.unlock() }
+    return cache[bundleIdentifier]
+  }
+
   public static func read(bundleURL: URL) -> AppTraits {
     let contents = bundleURL.appendingPathComponent("Contents")
     let frameworks = contents.appendingPathComponent("Frameworks")

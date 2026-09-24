@@ -2,8 +2,8 @@ import Foundation
 
 /// The `flash.toml` Flash writes when the user has none: one working hint
 /// shortcut plus commented suggestions. It lives in the user's file rather than
-/// in `config.default.toml` because mappings merge per key across layers and
-/// cannot be unmapped, so a bundled default could never be removed.
+/// in `config.default.toml`: a starter is the user's to edit or delete, while
+/// a bundled default would take an explicit `"<key>" = false` to remove.
 enum StarterConfig {
   static let text = """
     # Flash configuration. Flash created this starter because you had no config

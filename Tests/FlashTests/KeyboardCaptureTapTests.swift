@@ -103,6 +103,42 @@ final class KeyboardCaptureTapTests: XCTestCase {
     XCTAssertTrue(KeyboardCaptureTap.shouldSwallow(flashMode: .insert, inputMode: .hints))
   }
 
+  /// Secure input (a focused password field) hides keys from the tap, so a
+  /// hint session opened under it takes the key window instead: typed labels
+  /// then reach Flash, never the password field.
+  func testASessionOpenedUnderSecureInputUsesTheKeyWindow() {
+    XCTAssertEqual(
+      KeyboardCaptureTap.sessionCapture(tapInstalled: true, secureInputEnabled: false), .tap)
+    XCTAssertEqual(
+      KeyboardCaptureTap.sessionCapture(tapInstalled: true, secureInputEnabled: true), .keyWindow)
+    for secure in [false, true] {
+      XCTAssertEqual(
+        KeyboardCaptureTap.sessionCapture(tapInstalled: false, secureInputEnabled: secure),
+        .keyWindow, "without a tap the key window is the only capture")
+    }
+    XCTAssertEqual(KeyboardCaptureTap.SessionCapture.keyWindow.rawValue, "key_window")
+  }
+
+  /// The overlay routes hint keys through the tap only for a tap session;
+  /// NORMAL stays on the tap whatever the last session used.
+  func testTheTapOwnsHintsOnlyForATapSession() {
+    let panel = OverlayPanel()
+    panel.keyboardCaptureActive = true
+    defer { panel.inputMode = .passive }
+    panel.inputMode = .hints
+    panel.hintSessionCapture = .tap
+    XCTAssertTrue(panel.tapCapturesInput)
+    panel.hintSessionCapture = .keyWindow
+    XCTAssertFalse(panel.tapCapturesInput)
+    panel.inputMode = .normal
+    XCTAssertTrue(panel.tapCapturesInput)
+    panel.inputMode = .commandLine
+    XCTAssertFalse(panel.tapCapturesInput)
+    panel.keyboardCaptureActive = false
+    panel.inputMode = .normal
+    XCTAssertFalse(panel.tapCapturesInput)
+  }
+
   func testPassiveInputNeverSwallows() {
     for flashMode: FlashMode in [.normal, .insert] {
       XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: flashMode, inputMode: .passive))

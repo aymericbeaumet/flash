@@ -39,6 +39,54 @@ flash about                              # open the About Flash window
 flash quit                               # stop the resident app
 ```
 
+## Status, doctor and config checks
+
+Three CLI queries report instead of act. They are not verbs: no mapping can run
+them, and plugins cannot register verbs with their names.
+
+```bash
+flash status                 # mode, key capture, input source, config, plugins
+flash status --json          # the same as versioned JSON
+flash doctor                 # check permissions, capture, config, hotkeys, plugins
+flash doctor --json
+flash config_check           # validate the active config file, offline
+flash config_check --file=~/dotfiles/flash.toml
+```
+
+`flash status` asks the running resident. `--json` prints this object; the keys
+are fixed for `"schema": 1`:
+
+| Key | Value |
+| --- | --- |
+| `schema` | `1` |
+| `version`, `build` | The app's version and build number |
+| `mode` | `disabled`, `insert`, `normal`, `command` or `terminal` |
+| `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting` or `pointer` |
+| `focused_app` | The focused app's bundle identifier, or `null` |
+| `accessibility` | Whether Flash has the Accessibility grant |
+| `capture` | How hint keys arrive: `tap`, or `key_window` without a tap or under secure input |
+| `secure_input` | Whether secure input is on (a password field has focus) |
+| `input_source` | The selected input source's ID |
+| `keyboard_layout` | `[app] keyboard_layout` as configured |
+| `reference_layout` | The layout keys are read on, or `null` while they read as typed |
+| `config_path`, `config_diagnostics` | The config file and how many problems it has |
+| `plugins` | `{ "loaded", "ready", "error" }` counts |
+| `statusbar`, `autostart` | `[statusbar] enabled` and `[app] autostart` |
+
+`flash doctor` runs every check `:doctor` runs and prints one line per check:
+Accessibility, the keyboard tap, secure input (and which app holds it), the
+app's code signature (an ad-hoc signature can lose the Accessibility grant on
+update), other Flash residents, config diagnostics, hotkeys another app
+registered first, plugin health, hint and grid keys the current keyboard layout
+cannot type, and Screen Recording when the `screenshot` plugin runs. It exits 1
+when a check fails; warnings do not change the exit code.
+
+`flash config_check` does not contact the resident. It loads the bundled
+defaults and the file (`--file`, else the path Flash would load) exactly as the
+resident does, prints each problem as `path:line:col: message`, and exits 1
+when there is any, or 2 when the file cannot be read. Environment overrides are
+not applied.
+
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
 
 `mouse_grid` takes the click flags of `mouse_target` except `--adjust` and

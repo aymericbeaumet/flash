@@ -81,10 +81,18 @@ native case to the corpus and inspect the corresponding pinned parser branch.
 ## Context supplied by Flash
 
 Flash supplies `flash.mode`, `flash.date`, `flash.active_app_name`,
-`flash.active_bundle_identifier`, `flash.plugin.<id>.<segment>`,
-`flash.plugin.loaded_count`, `flash.plugin.ready_count`,
-`flash.plugin.error_count`, and `flash.source.<name>`. Host/user/process values
-and the process environment are available through ordinary lookup.
+`flash.active_bundle_identifier`, `flash.secure_input`,
+`flash.plugin.<id>.<segment>`, `flash.plugin.loaded_count`,
+`flash.plugin.ready_count`, `flash.plugin.error_count`, and
+`flash.source.<name>`. Host/user/process values and the process environment
+are available through ordinary lookup.
+
+`flash.secure_input` is `1` while secure input is on (a password field has
+focus, so the keyboard tap sees no keys and a hint session reads keys through
+the key window) and empty otherwise:
+`#{?flash.secure_input,#[fg=red]SECURE#[default] ,}`. It is refreshed when the
+keyboard tap reads it for a key and when a hint session starts; nothing polls
+it.
 
 Flash has no implicit tmux session, window, pane, client, or pane-history
 inventory. Their missing values expand to empty strings, loops over absent

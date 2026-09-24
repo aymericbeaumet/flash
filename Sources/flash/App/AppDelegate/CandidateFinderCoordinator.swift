@@ -1410,6 +1410,8 @@ extension AppDelegate {
       openDebugDashboard(tab: "commands")
     case .about:
       handleURLCommand(.showAbout)
+    case .doctor:
+      runDoctorCommand()
     }
   }
 
