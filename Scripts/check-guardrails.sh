@@ -202,6 +202,13 @@ if [[ -d Plugins ]]; then
     Plugins
 fi
 
+if tracked="$(git ls-files -- 'Tests/BrowserSnapshots/snapshots/collected-*' 'Tests/BrowserSnapshots/allowlists/collected-*')" &&
+  [[ -n "$tracked" ]]; then
+  echo "GUARDRAIL FAILED: collected browser captures are personal browsing data and must stay untracked" >&2
+  echo "$tracked" >&2
+  fail=1
+fi
+
 if [[ $fail -ne 0 ]]; then
   exit 1
 fi
