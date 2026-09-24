@@ -5519,5 +5519,34 @@
       "@timestamp": "9223372036854775808"
     },
     "expected": ""
+  },
+  {
+    "format": "#{E:@missing,a,b}",
+    "expected": ""
+  },
+  {
+    "format": "#{E:@missing,#{@v},b}",
+    "options": {
+      "@v": "hello"
+    },
+    "expected": "@missing,hello,b"
+  },
+  {
+    "format": "#{E:@t,a}",
+    "options": {
+      "@t,a": "literal"
+    },
+    "expected": "literal"
+  },
+  {
+    "format": "#{E:@t#,a}",
+    "options": {
+      "@t,a": "literal"
+    },
+    "expected": ""
+  },
+  {
+    "format": "#{T:@missing,x}",
+    "expected": ""
   }
 ]

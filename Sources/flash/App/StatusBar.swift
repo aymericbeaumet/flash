@@ -64,6 +64,9 @@ struct FlashStatusTextSegment: Equatable {
   var isModeLabel = false
   var shrink = false
   var cycle = false
+  /// An open `#[meter=…]` / `#[spark…]` region. Only parsing sees it: the
+  /// document replaces the enclosed text with its drawing and clears it.
+  var gauge: StatusFormatGauge? = nil
 
   init(
     text: String,

@@ -111,7 +111,7 @@ struct StatusFormatDocument: Equatable {
       runs.append(run)
     }
     appendEmptyModeLabels(at: raw.utf8.count)
-    return Self(runs: runs)
+    return Self(runs: StatusFormatGauge.render(runs))
   }
 
   static func parse(
@@ -258,6 +258,7 @@ struct StatusFormatStyleState {
   private var base: FlashStatusTextSegment
   private var currentDefault: FlashStatusTextSegment
   var current: FlashStatusTextSegment
+  private var gaugeRegions = 0
 
   init(defaultForeground: FlashStatusTextColor = .defaultForeground) {
     let value = FlashStatusTextSegment(text: "", foreground: defaultForeground)
@@ -277,6 +278,7 @@ struct StatusFormatStyleState {
     let previous = current
     var candidate = current
     var defaultAction: String?
+    var regions = gaugeRegions
     for raw in Self.tokens(body) {
       let token = raw.lowercased()
       let extensionToken = token.hasPrefix("link=") || token.hasPrefix("popup=")
@@ -386,6 +388,12 @@ struct StatusFormatStyleState {
         candidate.cycle = true
       } else if token == "nocyc" {
         candidate.cycle = false
+      } else if token.hasPrefix("meter=") || token == "spark" || token.hasPrefix("spark=") {
+        guard let kind = StatusFormatGauge.kind(token: token) else { return false }
+        regions += 1
+        candidate.gauge = StatusFormatGauge(kind: kind, region: regions)
+      } else if token == "nometer" || token == "nospark" {
+        if candidate.gauge?.isMeter == (token == "nometer") { candidate.gauge = nil }
       } else {
         let enabled = !token.hasPrefix("no")
         let attributes = enabled ? token : String(token.dropFirst(2))
@@ -432,6 +440,7 @@ struct StatusFormatStyleState {
     }
     candidate.underline = candidate.underlineMask != 0
     current = candidate
+    gaugeRegions = regions
     switch defaultAction {
     case "push-default": currentDefault = previous
     case "pop-default": currentDefault = base

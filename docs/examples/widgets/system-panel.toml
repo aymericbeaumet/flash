@@ -1,0 +1,51 @@
+# A conky-style system panel: CPU, memory and disk meters with sparklines,
+# disk and network rates, uptime, load and the busiest processes. Every figure
+# comes from the bundled monitor plugins; the panel runs no command.
+# See README.md in this directory to add it to flash.toml.
+
+[plugin.processes]
+top_count = 5 # rows in each process table, 1-20
+
+[widgets.system]
+anchor = "top_right"
+columns = 48
+bg = "#2E3440CC"
+border = "#4C566A"
+border_size = 1
+template = """
+#[fg=#EBCB8B bold]#{host_short}#[default]\
+#[align=right fg=#81A1C1]up #{flash.plugin.cpu.uptime}  load #{flash.plugin.cpu.load}
+#{E:@rule}
+#{E:@gauge,CPU,#{flash.plugin.cpu.percent},#{flash.plugin.cpu.history}}
+#{E:@gauge,MEM,#{flash.plugin.memory.percent},#{flash.plugin.memory.history}}
+#{E:@gauge,DSK,#{flash.plugin.disks.percent}}
+#{?flash.plugin.power.percent,#{E:@battery},#[fg=#4C566A]BAT none}
+#[fg=#88C0D0]I/O#[default] R #{flash.plugin.disks.read}  W #{flash.plugin.disks.write}
+#{E:@rate,NET,↓,#{flash.plugin.network.down_bps},#{flash.plugin.network.down_history}}
+#{E:@rate,,↑,#{flash.plugin.network.up_bps},#{flash.plugin.network.up_history}}
+#[fg=#88C0D0]IP #[default] #{flash.plugin.network.address}
+#{E:@rule}
+#[fg=#88C0D0]TOP CPU#[default]
+#{flash.plugin.processes.top_cpu}
+#[fg=#88C0D0]TOP MEM#[default]
+#{flash.plugin.processes.top_mem}
+"""
+
+# Fragments the template calls with #{E:@name,arg1,arg2,...}; inside one,
+# #{@1}...#{@9} are its arguments.
+[widgets.system.options]
+"@rule" = "#[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]"
+# LABEL, percentage, optional 0-100 history: a 16-cell meter, the figure and a
+# sparkline on a fixed 0-100 scale. Write %% for a percent sign.
+"@gauge" = """
+#[fg=#88C0D0]#{@1}#[default] \
+#[meter=16 fg=#A3BE8C bg=#3B4252]#{@2}#[nometer default] #{p-3:@2}%% \
+#[fg=#81A1C1 spark=0/100]#{@3}#[nospark default]\
+"""
+"@battery" = "#{E:@gauge,BAT,#{flash.plugin.power.percent}}#{flash.plugin.power.state}"
+# LABEL, arrow, bytes per second, history: the rate in kB/s and a sparkline
+# scaled to its own peak.
+"@rate" = """
+#[fg=#88C0D0]#{p3:@1}#[default] #{@2} #{p-7:#{e|/|f|1:#{@3},1000}} kB/s \
+#[fg=#81A1C1 spark]#{@4}#[nospark default]\
+"""

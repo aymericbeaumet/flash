@@ -297,13 +297,16 @@ popup_offset = 8
 #
 # Flash styles: link=URL/nolink, popup=name/nopopup,
 # popup=inline:<percent-encoded-rich-text>, breathing/nobreathing,
-# pill/nopill, and cyc/nocyc. Native range=user|name binds statusbar.click.
+# pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first
+# number inside) and spark[=MIN/MAX]/nospark (a sparkline of every number
+# inside). Native range=user|name binds statusbar.click.
 # Values stay plain text unless a plugin intentionally publishes rich status.
 template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
 # Native tmux options. @names are tmux user options; E expands a value as a
 # format, T additionally expands its strftime codes. Fragments are optional:
-# the same text can be written directly in template.
+# the same text can be written directly in template. Flash extension:
+# #{E:@name,a,b} expands @name with a and b bound as #{@1} and #{@2}.
 # Named terminal popups can wrap popup-free plugin labels, for example:
 # #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup]
 # CPU/MEM/DISK labels carry padded percentages; BAT is unpadded; NET carries a padded byte rate.
@@ -378,8 +381,8 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # enabled = true
 # template = """
 # #[fg=#EBCB8B,bold]#{host_short}#[default]#[align=right]%a %d %b %H:%M
-# CPU #{flash.plugin.cpu.percent}%%#{@sep}MEM #{flash.plugin.memory.percent}%%\
-# #{@sep}DISK #{flash.plugin.disks.percent}%%
+# CPU #[meter=10]#{flash.plugin.cpu.percent}#[nometer] #{flash.plugin.cpu.percent}%%\
+# #{@sep}MEM #[spark=0/100]#{flash.plugin.memory.history}#[nospark]
 # #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
 # #{flash.plugin.processes.top_cpu}
 # """
@@ -388,7 +391,7 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 #                           # centre_right, bottom_left, bottom_centre, bottom_right
 # gap_x = 24                # points from the anchored edges of the usable frame
 # gap_y = 24
-# columns = 44              # 0 fits the widest line, up to max_columns
+# columns = 48              # 0 fits the widest line, up to max_columns
 # max_columns = 120
 # font = ""                 # an installed monospaced font; "" = system monospaced
 # font_size = 13

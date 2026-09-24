@@ -24,6 +24,13 @@ Tables named by the user — `[plugin.<id>]`, `[terminal.<name>]`,
 `[statusbar.sources.<name>]` and `[widgets.<name>]` (see
 [desktop widgets](widgets.md)) — are validated key by key.
 
+`statusbar.template`, `[statusbar.popup]` bodies, widget templates and every
+`@option` share one [status format](status-format.md) language, including
+Flash's [meters, sparklines and template arguments](status-format.md#flash-extensions).
+The configurations under [`docs/examples`](examples/widgets/README.md) are
+loaded over the bundled defaults by the test suite and must produce no
+diagnostic; `flash config_check` applies the same check to your own file.
+
 ## Keyboard layout
 
 Hint labels, grid keys and NORMAL mappings are characters, matched against the

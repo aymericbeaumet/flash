@@ -17,9 +17,18 @@ running plugins with `:plugins`.
 | Automation: Notes, Reminders, Contacts | `apple` | The first time it indexes that app. |
 | Screen Recording | `screenshot` | The first `:screenshot`; macOS `screencapture` takes the picture. |
 | Location | `network` | Only on an explicit `:network refresh`, to read the Wi-Fi name. |
+| Calendars, Reminders, Contacts, … | A command you configure yourself, such as `icalBuddy` in a status source | The command's first read. Flash itself never asks. |
 
 Plugins are child processes of Flash, so macOS attributes their requests to
-Flash.
+Flash. So are the commands you configure: a named source
+(`[statusbar.sources.<name>]`), a `#()` job in a status format or widget, and
+a terminal popup. A calendar CLI such as `icalBuddy` reads Calendar through
+EventKit, so its first run makes macOS ask whether *Flash* may access your
+calendars, and the grant then covers Flash and every command it runs. Deny it
+to keep the command from reading Calendar; you can revoke it later in System
+Settings › Privacy & Security › Calendars. The
+[clock and agenda example](examples/widgets/README.md) does this; `khal`,
+which reads its own files, does not.
 
 ## Network
 
@@ -78,6 +87,12 @@ the others make their own requests or run the CLI tools named here.
   (`com.apple.PIPAgent`, `com.apple.WindowManager`), whose controls Flash then
   reads too. Nothing is kept past that hint session.
 - **Appearance:** `[overlay.dark]` follows whether macOS is in dark mode.
+- **Commands you configure:** status sources and `#()` jobs run with your
+  login-shell environment and read whatever they read. Flash keeps their
+  latest output, and a source's numeric `history`, in memory to draw the bar,
+  popups and widgets, and sends none of it anywhere; a popup showing it goes
+  through the private pager snapshot described in
+  [status popups](status-popups.md).
 - **AI provider quotas:** Claude Code's OAuth token from its Keychain item or
   `~/.claude/.credentials.json`, and the Codex CLI's session (`aiproviders`).
   Flash only reads the Claude token; when it expires, the quota shows as stale

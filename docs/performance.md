@@ -158,6 +158,46 @@ fixture, no new allow-list entry, and every expected Electron target still
 found and clicked. It must also make the browser or Electron walks measurably
 faster. A single new miss rejects it.
 
+## Widgets budget
+
+[Desktop widgets](widgets.md) must cost close to nothing while you work. They
+add no timer: they are evaluated by the bar's controller on its one
+`PollScheduler` deadline, re-evaluate only when a value they read changes, and
+draw meters and sparklines while parsing the text they already have. Against a
+bar-only baseline of the same build, with the
+[system panel example](examples/widgets/README.md) visible on the desktop:
+
+| Measure | Budget |
+| --- | --- |
+| Timers | None added: widgets tick on the bar's `PollScheduler` deadline |
+| Host idle CPU | +0.3 percentage points or less |
+| Host idle wakeups | +0.2 per second or less |
+| Host memory | Under 5 MB per widget |
+| Every widget covered by a window | Zero work: equal to the baseline |
+
+`Scripts/measure-footprint.sh` samples the running resident read-only: it
+never launches, restarts or stops Flash. Measure each state on the same build
+and log level (`trace` logging adds its own cost), after a minute of rest,
+with the keyboard and mouse idle:
+
+```sh
+./Scripts/install.sh --dev                  # the build to measure
+# 1. Baseline: the bar on, every [widgets.*] table removed or enabled = false.
+./Scripts/measure-footprint.sh 30
+footprint -p "$(pgrep -f 'Flash.*\.app/Contents/MacOS/flash$' | head -1)" | head -3
+# 2. Add docs/examples/widgets/system-panel.toml, save, show the desktop.
+./Scripts/measure-footprint.sh 30
+footprint -p "$(pgrep -f 'Flash.*\.app/Contents/MacOS/flash$' | head -1)" | head -3
+# 3. Cover the widget with a maximized window, wait 10 seconds.
+./Scripts/measure-footprint.sh 30
+```
+
+Compare the host line of step 2 with step 1: `%CPU`, and `IDLEW` divided by the
+printed interval, give the CPU and wakeup deltas; the `footprint` totals give
+the memory delta, divided by the number of widgets. Step 3 must match step 1.
+The children line covers plugins; the system panel adds only the `processes`
+plugin's two-second sample, which runs only while a table is visible.
+
 ## Not measured, by design
 
 - **Pixels.** Flash never reads the screen, so it has no OCR, vision or

@@ -24,7 +24,9 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 `#{@left}` inserts an option value. `#{E:@left}` additionally expands that value
 as a format; `#{T:@left}` enables time expansion too. Options are optional: the
 same format may be written directly in `template`. Values are strings, including
-native option names supplied explicitly in `[statusbar.options]`.
+native option names supplied explicitly in `[statusbar.options]`. An option
+can also be called with arguments, `#{E:@row,CPU,#{flash.plugin.cpu.percent}}`;
+see [Flash extensions](#flash-extensions).
 
 Outer bar templates remove newlines for readable TOML. Named document popups
 preserve their interior newlines. A desktop widget draws each line as its own
@@ -155,8 +157,10 @@ several surfaces show runs once, a job at the fastest of their intervals. Change
 are invalidated before their processes are stopped in one bounded batch.
 
 The additional style tokens are `pill/nopill`, `shrink/noshrink`,
-`cyc/nocyc`, `breathing/nobreathing`, `link=URL/nolink`, and
-`popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`.
+`cyc/nocyc`, `breathing/nobreathing`, `link=URL/nolink`,
+`popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`, and the
+numeric drawings `meter=W[/MAX]/nometer` and `spark[=MIN/MAX]/nospark`
+described under [Flash extensions](#flash-extensions).
 Native `range=user|name` selects a `[statusbar.click]` action. The status renderer
 reserves explicit mode-pill space and notch clearance, then draws the native
 cell layout. Elastic `#[shrink]` spans in either side lane reserve any fixed suffix
@@ -209,6 +213,68 @@ Inline popup identities derive from their source origin and invocation, not the
 current text or screen position. A changing source value refreshes an open
 popup in place; separate calls to the same fragment remain distinct anchors.
 The bar, hit regions, and terminal document encoder consume the same typed runs.
+
+## Flash extensions
+
+Flash adds two things to the tmux language. Like `pill` or `popup=`, both are
+Flash-only: tmux rejects the style tokens as a malformed marker, and reads a
+template call as one option name. Every other format still evaluates as in
+tmux, which the pinned corpus verifies.
+
+### Meters and sparklines
+
+`#[meter=W]` … `#[nometer]` replaces the enclosed text with a bar of exactly
+`W` cells (1–200) drawn with eighth blocks `▏▎▍▌▋▊▉█`: the first number of the
+text over `0…100`, or over `0…MAX` with `#[meter=W/MAX]` (`MAX` > 0, decimals
+allowed). The value clamps to the range and rounds to the nearest eighth; the
+unfilled cells are spaces, so the marker's `bg=` paints the track.
+`#[spark]` … `#[nospark]` replaces every number of the enclosed text with one
+of `▁▂▃▄▅▆▇█`: `floor(value / largest × 7)` by default, where `largest` is the
+greatest value or 0 (an all-zero series is flat, as the Rust SDK's
+`sparkline_scaled`), and over a fixed `MIN…MAX` (`MIN` < `MAX`) with
+`#[spark=MIN/MAX]`, clamped.
+
+```text
+CPU #[meter=20 fg=#A3BE8C bg=#3B4252]#{flash.plugin.cpu.percent}#[nometer default] #[spark=0/100]#{flash.plugin.cpu.history}#[nospark]
+```
+
+These are style tokens: they follow the marker rules above and combine with
+other tokens in one marker, and a malformed one (`meter=0`, `meter=201`,
+`meter=4/0`, `spark=5`, `spark=9/1`) rejects the whole marker. Only `nometer`
+ends a meter and only `nospark` a sparkline; `default` leaves them open, and a
+new `meter=` or `spark` token starts a new drawing. The drawing happens once
+the expanded text is parsed into runs: the enclosed runs are merged line by
+line, so a number split across values or styles reads as one, and the result
+takes the first run's style. Text without a number is kept unchanged, and a
+drawing never crosses a line break. Numbers are ASCII decimals; a `-` is a sign
+unless it follows a digit or a point. The typed runs carry the drawn text, so
+serialization emits no `meter`/`spark` tokens and hit testing, layout and the
+terminal document encoder see ordinary one-cell block characters. The system
+monospaced font draws every block glyph at one cell.
+
+### Template arguments
+
+`#{E:@name,arg1,…,arg9}` and `#{T:@name,…}` call the option `@name` with
+arguments. The operand is split at top-level commas, brace-aware and
+honouring `#,`; each argument is expanded in the caller's context, and the
+results are bound as the options `@1`…`@9` of a nested context in which
+`@name` is then expanded, as `E:` or `T:` would. Bound values are text and are
+not re-expanded. Inside the call, `@1`…`@9` hold only that call's arguments
+(missing ones are unset), so nested calls do not see their caller's; the
+caller's own bindings are intact after the call. Arguments past the ninth are
+ignored. Dependencies are captured statically (`@name`, and every value the
+arguments read) and at evaluation, so memoized surfaces refresh when an
+argument's value changes. Recursion is bounded by the evaluator's 100-level
+limit.
+
+This diverges from tmux on purpose. tmux looks up an option literally named
+`@name,arg1,…`: in tmux 3.7b `#{E:@v,x}` is empty even when `@v` is set.
+Flash calls `@name` whenever it exists, and otherwise keeps tmux's reading
+exactly — `#{E:@missing,#{@v},b}` expands to `@missing,<value of @v>,b` in
+both — which the pinned corpus verifies. Only `E:`/`T:` call: `#{@name,a}` is
+still one literal option name, and an operand whose modifiers choose their own
+evaluation (`l:`, `a:`, comparisons, loops, `R:`, `e:` and the rest) is never a
+call.
 
 ## Implementation and validation
 
