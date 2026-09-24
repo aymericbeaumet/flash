@@ -409,6 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.warmPool(count: 256)
     widgetController = WidgetController(setVisible: { [weak self] name, visible in
       self?.statusBarController?.setWidgetVisible(name: name, visible)
+      self?.pluginManager.setWidgetVisible(name: name, visible)
     })
     statusBarController = FlashStatusBarController(
       overlay: overlay,

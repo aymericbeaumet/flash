@@ -871,12 +871,14 @@ struct Config {
   }
 
   /// Plugin id → the status segments a live surface shows: the enabled bar
-  /// (template, options, named popups) and every enabled widget. The ids
-  /// keep status-bound plugins resident; the segments are what
-  /// `core:status.observed` reports to each plugin.
-  var observedStatusSegments: [String: Set<String>] {
+  /// (template, options, named popups) and every enabled widget not in
+  /// `hiddenWidgets` (fully covered). The ids keep status-bound plugins
+  /// resident; the segments are what `core:status.observed` reports to each
+  /// plugin.
+  func observedStatusSegments(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
     var segments = statusBar.observedSegments
-    for (id, names) in Self.statusSegments(in: enabledWidgets.values.map(\.template)) {
+    let shown = enabledWidgets.filter { !hiddenWidgets.contains($0.key) }
+    for (id, names) in Self.statusSegments(in: shown.values.map(\.template)) {
       segments[id, default: []].formUnion(names)
     }
     return segments

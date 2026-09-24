@@ -225,13 +225,17 @@ final class WidgetConfigTests: XCTestCase {
       template = "#{flash.plugin.memory.details}"
       """
     let config = ConfigLoader.parse(toml)
-    XCTAssertEqual(config.observedStatusSegments, ["processes": ["top_cpu", "top_mem"]])
+    XCTAssertEqual(config.observedStatusSegments(), ["processes": ["top_cpu", "top_mem"]])
+    XCTAssertEqual(config.observedStatusSegments(hiddenWidgets: ["top"]), [:])
     let both = ConfigLoader.parse(
       toml.replacingOccurrences(
         of: "enabled = false\ntemplate = \"#{flash.plugin.cpu",
         with: "enabled = true\ntemplate = \"#{flash.plugin.cpu"))
     XCTAssertEqual(
-      both.observedStatusSegments, ["processes": ["top_cpu", "top_mem"], "cpu": ["summary"]])
+      both.observedStatusSegments(), ["processes": ["top_cpu", "top_mem"], "cpu": ["summary"]])
+    XCTAssertEqual(
+      both.observedStatusSegments(hiddenWidgets: ["top"]), ["cpu": ["summary"]],
+      "a covered widget stops observing; the bar still does")
   }
 
   /// The commented example in `config.default.toml` is the reference a user
@@ -251,7 +255,7 @@ final class WidgetConfigTests: XCTestCase {
     let widget = try XCTUnwrap(config.widgets["system"])
     XCTAssertEqual(widget.anchor, .topRight)
     XCTAssertEqual(widget.template.options["@sep"], " · ")
-    XCTAssertEqual(config.observedStatusSegments["processes"], ["top_cpu"])
+    XCTAssertEqual(config.observedStatusSegments()["processes"], ["top_cpu"])
     XCTAssertEqual(ConfigLoader.parse(try String(contentsOf: url, encoding: .utf8)).widgets, [:])
   }
 }

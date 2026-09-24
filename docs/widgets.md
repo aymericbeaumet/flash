@@ -255,7 +255,10 @@ while the document is parsed, with no extra evaluation.
 
 A widget whose windows are all covered — a maximized or full-screen app over
 the desktop — stops refreshing: its sources, jobs and clock no longer count
-until a window is visible again. macOS reports that coverage per window; a
+until a window is visible again. After 30 seconds covered, it also stops
+observing plugin segments, so a status plugin only it shows stops sampling;
+the delay keeps briefly covering the desktop from respawning plugins. macOS
+reports that coverage per window; a
 widget whose window has never been reported visible is treated as visible, so
 a display that does not report occlusion keeps its widgets live. The budget
 and how to measure it are in [performance](performance.md#widgets-budget).

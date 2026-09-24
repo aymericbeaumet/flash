@@ -162,6 +162,13 @@ final class PluginManager {
   /// instead of the plugin silently not existing.
   private var loadFailureStatuses: [PluginStatus] = []
   private var pluginsByID: [String: PluginProcess] = [:]
+  /// Desktop widgets fully covered for at least `hiddenWidgetGrace`: they no
+  /// longer observe plugin segments. Queue-confined, as is `pendingHides`.
+  private var hiddenWidgets: Set<String> = []
+  private var pendingHides: [String: DispatchWorkItem] = [:]
+  /// How long a widget stays covered before its plugins stop sampling for it,
+  /// so briefly covering the desktop does not respawn status plugins.
+  static let hiddenWidgetGrace: DispatchTimeInterval = .seconds(30)
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
   /// Latest host-owned running-app snapshot, behind its own lock so each
   /// plugin's post-initialize `core:apps.changed` reads it from the plugin
@@ -534,6 +541,40 @@ final class PluginManager {
     }
   }
 
+  /// A desktop widget became visible or fully covered. A covered widget stops
+  /// observing its plugins' segments after `hiddenWidgetGrace`; one shown
+  /// again observes them at once.
+  func setWidgetVisible(name: String, _ visible: Bool) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.pendingHides.removeValue(forKey: name)?.cancel()
+      guard !visible else {
+        if self.hiddenWidgets.remove(name) != nil { self.applyObservedStatus() }
+        return
+      }
+      let work = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.pendingHides[name] = nil
+        if self.hiddenWidgets.insert(name).inserted { self.applyObservedStatus() }
+      }
+      self.pendingHides[name] = work
+      self.queue.asyncAfter(deadline: .now() + Self.hiddenWidgetGrace, execute: work)
+    }
+  }
+
+  /// Re-derive which segments the running plugins' surfaces show, without
+  /// reloading any plugin.
+  private func applyObservedStatus() {
+    guard let (config, _) = configurationSnapshot() else { return }
+    let observed = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
+    for (id, plugin) in pluginsByID {
+      // The segments first, as on reload: a plugin that becomes observed
+      // spawns now and must hear the new set after its initialize.
+      plugin.setObservedStatusSegments(observed[id] ?? [])
+      plugin.setStatusObserved(observed[id] != nil)
+    }
+  }
+
   private func reloadDefinition(_ plugin: PluginProcess) {
     queue.async { [weak self, weak plugin] in
       guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin,
@@ -889,7 +930,7 @@ final class PluginManager {
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
-    let observedStatus = config.observedStatusSegments
+    let observedStatus = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     for item in desired {
       do {
         let manifest = try PluginManifest.load(from: item.root)
