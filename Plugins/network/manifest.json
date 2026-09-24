@@ -26,7 +26,12 @@
   "status": [
     "summary",
     "label",
-    "details"
+    "details",
+    "down_bps",
+    "up_bps",
+    "down_history",
+    "up_history",
+    "address"
   ],
   "capabilities": [
     "wifi_info"

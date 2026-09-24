@@ -27,6 +27,11 @@
   "status": [
     "summary",
     "label",
-    "details"
+    "details",
+    "percent",
+    "read_bps",
+    "write_bps",
+    "read",
+    "write"
   ]
 }

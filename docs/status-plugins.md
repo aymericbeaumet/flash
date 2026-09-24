@@ -33,7 +33,8 @@ NET uses four cells for aggregate download + upload on the default-route
 interface (`1.2M`, ` 12K`), in decimal
 bytes per second. Counting the default route avoids double-counting VPN traffic.
 The labels contain no links or inline popups, so surrounding template bindings
-own clicks and hover. The maintained configuration shows `details` in PTY pagers;
+own clicks and hover. [Raw numeric segments](#raw-numeric-segments) carry the
+same figures without markup. The maintained configuration shows `details` in PTY pagers;
 no third-party monitoring application is required. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
 
@@ -90,6 +91,44 @@ Keep the ownership boundaries intact:
 - Core owns date/time rendering; `answers` provides timezone lookup.
 - Weather remains separate because it requires an explicit network/location
   policy.
+
+## Raw numeric segments
+
+Alongside the styled labels, each monitor publishes plain values without
+markup, so templates, numeric format markers and widgets can scale, chart or
+compare them. They reuse the samples and discovery results above and add no
+collection, timer or subprocess. They travel in the same publish-if-changed
+frame as the styled segments, so an unchanged frame stays off the wire.
+
+| Segment | Value | Example |
+| --- | --- | --- |
+| `#{flash.plugin.cpu.percent}` | Total CPU, integer 0–100 | `23` |
+| `#{flash.plugin.cpu.history}` | Retained CPU totals, integers, oldest first | `12 18 23` |
+| `#{flash.plugin.cpu.load}` | One-minute load average, two decimals | `3.47` |
+| `#{flash.plugin.cpu.uptime}` | Time since boot, sleep included, two units | `3d 4h` |
+| `#{flash.plugin.memory.percent}` | Used memory, integer 0–100 | `68` |
+| `#{flash.plugin.memory.history}` | Retained memory percentages, oldest first | `67 68 68` |
+| `#{flash.plugin.disks.percent}` | Startup-volume usage, integer 0–100 | `57` |
+| `#{flash.plugin.disks.read_bps}`, `write_bps` | Aggregate disk rates, whole bytes/s | `1572864` |
+| `#{flash.plugin.disks.read}`, `write` | The same rates in binary units | `1.5 MiB/s` |
+| `#{flash.plugin.network.down_bps}`, `up_bps` | Default-route rates, whole bytes/s | `48213` |
+| `#{flash.plugin.network.down_history}`, `up_history` | Retained rates, whole bytes/s, oldest first | `0 1536 48213` |
+| `#{flash.plugin.network.address}` | First IPv4 address of the default-route interface | `192.168.1.20` |
+| `#{flash.plugin.power.percent}` | Battery charge, integer 0–100 | `73` |
+| `#{flash.plugin.power.state}` | `charging`, `discharging`, `charged` or `ac` | `charging` |
+
+Histories hold the same 20 samples as the charts and are space-separated.
+Percentages round to the nearest integer and reach 100; the 99 cap belongs to
+the fixed-width labels. An empty value clears the segment, because unknown is
+not zero: a desktop without a battery clears `power.percent`, and a rate
+before its second sample or after its stale window clears with its history,
+while an idle disk or link publishes `0`. `power.state` prefers the battery's
+own reading; `ac` covers a desktop and a battery held on the adapter without
+charging. `network.address` follows the 30-second discovery pass and stays
+empty for an IPv6-only default route. `cpu.uptime` is one `CLOCK_MONOTONIC`
+read per CPU sample through the `nix` crate, which `network` already uses for
+`getifaddrs`; Darwin derives that clock from `kern.boottime`, so it counts
+sleep, as `uptime(1)` does.
 
 ## Refresh and failure invariants
 

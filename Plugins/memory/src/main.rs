@@ -30,16 +30,22 @@ impl MemorySnapshot {
 
 /// The published segments: `label` is the bare bar text, `summary` adds the
 /// inline history in full mode, and the preview backs both `summary` and
-/// `details`.
+/// `details`. `percent` and `history` carry the same figures as plain
+/// integers for templates and widgets that scale or chart them themselves.
 #[derive(Debug, PartialEq, Eq)]
 struct Status {
     label: Markup,
     summary: Markup,
     preview: Preview,
+    /// Used memory as an integer 0–100; unlike the label, never capped at 99.
+    percent: String,
+    /// The retained samples as space-separated integers, oldest first; empty
+    /// clears the segment.
+    history: String,
 }
 
 impl Status {
-    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+    fn segments(&self) -> [(&'static str, StatusValue); 5] {
         [
             (
                 "summary",
@@ -47,8 +53,32 @@ impl Status {
             ),
             ("label", StatusValue::text(self.label.clone())),
             ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.percent)),
+            ("history", plain(&self.history)),
         ]
     }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
+}
+
+/// Rounded to the nearest integer and clamped to 0–100; NaN reads as 0.
+fn whole_percent(value: f64) -> u8 {
+    if value > 0.0 {
+        value.min(100.0).round() as u8
+    } else {
+        0
+    }
+}
+
+fn percent_series(history: &History<HISTORY_SAMPLES>) -> String {
+    history
+        .iter()
+        .map(|sample| whole_percent(sample).to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,6 +332,8 @@ fn render_status(
         label,
         summary,
         preview,
+        percent: whole_percent(percent).to_string(),
+        history: percent_series(history),
     }
 }
 
@@ -372,7 +404,7 @@ mod tests {
                 &history(&[9.0]),
                 SummaryMode::Full,
             );
-            let [(_, summary), (_, label), _] = status.segments();
+            let [(_, summary), (_, label), ..] = status.segments();
             assert_eq!(
                 label.render().unwrap(),
                 format!("#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{expected}#[default]")
@@ -483,7 +515,7 @@ mod tests {
         };
         let history = history(&[50.0, 75.0]);
         let rendered = render_status(&snapshot, &history, SummaryMode::Compact);
-        let [(_, summary), (_, label), (_, details)] = rendered.segments();
+        let [(_, summary), (_, label), (_, details), ..] = rendered.segments();
         let summary = summary.render().unwrap();
         assert!(summary.starts_with("#[popup=inline:"));
         assert!(
@@ -545,5 +577,71 @@ History       ··················▅▆"
         assert!(published.update(same).is_none());
         let changed = render_status(&snapshot(100, 51), &history, SummaryMode::Compact);
         assert!(published.update(changed).is_some());
+    }
+
+    fn wire(status: &Status) -> std::collections::BTreeMap<&'static str, String> {
+        status
+            .segments()
+            .into_iter()
+            .map(|(name, value)| (name, value.render().expect("preview fits inline")))
+            .collect()
+    }
+
+    #[test]
+    fn raw_segments_publish_plain_integers_with_history_oldest_first() {
+        let status = render_status(
+            &snapshot(16 * GIB, 12 * GIB),
+            &history(&[50.4, 62.5, 75.0]),
+            SummaryMode::Compact,
+        );
+        let segments = wire(&status);
+        assert_eq!(segments["percent"], "75");
+        assert_eq!(segments["history"], "50 63 75");
+        assert!(!segments["percent"].contains("#["));
+        assert!(!segments["history"].contains("#["));
+
+        let empty = wire(&render_status(
+            &snapshot(100, 0),
+            &History::new(),
+            SummaryMode::Compact,
+        ));
+        assert_eq!(empty["percent"], "0");
+        assert_eq!(empty["history"], "", "an empty history clears its segment");
+    }
+
+    #[test]
+    fn raw_percent_rounds_to_an_integer_without_the_label_cap() {
+        for (occupied, expected) in [
+            (0, "0"),
+            (4, "0"),
+            (5, "1"),
+            (95, "10"),
+            (994, "99"),
+            (996, "100"),
+            (1_000, "100"),
+        ] {
+            let status = render_status(
+                &snapshot(1_000, occupied),
+                &History::new(),
+                SummaryMode::Compact,
+            );
+            assert_eq!(status.percent, expected, "{occupied}");
+        }
+        assert!(
+            render_status(&snapshot(1_000, 996), &History::new(), SummaryMode::Compact)
+                .label
+                .as_str()
+                .contains("99%")
+        );
+        assert_eq!(whole_percent(f64::NAN), 0);
+        assert_eq!(whole_percent(-1.0), 0);
+        assert_eq!(whole_percent(101.0), 100);
+    }
+
+    #[test]
+    fn raw_history_keeps_the_newest_samples_oldest_first() {
+        let samples: Vec<f64> = (0..25).map(f64::from).collect();
+        let expected = (5..25).map(|value| value.to_string()).collect::<Vec<_>>();
+        assert_eq!(percent_series(&history(&samples)), expected.join(" "));
     }
 }

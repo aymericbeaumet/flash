@@ -73,10 +73,27 @@ struct RenderedStatus {
     visible: Markup,
     label: Markup,
     preview: Preview,
+    raw: RawMetrics,
+}
+
+/// Plain values without markup, for templates and widgets that scale or chart
+/// numbers themselves. An empty value clears its segment: no capacity or no
+/// current rate is unknown, not zero.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawMetrics {
+    /// Startup-volume usage as an integer 0–100; unlike the label, never
+    /// capped at 99.
+    percent: String,
+    /// Whole bytes per second.
+    read_bps: String,
+    write_bps: String,
+    /// The same rates in binary units, as the details show them: `1.5 MiB/s`.
+    read: String,
+    write: String,
 }
 
 impl RenderedStatus {
-    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+    fn segments(&self) -> [(&'static str, StatusValue); 8] {
         [
             (
                 "summary",
@@ -84,8 +101,18 @@ impl RenderedStatus {
             ),
             ("label", StatusValue::text(self.label.clone())),
             ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.raw.percent)),
+            ("read_bps", plain(&self.raw.read_bps)),
+            ("write_bps", plain(&self.raw.write_bps)),
+            ("read", plain(&self.raw.read)),
+            ("write", plain(&self.raw.write)),
         ]
     }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -512,7 +539,44 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
         visible,
         label: bar(percent.unwrap_or_else(|| "  —".to_string())),
         preview,
+        raw: raw_metrics(state),
     })
+}
+
+fn raw_metrics(state: &DiskState) -> RawMetrics {
+    let percent = state
+        .capacity
+        .as_ref()
+        .and_then(CapacitySnapshot::primary)
+        .map(|volume| volume.percent.to_string())
+        .unwrap_or_default();
+    let (read_bps, write_bps, read, write) = state
+        .rates
+        .map(|rates| {
+            (
+                whole_rate(rates.read).to_string(),
+                whole_rate(rates.written).to_string(),
+                rate_iec(rates.read),
+                rate_iec(rates.written),
+            )
+        })
+        .unwrap_or_default();
+    RawMetrics {
+        percent,
+        read_bps,
+        write_bps,
+        read,
+        write,
+    }
+}
+
+/// Whole bytes per second, rounded; NaN or a negative rate reads as 0.
+fn whole_rate(bytes_per_second: f64) -> u64 {
+    if bytes_per_second > 0.0 {
+        bytes_per_second.round() as u64
+    } else {
+        0
+    }
 }
 
 fn render_preview(state: &DiskState) -> Option<Preview> {
@@ -681,7 +745,7 @@ mod tests {
                 }),
                 ..DiskState::default()
             };
-            let [(_, summary), (_, label), _] =
+            let [(_, summary), (_, label), ..] =
                 render_status(&state, SummaryMode::Full).unwrap().segments();
             assert_eq!(
                 label.render().unwrap(),
@@ -942,7 +1006,7 @@ Free          100 KiB"
             rendered.visible.as_str(),
             "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]"
         );
-        let [(_, summary), _, (_, details)] = rendered.segments();
+        let [(_, summary), _, (_, details), ..] = rendered.segments();
         let summary = summary.render().unwrap();
         assert!(summary.starts_with("#[popup=inline:"));
         assert!(
@@ -999,6 +1063,10 @@ Free          100 KiB"
             frames[0]["details"],
             render_preview(&state).unwrap().render().as_str()
         );
+        assert_eq!(frames[0]["percent"], "90");
+        for rate in ["read_bps", "write_bps", "read", "write"] {
+            assert_eq!(frames[0][rate], "", "no rate yet clears {rate}");
+        }
 
         state.capacity = Some(CapacitySnapshot {
             volumes: vec![startup(91)],
@@ -1041,5 +1109,73 @@ Free          100 KiB"
         assert!(!first_failure(&mut logged, true));
         assert!(!first_failure(&mut logged, false));
         assert!(first_failure(&mut logged, true));
+    }
+
+    #[test]
+    fn raw_segments_carry_startup_percent_and_whole_byte_rates() {
+        let raw = render_status(&activity_state(), SummaryMode::Compact)
+            .unwrap()
+            .raw;
+        assert_eq!(
+            raw,
+            RawMetrics {
+                percent: "90".to_string(),
+                read_bps: "1572864".to_string(),
+                write_bps: "2048".to_string(),
+                read: "1.5 MiB/s".to_string(),
+                write: "2.0 KiB/s".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn raw_rates_round_to_whole_bytes_and_idle_reads_zero() {
+        let mut state = activity_state();
+        state.rates = Some(IoRates {
+            read: 1_234.5,
+            written: 0.4,
+        });
+        let raw = raw_metrics(&state);
+        assert_eq!(
+            (raw.read_bps.as_str(), raw.write_bps.as_str()),
+            ("1235", "0")
+        );
+
+        state.rates = Some(IoRates {
+            read: 0.0,
+            written: 0.0,
+        });
+        let raw = raw_metrics(&state);
+        assert_eq!(
+            (
+                raw.read_bps.as_str(),
+                raw.write_bps.as_str(),
+                raw.read.as_str(),
+                raw.write.as_str()
+            ),
+            ("0", "0", "0 B/s", "0 B/s")
+        );
+        assert_eq!(whole_rate(f64::NAN), 0);
+        assert_eq!(whole_rate(-5.0), 0);
+    }
+
+    #[test]
+    fn raw_percent_reaches_one_hundred_and_unknown_values_clear() {
+        let state = DiskState {
+            capacity: Some(CapacitySnapshot {
+                volumes: vec![startup(100)],
+            }),
+            ..DiskState::default()
+        };
+        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
+        assert!(rendered.label.as_str().contains("99%"));
+        assert_eq!(rendered.raw.percent, "100");
+        assert_eq!(rendered.raw.read_bps, "");
+
+        let mut stale = activity_state();
+        stale.capacity = Some(CapacitySnapshot::default());
+        stale.last_io_success = Some(Instant::now());
+        assert!(stale.expire_stale_rates(Instant::now() + MAX_RATE_INTERVAL * 2));
+        assert_eq!(raw_metrics(&stale), RawMetrics::default());
     }
 }

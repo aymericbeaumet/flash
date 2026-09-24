@@ -1,11 +1,12 @@
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use flash_plugin::status::{percent2, sparkline_padded, sparkline_percent};
+use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
     run, run_command, sys, Color, CommandRequest, Context, History, Markup, PerformResponse,
     Preview, Published, StatusValue,
 };
+use nix::time::{clock_gettime, ClockId};
 
 // CPU load comes from `host_processor_info` tick counters sampled once per
 // period in-process; only the GPU metadata still shells out (`ioreg`).
@@ -26,6 +27,8 @@ struct CpuSnapshot {
     idle: f64,
     load: [f64; 3],
     logical_cpus: Option<usize>,
+    /// Seconds since boot, sleep included; read with each CPU sample.
+    uptime_seconds: Option<u64>,
 }
 
 impl CpuSnapshot {
@@ -53,16 +56,31 @@ enum GatePolicy {
 }
 
 /// One rendered status frame: the popup-free bar label, the visible summary
-/// and the hover preview shown behind it.
+/// and the hover preview shown behind it, plus the raw numeric segments.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Report {
     label: Markup,
     summary: Markup,
     preview: Preview,
+    raw: RawMetrics,
+}
+
+/// Plain values without markup, for templates and widgets that scale or chart
+/// numbers themselves. An empty value clears its segment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawMetrics {
+    /// Total CPU as an integer 0–100; unlike the label, never capped at 99.
+    percent: String,
+    /// The retained samples as space-separated integers, oldest first.
+    history: String,
+    /// One-minute load average with two decimals.
+    load: String,
+    /// Two-unit uptime such as `3d 4h`.
+    uptime: String,
 }
 
 impl Report {
-    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+    fn segments(&self) -> [(&'static str, StatusValue); 7] {
         [
             (
                 "summary",
@@ -70,8 +88,17 @@ impl Report {
             ),
             ("label", StatusValue::text(self.label.clone())),
             ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.raw.percent)),
+            ("history", plain(&self.raw.history)),
+            ("load", plain(&self.raw.load)),
+            ("uptime", plain(&self.raw.uptime)),
         ]
     }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,9 +294,19 @@ async fn collect_cpu(
     cpu_snapshot(percentages.user, percentages.system, percentages.idle, load)
         .map(|mut snapshot| {
             snapshot.logical_cpus = *LOGICAL_CPU_COUNT;
+            snapshot.uptime_seconds = uptime_seconds();
             Collection::Fresh(snapshot)
         })
         .unwrap_or(Collection::Failed)
+}
+
+/// Seconds since boot, sleep included: the figure `uptime(1)` prints. Darwin
+/// derives `CLOCK_MONOTONIC` from `kern.boottime`, whereas `Instant` reads
+/// `CLOCK_UPTIME_RAW`, which stops while the machine sleeps. One clock read
+/// per CPU sample; it arms no timer of its own.
+fn uptime_seconds() -> Option<u64> {
+    let since_boot = clock_gettime(ClockId::CLOCK_MONOTONIC).ok()?;
+    u64::try_from(since_boot.tv_sec()).ok()
 }
 
 async fn collect_gpu(
@@ -403,6 +440,7 @@ fn cpu_snapshot(user: f64, system: f64, idle: f64, load: [f64; 3]) -> Option<Cpu
         idle,
         load,
         logical_cpus: None,
+        uptime_seconds: None,
     };
     let percentages = [snapshot.user, snapshot.system, snapshot.idle];
     if percentages
@@ -578,7 +616,34 @@ fn render_report(
         label: metric("CPU", cpu.total()),
         summary: visible_summary(cpu, gpu, history, summary_mode),
         preview,
+        raw: raw_metrics(cpu, history),
     }
+}
+
+fn raw_metrics(cpu: &CpuSnapshot, history: &CpuHistory) -> RawMetrics {
+    RawMetrics {
+        percent: whole_percent(cpu.total()).to_string(),
+        history: percent_series(history),
+        load: format!("{:.2}", cpu.load[0]),
+        uptime: cpu.uptime_seconds.map(duration_uptime).unwrap_or_default(),
+    }
+}
+
+/// Rounded to the nearest integer and clamped to 0–100; NaN reads as 0.
+fn whole_percent(value: f64) -> u8 {
+    if value > 0.0 {
+        value.min(100.0).round() as u8
+    } else {
+        0
+    }
+}
+
+fn percent_series(history: &CpuHistory) -> String {
+    history
+        .iter()
+        .map(|sample| whole_percent(sample).to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Yellow section name plus the grey two-digit percentage the monitor labels
@@ -651,6 +716,7 @@ mod tests {
                 idle: 100.0 - user,
                 load: [0.0; 3],
                 logical_cpus: None,
+                uptime_seconds: None,
             };
             let report = render_report(&cpu, None, &history([user]), SummaryMode::Full);
             assert_eq!(
@@ -697,6 +763,7 @@ mod tests {
                 idle: 100.0 - user,
                 load: [0.0; 3],
                 logical_cpus: None,
+                uptime_seconds: None,
             };
             assert_eq!(
                 visible_summary(&cpu, None, &CpuHistory::new(), SummaryMode::Compact).as_str(),
@@ -713,6 +780,7 @@ mod tests {
             idle: 91.0,
             load: [0.0; 3],
             logical_cpus: None,
+            uptime_seconds: None,
         };
         let gpu = GpuSnapshot {
             utilization: 100.0,
@@ -815,6 +883,7 @@ mod tests {
             idle: 80.25,
             load: [1.25, 2.5, 3.75],
             logical_cpus: Some(16),
+            uptime_seconds: None,
         };
         let gpu = GpuSnapshot {
             utilization: 59.0,
@@ -889,6 +958,7 @@ Model         Apple M4 Pro"
             idle: 85.0,
             load: [1.0, 2.0, 3.0],
             logical_cpus: None,
+            uptime_seconds: None,
         };
         let gpu = GpuSnapshot {
             utilization: 20.0,
@@ -914,6 +984,7 @@ Model         Apple M4 Pro"
             idle: 75.0,
             load: [4.0, 3.0, 2.0],
             logical_cpus: Some(8),
+            uptime_seconds: None,
         };
         let details = render_report(
             &cpu,
@@ -936,5 +1007,129 @@ Model         Apple M4 Pro"
             .render_plain();
         assert!(empty.contains("Recent avg    —"), "{empty}");
         assert!(empty.contains("Recent peak   —"), "{empty}");
+    }
+
+    fn sample(user: f64, load: f64, uptime_seconds: Option<u64>) -> CpuSnapshot {
+        CpuSnapshot {
+            user,
+            system: 0.0,
+            idle: 100.0 - user,
+            load: [load, 0.0, 0.0],
+            logical_cpus: None,
+            uptime_seconds,
+        }
+    }
+
+    #[test]
+    fn raw_segments_publish_plain_numbers_with_history_oldest_first() {
+        let cpu = CpuSnapshot {
+            user: 12.5,
+            system: 7.25,
+            idle: 80.25,
+            load: [1.254, 2.5, 3.75],
+            logical_cpus: Some(16),
+            uptime_seconds: Some(3 * 86_400 + 4 * 3_600 + 59 * 60),
+        };
+        let report = render_report(
+            &cpu,
+            None,
+            &history([0.4, 50.5, 99.6, 100.0]),
+            SummaryMode::Compact,
+        );
+        let segments = wire(&report);
+        assert_eq!(segments["percent"], "20");
+        assert_eq!(segments["history"], "0 51 100 100");
+        assert_eq!(segments["load"], "1.25");
+        assert_eq!(segments["uptime"], "3d 4h");
+        for name in ["percent", "history", "load", "uptime"] {
+            assert!(!segments[name].contains("#["), "{name}: {}", segments[name]);
+        }
+    }
+
+    #[test]
+    fn raw_percent_rounds_to_an_integer_without_the_label_cap() {
+        for (user, expected) in [
+            (0.0, "0"),
+            (0.4, "0"),
+            (0.5, "1"),
+            (9.5, "10"),
+            (99.4, "99"),
+            (99.6, "100"),
+            (100.0, "100"),
+        ] {
+            let report = render_report(
+                &sample(user, 0.0, None),
+                None,
+                &CpuHistory::new(),
+                SummaryMode::Compact,
+            );
+            assert_eq!(report.raw.percent, expected, "{user}");
+        }
+        assert_eq!(whole_percent(f64::NAN), 0);
+        assert_eq!(whole_percent(-3.0), 0);
+        assert_eq!(whole_percent(250.0), 100);
+    }
+
+    #[test]
+    fn raw_history_keeps_the_newest_twenty_samples_oldest_first() {
+        let report = render_report(
+            &sample(10.0, 0.0, None),
+            None,
+            &history((0..25).map(f64::from)),
+            SummaryMode::Compact,
+        );
+        let expected = (5..25).map(|value| value.to_string()).collect::<Vec<_>>();
+        assert_eq!(report.raw.history, expected.join(" "));
+    }
+
+    #[test]
+    fn raw_load_keeps_two_decimals_and_missing_values_clear_their_segments() {
+        let report = render_report(
+            &sample(10.0, 12.3, None),
+            None,
+            &CpuHistory::new(),
+            SummaryMode::Compact,
+        );
+        let segments = wire(&report);
+        assert_eq!(segments["load"], "12.30");
+        assert_eq!(segments["history"], "");
+        assert_eq!(segments["uptime"], "");
+        assert_eq!(
+            raw_metrics(&sample(0.0, 0.0, Some(42)), &CpuHistory::new()).load,
+            "0.00"
+        );
+    }
+
+    #[test]
+    fn raw_uptime_uses_two_units_and_republishes_only_when_its_text_changes() {
+        for (seconds, expected) in [
+            (42, "42s"),
+            (5 * 60 + 59, "5m"),
+            (2 * 3_600 + 3 * 60, "2h 3m"),
+            (86_400 + 2 * 3_600 + 59 * 60, "1d 2h"),
+        ] {
+            assert_eq!(
+                raw_metrics(&sample(0.0, 0.0, Some(seconds)), &CpuHistory::new()).uptime,
+                expected
+            );
+        }
+
+        let mut published = Published::new();
+        let render = |uptime| {
+            render_report(
+                &sample(10.0, 1.0, Some(uptime)),
+                None,
+                &CpuHistory::new(),
+                SummaryMode::Compact,
+            )
+        };
+        assert!(published.update(render(86_400 + 60)).is_some());
+        assert!(published.update(render(86_400 + 120)).is_none());
+        assert!(published.update(render(86_400 + 3_600)).is_some());
+    }
+
+    #[test]
+    fn uptime_reads_the_boot_relative_clock() {
+        assert!(uptime_seconds().is_some_and(|seconds| seconds > 0));
     }
 }

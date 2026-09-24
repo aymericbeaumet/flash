@@ -21,7 +21,11 @@
   "status": [
     "summary",
     "label",
-    "details"
+    "details",
+    "percent",
+    "history",
+    "load",
+    "uptime"
   ],
   "sandbox": {
     "exec": [

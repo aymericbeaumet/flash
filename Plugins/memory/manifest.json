@@ -21,7 +21,9 @@
   "status": [
     "summary",
     "label",
-    "details"
+    "details",
+    "percent",
+    "history"
   ],
   "sandbox": {}
 }

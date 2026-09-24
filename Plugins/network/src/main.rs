@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -100,10 +100,27 @@ struct RenderedStatus {
     summary: Markup,
     label: Markup,
     details: Preview,
+    raw: RawMetrics,
+}
+
+/// Plain values without markup, for templates and widgets that scale or chart
+/// numbers themselves. An empty value clears its segment: no current rate or
+/// no known address is unknown, not zero.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawMetrics {
+    /// Default-route interface rates in whole bytes per second.
+    down_bps: String,
+    up_bps: String,
+    /// The retained rate samples as space-separated whole bytes per second,
+    /// oldest first.
+    down_history: String,
+    up_history: String,
+    /// First IPv4 address of the default-route interface.
+    address: String,
 }
 
 impl RenderedStatus {
-    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+    fn segments(&self) -> [(&'static str, StatusValue); 8] {
         [
             (
                 "summary",
@@ -111,8 +128,18 @@ impl RenderedStatus {
             ),
             ("label", StatusValue::text(self.label.clone())),
             ("details", StatusValue::text(self.details.render())),
+            ("down_bps", plain(&self.raw.down_bps)),
+            ("up_bps", plain(&self.raw.up_bps)),
+            ("down_history", plain(&self.raw.down_history)),
+            ("up_history", plain(&self.raw.up_history)),
+            ("address", plain(&self.raw.address)),
         ]
     }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -540,7 +567,61 @@ fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<Rend
         summary: visible_summary(state, summary_mode),
         label: Markup::colored("NET", Color::TITLE) + " " + Markup::colored(rate, Color::MUTED),
         details,
+        raw: raw_metrics(state),
     })
+}
+
+fn raw_metrics(state: &NetworkState) -> RawMetrics {
+    let (down_bps, up_bps) = state
+        .rates
+        .map(|rates| {
+            (
+                whole_rate(rates.received).to_string(),
+                whole_rate(rates.sent).to_string(),
+            )
+        })
+        .unwrap_or_default();
+    RawMetrics {
+        down_bps,
+        up_bps,
+        down_history: rate_series(&state.received_history),
+        up_history: rate_series(&state.sent_history),
+        address: default_route_ipv4(state)
+            .map(|ip| ip.to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// Whole bytes per second, rounded; NaN or a negative rate reads as 0.
+fn whole_rate(bytes_per_second: f64) -> u64 {
+    if bytes_per_second > 0.0 {
+        bytes_per_second.round() as u64
+    } else {
+        0
+    }
+}
+
+fn rate_series(history: &History<HISTORY_LEN>) -> String {
+    history
+        .iter()
+        .map(|sample| whole_rate(sample).to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The default-route interface's first IPv4 address in catalog order, from
+/// the discovery pass that already feeds `network.addresses`.
+fn default_route_ipv4(state: &NetworkState) -> Option<Ipv4Addr> {
+    let interface = state.default_interface.as_deref()?;
+    state
+        .catalog
+        .as_ref()?
+        .addresses
+        .iter()
+        .find_map(|address| match address.ip {
+            IpAddr::V4(ip) if address.interface_name == interface => Some(ip),
+            _ => None,
+        })
 }
 
 fn render_preview(state: &NetworkState) -> Option<Preview> {
@@ -1058,6 +1139,15 @@ default fe80::%utun6 UGcIg utun6\n";
         );
         assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
         assert!(frames[0]["details"].starts_with("#[fg=#EBCB8B]Network#[default]\n"));
+        for raw in [
+            "down_bps",
+            "up_bps",
+            "down_history",
+            "up_history",
+            "address",
+        ] {
+            assert_eq!(frames[0][raw], "", "unknown {raw} clears its segment");
+        }
 
         state().rates = Some(TransferRates {
             received: 600_000.0,
@@ -1070,6 +1160,8 @@ default fe80::%utun6 UGcIg utun6\n";
             frames[0]["label"],
             "#[fg=#EBCB8B]NET#[default] #[fg=colour245]1.2M#[default]"
         );
+        assert_eq!(frames[0]["down_bps"], "600000");
+        assert_eq!(frames[0]["up_bps"], "600000");
     }
 
     #[test]
@@ -1211,5 +1303,79 @@ default fe80::%utun6 UGcIg utun6\n";
         startup.await.unwrap();
         let status = harness.drain_status();
         assert!(!status.last().expect("initial status")["summary"].is_empty());
+    }
+
+    #[test]
+    fn raw_segments_carry_whole_byte_rates_and_histories_oldest_first() {
+        let state = NetworkState {
+            default_interface: Some("en0".to_string()),
+            rates: Some(TransferRates {
+                received: 1_572_864.0,
+                sent: 2_048.4,
+            }),
+            received_history: history([0.0, 1_536.4, 1_024.5]),
+            sent_history: history([10.0, 20.0, 2_048.4]),
+            ..NetworkState::default()
+        };
+        let wire = wire(&render_status(&state, SummaryMode::Compact).unwrap());
+        assert_eq!(wire["down_bps"], "1572864");
+        assert_eq!(wire["up_bps"], "2048");
+        assert_eq!(wire["down_history"], "0 1536 1025");
+        assert_eq!(wire["up_history"], "10 20 2048");
+
+        let long = history((0..25).map(|value| f64::from(value) * 1_000.0));
+        let expected = (5..25)
+            .map(|value| (value * 1_000).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(rate_series(&long), expected.join(" "));
+    }
+
+    #[test]
+    fn idle_traffic_publishes_zero_while_unknown_rates_clear() {
+        let mut state = NetworkState {
+            default_interface: Some("en0".to_string()),
+            rates: Some(TransferRates {
+                received: 0.0,
+                sent: 0.4,
+            }),
+            received_history: history([0.0, 0.0]),
+            sent_history: history([0.0, 0.4]),
+            ..NetworkState::default()
+        };
+        let raw = raw_metrics(&state);
+        assert_eq!((raw.down_bps.as_str(), raw.up_bps.as_str()), ("0", "0"));
+        assert_eq!(raw.down_history, "0 0");
+        assert_eq!(raw.up_history, "0 0");
+
+        state.last_traffic_success = Some(Instant::now());
+        assert!(state.expire_stale_rates(Instant::now() + MAX_RATE_INTERVAL * 2));
+        assert_eq!(raw_metrics(&state), RawMetrics::default());
+        assert_eq!(whole_rate(f64::NAN), 0);
+        assert_eq!(whole_rate(-1.0), 0);
+    }
+
+    #[test]
+    fn address_is_the_default_route_interfaces_first_ipv4() {
+        let mut addresses = vec![
+            address("lo0", IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            address("en1", "10.0.0.9".parse().unwrap()),
+            address("en0", "2001:db8::1".parse().unwrap()),
+            address("en0", "192.168.1.20".parse().unwrap()),
+        ];
+        sort_addresses(&mut addresses);
+        let mut state = NetworkState {
+            default_interface: Some("en0".to_string()),
+            catalog: Some(CatalogSnapshot {
+                hostname: None,
+                addresses,
+            }),
+            ..NetworkState::default()
+        };
+        assert_eq!(raw_metrics(&state).address, "192.168.1.20");
+
+        state.default_interface = Some("utun4".to_string());
+        assert_eq!(raw_metrics(&state).address, "", "an IPv6-only route clears");
+        state.default_interface = None;
+        assert_eq!(raw_metrics(&state).address, "");
     }
 }

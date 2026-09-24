@@ -68,10 +68,15 @@ struct PowerStatus {
     summary: Markup,
     label: Markup,
     preview: Preview,
+    /// Battery charge as a plain integer 0–100; empty (cleared) without a
+    /// battery.
+    percent: String,
+    /// `charging`, `discharging`, `charged` or `ac`; empty when unknown.
+    state: &'static str,
 }
 
 impl PowerStatus {
-    fn segments(&self) -> [(&'static str, StatusValue); 3] {
+    fn segments(&self) -> [(&'static str, StatusValue); 5] {
         [
             (
                 "summary",
@@ -79,8 +84,15 @@ impl PowerStatus {
             ),
             ("label", StatusValue::text(self.label.clone())),
             ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.percent)),
+            ("state", plain(self.state)),
         ]
     }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,6 +384,28 @@ fn render_status(
         summary: visible_summary(snapshot, summary_mode),
         label: Markup::colored("BAT", Color::TITLE) + " " + Markup::colored(charge, Color::MUTED),
         preview: preview(snapshot, health, history),
+        percent: snapshot
+            .battery
+            .as_ref()
+            .map(|battery| battery.percent.to_string())
+            .unwrap_or_default(),
+        state: raw_state(snapshot),
+    }
+}
+
+/// The battery's own state wins; otherwise the source decides. `ac` covers an
+/// adapter with no battery (a desktop) or a battery held without charging.
+fn raw_state(snapshot: &PowerSnapshot) -> &'static str {
+    match (
+        snapshot.battery.as_ref().map(|battery| battery.state),
+        snapshot.source,
+    ) {
+        (Some(BatteryState::Charging), _) => "charging",
+        (Some(BatteryState::Charged), _) => "charged",
+        (Some(BatteryState::Discharging), _)
+        | (Some(BatteryState::Unknown), PowerSource::Battery) => "discharging",
+        (_, PowerSource::Adapter) => "ac",
+        _ => "",
     }
 }
 
@@ -632,6 +666,8 @@ mod tests {
         assert_eq!(frames[0]["label"], status.label.as_str());
         assert!(!frames[0]["label"].contains("popup="));
         assert_eq!(frames[0]["details"], status.preview.render().as_str());
+        assert_eq!(frames[0]["percent"], "73");
+        assert_eq!(frames[0]["state"], "charging");
     }
 
     #[test]
@@ -1004,5 +1040,51 @@ History       ····················"
         assert!(!first_failure(&mut logged, true));
         assert!(!first_failure(&mut logged, false));
         assert!(first_failure(&mut logged, true));
+    }
+
+    fn raw(raw: &str) -> (String, &'static str) {
+        let snapshot = parse_pmset_snapshot(raw).expect("pmset snapshot");
+        let status = render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new());
+        (status.percent, status.state)
+    }
+
+    #[test]
+    fn raw_segments_publish_plain_charge_and_state() {
+        assert_eq!(raw(CHARGING), ("73".to_string(), "charging"));
+        assert_eq!(raw(DISCHARGING), ("26".to_string(), "discharging"));
+        assert_eq!(
+            raw("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; charged; 0:00 remaining present: true"),
+            ("100".to_string(), "charged")
+        );
+        assert_eq!(
+            raw("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 80%; AC attached; not charging present: true"),
+            ("80".to_string(), "ac"),
+            "a battery held on the adapter is neither charging nor discharging"
+        );
+        assert_eq!(
+            raw("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 0%; (no estimate) present: true"),
+            ("0".to_string(), "discharging")
+        );
+    }
+
+    #[test]
+    fn desktop_without_a_battery_clears_percent_and_reports_ac() {
+        let mut harness = flash_plugin::testing::Harness::new("power");
+        let snapshot = parse_pmset_snapshot(
+            "Now drawing from 'AC Power'\nNo batteries are currently installed.",
+        )
+        .unwrap();
+        let status = render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new());
+        harness.context().status(status.segments());
+        let frames = harness.drain_status();
+        assert_eq!(frames[0]["percent"], "", "no battery clears the segment");
+        assert_eq!(frames[0]["state"], "ac");
+
+        let unknown = PowerSnapshot {
+            source: PowerSource::Unknown,
+            battery: None,
+        };
+        let status = render_status(&unknown, None, SummaryMode::Compact, &ChargeHistory::new());
+        assert_eq!((status.percent.as_str(), status.state), ("", ""));
     }
 }
