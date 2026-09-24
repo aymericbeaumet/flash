@@ -62,6 +62,12 @@ final class WidgetController {
     self.statusBarMonitor = statusBarMonitor
     self.screenCapture = screenCapture
     lines = lines.filter { widgets[$0.key] != nil }
+    // A removed widget last reported covered returns to the state every
+    // listener gives a widget that appears: visible. Otherwise re-adding it
+    // would keep it covered, since its first visible report is not sent.
+    for name in Self.forgottenHidden(reportedVisible, keeping: Set(widgets.keys)) {
+      setVisible(name, true)
+    }
     reportedVisible = reportedVisible.filter { widgets[$0.key] != nil }
     if widgets.isEmpty {
       if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
@@ -156,6 +162,11 @@ final class WidgetController {
     entry.visible = visible || !entry.occlusionTrusted || !entry.window.isVisible
     placed[key] = entry
     reportVisibility(key.widget)
+  }
+
+  /// Widgets last reported covered that `names` no longer holds.
+  static func forgottenHidden(_ reported: [String: Bool], keeping names: Set<String>) -> [String] {
+    reported.filter { !$0.value && !names.contains($0.key) }.map(\.key).sorted()
   }
 
   /// A widget is visible while any of its windows is — none on a display it

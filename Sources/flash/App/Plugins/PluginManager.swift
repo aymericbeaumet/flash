@@ -930,6 +930,12 @@ final class PluginManager {
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
+    // Only configured widgets can be covered; a removed one forgets it.
+    let enabledWidgets = Set(config.enabledWidgets.keys)
+    hiddenWidgets.formIntersection(enabledWidgets)
+    for name in pendingHides.keys where !enabledWidgets.contains(name) {
+      pendingHides.removeValue(forKey: name)?.cancel()
+    }
     let observedStatus = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     for item in desired {
       do {

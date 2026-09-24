@@ -190,4 +190,12 @@ final class WidgetWindowTests: XCTestCase {
     XCTAssertEqual(windows().count, 0)
     XCTAssertTrue(reported.isEmpty, "a widget starts visible; nothing occluded it")
   }
+
+  func testAForgottenCoveredWidgetIsReportedVisibleAgain() {
+    let reported = ["covered": false, "shown": true, "kept": false]
+    XCTAssertEqual(
+      WidgetController.forgottenHidden(reported, keeping: ["kept"]), ["covered"],
+      "only removed widgets last reported covered return to the visible default")
+    XCTAssertEqual(WidgetController.forgottenHidden(reported, keeping: ["covered", "kept"]), [])
+  }
 }
