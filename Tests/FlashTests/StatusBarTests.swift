@@ -1162,6 +1162,26 @@ final class StatusBarTests: XCTestCase {
     XCTAssertNil(panel.toast)
   }
 
+  func testWalkthroughBannerSurvivesTheSettingsActivationTeardown() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissToast()
+      panel.orderOut(nil)
+    }
+    // Opening System Settings activates it, and the dismiss observer tears the
+    // overlay down; the Accessibility walkthrough followed there must stay.
+    panel.displayBanner("walkthrough", durationMs: 0, outlivesTeardown: true)
+    let walkthrough = panel.toast?.layer
+    XCTAssertNotNil(walkthrough)
+    panel.hide()
+    XCTAssertTrue(panel.toast?.layer === walkthrough)
+
+    panel.displayBanner("Copied", durationMs: 0)
+    panel.hide()
+    XCTAssertNil(panel.toast, "other banners still get out of the way")
+  }
+
   func testCommandLineRendersWithTheBarDisabledAndLeavesItOff() {
     _ = NSApplication.shared
     let panel = OverlayPanel()

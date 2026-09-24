@@ -374,19 +374,4 @@ extension AppDelegate {
     overlay.displayAlert(message, duration: 8, style: .error)
     shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
-
-  func logPermissionState() {
-    let trusted = AXIsProcessTrusted()
-    // Seed the activation-path cache so the very first ctrl+space
-    // doesn't pay the AX IPC cost just to discover the user already
-    // granted permission at some prior session.
-    if trusted { cachedAccessibilityTrusted = true }
-    if !trusted {
-      FlashLog.warn(
-        "[ax] accessibility permission not granted. "
-          + "Grant it in System Settings → Privacy & Security → Accessibility "
-          + "for /Applications/Flash.app."
-      )
-    }
-  }
 }

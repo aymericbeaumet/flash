@@ -388,26 +388,78 @@ extension AppDelegate {
         lastPermissionPromptAt = now
       }
     }
-    let bundlePath = Bundle.main.bundlePath
     let lines = [
       "Flash needs Accessibility permission",
-      "to read clickable elements from the focused app",
-      "and to dispatch the click on commit.",
+      "to find clickable elements and click them.",
       "",
       "System Settings → Privacy & Security → Accessibility",
+      "has been opened: turn Flash on there.",
       "",
-      "If Flash is NOT in the list:",
-      "  Click '+' and add this exact path:",
-      "  \(bundlePath)",
-      "  Then enable the toggle.",
+      "Not in the list? Click '+' and add:",
+      Bundle.main.bundlePath,
       "",
-      "If Flash IS already in the list (toggle ON):",
-      "  The grant is bound to the previous binary's hash.",
-      "  Toggle Flash OFF then ON to re-bind to the current build.",
-      "  (./Scripts/install.sh --dev resets this for you next time.)",
-      "",
-      "System Settings has been opened.",
+      "Already listed and on (e.g. after an update)?",
+      "Remove it with '−' and add it again,",
+      "or toggle it off and on.",
     ]
-    overlay.displayBanner(lines.joined(separator: "\n"), durationMs: 10_000)
+    // Outlives teardown: System Settings activating must not dismiss the
+    // instructions the user is about to follow there.
+    overlay.displayBanner(
+      lines.joined(separator: "\n"), durationMs: 10_000, outlivesTeardown: true)
+  }
+
+  /// Without the grant nothing works, and a first-run user may have no mapping
+  /// yet to reach the walkthrough, so launch shows it. `AXIsProcessTrusted`
+  /// stays a read-only query: no system prompt.
+  func checkAccessibilityAtLaunch() {
+    guard !PermissionCheck.isAccessibilityTrusted else {
+      // Seed the activation-path cache so the very first activation doesn't
+      // pay the AX IPC cost to rediscover a grant from a prior session.
+      cachedAccessibilityTrusted = true
+      return
+    }
+    FlashLog.warn(
+      "[ax] accessibility permission not granted. "
+        + "Grant it in System Settings → Privacy & Security → Accessibility "
+        + "for \(Bundle.main.bundlePath).")
+    awaitingAccessibilityGrant = true
+    DistributedNotificationCenter.default().addObserver(
+      self, selector: #selector(accessibilityTrustListDidChange(_:)),
+      name: Self.accessibilityTrustListDidChangeNotification, object: nil,
+      // AppKit suspends distributed delivery while the app is inactive, which
+      // for an accessory app is nearly always.
+      suspensionBehavior: .deliverImmediately)
+    promptForAccessibility()
+  }
+
+  /// Posted by the system whenever any app's Accessibility grant changes.
+  /// Undocumented but long-standing; if it never arrives, a restart still
+  /// picks the grant up.
+  static let accessibilityTrustListDidChangeNotification = Notification.Name(
+    "com.apple.accessibility.api")
+
+  /// The notification can precede the trust database it announces, so the
+  /// grant is checked on the next turn and once more shortly after.
+  static let accessibilityGrantCheckDelaysMs = [0, 1_000]
+
+  @objc private func accessibilityTrustListDidChange(_ note: Notification) {
+    for delayMs in Self.accessibilityGrantCheckDelaysMs {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
+        [weak self] in self?.finishLaunchIfAccessibilityGranted()
+      }
+    }
+  }
+
+  /// Completes what launch skipped without the grant. AX observers and
+  /// prepared models need nothing here: they retry on the next focus change,
+  /// which leaving System Settings provides.
+  private func finishLaunchIfAccessibilityGranted() {
+    guard awaitingAccessibilityGrant, PermissionCheck.isAccessibilityTrusted else { return }
+    awaitingAccessibilityGrant = false
+    DistributedNotificationCenter.default().removeObserver(
+      self, name: Self.accessibilityTrustListDidChangeNotification, object: nil)
+    cachedAccessibilityTrusted = true
+    FlashLog.info("[ax] accessibility granted while running")
+    startKeyboardCaptureTap()
   }
 }

@@ -1096,7 +1096,8 @@ extension Config {
 
       Flash reads `$XDG_CONFIG_HOME/flash/flash.toml`, then
       `~/.config/flash/flash.toml` when XDG is unset. The active file is
-      watched and reloaded live.
+      watched and reloaded live. When no file exists, Flash writes a
+      commented starter there on launch and never rewrites it afterwards.
 
       User-facing sections are:
 

@@ -271,6 +271,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// is the symptom of permission revocation mid-session.
   var cachedAccessibilityTrusted: Bool = false
   var lastPermissionPromptAt: Date?
+  /// Launched without Accessibility and still waiting for the grant; see
+  /// `checkAccessibilityAtLaunch`.
+  var awaitingAccessibilityGrant = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // First, so the cached primary-screen height refreshes before any other
@@ -291,6 +294,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.reloadTerminalPopupConfiguration()
       }
     }
+    // First run: give the user a working shortcut before the first load.
+    StarterConfig.seedIfNeeded(environment: ProcessInfo.processInfo.environment)
     config = ConfigLoader.load()
     FlashTunables.apply(config)
     frecencyStore = FrecencyStore(
@@ -428,7 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     watchConfigFile()
     selectInitialModeIfNeeded()
     configureDebugServer(for: config)
-    logPermissionState()
+    checkAccessibilityAtLaunch()
     installDismissObservers()
     reconcileClipboardMonitor()
     startPowerSourceMonitor()

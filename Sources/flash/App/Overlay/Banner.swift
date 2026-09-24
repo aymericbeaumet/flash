@@ -10,7 +10,9 @@ extension OverlayPanel {
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
   /// `\n`) are rendered as wrapped text. Used to signal edge cases (no targets,
   /// Accessibility denied) — staying within the "transparent hint overlay only" UI rule.
-  func displayBanner(_ text: String, durationMs: Int? = nil) {
+  /// `outlivesTeardown` keeps it up across app switches, for instructions the
+  /// user follows in another app.
+  func displayBanner(_ text: String, durationMs: Int? = nil, outlivesTeardown: Bool = false) {
     let durationMs = durationMs ?? FlashTunables.bannerDurationMs
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let frame = snapshot.unionFrame
@@ -56,7 +58,7 @@ extension OverlayPanel {
     label.frame = CGRect(
       x: 8, y: (chipHeight - textHeight) / 2, width: approxWidth - 16, height: textHeight)
     chip.sublayers = [label]
-    presentToast(chip, durationMs: durationMs, outlivesTeardown: false)
+    presentToast(chip, durationMs: durationMs, outlivesTeardown: outlivesTeardown)
   }
 }
 
