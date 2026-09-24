@@ -27,7 +27,9 @@
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) and
 //! per-host SSH inventory refreshes run concurrently so one slow socket or
-//! remote host cannot make every independent backend wait behind it.
+//! remote host cannot make every independent backend wait behind it. Remote
+//! hosts are opt-in through `[plugin.tmux] ssh_hosts`; without one the plugin
+//! opens no SSH connection.
 //!
 //! ## Hint discovery
 //!
@@ -530,6 +532,49 @@ fn remote_host_name(host: &str) -> &str {
     host.rsplit('@').next().unwrap_or(host)
 }
 
+const SSH_HOSTS_ERROR: &str =
+    "ssh_hosts must be an array of host names without user@ or whitespace";
+
+/// `[plugin.tmux] ssh_hosts`: the remote hosts whose tmux sessions the plugin
+/// may inventory. Inventory opens the plugin's own noninteractive SSH
+/// connections, which can ask an SSH agent or hardware key for approval and
+/// land in the remote auth log, so remote discovery is opt-in per host: with
+/// no entry the plugin never inspects SSH/Mosh processes and never runs `ssh`.
+/// Entries name the destination as written on the ssh/mosh command line,
+/// without its `user@` prefix, case-insensitively.
+fn parse_ssh_hosts(value: Option<Value>) -> Result<BTreeSet<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(BTreeSet::new());
+    };
+    value
+        .as_array()
+        .ok_or(SSH_HOSTS_ERROR)?
+        .iter()
+        .map(|host| {
+            host.as_str()
+                .filter(|host| {
+                    !host.is_empty() && !host.contains('@') && !host.contains(char::is_whitespace)
+                })
+                .map(str::to_ascii_lowercase)
+                .ok_or(SSH_HOSTS_ERROR)
+        })
+        .collect()
+}
+
+fn configured_ssh_hosts(ctx: &Context) -> BTreeSet<String> {
+    parse_ssh_hosts(ctx.config_json("ssh_hosts")).unwrap_or_else(|error| {
+        ctx.log(
+            "warn",
+            &format!("[tmux] invalid configuration: {error}; remote discovery stays off"),
+        );
+        BTreeSet::new()
+    })
+}
+
+fn ssh_host_allowed(ssh_hosts: &BTreeSet<String>, host: &str) -> bool {
+    ssh_hosts.contains(&remote_host_name(host).to_ascii_lowercase())
+}
+
 fn remote_host_label(host: &str) -> String {
     remote_host_name(host)
         .trim_matches(['[', ']'])
@@ -600,7 +645,14 @@ async fn process_command(pid: i64) -> Option<String> {
     .filter(|command| !command.is_empty())
 }
 
-async fn discover_remote_tmux_configs(ctx: &Context) -> BTreeMap<String, RemoteTmuxConfig> {
+async fn discover_remote_tmux_configs(
+    ctx: &Context,
+    ssh_hosts: &BTreeSet<String>,
+) -> BTreeMap<String, RemoteTmuxConfig> {
+    // Opt-in: without configured hosts, no process scan and no SSH side channel.
+    if ssh_hosts.is_empty() {
+        return BTreeMap::new();
+    }
     let control_path = remote_control_path().await;
     let records = process_records().await;
     let parent_map = records
@@ -629,7 +681,9 @@ async fn discover_remote_tmux_configs(ctx: &Context) -> BTreeMap<String, RemoteT
         let Some(command) = process_command(record.pid).await else {
             continue;
         };
-        let Some(transport) = parse_remote_transport(&command, process_name) else {
+        let Some(transport) = parse_remote_transport(&command, process_name)
+            .filter(|transport| ssh_host_allowed(ssh_hosts, &transport.host))
+        else {
             continue;
         };
         let nodes = if let Some(nodes) = windows_by_pid.get(&terminal_pid) {
@@ -3719,7 +3773,12 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
     });
 }
 
-fn start_remote_candidate_poll(plugin: &Tmux, ctx: &Context, initial_succeeded: bool) {
+fn start_remote_candidate_poll(
+    plugin: &Tmux,
+    ctx: &Context,
+    ssh_hosts: Arc<BTreeSet<String>>,
+    initial_succeeded: bool,
+) {
     let remote_configs = std::sync::Arc::clone(&plugin.remote_configs_arc);
     let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
     let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
@@ -3732,12 +3791,13 @@ fn start_remote_candidate_poll(plugin: &Tmux, ctx: &Context, initial_succeeded: 
         Duration::from_secs(remote_poll_delay_secs(initial_index)),
         move |ctx| {
             let remote_configs = Arc::clone(&remote_configs);
+            let ssh_hosts = Arc::clone(&ssh_hosts);
             let partitions = Arc::clone(&partitions);
             let last_hash = Arc::clone(&last_hash);
             let failure_index = Arc::clone(&failure_index);
             let slot = Arc::clone(&slot);
             async move {
-                let discovered = discover_remote_tmux_configs(&ctx).await;
+                let discovered = discover_remote_tmux_configs(&ctx, &ssh_hosts).await;
                 if let Ok(mut configured) = remote_configs.lock() {
                     *configured = discovered.clone();
                 }
@@ -5566,6 +5626,75 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
     }
 
     #[test]
+    fn ssh_hosts_default_to_none_and_reject_malformed_values() {
+        assert_eq!(parse_ssh_hosts(None), Ok(BTreeSet::new()));
+        assert_eq!(parse_ssh_hosts(Some(json!([]))), Ok(BTreeSet::new()));
+        assert_eq!(
+            parse_ssh_hosts(Some(json!(["Moria.Zone", "dev"]))),
+            Ok(BTreeSet::from([
+                "dev".to_string(),
+                "moria.zone".to_string()
+            ]))
+        );
+        for malformed in [
+            json!("moria.zone"),
+            json!(true),
+            json!([""]),
+            json!(["ab@moria.zone"]),
+            json!(["moria zone"]),
+            json!([1]),
+        ] {
+            assert_eq!(
+                parse_ssh_hosts(Some(malformed)),
+                Err(SSH_HOSTS_ERROR),
+                "malformed ssh_hosts must disable remote discovery"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_transports_are_inventoried_only_for_configured_hosts() {
+        let ssh =
+            parse_remote_transport("ssh -tt ab@Moria.Zone tmux new-session -A", "ssh").unwrap();
+        let mosh = parse_remote_transport(
+            "mosh-client -# --ssh=ssh ab@moria.zone -- tmux attach | 10.0.0.1 61000",
+            "mosh-client",
+        )
+        .unwrap();
+
+        for transport in [&ssh, &mosh] {
+            assert!(!ssh_host_allowed(&BTreeSet::new(), &transport.host));
+            assert!(!ssh_host_allowed(
+                &BTreeSet::from(["dev".to_string()]),
+                &transport.host
+            ));
+            assert!(ssh_host_allowed(
+                &parse_ssh_hosts(Some(json!(["moria.zone"]))).unwrap(),
+                &transport.host
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn default_settings_open_no_remote_backend() {
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        let ctx = harness.context();
+        let ssh_hosts = configured_ssh_hosts(&ctx);
+
+        assert!(ssh_hosts.is_empty());
+        // Every remote ssh argv is built from a discovered backend; none exist.
+        assert!(discover_remote_tmux_configs(&ctx, &ssh_hosts)
+            .await
+            .is_empty());
+
+        let harness = flash_plugin::testing::Harness::with_config(
+            "tmux",
+            json!({ "ssh_hosts": "moria.zone" }),
+        );
+        assert!(configured_ssh_hosts(&harness.context()).is_empty());
+    }
+
+    #[test]
     fn terminal_title_matching_uses_host_without_terminal_brand_assumptions() {
         let nodes = vec![
             AxWindowNode {
@@ -6577,7 +6706,8 @@ impl FlashPlugin for Tmux {
         if let Ok(mut local) = self.local_config_arc.lock() {
             *local = local_config;
         }
-        let remotes = discover_remote_tmux_configs(&ctx).await;
+        let ssh_hosts = Arc::new(configured_ssh_hosts(&ctx));
+        let remotes = discover_remote_tmux_configs(&ctx, &ssh_hosts).await;
         ctx.log_fields(
             "debug",
             "[tmux] process discovery",
@@ -6601,7 +6731,7 @@ impl FlashPlugin for Tmux {
             if self.resolved_tmux_path().await.is_none() {
                 ctx.log(
                     "debug",
-                    "[tmux] no local tmux binary; remote discovery remains active",
+                    "[tmux] no local tmux binary; configured ssh_hosts remain active",
                 );
             }
             let remote_refresh = async {
@@ -6636,7 +6766,10 @@ impl FlashPlugin for Tmux {
             );
         }
         start_candidate_poll(self, &ctx, degraded_initial);
-        start_remote_candidate_poll(self, &ctx, matches!(initial, Ok(true)));
+        // Remote polling can observe nothing until a host is opted in.
+        if !ssh_hosts.is_empty() {
+            start_remote_candidate_poll(self, &ctx, ssh_hosts, matches!(initial, Ok(true)));
+        }
     }
 
     /// Push events refresh the warm locations immediately. The poll keeps the

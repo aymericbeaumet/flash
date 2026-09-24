@@ -163,8 +163,22 @@ for Anthropic and two minutes for OpenAI. Only changed rendered segments publish
 Quota labels show an unpadded dash once the cache is older than twice the provider
 TTL; cached details remain available for inspection. Popup hover and status
 layout are pure reads of that state and perform no authentication or API calls.
+The plugin is status-bound, so it is resident only while the bar or a popup
+shows one of its segments. A chat-launcher bang such as `!claude` still starts
+it on demand, and a started process keeps the quota timer, including its
+credential reads, until it exits.
 
-Claude OAuth refresh preserves the complete credential document. Keychain writes
+Claude Code's credentials are read-only by default. The plugin reads the
+`Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and
+uses the stored access token until it expires. It then marks the Claude quota
+cached or unavailable with a `Token expired · run Claude Code to renew it`
+hint, and rereads the store every five minutes until Claude Code has renewed
+the token. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
+into renewing the token with Claude Code's OAuth client two minutes before
+expiry and writing the rotation back to Claude Code's store. Rotating another
+app's refresh token can sign that app out.
+
+An opted-in refresh preserves the complete credential document. Keychain writes
 use hex-encoded password data on `security -i` stdin, followed by read-back
 verification. Never pass credential JSON to a trailing `security ... -w` on stdin:
 that option prompts on the terminal and can save an empty password. Secrets must

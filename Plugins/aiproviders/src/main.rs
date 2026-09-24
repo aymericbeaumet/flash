@@ -5,8 +5,13 @@
 //! last-good cache, republishes changed rendered status at minute boundaries,
 //! then refreshes Anthropic every ten minutes and OpenAI every two minutes.
 //! Only percentages, reset epochs, window lengths, and fetch time are persisted
-//! in the plugin cache; credential rotations write back only to their owning
-//! stores, and raw responses stay in memory.
+//! in the plugin cache, and raw responses stay in memory.
+//!
+//! Claude Code's credentials are read-only by default: an expired token marks
+//! the Claude quota as waiting for Claude Code to renew it. Only
+//! `[plugin.aiproviders] refresh_claude_code_credentials = true` lets the
+//! plugin renew the token itself and write the rotation back to Claude Code's
+//! own store.
 //!
 //! Claude Code keeps OAuth credentials in the login keychain, while Codex owns
 //! its auth behind `codex app-server`. Those interfaces require subprocesses
@@ -63,6 +68,8 @@ const ASTRA_RATE_LIMIT_ID: &str = "codex_bengalfox";
 const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CREDENTIAL_REFRESH_SETTING: &str = "refresh_claude_code_credentials";
+const CLAUDE_TOKEN_EXPIRED_HINT: &str = "Token expired · run Claude Code to renew it";
 
 static USAGE_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static CODEX_PATH: LazyLock<OnceCell<Option<PathBuf>>> = LazyLock::new(OnceCell::new);
@@ -156,6 +163,9 @@ impl OpenAIUsage {
 struct UsageState {
     anthropic: Option<AnthropicUsage>,
     openai: Option<OpenAIUsage>,
+    /// The last Claude fetch stopped at an expired, read-only Claude Code
+    /// token. In memory only: the next start re-reads the credentials.
+    claude_token_expired: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,7 +212,11 @@ async fn load_usage_state(ctx: &Context) -> UsageState {
     let openai = load_json::<OpenAIUsage>(&ctx.data_dir().join(OPENAI_CACHE))
         .await
         .and_then(OpenAIUsage::sanitize);
-    UsageState { anthropic, openai }
+    UsageState {
+        anthropic,
+        openai,
+        claude_token_expired: false,
+    }
 }
 
 async fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
@@ -248,7 +262,11 @@ async fn publish_current_status(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>
     }
 }
 
-async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
+async fn refresh_usage(
+    ctx: &Context,
+    shared: &Arc<RwLock<UsageRuntime>>,
+    refresh_credentials: bool,
+) {
     let shared = Arc::clone(shared);
     USAGE_REFRESH_GATE
         .run(ctx, move |ctx, _applications| async move {
@@ -266,7 +284,7 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
 
             let anthropic = async {
                 if refresh_anthropic {
-                    fetch_anthropic_usage(now).await
+                    Some(fetch_anthropic_usage(now, refresh_credentials).await)
                 } else {
                     None
                 }
@@ -280,15 +298,21 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
             };
             let (anthropic, openai) = tokio::join!(anthropic, openai);
 
-            if let Some(usage) = anthropic {
-                ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
-                let _ = write_json(&ctx.data_dir().join(ANTHROPIC_CACHE), &usage).await;
-                state.anthropic = Some(usage);
-            } else if refresh_anthropic {
-                ANTHROPIC_RETRY_AT.store(
-                    now.saturating_add(ANTHROPIC_RETRY_SECONDS),
-                    Ordering::Relaxed,
-                );
+            match anthropic {
+                Some(Ok(usage)) => {
+                    ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
+                    let _ = write_json(&ctx.data_dir().join(ANTHROPIC_CACHE), &usage).await;
+                    state.anthropic = Some(usage);
+                    state.claude_token_expired = false;
+                }
+                Some(Err(error)) => {
+                    ANTHROPIC_RETRY_AT.store(
+                        now.saturating_add(ANTHROPIC_RETRY_SECONDS),
+                        Ordering::Relaxed,
+                    );
+                    state.claude_token_expired = error == ClaudeFetchError::TokenExpired;
+                }
+                None => {}
             }
             if let Some(usage) = openai {
                 let _ = write_json(&ctx.data_dir().join(OPENAI_CACHE), &usage).await;
@@ -429,7 +453,11 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
             state.anthropic.as_ref().map(|usage| usage.updated_at),
             2 * ANTHROPIC_USAGE_TTL,
             now,
-            "Claude Code",
+            if state.claude_token_expired {
+                CLAUDE_TOKEN_EXPIRED_HINT
+            } else {
+                "Check Claude Code login/network"
+            },
         ),
         [
             quota_row("Claude", "5-hour", shared_session, None, now),
@@ -443,7 +471,7 @@ fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
             state.openai.as_ref().map(|usage| usage.updated_at),
             2 * OPENAI_USAGE_TTL,
             now,
-            "Codex",
+            "Check Codex login/network",
         ),
         [
             quota_row("Codex", &openai_session_label, openai_session, None, now),
@@ -497,7 +525,8 @@ fn quota_preview(
         .render()
 }
 
-fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, provider: &str) -> String {
+/// `hint` says why a stale or missing quota could not refresh.
+fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, hint: &str) -> String {
     match updated_at {
         Some(updated) if fresh(updated, ttl, now) => {
             format!(
@@ -506,10 +535,10 @@ fn quota_freshness(updated_at: Option<u64>, ttl: u64, now: u64, provider: &str) 
             )
         }
         Some(updated) => format!(
-            "Cached · updated {} ago\nCheck {provider} login/network",
+            "Cached · updated {} ago\n{hint}",
             duration_compact(now.saturating_sub(updated))
         ),
-        None => format!("Unavailable · check {provider} login/network"),
+        None => format!("Unavailable\n{hint}"),
     }
 }
 
@@ -782,8 +811,67 @@ struct ClaudeCredentials {
     store: CredentialStore,
 }
 
-async fn fetch_anthropic_usage(now: u64) -> Option<AnthropicUsage> {
-    let token = claude_access_token(now).await?;
+/// Why a Claude quota fetch produced no usage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClaudeFetchError {
+    /// The stored Claude Code token has expired and renewing it is left to
+    /// Claude Code.
+    TokenExpired,
+    /// Missing credentials, a failed renewal, or a failed usage request.
+    Unavailable,
+}
+
+/// What a fetch does with the stored Claude Code token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClaudeToken {
+    Use,
+    Renew,
+    Expired,
+}
+
+/// `[plugin.aiproviders] refresh_claude_code_credentials`. Renewal rotates
+/// Claude Code's refresh token with Claude Code's own OAuth client and
+/// writes the result back into Claude Code's store, which can sign Claude Code
+/// out, so the default is read-only.
+fn parse_credential_refresh(value: Option<Value>) -> Result<bool, &'static str> {
+    match value {
+        None => Ok(false),
+        Some(Value::Bool(enabled)) => Ok(enabled),
+        Some(_) => Err("refresh_claude_code_credentials must be true or false"),
+    }
+}
+
+fn configured_credential_refresh(ctx: &Context) -> bool {
+    parse_credential_refresh(ctx.config_json(CREDENTIAL_REFRESH_SETTING)).unwrap_or_else(|error| {
+        ctx.log(
+            "warn",
+            &format!("[aiproviders] invalid configuration: {error}; credentials stay read-only"),
+        );
+        false
+    })
+}
+
+/// A read-only fetch uses the token until it expires; an opted-in one renews
+/// it two minutes early.
+fn claude_token(credentials: &Value, now: u64, refresh_credentials: bool) -> ClaudeToken {
+    let expires_at = credentials
+        .pointer("/claudeAiOauth/expiresAt")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if refresh_credentials && expires_at <= now.saturating_add(120).saturating_mul(1_000) {
+        ClaudeToken::Renew
+    } else if expires_at <= now.saturating_mul(1_000) {
+        ClaudeToken::Expired
+    } else {
+        ClaudeToken::Use
+    }
+}
+
+async fn fetch_anthropic_usage(
+    now: u64,
+    refresh_credentials: bool,
+) -> Result<AnthropicUsage, ClaudeFetchError> {
+    let token = claude_access_token(now, refresh_credentials).await?;
     let mut curl_config = format!(
         "header = \"Authorization: Bearer {token}\"\n\
          header = \"Content-Type: application/json\"\n\
@@ -803,19 +891,24 @@ async fn fetch_anthropic_usage(now: u64) -> Option<AnthropicUsage> {
         Some(curl_config.into_bytes()),
         COMMAND_TIMEOUT,
     )
-    .await?;
-    parse_anthropic_usage(&response.stdout, now)
+    .await
+    .ok_or(ClaudeFetchError::Unavailable)?;
+    parse_anthropic_usage(&response.stdout, now).ok_or(ClaudeFetchError::Unavailable)
 }
 
-async fn claude_access_token(now: u64) -> Option<String> {
-    let mut credentials = load_claude_credentials().await?;
-    let expires_at = credentials
-        .value
-        .pointer("/claudeAiOauth/expiresAt")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    if expires_at <= now.saturating_add(120).saturating_mul(1_000) {
-        refresh_claude_credentials(&mut credentials, now).await?;
+async fn claude_access_token(
+    now: u64,
+    refresh_credentials: bool,
+) -> Result<String, ClaudeFetchError> {
+    let mut credentials = load_claude_credentials()
+        .await
+        .ok_or(ClaudeFetchError::Unavailable)?;
+    match claude_token(&credentials.value, now, refresh_credentials) {
+        ClaudeToken::Use => {}
+        ClaudeToken::Expired => return Err(ClaudeFetchError::TokenExpired),
+        ClaudeToken::Renew => refresh_claude_credentials(&mut credentials, now)
+            .await
+            .ok_or(ClaudeFetchError::Unavailable)?,
     }
     credentials
         .value
@@ -823,6 +916,7 @@ async fn claude_access_token(now: u64) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|token| safe_header_value(token))
         .map(str::to_string)
+        .ok_or(ClaudeFetchError::Unavailable)
 }
 
 async fn load_claude_credentials() -> Option<ClaudeCredentials> {
@@ -1198,16 +1292,17 @@ impl FlashPlugin for AiProviders {
         };
         publish_current_status(&ctx, &self.usage).await;
 
+        let refresh_credentials = configured_credential_refresh(&ctx);
         let refresh_ctx = ctx.clone();
         let refresh_usage_state = Arc::clone(&self.usage);
         tokio::spawn(async move {
-            refresh_usage(&refresh_ctx, &refresh_usage_state).await;
+            refresh_usage(&refresh_ctx, &refresh_usage_state, refresh_credentials).await;
         });
         let refresh_usage_state = Arc::clone(&self.usage);
         drop(ctx.interval(STATUS_PUBLISH_INTERVAL, move |ctx| {
             let usage = Arc::clone(&refresh_usage_state);
             async move {
-                refresh_usage(&ctx, &usage).await;
+                refresh_usage(&ctx, &usage, refresh_credentials).await;
             }
         }));
     }
@@ -1383,6 +1478,7 @@ mod tests {
                     weekly: Some(WindowUsage::new(99.0, Some(604_800), 10_080)),
                 },
             }),
+            claude_token_expired: false,
         };
         let segments = render_status_segments(&state, 0);
         assert_eq!(
@@ -1484,6 +1580,83 @@ mod tests {
     }
 
     #[test]
+    fn claude_code_credentials_are_read_only_unless_refresh_is_enabled() {
+        assert_eq!(parse_credential_refresh(None), Ok(false));
+        assert_eq!(parse_credential_refresh(Some(json!(false))), Ok(false));
+        assert_eq!(parse_credential_refresh(Some(json!(true))), Ok(true));
+        assert!(parse_credential_refresh(Some(json!("true"))).is_err());
+
+        let harness = flash_plugin::testing::Harness::new("aiproviders");
+        assert!(!configured_credential_refresh(&harness.context()));
+        let harness = flash_plugin::testing::Harness::with_config(
+            "aiproviders",
+            json!({ "refresh_claude_code_credentials": 1 }),
+        );
+        assert!(!configured_credential_refresh(&harness.context()));
+        let harness = flash_plugin::testing::Harness::with_config(
+            "aiproviders",
+            json!({ "refresh_claude_code_credentials": true }),
+        );
+        assert!(configured_credential_refresh(&harness.context()));
+    }
+
+    #[test]
+    fn expired_claude_token_is_reported_instead_of_renewed_by_default() {
+        let now = 1_000;
+        let expiring = |at: u64| json!({ "claudeAiOauth": { "expiresAt": at * 1_000 } });
+
+        assert_eq!(
+            claude_token(&expiring(now), now, false),
+            ClaudeToken::Expired
+        );
+        assert_eq!(claude_token(&json!({}), now, false), ClaudeToken::Expired);
+        assert_eq!(
+            claude_token(&expiring(now + 60), now, false),
+            ClaudeToken::Use
+        );
+        assert_eq!(
+            claude_token(&expiring(now + 60), now, true),
+            ClaudeToken::Renew
+        );
+        assert_eq!(claude_token(&expiring(now), now, true), ClaudeToken::Renew);
+        assert_eq!(
+            claude_token(&expiring(now + 600), now, true),
+            ClaudeToken::Use
+        );
+    }
+
+    #[test]
+    fn expired_read_only_token_marks_the_claude_quota_stale_with_a_hint() {
+        let cached = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 0,
+                claude_week: Some(WindowUsage::new(25.0, None, 10_080)),
+                ..AnthropicUsage::default()
+            }),
+            claude_token_expired: true,
+            ..UsageState::default()
+        };
+        let stale = render_status_segments(&cached, 2 * ANTHROPIC_USAGE_TTL);
+        assert!(stale.claude_label.as_str().contains("]—#[default]"));
+        let details = stale.claude_details.plain();
+        assert!(details.contains("Cached"), "{details}");
+        assert!(details.contains(CLAUDE_TOKEN_EXPIRED_HINT), "{details}");
+        assert!(!stale
+            .codex_details
+            .plain()
+            .contains(CLAUDE_TOKEN_EXPIRED_HINT));
+
+        let missing = UsageState {
+            claude_token_expired: true,
+            ..UsageState::default()
+        };
+        let details = render_status_segments(&missing, 0).claude_details.plain();
+        assert!(details.contains("Unavailable"), "{details}");
+        assert!(details.contains(CLAUDE_TOKEN_EXPIRED_HINT), "{details}");
+        assert!(CLAUDE_TOKEN_EXPIRED_HINT.chars().count() <= 50);
+    }
+
+    #[test]
     fn stale_quota_labels_become_unavailable_without_discarding_cached_details() {
         let state = UsageState {
             anthropic: Some(AnthropicUsage {
@@ -1499,6 +1672,7 @@ mod tests {
                 },
                 ..OpenAIUsage::default()
             }),
+            claude_token_expired: false,
         };
         let current = render_status_segments(&state, 1_000);
         assert!(current.claude_label.as_str().contains("75%"));
@@ -1573,6 +1747,7 @@ mod tests {
                     weekly: Some(window),
                 },
             }),
+            claude_token_expired: false,
         };
         let segments = render_status_segments(&state, 0);
         for details in [segments.claude_details, segments.codex_details] {

@@ -9,7 +9,9 @@ opening a popup adds no collector or authentication store. See the
 Cld and Cdx have separate `claude` and `codex` popups using
 `aiproviders.claude_details` and `aiproviders.codex_details` respectively. They show the
 available session/week/model quotas, remaining bars, reset delays, and cache age.
-Missing data is marked unavailable; stale data is marked cached. Each provider
+Missing data is marked unavailable; stale data is marked cached. Either note
+names the cause, such as an expired Claude Code token that Flash leaves to
+Claude Code to renew by default. Each provider
 keeps its own usage-page link for left-click; right-click pins the corresponding view.
 
 The system regions use `cpu.details`, `memory.details`, `disks.details`,

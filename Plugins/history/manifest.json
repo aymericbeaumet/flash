@@ -2,7 +2,7 @@
   "id": "history",
   "name": "History",
   "version": "0.1.0",
-  "description": "Per-browser history and bookmarks (Firefox places.sqlite, Chrome History/Bookmarks) as opt-in flashlight sources.",
+  "description": "Per-browser history and bookmarks. Enabled by default: at launch and every 5 minutes it copies Firefox places.sqlite and Chrome History into its private cache and reads Chrome Bookmarks. Rows stay out of default flashlight results and appear only through their @<browser>.history/.bookmarks source filters or !fh/!fb/!ch/!cb.",
   "sandbox": {},
   "exec": [
     "./flash-plugin-history"

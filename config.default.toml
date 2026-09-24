@@ -82,7 +82,7 @@ alert_duration = 2.0
 banner_duration_ms = 700
 
 [open]
-# App candidates hidden from :open and the `app_open name=...` verb.
+# App candidates hidden from :open and the `app_open --name=...` verb.
 # Entries match display name, bundle identifier, bundle path, .app filename,
 # or app filename without .app, case-insensitively.
 ignored_apps = []
@@ -138,9 +138,18 @@ startup_timeout = 5
 #                          # for user-installed tools the manifest can't
 #                          # know the location of
 #
-# Example:
+# Remote tmux over SSH/Mosh is opt-in per host: only listed hosts are
+# inventoried, over the plugin's own noninteractive SSH connections (these can
+# prompt an SSH agent or hardware key). Unset, the plugin never runs ssh.
 # [plugin.tmux]
-# ssh_hosts = ["dev.example.com"]
+# ssh_hosts = ["dev.example.com"] # destinations as typed, without user@
+#
+# The Claude quota only reads Claude Code's OAuth token; once it expires, the
+# quota shows as stale until Claude Code renews it. `true` lets Flash renew it
+# and write the rotated token back to Claude Code's store, which can sign
+# Claude Code out.
+# [plugin.aiproviders]
+# refresh_claude_code_credentials = false
 #
 # The cpu, memory, disks, network, and power status plugins share one display
 # setting. `compact` is the default: the bar keeps only the primary percentage
@@ -155,8 +164,8 @@ startup_timeout = 5
 # Add #{flash.plugin.feed.summary} to a status format for the rotating title,
 # segment label, original domain/link, and whole-row article preview popup.
 # [plugin.feed]
-# label = "AGGR" # defaults to FEED
-# url = "https://aggr.aymericbeaumet.com/rss.xml"
+# label = "NEWS" # defaults to FEED
+# url = "https://example.com/feed.xml"
 # refresh_interval = 300 # seconds between feed requests
 # cycle_interval = 30    # seconds per headline; Flash rotates the carousel
 
@@ -338,7 +347,7 @@ send_key_interval_ms = 35
 # are read only by the overlay while Flash is capturing normal-mode input.
 #
 # Examples:
-# "ctrl+space" = ["flash", "mouse_target"]
+# "cmd+shift+space" = ["flash", "mouse_target"]
 # "ctrl+alt+n" = ["flash", "leave_mode"] # enables advanced mode; shared exit shortcut
 # "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
 # "cmd+ctrl+semicolon" = ["flash", "enter_command_mode"]
