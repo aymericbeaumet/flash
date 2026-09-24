@@ -16,6 +16,7 @@ contracts before changing a subsystem:
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
   [status popups](docs/status-popups.md), [terminal popups](docs/terminal-popups.md),
   [help](docs/help.md).
+- [Privacy and permissions](docs/privacy.md).
 
 ## Hard constraints
 
@@ -151,6 +152,12 @@ Surface requests that would violate these constraints before implementing them.
   Resumption notes belong in transient `.handouts/`, never external memory.
   Static unused-code reports need caller/protocol/dynamic-dispatch review before
   deletion; app-layer declarations can still have runtime consumers.
+- `docs/privacy.md` is the public inventory of permission prompts, network
+  destinations, stored data, and unsandboxed plugins. Update it in the same
+  change that alters any of them, and keep README privacy claims true.
+- Browser fixture-collector captures (`Tests/BrowserSnapshots/**/collected-*`)
+  are real browsing sessions: keep them local and gitignored. Guardrails reject
+  tracked ones.
 
 ## Deliberately maintained infrastructure
 

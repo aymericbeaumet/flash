@@ -78,7 +78,9 @@ watchdog also reports stalls while they are still in progress
 
 ## Privacy
 
-Logs never record what the user typed: no key codes or characters from the
-keyboard tap or NORMAL's interpreter, no on-screen text of hint targets, no
-query text, candidate data, clipboard content or config values. Plugins
+Logs never record what the user typed in other apps: no key codes or
+characters from the keyboard tap or NORMAL's interpreter, no on-screen text of
+hint targets, no candidate data, clipboard content or config values. The one
+exception is Flash's own command line: a command it cannot run is logged with
+its text at `warn`, and `trace` logs every submitted command line. Plugins
 follow the same rule for their `log` lines.

@@ -369,7 +369,7 @@ Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 ```toml
 [mode.all.mappings]
 "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
-"cmd+ctrl+[" = ["flash", "leave_mode"]
+"cmd+ctrl+[" = ["flash", "enter_normal_mode"]
 "alt+space" = ["flash", "terminal_show"]
 ```
 

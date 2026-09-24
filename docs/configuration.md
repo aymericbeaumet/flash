@@ -91,7 +91,7 @@ suggestion_count = 10
 leader = "\\"
 
 [mode.normal.mappings]
-"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight"]
+"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight "]
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_grid"]

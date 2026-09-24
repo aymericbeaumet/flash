@@ -7,7 +7,7 @@
 ```text
 :help plugins
 :help normal-mode
-:help urls
+:help verbs
 :help config
 ```
 
