@@ -193,6 +193,35 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertTrue(registry.preloadedNames.isEmpty)
   }
 
+  func testUnrelatedReloadKeepsAPreloadedPopupProcess() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var config = Config()
+    config.terminals["feed"] = .init(command: ["/bin/sleep", "30"])
+    registry.preloadPopups(named: ["feed"], configuration: config)
+    let preloaded = try XCTUnwrap(registry.sessions["feed"])
+    waitUntil {
+      if case .running = preloaded.state { return true }
+      return false
+    }
+    guard case .running(let pid) = preloaded.state else { return XCTFail("not running") }
+
+    // The reload order `reloadTerminalPopupConfiguration` uses, for a change
+    // that touches neither the terminal nor the shown popups.
+    config.statusBar.popupStyle.foreground = "#FFFFFF"
+    config.hints.mouseGridSteps = 4
+    registry.apply(
+      config.statusBar, terminals: config.terminals,
+      invalidTerminalNames: config.invalidTerminalNames)
+    registry.preloadPopups(named: ["feed"], configuration: config)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+
+    XCTAssertTrue(registry.sessions["feed"] === preloaded, "the preloaded session is kept")
+    XCTAssertEqual(registry.preloadedNames, ["feed"])
+    guard case .running(let still) = preloaded.state else { return XCTFail("stopped") }
+    XCTAssertEqual(still, pid, "the command is not run again")
+  }
+
   func testPreloadedPopupThatExitsAtOnceBacksOffInsteadOfSpinning() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
