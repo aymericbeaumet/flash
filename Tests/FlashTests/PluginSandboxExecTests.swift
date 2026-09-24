@@ -96,6 +96,9 @@ final class PluginSandboxExecTests: XCTestCase {
         execTail: Array(exec.dropFirst()))
       booted += 1
     }
+    if ProcessInfo.processInfo.environment["FLASH_REQUIRE_PLUGIN_BINARIES"] == "1" {
+      XCTAssertEqual(unbuilt, [], "every sandboxed plugin must be built and booted")
+    }
     if booted == 0 {
       throw XCTSkip(
         "no built sandboxed plugin binaries (\(unbuilt.count) unbuilt) — run Scripts/build-plugins.sh dev"
