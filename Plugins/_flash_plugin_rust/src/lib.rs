@@ -7,24 +7,35 @@
 //! typed host RPC client. Everything a plugin touches is a typed value.
 
 mod context;
+mod deadline;
 mod emit;
+mod events;
+mod framing;
 pub mod process;
 mod runtime;
+pub mod status;
+pub mod sys;
 pub mod testing;
+mod trace;
 mod types;
+mod wire;
 
 /// Generate the typed plugin surface from `manifest.json` at compile time. See
 /// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`
 /// then write `impl FlashPlugin for MyPlugin { … }`.
 pub use flash_plugin_macros::plugin;
 
+pub use context::PollHandle;
 pub use context::{
-    applescript_quote, escape_status_text, inline_status_popup, run_command,
-    run_command_with_slow_threshold, run_osascript, shorten, spawn_managed, CommandOutput, Context,
-    NormalModeTarget, RefreshGate,
+    applescript_quote, run_command, run_command_with_slow_threshold, run_osascript, shorten,
+    spawn_managed, AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate,
 };
 pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{run, Plugin};
+pub use status::{
+    Align, Color, Column, History, Markup, Preview, PreviewTooLarge, Published, StatusCarousel,
+    StatusSegment, StatusValue, Style, Table, MAX_INLINE_PREVIEW_ENCODED_BYTES,
+};
 pub use types::{
     candidate_metadata, ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest,
     EvaluateRequest, EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget,

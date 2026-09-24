@@ -25,9 +25,7 @@ struct CompiledMappings: Equatable {
     var prefixes: Set<String> = []
     var physicalAtomsBySignature: [UInt64: Set<String>] = [:]
     for mapping in mappings {
-      // First-writer-wins: matches `mappings.first(where:)` semantics
-      // when the caller concatenates `all + normal` and `all` should
-      // win on key collision.
+      // First-writer-wins: callers put the active scope before all-mode fallbacks.
       if byKey[mapping.key] == nil {
         byKey[mapping.key] = mapping
       }
@@ -60,6 +58,14 @@ struct CompiledMappings: Equatable {
         virtualKey: virtualKey,
         modifiers: MappingsCoordinator.carbonModifiers(fromCG: cgFlags))
     ] ?? []
+  }
+
+  /// Aliases for the same physical chord share precedence during terminal
+  /// default inheritance, just as they share a native hotkey registration.
+  static func physicalIdentity(for key: String) -> String {
+    NormalModeInterpreter.keyAtoms(from: key).map { atom in
+      physicalSignature(for: atom).map { "key:\($0)" } ?? "text:\(atom)"
+    }.joined(separator: String(NormalModeInterpreter.keyAtomSeparator))
   }
 
   private static func physicalSignature(for atom: String) -> UInt64? {

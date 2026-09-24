@@ -1,20 +1,21 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use flash_plugin::status::{
+    bytes_iec, bytes_iec_compact, percent2, rate_iec, sparkline_padded, sparkline_scaled,
+};
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, CommandRequest, Context,
-    PerformResponse, RefreshGate,
+    run, run_command, Color, CommandRequest, Context, History, Markup, PerformResponse, Preview,
+    Published, RefreshGate, StatusValue,
 };
 
-const ACTIVITY_POLL: Duration = Duration::from_secs(1);
+const ACTIVITY_POLL: Duration = Duration::from_secs(3);
 const CAPACITY_POLL: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MIN_RATE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(45);
 const HISTORY_LEN: usize = 20;
-const PLAIN_HISTORY_LEN: usize = 16;
-const DETAIL_LABEL_WIDTH: usize = 14;
 
 static STATE: LazyLock<Mutex<DiskState>> = LazyLock::new(|| Mutex::new(DiskState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -65,10 +66,53 @@ impl CapacitySnapshot {
     }
 }
 
+/// The popup-backed summary's visible text and hover preview, plus the
+/// popup-free label; `details` publishes the preview on its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedStatus {
-    summary: String,
-    details: String,
+    visible: Markup,
+    label: Markup,
+    preview: Preview,
+    raw: RawMetrics,
+}
+
+/// Plain values without markup, for templates and widgets that scale or chart
+/// numbers themselves. An empty value clears its segment: no capacity or no
+/// current rate is unknown, not zero.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawMetrics {
+    /// Startup-volume usage as an integer 0–100; unlike the label, never
+    /// capped at 99.
+    percent: String,
+    /// Whole bytes per second.
+    read_bps: String,
+    write_bps: String,
+    /// The same rates in binary units, as the details show them: `1.5 MiB/s`.
+    read: String,
+    write: String,
+}
+
+impl RenderedStatus {
+    fn segments(&self) -> [(&'static str, StatusValue); 8] {
+        [
+            (
+                "summary",
+                StatusValue::text(self.visible.clone()).with_preview(self.preview.clone()),
+            ),
+            ("label", StatusValue::text(self.label.clone())),
+            ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.raw.percent)),
+            ("read_bps", plain(&self.raw.read_bps)),
+            ("write_bps", plain(&self.raw.write_bps)),
+            ("read", plain(&self.raw.read)),
+            ("write", plain(&self.raw.write)),
+        ]
+    }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,12 +146,12 @@ fn warn_invalid_summary_mode(ctx: &Context) {
 struct DiskState {
     previous_io: Option<TimedIoSnapshot>,
     rates: Option<IoRates>,
-    read_history: VecDeque<f64>,
-    write_history: VecDeque<f64>,
+    read_history: History<HISTORY_LEN>,
+    write_history: History<HISTORY_LEN>,
     capacity: Option<CapacitySnapshot>,
     last_capacity_attempt: Option<Instant>,
     last_io_success: Option<Instant>,
-    last_status: Option<RenderedStatus>,
+    published: Published<RenderedStatus>,
     io_failure_logged: bool,
     capacity_failure_logged: bool,
 }
@@ -130,8 +174,8 @@ impl DiskState {
             RateDecision::Rates(rates) => {
                 self.previous_io = Some(sample);
                 self.rates = Some(rates);
-                push_history(&mut self.read_history, rates.read);
-                push_history(&mut self.write_history, rates.written);
+                self.read_history.push(rates.read);
+                self.write_history.push(rates.written);
             }
         }
     }
@@ -273,39 +317,23 @@ async fn refresh_disks_locked(ctx: &Context, force_capacity: bool) {
     if log_capacity_failure {
         ctx.log("warn", "[disks] capacity collection failed");
     }
-    emit_status_if_changed(ctx);
+    publish_status(ctx, &mut state());
 }
 
 fn current_response() -> PerformResponse {
-    match render_details(&state()) {
-        Some(details) => PerformResponse::ok().message(details),
+    match render_preview(&state()) {
+        Some(preview) => PerformResponse::ok().message(preview.render_plain()),
         None => PerformResponse::fail("disk metrics are not available yet"),
     }
 }
 
-fn emit_status_if_changed(ctx: &Context) {
-    let rendered = {
-        let mut state = state();
-        let Some(rendered) = render_status(&state, configured_summary_mode(ctx)) else {
-            return;
-        };
-        let Some(rendered) = status_update(&mut state.last_status, rendered) else {
-            return;
-        };
-        rendered
+fn publish_status(ctx: &Context, state: &mut DiskState) {
+    let Some(rendered) = render_status(state, configured_summary_mode(ctx)) else {
+        return;
     };
-    ctx.status([("summary", rendered.summary), ("details", rendered.details)]);
-}
-
-fn status_update(
-    last: &mut Option<RenderedStatus>,
-    next: RenderedStatus,
-) -> Option<RenderedStatus> {
-    if last.as_ref() == Some(&next) {
-        return None;
+    if let Some(rendered) = state.published.update(rendered) {
+        ctx.status(rendered.segments());
     }
-    *last = Some(next.clone());
-    Some(next)
 }
 
 fn first_failure(already_logged: &mut bool, failed: bool) -> bool {
@@ -470,200 +498,151 @@ fn is_visible_mount(mount: &str) -> bool {
         .is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
 
-fn push_history(history: &mut VecDeque<f64>, value: f64) {
-    if history.len() == HISTORY_LEN {
-        history.pop_front();
-    }
-    history.push_back(value);
-}
-
 fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
-    let details = render_popup_details(state)?;
-    let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
-    let percent = primary
-        .map(|volume| format!("{:>2}%", volume.percent.min(99)))
-        .unwrap_or_else(|| "—".to_string());
-    let mut visible = format!("#[fg=colour178]DSK#[default] #[fg=colour245]{percent}#[default]");
+    let preview = render_preview(state)?;
+    let bar = |metric: String| {
+        Markup::colored("DSK", Color::TITLE) + " " + Markup::colored(metric, Color::MUTED)
+    };
+    let percent = state
+        .capacity
+        .as_ref()
+        .and_then(CapacitySnapshot::primary)
+        .map(|volume| percent2(f64::from(volume.percent)));
+    let mut visible = bar(percent.clone().unwrap_or_else(|| "—".to_string()));
     if summary_mode == SummaryMode::Full {
         let (read, written) = state
             .rates
-            .map(|rates| (compact_rate(rates.read), compact_rate(rates.written)))
+            .map(|rates| {
+                (
+                    bytes_iec_compact(rates.read),
+                    bytes_iec_compact(rates.written),
+                )
+            })
             .unwrap_or_else(|| ("—".to_string(), "—".to_string()));
-        visible.push_str(&format!(
-            " #[fg=colour39]↓{read}#[default] #[fg=colour214]↑{written}#[default]"
-        ));
-        let combined: Vec<f64> = state
-            .read_history
-            .iter()
-            .zip(&state.write_history)
-            .map(|(read, written)| read.max(*written))
-            .collect();
-        let chart = sparkline(&combined);
+        visible += " ";
+        visible += Markup::colored(format!("↓{read}"), Color::INBOUND);
+        visible += " ";
+        visible += Markup::colored(format!("↑{written}"), Color::OUTBOUND);
+        let chart = sparkline_scaled(
+            state
+                .read_history
+                .iter()
+                .zip(&state.write_history)
+                .map(|(read, written)| read.max(written)),
+        );
         if !chart.is_empty() {
-            visible.push(' ');
-            visible.push_str(&chart);
+            visible += " ";
+            visible += chart;
         }
     }
     Some(RenderedStatus {
-        summary: inline_status_popup(&visible, &details),
-        details,
+        visible,
+        label: bar(percent.unwrap_or_else(|| "  —".to_string())),
+        preview,
+        raw: raw_metrics(state),
     })
 }
 
-fn render_popup_details(state: &DiskState) -> Option<String> {
+fn raw_metrics(state: &DiskState) -> RawMetrics {
+    let percent = state
+        .capacity
+        .as_ref()
+        .and_then(CapacitySnapshot::primary)
+        .map(|volume| volume.percent.to_string())
+        .unwrap_or_default();
+    let (read_bps, write_bps, read, write) = state
+        .rates
+        .map(|rates| {
+            (
+                whole_rate(rates.read).to_string(),
+                whole_rate(rates.written).to_string(),
+                rate_iec(rates.read),
+                rate_iec(rates.written),
+            )
+        })
+        .unwrap_or_default();
+    RawMetrics {
+        percent,
+        read_bps,
+        write_bps,
+        read,
+        write,
+    }
+}
+
+/// Whole bytes per second, rounded; NaN or a negative rate reads as 0.
+fn whole_rate(bytes_per_second: f64) -> u64 {
+    if bytes_per_second > 0.0 {
+        bytes_per_second.round() as u64
+    } else {
+        0
+    }
+}
+
+fn render_preview(state: &DiskState) -> Option<Preview> {
     if state.capacity.is_none() && state.previous_io.is_none() {
         return None;
     }
-    let primary = state.capacity.as_ref().and_then(CapacitySnapshot::primary);
-    let mut rows = vec![
-        "#[fg=colour178]Disks#[default]".to_string(),
-        detail_row(
-            "Capacity",
-            &primary
-                .map(|volume| format!("{:>3} %", volume.percent))
-                .unwrap_or_else(|| "    —".to_string()),
-        ),
-        detail_row(
-            "Read",
-            &state
-                .rates
-                .map(|rates| format!("{:>12}", format_rate(rates.read)))
-                .unwrap_or_else(|| "           —".to_string()),
-        ),
-        detail_row(
-            "Write",
-            &state
-                .rates
-                .map(|rates| format!("{:>12}", format_rate(rates.written)))
-                .unwrap_or_else(|| "           —".to_string()),
-        ),
-        detail_row("Read history", &padded_history(&state.read_history)),
-        detail_row("Write history", &padded_history(&state.write_history)),
-    ];
-    if let Some(capacity) = &state.capacity {
-        for volume in &capacity.volumes {
-            rows.push(detail_row(
-                "Volume",
-                &escape_status_text(&format!("{} ({})", volume.name, volume.mount)),
-            ));
-            rows.push(detail_row(
+    let capacity = state
+        .capacity
+        .as_ref()
+        .and_then(CapacitySnapshot::primary)
+        .map_or_else(
+            || "—".to_string(),
+            |volume| format!("{:>3} %", volume.percent),
+        );
+    let (read, written) = state
+        .rates
+        .map(|rates| (rate_iec(rates.read), rate_iec(rates.written)))
+        .unwrap_or_else(|| ("—".to_string(), "—".to_string()));
+    let totals = state.previous_io.as_ref().map(|sample| {
+        sample
+            .snapshot
+            .devices
+            .values()
+            .fold(IoCounters::default(), |total, next| IoCounters {
+                read: total.read.saturating_add(next.read),
+                written: total.written.saturating_add(next.written),
+            })
+    });
+    let mut preview = Preview::new()
+        .title("Disks")
+        .row("Capacity", format!("{capacity:>5}"))
+        .row("Read", format!("{read:>12}"))
+        .row("Write", format!("{written:>12}"))
+        .row(
+            "Read total",
+            totals.map_or_else(|| "—".to_string(), |totals| bytes_iec(totals.read)),
+        )
+        .row(
+            "Write total",
+            totals.map_or_else(|| "—".to_string(), |totals| bytes_iec(totals.written)),
+        )
+        .note("Totals since device reset · rates sampled every 3s")
+        .row(
+            "Read history",
+            sparkline_padded(&sparkline_scaled(&state.read_history), HISTORY_LEN),
+        )
+        .row(
+            "Write history",
+            sparkline_padded(&sparkline_scaled(&state.write_history), HISTORY_LEN),
+        );
+    for volume in state.capacity.iter().flat_map(|capacity| &capacity.volumes) {
+        preview = preview
+            .row("Volume", Markup::text(&volume.name))
+            .row("Mount", Markup::text(&volume.mount))
+            .row(
                 "Space",
-                &format!(
+                format!(
                     "{:>3} % · {:>10} / {:>10}",
                     volume.percent,
-                    format_bytes(volume.used),
-                    format_bytes(volume.total)
+                    bytes_iec(volume.used),
+                    bytes_iec(volume.total)
                 ),
-            ));
-        }
+            )
+            .row("Free", bytes_iec(volume.total.saturating_sub(volume.used)));
     }
-    Some(rows.join("\n"))
-}
-
-fn detail_row(label: &str, value: &str) -> String {
-    format!(
-        "#[fg=colour245]{label:<width$}#[default]{value}",
-        width = DETAIL_LABEL_WIDTH
-    )
-}
-
-fn padded_history(history: &VecDeque<f64>) -> String {
-    let values: Vec<f64> = history.iter().copied().collect();
-    let chart = sparkline(&values);
-    let padding = HISTORY_LEN.saturating_sub(chart.chars().count());
-    format!("{}{chart}", "·".repeat(padding))
-}
-
-fn render_details(state: &DiskState) -> Option<String> {
-    if state.capacity.is_none() && state.previous_io.is_none() {
-        return None;
-    }
-    let mut lines = vec!["Disks".to_string()];
-    if let Some(rates) = state.rates {
-        lines.push(format!("Read: {}", format_rate(rates.read)));
-        lines.push(format!("Write: {}", format_rate(rates.written)));
-    } else {
-        lines.push("Activity: sampling…".to_string());
-    }
-    let read_history: Vec<f64> = state
-        .read_history
-        .iter()
-        .skip(state.read_history.len().saturating_sub(PLAIN_HISTORY_LEN))
-        .copied()
-        .collect();
-    let write_history: Vec<f64> = state
-        .write_history
-        .iter()
-        .skip(state.write_history.len().saturating_sub(PLAIN_HISTORY_LEN))
-        .copied()
-        .collect();
-    let read_chart = sparkline(&read_history);
-    let write_chart = sparkline(&write_history);
-    if !read_chart.is_empty() {
-        lines.push(format!("Read history: {read_chart}"));
-    }
-    if !write_chart.is_empty() {
-        lines.push(format!("Write history: {write_chart}"));
-    }
-    if let Some(capacity) = &state.capacity {
-        lines.push("Volumes".to_string());
-        for volume in &capacity.volumes {
-            lines.push(format!(
-                "{} ({}): {}% · {} / {}",
-                volume.name,
-                volume.mount,
-                volume.percent,
-                format_bytes(volume.used),
-                format_bytes(volume.total)
-            ));
-        }
-    }
-    Some(lines.join("\n"))
-}
-
-fn format_rate(bytes_per_second: f64) -> String {
-    format!("{}/s", scaled_bytes(bytes_per_second, true))
-}
-
-fn compact_rate(bytes_per_second: f64) -> String {
-    scaled_bytes(bytes_per_second, false)
-}
-
-fn format_bytes(bytes: u64) -> String {
-    scaled_bytes(bytes as f64, true)
-}
-
-fn scaled_bytes(bytes: f64, spaced: bool) -> String {
-    let separator = if spaced { " " } else { "" };
-    let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-    let mut value = bytes.max(0.0);
-    let mut unit = 0;
-    while value >= 1024.0 && unit < units.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    let number = if unit == 0 || value >= 10.0 {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.1}")
-    };
-    format!("{number}{separator}{}", units[unit])
-}
-
-fn sparkline(values: &[f64]) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let maximum = values.iter().copied().fold(0.0_f64, f64::max);
-    values
-        .iter()
-        .map(|value| {
-            if maximum <= f64::EPSILON {
-                BARS[0]
-            } else {
-                let index = ((*value / maximum) * (BARS.len() - 1) as f64).floor() as usize;
-                BARS[index.min(BARS.len() - 1)]
-            }
-        })
-        .collect()
+    Some(preview)
 }
 
 fn main() {
@@ -673,6 +652,119 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flash_plugin::testing::Harness;
+
+    fn startup(percent: u8) -> Volume {
+        Volume {
+            name: "Startup".to_string(),
+            mount: "/".to_string(),
+            total: 100,
+            used: u64::from(percent),
+            percent,
+        }
+    }
+
+    fn history(values: impl IntoIterator<Item = f64>) -> History<HISTORY_LEN> {
+        let mut history = History::new();
+        for value in values {
+            history.push(value);
+        }
+        history
+    }
+
+    fn activity_state() -> DiskState {
+        DiskState {
+            rates: Some(IoRates {
+                read: 1_572_864.0,
+                written: 2_048.0,
+            }),
+            read_history: history([1.0]),
+            write_history: history([0.5]),
+            capacity: Some(CapacitySnapshot {
+                volumes: vec![Volume {
+                    name: "Startup".to_string(),
+                    mount: "/".to_string(),
+                    total: 1_000 * 1024,
+                    used: 900 * 1024,
+                    percent: 90,
+                }],
+            }),
+            ..DiskState::default()
+        }
+    }
+
+    #[test]
+    fn details_include_free_capacity_and_sampled_transfer_totals() {
+        let mut state = activity_state();
+        state.previous_io = Some(TimedIoSnapshot {
+            sampled_at: Instant::now(),
+            snapshot: IoSnapshot {
+                devices: BTreeMap::from([
+                    (
+                        "disk0".to_string(),
+                        IoCounters {
+                            read: 1 << 30,
+                            written: 2 << 30,
+                        },
+                    ),
+                    (
+                        "disk1".to_string(),
+                        IoCounters {
+                            read: 2 << 30,
+                            written: 1 << 30,
+                        },
+                    ),
+                ]),
+            },
+        });
+        let details = render_preview(&state).unwrap().render_plain();
+        assert!(details.contains("Free          100 KiB"), "{details}");
+        assert!(details.contains("Read total    3.0 GiB"), "{details}");
+        assert!(details.contains("Write total   3.0 GiB"), "{details}");
+        assert!(
+            details.lines().all(|line| line.chars().count() <= 50),
+            "{details}"
+        );
+    }
+
+    #[test]
+    fn label_keeps_startup_usage_width_and_excludes_popup_markup() {
+        for (percent, expected) in [(0, " 0%"), (9, " 9%"), (10, "10%"), (100, "99%")] {
+            let state = DiskState {
+                capacity: Some(CapacitySnapshot {
+                    volumes: vec![
+                        Volume {
+                            name: "Backup".to_string(),
+                            mount: "/Volumes/Backup".to_string(),
+                            total: 100,
+                            used: 99,
+                            percent: 99,
+                        },
+                        startup(percent),
+                    ],
+                }),
+                ..DiskState::default()
+            };
+            let [(_, summary), (_, label), ..] =
+                render_status(&state, SummaryMode::Full).unwrap().segments();
+            assert_eq!(
+                label.render().unwrap(),
+                format!("#[fg=#EBCB8B]DSK#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(summary.render().unwrap().contains("popup="));
+        }
+        let state = DiskState {
+            capacity: Some(CapacitySnapshot::default()),
+            ..DiskState::default()
+        };
+        assert_eq!(
+            render_status(&state, SummaryMode::Compact)
+                .unwrap()
+                .label
+                .as_str(),
+            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]  —#[default]"
+        );
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
@@ -685,35 +777,26 @@ mod tests {
     #[test]
     fn compact_disk_summary_caps_at_two_percentage_digits() {
         for (percent, expected) in [
-            (
-                9,
-                "#[fg=colour178]DSK#[default] #[fg=colour245] 9%#[default]",
-            ),
+            (9, "#[fg=#EBCB8B]DSK#[default] #[fg=colour245] 9%#[default]"),
             (
                 10,
-                "#[fg=colour178]DSK#[default] #[fg=colour245]10%#[default]",
+                "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]10%#[default]",
             ),
             (
                 100,
-                "#[fg=colour178]DSK#[default] #[fg=colour245]99%#[default]",
+                "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]99%#[default]",
             ),
         ] {
             let state = DiskState {
                 capacity: Some(CapacitySnapshot {
-                    volumes: vec![Volume {
-                        name: "Startup".to_string(),
-                        mount: "/".to_string(),
-                        total: 100,
-                        used: u64::from(percent),
-                        percent,
-                    }],
+                    volumes: vec![startup(percent)],
                 }),
                 ..DiskState::default()
             };
-            let summary = render_status(&state, SummaryMode::Compact)
+            let visible = render_status(&state, SummaryMode::Compact)
                 .expect("rendered disk status")
-                .summary;
-            assert!(summary.ends_with(&format!("]{expected}#[nopopup]")));
+                .visible;
+            assert_eq!(visible.as_str(), expected);
         }
     }
 
@@ -835,8 +918,8 @@ mod tests {
                 read: 10.0,
                 written: 20.0,
             }),
-            read_history: VecDeque::from([10.0]),
-            write_history: VecDeque::from([20.0]),
+            read_history: history([10.0]),
+            write_history: history([20.0]),
             capacity: Some(capacity.clone()),
             last_io_success: Some(sampled_at),
             ..DiskState::default()
@@ -848,9 +931,13 @@ mod tests {
         assert!(state.read_history.is_empty());
         assert!(state.write_history.is_empty());
         assert_eq!(state.capacity, Some(capacity));
-        assert!(render_details(&state)
-            .unwrap()
-            .contains("Activity: sampling…"));
+        let preview = render_preview(&state).unwrap().render();
+        assert!(preview
+            .as_str()
+            .contains("#[fg=colour245]Read          #[default]           —"));
+        assert!(preview
+            .as_str()
+            .contains("#[fg=colour245]Volume        #[default]Startup"));
     }
 
     #[test]
@@ -891,100 +978,104 @@ mod tests {
     }
 
     #[test]
-    fn history_is_bounded_and_sparkline_scales() {
-        let mut history = VecDeque::new();
-        for value in 0..20 {
-            push_history(&mut history, f64::from(value));
-        }
-        assert_eq!(history.len(), HISTORY_LEN);
-        assert_eq!(history.front(), Some(&0.0));
-        assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0]), "▁▃▅█");
-    }
-
-    #[test]
-    fn plain_details_keep_the_legacy_history_width() {
-        let mut state = DiskState {
-            previous_io: Some(TimedIoSnapshot {
-                snapshot: IoSnapshot::default(),
-                sampled_at: Instant::now(),
-            }),
-            ..DiskState::default()
-        };
-        for value in 0..HISTORY_LEN {
-            push_history(&mut state.read_history, value as f64);
-        }
-
-        let details = render_details(&state).unwrap();
-        let history = details
-            .lines()
-            .find_map(|line| line.strip_prefix("Read history: "))
-            .unwrap();
-        assert_eq!(history.chars().count(), 16);
+    fn plain_command_reply_is_the_preview_without_markup() {
+        assert_eq!(
+            render_preview(&activity_state()).unwrap().render_plain(),
+            "Disks\n\
+Capacity       90 %\n\
+Read             1.5 MiB/s\n\
+Write            2.0 KiB/s\n\
+Read total    —\n\
+Write total   —\n\
+Totals since device reset · rates sampled every 3s\n\
+Read history  ···················█\n\
+Write history ···················█\n\
+Volume        Startup\n\
+Mount         /\n\
+Space          90 % ·    900 KiB /   1000 KiB\n\
+Free          100 KiB"
+        );
+        assert!(render_preview(&DiskState::default()).is_none());
     }
 
     #[test]
     fn renders_capacity_only_summary_with_activity_in_inline_popup() {
-        let mut state = DiskState {
-            rates: Some(IoRates {
-                read: 1_572_864.0,
-                written: 2_048.0,
-            }),
-            capacity: Some(CapacitySnapshot {
-                volumes: vec![Volume {
-                    name: "Startup".to_string(),
-                    mount: "/".to_string(),
-                    total: 1_000 * 1024,
-                    used: 900 * 1024,
-                    percent: 90,
-                }],
-            }),
-            ..DiskState::default()
-        };
-        push_history(&mut state.read_history, 1.0);
-        push_history(&mut state.write_history, 0.5);
+        let state = activity_state();
         let rendered = render_status(&state, SummaryMode::Compact).unwrap();
-        assert!(rendered.summary.starts_with("#[popup=inline:"));
-        assert!(rendered
-            .summary
-            .ends_with("]#[fg=colour178]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]"));
-        assert!(!rendered.summary.contains("R1.5MiB"));
-        assert!(!rendered.summary.contains("W2.0KiB"));
         assert_eq!(
-            render_status(&state, SummaryMode::Full).unwrap().summary,
-            inline_status_popup(
-                "#[fg=colour178]DSK#[default] #[fg=colour245]90%#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █",
-                &rendered.details
-            )
+            rendered.visible.as_str(),
+            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]"
         );
-        assert_eq!(ACTIVITY_POLL, Duration::from_secs(1));
+        let [(_, summary), _, (_, details), ..] = rendered.segments();
+        let summary = summary.render().unwrap();
+        assert!(summary.starts_with("#[popup=inline:"));
+        assert!(
+            summary.ends_with("]#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]")
+        );
+        assert_eq!(
+            render_status(&state, SummaryMode::Full).unwrap().visible.as_str(),
+            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
+        );
+        assert_eq!(ACTIVITY_POLL, Duration::from_secs(3));
         assert_eq!(CAPACITY_POLL, Duration::from_secs(30));
         assert_eq!(HISTORY_LEN, 20);
         assert_eq!(
-            rendered.details,
-            "#[fg=colour178]Disks#[default]\n\
+            details.render().unwrap(),
+            "#[fg=#EBCB8B]Disks#[default]\n\
 #[fg=colour245]Capacity      #[default] 90 %\n\
 #[fg=colour245]Read          #[default]   1.5 MiB/s\n\
 #[fg=colour245]Write         #[default]   2.0 KiB/s\n\
+#[fg=colour245]Read total    #[default]—\n\
+#[fg=colour245]Write total   #[default]—\n\
+#[fg=colour245]Totals since device reset · rates sampled every 3s#[default]\n\
 #[fg=colour245]Read history  #[default]···················█\n\
 #[fg=colour245]Write history #[default]···················█\n\
-#[fg=colour245]Volume        #[default]Startup (/)\n\
-#[fg=colour245]Space         #[default] 90 % ·    900 KiB /   1000 KiB"
+#[fg=colour245]Volume        #[default]Startup\n\
+#[fg=colour245]Mount         #[default]/\n\
+#[fg=colour245]Space         #[default] 90 % ·    900 KiB /   1000 KiB\n\
+#[fg=colour245]Free          #[default]100 KiB"
         );
-        assert!(!rendered.details.ends_with('\n'));
     }
 
     #[test]
-    fn identical_rendered_status_is_suppressed() {
-        let rendered = RenderedStatus {
-            summary: "summary".to_string(),
-            details: "details".to_string(),
+    fn identical_rendered_status_is_published_once() {
+        let mut harness = Harness::new("disks");
+        let ctx = harness.context();
+        let mut state = DiskState {
+            capacity: Some(CapacitySnapshot {
+                volumes: vec![startup(90)],
+            }),
+            ..DiskState::default()
         };
-        let mut last = None;
+
+        publish_status(&ctx, &mut state);
+        publish_status(&ctx, &mut state);
+        let frames = harness.drain_status();
+        assert_eq!(frames.len(), 1);
         assert_eq!(
-            status_update(&mut last, rendered.clone()),
-            Some(rendered.clone())
+            frames[0]["label"],
+            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]"
         );
-        assert_eq!(status_update(&mut last, rendered), None);
+        assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
+        assert!(frames[0]["summary"]
+            .ends_with("]#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]"));
+        assert_eq!(
+            frames[0]["details"],
+            render_preview(&state).unwrap().render().as_str()
+        );
+        assert_eq!(frames[0]["percent"], "90");
+        for rate in ["read_bps", "write_bps", "read", "write"] {
+            assert_eq!(frames[0][rate], "", "no rate yet clears {rate}");
+        }
+
+        state.capacity = Some(CapacitySnapshot {
+            volumes: vec![startup(91)],
+        });
+        publish_status(&ctx, &mut state);
+        assert_eq!(harness.drain_status().len(), 1);
+
+        publish_status(&ctx, &mut DiskState::default());
+        assert!(harness.drain_status().is_empty());
     }
 
     #[test]
@@ -1002,12 +1093,12 @@ mod tests {
             ..DiskState::default()
         };
 
-        let plain = render_details(&state).unwrap();
-        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
-
-        assert!(plain.contains("Backup #[fg=colour196] (/Volumes/#1)"));
-        assert!(rendered.details.contains(
-            "#[fg=colour245]Volume        #[default]Backup ##[fg=colour196] (/Volumes/##1)"
+        let preview = render_preview(&state).unwrap();
+        assert!(preview
+            .render_plain()
+            .contains("Volume        Backup #[fg=colour196]\nMount         /Volumes/#1"));
+        assert!(preview.render().as_str().contains(
+            "#[fg=colour245]Volume        #[default]Backup ##[fg=colour196]\n#[fg=colour245]Mount         #[default]/Volumes/##1"
         ));
     }
 
@@ -1018,5 +1109,73 @@ mod tests {
         assert!(!first_failure(&mut logged, true));
         assert!(!first_failure(&mut logged, false));
         assert!(first_failure(&mut logged, true));
+    }
+
+    #[test]
+    fn raw_segments_carry_startup_percent_and_whole_byte_rates() {
+        let raw = render_status(&activity_state(), SummaryMode::Compact)
+            .unwrap()
+            .raw;
+        assert_eq!(
+            raw,
+            RawMetrics {
+                percent: "90".to_string(),
+                read_bps: "1572864".to_string(),
+                write_bps: "2048".to_string(),
+                read: "1.5 MiB/s".to_string(),
+                write: "2.0 KiB/s".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn raw_rates_round_to_whole_bytes_and_idle_reads_zero() {
+        let mut state = activity_state();
+        state.rates = Some(IoRates {
+            read: 1_234.5,
+            written: 0.4,
+        });
+        let raw = raw_metrics(&state);
+        assert_eq!(
+            (raw.read_bps.as_str(), raw.write_bps.as_str()),
+            ("1235", "0")
+        );
+
+        state.rates = Some(IoRates {
+            read: 0.0,
+            written: 0.0,
+        });
+        let raw = raw_metrics(&state);
+        assert_eq!(
+            (
+                raw.read_bps.as_str(),
+                raw.write_bps.as_str(),
+                raw.read.as_str(),
+                raw.write.as_str()
+            ),
+            ("0", "0", "0 B/s", "0 B/s")
+        );
+        assert_eq!(whole_rate(f64::NAN), 0);
+        assert_eq!(whole_rate(-5.0), 0);
+    }
+
+    #[test]
+    fn raw_percent_reaches_one_hundred_and_unknown_values_clear() {
+        let state = DiskState {
+            capacity: Some(CapacitySnapshot {
+                volumes: vec![startup(100)],
+            }),
+            ..DiskState::default()
+        };
+        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
+        assert!(rendered.label.as_str().contains("99%"));
+        assert_eq!(rendered.raw.percent, "100");
+        assert_eq!(rendered.raw.read_bps, "");
+
+        let mut stale = activity_state();
+        stale.capacity = Some(CapacitySnapshot::default());
+        stale.last_io_success = Some(Instant::now());
+        assert!(stale.expire_stale_rates(Instant::now() + MAX_RATE_INTERVAL * 2));
+        assert_eq!(raw_metrics(&stale), RawMetrics::default());
     }
 }

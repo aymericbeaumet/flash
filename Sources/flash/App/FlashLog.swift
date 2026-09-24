@@ -1,11 +1,16 @@
+import Darwin
 import Foundation
 
 /// Single sink for the app's diagnostics. Every emitted line is one
 /// compact JSON object, written to stderr and appended to
 /// `~/Library/Logs/Flash/flash.log`.
 ///
-/// File writes are dispatched onto a dedicated background queue so a
-/// slow disk never blocks the activation hot path.
+/// The calling thread only decides whether the record passes and builds the
+/// record value; JSON encoding, the stderr write, and the file append all run
+/// on one background I/O queue so the input hot path never blocks on a
+/// `write(2)`. A suppressed call costs one lock round trip and no allocation:
+/// the message autoclosure is not evaluated and the default `source` is
+/// derived from `StaticString` literals only for records that pass.
 enum FlashLog {
   /// Severity ordering. The configured `minLevel` is the floor —
   /// messages below it are dropped before any string interpolation
@@ -54,6 +59,8 @@ enum FlashLog {
     var fields: [String: String]
     var pid: Int
     var timeUnixMs: Int64
+    /// The interaction this line belongs to (`Trace`), when there is one.
+    var trace: String? = nil
 
     var jsonObject: [String: Any] {
       var object: [String: Any] = [
@@ -66,27 +73,46 @@ enum FlashLog {
       if !fields.isEmpty {
         object["fields"] = fields
       }
+      if let trace {
+        object["trace"] = trace
+      }
       return object
     }
   }
 
   typealias Sink = (Record) -> Void
 
+  /// An in-memory consumer (the HTTP inspector, tests) and the lowest level it
+  /// takes; `nil` follows the configured level, so the inspector never forces
+  /// trace messages on hot paths to be built.
+  private struct SinkEntry {
+    var minLevel: Level?
+    var sink: Sink
+  }
+
   private static let lock = NSLock()
   private static var minLevel: Level = .info
-  private static var handle: FileHandle?
-  private static var sinks: [UUID: Sink] = [:]
-  private static let writeQueue =
-    DispatchQueue(label: "flash.log.write", qos: .utility)
+  private static var sinks: [UUID: SinkEntry] = [:]
+  private static let pid = Int(getpid())
+  /// Serial queue owning every byte of log output (stderr and file).
+  private static let ioQueue = DispatchQueue(label: "flash.log.io", qos: .utility)
+  static let defaultLogFileURL: URL? = {
+    guard NSClassFromString("XCTestCase") == nil else { return nil }
+    return FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Logs/Flash/flash.log")
+  }()
+  private static let fileWriter = defaultLogFileURL.map {
+    FlashLogFileWriter(url: $0, queue: ioQueue)
+  }
 
-  /// Rotate `flash.log` when it exceeds this size. Trace-level logs (which can
-  /// include AX tree dumps) can balloon quickly; without rotation the file
-  /// grows unbounded across a long-running resident session.
-  private static let rotationByteLimit: UInt64 = 10 * 1024 * 1024
-  /// Number of rotated segments kept beside `flash.log` (`flash.log.1` …
-  /// `flash.log.N`). Anything older is deleted on rotation.
-  private static let rotationKeep = 3
-  private static var bytesWrittenSinceRotation: UInt64 = 0
+  /// Whether `level` currently reaches the log file or a sink. Diagnostic-only
+  /// machinery (the main-thread watchdog, pipeline summaries) uses this to
+  /// stay off entirely when nothing would read its output.
+  static func wouldEmit(_ level: Level) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return level >= minLevel || sinksPass(level)
+  }
 
   static func setLevel(_ level: Level) {
     lock.lock()
@@ -94,10 +120,11 @@ enum FlashLog {
     lock.unlock()
   }
 
-  static func addSink(_ sink: @escaping Sink) -> UUID {
+  /// `minLevel: nil` follows the configured level.
+  static func addSink(minLevel: Level? = .trace, _ sink: @escaping Sink) -> UUID {
     let id = UUID()
     lock.lock()
-    sinks[id] = sink
+    sinks[id] = SinkEntry(minLevel: minLevel, sink: sink)
     lock.unlock()
     return id
   }
@@ -108,156 +135,207 @@ enum FlashLog {
     lock.unlock()
   }
 
-  static func wouldEmit(_ level: Level) -> Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    return level >= minLevel || !sinks.isEmpty
+  /// Under `lock`.
+  private static func sinksPass(_ level: Level) -> Bool {
+    sinks.values.contains { level >= ($0.minLevel ?? minLevel) }
   }
 
-  static func coreSource(fileID: String, function: String) -> String {
+  /// Block until every record emitted so far has been written out.
+  static func flush() {
+    ioQueue.sync {}
+  }
+
+  static func coreSource(fileID: StaticString, function: StaticString) -> String {
+    let fileID = fileID.description
     let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
     return "core:\(file).\(function)"
   }
 
   static func debug(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.debug, source: source, fields: fields, message)
+    emit(.debug, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func trace(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.trace, source: source, fields: fields, message)
+    emit(.trace, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func info(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.info, source: source, fields: fields, message)
+    emit(.info, source: source, fileID: fileID, function: function, fields: fields, message)
   }
   static func warn(
     _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
   ) {
-    emit(.warn, source: source, fields: fields, message)
+    emit(.warn, source: source, fileID: fileID, function: function, fields: fields, message)
   }
+  static func error(
+    _ message: @autoclosure () -> String,
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
+  ) {
+    emit(.error, source: source, fileID: fileID, function: function, fields: fields, message)
+  }
+  /// A line from, or about, plugin `pluginID`. `trace` is the interaction
+  /// it serves when known off the main thread (a plugin echoes it back).
   static func plugin(
     _ level: Level,
     pluginID: String,
     message: @autoclosure () -> String,
-    fields: [String: String] = [:]
+    fields: @autoclosure () -> [String: String] = [:],
+    trace: String? = nil
   ) {
-    emit(level, source: "plugin:\(pluginID)", fields: fields, message)
+    emit(
+      level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields,
+      trace: trace, message)
   }
 
   private static func emit(
     _ level: Level,
-    source: String,
-    fields: [String: String],
+    source: String?,
+    fileID: StaticString,
+    function: StaticString,
+    fields: () -> [String: String],
+    trace: String? = nil,
     _ message: () -> String
   ) {
     lock.lock()
     let pass = level >= minLevel
-    if pass, handle == nil {
-      handle = openLogFile()
-    }
-    let h = handle
-    let sinkSnapshot = Array(sinks.values)
+    let sinkPass = !sinks.isEmpty && sinksPass(level)
     lock.unlock()
-    guard pass || !sinkSnapshot.isEmpty else { return }
+    guard pass || sinkPass else { return }
     let record = Record(
       level: level,
-      source: source,
+      source: source ?? coreSource(fileID: fileID, function: function),
       message: message(),
-      fields: fields,
-      pid: Int(ProcessInfo.processInfo.processIdentifier),
-      timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()))
-    let line = jsonLine(record)
-    for sink in sinkSnapshot {
-      sink(record)
+      fields: fields(),
+      pid: pid,
+      timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()),
+      trace: trace ?? Trace.current?.text)
+    if sinkPass {
+      lock.lock()
+      let receivers = sinks.values.filter { level >= ($0.minLevel ?? minLevel) }.map(\.sink)
+      lock.unlock()
+      for sink in receivers {
+        sink(record)
+      }
     }
     guard pass else { return }
-    fputs(line, stderr)
-    guard let h, let data = line.data(using: .utf8) else { return }
-    writeQueue.async {
-      try? h.write(contentsOf: data)
-      bytesWrittenSinceRotation &+= UInt64(data.count)
-      if bytesWrittenSinceRotation >= rotationByteLimit {
-        rotateIfNeeded()
+    ioQueue.async {
+      let line = jsonLineData(record)
+      line.withUnsafeBytes { bytes in
+        guard let base = bytes.baseAddress else { return }
+        _ = fwrite(base, 1, bytes.count, stderr)
       }
+      fileWriter?.writeOnQueue(line)
     }
   }
 
-  /// Off the write queue: if `flash.log` has grown past `rotationByteLimit`,
-  /// shift `flash.log.(N-1) → flash.log.N` through `flash.log → flash.log.1`
-  /// and reopen a fresh handle. Failures are best-effort; if rotation can't
-  /// happen we keep writing to the existing handle rather than losing entries.
-  private static func rotateIfNeeded() {
-    guard let url = logFileURL() else {
-      bytesWrittenSinceRotation = 0
-      return
+  /// One newline-terminated JSON object, encoded exactly once.
+  static func jsonLineData(_ record: Record) -> Data {
+    let object = record.jsonObject
+    guard
+      var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    else {
+      return Data(
+        "{\"level\":\"error\",\"message\":\"log serialization failed\",\"source\":\"core:FlashLog\"}\n"
+          .utf8)
     }
+    data.append(0x0A)
+    return data
+  }
+
+}
+
+final class FlashLogFileWriter {
+  private let url: URL
+  private let rotationByteLimit: UInt64
+  private let rotationKeep: Int
+  private let queue: DispatchQueue
+  private var handle: FileHandle?
+  private var bytesWritten: UInt64 = 0
+
+  init(
+    url: URL,
+    rotationByteLimit: UInt64 = 10 * 1024 * 1024,
+    rotationKeep: Int = 3,
+    queue: DispatchQueue = DispatchQueue(label: "flash.log.write", qos: .utility)
+  ) {
+    precondition(rotationByteLimit > 0 && rotationKeep > 0)
+    self.url = url
+    self.rotationByteLimit = rotationByteLimit
+    self.rotationKeep = rotationKeep
+    self.queue = queue
+  }
+
+  func append(_ data: Data) {
+    queue.async { [self] in
+      writeOnQueue(data)
+    }
+  }
+
+  /// Append from a block already running on this writer's queue.
+  func writeOnQueue(_ data: Data) {
+    dispatchPrecondition(condition: .onQueue(queue))
+    openIfNeeded()
+    guard let handle else { return }
+    do { try handle.write(contentsOf: data) } catch { return }
+    bytesWritten &+= UInt64(data.count)
+    if bytesWritten >= rotationByteLimit { rotate() }
+  }
+
+  func flush() { queue.sync {} }
+
+  private func openIfNeeded() {
+    guard handle == nil else { return }
     let fm = FileManager.default
-    let attrs = try? fm.attributesOfItem(atPath: url.path)
-    let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
-    guard size >= rotationByteLimit else {
-      bytesWrittenSinceRotation = 0
-      return
-    }
+    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let descriptor = Darwin.open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { return }
+    handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    let attributes = try? fm.attributesOfItem(atPath: url.path)
+    bytesWritten = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+  }
+
+  private func rotate() {
+    let fm = FileManager.default
     let base = url.deletingLastPathComponent()
     let name = url.lastPathComponent
-    // Drop the oldest, then shift each rotated segment up by one.
     let oldest = base.appendingPathComponent("\(name).\(rotationKeep)")
     try? fm.removeItem(at: oldest)
     for index in stride(from: rotationKeep - 1, through: 1, by: -1) {
       let from = base.appendingPathComponent("\(name).\(index)")
       let to = base.appendingPathComponent("\(name).\(index + 1)")
-      _ = try? fm.moveItem(at: from, to: to)
+      try? fm.moveItem(at: from, to: to)
     }
-    let firstRotated = base.appendingPathComponent("\(name).1")
-    _ = try? fm.moveItem(at: url, to: firstRotated)
-    lock.lock()
-    try? handle?.close()
-    handle = openLogFile()
-    lock.unlock()
-    bytesWrittenSinceRotation = 0
-  }
-
-  private static func logFileURL() -> URL? {
-    FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Logs/Flash/flash.log")
-  }
-
-  static func jsonLine(_ record: Record) -> String {
-    let object = record.jsonObject
-    guard
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
-      var line = String(data: data, encoding: .utf8)
-    else {
+    do {
+      try fm.moveItem(at: url, to: base.appendingPathComponent("\(name).1"))
+    } catch {
+      bytesWritten = 0
       return
-        "{\"level\":\"error\",\"message\":\"log serialization failed\",\"source\":\"core:FlashLog\"}\n"
     }
-    line.append("\n")
-    return line
-  }
-
-  private static func openLogFile() -> FileHandle? {
-    guard let url = logFileURL() else { return nil }
-    let fm = FileManager.default
-    try? fm.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    if !fm.fileExists(atPath: url.path) {
-      fm.createFile(atPath: url.path, contents: nil)
-    }
-    guard let h = try? FileHandle(forWritingTo: url) else { return nil }
-    _ = try? h.seekToEnd()
-    return h
+    try? handle?.close()
+    handle = nil
+    openIfNeeded()
   }
 }

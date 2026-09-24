@@ -7,8 +7,10 @@ struct CommandMappingLaunchPlan: Equatable {
 }
 
 enum CommandMappingRunner {
-  static func launchPlan(for argv: [String]) -> CommandMappingLaunchPlan? {
-    let expanded = argv.map(expandLeadingTilde)
+  static func launchPlan(for argv: [String], environment: [String: String] = [:])
+    -> CommandMappingLaunchPlan?
+  {
+    let expanded = CommandLaunchConfiguration(command: argv, environment: environment).command
     guard let executable = expanded.first, !executable.isEmpty else { return nil }
     guard !mappingCommandHeadNamesFlash(executable) else { return nil }
     let rest = Array(expanded.dropFirst())
@@ -24,14 +26,15 @@ enum CommandMappingRunner {
 
   @discardableResult
   static func run(_ argv: [String]) -> Bool {
-    guard let plan = launchPlan(for: argv) else {
+    let environment = FlashProcessEnvironment.shared.environment
+    guard let plan = launchPlan(for: argv, environment: environment) else {
       FlashLog.warn("[mappings] shell command has no executable")
       return false
     }
     let process = Process()
     process.executableURL = plan.executableURL
     process.arguments = plan.arguments
-    FlashProcessEnvironment.shared.apply(to: process)
+    process.environment = environment
     // Discard output through the shared null device. Do NOT open our own
     // `FileHandle(forWritingTo: /dev/null)` and assign it to both streams: an
     // owned FileHandle is double-closed when `Process` tears it down after
@@ -50,11 +53,6 @@ enum CommandMappingRunner {
       FlashLog.warn("[mappings] failed to launch \(argvDiagnostic(argv)): \(error)")
       return false
     }
-  }
-
-  static func expandLeadingTilde(_ value: String) -> String {
-    guard value == "~" || value.hasPrefix("~/") else { return value }
-    return (value as NSString).expandingTildeInPath
   }
 
   private static func argvDiagnostic(_ argv: [String]) -> String {

@@ -20,7 +20,7 @@ final class PluginHostRPCArmTests: XCTestCase {
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-      .appendingPathComponent("Plugins/_flash_plugin_specs/protocol.json")
+      .appendingPathComponent("Plugins/_flash_plugin_rust/protocol.json")
     let data = try Data(contentsOf: url)
     return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
   }
@@ -169,9 +169,11 @@ final class PluginHostRPCArmTests: XCTestCase {
 
   func testHostOpenRoutesURLsAndBundleIDsThroughTheSeams() {
     let originalURLOpener = PluginHostRPC.urlOpener
+    let originalURLHandler = PluginHostRPC.urlHandler
     let originalAppOpener = PluginHostRPC.appOpener
     defer {
       PluginHostRPC.urlOpener = originalURLOpener
+      PluginHostRPC.urlHandler = originalURLHandler
       PluginHostRPC.appOpener = originalAppOpener
     }
     var openedURLs: [URL] = []
@@ -182,6 +184,8 @@ final class PluginHostRPCArmTests: XCTestCase {
       openedURLs.append(url)
       return urlOpenSucceeds
     }
+    var handler: String? = "com.example.browser"
+    PluginHostRPC.urlHandler = { _ in handler }
     PluginHostRPC.appOpener = { bundleID, done in
       openedBundles.append(bundleID)
       done(appOpenError)
@@ -191,7 +195,13 @@ final class PluginHostRPCArmTests: XCTestCase {
     let urlReply = hostReply(
       rpc, "host.open", ["url": "https://example.com/x"], capabilities: [.open])
     XCTAssertEqual(urlReply["ok"] as? Bool, true)
+    XCTAssertEqual(urlReply["bundle_id"] as? String, "com.example.browser")
     XCTAssertEqual(openedURLs, [URL(string: "https://example.com/x")])
+    handler = nil
+    let unnamed = hostReply(
+      rpc, "host.open", ["url": "https://example.com/x"], capabilities: [.open])
+    XCTAssertEqual(unnamed["ok"] as? Bool, true)
+    XCTAssertNil(unnamed["bundle_id"], "an unresolved handler is omitted, not empty")
 
     // Response law: an opener failure carries a non-empty error, never a
     // bare {"ok": false}.
@@ -214,7 +224,7 @@ final class PluginHostRPCArmTests: XCTestCase {
 
     let neither = hostReply(rpc, "host.open", [:], capabilities: [.open])
     XCTAssertEqual(neither["error"] as? String, "host.open requires url or bundle_id")
-    XCTAssertEqual(openedURLs.count, 2, "a rejected call must not reach the opener")
+    XCTAssertEqual(openedURLs.count, 3, "a rejected call must not reach the opener")
   }
 
   // MARK: - host.post_media_key (mediaKeyPoster seam)
@@ -295,7 +305,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertNotNil(rows.first?["disk_write_bytes"] as? Int)
     XCTAssertNotNil(rows.first?["uptime_seconds"] as? Int)
     XCTAssertNotNil(rows.first?["thread_count"] as? Int)
-    XCTAssertNotNil(rows.first?["network_socket_count"] as? Int)
+    XCTAssertNotNil(rows.first?["socket_count"] as? Int)
     XCTAssertGreaterThanOrEqual(rows.first?["process_count"] as? Int ?? 0, 2)
   }
 
@@ -310,12 +320,25 @@ final class PluginHostRPCArmTests: XCTestCase {
 
   func testNormalModeTargetReportsTheResolvedTargetOrAbsence() {
     let rpc = PluginHostRPC()
-    rpc.onNormalModeTargetRequested = { (pid: 42, bundleID: "com.example.app") }
+    rpc.onNormalModeTargetRequested = {
+      (pid: 42, bundleID: "com.example.app", windowID: CGWindowID(9_001))
+    }
     let reply = hostReply(rpc, "host.normal_mode_target", [:], capabilities: [.appControl])
     XCTAssertEqual(reply["ok"] as? Bool, true)
     XCTAssertEqual(reply["present"] as? Bool, true)
     XCTAssertEqual(reply["pid"] as? Int, 42)
     XCTAssertEqual(reply["bundle_id"] as? String, "com.example.app")
+    // Window identity travels with the target so a plugin can name a window
+    // without asking the user to pick one.
+    XCTAssertEqual(reply["window_id"] as? Int, 9_001)
+
+    // A target with no resolvable window simply omits the id.
+    rpc.onNormalModeTargetRequested = {
+      (pid: 42, bundleID: "com.example.app", windowID: nil)
+    }
+    let windowless = hostReply(rpc, "host.normal_mode_target", [:], capabilities: [.appControl])
+    XCTAssertEqual(windowless["present"] as? Bool, true)
+    XCTAssertNil(windowless["window_id"])
 
     rpc.onNormalModeTargetRequested = { nil }
     let absent = hostReply(rpc, "host.normal_mode_target", [:], capabilities: [.appControl])

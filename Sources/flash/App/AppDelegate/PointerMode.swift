@@ -4,28 +4,28 @@ import FlashCore
 /// Pointer mode (`mouse_pointer`): freestyle keyboard cursor control.
 /// h/j/k/l or arrows move with autorepeat acceleration (shift = 2px fine),
 /// `m` / `,` / `.` click left/middle/right in place, `v` toggles a drag,
-/// Return or space clicks and exits with the same INSERT handoff as a
-/// mouse-grid commit, Escape (or `q`) exits. Runs as a hint-session variant:
+/// Return or space clicks and returns to NORMAL; Escape (or `q`) exits.
+/// `mouse_button` presses and releases outside it; both share
+/// `ActionDispatcher`'s held button, so a move with a button down drags.
+/// Runs as a hint-session variant:
 /// `inputMode` stays `.hints` so the capture policy is untouched, and the
-/// panel's `pointerModeActive` flag routes keys to `PointerModeInterpreter`.
+/// session's pointer phase routes keys to `PointerModeInterpreter`.
 extension AppDelegate {
   func enterPointerMode() {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
-    }
-    clearHintSessionState()
-    hintSession.pointerModeActive = true
+    guard prepareHintActivation(.pointer) else { return }
+    hintSession.phase = .pointer(.init())
     applyModeOverlay()
-    // `.hints` hides the cursor for chip picking; pointer mode is the
-    // opposite — the cursor IS the interface.
-    overlay.showHintCursor()
     overlay.presentPointerMode(at: NSEvent.mouseLocation)
     FlashLog.trace("[pointer_mode] enter")
   }
 
   func overlayDidPointer(_ command: PointerModeCommand) {
-    guard hintSession.pointerModeActive else {
+    guard var pointer = hintSession.pointer else {
       cancelOverlay()
+      return
+    }
+    if activationLifecycle.isCommitting {
+      if case .exit = command { cancelOverlay() }
       return
     }
     let location = NSEvent.mouseLocation
@@ -35,17 +35,16 @@ extension AppDelegate {
       cancelOverlay()
     case .move(let dx, let dy, let fine):
       let now = Date()
-      let sinceMs = hintSession.pointerLastMoveAt.map {
-        Int(now.timeIntervalSince($0) * 1000)
-      }
+      let sinceMs = pointer.lastMoveAt.map { Int(now.timeIntervalSince($0) * 1000) }
       let streak = PointerModeInterpreter.nextStreak(
-        previous: hintSession.pointerMoveStreak, sinceLastMoveMs: sinceMs)
-      hintSession.pointerMoveStreak = streak
-      hintSession.pointerLastMoveAt = now
+        previous: pointer.moveStreak, sinceLastMoveMs: sinceMs)
+      pointer.moveStreak = streak
+      pointer.lastMoveAt = now
+      hintSession.phase = .pointer(pointer)
       let step = PointerModeInterpreter.step(streak: streak, fine: fine)
       let target = Self.clampToScreens(
         CGPoint(x: location.x + CGFloat(dx) * step, y: location.y + CGFloat(dy) * step))
-      _ = ActionDispatcher.movePointer(to: target, dragging: hintSession.pointerDragActive)
+      _ = ActionDispatcher.moveCursor(to: target)
       overlay.movePointerMarker(to: target)
     case .clickLeft:
       pointerModeClickInPlace(.leftClick, at: location)
@@ -54,67 +53,66 @@ extension AppDelegate {
     case .clickRight:
       // A context menu takes its own modal session; leave pointer mode and
       // suspend like every other right-click commit.
-      guard !hintSession.pointerDragActive else { return }
+      guard ActionDispatcher.heldButton == nil else { return }
       clearHintSessionState()
       overlay.hide()
-      _ = ActionDispatcher.synthesizeClick(
-        at: location, action: .rightClick, modifiers: [], preserveCursor: false)
-      pointerModeSuspendForContextMenu()
-    case .toggleDrag:
-      if hintSession.pointerDragActive {
-        _ = ActionDispatcher.releasePrimaryButton(at: location)
-        hintSession.pointerDragActive = false
-        FlashLog.trace("[pointer_mode] drag_release")
-      } else {
-        _ = ActionDispatcher.pressPrimaryButton(at: location)
-        hintSession.pointerDragActive = true
-        FlashLog.trace("[pointer_mode] drag_press")
+      let committedClick = LastCommittedClick(
+        point: location, action: .rightClick, modifiers: [], pid: nil)
+      performHintCommit(recording: committedClick) { finished in
+        ActionDispatcher.synthesizeClick(
+          at: location, action: .rightClick, modifiers: [],
+          completion: finished)
+      } completion: { owner in
+        owner.suspendNormalCaptureForNativeSurface(reason: "pointer_mode_right_click")
       }
+    case .toggleDrag:
+      // The same hold as `mouse_button --state=toggle`: a button another
+      // press left down is released first.
+      ActionDispatcher.setMouseButton(.toggle, .primary, at: location)
+      FlashLog.trace("[pointer_mode] drag held=\(ActionDispatcher.heldButton != nil)")
     case .commitClick:
       commitPointerModeClick(at: location)
     }
   }
 
   /// `m` / `,`: click without leaving pointer mode, so several targets can be
-  /// hit in one session (mirrors `--multi`). Ignored while the drag toggle
-  /// holds the button — a click mid-drag would corrupt the gesture.
+  /// hit in one session (mirrors `--multi`). Ignored while a button is held
+  /// — a click mid-drag would corrupt the gesture.
   private func pointerModeClickInPlace(_ action: JumpAction, at location: CGPoint) {
-    guard !hintSession.pointerDragActive else { return }
-    lastCommittedClick = LastCommittedClick(
+    guard ActionDispatcher.heldButton == nil else { return }
+    let committedClick = LastCommittedClick(
       point: location, action: action, modifiers: [], pid: nil)
-    _ = ActionDispatcher.synthesizeClick(
-      at: location, action: action, modifiers: [], preserveCursor: false)
+    performHintCommit(recording: committedClick) { finished in
+      ActionDispatcher.synthesizeClick(
+        at: location, action: action, modifiers: [],
+        completion: finished)
+    } completion: { owner in
+      owner.applyModeOverlay()
+    }
   }
 
-  /// Return / space: finish the session. With the drag toggle held this
-  /// releases the button (completing the drag); otherwise it left-clicks with
-  /// the same INSERT handoff as a mouse-grid commit.
+  /// Return / space: finish the session. With a button held this releases
+  /// it (completing the drag); otherwise it left-clicks and restores NORMAL
+  /// capture.
   private func commitPointerModeClick(at location: CGPoint) {
-    if hintSession.pointerDragActive {
-      _ = ActionDispatcher.releasePrimaryButton(at: location)
-      hintSession.pointerDragActive = false
+    if ActionDispatcher.releaseHeldButton(at: location) {
       cancelOverlay()
       return
     }
-    let pid = currentNonFlashContext()?.processID ?? normalModeTargetPID
-    lastCommittedClick = LastCommittedClick(
+    let pid = currentNonFlashRunningApplication()?.processIdentifier ?? normalModeTargetPID
+    let committedClick = LastCommittedClick(
       point: location, action: .leftClick, modifiers: [], pid: pid)
     clearHintSessionState()
     overlay.hide()
-    let handoffToken = notePointerInsertHandoff(reason: "pointer_mode_commit")
     applyModeOverlay(captureOverride: false)
-    _ = ActionDispatcher.synthesizeClick(
-      at: location, action: .leftClick, modifiers: [], preserveCursor: false
-    ) { [weak self] in
-      guard let self else { return }
-      self.resolvePointerModeInsert(pid: pid, handoffToken: handoffToken)
+    performHintCommit(recording: committedClick) { finished in
+      ActionDispatcher.synthesizeClick(
+        at: location, action: .leftClick, modifiers: [],
+        completion: finished)
+    } completion: { owner in
+      guard owner.flashMode == .normal else { return }
+      owner.restoreNormalModeAfterCommit(action: .leftClick, at: location)
     }
-  }
-
-  private func pointerModeSuspendForContextMenu() {
-    noteContextMenuInteraction(reason: "pointer_mode_right_click")
-    nativeSurfaceSuspended = true
-    applyModeOverlay()
   }
 
   static func clampToScreens(_ point: CGPoint) -> CGPoint {
@@ -124,9 +122,9 @@ extension AppDelegate {
       y: min(max(point.y, frame.minY), frame.maxY - 1))
   }
 
-  /// `focus_input` (Vimium `gi`): focus the count-th editable text input of
-  /// the focused window via the AX focused attribute, then enter INSERT so
-  /// typing flows immediately. The bounded AX walk runs off the main thread.
+  /// `focus_input`: focus the count-th editable text input of
+  /// the focused window via the AX focused attribute, preserving the mode.
+  /// The bounded AX walk runs off the main thread.
   func focusTextInputInNormalMode(index: Int) {
     guard let context = normalModeContext() ?? currentNonFlashContext() else {
       applyModeOverlay()
@@ -134,20 +132,38 @@ extension AppDelegate {
     }
     let pid = context.processID
     let normalized = max(1, index)
+    let generation = activationGen
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let focused = NormalModeDispatcher.focusTextInput(pid: pid, index: normalized)
       DispatchQueue.main.async {
-        guard let self else { return }
+        guard let self, self.activationLifecycle.isCurrent(generation) else { return }
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
-          if self.flashMode == .normal {
-            self.enterInsertMode(reason: .explicitCommand, targetPID: pid)
-          }
         } else {
           FlashLog.debug("[focus_input] no_text_input pid=\(pid)")
-          self.applyModeOverlay()
         }
+        self.applyModeOverlay()
       }
     }
+  }
+}
+
+extension AppDelegate {
+  /// `mouse_button`: press, release or toggle a button where the pointer is.
+  /// `ActionDispatcher` owns the hold; pointer moves drag until the button
+  /// is released here, by Escape in a Flash overlay, `leave_mode` or quit.
+  func performMouseButton(_ request: MouseButtonRequest) {
+    let effects = ActionDispatcher.setMouseButton(
+      request.state, request.button, at: NSEvent.mouseLocation)
+    FlashLog.debug(
+      "[mouse_button] state=\(request.state.rawValue) button=\(request.button.rawValue) "
+        + "effects=\(effects.count) held=\(ActionDispatcher.heldButton?.rawValue ?? "none")")
+  }
+
+  /// Escape in a Flash overlay, `leave_mode` and quit let go of a held
+  /// button.
+  func releaseHeldMouseButton(reason: String) {
+    guard ActionDispatcher.releaseHeldButton(at: NSEvent.mouseLocation) else { return }
+    FlashLog.debug("[mouse_button] released reason=\(reason)")
   }
 }

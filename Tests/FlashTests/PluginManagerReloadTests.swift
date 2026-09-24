@@ -29,16 +29,20 @@ final class PluginManagerReloadTests: XCTestCase {
     return config
   }
 
+  private static let residentSurfaces = #""listen": ["core:config.changed"]"#
+
   private func status(_ manager: PluginManager, _ id: String) -> PluginStatus? {
     manager.pluginStatuses().first { $0.id == id }
   }
 
+  /// Resident whatever the status bar shows: `listen` alone keeps a plugin
+  /// running (a status-only one waits for the bar to observe it).
   private func residentFixture(id: String, baseDataDir: URL? = nil) throws
     -> PluginFixtureKit.Fixture
   {
     try PluginFixtureKit.make(
       id: id,
-      manifest: PluginFixtureKit.manifest(id: id),
+      manifest: PluginFixtureKit.manifest(id: id, extra: Self.residentSurfaces),
       script: PluginFixtureKit.script(),
       baseDataDir: baseDataDir)
   }
@@ -88,6 +92,93 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(off.spawnCount(), 0, "no process may ever spawn for a disabled id")
   }
 
+  // MARK: - status-bound activation
+
+  func testStatusOnlyPluginRunsWhileTheEnabledBarShowsIt() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "mgrbound",
+      manifest: PluginFixtureKit.manifest(id: "mgrbound"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(fixture.root.path)"])
+    config.statusBar.template = FlashStatusBarTemplate(
+      template: "#{flash.plugin.mgrbound.state}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.flash.plugin.mgrbound.state",
+          token: "flash.plugin.mgrbound.state",
+          source: .plugin(.statusSegment(pluginID: "mgrbound", name: "state")))
+      ], options: [:])
+    manager.start(config: config)
+    waitUntilTrue("registered") { self.status(manager, "mgrbound")?.activation == "on_demand" }
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 0, "the template shows it, but the bar is hidden")
+
+    config.statusBar.enabled = true
+    manager.updateConfig(config)
+    waitUntilTrue("observed plugin spawned") {
+      self.status(manager, "mgrbound")?.state == "running"
+    }
+    XCTAssertEqual(status(manager, "mgrbound")?.activation, "resident")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+  }
+
+  // MARK: - action keystrokes
+
+  /// A bundle's own chord beats a plugin-wide one across plugins; a declared
+  /// chord marks the emulator as binding it.
+  func testActionKeystrokesResolvePerAppFromManifestOnlyPlugins() throws {
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-mgr-keystrokes-\(UUID().uuidString)")
+    let root = base.appendingPathComponent("wide")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    try """
+    {
+      "id": "wide",
+      "name": "Wide",
+      "version": "1.0.0",
+      "description": "Plugin-wide chords",
+      "only_bundle_ids": ["com.example.app", "com.apple.MobileSMS"],
+      "action_keystrokes": { "tab_next": { "": "cmd+option+right" } }
+    }
+    """.write(
+      to: root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    let manager = PluginManager(baseDataDir: base)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(root.path)"])
+    config.plugins.disabled.subtract(["defaults", "terminals"])
+    manager.start(config: config)
+
+    func chord(_ action: SourceActionName, _ bundle: String) -> ParsedHotkey? {
+      manager.actionKeystroke(action, in: PluginSelectorContext(bundleID: bundle))
+    }
+    waitUntilTrue("manifests published") { chord(.tabNext, "com.example.app") != nil }
+    XCTAssertEqual(
+      chord(.tabNext, "com.example.app"), HotkeySyntax.parse(hotkey: "cmd+option+right"))
+    XCTAssertEqual(
+      chord(.tabNext, "com.apple.MobileSMS"), HotkeySyntax.parse(hotkey: "ctrl+tab"),
+      "Messages' own entry in defaults beats the other plugin's plugin-wide chord")
+    XCTAssertNil(chord(.tabNext, "com.example.elsewhere"))
+    XCTAssertNil(chord(.tabLast, "com.example.app"))
+
+    let bracket = try XCTUnwrap(HotkeySyntax.parse(hotkey: "cmd+]"))
+    XCTAssertTrue(
+      manager.declaresActionKeystroke(
+        key: bracket.keyCode, flags: bracket.eventFlags,
+        in: PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
+    XCTAssertFalse(
+      manager.declaresActionKeystroke(
+        key: bracket.keyCode, flags: bracket.eventFlags,
+        in: PluginSelectorContext(bundleID: "org.alacritty")))
+    XCTAssertTrue(
+      TerminalEmulators.contains("org.alacritty"), "publishing declares the terminals plugin's list"
+    )
+    XCTAssertFalse(TerminalEmulators.contains("com.example.app"))
+  }
+
   // MARK: - reloadAll
 
   func testReloadAllRestartsRunningPluginsWithoutBlockingTheMainThread() throws {
@@ -112,6 +203,62 @@ final class PluginManagerReloadTests: XCTestCase {
   }
 
   // MARK: - github: refs (local git fixture, no network)
+
+  func testExplicitReloadReconcilesChangedManifestAndKeepsLastGoodOnInvalidReplacement() throws {
+    let fixture = try residentFixture(id: "definitionreload")
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("initial definition running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let manifestURL = fixture.root.appendingPathComponent("manifest.json")
+    let replacement = PluginFixtureKit.manifest(
+      id: fixture.pluginID,
+      extra:
+        Self.residentSurfaces
+        + #","commands":[{"command":"newcommand","subcommand":"ping","description":"test"}]"#
+    ).replacingOccurrences(of: "1.0.0", with: "2.0.0")
+    try replacement.write(to: manifestURL, atomically: true, encoding: .utf8)
+    manager.reloadAll()
+    waitUntilTrue("replacement definition registered") {
+      self.status(manager, fixture.pluginID)?.version == "2.0.0"
+    }
+    XCTAssertEqual(status(manager, fixture.pluginID)?.commandCount, 1)
+    waitUntilTrue("replacement running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let replacementPID = status(manager, fixture.pluginID)?.pid
+    try "{invalid".write(to: manifestURL, atomically: true, encoding: .utf8)
+    manager.reloadAll()
+    waitUntilTrue("invalid replacement reported") {
+      self.status(manager, fixture.pluginID)?.lastError?.contains("definition") == true
+    }
+    XCTAssertEqual(status(manager, fixture.pluginID)?.version, "2.0.0")
+    XCTAssertEqual(status(manager, fixture.pluginID)?.pid, replacementPID)
+    XCTAssertEqual(manager.pluginStatuses().filter { $0.id == fixture.pluginID }.count, 1)
+  }
+
+  func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
+    let fixture = try residentFixture(id: "definitionwatch")
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(fixture.root.path)"])
+    config.plugins.watchingEnabled = true
+    manager.start(config: config)
+    waitUntilTrue("watched definition running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let replacement = PluginFixtureKit.manifest(id: fixture.pluginID).replacingOccurrences(
+      of: "1.0.0", with: "2.0.0")
+    try replacement.write(
+      to: fixture.root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    waitUntilTrue("manifest watcher reconciles definition") {
+      self.status(manager, fixture.pluginID)?.version == "2.0.0"
+    }
+  }
 
   func testGithubMaterializationEnforcesTheCommitPin() throws {
     let fm = FileManager.default

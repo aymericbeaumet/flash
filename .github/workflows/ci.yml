@@ -13,7 +13,7 @@ jobs:
     name: Format
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Show swift-format version
         run: swift format --version
       - name: Check formatting
@@ -28,7 +28,7 @@ jobs:
     name: Lint
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Show swift-format version
         run: swift format --version
       - name: Lint
@@ -38,56 +38,19 @@ jobs:
     name: Guardrails
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check hard-rule guardrails
         run: ./Scripts/check-guardrails.sh
 
-  plugins:
-    name: Plugins (cargo)
-    runs-on: macos-15
-    env:
-      # Shared across every hermetic crate: cargo keys artifacts by
-      # package-id + metadata hash, so the SDK compiles once, not 36 times.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
-    steps:
-      - uses: actions/checkout@v4
-      - name: Cache Cargo registry + shared plugin target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            build/plugin-target
-          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-plugin-cargo-
-      - name: fmt + clippy + build + test per hermetic crate
-        # One fail-fast loop over the SDK workspace and the 36 standalone
-        # plugin crates. `cd` (not --manifest-path) is load-bearing: clippy
-        # discovers each crate's clippy.toml by walking up from the cwd.
-        # `--locked` doubles as the committed-Cargo.lock freshness gate, and
-        # `-D warnings` keeps clippy a hard gate so warnings can't accumulate.
-        run: |
-          set -euo pipefail
-          for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/; do
-            [[ -f "$dir/Cargo.toml" ]] || continue
-            echo "== $dir"
-            (cd "$dir" &&
-              cargo fmt --all --check &&
-              cargo clippy --workspace --all-targets --locked -- -D warnings &&
-              cargo build --workspace --release --locked &&
-              cargo test --workspace --locked)
-          done
-
-  conformance:
-    name: Plugins (conformance)
+  plugin-gate:
+    name: Plugins (gate)
     runs-on: macos-15
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache Cargo registry + plugin target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -96,44 +59,35 @@ jobs:
           key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - name: Cache SwiftPM build (sandbox-profile verb)
-        uses: actions/cache@v4
-        with:
-          path: .build
-          key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-build-
-      - name: Full plugin pipeline
-        # Scripts/test-plugins.sh runs everything: spec-schema validation,
-        # Rust lint, per-crate cargo unit tests, dev builds of all executable
-        # plugins + the Rust conformance probe,
-        # then the conformance matrix — every bundled plugin × every
-        # applicable spec, the Rust probe × the full suite, and the sandbox
-        # lane booting each sandboxed plugin under its REAL generated
-        # seatbelt profile. Coverage is by manifest glob: a new plugin or
-        # spec is exercised by construction, never by editing this file.
-        # TCC-dependent skips live in Plugins/_flash_plugin_specs/
-        # overrides.json (reminders, shortcuts — the first suspects if this
-        # job reds on a runner TCC change); an xfail that PASSES fails the
-        # run, so parity debt can only shrink.
-        run: ./Scripts/test-plugins.sh --lane all --jobs 8 --report conformance-report.json --github-annotations
-      - name: Upload conformance report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: conformance-report
-          path: conformance-report.json
-          if-no-files-found: ignore
+      - uses: jdx/mise-action@v4
+      - name: Plugin gate
+        # Scripts/test-plugins.sh --lane all is the whole Rust gate: `lint`
+        # (fmt --check + clippy -D warnings) and `units` (the plugin-publication
+        # test plus per-crate `cargo test --locked`, where the SDK's
+        # wire/runtime suites and its probe member are the protocol conformance
+        # authority) over the SDK workspace and every plugin crate, then `build`
+        # (a dev build of every executable plugin). `--locked` doubles as the
+        # committed-Cargo.lock freshness gate. Coverage is by glob: a new plugin
+        # crate is exercised by construction, never by editing this file.
+        run: ./Scripts/test-plugins.sh --lane all
 
   build:
     name: Build
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+      - name: Cache libghostty-vt
+        uses: actions/cache@v6
+        with:
+          path: build/ghostty
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+      - name: Build libghostty-vt
+        run: ./Scripts/build-ghostty.sh --dev
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .build
           key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
@@ -145,19 +99,44 @@ jobs:
   test:
     name: Test
     runs-on: macos-15
+    env:
+      TMUX_ORACLE: ${{ github.workspace }}/build/tmux-oracle/bin/tmux
+      FLASH_REQUIRE_TMUX_ORACLE: '1'
+      FLASH_REQUIRE_PLUGIN_BINARIES: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+      - name: Install tmux oracle build dependencies
+        run: brew install libevent ncurses pkg-config
+      - name: Cache pinned tmux oracle
+        uses: actions/cache@v6
+        with:
+          path: build/tmux-oracle
+          key: ${{ runner.os }}-${{ runner.arch }}-tmux-oracle-${{ hashFiles('Scripts/build-tmux-oracle.sh') }}
+      - name: Build pinned tmux oracle
+        run: |
+          ./Scripts/build-tmux-oracle.sh
+          echo "$GITHUB_WORKSPACE/build/tmux-oracle/bin" >> "$GITHUB_PATH"
+      - name: Check native format expansion oracle
+        run: python3 Scripts/test-status-format-oracle.py
+      - name: Cache libghostty-vt
+        uses: actions/cache@v6
+        with:
+          path: build/ghostty
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+      - name: Build libghostty-vt
+        run: ./Scripts/build-ghostty.sh --dev
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .build
           key: ${{ runner.os }}-spm-test-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-test-
       - name: Cache Cargo registry + plugin target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -166,11 +145,13 @@ jobs:
           key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - name: Build smoke-test plugin binaries
-        # The two end-to-end subprocess smoke tests XCTSkip without these
-        # binaries — building them turns silent skips into real runs. Doctor
-        # also inspects media as a representative bundled plugin.
-        run: ./Scripts/build-plugins.sh dev slack spotify calculator media
+      - name: Build plugin binaries
+        # Every executable plugin: the sandbox boot test launches each one
+        # under its generated profile, and FLASH_REQUIRE_PLUGIN_BINARIES turns
+        # an unbuilt plugin into a failure instead of a skip. The subprocess
+        # smoke tests drive spotify (mocked CLI) and answers (stdin EOF), and
+        # doctor inspects media.
+        run: ./Scripts/build-plugins.sh dev
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
       - name: Test
@@ -180,13 +161,13 @@ jobs:
     name: Inspector
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
-          version: 9
-      - uses: actions/setup-node@v4
+          version: 10
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           cache-dependency-path: Inspector/pnpm-lock.yaml
       - name: Install inspector deps
@@ -205,14 +186,13 @@ jobs:
   homebrew:
     name: Homebrew
     runs-on: macos-15
-    # plugins + conformance are REQUIRED: a red plugin build or a failed
-    # conformance matrix must never ship a release.
-    needs: [format, lint, guardrails, build, test, inspector, plugins, conformance]
+    # plugin-gate is REQUIRED: a failed plugin gate must never ship a release.
+    needs: [format, lint, guardrails, build, test, inspector, plugin-gate]
     if: github.event_name == 'push'
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -245,6 +225,7 @@ jobs:
           echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
           echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
 
+      - uses: jdx/mise-action@v4
       - name: Package Flash.app
         id: package
         if: steps.meta.outputs.deploy == 'true'
@@ -291,7 +272,7 @@ jobs:
 
       - name: Checkout Homebrew tap
         if: steps.meta.outputs.deploy == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aymericbeaumet/homebrew-tap
           path: homebrew-tap

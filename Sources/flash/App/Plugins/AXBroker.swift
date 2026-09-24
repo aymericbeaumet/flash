@@ -42,7 +42,9 @@ final class AXBroker {
   /// Serial queue guarding the handle registry and serializing AX reads. AX
   /// attribute calls are thread-safe and the previous in-core sources walked
   /// trees off the main thread, so the walk stays off-main.
-  private let queue = DispatchQueue(label: "flash.ax.broker")
+  /// Background-tier: snapshots serve warm catalogs (windows, browser tabs),
+  /// never a keypress, and must not outrank the AX walk on `flash.ax`.
+  private let queue = DispatchQueue(label: "flash.ax.broker", qos: .utility)
   private var entries: [UInt64: Entry] = [:]
   private var nextHandle: UInt64 = 0
 
@@ -89,8 +91,20 @@ final class AXBroker {
       ?? Self.defaultFollow
     let collect = params["collect"] as? [String] ?? []
     let pruneRoles = Set(params["prune_roles"] as? [String] ?? [])
-    let maxNodes = params["max_nodes"] as? Int ?? 3_000
-    let geometry = params["geometry"] as? Bool ?? false
+    guard params["max_nodes"] == nil || PluginJSON.integer(params["max_nodes"]) != nil,
+      params["geometry"] == nil || PluginJSON.boolean(params["geometry"]) != nil,
+      params["deadline_ms"] == nil || (PluginJSON.integer(params["deadline_ms"]) ?? 0) > 0
+    else {
+      reply(["ok": false, "error": "invalid snapshot scalar params"])
+      return
+    }
+    let maxNodes = PluginJSON.integer(params["max_nodes"]) ?? 3_000
+    let geometry = PluginJSON.boolean(params["geometry"]) ?? false
+    // Counted from the call's arrival, so time queued behind another walk
+    // spends it too.
+    let deadline = PluginJSON.integer(params["deadline_ms"]).map {
+      DispatchTime.now() + .milliseconds($0)
+    }
 
     queue.async { [weak self] in
       guard let self else {
@@ -113,10 +127,15 @@ final class AXBroker {
         }
         var nodes: [[String: Any]] = []
         var seen = AXElementIdentitySet()
-        for (rootIndex, root) in roots.enumerated() {
+        var expired = false
+        walk: for (rootIndex, root) in roots.enumerated() {
           var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
           var index = 0
           while index < bfs.count, nodes.count < maxNodes {
+            if let deadline, DispatchTime.now() >= deadline {
+              expired = true
+              break walk
+            }
             let item = bfs[index]
             let element = item.element
             index += 1
@@ -135,7 +154,11 @@ final class AXBroker {
             bfs.append(contentsOf: children.map { ($0, handle) })
           }
         }
-        return ["ok": true, "nodes": nodes]
+        // A walk cut short by its deadline still answers with the nodes it
+        // reached — breadth first, so the shallowest.
+        var result: [String: Any] = ["ok": true, "nodes": nodes]
+        if expired { result["truncated"] = true }
+        return result
       }
       reply(response)
     }
@@ -178,7 +201,7 @@ final class AXBroker {
         return
       }
       let cfValue: CFTypeRef
-      if let flag = value as? Bool {
+      if let flag = PluginJSON.boolean(value) {
         cfValue = flag ? kCFBooleanTrue : kCFBooleanFalse
       } else if let text = value as? String {
         cfValue = text as CFString
@@ -232,7 +255,7 @@ final class AXBroker {
     app: AXUIElement? = nil,
     _ operation: (AXUIElement) -> T
   ) -> T {
-    FirefoxAccessibility.withTree(
+    GeckoAccessibility.withTree(
       pid: pid,
       bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
       app: app,
@@ -390,10 +413,7 @@ final class AXBroker {
   }
 
   private func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
 
   // MARK: - Param coercion
@@ -403,16 +423,12 @@ final class AXBroker {
   }
 
   private func uint64Param(_ value: Any?) -> UInt64? {
-    if let number = value as? NSNumber { return number.uint64Value }
-    if let value = value as? Int, value >= 0 { return UInt64(value) }
-    if let value = value as? UInt64 { return value }
-    return nil
+    guard let number = PluginJSON.integer(value), number >= 0 else { return nil }
+    return UInt64(exactly: number)
   }
 
   private func pidParam(_ params: [String: Any], key: String) -> pid_t? {
-    if let number = params[key] as? NSNumber { return pid_t(number.int32Value) }
-    if let value = params[key] as? Int { return pid_t(value) }
-    return nil
+    PluginJSON.pid(params[key])
   }
 
 }

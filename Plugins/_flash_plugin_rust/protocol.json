@@ -1,0 +1,174 @@
+{
+  "$comment": "THE machine-readable Flash plugin protocol contract — the single source of truth for version, deadlines, quotas, error strings, the capability registry and transport limits. Normativity order: this file > docs/plugin-protocol.md prose > any implementation. Swift asserts its constants equal this file (PluginProtocolParityTests); the Rust SDK asserts its transport limits against it (wire.rs) and pins the behaviour in its runtime tests and probe crate. Changing anything here is a protocol change: update the host, SDK, affected plugins, tests, and docs in the same commit (repo rule 7 — no compatibility shims, no version bump while Flash has no external users).",
+  "protocol_version": 1,
+  "deadlines_ms": {
+    "$comment": "One deadline table. startup: initialize must be answered immediately (no warm-catalog wait; config [plugins] startup_timeout tunes it). query: per-keystroke evaluate. live: search (late replies dropped, non-fatal). hints: activation hint pull; it blocks the AX queue ahead of the prepared model, so it is a fixed latency ceiling. perform: all four kinds; a manifest commands[] entry timeout_ms overrides for that entry. ping: reply budget for the idle-liveness probe (sent only after idle_before_ping_ms of inbound silence with no request in flight; ONE miss tears down). shutdown_grace: stdin-close -> SIGTERM; +500ms -> SIGKILL.",
+    "startup": 5000,
+    "query": 50,
+    "live": 1000,
+    "hints": 500,
+    "perform": 10000,
+    "ping": 10000,
+    "idle_before_ping": 60000,
+    "shutdown_grace": 1000
+  },
+  "methods": {
+    "host_to_plugin": {
+      "initialize": "request {protocol_version} -> {ok, protocol_version}; reply immediately, once ever; ok:false or a version mismatch is terminal (flush, exit 0)",
+      "ping": "request {} -> {ok:true}",
+      "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`; `core:status.observed` carries {segments: [name]}, the complete set of unique nonempty manifest `status` names of this plugin that a status surface shows (empty = none), sent once after initialize and again on every change",
+      "evaluate": "request {query, scope, surface} -> {ok, answers}; CPU-only over pre-warmed state",
+      "search": "request {query, scope} -> {ok, rows}; live sources only, may do real work",
+      "hints": "request {bundle_id, pid, front_window_frame} -> {ok, targets, context_pid?}; always live",
+      "perform": "request {kind: resolve|command|action|navigate, ...} -> {ok, target_pid?, navigation_url?, message?} | {ok:false, unhandled:true} | {ok:false, error}"
+    },
+    "plugin_to_host_notifications": {
+      "publish": "{rows} — full-replacement catalog; host-owned store; empty rows = authoritative empty; transient failure = don't publish (host keeps last-good)",
+      "status": "{segments: {name: value}} — manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
+      "poll": "{intervals: {name: seconds >= 0.05}} — full-replacement set of cadences the host should drive for this plugin; empty clears. Plugins must not arm their own timers: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Malformed frames are rejected whole.",
+      "log": "{level, message, fields, trace?} — content-free; trace names the interaction of the request being served"
+    },
+    "plugin_to_host_rpcs": {
+      "host.ping": null,
+      "host.fetch": "network_fetch",
+      "host.wifi_info": "wifi_info",
+      "host.normal_mode_target": "app_control",
+      "host.activate": "app_control",
+      "host.open": "open",
+      "host.post_media_key": "media_keys",
+      "host.process_table": "process_control",
+      "host.signal": "process_control",
+      "host.clipboard_write": "clipboard",
+      "host.notify": "notify",
+      "host.storage_get": null,
+      "host.storage_set": null,
+      "host.post_keys": "accessibility",
+      "host.post_global_key": "accessibility",
+      "host.ax_snapshot": "accessibility",
+      "host.ax_perform": "accessibility",
+      "host.ax_set": "accessibility",
+      "host.ax_select_child": "accessibility"
+    }
+  },
+  "perform_kinds": [
+    "resolve",
+    "command",
+    "action",
+    "navigate"
+  ],
+  "row": {
+    "$comment": "Catalog row shape for publish and search. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
+    "required": [
+      "source",
+      "title"
+    ],
+    "optional": [
+      "url",
+      "metadata",
+      "effect"
+    ]
+  },
+  "hint_target": {
+    "$comment": "The host revalidates geometry and target identity before clicking. context_id is an optional non-empty opaque string identifying the containing live source context; a changed context cancels the captured target. Omitted or null means unspecified.",
+    "required": [
+      "id",
+      "frame"
+    ],
+    "optional": [
+      "role",
+      "label",
+      "url",
+      "pid",
+      "enters_insert_mode",
+      "priority",
+      "context_id"
+    ]
+  },
+  "effects": {
+    "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect — argv side effects belong in perform, inside the sandbox.",
+    "rows": [
+      "copy_text",
+      "insert_text",
+      "open"
+    ],
+    "answers": [
+      "copy_text",
+      "insert_text"
+    ]
+  },
+  "quotas": {
+    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated.",
+    "frame_bytes": 10485760,
+    "catalog_rows": 10000,
+    "catalog_bytes": 4194304,
+    "title_bytes": 4096,
+    "url_bytes": 16384,
+    "metadata_entries": 64,
+    "metadata_key_bytes": 256,
+    "metadata_value_bytes": 65536,
+    "effect_text_bytes": 65536,
+    "answers": 16,
+    "answers_bytes": 262144,
+    "answer_field_bytes": 16384,
+    "clipboard_write_bytes": 1048576,
+    "notify_message_bytes": 1024,
+    "storage_key_bytes": 128,
+    "storage_value_bytes": 65536,
+    "storage_entries": 256,
+    "fetch_response_bytes": 1048576,
+    "fetch_timeout_ms": 8000
+  },
+  "errors": {
+    "$comment": "Canonical EXACT protocol-level error strings (spec-pinned; domain failures stay free-form and content-free). The response law: every result carries boolean `ok`; ok:false carries a non-empty `error` — except perform's {ok:false, unhandled:true} (not mine; host MAY fall back). A perform {ok:false, error} means mine-but-broke: the host MUST NOT fall back.",
+    "unknown_method": "unknown method: <method>",
+    "protocol_mismatch": "protocol version mismatch: host v<H>, plugin v1",
+    "initialize_repeated": "initialize may only be called once",
+    "host_closed": "host closed stdin",
+    "host_call_timeout": "host call timed out",
+    "frame_overflow": "response exceeded outbound frame limit",
+    "capability_denied": "missing <capability> capability",
+    "request_capacity": "plugin request capacity exceeded",
+    "host_call_capacity": "host call capacity exceeded",
+    "deadline_exceeded": "deadline exceeded"
+  },
+  "capabilities": [
+    "accessibility",
+    "app_control",
+    "clipboard",
+    "media_keys",
+    "network",
+    "network_fetch",
+    "notify",
+    "open",
+    "process_control",
+    "subprocess",
+    "wifi_info"
+  ],
+  "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
+  "trace": {
+    "pattern": "^[0-9a-z]{1,16}$",
+    "host_to_plugin": "optional `trace` key on a request envelope (hints, search, evaluate, perform) naming the user interaction that caused it",
+    "plugin_to_host": "a `log` notification emitted while serving that request carries it back as params.trace; a malformed id is ignored"
+  },
+  "deadline": {
+    "host_to_plugin": "optional `deadline_ms` on a request envelope: the milliseconds the host still waits for the reply as it writes the request, a positive integer",
+    "plugin": "a search or hints handler still running a tenth of the deadline (at most 50 ms) before it is dropped and answers errors.deadline_exceeded; evaluate and perform run to completion"
+  },
+  "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
+  "transport_limits": {
+    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of nine known state notifications in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
+    "plugin_requests": 16,
+    "plugin_request_bytes": 33554432,
+    "plugin_host_calls": 64,
+    "plugin_outbound_frames": 64,
+    "plugin_outbound_bytes": 16777216,
+    "plugin_event_frames": 256,
+    "plugin_event_bytes": 16777216,
+    "host_pending_requests": 64,
+    "host_host_rpcs": 64,
+    "host_outbound_frames": 256,
+    "host_outbound_bytes": 20971520,
+    "host_inbound_frames": 256,
+    "host_inbound_bytes": 20971520
+  }
+}

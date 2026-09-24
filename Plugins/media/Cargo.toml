@@ -10,7 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
-serde_json = "1"
 
 # Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
 # (fully-unoptimized tokio is visibly slow under the plugin latency contracts),

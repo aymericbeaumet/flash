@@ -1,0 +1,10 @@
+{
+  "id": "feed",
+  "name": "Feed",
+  "version": "0.1.0",
+  "description": "Publish the latest 24 hours of RSS articles as a host-rotated status-bar carousel; summary carries links and article previews, label is popup-free so the template owns hover and clicks. cycle_interval defaults to 30 seconds. Configure url to enable fetching.",
+  "exec": ["./flash-plugin-feed"],
+  "capabilities": ["network"],
+  "sandbox": {},
+  "status": ["summary", "label"]
+}

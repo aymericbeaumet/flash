@@ -31,7 +31,7 @@ final class SourceRegistryTests: XCTestCase {
           return StubSource(identifier: "unmatched")
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     XCTAssertNotNil(registry.source(identifier: "always"))
@@ -77,7 +77,7 @@ final class SourceRegistryTests: XCTestCase {
           }
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     let items = registry.synchronousCandidates(scope: .running)
@@ -112,7 +112,7 @@ final class SourceRegistryTests: XCTestCase {
           }
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       runningApplicationsProvider: { [app] })
 
@@ -127,6 +127,64 @@ final class SourceRegistryTests: XCTestCase {
 
     XCTAssertEqual(refreshedItems.map(\.sourceID), ["dynamic"])
     XCTAssertEqual(candidateCalls, 1)
+  }
+
+  func testScheduledRunningApplicationsRefreshRunsOffMainAndCoalesces() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let bundleID = try XCTUnwrap(app.bundleIdentifier)
+    let lock = NSLock()
+    var providerCalls = 0
+    var providerRanOnMain = false
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let registry = SourceRegistry(
+      descriptors: [
+        SourceDescriptor(identifier: "dynamic", activationPolicy: .bundleIDs([bundleID])) {
+          StubSource(identifier: "dynamic", capabilities: [.candidates]) { _ in [] }
+        }
+      ],
+      isTerminalEmulator: { _ in false },
+      runningApplications: [],
+      runningApplicationsProvider: {
+        lock.lock()
+        providerCalls += 1
+        let first = providerCalls == 1
+        providerRanOnMain = providerRanOnMain || Thread.isMainThread
+        lock.unlock()
+        if first {
+          entered.signal()
+          release.wait()
+        }
+        return [app]
+      })
+
+    registry.scheduleRunningApplicationsRefresh()
+    XCTAssertEqual(entered.wait(timeout: .now() + 2), .success)
+    // One refresh is running; these three share the single follow-up.
+    registry.scheduleRunningApplicationsRefresh()
+    registry.scheduleRunningApplicationsRefresh()
+    registry.scheduleRunningApplicationsRefresh()
+    release.signal()
+
+    let refreshed = expectation(description: "refreshed")
+    func poll() {
+      lock.lock()
+      let calls = providerCalls
+      lock.unlock()
+      if calls >= 2, registry.source(identifier: "dynamic") != nil {
+        refreshed.fulfill()
+      } else {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: poll)
+      }
+    }
+    poll()
+    wait(for: [refreshed], timeout: 2)
+    Thread.sleep(forTimeInterval: 0.05)
+    lock.lock()
+    XCTAssertEqual(providerCalls, 2)
+    XCTAssertFalse(providerRanOnMain)
+    lock.unlock()
   }
 
   func testCoreAppCandidatesOnlyQueryCoreAppSource() {
@@ -146,7 +204,7 @@ final class SourceRegistryTests: XCTestCase {
           }
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -210,18 +268,18 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
           StubSource(
-            identifier: "plugin:emojis",
+            identifier: "plugin:reference",
             capabilities: [.candidates],
             candidatesHandler: { _ in
               [
                 Candidate(
                   kind: CandidateFinder.emojiKind,
-                  sourceID: "plugin:emojis",
+                  sourceID: "plugin:reference",
                   source: "emoji",
                   pid: nil,
                   title: "sparkles",
@@ -252,7 +310,7 @@ final class SourceRegistryTests: XCTestCase {
             candidateSourceLabels: ["apps"])
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -278,7 +336,7 @@ final class SourceRegistryTests: XCTestCase {
             ])
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: {
         [
@@ -324,7 +382,7 @@ final class SourceRegistryTests: XCTestCase {
       supportsHandler: { _ in true })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app],
       pluginSourcesProvider: { [tmux, accessibility] })
 
@@ -400,7 +458,7 @@ final class SourceRegistryTests: XCTestCase {
       allScreensFrame: .zero)
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app],
       pluginSourcesProvider: {
         [
@@ -456,7 +514,7 @@ final class SourceRegistryTests: XCTestCase {
           ApplicationSource()
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     let current = registry.currentLocation(
@@ -494,7 +552,7 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app])
 
     let current = registry.currentLocation(
@@ -510,7 +568,7 @@ final class SourceRegistryTests: XCTestCase {
     let plugin = StubSource(identifier: "plugin:projects", capabilities: [.candidates])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [plugin] })
 
@@ -538,7 +596,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [plugin] })
 
@@ -584,7 +642,7 @@ final class SourceRegistryTests: XCTestCase {
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [])
 
     XCTAssertTrue(registry.canRestoreNavigation(to: url))
@@ -610,7 +668,7 @@ final class SourceRegistryTests: XCTestCase {
       title: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let emojiShadow = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
+      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
       source: "emoji", pid: nil,
       title: "slack key cap",
       subtitle: "emoji", bundleIdentifier: "", url: nil)
@@ -624,15 +682,15 @@ final class SourceRegistryTests: XCTestCase {
               "Slack".localizedCaseInsensitiveContains(target) ? slackApp : nil
             })
         },
-        SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:reference", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:reference", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
               emojiShadow.title.localizedCaseInsensitiveContains(target) ? emojiShadow : nil
             })
         },
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [])
 
     registry.resolveCandidate(matching: "Slack") { match in
@@ -655,7 +713,7 @@ final class SourceRegistryTests: XCTestCase {
       kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
       title: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
     let emojiEntry = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
+      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
       source: "emoji", pid: nil, title: "editor pencil", subtitle: "emoji",
       bundleIdentifier: "", url: nil)
 
@@ -664,9 +722,9 @@ final class SourceRegistryTests: XCTestCase {
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
           StubSource(identifier: "core.apps", priority: 0, capabilities: [.appActivation])
         },
-        SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:reference", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:reference", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
               emojiEntry.title.localizedCaseInsensitiveContains(target) ? emojiEntry : nil
             })
@@ -683,7 +741,7 @@ final class SourceRegistryTests: XCTestCase {
           })
       }
       return SourceRegistry(
-        descriptors: descriptors, terminalBundleIDs: [], runningApplications: [])
+        descriptors: descriptors, isTerminalEmulator: { _ in false }, runningApplications: [])
     }
 
     // Only the emoji (insert-text) candidate matches → nil, never typed text.
@@ -721,7 +779,7 @@ final class SourceRegistryTests: XCTestCase {
       ])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [app],
       pluginSourcesProvider: { [active, inactive] })
 
@@ -754,7 +812,7 @@ final class SourceRegistryTests: XCTestCase {
             ])
         }
       ],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [nonLocation, location] })
 
@@ -764,14 +822,14 @@ final class SourceRegistryTests: XCTestCase {
   }
 
   func testNonLocationCandidateSourcesCanTargetDeclaredSourcePrefix() {
-    let emojis = StubSource(
-      identifier: "plugin:emojis",
+    let reference = StubSource(
+      identifier: "plugin:reference",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "emojis.glyphs", kind: .standard)
       ])
-    let notes = StubSource(
-      identifier: "plugin:notes",
+    let apple = StubSource(
+      identifier: "plugin:apple",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "notes.notes", kind: .standard)
@@ -784,16 +842,16 @@ final class SourceRegistryTests: XCTestCase {
       ])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
-      pluginSourcesProvider: { [notes, location, emojis] })
+      pluginSourcesProvider: { [apple, location, reference] })
 
     XCTAssertEqual(
       registry.nonLocationCandidateSources(matching: "emojis").map(\.identifier),
-      ["plugin:emojis"])
+      ["plugin:reference"])
     XCTAssertEqual(
       Set(registry.nonLocationCandidateSources().map(\.identifier)),
-      Set(["plugin:emojis", "plugin:notes"]))
+      Set(["plugin:reference", "plugin:apple"]))
   }
 
   func testWarmSnapshotIsASynchronousStoreRead() {
@@ -813,7 +871,7 @@ final class SourceRegistryTests: XCTestCase {
       capabilities: [.candidates])
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [second, empty, first] })
 
@@ -842,7 +900,7 @@ final class SourceRegistryTests: XCTestCase {
         ]
       })
     let nonLocation = StubSource(
-      identifier: "plugin:notes",
+      identifier: "plugin:apple",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "notes.notes")
@@ -853,7 +911,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [nonLocation, location] })
 
@@ -914,7 +972,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [processes, locations] })
 
@@ -949,7 +1007,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [low, high] })
 
@@ -966,8 +1024,8 @@ final class SourceRegistryTests: XCTestCase {
   func testExclusiveQueryPrefixRoutesOnlyToDeclaringEvaluator() {
     let completion = expectation(description: "exclusive query evaluation")
     var genericCalls = 0
-    let calculator = StubSource(
-      identifier: "plugin:calculator",
+    let answers = StubSource(
+      identifier: "plugin:answers",
       queryEvaluationSurfaces: [.flashlight],
       queryEvaluationPrefixes: ["="],
       queryEvaluationHandler: { request, done in
@@ -983,9 +1041,9 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
-      pluginSourcesProvider: { [calculator, generic] })
+      pluginSourcesProvider: { [answers, generic] })
 
     registry.evaluateQuery(
       QueryEvaluationRequest(
@@ -1006,7 +1064,7 @@ final class SourceRegistryTests: XCTestCase {
     let completion = expectation(description: "query evaluation")
     var evaluatorCallbackIsActive = false
     let evaluator = StubSource(
-      identifier: "plugin:calculator",
+      identifier: "plugin:answers",
       queryEvaluationSurfaces: [.flashlight],
       queryEvaluationHandler: { _, done in
         evaluatorCallbackIsActive = true
@@ -1015,7 +1073,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [evaluator] })
 
@@ -1044,7 +1102,7 @@ final class SourceRegistryTests: XCTestCase {
       queryEvaluationHandler: { _, _ in })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [fast, stalled] })
 
@@ -1077,7 +1135,7 @@ final class SourceRegistryTests: XCTestCase {
       })
     let registry = SourceRegistry(
       descriptors: [],
-      terminalBundleIDs: [],
+      isTerminalEmulator: { _ in false },
       runningApplications: [],
       pluginSourcesProvider: { [active, inactive] })
 

@@ -22,37 +22,31 @@ enum Mode: Equatable {
   /// "advanced-off but in NORMAL" combination unrepresentable.
   case disabled
 
-  /// Keyboard is handed to the focused app. `locked` distinguishes `I`
-  /// (locked) from `i` for the badge/diagnostics; it no longer gates any
-  /// transition now that automatic exits are gone.
-  case insert(locked: Bool)
+  /// Keyboard is handed to the focused app until an explicit mode change.
+  case insert
 
   /// The overlay owns the keyboard and interprets keys as commands.
   case normal
 
-  /// Command line / flashlight surface. `restoreTo` records where to land when
-  /// the surface closes.
-  case command(scope: CommandScope, restoreTo: ReturnMode)
-}
+  /// The command line (`:`, flashlight included). `restoreTo` records where
+  /// to land when it closes.
+  case command(restoreTo: ReturnMode)
 
-/// Which command surface is active. `finder` is the flashlight candidate picker
-/// (`:` flashlight seed); `commandLine` is the plain `:` prompt.
-enum CommandScope: Equatable {
-  case commandLine
-  case finder(all: Bool)
+  /// A popup's local terminal view owns keyboard input; global mappings are suspended.
+  case terminal(restoreTo: ReturnMode)
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.
 /// A restricted projection of `Mode` — you can only return to a base mode.
 enum ReturnMode: Equatable {
   case disabled
-  case insert(locked: Bool)
+  case insert
   case normal
 
   var mode: Mode {
     switch self {
     case .disabled: return .disabled
-    case .insert(let locked): return .insert(locked: locked)
+    case .insert: return .insert
     case .normal: return .normal
     }
   }
@@ -64,10 +58,10 @@ extension Mode {
   var asReturnMode: ReturnMode {
     switch self {
     case .disabled: return .disabled
-    case .insert(let locked): return .insert(locked: locked)
+    case .insert: return .insert
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(_, let restoreTo): return restoreTo
+    case .command(let restoreTo), .terminal(let restoreTo): return restoreTo
     }
   }
 
@@ -77,4 +71,11 @@ extension Mode {
   }
 
   var isNormal: Bool { self == .normal }
+
+  var isTerminal: Bool {
+    if case .terminal = self { return true }
+    return false
+  }
+
+  var advancedEnabled: Bool { asReturnMode != .disabled }
 }

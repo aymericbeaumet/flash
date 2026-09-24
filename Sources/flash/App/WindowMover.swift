@@ -16,7 +16,13 @@ final class WindowLayoutManager {
   typealias ScreenLayoutsProvider =
     (Bool, Config.StatusBar.Monitor) -> [WindowScreenLayout]
 
-  static let defaultScreenRecoveryDelaysMs = [80, 250, 750, 1_500]
+  /// Bounded passes after a display change. AppKit reports the change before
+  /// `NSScreen` settles, and the apps themselves relocate their windows over
+  /// the following seconds — a reconnected or woken display is the slow case,
+  /// well past where the earlier ladder stopped looking. The last entry also
+  /// sets how long observed frames are treated as macOS's doing rather than
+  /// the user's.
+  static let defaultScreenRecoveryDelaysMs = [80, 250, 750, 1_500, 3_000]
 
   private struct WindowKey: Hashable {
     let pid: pid_t
@@ -42,6 +48,16 @@ final class WindowLayoutManager {
   private var screenChangeKeys: Set<WindowKey> = []
   private var screenChangeActiveUntil = DispatchTime(uptimeNanoseconds: 0)
   private var selfAuthoredChangesUntil: [WindowKey: DispatchTime] = [:]
+  /// Accessibility cannot read or move windows while the session is locked or
+  /// asleep, which is exactly when a wake reports the new displays. Restores
+  /// wait for the session instead of failing against it.
+  private var sessionSuspended = false
+  /// Windows whose layout has not landed because their frame could not be
+  /// read. They are restored when the session resumes, and when focused.
+  private var pendingRestoreKeys: Set<WindowKey> = []
+  /// The proportional layouts the config's `window_move` mappings apply, so a
+  /// window placed by one is recognized again after Flash restarts.
+  private var declaredLayouts: [WindowLayout] = []
 
   private let screenRecoveryDelaysMs: [Int]
   private let screenLayoutsProvider: ScreenLayoutsProvider
@@ -94,21 +110,56 @@ final class WindowLayoutManager {
     }
   }
 
+  func setDeclaredLayouts(_ layouts: [WindowLayout]) {
+    queue.async { [weak self] in self?.declaredLayouts = layouts }
+  }
+
+  /// The session stopped or resumed being interactive (lock, sleep, screens
+  /// asleep). Resuming restores every window whose layout did not land while
+  /// it was away, re-reading the displays over the usual recovery passes.
+  func setSessionSuspended(
+    _ suspended: Bool,
+    statusBarReservesSpace: Bool,
+    statusBarMonitor: Config.StatusBar.Monitor,
+    beforeRecoveryPass: (() -> Void)? = nil,
+    afterRecoveryPass: (([WindowScreenLayout]) -> Void)? = nil
+  ) {
+    queue.async { [weak self] in
+      guard let self, self.sessionSuspended != suspended else { return }
+      self.sessionSuspended = suspended
+      guard !suspended, !self.pendingRestoreKeys.isEmpty else { return }
+      FlashLog.debug(
+        "[window_layout] session_resumed pending=\(self.pendingRestoreKeys.count)")
+      DispatchQueue.main.async { [weak self] in
+        self?.screenParametersDidChange(
+          statusBarReservesSpace: statusBarReservesSpace,
+          statusBarMonitor: statusBarMonitor,
+          beforeRecoveryPass: beforeRecoveryPass,
+          afterRecoveryPass: afterRecoveryPass)
+      }
+    }
+  }
+
   /// Reapply semantic layouts after any display topology or usable-frame
   /// change. Repeated bounded passes cover apps that perform their own delayed
   /// relocation after AppKit's screen notification; a newer notification
-  /// cancels the older recovery generation.
+  /// cancels the older recovery generation. `beforeRecoveryPass` runs on main
+  /// ahead of each pass's geometry snapshot.
   func screenParametersDidChange(
     statusBarReservesSpace: Bool,
     statusBarMonitor: Config.StatusBar.Monitor,
     forceRecovery: Bool = true,
+    beforeRecoveryPass: (() -> Void)? = nil,
     afterRecoveryPass: (([WindowScreenLayout]) -> Void)? = nil
   ) {
     let provider = screenLayoutsProvider
     scheduleScreenRecovery(
       initialScreens: provider(statusBarReservesSpace, statusBarMonitor),
       forceRecovery: forceRecovery,
-      settledScreens: { provider(statusBarReservesSpace, statusBarMonitor) },
+      settledScreens: {
+        beforeRecoveryPass?()
+        return provider(statusBarReservesSpace, statusBarMonitor)
+      },
       afterRecoveryPass: afterRecoveryPass)
   }
 
@@ -139,6 +190,11 @@ final class WindowLayoutManager {
         forceRecovery || previousScreens != initialScreens
       else { return }
 
+      FlashLog.debug(
+        "[window_layout] screen_change screens=\(initialScreens.count) "
+          + "tracked=\(self.tracked.count) "
+          + "usable=\(initialScreens.map { NSStringFromRect($0.usableFrame) }.joined(separator: " "))"
+      )
       let now = DispatchTime.now()
       let continuingChange = now < self.screenChangeActiveUntil
       if !continuingChange {
@@ -162,7 +218,7 @@ final class WindowLayoutManager {
             guard let self, self.screenChangeGeneration == generation else { return }
             if !screens.isEmpty {
               self.currentScreens = screens
-              self.restoreTrackedLayouts(using: screens)
+              self.restoreTrackedLayouts(self.screenChangeKeys, using: screens)
               if let afterRecoveryPass {
                 DispatchQueue.main.async {
                   afterRecoveryPass(screens)
@@ -198,6 +254,7 @@ final class WindowLayoutManager {
       if notification == kAXUIElementDestroyedNotification as String {
         self.tracked.removeValue(forKey: key)
         self.selfAuthoredChangesUntil.removeValue(forKey: key)
+        self.pendingRestoreKeys.remove(key)
         return
       }
       // AppKit can publish the new NSScreen topology before delivering its
@@ -207,6 +264,10 @@ final class WindowLayoutManager {
       if self.currentScreens != screens {
         return
       }
+      // Nobody moves windows on a locked screen: frames changing then are
+      // macOS relocating them, and a window still waiting for its layout must
+      // not have it erased by the displaced frame it is waiting to leave.
+      if self.sessionSuspended || self.pendingRestoreKeys.contains(key) { return }
       let now = DispatchTime.now()
       if now < self.screenChangeActiveUntil
         || now < (self.selfAuthoredChangesUntil[key] ?? DispatchTime(uptimeNanoseconds: 0))
@@ -234,6 +295,12 @@ final class WindowLayoutManager {
       if self.currentScreens.isEmpty { self.currentScreens = screens }
       guard self.currentScreens == screens else { return }
       let key = WindowKey(pid: pid, window: window)
+      if self.pendingRestoreKeys.contains(key) {
+        // Its layout never landed (the frame was unreadable then); the user
+        // is looking at it now, so put it right.
+        self.restoreTrackedLayouts([key], using: screens)
+        return
+      }
       let now = DispatchTime.now()
       guard now >= self.screenChangeActiveUntil,
         now >= (self.selfAuthoredChangesUntil[key] ?? DispatchTime(uptimeNanoseconds: 0)),
@@ -262,7 +329,8 @@ final class WindowLayoutManager {
       let layout = WindowMover.semanticLayout(
         matching: frame,
         in: screen.usableFrame,
-        existing: existingLayout)
+        existing: existingLayout,
+        declared: declaredLayouts)
     else {
       tracked.removeValue(forKey: key)
       return
@@ -274,43 +342,61 @@ final class WindowLayoutManager {
       screenID: screen.id)
   }
 
-  private func restoreTrackedLayouts(using screens: [WindowScreenLayout]) {
-    guard !screenChangeKeys.isEmpty,
+  private enum RestoreOutcome {
+    case restored, alreadyCorrect, refused, unreadable
+  }
+
+  private func restoreTrackedLayouts(_ keys: Set<WindowKey>, using screens: [WindowScreenLayout]) {
+    guard !keys.isEmpty,
       let primaryHeight = WindowMover.primaryHeight(in: screens)
     else { return }
-    var restored = 0
-    for key in screenChangeKeys {
-      guard var layout = tracked[key] else { continue }
+    guard !sessionSuspended else {
+      pendingRestoreKeys.formUnion(keys.filter { tracked[$0] != nil })
+      FlashLog.debug(
+        "[window_layout] restore_deferred reason=session_suspended "
+          + "pending=\(pendingRestoreKeys.count)")
+      return
+    }
+    var counts: [RestoreOutcome: Int] = [:]
+    var dropped = 0
+    for key in keys {
+      guard var layout = tracked[key] else {
+        pendingRestoreKeys.remove(key)
+        dropped += 1
+        continue
+      }
       guard NSRunningApplication(processIdentifier: layout.pid)?.isTerminated == false else {
         tracked.removeValue(forKey: key)
         selfAuthoredChangesUntil.removeValue(forKey: key)
+        pendingRestoreKeys.remove(key)
+        dropped += 1
         continue
       }
       let bundleIdentifier =
         NSRunningApplication(processIdentifier: layout.pid)?.bundleIdentifier
       let axApp = AXApp.make(pid: layout.pid)
-      let didRestore = FirefoxAccessibility.withWindowManagement(
+      let outcome = GeckoAccessibility.withWindowManagement(
         pid: layout.pid,
         bundleIdentifier: bundleIdentifier,
         app: axApp
-      ) { axApp, prepareGeometry in
-        let current = WindowMover.readWindowFrameInNSCoords(
-          window: layout.window,
-          primaryHeight: primaryHeight)
+      ) { axApp, prepareGeometry -> RestoreOutcome in
         guard
+          let current = WindowMover.readWindowFrameInNSCoords(
+            window: layout.window,
+            primaryHeight: primaryHeight),
           let plan = WindowMover.recoveryPlan(
             layout: layout.layout,
             screenID: layout.screenID,
             currentFrame: current,
             screens: screens)
-        else { return false }
+        else { return .unreadable }
         layout.screenID = plan.screen.id
-        guard current.map({ WindowMover.framesApproximatelyEqual($0, plan.frame) }) != true else {
-          return false
+        guard !WindowMover.framesMatchPlacement(current, plan.frame) else {
+          return .alreadyCorrect
         }
         let startedAt = DispatchTime.now()
         prepareGeometry()
-        WindowMover.apply(
+        let applied = WindowMover.apply(
           rect: plan.frame,
           toWindow: layout.window,
           axApp: axApp,
@@ -323,19 +409,33 @@ final class WindowLayoutManager {
               + "layout=\(WindowMover.description(of: layout.layout)) "
               + "elapsed_ms=\(Int(elapsedMs.rounded()))")
         }
-        return true
+        switch applied {
+        case .converged: return .restored
+        case .refused: return .refused
+        case .unreadable: return .unreadable
+        }
       }
-      if didRestore {
-        restored += 1
+      counts[outcome, default: 0] += 1
+      // An unreadable window keeps waiting (a locked or waking session); one
+      // that took its frame, or whose app refused it, is done.
+      if outcome == .unreadable {
+        pendingRestoreKeys.insert(key)
+      } else {
+        pendingRestoreKeys.remove(key)
       }
       tracked[key] = layout
       selfAuthoredChangesUntil[key] =
         .now() + .milliseconds(Self.authoredChangeGraceMs)
     }
-    if restored > 0 {
-      FlashLog.debug(
-        "[window_layout] restored count=\(restored)")
-    }
+    // Logged every pass, not only when something moved: a pass that restores
+    // nothing because the windows were already dropped from tracking looks
+    // identical to a pass that had nothing to do, and telling those apart is
+    // the whole question when a restore does not stick.
+    FlashLog.debug(
+      "[window_layout] restore_pass considered=\(keys.count) "
+        + "restored=\(counts[.restored] ?? 0) already_correct=\(counts[.alreadyCorrect] ?? 0) "
+        + "refused=\(counts[.refused] ?? 0) unreadable=\(counts[.unreadable] ?? 0) "
+        + "untracked=\(dropped) pending=\(pendingRestoreKeys.count)")
   }
 
   func appDidTerminate(pid: pid_t) {
@@ -346,6 +446,7 @@ final class WindowLayoutManager {
         self.tracked.removeValue(forKey: key)
         self.selfAuthoredChangesUntil.removeValue(forKey: key)
         self.screenChangeKeys.remove(key)
+        self.pendingRestoreKeys.remove(key)
       }
     }
   }
@@ -391,14 +492,11 @@ enum WindowMover {
   ) -> [WindowScreenLayout] {
     let fontSize = OverlayPanel.statusBarFontSize(overlayFontSize: 0)
     let screens = NSScreen.screens
-    let mainFrame = (NSScreen.main ?? screens.first)?.frame
+    let mainFrame = (screens.first { $0.frame.origin == .zero } ?? screens.first)?.frame
     return screens.enumerated().map { index, screen in
-      let number =
-        screen.deviceDescription[
-          NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
       // NSScreenNumber is present for physical displays. Keep a deterministic
       // fallback for virtual/test screens rather than dropping the layout.
-      let screenID = number?.uint32Value ?? CGDirectDisplayID(index + 1)
+      let screenID = screen.displayID ?? CGDirectDisplayID(index + 1)
       return WindowScreenLayout(
         id: screenID,
         frame: screen.frame,
@@ -436,7 +534,7 @@ enum WindowMover {
     let axApp = AXApp.make(pid: targetPID)
     let bundleIdentifier =
       NSRunningApplication(processIdentifier: targetPID)?.bundleIdentifier
-    return FirefoxAccessibility.withWindowManagement(
+    return GeckoAccessibility.withWindowManagement(
       pid: targetPID,
       bundleIdentifier: bundleIdentifier,
       app: axApp
@@ -662,7 +760,7 @@ enum WindowMover {
     visibleFrame: CGRect,
     statusBarReservesSpace: Bool,
     fontSize: CGFloat,
-    fallbackNativeStatusBarHeight: CGFloat = OverlayPanel.nativeStatusBarFallbackHeight()
+    fallbackNativeStatusBarHeight: CGFloat? = nil
   ) -> CGRect {
     guard statusBarReservesSpace else { return visibleFrame }
     let statusBarHeight = OverlayPanel.statusBarHeight(
@@ -760,16 +858,43 @@ enum WindowMover {
     AXValueGetValue(posValue, .cgPoint, &pos)
     AXValueGetValue(sizeValue, .cgSize, &size)
 
-    // AX y is from primary's top-left, Y-down. Convert to NSScreen
-    // y (from primary's bottom-left, Y-up).
-    let nsY = primaryHeight - pos.y - size.height
-    return CGRect(x: pos.x, y: nsY, width: size.width, height: size.height)
+    return nsRectFromAX(position: pos, size: size, primaryHeight: primaryHeight)
+  }
+
+  /// AX y is from the primary screen's top-left, Y-down. Convert to NSScreen
+  /// y (from the primary's bottom-left, Y-up). The active-window border's
+  /// fast path reads geometry this way, so it has to land in the same space
+  /// as the WindowServer scan it replaced.
+  static func nsRectFromAX(
+    position: CGPoint, size: CGSize, primaryHeight: CGFloat
+  ) -> CGRect {
+    CGRect(
+      x: position.x, y: primaryHeight - position.y - size.height,
+      width: size.width, height: size.height)
   }
 
   /// Map a `WindowPosition` onto a slot of the supplied usable frame
   /// (in NSScreen / Y-up coordinates).
   static func rectFor(
     position: WindowPosition, in vf: CGRect
+  ) -> CGRect {
+    pointAligned(fractionalRect(for: position, in: vf))
+  }
+
+  /// A slot's edges on whole points. Each edge rounds on its own and the size
+  /// follows from the rounded edges, so neighbouring slots (the two halves of
+  /// an odd-width display) share an edge instead of leaving a gap or
+  /// overlapping, and the frame an app reports back matches it exactly.
+  static func pointAligned(_ rect: CGRect) -> CGRect {
+    let minX = rect.minX.rounded()
+    let minY = rect.minY.rounded()
+    return CGRect(
+      x: minX, y: minY,
+      width: rect.maxX.rounded() - minX, height: rect.maxY.rounded() - minY)
+  }
+
+  private static func fractionalRect(
+    for position: WindowPosition, in vf: CGRect
   ) -> CGRect {
     let halfW = vf.width / 2
     let halfH = vf.height / 2
@@ -815,13 +940,14 @@ enum WindowMover {
     case .proportional(let frame):
       let width = usableFrame.width * CGFloat(frame.widthPercent / 100)
       let height = usableFrame.height * CGFloat(frame.heightPercent / 100)
-      return CGRect(
-        x: usableFrame.minX + usableFrame.width * CGFloat(frame.xPercent / 100),
-        y: usableFrame.maxY
-          - usableFrame.height * CGFloat(frame.yPercent / 100)
-          - height,
-        width: width,
-        height: height)
+      return pointAligned(
+        CGRect(
+          x: usableFrame.minX + usableFrame.width * CGFloat(frame.xPercent / 100),
+          y: usableFrame.maxY
+            - usableFrame.height * CGFloat(frame.yPercent / 100)
+            - height,
+          width: width,
+          height: height))
     }
   }
 
@@ -839,17 +965,26 @@ enum WindowMover {
     }
   }
 
+  /// The layout `frame` sits in: the window's own tracked layout first, then
+  /// a named slot, then a proportional layout the config's mappings declare —
+  /// so a window placed by such a mapping is recognized after Flash restarts.
   static func semanticLayout(
     matching frame: CGRect,
     in usableFrame: CGRect,
-    existing: WindowLayout?
+    existing: WindowLayout?,
+    declared: [WindowLayout] = []
   ) -> WindowLayout? {
     if let existing,
       framesApproximatelyEqual(frame, rectFor(layout: existing, in: usableFrame))
     {
       return existing
     }
-    return position(matching: frame, in: usableFrame).map(WindowLayout.position)
+    if let position = position(matching: frame, in: usableFrame) {
+      return .position(position)
+    }
+    return declared.first {
+      framesApproximatelyEqual(frame, rectFor(layout: $0, in: usableFrame))
+    }
   }
 
   static func framesApproximatelyEqual(
@@ -863,11 +998,29 @@ enum WindowMover {
       && abs(lhs.height - rhs.height) <= tolerance
   }
 
+  /// Whether a window sits where a placement put it. Slot recognition above
+  /// forgives a couple of points; placement cannot, or a window left a point
+  /// off its slot stays there until the next manual move closes the gap.
+  /// Anything under a point is the app rounding a fractional target.
+  static func framesMatchPlacement(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+    abs(lhs.minX - rhs.minX) < 1
+      && abs(lhs.minY - rhs.minY) < 1
+      && abs(lhs.width - rhs.width) < 1
+      && abs(lhs.height - rhs.height) < 1
+  }
+
   /// The most correction passes `apply` makes after its initial
   /// size → position → size burst. One pass is enough to defeat the async
   /// grow-clamp race described below; the extra margin lets grid-snapping
   /// apps settle without looping.
   private static let applyCorrectionAttempts = 2
+
+  /// Wall-clock ceiling on those corrections. Every AX write and read-back is
+  /// a blocking round trip into the target app, and this runs on the main
+  /// thread from a key mapping, so a pathologically slow app must give up its
+  /// turn rather than hold input. The post-restore check below is outside the
+  /// budget: it is the one that decides whether the move stuck at all.
+  private static let applyCorrectionBudgetMs = 120
 
   /// Push the rect into the AX window. Mirrors Hammerspoon's
   /// `setFrame` (size → position → size) so the move is instant and
@@ -902,28 +1055,41 @@ enum WindowMover {
   ///      and, if it missed the target, re-issue position → size. Bounded so a
   ///      window that genuinely can't reach the rect (grid-snapping terminals,
   ///      min-size dialogs) stops instead of looping.
+  /// How a placement ended: the window took the rect, its app kept it
+  /// elsewhere, or its frame could not be read back (the session is locked,
+  /// or the app is not answering Accessibility).
+  enum ApplyOutcome: Equatable {
+    case converged, refused, unreadable
+  }
+
+  @discardableResult
   static func apply(
     rect nsRect: CGRect,
     toWindow window: AXUIElement,
     axApp: AXUIElement,
     primaryHeight: CGFloat,
     bundleIdentifier: String?
-  ) {
+  ) -> ApplyOutcome {
     let axY = primaryHeight - nsRect.maxY
     var axPos = CGPoint(x: nsRect.origin.x, y: axY)
     var axSize = CGSize(width: nsRect.width, height: nsRect.height)
 
     let previousEnhanced = enhancedUserInterface(of: axApp)
     let enhancedUserInterfaceIsSettable = isEnhancedUserInterfaceSettable(on: axApp)
+    var pid: pid_t = 0
+    AXUIElementGetPid(axApp, &pid)
     let temporarilyDisableEnhancedUserInterface = shouldTemporarilyDisableEnhancedUserInterface(
       currentValue: previousEnhanced,
       isSettable: enhancedUserInterfaceIsSettable,
-      bundleIdentifier: bundleIdentifier)
+      engine: AppTraits.of(bundleIdentifier: bundleIdentifier, pid: pid).engine)
     if temporarilyDisableEnhancedUserInterface {
       setEnhancedUserInterface(false, on: axApp)
     }
+    // Restored explicitly below so the frame can be verified with enhanced UI
+    // back on; this only catches the early-exit paths.
+    var enhancedUserInterfaceRestored = false
     defer {
-      if temporarilyDisableEnhancedUserInterface {
+      if temporarilyDisableEnhancedUserInterface, !enhancedUserInterfaceRestored {
         setEnhancedUserInterface(true, on: axApp)
       }
     }
@@ -938,6 +1104,10 @@ enum WindowMover {
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, v)
       }
     }
+    func observed() -> CGRect? {
+      readWindowFrameInNSCoords(window: window, primaryHeight: primaryHeight)
+    }
+
     setSize()
     setPos()
     setSize()
@@ -946,14 +1116,52 @@ enum WindowMover {
     // left the window short, correct it. The read-back is synchronous, so by
     // the time it returns the earlier position move has landed — the window now
     // sits at the origin and the corrective size write can grow freely.
-    for _ in 0..<Self.applyCorrectionAttempts {
-      guard
-        let actual = readWindowFrameInNSCoords(window: window, primaryHeight: primaryHeight),
-        !framesApproximatelyEqual(actual, nsRect)
-      else { break }
+    //
+    // Every round is verified, including the last. The previous shape checked
+    // *before* each correction and never after the final one, so a window that
+    // was still short when the attempts ran out simply stayed short, with
+    // nothing recorded — which is the "maximize needs a second press".
+    var actual = observed()
+    var converged = actual.map { framesMatchPlacement($0, nsRect) } ?? false
+    let budget = DispatchTime.now() + .milliseconds(Self.applyCorrectionBudgetMs)
+    var attempt = 0
+    while !converged, attempt < Self.applyCorrectionAttempts, DispatchTime.now() < budget {
+      attempt += 1
       setPos()
       setSize()
+      actual = observed()
+      converged = actual.map { framesMatchPlacement($0, nsRect) } ?? false
     }
+
+    if temporarilyDisableEnhancedUserInterface {
+      setEnhancedUserInterface(true, on: axApp)
+      enhancedUserInterfaceRestored = true
+      // Turning enhanced UI back on makes some apps re-run their own layout,
+      // which can undo part of the move. That happens after every check above,
+      // so the window settled short and nothing noticed. Look once more with
+      // it on, and if the app took the frame back, put it right.
+      actual = observed()
+      if actual.map({ framesMatchPlacement($0, nsRect) }) != true {
+        setEnhancedUserInterface(false, on: axApp)
+        setPos()
+        setSize()
+        setEnhancedUserInterface(true, on: axApp)
+        actual = observed()
+      }
+      converged = actual.map { framesMatchPlacement($0, nsRect) } ?? false
+    }
+
+    if !converged {
+      // The window genuinely would not take the rect (min-size dialogs,
+      // grid-snapping terminals, an app fighting back). Record it: this used
+      // to fail silently, which is why it looked intermittent.
+      FlashLog.warn(
+        "[window_move] unconverged bundle=\(bundleIdentifier ?? "unknown") "
+          + "target=\(NSStringFromRect(nsRect)) "
+          + "actual=\(actual.map(NSStringFromRect) ?? "unreadable") "
+          + "corrections=\(attempt)")
+    }
+    return converged ? .converged : actual == nil ? .unreadable : .refused
   }
 
   /// Read `AXEnhancedUserInterface`. Returns `nil` for apps that
@@ -979,18 +1187,13 @@ enum WindowMover {
   static func shouldTemporarilyDisableEnhancedUserInterface(
     currentValue: Bool?,
     isSettable: Bool,
-    bundleIdentifier: String?
+    engine: AppTraits.Engine?
   ) -> Bool {
+    // Gecko's own enhanced-UI state is scoped by `GeckoAccessibility`.
     return currentValue == true
       && isSettable
-      && !enhancedUserInterfaceToggleExcludedBundleIdentifiers.contains(bundleIdentifier ?? "")
+      && engine != .gecko
   }
-
-  private static let enhancedUserInterfaceToggleExcludedBundleIdentifiers: Set<String> = [
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-    "org.mozilla.nightly",
-  ]
 
   private static func setEnhancedUserInterface(_ enabled: Bool, on axApp: AXUIElement) {
     AXUIElementSetAttributeValue(

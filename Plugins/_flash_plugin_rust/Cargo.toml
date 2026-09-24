@@ -5,11 +5,15 @@ edition = "2021"
 license = "MIT"
 description = "Tokio NDJSON-over-stdio scaffolding for Flash plugins (macOS)."
 
-# Self-contained SDK workspace (flash_plugin + its proc-macro crate) with its
-# own committed Cargo.lock. This is the ONLY workspace under Plugins/ — every
-# plugin is a hermetic standalone crate that path-depends on this package.
+# Self-contained SDK workspace (flash_plugin, its proc-macro crate, and the
+# wire probe that exercises the generated plugin surface from cargo test)
+# with its own committed Cargo.lock. This is the ONLY workspace under
+# Plugins/ — every plugin is a hermetic standalone crate that path-depends on
+# this package. The probe lives below the SDK so no Plugins/*/manifest.json
+# glob (build-plugins.sh, check-guardrails.sh, the host's discovery) ever
+# treats it as a bundled plugin.
 [workspace]
-members = ["macros"]
+members = ["macros", "probe"]
 
 [dependencies]
 flash_plugin_macros = { path = "macros" }

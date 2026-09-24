@@ -1,23 +1,24 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 
+use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, run_command_with_slow_threshold,
-    CommandRequest, Context, PerformResponse,
+    run, run_command, sys, Color, CommandRequest, Context, History, Markup, PerformResponse,
+    Preview, Published, StatusValue,
 };
+use nix::time::{clock_gettime, ClockId};
 
-// iostat blocks for the one-second differential sample but consumes
-// negligible CPU, unlike repeatedly launching top on a busy machine.
+// CPU load comes from `host_processor_info` tick counters sampled once per
+// period in-process; only the GPU metadata still shells out (`ioreg`).
 const CPU_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 const GPU_INTERVAL: Duration = Duration::from_secs(15);
-const CPU_TIMEOUT: Duration = Duration::from_secs(3);
-const CPU_SLOW_THRESHOLD: Duration = Duration::from_millis(1_500);
 const GPU_TIMEOUT: Duration = Duration::from_secs(4);
 const HISTORY_SAMPLES: usize = 20;
-const DETAIL_LABEL_WIDTH: usize = 14;
-const IOSTAT: &str = "/usr/sbin/iostat";
 const IOREG: &str = "/usr/sbin/ioreg";
+static LOGICAL_CPU_COUNT: LazyLock<Option<usize>> =
+    LazyLock::new(|| std::thread::available_parallelism().ok().map(usize::from));
+
+type CpuHistory = History<HISTORY_SAMPLES>;
 
 #[derive(Clone, Debug, PartialEq)]
 struct CpuSnapshot {
@@ -25,6 +26,9 @@ struct CpuSnapshot {
     system: f64,
     idle: f64,
     load: [f64; 3],
+    logical_cpus: Option<usize>,
+    /// Seconds since boot, sleep included; read with each CPU sample.
+    uptime_seconds: Option<u64>,
 }
 
 impl CpuSnapshot {
@@ -51,11 +55,50 @@ enum GatePolicy {
     SkipIfBusy,
 }
 
+/// One rendered status frame: the popup-free bar label, the visible summary
+/// and the hover preview shown behind it, plus the raw numeric segments.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct StatusSegments {
-    summary: String,
-    details: String,
-    plain_details: String,
+struct Report {
+    label: Markup,
+    summary: Markup,
+    preview: Preview,
+    raw: RawMetrics,
+}
+
+/// Plain values without markup, for templates and widgets that scale or chart
+/// numbers themselves. An empty value clears its segment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawMetrics {
+    /// Total CPU as an integer 0–100; unlike the label, never capped at 99.
+    percent: String,
+    /// The retained samples as space-separated integers, oldest first.
+    history: String,
+    /// One-minute load average with two decimals.
+    load: String,
+    /// Two-unit uptime such as `3d 4h`.
+    uptime: String,
+}
+
+impl Report {
+    fn segments(&self) -> [(&'static str, StatusValue); 7] {
+        [
+            (
+                "summary",
+                StatusValue::text(self.summary.clone()).with_preview(self.preview.clone()),
+            ),
+            ("label", StatusValue::text(self.label.clone())),
+            ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.raw.percent)),
+            ("history", plain(&self.raw.history)),
+            ("load", plain(&self.raw.load)),
+            ("uptime", plain(&self.raw.uptime)),
+        ]
+    }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,11 +131,25 @@ fn warn_invalid_summary_mode(ctx: &Context) {
 #[derive(Default)]
 struct MonitorState {
     cpu: Option<CpuSnapshot>,
+    /// Baseline for the next differential sample.
+    ticks: Option<sys::CpuTicks>,
     gpu: Option<GpuSnapshot>,
-    history: VecDeque<f64>,
-    published: Option<StatusSegments>,
+    history: CpuHistory,
+    published: Published<Report>,
     cpu_failure_logged: bool,
     gpu_failure_logged: bool,
+}
+
+impl MonitorState {
+    fn report(&self, summary_mode: SummaryMode) -> Option<Report> {
+        let cpu = self.cpu.as_ref()?;
+        Some(render_report(
+            cpu,
+            self.gpu.as_ref(),
+            &self.history,
+            summary_mode,
+        ))
+    }
 }
 
 struct Cpu {
@@ -125,14 +182,13 @@ impl FlashPlugin for Cpu {
         )
         .await;
 
-        let cpu_ctx = ctx.clone();
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.cpu_gate);
-        drop(tokio::spawn(async move {
-            loop {
-                let started = Instant::now();
-                refresh_cpu(&cpu_ctx, &state, &gate).await;
-                tokio::time::sleep(cpu_sample_delay(started.elapsed())).await;
+        drop(ctx.interval(CPU_SAMPLE_PERIOD, move |ctx| {
+            let state = Arc::clone(&state);
+            let gate = Arc::clone(&gate);
+            async move {
+                refresh_cpu(&ctx, &state, &gate).await;
             }
         }));
 
@@ -149,7 +205,7 @@ impl FlashPlugin for Cpu {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "" => details_response(current_status(&ctx, &self.state)),
+            "" => details_response(current_report(&ctx, &self.state)),
             "refresh" => {
                 refresh_all(
                     &ctx,
@@ -159,7 +215,7 @@ impl FlashPlugin for Cpu {
                     GatePolicy::SkipIfBusy,
                 )
                 .await;
-                details_response(current_status(&ctx, &self.state))
+                details_response(current_report(&ctx, &self.state))
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
@@ -174,7 +230,7 @@ async fn refresh_all(
     policy: GatePolicy,
 ) {
     let (cpu, gpu) = tokio::join!(
-        collect_cpu(ctx, cpu_gate, policy),
+        collect_cpu(state, cpu_gate, policy),
         collect_gpu(ctx, gpu_gate, policy)
     );
     apply_cpu_result(ctx, state, cpu);
@@ -187,7 +243,7 @@ async fn refresh_cpu(
     state: &Arc<Mutex<MonitorState>>,
     gate: &Arc<tokio::sync::Mutex<()>>,
 ) {
-    let result = collect_cpu(ctx, gate, GatePolicy::Wait).await;
+    let result = collect_cpu(state, gate, GatePolicy::Wait).await;
     apply_cpu_result(ctx, state, result);
     publish_if_changed(ctx, state);
 }
@@ -203,32 +259,54 @@ async fn refresh_gpu(
 }
 
 async fn collect_cpu(
-    ctx: &Context,
+    state: &Arc<Mutex<MonitorState>>,
     gate: &Arc<tokio::sync::Mutex<()>>,
     policy: GatePolicy,
 ) -> Collection<CpuSnapshot> {
     let Some(_guard) = acquire_collection(gate, policy).await else {
         return Collection::Busy;
     };
-    let output = run_command_with_slow_threshold(
-        ctx,
-        &[
-            IOSTAT.to_string(),
-            "-c".to_string(),
-            "2".to_string(),
-            "-w".to_string(),
-            "1".to_string(),
-        ],
-        CPU_TIMEOUT,
-        CPU_SLOW_THRESHOLD,
-    )
-    .await;
-    if !output.ok {
+    let baseline = lock_state(state).ticks;
+    let previous = match baseline {
+        Some(ticks) => ticks,
+        None => {
+            // First sample: bracket one period so the initial publish carries a
+            // real figure instead of waiting for the next loop iteration.
+            let Ok(first) = sys::cpu_ticks() else {
+                return Collection::Failed;
+            };
+            tokio::time::sleep(CPU_SAMPLE_PERIOD).await;
+            first
+        }
+    };
+    let Ok(current) = sys::cpu_ticks() else {
         return Collection::Failed;
-    }
-    parse_iostat(&output.stdout)
-        .map(Collection::Fresh)
+    };
+    lock_state(state).ticks = Some(current);
+    let Some(percentages) = current.percentages_since(&previous) else {
+        // No ticks elapsed between two back-to-back samples (an event refresh
+        // right after the poll): keep the last figure without reporting a failure.
+        return Collection::Busy;
+    };
+    let Ok(load) = sys::load_averages() else {
+        return Collection::Failed;
+    };
+    cpu_snapshot(percentages.user, percentages.system, percentages.idle, load)
+        .map(|mut snapshot| {
+            snapshot.logical_cpus = *LOGICAL_CPU_COUNT;
+            snapshot.uptime_seconds = uptime_seconds();
+            Collection::Fresh(snapshot)
+        })
         .unwrap_or(Collection::Failed)
+}
+
+/// Seconds since boot, sleep included: the figure `uptime(1)` prints. Darwin
+/// derives `CLOCK_MONOTONIC` from `kern.boottime`, whereas `Instant` reads
+/// `CLOCK_UPTIME_RAW`, which stops while the machine sleeps. One clock read
+/// per CPU sample; it arms no timer of its own.
+fn uptime_seconds() -> Option<u64> {
+    let since_boot = clock_gettime(ClockId::CLOCK_MONOTONIC).ok()?;
+    u64::try_from(since_boot.tv_sec()).ok()
 }
 
 async fn collect_gpu(
@@ -267,10 +345,6 @@ fn begin_collection(gate: &tokio::sync::Mutex<()>) -> Option<tokio::sync::MutexG
     gate.try_lock().ok()
 }
 
-fn cpu_sample_delay(elapsed: Duration) -> Duration {
-    CPU_SAMPLE_PERIOD.saturating_sub(elapsed)
-}
-
 async fn acquire_collection<'a>(
     gate: &'a tokio::sync::Mutex<()>,
     policy: GatePolicy,
@@ -289,7 +363,7 @@ fn apply_cpu_result(
     let mut state = lock_state(state);
     match result {
         Collection::Fresh(snapshot) => {
-            append_history(&mut state.history, snapshot.total());
+            state.history.push(snapshot.total());
             state.cpu = Some(snapshot);
             state.cpu_failure_logged = false;
         }
@@ -329,39 +403,20 @@ fn apply_gpu_result(
 }
 
 fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
-    let next = {
+    let segments = {
         let mut state = lock_state(state);
-        let cpu = match state.cpu.as_ref() {
-            Some(cpu) => cpu,
-            None => return,
-        };
-        let rendered = render_status(
-            cpu,
-            state.gpu.as_ref(),
-            &state.history,
-            configured_summary_mode(ctx),
-        );
-        if state.published.as_ref() == Some(&rendered) {
+        let Some(report) = state.report(configured_summary_mode(ctx)) else {
             return;
-        }
-        state.published = Some(rendered.clone());
-        rendered
+        };
+        state.published.update(report).map(Report::segments)
     };
-    ctx.status([
-        ("summary", next.summary.as_str()),
-        ("details", next.details.as_str()),
-    ]);
+    if let Some(segments) = segments {
+        ctx.status(segments);
+    }
 }
 
-fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
-    let state = lock_state(state);
-    let cpu = state.cpu.as_ref()?;
-    Some(render_status(
-        cpu,
-        state.gpu.as_ref(),
-        &state.history,
-        configured_summary_mode(ctx),
-    ))
+fn current_report(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<Report> {
+    lock_state(state).report(configured_summary_mode(ctx))
 }
 
 fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, MonitorState> {
@@ -370,28 +425,22 @@ fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, Mon
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn details_response(status: Option<StatusSegments>) -> PerformResponse {
-    status
-        .map(|status| PerformResponse::ok().message(status.plain_details))
+fn details_response(report: Option<Report>) -> PerformResponse {
+    report
+        .map(|report| PerformResponse::ok().message(report.preview.render_plain()))
         .unwrap_or_else(|| PerformResponse::fail("CPU information unavailable"))
 }
 
-fn parse_iostat(raw: &str) -> Option<CpuSnapshot> {
-    raw.lines().rev().find_map(parse_iostat_row)
-}
-
-fn parse_iostat_row(line: &str) -> Option<CpuSnapshot> {
-    let values = line
-        .split_whitespace()
-        .map(str::parse::<f64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let offset = values.len().checked_sub(6)?;
+/// Validates one differential sample the way the old `iostat` row parser did:
+/// finite percentages that sum to 100 and non-negative load averages.
+fn cpu_snapshot(user: f64, system: f64, idle: f64, load: [f64; 3]) -> Option<CpuSnapshot> {
     let snapshot = CpuSnapshot {
-        user: values[offset],
-        system: values[offset + 1],
-        idle: values[offset + 2],
-        load: [values[offset + 3], values[offset + 4], values[offset + 5]],
+        user,
+        system,
+        idle,
+        load,
+        logical_cpus: None,
+        uptime_seconds: None,
     };
     let percentages = [snapshot.user, snapshot.system, snapshot.idle];
     if percentages
@@ -491,116 +540,136 @@ fn quoted_value(raw: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn append_history(history: &mut VecDeque<f64>, value: f64) {
-    history.push_back(value.clamp(0.0, 100.0));
-    while history.len() > HISTORY_SAMPLES {
-        history.pop_front();
-    }
-}
-
-fn sparkline(history: &VecDeque<f64>) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    history
-        .iter()
-        .map(|value| {
-            let index = (value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize;
-            BARS[index]
-        })
-        .collect()
-}
-
-fn render_status(
+fn render_report(
     cpu: &CpuSnapshot,
     gpu: Option<&GpuSnapshot>,
-    history: &VecDeque<f64>,
+    history: &CpuHistory,
     summary_mode: SummaryMode,
-) -> StatusSegments {
-    let total = cpu.total();
-    let visible = visible_summary(cpu, gpu, history, summary_mode);
-
-    let body = format!(
-        "User: {:.1}% · System: {:.1}% · Idle: {:.1}%\n\
-Load: {:.2} · {:.2} · {:.2}",
-        cpu.user, cpu.system, cpu.idle, cpu.load[0], cpu.load[1], cpu.load[2]
-    );
-    let (gpu_value, model) = gpu
-        .map(|gpu| {
+) -> Report {
+    let (gpu_value, model) = gpu.map_or_else(
+        || ("      —".to_string(), Markup::text("—")),
+        |gpu| {
             (
                 format!("{:>5.1} %", gpu.utilization),
-                escape_status_text(gpu.model.as_deref().unwrap_or("GPU")),
+                Markup::text(gpu.model.as_deref().unwrap_or("GPU")),
             )
-        })
-        .unwrap_or_else(|| ("      —".to_string(), "—".to_string()));
-    let details = [
-        "#[fg=colour178]CPU#[default]".to_string(),
-        detail_row("Total", &format!("{total:>5.1} %")),
-        detail_row("User", &format!("{:>5.1} %", cpu.user)),
-        detail_row("System", &format!("{:>5.1} %", cpu.system)),
-        detail_row("Idle", &format!("{:>5.1} %", cpu.idle)),
-        detail_row(
+        },
+    );
+    let preview = Preview::new()
+        .title("CPU")
+        .row("Total", format!("{:>5.1} %", cpu.total()))
+        .row("User", format!("{:>5.1} %", cpu.user))
+        .row("System", format!("{:>5.1} %", cpu.system))
+        .row("Idle", format!("{:>5.1} %", cpu.idle))
+        .row(
+            "Logical CPUs",
+            cpu.logical_cpus
+                .map_or_else(|| "—".to_string(), |count| count.to_string()),
+        )
+        .row(
             "Load",
-            &format!(
+            format!(
                 "{:>5.2}  {:>5.2}  {:>5.2}",
                 cpu.load[0], cpu.load[1], cpu.load[2]
             ),
-        ),
-        detail_row("History", &padded_history(history)),
-        detail_row("GPU", &gpu_value),
-        detail_row("Model", &model),
-    ]
-    .join("\n");
-    let mut plain_details = format!("CPU {total:.1}%\n{body}");
-    if !history.is_empty() {
-        let history = format!("\nHistory: {}", sparkline(history));
-        plain_details.push_str(&history);
-    }
-    if let Some(gpu) = gpu {
-        let label = gpu.model.as_deref().unwrap_or("GPU");
-        plain_details.push_str(&format!("\n\nGPU\n{label}: {:.0}%", gpu.utilization));
-    }
-
-    StatusSegments {
-        summary: inline_status_popup(&visible, &details),
-        details,
-        plain_details,
+        )
+        .row(
+            "History",
+            sparkline_padded(&sparkline_percent(history), CpuHistory::CAPACITY),
+        )
+        .row(
+            "Recent avg",
+            if history.is_empty() {
+                "—".to_string()
+            } else {
+                format!(
+                    "{:.1} %",
+                    history.iter().sum::<f64>() / history.len() as f64
+                )
+            },
+        )
+        .row(
+            "Recent peak",
+            history
+                .iter()
+                .reduce(f64::max)
+                .map_or_else(|| "—".to_string(), |value| format!("{value:.1} %")),
+        )
+        .row(
+            "Load / CPU",
+            cpu.logical_cpus.filter(|count| *count > 0).map_or_else(
+                || "—".to_string(),
+                |count| {
+                    format!(
+                        "{:.2}  {:.2}  {:.2}",
+                        cpu.load[0] / count as f64,
+                        cpu.load[1] / count as f64,
+                        cpu.load[2] / count as f64
+                    )
+                },
+            ),
+        )
+        .note("Load: 1 / 5 / 15 min · recent: last 20 samples")
+        .row("GPU", gpu_value)
+        .row("Model", model);
+    Report {
+        label: metric("CPU", cpu.total()),
+        summary: visible_summary(cpu, gpu, history, summary_mode),
+        preview,
+        raw: raw_metrics(cpu, history),
     }
 }
 
-fn detail_row(label: &str, value: &str) -> String {
-    format!(
-        "#[fg=colour245]{label:<width$}#[default]{value}",
-        width = DETAIL_LABEL_WIDTH
-    )
+fn raw_metrics(cpu: &CpuSnapshot, history: &CpuHistory) -> RawMetrics {
+    RawMetrics {
+        percent: whole_percent(cpu.total()).to_string(),
+        history: percent_series(history),
+        load: format!("{:.2}", cpu.load[0]),
+        uptime: cpu.uptime_seconds.map(duration_uptime).unwrap_or_default(),
+    }
 }
 
-fn padded_history(history: &VecDeque<f64>) -> String {
-    let chart = sparkline(history);
-    let padding = HISTORY_SAMPLES.saturating_sub(chart.chars().count());
-    format!("{}{chart}", "·".repeat(padding))
+/// Rounded to the nearest integer and clamped to 0–100; NaN reads as 0.
+fn whole_percent(value: f64) -> u8 {
+    if value > 0.0 {
+        value.min(100.0).round() as u8
+    } else {
+        0
+    }
+}
+
+fn percent_series(history: &CpuHistory) -> String {
+    history
+        .iter()
+        .map(|sample| whole_percent(sample).to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Yellow section name plus the grey two-digit percentage the monitor labels
+/// share.
+fn metric(name: &str, percent: f64) -> Markup {
+    Markup::colored(name, Color::TITLE) + " " + Markup::colored(percent2(percent), Color::MUTED)
 }
 
 fn visible_summary(
     cpu: &CpuSnapshot,
     gpu: Option<&GpuSnapshot>,
-    history: &VecDeque<f64>,
+    history: &CpuHistory,
     summary_mode: SummaryMode,
-) -> String {
-    let total = cpu.total().min(99.0);
-    let mut visible =
-        format!("#[fg=colour178]CPU#[default] #[fg=colour245]{total:>2.0}%#[default]");
+) -> Markup {
+    let mut visible = metric("CPU", cpu.total());
     if summary_mode == SummaryMode::Compact {
         return visible;
     }
     if let Some(gpu) = gpu {
-        let utilization = gpu.utilization.min(99.0);
-        visible.push_str(&format!(
-            " #[fg=colour245]· #[fg=colour178]GPU#[default] #[fg=colour245]{:>2.0}%#[default]",
-            utilization,
-        ));
+        visible += " ";
+        visible += Markup::colored("· ", Color::MUTED);
+        visible += metric("GPU", gpu.utilization);
     }
     if !history.is_empty() {
-        visible.push(' ');
-        visible.push_str(&sparkline(history));
+        visible += " ";
+        visible += sparkline_percent(history);
     }
     visible
 }
@@ -611,9 +680,54 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::BTreeMap;
 
     use super::*;
+
+    /// The wire strings `Context::status` publishes for a report.
+    fn wire(report: &Report) -> BTreeMap<&'static str, String> {
+        report
+            .segments()
+            .into_iter()
+            .map(|(name, value)| (name, value.render().expect("preview fits inline")))
+            .collect()
+    }
+
+    fn history(samples: impl IntoIterator<Item = f64>) -> CpuHistory {
+        let mut history = CpuHistory::new();
+        for sample in samples {
+            history.push(sample);
+        }
+        history
+    }
+
+    #[test]
+    fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
+        for (user, expected) in [
+            (0.0, " 0%"),
+            (9.0, " 9%"),
+            (10.0, "10%"),
+            (99.6, "99%"),
+            (100.0, "99%"),
+        ] {
+            let cpu = CpuSnapshot {
+                user,
+                system: 0.0,
+                idle: 100.0 - user,
+                load: [0.0; 3],
+                logical_cpus: None,
+                uptime_seconds: None,
+            };
+            let report = render_report(&cpu, None, &history([user]), SummaryMode::Full);
+            assert_eq!(
+                report.label.as_str(),
+                format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{expected}#[default]")
+            );
+            let segments = wire(&report);
+            assert_eq!(segments["label"], report.label.as_str());
+            assert!(segments["summary"].contains("popup="));
+        }
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
@@ -628,19 +742,19 @@ mod tests {
         for (user, expected) in [
             (
                 9.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245] 9%#[default]",
             ),
             (
                 10.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]10%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]10%#[default]",
             ),
             (
                 99.6,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]99%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]99%#[default]",
             ),
             (
                 100.0,
-                "#[fg=colour178]CPU#[default] #[fg=colour245]99%#[default]",
+                "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]99%#[default]",
             ),
         ] {
             let cpu = CpuSnapshot {
@@ -648,9 +762,11 @@ mod tests {
                 system: 0.0,
                 idle: 100.0 - user,
                 load: [0.0; 3],
+                logical_cpus: None,
+                uptime_seconds: None,
             };
             assert_eq!(
-                visible_summary(&cpu, None, &VecDeque::new(), SummaryMode::Compact),
+                visible_summary(&cpu, None, &CpuHistory::new(), SummaryMode::Compact).as_str(),
                 expected
             );
         }
@@ -663,6 +779,8 @@ mod tests {
             system: 0.0,
             idle: 91.0,
             load: [0.0; 3],
+            logical_cpus: None,
+            uptime_seconds: None,
         };
         let gpu = GpuSnapshot {
             utilization: 100.0,
@@ -670,26 +788,24 @@ mod tests {
         };
 
         assert_eq!(
-            visible_summary(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Full),
-            "#[fg=colour178]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
-· #[fg=colour178]GPU#[default] #[fg=colour245]99%#[default]"
+            visible_summary(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Full).as_str(),
+            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
+· #[default]#[fg=#EBCB8B]GPU#[default] #[fg=colour245]99%#[default]"
         );
     }
 
     #[test]
-    fn parses_second_iostat_cpu_and_load_fixture() {
-        let snapshot = parse_iostat(include_str!("../fixtures/iostat.txt")).expect("CPU snapshot");
-        assert_eq!(snapshot.user, 12.5);
-        assert_eq!(snapshot.system, 7.25);
-        assert_eq!(snapshot.idle, 80.25);
+    fn accepts_a_consistent_differential_sample() {
+        let snapshot = cpu_snapshot(12.5, 7.25, 80.25, [1.25, 2.5, 3.75]).expect("CPU snapshot");
         assert_eq!(snapshot.total(), 19.75);
         assert_eq!(snapshot.load, [1.25, 2.5, 3.75]);
     }
 
     #[test]
-    fn rejects_incomplete_or_impossible_cpu_samples() {
-        assert!(parse_iostat("disk0 cpu load average\nKB/t tps MB/s us sy id 1m 5m 15m").is_none());
-        assert!(parse_iostat("1 2 3 90 20 0 1 2 3").is_none());
+    fn rejects_impossible_cpu_samples() {
+        assert!(cpu_snapshot(90.0, 20.0, 0.0, [1.0, 2.0, 3.0]).is_none());
+        assert!(cpu_snapshot(f64::NAN, 0.0, 100.0, [1.0, 2.0, 3.0]).is_none());
+        assert!(cpu_snapshot(10.0, 10.0, 80.0, [-1.0, 2.0, 3.0]).is_none());
     }
 
     #[test]
@@ -738,17 +854,25 @@ mod tests {
     }
 
     #[test]
-    fn history_is_bounded_and_sparkline_is_deterministic() {
-        let mut history = VecDeque::new();
-        for value in 0..25 {
-            append_history(&mut history, f64::from(value) * 4.0);
-        }
+    fn history_keeps_the_newest_twenty_samples() {
+        let history = history((0..25).map(|value| f64::from(value) * 4.0));
         assert_eq!(history.len(), HISTORY_SAMPLES);
-        assert_eq!(history.front().copied(), Some(20.0));
-        assert_eq!(
-            sparkline(&VecDeque::from([0.0, 12.5, 50.0, 87.5, 100.0])),
-            "▁▂▅▇█"
-        );
+        assert_eq!(history.iter().next(), Some(20.0));
+    }
+
+    #[test]
+    fn unchanged_reports_stay_off_the_wire() {
+        let cpu = cpu_snapshot(10.0, 5.0, 85.0, [1.0, 2.0, 3.0]).expect("CPU snapshot");
+        let mut state = MonitorState {
+            cpu: Some(cpu),
+            ..MonitorState::default()
+        };
+        let report = state.report(SummaryMode::Compact).expect("report");
+        assert!(state.published.update(report.clone()).is_some());
+        assert!(state.published.update(report).is_none());
+        state.history.push(50.0);
+        let changed = state.report(SummaryMode::Compact).expect("report");
+        assert!(state.published.update(changed).is_some());
     }
 
     #[test]
@@ -758,50 +882,71 @@ mod tests {
             system: 7.25,
             idle: 80.25,
             load: [1.25, 2.5, 3.75],
+            logical_cpus: Some(16),
+            uptime_seconds: None,
         };
         let gpu = GpuSnapshot {
             utilization: 59.0,
             model: Some("Apple M4 Pro".into()),
         };
-        let history = VecDeque::from([10.0, 20.0]);
-        let rendered = render_status(&cpu, Some(&gpu), &history, SummaryMode::Compact);
-        assert!(rendered.summary.starts_with("#[popup=inline:"));
-        assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered
-            .summary
-            .contains("CPU#[default] #[fg=colour245]20%#[default]"));
-        assert!(!rendered.summary.contains("GPU#[default]"));
-        assert!(!rendered.summary.contains("▂"));
+        let history = history([10.0, 20.0]);
+        let report = render_report(&cpu, Some(&gpu), &history, SummaryMode::Compact);
+        let segments = wire(&report);
+        assert!(segments["summary"].starts_with("#[popup=inline:"));
+        assert!(segments["summary"].ends_with("#[nopopup]"));
+        assert!(segments["summary"].contains("CPU#[default] #[fg=colour245]20%#[default]"));
+        assert!(!segments["summary"].contains("GPU#[default]"));
+        assert!(!segments["summary"].contains("▂"));
         assert_eq!(
-            visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Compact),
-            "#[fg=colour178]CPU#[default] #[fg=colour245]20%#[default]"
+            report.summary.as_str(),
+            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]20%#[default]"
         );
         assert!(
             visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
-                .contains("#[fg=colour178]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
+                .as_str()
+                .contains("#[fg=#EBCB8B]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
         );
         assert_eq!(CPU_SAMPLE_PERIOD, Duration::from_secs(1));
         assert_eq!(GPU_INTERVAL, Duration::from_secs(15));
         assert_eq!(
-            rendered.details,
-            "#[fg=colour178]CPU#[default]\n\
+            segments["details"],
+            "#[fg=#EBCB8B]CPU#[default]\n\
 #[fg=colour245]Total         #[default] 19.8 %\n\
 #[fg=colour245]User          #[default] 12.5 %\n\
 #[fg=colour245]System        #[default]  7.2 %\n\
 #[fg=colour245]Idle          #[default] 80.2 %\n\
+#[fg=colour245]Logical CPUs  #[default]16\n\
 #[fg=colour245]Load          #[default] 1.25   2.50   3.75\n\
 #[fg=colour245]History       #[default]··················▂▂\n\
+#[fg=colour245]Recent avg    #[default]15.0 %\n\
+#[fg=colour245]Recent peak   #[default]20.0 %\n\
+#[fg=colour245]Load / CPU    #[default]0.08  0.16  0.23\n\
+#[fg=colour245]Load: 1 / 5 / 15 min · recent: last 20 samples#[default]\n\
 #[fg=colour245]GPU           #[default] 59.0 %\n\
 #[fg=colour245]Model         #[default]Apple M4 Pro"
         );
-        assert!(!rendered.details.ends_with('\n'));
-        assert!(!rendered.plain_details.contains("#["));
-        assert!(rendered.plain_details.starts_with("CPU 19.8%\n"));
-        assert!(rendered.plain_details.contains("GPU\nApple M4 Pro: 59%"));
+        assert!(!segments["details"].ends_with('\n'));
+        assert_eq!(
+            report.preview.render_plain(),
+            "CPU\n\
+Total          19.8 %\n\
+User           12.5 %\n\
+System          7.2 %\n\
+Idle           80.2 %\n\
+Logical CPUs  16\n\
+Load           1.25   2.50   3.75\n\
+History       ··················▂▂\n\
+Recent avg    15.0 %\n\
+Recent peak   20.0 %\n\
+Load / CPU    0.08  0.16  0.23\n\
+Load: 1 / 5 / 15 min · recent: last 20 samples\n\
+GPU            59.0 %\n\
+Model         Apple M4 Pro"
+        );
 
-        let without_gpu = render_status(&cpu, None, &VecDeque::new(), SummaryMode::Compact);
-        assert!(without_gpu.details.ends_with(
-            "#[fg=colour245]History       #[default]····················\n#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
+        let without_gpu = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact);
+        assert!(wire(&without_gpu)["details"].ends_with(
+            "#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
         ));
     }
 
@@ -812,24 +957,179 @@ mod tests {
             system: 5.0,
             idle: 85.0,
             load: [1.0, 2.0, 3.0],
+            logical_cpus: None,
+            uptime_seconds: None,
         };
         let gpu = GpuSnapshot {
             utilization: 20.0,
             model: Some("GPU #[fg=colour196] #1".into()),
         };
 
-        let details =
-            render_status(&cpu, Some(&gpu), &VecDeque::new(), SummaryMode::Compact).details;
-        assert!(details.contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1"));
+        let report = render_report(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Compact);
+        let details = report.preview.render();
+        assert!(details
+            .as_str()
+            .contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1"));
+        assert!(report
+            .preview
+            .render_plain()
+            .ends_with("Model         GPU #[fg=colour196] #1"));
     }
 
     #[test]
-    fn cpu_sampler_accounts_for_the_blocking_iostat_window() {
-        assert_eq!(
-            cpu_sample_delay(Duration::from_millis(250)),
-            Duration::from_millis(750)
+    fn detail_statistics_describe_the_sampled_cpu_window() {
+        let cpu = CpuSnapshot {
+            user: 20.0,
+            system: 5.0,
+            idle: 75.0,
+            load: [4.0, 3.0, 2.0],
+            logical_cpus: Some(8),
+            uptime_seconds: None,
+        };
+        let details = render_report(
+            &cpu,
+            None,
+            &history([10.0, 20.0, 60.0]),
+            SummaryMode::Compact,
+        )
+        .preview
+        .render_plain();
+        assert!(details.contains("Recent avg    30.0 %"), "{details}");
+        assert!(details.contains("Recent peak   60.0 %"), "{details}");
+        assert!(
+            details.contains("Load / CPU    0.50  0.38  0.25"),
+            "{details}"
         );
-        assert_eq!(cpu_sample_delay(Duration::from_secs(1)), Duration::ZERO);
-        assert_eq!(cpu_sample_delay(Duration::from_secs(2)), Duration::ZERO);
+        assert!(details.contains("1 / 5 / 15 min"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
+        let empty = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact)
+            .preview
+            .render_plain();
+        assert!(empty.contains("Recent avg    —"), "{empty}");
+        assert!(empty.contains("Recent peak   —"), "{empty}");
+    }
+
+    fn sample(user: f64, load: f64, uptime_seconds: Option<u64>) -> CpuSnapshot {
+        CpuSnapshot {
+            user,
+            system: 0.0,
+            idle: 100.0 - user,
+            load: [load, 0.0, 0.0],
+            logical_cpus: None,
+            uptime_seconds,
+        }
+    }
+
+    #[test]
+    fn raw_segments_publish_plain_numbers_with_history_oldest_first() {
+        let cpu = CpuSnapshot {
+            user: 12.5,
+            system: 7.25,
+            idle: 80.25,
+            load: [1.254, 2.5, 3.75],
+            logical_cpus: Some(16),
+            uptime_seconds: Some(3 * 86_400 + 4 * 3_600 + 59 * 60),
+        };
+        let report = render_report(
+            &cpu,
+            None,
+            &history([0.4, 50.5, 99.6, 100.0]),
+            SummaryMode::Compact,
+        );
+        let segments = wire(&report);
+        assert_eq!(segments["percent"], "20");
+        assert_eq!(segments["history"], "0 51 100 100");
+        assert_eq!(segments["load"], "1.25");
+        assert_eq!(segments["uptime"], "3d 4h");
+        for name in ["percent", "history", "load", "uptime"] {
+            assert!(!segments[name].contains("#["), "{name}: {}", segments[name]);
+        }
+    }
+
+    #[test]
+    fn raw_percent_rounds_to_an_integer_without_the_label_cap() {
+        for (user, expected) in [
+            (0.0, "0"),
+            (0.4, "0"),
+            (0.5, "1"),
+            (9.5, "10"),
+            (99.4, "99"),
+            (99.6, "100"),
+            (100.0, "100"),
+        ] {
+            let report = render_report(
+                &sample(user, 0.0, None),
+                None,
+                &CpuHistory::new(),
+                SummaryMode::Compact,
+            );
+            assert_eq!(report.raw.percent, expected, "{user}");
+        }
+        assert_eq!(whole_percent(f64::NAN), 0);
+        assert_eq!(whole_percent(-3.0), 0);
+        assert_eq!(whole_percent(250.0), 100);
+    }
+
+    #[test]
+    fn raw_history_keeps_the_newest_twenty_samples_oldest_first() {
+        let report = render_report(
+            &sample(10.0, 0.0, None),
+            None,
+            &history((0..25).map(f64::from)),
+            SummaryMode::Compact,
+        );
+        let expected = (5..25).map(|value| value.to_string()).collect::<Vec<_>>();
+        assert_eq!(report.raw.history, expected.join(" "));
+    }
+
+    #[test]
+    fn raw_load_keeps_two_decimals_and_missing_values_clear_their_segments() {
+        let report = render_report(
+            &sample(10.0, 12.3, None),
+            None,
+            &CpuHistory::new(),
+            SummaryMode::Compact,
+        );
+        let segments = wire(&report);
+        assert_eq!(segments["load"], "12.30");
+        assert_eq!(segments["history"], "");
+        assert_eq!(segments["uptime"], "");
+        assert_eq!(
+            raw_metrics(&sample(0.0, 0.0, Some(42)), &CpuHistory::new()).load,
+            "0.00"
+        );
+    }
+
+    #[test]
+    fn raw_uptime_uses_two_units_and_republishes_only_when_its_text_changes() {
+        for (seconds, expected) in [
+            (42, "42s"),
+            (5 * 60 + 59, "5m"),
+            (2 * 3_600 + 3 * 60, "2h 3m"),
+            (86_400 + 2 * 3_600 + 59 * 60, "1d 2h"),
+        ] {
+            assert_eq!(
+                raw_metrics(&sample(0.0, 0.0, Some(seconds)), &CpuHistory::new()).uptime,
+                expected
+            );
+        }
+
+        let mut published = Published::new();
+        let render = |uptime| {
+            render_report(
+                &sample(10.0, 1.0, Some(uptime)),
+                None,
+                &CpuHistory::new(),
+                SummaryMode::Compact,
+            )
+        };
+        assert!(published.update(render(86_400 + 60)).is_some());
+        assert!(published.update(render(86_400 + 120)).is_none());
+        assert!(published.update(render(86_400 + 3_600)).is_some());
+    }
+
+    #[test]
+    fn uptime_reads_the_boot_relative_clock() {
+        assert!(uptime_seconds().is_some_and(|seconds| seconds > 0));
     }
 }

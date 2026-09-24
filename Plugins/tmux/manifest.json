@@ -12,6 +12,7 @@
     "app_control"
   ],
   "priority": 20,
+  "only_terminals": true,
   "hints": {
     "fallback_on_empty": true
   },
@@ -50,7 +51,7 @@
   "actions": [
     "tab_select",
     "tab_next",
-    "tab_prev",
+    "tab_previous",
     "tab_first",
     "tab_last",
     "tab_new",
@@ -62,6 +63,8 @@
     "pane_split_vertical",
     "pane_split_horizontal",
     "pane_close",
+    "scroll_top",
+    "scroll_bottom",
     "app_reload"
   ]
 }

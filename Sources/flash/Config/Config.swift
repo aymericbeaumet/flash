@@ -89,6 +89,10 @@ struct ConfigLocation: Equatable {
 struct ConfigDiagnostic: Equatable {
   let message: String
   let location: ConfigLocation?
+  /// The file whose value raised it, when one did: the user's config for
+  /// its own entries, the bundled defaults for theirs. `flash config_check`
+  /// prints it as the `path` of `path:line:col`.
+  var file: String? = nil
 
   var logMessage: String {
     guard let location else { return message }
@@ -120,8 +124,29 @@ enum PluginConfigValue: Equatable {
   }
 }
 
+/// `[overlay] hint_placement`: where a hint chip sits relative to its target
+/// frame. The geometry is `HintPlacement.chipFrame`.
+enum HintPlacement: String, CaseIterable, Equatable {
+  /// On the target's top-left corner, centred on a target barely larger than
+  /// the chip: the long-standing placement.
+  case corner
+  /// Centred on the target.
+  case center
+  /// Just above the target's top edge.
+  case above
+  /// Just below the target's bottom edge.
+  case below
+}
+
+/// `[overlay] screen_capture`: whether capture and sharing see Flash's
+/// windows.
+enum ScreenCaptureVisibility: String, CaseIterable, Equatable {
+  case show
+  case hide
+}
+
 struct Config {
-  struct App {
+  struct App: Equatable {
     /// macOS menu-bar icon (see `StatusItemController.swift`, the single
     /// sanctioned status item) carrying About / Open Configuration / Quit.
     /// `[app] menu_bar_icon = false` hides it — Flash stays fully
@@ -130,21 +155,35 @@ struct Config {
     /// Login-item registration through SMAppService, reconciled on every
     /// launch and config reload. `[app] autostart = false` unregisters.
     var autostart: Bool = true
+    /// The layout keys are read against for hint labels, the grid and
+    /// NORMAL (`KeyboardLayout.Setting`): "auto" reads them on the paired
+    /// ASCII-capable layout while a non-Latin source is selected, an
+    /// input-source ID always reads them on that layout.
+    var keyboardLayout: String = "auto"
   }
-  struct Hints {
+  struct Hints: Equatable {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
     /// Number of selection steps for the `mouse_grid` verb. Larger values
     /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
+    /// The grid's key matrix, one string per keyboard row. Empty derives the
+    /// left-hand block of the `keys` layout (`resolvedMouseGridKeys`).
+    var mouseGridKeys: [String] = []
+    /// Move the pointer to the grid region's centre after every step.
+    var mouseGridCursorFollow = false
+    /// Put the pointer back where it was after a committed hint or grid
+    /// click, drag or selection, and after `mouse_repeat` (`--move` and
+    /// `mouse_pointer` still move it).
+    var restorePointer = false
     /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
     /// can still see what's underneath the precision overlay. 1.0 is
     /// fully opaque, 0.0 invisible. Default 0.5 — the underlying window
     /// stays clearly visible through the precision grid.
     var mouseGridOpacity: Double = 0.5
   }
-  struct Overlay {
+  struct Overlay: Equatable {
     var fontSize: Double = 12
     var hintFG: String = "#302505"
     /// Top stop of the chip's vertical gradient. Set this equal to
@@ -180,9 +219,64 @@ struct Config {
     /// Milliseconds a transient banner (command output, "Copied: …")
     /// stays up.
     var bannerDurationMs: Int = 700
+    /// Where a hint chip sits relative to its target. Only the chip moves:
+    /// the click aims at the same point whatever the placement.
+    var hintPlacement: HintPlacement = .corner
+    /// `[overlay.dark]`: chip colours drawn while the system appearance is
+    /// dark. An empty value keeps its `[overlay]` counterpart.
+    var dark = DarkHintColors()
+    /// Draw a short ring where each committed click lands (demos,
+    /// screencasts).
+    var clickFeedback = false
+    /// Whether screen capture and sharing see Flash's overlay, status bar
+    /// and popup windows. Best effort: `hide` sets `NSWindow.sharingType`
+    /// to none, which recent macOS capture APIs may ignore.
+    var screenCapture: ScreenCaptureVisibility = .show
+
+    /// `[overlay.dark]`: the colour keys of `[overlay]`, each empty until set.
+    struct DarkHintColors: Equatable {
+      var hintFG = ""
+      var hintBGTop = ""
+      var hintBGBottom = ""
+      var hintBorder = ""
+      var importantHintFG = ""
+      var importantHintBGTop = ""
+      var importantHintBGBottom = ""
+      var importantHintBorder = ""
+    }
+
+    /// The chip colours to draw with. Under a dark appearance every
+    /// non-empty `[overlay.dark]` value replaces its `[overlay]`
+    /// counterpart, one key at a time.
+    func hintColors(dark isDark: Bool) -> HintColors {
+      func pick(_ darkValue: String, _ lightValue: String) -> String {
+        isDark && !darkValue.isEmpty ? darkValue : lightValue
+      }
+      return HintColors(
+        fg: pick(dark.hintFG, hintFG),
+        bgTop: pick(dark.hintBGTop, hintBGTop),
+        bgBottom: pick(dark.hintBGBottom, hintBGBottom),
+        border: pick(dark.hintBorder, hintBorder),
+        importantFG: pick(dark.importantHintFG, importantHintFG),
+        importantBGTop: pick(dark.importantHintBGTop, importantHintBGTop),
+        importantBGBottom: pick(dark.importantHintBGBottom, importantHintBGBottom),
+        importantBorder: pick(dark.importantHintBorder, importantHintBorder))
+    }
+  }
+
+  /// One appearance's resolved chip colours, as hex strings.
+  struct HintColors: Equatable {
+    var fg: String
+    var bgTop: String
+    var bgBottom: String
+    var border: String
+    var importantFG: String
+    var importantBGTop: String
+    var importantBGBottom: String
+    var importantBorder: String
   }
   /// Tunables for the `:flashlight` command-line surface.
-  struct Flashlight {
+  struct Flashlight: Equatable {
     /// Number of command-bar suggestions shown for `:flashlight`,
     /// `:emojis`, source filters, bangs, and command completions.
     var suggestionCount: Int = 10
@@ -236,7 +330,7 @@ struct Config {
     /// locations an effective rank of 60 vs. inactive 50.
     var precedenceAliveBonus: Int = 10
   }
-  struct Debug {
+  struct Debug: Equatable {
     /// When true, every detected target is outlined alongside its hint chip.
     /// Useful for diagnosing missing or misplaced hints — you can see exactly
     /// which AX rect Flash decided to use.
@@ -266,7 +360,7 @@ struct Config {
     /// TCP port the inspector listens on.
     var httpInspectorPort: Int = 4242
   }
-  struct Open {
+  struct Open: Equatable {
     var ignoredApps: [String] = []
     /// Directories scanned (recursively) and watched for `.app` bundles —
     /// the flashlight's installed-app catalog and the `app_open` verb's
@@ -284,7 +378,7 @@ struct Config {
       "~/Applications",
     ]
   }
-  struct Plugins {
+  struct Plugins: Equatable {
     /// Third-party plugins explicitly requested by the user. Official
     /// bundled plugins are discovered from the app bundle, not this list.
     var thirdParty: [PluginReference] = []
@@ -308,12 +402,21 @@ struct Config {
     /// plugin id, then by setting name.
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
-  struct StatusBar {
+  struct Terminal: Equatable {
+    var command: [String]
+    var workingDirectory: String?
+    var environment: [String: String] = [:]
+    var columns: Int = 100
+    var rows: Int = 28
+    var persistent: Bool = false
+  }
+
+  struct StatusBar: Equatable {
     struct PopupStyle: Equatable {
       /// Default text colour for popup content. Inline `#[fg=…]` markers
       /// override it exactly as they do in the status bar.
       var foreground: String = "#D8DEE9"
-      var background: String = "#2E3440"
+      var background: String = "#2E3440F2"
       var borderColor: String = "#4C566A"
       var borderWidth: Double = 1
       var cornerRadius: Double = 8
@@ -340,47 +443,30 @@ struct Config {
     var monitor: Monitor = .all
     /// Bar text size in points (the mode pill uses the same size).
     var fontSize: Double = 13
-    /// Timeout in seconds for one command/script/cycle subprocess run;
+    /// Timeout for one named Flash source run;
     /// SIGTERM then SIGKILL past it, keeping the previous value.
     var commandTimeoutSeconds: Double = 6
     /// Points kept clear on each side of a notch (camera housing).
-    var notchMargin: Double = 0
-    /// Poll cadence in seconds for command/script/cycle template sections —
-    /// tmux's `status-interval` analog (`[statusbar] interval`). A source
-    /// can override it inline (`#{script=30:…}`, `#{cycle=60/300:…}`);
-    /// cycles default to `max(rotation, interval)`. `0` disables periodic
-    /// re-runs entirely (sections run once when the template loads).
+    var notchMargin: Double = 6
+    /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
-    /// Single-string status-bar template using tmux-style format markers:
-    ///   #[align=left|centre|right]  — switches which alignment region
-    ///                                 subsequent text/variables accumulate
-    ///                                 into (default: `left`).
-    ///   #[fg=…,bold=true]          — inline text styling (passed through
-    ///                                 to the renderer).
-    ///   #[link=URL]…#[nolink]      — makes the wrapped run clickable; a
-    ///                                 click opens URL. URL must be
-    ///                                 whitespace/comma-free.
-    ///   #[popup=name]…#[nopopup]   — shows the named `[statusbar.popup]`
-    ///                                 rich-text body while hovered.
-    ///   #[popup=inline:<encoded>]  — shows a percent-encoded rich-text body
-    ///                                 carried atomically by a dynamic value.
-    ///   #{token}                    — template variable (mode, date,
-    ///                                 tmux-compatible vars,
-    ///                                 plugin:<count>,
-    ///                                 plugin:<plugin>.<segment>,
-    ///                                 script:<path>, command:<shell>).
-    static let defaultTemplateString = "#[align=left]#{mode}#[align=right]#{date}"
+    /// One native tmux format, with Flash presentation styles and values.
+    static let defaultTemplateString = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
+    static let defaultOptions = [
+      "@left": "#[pill]#{flash.mode}#[nopill]",
+      "@right": "#[fg=#EBCB8B]#{flash.date}",
+    ]
     var template: FlashStatusBarTemplate = Self.defaultTemplate
-    /// The config file that defined `template`, for resolving relative
-    /// `#{script:…}` paths. With layered configs the defining layer may not
-    /// be the last file parsed. Not user-facing.
+    /// The defining layer, retained for diagnostics and source identity.
     var templateSourceURL: URL?
     /// Rich-text bodies referenced by `#[popup=<name>]…#[nopopup]` spans.
     /// Each body is compiled as a status template and refreshed by the same
     /// source scheduler, so hovering never starts a subprocess.
     var popups: [String: FlashStatusBarTemplate] = [:]
-    /// Defining config layer for each popup, used to resolve relative script
-    /// paths after all layers have merged. Not user-facing.
+    var options: [String: String] = Self.defaultOptions
+    var sources: [String: FlashStatusBarSourceDefinition] = [:]
+    var sourcesUsingDefaultInterval: Set<String> = []
+    /// Defining layer for each named document.
     var popupSourceURLs: [String: URL] = [:]
     var popupStyle = PopupStyle()
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
@@ -403,49 +489,164 @@ struct Config {
       variables: [
         FlashStatusBarTemplateVariable(
           id: "statusbar.template.mode",
-          token: "mode",
+          token: "flash.mode",
           source: .sdk(.modeLabel)),
         FlashStatusBarTemplateVariable(
           id: "statusbar.template.date",
-          token: "date",
+          token: "flash.date",
           source: .sdk(.date)),
-      ])
+      ], options: Self.defaultOptions)
+
+    /// The popups the enabled bar's `#[popup=<name>]` markers open, in its
+    /// template or the options it expands. Configured terminals among them
+    /// are loaded ahead, so hovering only has to show them.
+    var shownPopupNames: Set<String> {
+      guard enabled else { return [] }
+      return ([template.template] + options.values).reduce(into: []) { names, format in
+        names.formUnion(StatusFormatDocument.popupNames(in: format))
+      }
+    }
+
+    /// Plugin id → the segments the enabled bar or one of its popups shows.
+    /// Options are compiled into every template's variables, so they are
+    /// covered.
+    var observedSegments: [String: Set<String>] {
+      guard enabled else { return [:] }
+      return Config.statusSegments(in: [template] + popups.values)
+    }
   }
-  struct Mode {
+
+  /// A `[widgets.<name>]` table: one status format drawn as stacked lines in
+  /// a click-through window on the desktop, below every app window.
+  struct Widget: Equatable {
+    enum Screen: Equatable {
+      case primary
+      case all
+      /// 1-based, counting displays left to right.
+      case index(Int)
+    }
+
+    enum Anchor: String, CaseIterable {
+      case topLeft = "top_left"
+      case topCentre = "top_centre"
+      case topRight = "top_right"
+      case centreLeft = "centre_left"
+      case centre
+      case centreRight = "centre_right"
+      case bottomLeft = "bottom_left"
+      case bottomCentre = "bottom_centre"
+      case bottomRight = "bottom_right"
+    }
+
+    var enabled = true
+    /// Compiled with `options` over `[statusbar.options]`.
+    var template = FlashStatusBarTemplate(template: "")
+    var screen = Screen.primary
+    var anchor = Anchor.topLeft
+    /// Points from the anchored edges of the usable frame (the screen minus
+    /// the Dock and the Flash bar band); ignored along a centred axis.
+    var gapX: Double = 24
+    var gapY: Double = 24
+    /// Cell columns; 0 sizes the widget to its widest line, up to
+    /// `maxColumns`.
+    var columns = 0
+    var maxColumns = 120
+    /// A monospaced font name; empty uses the system monospaced font.
+    var font = ""
+    var fontSize: Double = 13
+    var lineSpacing: Double = 0
+    var foreground = "#D8DEE9"
+    var background = "#2E344000"
+    var border = "#00000000"
+    var borderSize: Double = 0
+    var cornerRadius: Double = 8
+    var padding: Double = 8
+    /// Clock and `#()` refresh cadence in seconds; 0 follows
+    /// `[statusbar] interval`.
+    var intervalSeconds: Double = 0
+    /// Ask the window server to leave the widget out of screen captures.
+    var hideFromCapture = false
+    /// `[widgets.<name>.options]`, local over `[statusbar.options]`.
+    var options: [String: String] = [:]
+
+    var spec: StatusWidgetSpec {
+      StatusWidgetSpec(
+        template: template, intervalSeconds: intervalSeconds,
+        columns: columns > 0 ? columns : maxColumns)
+    }
+  }
+
+  /// Plugin id → the manifest status names the given templates read.
+  static func statusSegments(in templates: [FlashStatusBarTemplate]) -> [String: Set<String>] {
+    var segments: [String: Set<String>] = [:]
+    for compiled in templates {
+      for variable in compiled.variables {
+        if case .plugin(.statusSegment(let pluginID, let name)) = variable.source {
+          segments[pluginID, default: []].insert(name)
+        }
+      }
+    }
+    return segments
+  }
+  struct Mode: Equatable {
     struct Labels: Equatable {
       var normal: String = "NORMAL"
       var insert: String = "INSERT"
       var command: String = "COMMAND"
+      var terminal: String = "TERMINAL"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count)
+        max(normal.count, insert.count, command.count, terminal.count)
       }
     }
 
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
-    var normalLeader: String? = Self.defaultNormalLeader
-    /// Keys and modifiers that make an unmapped keypress in NORMAL switch to
-    /// INSERT and continue to the focused app or macOS unchanged. Explicit
-    /// `[mode.normal.mappings]` and `[mode.all.mappings]` bindings still win.
-    var normalPassthroughKeys = Self.defaultNormalPassthroughKeys
-    var normalPassthroughModifiers = Self.defaultNormalPassthroughModifiers
+    var terminal: [ModeMapping] = Self.defaultTerminalMappings
+    var command: [ModeMapping] = []
+    /// Keys a `"<key>" = false` entry removed, per table, after every layer.
+    /// A later layer mapping the key again takes it back out. Plugin
+    /// mappings on these keys are dropped too (`EffectiveMappings.merge`).
+    var unmapped: [ModeScope: Set<String>] = [:]
 
-    var normalPassthroughKeyCodes: Set<UInt32> {
-      Set(normalPassthroughKeys.compactMap(HotkeySyntax.parseKey))
+    /// Whether a `false` entry in `scope` removed `mapping`'s key, compared
+    /// by physical chord so `cmd+shift+]` also removes `cmd+shift+}`.
+    func removes(_ mapping: ModeMapping, in scope: ModeScope) -> Bool {
+      guard let keys = unmapped[scope], !keys.isEmpty else { return false }
+      if keys.contains(mapping.key) { return true }
+      guard let chord = mapping.nativeHotkey else { return false }
+      return keys.contains { ModeMapping.parseNativeHotkey($0) == chord }
     }
 
+    /// The proportional layouts `window_move` mappings apply, in any scope.
+    var declaredWindowLayouts: [WindowLayout] {
+      var layouts: [WindowLayout] = []
+      for mapping in all + normal + insert + terminal + command {
+        guard case .flashCommand(.moveWindow(let params)) = mapping.action,
+          case .proportional? = params.layout, let layout = params.layout,
+          !layouts.contains(layout)
+        else { continue }
+        layouts.append(layout)
+      }
+      return layouts
+    }
+    var normalLeader: String? = Self.defaultNormalLeader
     var labels = Labels()
     /// How long the interpreter waits for the next key in a pending
     /// sequence before resolving the longest matching prefix.
     /// Vim's `timeoutlen`. Lower → faster commits, more two-key
     /// collisions; higher → slower commits, fewer surprises.
     var sequenceTimeoutMs: Int = Self.defaultSequenceTimeoutMs
-    /// Pixels per h/j/k/l (and ctrl+e/ctrl+y) scroll step.
+    /// Pixels per horizontal h/l scroll step.
     var scrollStep: Int = 60
-    /// Fraction of the scrollable range moved by d/u (Vim's `scroll`).
-    var scrollPageFraction: Double = 0.5
+    /// Mouse-wheel lines per ctrl+e/ctrl+y scroll step.
+    var scrollStepLines: Int = 3
+    /// Mouse-wheel lines per ctrl+d/ctrl+u scroll step.
+    var scrollPageLines: Int = 20
+    /// Spread each vertical line scroll over this many milliseconds as
+    /// several smaller line events (`SmoothScroll`); 0 posts it at once.
+    var scrollSmoothMs: Int = 0
     /// Mouse-down→up hold on synthesized clicks; some apps need a
     /// non-zero press to register.
     var clickHoldMs: Int = 18
@@ -455,8 +656,6 @@ struct Config {
     /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
     /// same as in the editor users already have muscle memory for.
     static let defaultSequenceTimeoutMs = 1000
-    static let defaultNormalPassthroughKeys = ["escape"]
-    static let defaultNormalPassthroughModifiers = ["cmd", "ctrl", "shift", "alt"]
 
     /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
     /// Use `\` bare or `<backslash>` — both resolve to the same key.
@@ -464,192 +663,82 @@ struct Config {
 
     static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
 
+    static let defaultTerminalMappings: [ModeMapping] = {
+      let bindings: [(String, URLCommand)] = [
+        ("cmd+q", .terminalQuit(name: nil)),
+        ("cmd+r", .terminalRestart(name: nil)),
+        ("cmd+w", .terminalDismiss),
+      ]
+      return bindings.map { key, command in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("invalid default terminal mapping: \(key)")
+        }
+        return ModeMapping(key: canonical, action: .flashCommand(command))
+      }
+    }()
+
     private static func makeDefaultNormalMappings() -> [ModeMapping] {
-      // Bare punctuation is allowed by the parser; defaults stay
-      // concise. Use `<name>` only for keys that can't be typed bare
-      // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
-      var raw: [(String, MappingCommand)] = [
+      let raw: [(String, MappingCommand)] = [
         ("h", .flashCommand(.scroll(.left))),
-        ("j", sendKeyMapping("down")),
-        ("k", sendKeyMapping("up")),
         ("l", .flashCommand(.scroll(.right))),
         ("ctrl+e", .flashCommand(.scroll(.down))),
         ("ctrl+y", .flashCommand(.scroll(.up))),
         ("ctrl+d", .flashCommand(.scroll(.halfPageDown))),
         ("ctrl+u", .flashCommand(.scroll(.halfPageUp))),
-        // Vimium parity: bare `d` / `u` scroll a half page (the `ctrl+`
-        // forms above stay as vim-style aliases). `d` is kept free of any
-        // hint-mode prefix — double-click hints live on the `D` prefix
-        // below — so the bare keystroke resolves instantly with no
-        // sequence-timeout wait, the same reason right-click moved `r`→`s`.
-        ("d", .flashCommand(.scroll(.halfPageDown))),
-        ("u", .flashCommand(.scroll(.halfPageUp))),
         ("gg", .flashCommand(.scroll(.top))),
         ("G", .flashCommand(.scroll(.bottom))),
-        // Vimium `H` / `L` — back / forward in history. (Lowercase
-        // `h` / `l` scroll left / right, matching Vimium too.) `[h`/`]h` alias
-        // these below, in the bracket-pair block.
-        ("H", .flashCommand(.historyBack)),
-        ("L", .flashCommand(.historyForward)),
-        // Bracket-pair navigation borrows tpope/vim-unimpaired's `[X` =
-        // previous, `]X` = next convention so muscle memory transfers
-        // straight from Vim. Multi-letter aliases live alongside the
-        // primary binding so users coming from `vim-unimpaired` find
-        // their letters AND desktop users find an intuitive abbreviation.
-        ("[t", .flashCommand(.tabPrev)),
-        ("]t", .flashCommand(.tabNext)),
-        // `[h`/`]h` — back / forward in history, the unimpaired-style alias for
-        // `H`/`L`.
-        ("[h", .flashCommand(.historyBack)),
-        ("]h", .flashCommand(.historyForward)),
-        // `]b` — Vim "buffer next". In a desktop context the closest
-        // analogue is the next browser/terminal tab, so this aliases `]t`.
-        ("]b", .flashCommand(.tabNext)),
-        // `[B`/`]B` — Vim first/last buffer. Aliases `g^`/`g$` (tab
-        // first/last).
-        ("[B", .flashCommand(.tabFirst)),
-        ("]B", .flashCommand(.tabLast)),
-        // Move (reorder) the current tab. `m` for "move" stays as the
-        // primary form because it's the desktop-intuitive abbreviation;
-        // `[e`/`]e` (Vim "exchange") is the unimpaired-style alias.
-        ("[m", .flashCommand(.tabMovePrev)),
-        ("]m", .flashCommand(.tabMoveNext)),
-        ("[e", .flashCommand(.tabMovePrev)),
-        ("]e", .flashCommand(.tabMoveNext)),
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
-        // `[w`/`]w` — Vim's `:wprev`/`:wnext`: cycle the FOCUSED APP's windows
-        // via the native macOS ⌘` / ⌘⇧` shortcuts, sent to the app so it works
-        // wherever macOS window cycling does.
-        ("[w", sendKeyMapping("cmd+shift+`")),
-        ("]w", sendKeyMapping("cmd+`")),
-        // Reopen the most recently closed tab. Vimium binds this to `X`
-        // ("restore"); ⌘⇧T is the cross-browser standard the host
-        // keystroke fallback delivers for any non-terminal app, and
-        // terminals (no close-tab history) return `.unhandled`.
-        ("X", .flashCommand(.tabReopen)),
-        // No default ⌘-based bindings: the system/browser ⌘ chords
-        // (⌘tab, ⌘1–9, ⌘R, ⌘[ / ⌘], ⌘⇧[ / ⌘⇧], ⌘T, ⌘W, ⌘N, ⌘F) are left to the
-        // OS / focused app. Their vim-style siblings cover the same actions in
-        // normal mode (`gt`/`gT`, `g1`–`g9`, `r`/`R`, `H`/`L`, `[t`/`]t`, `t`,
-        // `x`, `/`, `[a`/`]a`).
-        //
-        // ⌃Tab / ⌃⇧Tab → next / previous tab — browser-native chords shadowed
-        // in normal mode (scope-bound Carbon; insert mode releases them so the
-        // focused app sees the native chord again).
-        ("ctrl+tab", .flashCommand(.tabNext)),
-        ("ctrl+shift+tab", .flashCommand(.tabPrev)),
-        // First / last tab. Vim-style `g^` / `g$` borrowed from
-        // line-extreme motions: `^` is the first non-blank, `$` is the
-        // end of line. Browsers translate to ⌘1 / ⌘9 (the cross-vendor
-        // convention for first / last tab); plugin sources receive the
-        // `tab_first` / `tab_last` source action.
+        ("[t", sendKeyMapping("cmd+shift+[")),
+        ("]t", sendKeyMapping("cmd+shift+]")),
+        ("t", sendKeyMapping("cmd+t")),
+        ("g1", sendKeyMapping("cmd+1")),
+        ("g2", sendKeyMapping("cmd+2")),
+        ("g3", sendKeyMapping("cmd+3")),
+        ("g4", sendKeyMapping("cmd+4")),
+        ("g5", sendKeyMapping("cmd+5")),
+        ("g6", sendKeyMapping("cmd+6")),
+        ("g7", sendKeyMapping("cmd+7")),
+        ("g8", sendKeyMapping("cmd+8")),
+        ("g9", sendKeyMapping("cmd+9")),
+        ("g0", .flashCommand(.tabFirst)),
         ("g^", .flashCommand(.tabFirst)),
         ("g$", .flashCommand(.tabLast)),
-        // Vimium `g0` — first tab (alias of `g^`).
-        ("g0", .flashCommand(.tabFirst)),
-        ("g1", .flashCommand(.tabSelect(index: 1))),
-        ("g2", .flashCommand(.tabSelect(index: 2))),
-        ("g3", .flashCommand(.tabSelect(index: 3))),
-        ("g4", .flashCommand(.tabSelect(index: 4))),
-        ("g5", .flashCommand(.tabSelect(index: 5))),
-        ("g6", .flashCommand(.tabSelect(index: 6))),
-        ("g7", .flashCommand(.tabSelect(index: 7))),
-        ("g8", .flashCommand(.tabSelect(index: 8))),
-        ("g9", .flashCommand(.tabSelect(index: 9))),
-        // Vimium `gi` — focus the first text input and enter INSERT.
-        ("gi", .flashCommand(.focusInput)),
+        ("[m", .flashCommand(.tabMovePrev)),
+        ("]m", .flashCommand(.tabMoveNext)),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
-        ("gt", .flashCommand(.tabNext)),
-        ("gT", .flashCommand(.tabPrev)),
-        // Vimium `J` / `K` — one tab left (prev) / right (next), the
-        // capital-letter siblings of `gT` / `gt`.
-        ("J", .flashCommand(.tabPrev)),
-        ("K", .flashCommand(.tabNext)),
-        ("a", .flashCommand(.insertMode)),
-        ("A", .flashCommand(.insertMode)),
-        ("i", .flashCommand(.insertMode)),
-        ("I", .flashCommand(.lockedInsertMode)),
-        ("o", .flashCommand(.insertMode)),
-        ("O", .flashCommand(.insertMode)),
+        // Lowercase `f` targets discovered elements, uppercase `F` targets a
+        // screen position through the grid. A lowercase prefix picks the click
+        // on either: none, `s`econdary, `d`ouble, `m`ove. Modifiers ride the
+        // final hint key (`hints.magic_modifiers`), so there are no separate
+        // modified bindings to remember.
+        //
+        // Every prefix letter must be free of a mapping of its own. The
+        // interpreter parks a key that is both an exact mapping and the prefix
+        // of a longer one until `sequence_timeout_ms` elapses, so binding `t`
+        // here would make a bare `t` (new tab) wait a full second. Triple
+        // click is deliberately unbound for that reason — add `"tf"` in your
+        // own config if you want it, and remove `t` with `"t" = false`.
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        // `F` requests the global Command-Shift new-context gesture. `f` stays
-        // plain except for the Shift transport modifier terminal links require.
-        (
-          "F",
-          .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
-        ),
-        // Ctrl moves the same current/new-tab pair onto the precision grid.
-        ("ctrl+f", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
-        (
-          "ctrl+shift+f",
-          .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
-        ),
-        // `s` for "secondary click" (right-click). `r` was the old
-        // prefix but it collided with the `r`→`R` reload pair: typing
-        // `r` waited the full sequence-timeout before resolving as
-        // reload, because right-click hint sequences also began with `r`.
-        // `s` has no such pair so the keystroke fires instantly.
+        ("F", .flashCommand(.mouseGrid(.init(.click(.leftClick, modifiers: []))))),
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
-        // Double-click hints. `D` ("Double") rather than the natural `d`
-        // prefix so the bare `d` half-page scroll above stays instant.
-        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
+        ("sF", .flashCommand(.mouseGrid(.init(.click(.rightClick, modifiers: []))))),
+        ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
+        ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("mf", .flashCommand(.mouseTarget(.move))),
-        ("sF", .flashCommand(.mouseGrid(.click(.rightClick, modifiers: [])))),
-        ("DF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
-        ("mF", .flashCommand(.mouseGrid(.move))),
-        // Undo lives on `u` in Vim, but Vimium reuses `u` for half-page
-        // scroll-up (mapped above). Undo stays reachable via `:undo` /
-        // `:u` and the app's native ⌘Z in insert mode.
+        ("mF", .flashCommand(.mouseGrid(.init(.move)))),
+        ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
-        ("e", .flashCommand(.archive)),
-        // `x` sends the app's own close chord instead of a Flash-side
-        // "smart close": every app already decides what ⌘W means (a
-        // browser closes the tab, a terminal's own keybinding can route
-        // it to a confirmed tmux kill-pane, …). Avoiding behavior
-        // overrides keeps Flash predictable — the user's per-app
-        // configuration stays the authority.
         ("x", sendKeyMapping("cmd+w")),
-        // Vimium `n` / `N` cycle find matches. Flash drives the focused
-        // app's native find-again (⌘G / ⌘⇧G) after `/` opens find. New
-        // windows stay on ⌘N (below) — `n` is needed for find parity.
-        ("n", sendKeyMapping("cmd+g")),
-        ("N", sendKeyMapping("cmd+shift+g")),
-        // `y` yanks (copies) the current selection; `p` pastes it back.
-        // With no register prefix these use the system clipboard — `"ay` /
-        // `"ap` route through the named register `a` instead (a-z, 0-9; an
-        // uppercase name appends). `y` is a one-key prefix of `yy` below, so a
-        // bare `y` commits after the sequence timeout — `yy` (yank URL) fires
-        // immediately on the second key.
+        ("X", sendKeyMapping("cmd+shift+t")),
+        ("r", sendKeyMapping("cmd+r")),
+        ("R", sendKeyMapping("cmd+shift+r")),
         ("y", .flashCommand(.yankSelection(register: nil))),
         ("p", .flashCommand(.paste(register: nil))),
-        // `yy` yanks the current URL/location (Vimium `yy`).
-        ("yy", .flashCommand(.copyURL)),
-        ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
-        ("<leader><space>", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
-        ("r", .flashCommand(.reload(force: false))),
-        ("R", .flashCommand(.reload(force: true))),
         ("?", .flashCommand(.showUsage(topic: nil))),
-        (":", .flashCommand(.commandMode)),
       ]
-      // Vim-style marks: `m<letter>` sets, `` `<letter> `` jumps.
-      // Generated rather than hand-listed so the 52 mappings (26+26)
-      // stay in sync if more letter ranges are added later.
-      for letter in "abcdefghijklmnopqrstuvwxyz" {
-        let l = String(letter)
-        raw.append(
-          (
-            "m\(l)",
-            .flashCommand(.pluginVerb(name: "set_mark", args: ["letter": l]))
-          ))
-        raw.append(
-          (
-            "`\(l)",
-            .flashCommand(.pluginVerb(name: "jump_to_mark", args: ["letter": l]))
-          ))
-      }
       // Every built-in bracket-pair mapping follows vim-unimpaired repetition:
       // after `[x` or `]x`, additional presses of `x` repeat the action.
       let repeatableKeys = Set(
@@ -675,9 +764,21 @@ struct Config {
     func mappings(for mode: FlashMode) -> [ModeMapping] {
       switch mode {
       case .normal:
-        return all + normal
+        return Self.resolveMappings(normal + all)
       case .insert:
-        return all + insert
+        return Self.resolveMappings(insert + all)
+      }
+    }
+
+    /// Scope-specific entries precede all-mode fallbacks. Chord aliases share
+    /// one winner across the interpreter and native hotkey dispatcher.
+    static func resolveMappings(_ mappings: [ModeMapping]) -> [ModeMapping] {
+      var keys: Set<String> = []
+      var chords: Set<ParsedHotkey> = []
+      return mappings.filter { mapping in
+        guard keys.insert(mapping.key).inserted else { return false }
+        guard let chord = mapping.nativeHotkey else { return true }
+        return chords.insert(chord).inserted
       }
     }
 
@@ -685,10 +786,28 @@ struct Config {
     /// `prepareDerivedValues()` after every config load / reload.
     private(set) var compiledNormal = CompiledMappings()
     private(set) var compiledInsert = CompiledMappings()
+    private(set) var compiledTerminal = CompiledMappings()
+
+    var effectiveTerminalMappings: [ModeMapping] {
+      var claimed = Set<String>()
+      let explicit = terminal.filter {
+        claimed.insert(CompiledMappings.physicalIdentity(for: $0.key)).inserted
+      }
+      var insertClaimed = Set<String>()
+      let inherited = mappings(for: .insert).filter {
+        let identity = CompiledMappings.physicalIdentity(for: $0.key)
+        return insertClaimed.insert(identity).inserted
+          && ($0.action.command == .normalMode || $0.action.command == .leaveMode)
+          && !removes($0, in: .terminal)
+          && claimed.insert(identity).inserted
+      }
+      return explicit + inherited
+    }
 
     mutating func recompileMappings() {
       compiledNormal = CompiledMappings(mappings(for: .normal))
       compiledInsert = CompiledMappings(mappings(for: .insert))
+      compiledTerminal = CompiledMappings(effectiveTerminalMappings)
     }
 
     mutating func refreshLeaderDerivedDefaults() {
@@ -705,14 +824,14 @@ struct Config {
     }
 
     var containsNormalModeMapping: Bool {
-      (all + normal + insert).contains { mapping in
-        mapping.action.command == .normalMode
+      (all + normal + insert + command + terminal).contains { mapping in
+        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
 
     var containsAdvancedModeMapping: Bool {
       all.contains { mapping in
-        mapping.action.command == .normalMode
+        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
   }
@@ -723,6 +842,10 @@ struct Config {
   var open = Open()
   var plugins = Plugins()
   var statusBar = StatusBar()
+  var widgets: [String: Widget] = [:]
+  var terminals: [String: Terminal] = [:]
+  /// Invalid replacements preserve existing sessions during configuration reload.
+  var invalidTerminalNames: Set<String> = []
   var mode = Mode()
   var debug = Debug()
   var flashlight = Flashlight()
@@ -732,10 +855,34 @@ struct Config {
   /// can't drift.
   var warnings: [String] { diagnostics.map(\.message) }
   var valueLocations: [String: ConfigLocation] = [:]
-  /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env/CLI
+  /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env
   /// precedence has settled. Activation should use this stored value
   /// instead of re-parsing layout selectors.
   private(set) var resolvedAlphabet: Alphabet.Resolved = Alphabet.resolve(Alphabet.defaultKeys)
+  /// The mouse grid's keys: `hints.mouse_grid_keys`, or the left-hand block of
+  /// the resolved `hints.keys` layout. Derived after overrides so a user's
+  /// layout wins over the default layer's empty value.
+  private(set) var resolvedMouseGridKeys: [[Character]] = Alphabet.gridKeys(layoutName: nil)
+
+  /// The widgets to show: enabled, with a template (a missing one is
+  /// diagnosed at load).
+  var enabledWidgets: [String: Widget] {
+    widgets.filter { $0.value.enabled && !$0.value.template.template.isEmpty }
+  }
+
+  /// Plugin id → the status segments a live surface shows: the enabled bar
+  /// (template, options, named popups) and every enabled widget not in
+  /// `hiddenWidgets` (fully covered). The ids keep status-bound plugins
+  /// resident; the segments are what `core:status.observed` reports to each
+  /// plugin.
+  func observedStatusSegments(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
+    var segments = statusBar.observedSegments
+    let shown = enabledWidgets.filter { !hiddenWidgets.contains($0.key) }
+    for (id, names) in Self.statusSegments(in: shown.values.map(\.template)) {
+      segments[id, default: []].formUnion(names)
+    }
+    return segments
+  }
 
   static let `default`: Config = {
     var config = Config()
@@ -752,8 +899,10 @@ struct Config {
     valueLocations.removeValue(forKey: path)
   }
 
-  mutating func addDiagnostic(_ message: String, location: ConfigLocation? = nil) {
-    diagnostics.append(ConfigDiagnostic(message: message, location: location))
+  mutating func addDiagnostic(
+    _ message: String, location: ConfigLocation? = nil, file: String? = nil
+  ) {
+    diagnostics.append(ConfigDiagnostic(message: message, location: location, file: file))
   }
 
   mutating func removeDiagnostics(where predicate: (String) -> Bool) {
@@ -763,19 +912,27 @@ struct Config {
   mutating func prepareDerivedValues() {
     mode.refreshLeaderDerivedDefaults()
     resolvedAlphabet = Alphabet.resolve(hints.keys)
-    removeAmbiguousShiftMagicModifier()
+    resolvedMouseGridKeys = MouseGridKeys.resolve(
+      hints.mouseGridKeys, layoutName: resolvedAlphabet.layoutName)
+    diagnoseAmbiguousShiftMagicModifier()
     mode.recompileMappings()
   }
 
-  private mutating func removeAmbiguousShiftMagicModifier() {
+  /// `hints.magic_modifiers` for target hints. Shift is dropped when the
+  /// resolved `hints.keys` holds a non-letter (a literal alphabet may use `;`
+  /// or `'`), because a shifted key then types a different character. The
+  /// layout presets are letters only, so they keep Shift. The mouse grid reads
+  /// the unshifted key itself, so its digits and punctuation never need this.
+  var effectiveMagicModifiers: [String] {
     guard resolvedAlphabet.chars.contains(where: { !$0.isLetter }) else {
-      removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
-      return
+      return hints.magicModifiers
     }
-    let original = hints.magicModifiers
-    hints.magicModifiers.removeAll { $0.lowercased() == "shift" }
-    guard original.count != hints.magicModifiers.count else { return }
+    return hints.magicModifiers.filter { $0.lowercased() != "shift" }
+  }
+
+  private mutating func diagnoseAmbiguousShiftMagicModifier() {
     removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
+    guard effectiveMagicModifiers.count != hints.magicModifiers.count else { return }
     addDiagnostic(
       "hints.magic_modifiers includes \"shift\", but resolved hints.keys "
         + "contains non-letter characters (\(String(resolvedAlphabet.chars))); "
@@ -801,16 +958,18 @@ struct Config {
   var resolvedConfigJSON: String {
     let modeJSON: [String: Any] = [
       "all": mode.all.map(Self.mappingJSONValue),
+      "command": mode.command.map(Self.mappingJSONValue),
       "insert": mode.insert.map(Self.mappingJSONValue),
+      "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
       "labels": [
         "command": mode.labels.command,
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
+        "terminal": mode.labels.terminal,
       ],
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
-      "normal_passthrough_keys": mode.normalPassthroughKeys,
-      "normal_passthrough_modifiers": mode.normalPassthroughModifiers,
+      "scroll_smooth_ms": mode.scrollSmoothMs,
     ]
     return compactJSON([
       "debug": [
@@ -824,10 +983,13 @@ struct Config {
       ],
       "hints": [
         "keys": hints.keys,
-        "magic_modifiers": hints.magicModifiers,
+        "magic_modifiers": effectiveMagicModifiers,
         "min_length": hints.minLength,
+        "mouse_grid_cursor_follow": hints.mouseGridCursorFollow,
+        "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
         "mouse_grid_opacity": hints.mouseGridOpacity,
         "mouse_grid_steps": hints.mouseGridSteps,
+        "restore_pointer": hints.restorePointer,
       ],
       "flashlight": [
         "aliases": flashlight.aliases,
@@ -840,11 +1002,24 @@ struct Config {
         "ignored_apps": open.ignoredApps
       ],
       "overlay": [
+        "click_feedback": overlay.clickFeedback,
+        "dark": [
+          "hint_bg_bottom": overlay.dark.hintBGBottom,
+          "hint_bg_top": overlay.dark.hintBGTop,
+          "hint_border": overlay.dark.hintBorder,
+          "hint_fg": overlay.dark.hintFG,
+          "important_hint_bg_bottom": overlay.dark.importantHintBGBottom,
+          "important_hint_bg_top": overlay.dark.importantHintBGTop,
+          "important_hint_border": overlay.dark.importantHintBorder,
+          "important_hint_fg": overlay.dark.importantHintFG,
+        ],
         "font_size": overlay.fontSize,
         "hint_bg_bottom": overlay.hintBGBottom,
         "hint_bg_top": overlay.hintBGTop,
         "hint_border": overlay.hintBorder,
         "hint_fg": overlay.hintFG,
+        "hint_placement": overlay.hintPlacement.rawValue,
+        "screen_capture": overlay.screenCapture.rawValue,
       ],
       "plugins": [
         "disabled": plugins.disabled.sorted(),
@@ -855,17 +1030,32 @@ struct Config {
         // plugin through FLASH_PLUGIN_CONFIG.
         "configured": plugins.settings.keys.sorted(),
       ],
+      "terminal": terminals.mapValues { terminal in
+        [
+          "persistent": terminal.persistent, "columns": terminal.columns,
+          "rows": terminal.rows,
+        ] as [String: Any]
+      },
       "statusbar": [
         "enabled": statusBar.enabled,
         "template": statusBar.template.template,
+        "options": statusBar.options.keys.sorted(),
+        "sources": statusBar.sources.keys.sorted(),
       ],
+      "widgets": widgets.mapValues { widget in
+        [
+          "enabled": widget.enabled, "template": widget.template.template,
+          "anchor": widget.anchor.rawValue, "columns": widget.columns,
+          "interval": widget.intervalSeconds, "options": widget.options.keys.sorted(),
+        ] as [String: Any]
+      },
       "warnings": warnings,
     ])
   }
 
   private static func mappingJSONValue(_ mapping: ModeMapping) -> [String: Any] {
     [
-      "action": mapping.action.configValue,
+      "command": mapping.action.configValue,
       "key": mapping.key,
       "repeat": mapping.repeatsOnFinalKey,
     ]
@@ -952,13 +1142,23 @@ extension URLCommand {
       return verb("mouse_grid", command.argTokens)
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
+    case .mouseButton(let request): return verb("mouse_button", request.argTokens)
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")
     case .mouseDock: return verb("mouse_dock")
-    case .mouseStatusBar: return verb("mouse_statusbar")
+    case .mouseMenuBar: return verb("mouse_menubar")
+    case .mouseNotifications: return verb("mouse_notifications")
     case .normalMode: return verb("enter_normal_mode")
+    case .leaveMode: return verb("leave_mode")
+    case .terminalShow(let name):
+      return verb("terminal_show", name.map { ["--name=\($0)"] } ?? [])
+    case .terminalDismiss:
+      return verb("terminal_dismiss")
+    case .terminalRestart(let name):
+      return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
+    case .terminalQuit(let name):
+      return verb("terminal_quit", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")
-    case .lockedInsertMode: return verb("enter_locked_insert_mode")
     case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):
       switch kind {
@@ -1131,7 +1331,8 @@ extension Config {
 
       Flash reads `$XDG_CONFIG_HOME/flash/flash.toml`, then
       `~/.config/flash/flash.toml` when XDG is unset. The active file is
-      watched and reloaded live.
+      watched and reloaded live. When no file exists, Flash writes a
+      commented starter there on launch and never rewrites it afterwards.
 
       User-facing sections are:
 
@@ -1143,6 +1344,8 @@ extension Config {
       - `[mode.normal]`
       - `[mode.normal.mappings]`
       - `[mode.insert.mappings]`
+      - `[mode.terminal.mappings]`
+      - `[mode.command.mappings]`
       - `[debug]`
 
       Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`,

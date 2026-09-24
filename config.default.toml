@@ -15,6 +15,19 @@
 menu_bar_icon = true
 autostart = true
 
+# Which keyboard layout hint labels, mouse-grid keys and NORMAL mappings are
+# read on. Keys are matched by where they sit on that layout, so labels keep
+# working while a non-Latin input source (Russian, Greek, Hebrew, a CJK input
+# method) is selected.
+#   "auto"  read keys as typed while the selected source can type Latin
+#           letters; otherwise read them on the Latin layout macOS pairs with
+#           it (ABC or U.S.), or US-ANSI when there is none.
+#   an ID   always read keys on that input source, whatever is selected, e.g.
+#           "com.apple.keylayout.US" or "com.apple.keylayout.Colemak".
+# The table is rebuilt when the input source changes. `--search` still matches
+# the text you actually type. `flash status` shows the source and reference.
+keyboard_layout = "auto"
+
 # The active file is watched for live reload.
 
 [hints]
@@ -35,12 +48,43 @@ min_length = 1
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
-# Selection steps for the `mouse_grid` verb. The grid is always a square
-# NxN with N the largest odd integer such that N*N <= alphabet length
-# (so a 25-letter alphabet lands on 5x5). Each selection zooms into a
-# cell and re-tiles it with the same grid. Larger step counts give
+# Put the pointer back where it was after a committed click, drag or
+# selection, from hints and the grid alike, and after `mouse_repeat`. Off,
+# the pointer stays on the target as with a real click. `--move` and
+# `mouse_pointer` always move it. NORMAL's scroll keys act at the pointer, so
+# with this on they keep scrolling where the pointer was, not the clicked area.
+restore_pointer = false
+
+# The `mouse_grid` verb splits the screen like the left half of your
+# keyboard: 4 rows x 5 columns, each cell labelled with the key at the same
+# position. On QWERTY that is
+#
+#   1 2 3 4 5
+#   q w e r t
+#   a s d f g
+#   z x c v b
+#
+# so `1` is the top-left cell and `b` the bottom-right one. Press the key
+# where you want to go, then again inside that cell to refine: every step
+# uses the same keys, so screen position and key position stay one habit.
+
+# Selection steps for the `mouse_grid` verb. Each selection zooms into a
+# cell and re-tiles it with the same keys; the last one clicks. Selection
+# also clicks early once cells reach 18 points. Larger step counts give
 # finer precision at the cost of more keystrokes. Valid range: 2–6.
 mouse_grid_steps = 3
+
+# Grid keys, one string per keyboard row, top row first. Empty derives the
+# left-hand block from the `keys` layout: qwerty 12345/qwert/asdfg/zxcvb,
+# colemak 12345/qwfpg/arstd/zxcvb, dvorak 12345/',.py/aoeui/;qjkx. A literal
+# `keys` string has no layout and gets the qwerty block. Rows need the same
+# length (at least 2x2) and unique keys; "`" is reserved. For example:
+#   mouse_grid_keys = ["qwer", "asdf", "zxcv"]
+mouse_grid_keys = []
+
+# Move the pointer to the centre of the grid region after every step, so
+# hover effects follow along. "`" toggles it while the grid is up.
+mouse_grid_cursor_follow = false
 
 # Opacity (0.0..1.0) applied to every mouse-grid chip. 1.0 = fully
 # opaque, 0.0 = invisible. The grid fills the screen during a precision
@@ -80,9 +124,39 @@ window_border_color = ""
 alert_duration = 2.0
 # Milliseconds a transient banner (command output, "Copied: ...") stays up.
 banner_duration_ms = 700
+# Where a hint chip sits relative to its target: "corner" (the target's
+# top-left corner, centred on a target barely larger than the chip),
+# "center", "above" (on the target's top edge) or "below" (under its bottom
+# edge). Chips stay on the target's screen. Only the chip moves: the click
+# aims at the same point whatever the placement.
+hint_placement = "corner"
+# Draw a short ring where each committed click lands (hint, grid,
+# mouse_pointer and mouse_repeat clicks). It never delays the click or the
+# next key. Handy for demos and screencasts.
+click_feedback = false
+# "hide" asks macOS to keep the overlay, status bar and popup windows out of
+# screenshots, recordings and screen sharing (NSWindow.sharingType = none).
+# Best effort: recent macOS capture APIs may still record them.
+screen_capture = "show"
+
+[overlay.dark]
+# The chip colours above, used while macOS is in dark mode. An empty value
+# keeps the [overlay] colour, so an empty table draws the same chips in both
+# appearances. For example:
+#   hint_bg_top = "#4C566A"
+#   hint_bg_bottom = "#3B4252"
+#   hint_fg = "#ECEFF4"
+hint_fg = ""
+hint_bg_top = ""
+hint_bg_bottom = ""
+hint_border = ""
+important_hint_fg = ""
+important_hint_bg_top = ""
+important_hint_bg_bottom = ""
+important_hint_border = ""
 
 [open]
-# App candidates hidden from :open and the `app_open name=...` verb.
+# App candidates hidden from :open and the `app_open --name=...` verb.
 # Entries match display name, bundle identifier, bundle path, .app filename,
 # or app filename without .app, case-insensitively.
 ignored_apps = []
@@ -138,9 +212,18 @@ startup_timeout = 5
 #                          # for user-installed tools the manifest can't
 #                          # know the location of
 #
-# Example:
+# Remote tmux over SSH/Mosh is opt-in per host: only listed hosts are
+# inventoried, over the plugin's own noninteractive SSH connections (these can
+# prompt an SSH agent or hardware key). Unset, the plugin never runs ssh.
 # [plugin.tmux]
-# ssh_hosts = ["dev.example.com"]
+# ssh_hosts = ["dev.example.com"] # destinations as typed, without user@
+#
+# The Claude quota only reads Claude Code's OAuth token; once it expires, the
+# quota shows as stale until Claude Code renews it. `true` lets Flash renew it
+# and write the rotated token back to Claude Code's store, which can sign
+# Claude Code out.
+# [plugin.aiproviders]
+# refresh_claude_code_credentials = false
 #
 # The cpu, memory, disks, network, and power status plugins share one display
 # setting. `compact` is the default: the bar keeps only the primary percentage
@@ -151,30 +234,46 @@ startup_timeout = 5
 # [plugin.network]
 # summary_mode = "full" # "compact" | "full"
 
+# The processes plugin publishes top_cpu and top_mem: aligned tables of the
+# busiest processes by CPU and by resident memory (conky's ${top}), sampled
+# every 2 seconds only while a status surface shows one of them.
+# [plugin.processes]
+# top_count = 5 # rows per table, 1-20
+
+# RSS headlines from the last 24 hours. No requests run until a URL is set.
+# Add #{flash.plugin.feed.summary} to a status format for the rotating title,
+# segment label, original domain/link, and whole-row article preview popup.
+# [plugin.feed]
+# label = "NEWS" # defaults to FEED
+# url = "https://example.com/feed.xml"
+# refresh_interval = 300 # seconds between feed requests
+# cycle_interval = 30    # seconds per headline; Flash rotates the carousel
+
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
-# visibility — it is independent of advanced mode (the enter_normal_mode
-# binding). Defaults to false.
+# visibility — it is independent of advanced mode (enter_normal_mode/leave_mode
+# binding). Defaults to false. Enabling it also asks macOS to auto-hide the
+# native menu bar, whose band the Flash bar takes over; reaching for the top
+# edge still reveals it. Turning the bar off restores the menu bar only if
+# Flash was the one that hid it.
 enabled = false
 # Which displays show the bar: "all" (default, every screen's top band) or
 # "primary" (only the main / menu-bar display).
 monitor = "all"
-# Poll cadence in seconds for command/script/cycle sections — tmux's
-# status-interval analog. A source can override it inline: #{script=30:…}
-# re-runs that script every 30 s regardless of this value; #{cycle=R/N:…}
-# polls every N s. Cycles without an explicit N poll at max(rotation,
-# interval) — a cycle can't show lines faster than it rotates, so polling
-# faster is waste. 0 disables periodic re-runs (sections run once when the
-# template loads).
+# Default poll cadence for named Flash sources. Each source can override it.
+# 0 runs once; cycle_interval controls rotation independently of polling.
 interval = 5
 # Bar text size in points (the mode pill uses the same size).
 font_size = 13
-# Timeout in seconds for one command/script/cycle subprocess run; past it
-# the process gets SIGTERM then SIGKILL and the previous value is kept.
+# Timeout for one named Flash source run; keep its last successful value on
+# timeout. Native #(...) jobs and persistent PTY commands have no such timeout.
 command_timeout = 6.0
-# Points kept clear on each side of a notch (camera housing). The centre
-# region hides entirely on notched screens.
-notch_margin = 0
+# Points kept clear on each side of a notch — the real camera housing on a
+# notched screen, and the recess the bar draws behind its centre region
+# elsewhere. Both are the same width and use this same margin, so the bar lays
+# out identically on a notched Mac and an external display. The centre region
+# hides entirely on notched screens, where the hardware supplies the gap.
+notch_margin = 6
 # Hover-popup chrome. Popup bodies use the same inline text styles as the bar;
 # these values control their default foreground and surrounding surface.
 popup_fg = "#D8DEE9"
@@ -186,126 +285,76 @@ popup_padding = 8
 popup_max_width = 480
 # Gap in points between the pointer and the popup's top edge.
 popup_offset = 8
-# Single template string for the status bar. Use tmux-style alignment
-# markers to switch which region subsequent content lands in:
+# One tmux 3.7b format string. Alignment and style markers can appear inside
+# conditional/option expansions. Newlines in this outer template are ignored.
+# Native formats, modifiers, #H/#h aliases, #(...) jobs, styles, and strftime
+# use tmux semantics. Missing tmux session/window/pane context is empty.
+# Flash supplies flash.mode, flash.date, flash.active_app_name,
+# flash.active_bundle_identifier, flash.plugin.<id>.<segment>,
+# flash.plugin.loaded_count/ready_count/error_count, flash.source.<name>, and
+# flash.history.<name> for a source that keeps a history.
+# Colours use the standard xterm palette, ANSI names, or explicit #RRGGBB.
 #
-#   #[align=left]    — highlighted left cell (default until a marker fires)
-#   #[align=centre]  — centred section between left and right
-#   #[align=right]   — right-aligned section
-#
-# Inline styling markers stay in whatever region the parser is currently
-# filling and pass through to the renderer:
-#
-#   #[fg=colour245]       — foreground colour (numbered tmux palette)
-#   #[bg=colour0]         — background colour
-#   #[bold] / #[nobold]   — bold weight on/off
-#   #[italics] / #[noitalics]
-#   #[underscore] / #[nounderscore]
-#   #[dim] / #[nodim]
-#   #[reverse] / #[noreverse]
-#   #[blink] / #[noblink]            — pulse the wrapped text once a
-#                                     second (tmux's blink attribute).
-#   #[breathing] / #[nobreathing]    — Flash extension. Subtle opacity
-#                                     sinusoid on a 10-second cycle
-#                                     (80 → 100 % alpha) — well below a
-#                                     baseline meditation breath so the
-#                                     chip never signals, just sits alive.
-#                                     Used by the power plugin to mark
-#                                     a battery that's plugged in.
-#   #[popup=<name>] / #[nopopup]     — show the named `[statusbar.popup]`
-#                                     body while this text is hovered.
-#   #[popup=inline:<encoded>]         — show percent-encoded rich text carried
-#                                     by a dynamic value (useful for cycles).
-#
-# `##` emits a literal `#`. Wrap a token in `#{=N:…}` (or `#{=-N:…}` for
-# trailing window) to cap its rendered length at N characters — useful
-# when an app name or plugin field could overflow the bar.
-#
-# tmux format modifiers (composable by nesting, e.g. #{=10:#{s/a/b/:mode}}):
-#   #{?cond,a,b}            — ternary: cond is a variable (or nested
-#                             #{…} format); truthy = non-empty and not
-#                             "0". Escape a literal comma as #,
-#   #{==:a,b} #{!=:a,b}     — comparisons; both sides are formats.
-#   #{<:a,b} #{>:a,b}         Numeric when both parse as numbers,
-#   #{<=:a,b} #{>=:a,b}       lexicographic otherwise. Yield "1"/"0".
-#   #{&&:a,b} #{||:a,b}     — logic over truthiness. Yield "1"/"0".
-#   #{s/re/repl/:var}       — regex substitution (all matches; \1
-#                             backrefs; trailing i flag for case-
-#                             insensitive: #{s/re/repl/i:var}).
-#   #{pN:var} / #{p-N:var}  — pad right / left to N visible cells.
-#   #{=/N/marker:var}       — tmux marker truncation: keep N visible
-#   #{=-/N/marker:var}        cells, append/prepend marker when trimmed
-#                             (marker doesn't count toward N).
-#   #[default]              — reset style to the current default;
-#   #[push-default]         — make the current style the default
-#   #[pop-default]            (saving the old one) / restore it.
-#
-# strftime literals: `%`-codes in the template (e.g. %H:%M, %a %d) expand
-# with the current time before formats, exactly like tmux status strings;
-# `%%` is a literal percent. `%` inside script/plugin OUTPUT is untouched.
-# Colours: the full numbered palette (colour0–colour255), #RRGGBB hex, and
-# ANSI names now render; colour0/178/196/245 keep their Nord-theme shades.
-#
-# Supported template variables (#{token}):
-#   #{mode}
-#   #{active_app_name}
-#   #{active_bundle_identifier}
-#   #{date}
-#   #{host} / #H
-#   #{host_short} / #h
-#   #{user}
-#   #{uid}
-#   #{pid}
-#   #{plugin:loaded_count}
-#   #{plugin:ready_count}
-#   #{plugin:error_count}
-#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:power.summary};
-#                                    # tmux state comes from the tmux plugin:
-#                                    # #{plugin:tmux.session} / #{plugin:tmux.window}
-#                                    # / #{plugin:tmux.pane}
-#
-# Any other bare #{token} is a config error — tmux-state names like
-# #{session_name} or #S no longer validate-and-render-empty; use the
-# #{plugin:tmux.<segment>} equivalents above.
-#   #{script:<path>}                 # run <path>, show its stdout
-#   #{script=N:<path>}               # …re-running every N seconds
-#   #{command:<shell command>}       # run via /bin/sh -lc
-#   #{command=N:<shell command>}     # …re-running every N seconds
-#   #{cycle:<path>}                  # rotate through stdout lines, 60 s/line
-#   #{cycle=R:<path>}                # …rotating every R seconds
-#   #{cycle=R/N:<path>}              # …and re-running the script every N s
-#
-# A triple-quoted multi-line string lets long templates breathe across
-# rows. Newlines in the template are ignored before rendering.
-# Flash re-renders when mode, focused app, plugin status, or the minute
-# clock changes. Command/script sections are polled only when the
-# template contains them and keep their previous successful value until
-# a replacement is ready.
-template = "#[align=left]#{mode}#[align=right]#{date}"
-# The bundled CPU, memory, disks, network, and power summaries carry their
-# own live hover popups. Compose them here for an iStat-style combined view:
-# template = """
-#   #[align=left]#{mode}
-#   #[align=center]#{active_app_name}
-#   #[align=right]#{plugin:cpu.summary}
-#   #[fg=colour245] · #{plugin:memory.summary}
-#   #[fg=colour245] · #{plugin:disks.summary}
-#   #[fg=colour245] · #{plugin:network.summary}
-#   #[fg=colour245] · #{plugin:power.summary}
-#   #[fg=colour245] · #{date}
-#   """
+# Flash styles: link=URL/nolink, popup=name/nopopup,
+# popup=inline:<percent-encoded-rich-text>, breathing/nobreathing,
+# pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first
+# number inside) and spark[=MIN/MAX]/nospark (a sparkline of every number
+# inside). Native range=user|name binds statusbar.click.
+# Values stay plain text unless a plugin intentionally publishes rich status.
+template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
-# Named textual hover overlays referenced by `#[popup=<name>]` spans. Bodies
-# preserve newlines and are full status templates: variables and
-# script/command/cycle sources refresh on their normal schedules, while the
-# popup follows the pointer without running work on hover. Inline fg/bg/bold,
-# italics, underline, dim, and reverse markers render exactly as in the bar.
+# Native tmux options. @names are tmux user options; E expands a value as a
+# format, T additionally expands its strftime codes. Fragments are optional:
+# the same text can be written directly in template. Flash extension:
+# #{E:@name,a,b} expands @name with a and b bound as #{@1} and #{@2}.
+# Named terminal popups can wrap popup-free plugin labels, for example:
+# #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup]
+# CPU/MEM/DISK labels carry padded percentages; BAT is unpadded; NET carries a padded byte rate.
+# AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
+[statusbar.options]
+"@left" = "#[pill]#{flash.mode}#[nopill]"
+"@right" = "#[fg=#EBCB8B]#{flash.date}"
+# Example combined metrics:
+# "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
+
+# Named text preserves newlines and opens in a real terminal pager. Source/plugin
+# collectors stay shared; focused pagers keep their snapshot until explicit refresh.
 [statusbar.popup]
-# quota = """
-#   #[fg=colour178,bold]Claude#[default]
-#   5-hour: 53% remaining
-#   7-day: 14% remaining
-#   """
+# quota = "#[fg=#EBCB8B,bold]Quota#[default]\n5-hour: 53% remaining"
+
+# A persistent command popup owns a PTY from Flash startup until removal/shutdown,
+# even with the status bar hidden. Hover previews hide on leaving the segment;
+# right-click any popup segment to pin/focus, including links. Left-click focuses
+# unlinked labels; Option-click focuses linked segments.
+# Terminal bindings live in [mode.terminal.mappings].
+# Exited processes restart after 100ms; repeated immediate exits back off to 30s.
+# terminal_restart restarts immediately; hiding preserves the process.
+# Shell syntax requires explicit argv, e.g. ["/bin/sh", "-lc", "exec btm"].
+# [terminal.system]
+# persistent = true
+# command = ["btm", "--read_only", "--rate", "2s"]
+# columns = 80
+# rows = 24
+# working_directory = "~"
+# env = { LANG = "en_US.UTF-8" }
+# Add #[popup=system]System#[nopopup] to any format fragment.
+
+# Use native #(shell command) for asynchronous tmux shell jobs. For explicit
+# argv, a poll cadence, or rotating output lines, declare a named Flash source
+# and refer to #{flash.source.news}. Relative paths follow the defining file.
+# interval=0 runs once; cycle_interval rotates nonempty output lines.
+# [statusbar.sources.news]
+# command = ["./news.sh"]
+# interval = 300
+# cycle_interval = 60
+#
+# history = N (2-512) keeps the last N numeric outputs as
+# #{flash.history.<name>}, space-separated and oldest first; other output
+# never enters it. It cannot combine with cycle_interval.
+# [statusbar.sources.load]
+# command = ["/bin/sh", "-c", "sysctl -n vm.loadavg | awk '{print $2}'"]
+# interval = 10
+# history = 30
 
 # tmux status-line mouse model: a `#[range=user|<name>]…#[norange]` span in
 # the template (or in plugin/script output) names an action; this table
@@ -316,6 +365,47 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 # The bundled power plugin wraps its battery chip in
 # #[range=user|bat-prefs], so a click opens the Battery pane.
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
+
+# Desktop widgets: a status format drawn as stacked lines on the desktop,
+# above the wallpaper and below Finder icons and every app window. Widgets are
+# click-through and never take focus, so link=, popup= and range= do nothing.
+# Each [widgets.<name>] (letters, digits, _ and -) is evaluated beside the bar
+# with the same values, sources and #(...) jobs, even while the bar is off; a
+# widget whose windows are all covered stops refreshing until it shows again.
+# Each line of the template is its own status line: colours carry over, and
+# alignment starts again on the left. A trailing backslash joins two lines.
+# #{flash.widget.name} is the widget's name and #{flash.widget.columns} its
+# width (columns, or max_columns when sized to fit). See docs/widgets.md.
+[widgets]
+# [widgets.system]
+# enabled = true
+# template = """
+# #[fg=#EBCB8B,bold]#{host_short}#[default]#[align=right]%a %d %b %H:%M
+# CPU #[meter=10]#{flash.plugin.cpu.percent}#[nometer] #{flash.plugin.cpu.percent}%%\
+# #{@sep}MEM #[spark=0/100]#{flash.plugin.memory.history}#[nospark]
+# #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
+# #{flash.plugin.processes.top_cpu}
+# """
+# screen = "primary"        # "primary", "all", or a display number (1 = leftmost)
+# anchor = "top_right"      # top_left, top_centre, top_right, centre_left, centre,
+#                           # centre_right, bottom_left, bottom_centre, bottom_right
+# gap_x = 24                # points from the anchored edges of the usable frame
+# gap_y = 24
+# columns = 48              # 0 fits the widest line, up to max_columns
+# max_columns = 120
+# font = ""                 # an installed monospaced font; "" = system monospaced
+# font_size = 13
+# line_spacing = 0          # extra points between lines
+# fg = "#D8DEE9"            # default text colour, #RRGGBB
+# bg = "#2E3440CC"          # #RRGGBB or #RRGGBBAA; the default is transparent
+# border = "#00000000"
+# border_size = 0
+# corner_radius = 8
+# padding = 8
+# interval = 0              # clock and #(...) refresh seconds; 0 = statusbar.interval
+# hide_from_capture = false # best effort: leave it out of screenshots and sharing
+# [widgets.system.options]  # local @options over [statusbar.options]
+# "@sep" = " · "
 
 [flashlight]
 # Frecency (recency-weighted frequency) ranking boost. half_life_days is
@@ -361,10 +451,18 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 # higher = slower commit but fewer surprises. Matches Neovim's
 # `timeoutlen` default of 1000.
 sequence_timeout_ms = 1000
-# Pixels per h/j/k/l (and ctrl+e/ctrl+y) scroll step.
+# Pixels per horizontal h/l scroll step.
 scroll_step = 60
-# Fraction of the scrollable range moved by d/u (Vim's `scroll` option).
-scroll_page_fraction = 0.5
+# Mouse-wheel lines per ctrl+e/ctrl+y and ctrl+d/ctrl+u step.
+# These scroll at the cursor in every app, including terminals.
+scroll_step_lines = 3
+scroll_page_lines = 20
+# Spread each of those vertical scrolls over this many milliseconds (at
+# most 300) as several smaller line events, so the content glides instead of
+# jumping. Still line events, so terminals scroll the same distance. A new
+# scroll cancels what is left of the previous one; gg / G stay instant.
+# 0 (the default) scrolls at once.
+scroll_smooth_ms = 0
 # Mouse-down-to-up hold on synthesized clicks (ms); some apps need a
 # non-zero press to register.
 click_hold_ms = 18
@@ -380,15 +478,27 @@ send_key_interval_ms = 35
 # basename is "flash" dispatch the verb in-process; any other head is launched
 # as argv (no shell wrap) with `~` and env expansion on each element. Bare
 # strings and URLs are rejected.
-# Relative argv paths containing "/" are resolved from this config file.
+# A relative executable containing "/" resolves from this config file.
+# Remaining arguments stay opaque; set working_directory on sources/terminals
+# when their arguments refer to files relative to the configuration directory.
 #
-# Native modified-key mappings are registered with Carbon only when the key
-# contains "+". Non-modified keys are read only by the overlay while Flash is
-# capturing normal-mode input.
+# Single modified-key mappings use Carbon. Non-modified keys and sequences
+# are read only by the overlay while Flash is capturing normal-mode input.
 #
 # Examples:
-# "ctrl+space" = ["flash", "mouse_target"]
-# "ctrl+alt+n" = ["flash", "enter_normal_mode"] # enables advanced mode
+# "cmd+shift+space" = ["flash", "mouse_target"]
+# "ctrl+alt+n" = ["flash", "leave_mode"] # enables advanced mode; shared exit shortcut
+# "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+# "cmd+ctrl+semicolon" = ["flash", "enter_command_mode"]
+# leave_mode returns INSERT to NORMAL and closes command panels, respecting
+# --restore-mode. It does nothing in NORMAL. enter_normal_mode explicitly
+# selects NORMAL regardless of a command panel's recorded return mode.
+# Mode-specific mappings override the same chord here; no exit override is
+# installed by default.
+# leave_mode, enter_insert_mode, and enter_command_mode have no default
+# mappings in any scope. Define their shortcuts explicitly.
+# focus_input also has no default mapping; opt in if focusing a text input
+# should enter INSERT (for example, "gi" = ["flash", "focus_input"]).
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # Percentage frames require x/y/width/height together. x and y are offsets
@@ -408,176 +518,117 @@ send_key_interval_ms = 35
 # "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
 
 [mode.normal]
-# Let named, unmapped keys switch Flash to INSERT and continue to the focused
-# app unchanged. Explicit normal/all mappings still win. Use [] to disable.
-passthrough_keys = ["escape"]
-# Let an unmapped shortcut carrying any listed modifier switch Flash to INSERT
-# and continue to the focused app or macOS unchanged. Explicit normal/all
-# mappings still win. Use [] to keep NORMAL hermetic.
-passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
 leader = "\\"
 
 [mode.normal.mappings]
-# Entries here extend the built-in normal-mode map. Reusing a key overrides
-# that one default mapping; unrelated defaults stay available.
-# Mapped keys dispatch Flash commands and other bare unmapped keys are swallowed.
-# With `passthrough_keys` / `passthrough_modifiers`, matching unmapped keypresses
-# instead switch to INSERT and continue natively.
-# Use an inline table when a mapping needs metadata. `repeat = true` lets each
-# additional press of the final key repeat the completed sequence (`[tttt`).
-# Every built-in [ / ] sequence below enables it.
-# Example:
-# "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
+# Defaults use Flash-owned actions and standard macOS editing/scrolling.
+# Tabs use [t / ]t to switch, t to open, g1–g9 to send Cmd-1…Cmd-9,
+# and [m / ]m to reorder through the source or supported native shortcut.
+# Other tab, split, browser-history, reload, archive, URL and mark commands remain
+# available for explicit mappings. Bare d, j and k are unbound.
+# Entries extend the defaults; reusing a key overrides that mapping, and
+# "<key>" = false removes it (a later layer may map it again). A removed key
+# also drops plugin mappings on it; removal applies to this table only.
+# Every unmapped key or chord is swallowed in NORMAL.
+# Use repeat = true to repeat a sequence by pressing its final key again.
+# NORMAL persists. INSERT requires enter_insert_mode, a physical app click,
+# or a primary hint or mouse-grid click on an input.
 "h" = ["flash", "scroll_left"]
-"j" = ["flash", "send_key", "--keys=down"]
-"k" = ["flash", "send_key", "--keys=up"]
 "l" = ["flash", "scroll_right"]
 "ctrl+e" = ["flash", "scroll_down"]
 "ctrl+y" = ["flash", "scroll_up"]
 "ctrl+d" = ["flash", "scroll_half_page_down"]
 "ctrl+u" = ["flash", "scroll_half_page_up"]
-# Vimium parity: bare d/u scroll a half page (ctrl-d/ctrl-u stay as
-# vim-style aliases). d is kept free of any hint-mode prefix — double-click
-# hints live on the D prefix below — so the bare keystroke fires instantly.
-"d" = ["flash", "scroll_half_page_down"]
-"u" = ["flash", "scroll_half_page_up"]
 "gg" = ["flash", "scroll_top"]
 "G" = ["flash", "scroll_bottom"]
-# Vimium H/L — back/forward in history. (Lowercase h/l scroll left/right.)
-# [h/]h alias these, unimpaired-style.
-"H" = ["flash", "history_back"]
-"L" = ["flash", "history_forward"]
-"[h" = { action = ["flash", "history_back"], repeat = true }
-"]h" = { action = ["flash", "history_forward"], repeat = true }
-"[t" = { action = ["flash", "tab_previous"], repeat = true }
-"]t" = { action = ["flash", "tab_next"], repeat = true }
-# Vim's next-buffer alias maps naturally onto desktop tabs.
-"]b" = { action = ["flash", "tab_next"], repeat = true }
-"[B" = { action = ["flash", "tab_first"], repeat = true }
-"]B" = { action = ["flash", "tab_last"], repeat = true }
-# Vimium J/K — one tab left (previous) / right (next), capital siblings
-# of gT/gt.
-"J" = ["flash", "tab_previous"]
-"K" = ["flash", "tab_next"]
-# Reorder the current tab. In tmux this swap-windows; in browsers there
-# is no portable equivalent so the mapping is a no-op.
-"[m" = { action = ["flash", "tab_move_previous"], repeat = true }
-"]m" = { action = ["flash", "tab_move_next"], repeat = true }
-"[e" = { action = ["flash", "tab_move_previous"], repeat = true }
-"]e" = { action = ["flash", "tab_move_next"], repeat = true }
-"[a" = { action = ["flash", "app_previous"], repeat = true }
-"]a" = { action = ["flash", "app_next"], repeat = true }
-# Cycle the focused app's windows with native macOS shortcuts.
-"[w" = { action = ["flash", "send_key", "--keys=cmd+shift+`"], repeat = true }
-"]w" = { action = ["flash", "send_key", "--keys=cmd+`"], repeat = true }
-# Restore the most recently closed tab. Vimium binds this to X; browsers
-# receive ⌘⇧T; tmux has no closed-window history so it returns "unhandled".
-"X" = ["flash", "tab_reopen"]
-# No default ⌘-based bindings: the system/browser ⌘ chords (⌘Tab, ⌘R,
-# ⌘⇧T, ⌘F, …) are left to the OS / focused app, and their vim-style
-# siblings above cover the same actions in normal mode. Uncomment to
-# shadow a native chord with Flash's version instead:
-# "cmd+tab" = ["flash", "app_next"]
-# "cmd+shift+tab" = ["flash", "app_previous"]
-# "cmd+r" = ["flash", "app_reload"]                  # ≈ r
-# "cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
-# "cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ X
-# "cmd+f" = ["flash", "app_find"]                    # ≈ /
-# The bundled tmux source registers no mappings; terminals can send their
-# native tmux prefix bindings directly for zero-round-trip pane/window actions.
-"ctrl+tab" = ["flash", "tab_next"]           # browser-native ≈ ]t
-"ctrl+shift+tab" = ["flash", "tab_previous"] # browser-native ≈ [t
+"[a" = { command = ["flash", "app_previous"], repeat = true }
+"]a" = { command = ["flash", "app_next"], repeat = true }
+"[t" = { command = ["flash", "send_key", "--keys=cmd+shift+["], repeat = true }
+"]t" = { command = ["flash", "send_key", "--keys=cmd+shift+]"], repeat = true }
+"t" = ["flash", "send_key", "--keys=cmd+t"]
+"g1" = ["flash", "send_key", "--keys=cmd+1"]
+"g2" = ["flash", "send_key", "--keys=cmd+2"]
+"g3" = ["flash", "send_key", "--keys=cmd+3"]
+"g4" = ["flash", "send_key", "--keys=cmd+4"]
+"g5" = ["flash", "send_key", "--keys=cmd+5"]
+"g6" = ["flash", "send_key", "--keys=cmd+6"]
+"g7" = ["flash", "send_key", "--keys=cmd+7"]
+"g8" = ["flash", "send_key", "--keys=cmd+8"]
+"g9" = ["flash", "send_key", "--keys=cmd+9"]
+"g0" = ["flash", "tab_first"]
 "g^" = ["flash", "tab_first"]
 "g$" = ["flash", "tab_last"]
-"g0" = ["flash", "tab_first"]                # Vimium: first tab (alias of g^)
-"g1" = ["flash", "tab_select", "--index=1"]
-"g2" = ["flash", "tab_select", "--index=2"]
-"g3" = ["flash", "tab_select", "--index=3"]
-"g4" = ["flash", "tab_select", "--index=4"]
-"g5" = ["flash", "tab_select", "--index=5"]
-"g6" = ["flash", "tab_select", "--index=6"]
-"g7" = ["flash", "tab_select", "--index=7"]
-"g8" = ["flash", "tab_select", "--index=8"]
-"g9" = ["flash", "tab_select", "--index=9"]
-"gi" = ["flash", "focus_input"]              # Vimium: focus the first text input
+"[m" = { command = ["flash", "tab_move_previous"], repeat = true }
+"]m" = { command = ["flash", "tab_move_next"], repeat = true }
 "ctrl+o" = ["flash", "movement_back"]
 "ctrl+i" = ["flash", "movement_forward"]
-"a" = ["flash", "enter_insert_mode"]
-"A" = ["flash", "enter_insert_mode"]
-"i" = ["flash", "enter_insert_mode"]
-"I" = ["flash", "enter_locked_insert_mode"]
-"o" = ["flash", "enter_insert_mode"]
-"O" = ["flash", "enter_insert_mode"]
-# `f` is a plain current-context click everywhere except terminal links, which
-# add Shift so the terminal opens the link at all. `F` sends Command-Shift to
-# every target as the global new-context gesture. Tmux hints stay in NORMAL.
+# f clicks normally; F applies the same Command-Shift gesture in every app.
+# Terminal links additionally require Shift so the terminal opens the link.
+# Lowercase f targets discovered elements, uppercase F targets a screen
+# position through the grid. A lowercase prefix picks the click on either:
+# none, s(econdary), d(ouble), m(ove). Modifiers ride the final hint key
+# (hints.magic_modifiers), so holding cmd+shift on it is a Command-Shift
+# click without a binding of its own. A prefix letter must not also be a
+# mapping on its own, or that mapping waits for sequence_timeout_ms before
+# it fires -- which is why triple click ships unbound: "tf" would stall the
+# bare "t" above. To add it, remove "t" first:
+#   "t" = false
+#   "tf" = ["flash", "mouse_target", "--triple"]
+#   "tF" = ["flash", "mouse_grid", "--triple"]
 "f" = ["flash", "mouse_target"]
-"F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
-# Ctrl selects the precision grid; adding Shift preserves the current/new-tab
-# pairing above by presetting the same Command-Shift-click on the final grid point.
-"ctrl+f" = ["flash", "mouse_grid"]
-"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
+"F" = ["flash", "mouse_grid"]
 "sf" = ["flash", "mouse_target", "--secondary"]
-# Double-click hints sit on the D ("Double") prefix, not d, so the bare
-# d half-page scroll above stays instant.
-"Df" = ["flash", "mouse_target", "--double"]
-# NOTE: `m<letter>` is the set-mark prefix (marks plugin), so `mf` is NOT
-# bound to hint-move by default — `set_mark f` owns it. Rebind hint-move
-# to a free key if you use it more than marks:
-# "gm" = ["flash", "mouse_target", "--move"]
 "sF" = ["flash", "mouse_grid", "--secondary"]
-"DF" = ["flash", "mouse_grid", "--double"]
+"df" = ["flash", "mouse_target", "--double"]
+"dF" = ["flash", "mouse_grid", "--double"]
+"mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
-# Composed-click sessions and wider scopes ship unbound — pick free keys:
-# "gd" = ["flash", "mouse_target", "--drag"]           # grab point, then drop point
-# "gs" = ["flash", "mouse_target", "--select"]         # click A, shift-click B
-# "gm" = ["flash", "mouse_target", "--multi"]          # click several; Escape ends
-# "ga" = ["flash", "mouse_target", "--adjust"]         # refine the point, Return clicks
-# "g/" = ["flash", "mouse_target", "--search"]         # type visible text; Tab/Return
-# "gf" = ["flash", "mouse_target", "--scope=screen"]   # hints across every app
-# "g." = ["flash", "mouse_repeat"]                     # re-click the last point
-# "gp" = ["flash", "mouse_pointer"]                    # freestyle hjkl cursor mode
-# "gD" = ["flash", "mouse_dock"]                       # hint the Dock
-# "gS" = ["flash", "mouse_statusbar"]                  # hint the menu-bar extras
-# "gz" = ["flash", "scroll_target"]                    # pick the scroll area
-# Undo is no longer on bare u (Vimium reuses it for half-page scroll-up);
-# reach it via the command line (:undo) or the app's native ⌘Z.
+"u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]
-# y yanks (copies) the current selection; p pastes it back. With no register
-# these use the system clipboard, so they interoperate with copy/paste in every
-# other app. A "<name> prefix routes through a register instead: "ay yanks into
-# register a, "ap pastes from it (registers a-z, 0-9 survive clipboard churn; an
-# uppercase name like "Ay appends; +, *, and " name the system clipboard). Bare
-# y commits after the sequence timeout because it's a one-key prefix of yy.
+# x uses the app's native close chord. y/p use the system clipboard unless
+# prefixed with a register, e.g. "ay / "ap for register a. y resolves immediately.
+"x" = ["flash", "send_key", "--keys=cmd+w"]
+"X" = ["flash", "send_key", "--keys=cmd+shift+t"]
+# r reloads and R hard-reloads with the app's native chords. Terminals leave
+# cmd+r unbound, so there both do nothing instead of typing an r.
+"r" = ["flash", "send_key", "--keys=cmd+r"]
+"R" = ["flash", "send_key", "--keys=cmd+shift+r"]
 "y" = ["flash", "yank_selection"]
 "p" = ["flash", "paste"]
-# yy yanks the current URL/location (Vimium yy).
-"yy" = ["flash", "url_copy"]
-"e" = ["flash", "resource_archive"]
-# x sends the app's own close chord — each app decides what ⌘W means (a
-# browser closes the tab; a terminal keybinding can route it to a
-# confirmed tmux kill-pane). No Flash-side "smart close" override.
-"x" = ["flash", "send_key", "--keys=cmd+w"]
-# Vimium n/N cycle find matches — Flash drives the focused app's native
-# find-again (⌘G / ⌘⇧G) after `/` opens find. New windows stay on ⌘N.
-"n" = ["flash", "send_key", "--keys=cmd+g"]
-"N" = ["flash", "send_key", "--keys=cmd+shift+g"]
-# Context-aware new: opens a new tmux window when a tmux client is focused
-# or a new browser tab in browsers. Other apps do nothing.
-"t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader><space>" = ["flash", "enter_command_mode", "--input=:flashlight "]
-# Context-aware reload: browsers reload the current page; tmux refreshes
-# the focused client. Other apps do nothing.
-"r" = ["flash", "app_reload"]
-"R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]
-":" = ["flash", "enter_command_mode"]
+
+# Named terminal command templates. persistent defaults to false: a new process
+# each time the window opens, and the window closes when that process exits.
+# Persistent sessions start with Flash, keep running after the window closes,
+# and restart after process exit.
+# [terminal.bonsai]
+# command = ["bonsai", "hq", "--no-open", "--port", "0"]
+# persistent = true
+# working_directory = "~"
+# columns = 120 # standalone default: 100
+# rows = 36 # standalone default: 28
+# env = { LANG = "en_US.UTF-8" }
+# In [mode.normal.mappings]:
+# "'b" = ["flash", "terminal_show", "--name=bonsai"]
+# "'t" = ["flash", "terminal_show"] # fresh login shell in the home directory
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
-# Advanced mode is enabled only by binding ["flash", "enter_normal_mode"] in [mode.all.mappings].
+# Binding leave_mode or enter_normal_mode in [mode.all.mappings] enables advanced mode.
+
+[mode.command.mappings]
+# Optional modified-key overrides while command-line or candidate-finder
+# surfaces own the keyboard. All-mode shortcuts remain available by default.
+
+[mode.terminal.mappings]
+# Terminal input stays local to the focused window. Plain Escape goes to the TUI.
+# Winning INSERT leave_mode / enter_normal_mode bindings are inherited;
+# optional terminal mappings override them.
+"cmd+q" = ["flash", "terminal_quit"] # stop the child; automatic restart applies
+"cmd+r" = ["flash", "terminal_restart"] # restart immediately
+"cmd+w" = ["flash", "terminal_dismiss"] # hide; persistent sessions keep running
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

@@ -20,12 +20,10 @@
   ],
   "status": [
     "summary",
-    "details"
+    "label",
+    "details",
+    "percent",
+    "history"
   ],
-  "sandbox": {
-    "exec": [
-      "/usr/bin/vm_stat",
-      "/usr/sbin/sysctl"
-    ]
-  }
+  "sandbox": {}
 }

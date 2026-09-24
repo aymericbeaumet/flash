@@ -20,7 +20,10 @@ final class PluginHostRPC {
   /// — `core:focus.changed` alone is insufficient because Flash itself is
   /// the focused process while normal mode is active. Set by AppDelegate
   /// during plugin setup.
-  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)?
+  /// `windowID` is the frontmost window's WindowServer number — metadata, not
+  /// pixels. A plugin needs it to name a window to a capture tool without
+  /// making the user click one.
+  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String, windowID: CGWindowID?)?)?
   /// Executor for the `host.post_keys` RPC: posts a short synthesized chord
   /// sequence to a pid at the given interval. Set by AppDelegate so the
   /// posting can register each chord with the mappings dispatcher first
@@ -47,6 +50,10 @@ final class PluginHostRPC {
   // validated call without opening browsers or signaling processes; the
   // defaults ARE the production behavior.
   static var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+  /// The bundle id of the app LaunchServices hands `url` to.
+  static var urlHandler: (URL) -> String? = { url in
+    NSWorkspace.shared.urlForApplication(toOpen: url).flatMap { Bundle(url: $0)?.bundleIdentifier }
+  }
   static var appOpener: (String, @escaping (String?) -> Void) -> Void = { bundleID, done in
     guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
     else {
@@ -75,6 +82,16 @@ final class PluginHostRPC {
     dataDir: URL? = nil,
     reply: @escaping ([String: Any]) -> Void
   ) {
+    let integerFields: [String: [String]] = [
+      "host.notify": ["duration_ms"], "host.process_table": ["sample_window_ms"],
+      "host.post_keys": ["interval_ms"],
+    ]
+    if let key = integerFields[method]?.first(where: {
+      params[$0] != nil && PluginJSON.integer(params[$0]) == nil
+    }) {
+      reply(["ok": false, "error": "\(method) requires an integer \(key)"])
+      return
+    }
     switch method {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
@@ -89,12 +106,14 @@ final class PluginHostRPC {
           reply(["ok": true, "present": false])
           return
         }
-        reply([
+        var payload: [String: Any] = [
           "ok": true,
           "present": true,
           "pid": Int(target.pid),
           "bundle_id": target.bundleID,
-        ])
+        ]
+        if let windowID = target.windowID { payload["window_id"] = Int(windowID) }
+        reply(payload)
       }
     case "host.activate":
       guard capabilities.contains(.appControl) else {
@@ -304,7 +323,7 @@ final class PluginHostRPC {
       reply(["ok": false, "error": "host.notify requires a message under 1 KiB"])
       return
     }
-    let durationMs = min(max((params["duration_ms"] as? Int) ?? 3000, 500), 10_000)
+    let durationMs = min(max(PluginJSON.integer(params["duration_ms"]) ?? 3000, 500), 10_000)
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       let now = Date()
@@ -425,7 +444,9 @@ final class PluginHostRPC {
   }
 
   /// `host.open`: hand a URL or bundle id to LaunchServices host-side, so
-  /// plugins never fork `/usr/bin/open` and keep fork-free profiles.
+  /// plugins never fork `/usr/bin/open` and keep fork-free profiles. A URL
+  /// reply names the app that handles it (`bundle_id`), so a plugin can check
+  /// that app still has focus before acting on it.
   private func hostOpen(
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
@@ -437,7 +458,9 @@ final class PluginHostRPC {
         // Response law: ok:false always carries a non-empty, content-free
         // error (a bare {"ok": false} is a spec violation).
         if Self.urlOpener(url) {
-          reply(["ok": true])
+          var result: [String: Any] = ["ok": true]
+          result["bundle_id"] = Self.urlHandler(url)
+          reply(result)
         } else {
           reply(["ok": false, "error": "open failed"])
         }
@@ -467,7 +490,7 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let keyCode = params["key_code"] as? Int, (0...31).contains(keyCode) else {
+    guard let keyCode = PluginJSON.integer(params["key_code"]), (0...31).contains(keyCode) else {
       reply(["ok": false, "error": "host.post_media_key requires key_code 0-31"])
       return
     }
@@ -498,34 +521,54 @@ final class PluginHostRPC {
     }
   }
 
-  /// `host.process_table`: visible processes with an instantaneous CPU
-  /// measurement over `sample_window_ms` (two libproc rusage snapshots
-  /// bracketing a sleep). Host-side so process inspectors need no
-  /// `process_info` seatbelt allowance and no second process model.
+  /// One libproc sample of a pid, retained across calls so the next call
+  /// computes CPU % as a delta instead of sleeping to bracket two reads.
+  /// `startAbstime` guards against pid reuse; `comm` is cached because
+  /// `proc_pidpath` is the most expensive per-pid call in the sweep.
+  private struct ProcessSample {
+    var cpuNs: UInt64
+    var sampledAtNs: UInt64
+    var startAbstime: UInt64
+    var comm: String
+  }
+
+  private let processSampleLock = NSLock()
+  private var processSamples: [pid_t: ProcessSample] = [:]
+
+  private struct SampledProcess {
+    var usage: PIDUsage
+    var cpuPercent: Double
+    var comm: String
+  }
+
+  /// `host.process_table`: visible processes with CPU % since the previous
+  /// sample of each pid. Only a pid seen for the first time brackets two
+  /// rusage reads over `sample_window_ms`; a steady poll is one libproc pass
+  /// with no sleep. Host-side so process inspectors need no `process_info`
+  /// seatbelt allowance and no second process model.
   private func processTable(
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    let windowMs = min(max((params["sample_window_ms"] as? Int) ?? 150, 10), 2_000)
+    let windowMs = min(max(PluginJSON.integer(params["sample_window_ms"]) ?? 150, 10), 2_000)
     let requestedPID: pid_t?
     if let rawPID = params["pid"] {
-      guard let pid = rawPID as? Int, pid > 0 else {
+      guard let pid = PluginJSON.pid(rawPID) else {
         reply(["ok": false, "error": "host.process_table pid must be positive"])
         return
       }
-      requestedPID = pid_t(pid)
+      requestedPID = pid
     } else {
       requestedPID = nil
     }
-    DispatchQueue.global(qos: .utility).async {
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      guard let self else { return }
       let pids = requestedPID.map(Self.processTree(root:)) ?? Self.allPids()
-      let first = Self.cpuTimeByPid(pids)
-      Thread.sleep(forTimeInterval: Double(windowMs) / 1_000)
-      let windowNs = Double(windowMs) * 1_000_000
+      let sampled = self.sampleProcesses(pids, windowMs: windowMs, pruneOthers: requestedPID == nil)
       let totalMemory = Double(max(ProcessInfo.processInfo.physicalMemory, 1))
       var rows: [[String: Any]] = []
       if let rootPID = requestedPID {
-        guard let comm = Self.executableBasename(rootPID) else {
+        guard let root = sampled[rootPID] else {
           reply(["ok": true, "processes": rows])
           return
         }
@@ -535,26 +578,20 @@ final class PluginHostRPC {
         var diskWriteBytes: UInt64 = 0
         var processCount = 0
         var threadCount = 0
-        var networkSocketCount = 0
+        var socketCount = 0
         for pid in pids {
-          guard let usage = Self.pidUsage(pid) else { continue }
+          guard let process = sampled[pid] else { continue }
           processCount += 1
-          if let prior = first[pid] {
-            cpuPercent += Double(usage.cpuNs &- min(prior, usage.cpuNs)) / windowNs * 100
-          }
-          residentBytes = Self.saturatingAdd(residentBytes, usage.residentBytes)
-          diskReadBytes = Self.saturatingAdd(diskReadBytes, usage.diskReadBytes)
-          diskWriteBytes = Self.saturatingAdd(diskWriteBytes, usage.diskWriteBytes)
+          cpuPercent += process.cpuPercent
+          residentBytes = Self.saturatingAdd(residentBytes, process.usage.residentBytes)
+          diskReadBytes = Self.saturatingAdd(diskReadBytes, process.usage.diskReadBytes)
+          diskWriteBytes = Self.saturatingAdd(diskWriteBytes, process.usage.diskWriteBytes)
           threadCount += Self.processThreadCount(pid)
-          networkSocketCount += Self.networkSocketCount(pid)
-        }
-        guard processCount > 0 else {
-          reply(["ok": true, "processes": rows])
-          return
+          socketCount += Self.socketDescriptorCount(pid)
         }
         rows.append([
           "pid": Int(rootPID),
-          "comm": comm,
+          "comm": root.comm,
           "cpu_percent": cpuPercent,
           "mem_percent": Double(residentBytes) / totalMemory * 100,
           "memory_bytes": Self.jsonInt(residentBytes),
@@ -563,26 +600,71 @@ final class PluginHostRPC {
           "uptime_seconds": Self.processUptimeSeconds(rootPID),
           "process_count": processCount,
           "thread_count": threadCount,
-          "network_socket_count": networkSocketCount,
+          "socket_count": socketCount,
         ])
       } else {
         for pid in pids {
-          guard let usage = Self.pidUsage(pid), let comm = Self.executableBasename(pid) else {
-            continue
-          }
-          let cpuPercent = first[pid].map {
-            Double(usage.cpuNs &- min($0, usage.cpuNs)) / windowNs * 100
-          }
+          guard let process = sampled[pid] else { continue }
           rows.append([
             "pid": Int(pid),
-            "comm": comm,
-            "cpu_percent": cpuPercent ?? 0,
-            "mem_percent": Double(usage.residentBytes) / totalMemory * 100,
+            "comm": process.comm,
+            "cpu_percent": process.cpuPercent,
+            "mem_percent": Double(process.usage.residentBytes) / totalMemory * 100,
           ])
         }
       }
       reply(["ok": true, "processes": rows])
     }
+  }
+
+  /// Read every pid once; pids without a usable prior sample are read a
+  /// second time after `windowMs` so their first CPU figure is real rather
+  /// than zero. Prior samples come from the cache regardless of which caller
+  /// (full table or a process tree) produced them.
+  private func sampleProcesses(
+    _ pids: [pid_t], windowMs: Int, pruneOthers: Bool
+  ) -> [pid_t: SampledProcess] {
+    var out: [pid_t: SampledProcess] = [:]
+    var needsBracket: [pid_t: PIDUsage] = [:]
+    let now = DispatchTime.now().uptimeNanoseconds
+    processSampleLock.lock()
+    for pid in pids {
+      guard let usage = Self.pidUsage(pid) else { continue }
+      if let prior = processSamples[pid], prior.startAbstime == usage.startAbstime,
+        now > prior.sampledAtNs
+      {
+        let elapsedNs = Double(now - prior.sampledAtNs)
+        let cpuPercent = Double(usage.cpuNs &- min(prior.cpuNs, usage.cpuNs)) / elapsedNs * 100
+        out[pid] = SampledProcess(usage: usage, cpuPercent: cpuPercent, comm: prior.comm)
+        processSamples[pid] = ProcessSample(
+          cpuNs: usage.cpuNs, sampledAtNs: now, startAbstime: usage.startAbstime,
+          comm: prior.comm)
+      } else {
+        needsBracket[pid] = usage
+      }
+    }
+    if pruneOthers {
+      let live = Set(pids)
+      processSamples = processSamples.filter { live.contains($0.key) }
+    }
+    processSampleLock.unlock()
+    guard !needsBracket.isEmpty else { return out }
+
+    Thread.sleep(forTimeInterval: Double(windowMs) / 1_000)
+    let after = DispatchTime.now().uptimeNanoseconds
+    let windowNs = Double(after - now)
+    processSampleLock.lock()
+    for (pid, first) in needsBracket {
+      guard let usage = Self.pidUsage(pid), usage.startAbstime == first.startAbstime,
+        let comm = Self.executableBasename(pid)
+      else { continue }
+      let cpuPercent = Double(usage.cpuNs &- min(first.cpuNs, usage.cpuNs)) / windowNs * 100
+      out[pid] = SampledProcess(usage: usage, cpuPercent: cpuPercent, comm: comm)
+      processSamples[pid] = ProcessSample(
+        cpuNs: usage.cpuNs, sampledAtNs: after, startAbstime: usage.startAbstime, comm: comm)
+    }
+    processSampleLock.unlock()
+    return out
   }
 
   /// `host.signal`: SIGTERM a pid without a `/bin/kill` subprocess. Errors
@@ -591,11 +673,11 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = params["pid"] as? Int, pid > 1 else {
+    guard let pid = PluginJSON.pid(params["pid"]), pid > 1 else {
       reply(["ok": false, "error": "host.signal requires pid > 1"])
       return
     }
-    if Self.signalSender(pid_t(pid)) == 0 {
+    if Self.signalSender(pid) == 0 {
       reply(["ok": true])
     } else {
       reply(["ok": false, "error": String(cString: strerror(errno))])
@@ -636,21 +718,12 @@ final class PluginHostRPC {
     return ordered
   }
 
-  private static func cpuTimeByPid(_ pids: [pid_t]) -> [pid_t: UInt64] {
-    var out: [pid_t: UInt64] = [:]
-    for pid in pids {
-      if let usage = pidUsage(pid) {
-        out[pid] = usage.cpuNs
-      }
-    }
-    return out
-  }
-
   private struct PIDUsage {
     var cpuNs: UInt64
     var residentBytes: UInt64
     var diskReadBytes: UInt64
     var diskWriteBytes: UInt64
+    var startAbstime: UInt64
   }
 
   private static func pidUsage(_ pid: pid_t) -> PIDUsage? {
@@ -662,10 +735,11 @@ final class PluginHostRPC {
     }
     guard ok else { return nil }
     return PIDUsage(
-      cpuNs: info.ri_user_time &+ info.ri_system_time,
+      cpuNs: MachTime.nanoseconds(fromTicks: info.ri_user_time &+ info.ri_system_time),
       residentBytes: info.ri_resident_size,
       diskReadBytes: info.ri_diskio_bytesread,
-      diskWriteBytes: info.ri_diskio_byteswritten)
+      diskWriteBytes: info.ri_diskio_byteswritten,
+      startAbstime: info.ri_proc_start_abstime)
   }
 
   private static func jsonInt(_ value: UInt64) -> Int {
@@ -697,10 +771,11 @@ final class PluginHostRPC {
     return max(0, Int(info.pti_threadnum))
   }
 
-  /// Count live internet sockets without launching `nettop` (which takes a
-  /// multi-second sample and would be inappropriate for a resident status
-  /// provider). Unix-domain IPC sockets are deliberately excluded.
-  private static func networkSocketCount(_ pid: pid_t) -> Int {
+  /// Count open socket descriptors from the descriptor list alone. Resolving
+  /// each socket's address family costs one `proc_pidfdinfo` per descriptor —
+  /// tens of thousands of syscalls per sample for a browser's helper tree —
+  /// so the count includes unix-domain sockets and stays two syscalls per pid.
+  private static func socketDescriptorCount(_ pid: pid_t) -> Int {
     let required = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
     guard required > 0 else { return 0 }
     let stride = MemoryLayout<proc_fdinfo>.stride
@@ -714,15 +789,7 @@ final class PluginHostRPC {
     guard filled > 0 else { return 0 }
     let count = min(Int(filled) / stride, descriptors.count)
     return descriptors.prefix(count).reduce(into: 0) { total, descriptor in
-      guard descriptor.proc_fdtype == PROX_FDTYPE_SOCKET else { return }
-      var socket = socket_fdinfo()
-      let size = Int32(MemoryLayout<socket_fdinfo>.size)
-      let read = withUnsafeMutablePointer(to: &socket) {
-        proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDSOCKETINFO, $0, size)
-      }
-      guard read == size else { return }
-      let family = socket.psi.soi_family
-      if family == AF_INET || family == AF_INET6 { total += 1 }
+      if descriptor.proc_fdtype == PROX_FDTYPE_SOCKET { total += 1 }
     }
   }
 
@@ -738,7 +805,7 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = (params["pid"] as? Int).map(pid_t.init) else {
+    guard let pid = PluginJSON.pid(params["pid"]) else {
       reply(["ok": false, "error": "host.activate requires pid"])
       return
     }
@@ -762,7 +829,7 @@ final class PluginHostRPC {
   static func globalSyntheticKeyChord(
     from params: [String: Any]
   ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    guard let rawCode = params["key_code"] as? Int, rawCode >= 0, rawCode < 0x80,
+    guard let rawCode = PluginJSON.integer(params["key_code"]), rawCode >= 0, rawCode < 0x80,
       let names = params["modifiers"] as? [String], !names.isEmpty
     else { return nil }
     var flags: CGEventFlags = []
@@ -808,7 +875,7 @@ final class PluginHostRPC {
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = (params["pid"] as? Int).map(pid_t.init), pid > 0,
+    guard let pid = PluginJSON.pid(params["pid"]), pid > 0,
       let steps = params["keys"] as? [[String: Any]],
       !steps.isEmpty, steps.count <= 32
     else {
@@ -817,7 +884,7 @@ final class PluginHostRPC {
     }
     var chords: [(key: CGKeyCode, flags: CGEventFlags)] = []
     for step in steps {
-      guard let rawCode = step["key_code"] as? Int, rawCode >= 0, rawCode < 0x80,
+      guard let rawCode = PluginJSON.integer(step["key_code"]), rawCode >= 0, rawCode < 0x80,
         let names = step["modifiers"] as? [String], !names.isEmpty
       else {
         reply(["ok": false, "error": "each key needs key_code and non-empty modifiers"])
@@ -833,7 +900,7 @@ final class PluginHostRPC {
       }
       chords.append((key: CGKeyCode(rawCode), flags: flags))
     }
-    let intervalMs = min(max((params["interval_ms"] as? Int) ?? 35, 8), 100)
+    let intervalMs = min(max(PluginJSON.integer(params["interval_ms"]) ?? 35, 8), 100)
     guard let post = onSyntheticKeysRequested else {
       reply(["ok": false, "error": "key posting unavailable"])
       return

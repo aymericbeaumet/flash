@@ -8,6 +8,7 @@ build/
 DerivedData/
 *.xcodeproj
 *.xcworkspace
+Tests/ElectronFixture/node_modules/
 
 ## Rust plugin build output. Plugins are hermetic standalone crates whose
 ## committed Cargo.lock lives at Plugins/<id>/Cargo.lock (not ignored); a
@@ -30,6 +31,11 @@ __pycache__/
 ## Local config / scratch
 karabiner.json.bak-*
 *.bak-flash
+
+## Browser captures from the fixture collector are real browsing sessions:
+## they stay local and must never be committed.
+Tests/BrowserSnapshots/snapshots/collected-*
+Tests/BrowserSnapshots/allowlists/collected-*
 
 ## Stray empty top-level dirs left over from earlier dev workflows. Keeping
 ## them out of the index avoids accidental commits if they ever pick up content.

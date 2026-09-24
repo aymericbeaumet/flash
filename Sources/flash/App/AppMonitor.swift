@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import FlashCore
 import os
 
 /// Coordinates discovery + hint assignment for the focused app.
@@ -35,6 +36,10 @@ final class AppMonitor {
   let registry: SourceRegistry
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
+  /// AX geometry reads for the active-window border that must not wait behind
+  /// an AX walk on `axQueue`. Window-list reads never run here; see
+  /// `WindowSnapshot.windowList`.
+  let geometryQueue = DispatchQueue(label: "flash.window_geometry", qos: .userInitiated)
   let mainThreadWatchdog = MainThreadWatchdog()
   var focusedElementDidChange: ((pid_t, String) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
@@ -73,7 +78,7 @@ final class AppMonitor {
       let pid = app.processIdentifier
       guard pid > 0 else { return }
       self.invalidatePreparedModel(for: pid)
-      self.scheduleModelRefresh(for: pid, reason: "config")
+      self.scheduleModelRefresh(for: pid, reason: .config)
     }
   }
 
@@ -82,6 +87,11 @@ final class AppMonitor {
   /// observer set missed (some apps don't fire `kAXLayoutChanged` on
   /// every UI transition).
   static let modelFreshnessMs: Int = 1500
+  /// Ceiling for the per-model freshness backoff (see `PreparedModel.freshnessMs`).
+  static let modelFreshnessMaxMs: Int = 30_000
+  /// No maintenance walks while the user has produced no input for this long;
+  /// the next activation performs a complete walk on demand.
+  static let maintenanceIdleSuspendSeconds: Double = 60
   static let modelDebounceMs: Int = 80
   static let modelMaintenanceLeadMs: Int = 250
   static let backgroundModelMinIntervalMs: Int = 2500
@@ -114,16 +124,13 @@ final class AppMonitor {
     max(1, axEventStormThresholdPerSecond * axEventStormWindowMs / 1000)
   }
 
-  /// Some native apps expose enough AX structure that background warming is
-  /// more disruptive than a cold on-demand hint walk. Keep activation explicit
-  /// for those apps: focus changes still invalidate stale models, but Flash
-  /// does not poke their AX tree just because they became frontmost.
-  static let automaticPreparedModelExcludedBundleIdentifiers: Set<String> = [
-    "com.apple.Notes"
-  ]
-
+  /// Some apps expose enough AX structure that background warming is more
+  /// disruptive than a cold on-demand hint walk; plugins declare them
+  /// (`OnDemandHintApps`). Keep activation explicit for those apps: focus
+  /// changes still invalidate stale models, but Flash does not poke their AX
+  /// tree just because they became frontmost.
   static func shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: String) -> Bool {
-    !automaticPreparedModelExcludedBundleIdentifiers.contains(bundleIdentifier)
+    !OnDemandHintApps.contains(bundleIdentifier)
   }
 
   init(registry: SourceRegistry, config: Config) {
@@ -150,25 +157,20 @@ final class AppMonitor {
   /// background-work budget. AX/queued/maintenance warming stays paused for
   /// them until another explicit focus/config refresh measures a cheap tree.
   var slowAutomaticModelRefreshPIDs: Set<pid_t> = []
-  /// Coalesced model refresh scheduling. The previous implementation
-  /// allocated a fresh `DispatchWorkItem` for every observed AX event
-  /// and cancelled the previous one. Under scroll storms
-  /// (`kAXValueChangedNotification` fires per frame) this churned
-  /// 60+ allocations per second on main. The new approach keeps one
-  /// dispatch in flight per pid; new events extend the deadline and
-  /// the in-flight closure re-arms itself if the burst is still
-  /// active when it wakes.
-  var modelRefreshArmed: Set<pid_t> = []
-  var modelRefreshDeadline: [pid_t: DispatchTime] = [:]
-  var modelRefreshReason: [pid_t: String] = [:]
-  var maintenanceRefresh: [pid_t: DispatchWorkItem] = [:]
-  var lastBackgroundModelRefreshAt: [pid_t: DispatchTime] = [:]
+  var modelScheduler = PreparedModelScheduler(
+    debounceMs: modelDebounceMs,
+    minimumIntervalMs: backgroundModelMinIntervalMs,
+    freshnessMs: modelFreshnessMs,
+    maintenanceLeadMs: modelMaintenanceLeadMs)
   /// Only the latest activation waiter matters — earlier waiters are
   /// stale activations whose generation has already moved on. A scalar
   /// per pid replaces the previous unbounded array; if a second
   /// activation lands while a walk is in flight, it overwrites the
   /// first instead of stacking.
   var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
+  /// The last trusted target count per app: what a later walk of the same app
+  /// is judged against (`discoveryLooksDegenerate`).
+  var healthyTargetCounts: [pid_t: Int] = [:]
   var workspaceObservers: [NSObjectProtocol] = []
   var localObservers: [NSObjectProtocol] = []
   /// `installObserver` runs on every focus change; this gates the
@@ -187,6 +189,9 @@ final class AppMonitor {
     /// notifications are emitted by the window element, not the application
     /// element, so the focused window needs its own registrations.
     var focusedWindow: AXUIElement?
+    /// Accessed only on `axQueue`. Set by teardown so a pending registration
+    /// retry stops instead of registering on an observer that is gone.
+    var isTornDown = false
 
     init(
       observer: AXObserver,
@@ -228,23 +233,56 @@ final class AppMonitor {
     }
   }
 
+  /// Runs on `AXObserverThread`. Touches no monitor state: it appends to the
+  /// pending batch and arms at most one main-thread drain per burst.
   static let observerCallback: AXObserverCallback = { _, element, notification, refcon in
     guard let refcon else { return }
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
     guard let monitor = ctx.monitor else { return }
-    let pid = ctx.pid
-    let notificationName = notification as String
-    // AXObserver callbacks already run on the run loop that holds the
-    // source — we add it to the main run loop below, so we're already
-    // on main here. Hop anyway to make the invariant explicit and
-    // bullet-proof against future relocation of the source.
     let isFocusedWindow = ctx.isFocusedWindow(element)
-    MainThreadHopper.runOrAsync {
-      monitor.onAXEvent(
-        pid: pid,
-        notification: notificationName,
+    monitor.enqueueAXEvent(
+      PendingAXEvent(
+        pid: ctx.pid,
+        notification: notification as String,
         observedElementIsFocusedWindow: isFocusedWindow,
-        observedWindow: isFocusedWindow ? element : nil)
+        observedWindow: isFocusedWindow ? element : nil))
+  }
+
+  struct PendingAXEvent {
+    let pid: pid_t
+    let notification: String
+    let observedElementIsFocusedWindow: Bool
+    let observedWindow: AXUIElement?
+  }
+
+  private let pendingAXEventsLock = NSLock()
+  private var pendingAXEvents: [PendingAXEvent] = []
+  private var axDrainArmed = false
+
+  func enqueueAXEvent(_ event: PendingAXEvent) {
+    pendingAXEventsLock.lock()
+    pendingAXEvents.append(event)
+    let arm = !axDrainArmed
+    if arm { axDrainArmed = true }
+    pendingAXEventsLock.unlock()
+    guard arm else { return }
+    DispatchQueue.main.async { [weak self] in self?.drainAXEvents() }
+  }
+
+  /// Main thread. One drain handles everything that arrived since the last
+  /// one, so a 1000-event storm costs one wakeup, not a thousand.
+  func drainAXEvents() {
+    pendingAXEventsLock.lock()
+    let batch = pendingAXEvents
+    pendingAXEvents.removeAll(keepingCapacity: true)
+    axDrainArmed = false
+    pendingAXEventsLock.unlock()
+    for event in batch {
+      onAXEvent(
+        pid: event.pid,
+        notification: event.notification,
+        observedElementIsFocusedWindow: event.observedElementIsFocusedWindow,
+        observedWindow: event.observedWindow)
     }
   }
 
@@ -275,14 +313,14 @@ final class AppMonitor {
     kAXRowCollapsedNotification,
   ]
 
-  /// Reduced set for bundles excluded from automatic model warming
-  /// (`automaticPreparedModelExcludedBundleIdentifiers`). For those apps a
+  /// Reduced set for apps excluded from automatic model warming
+  /// (`OnDemandHintApps`). For those apps a
   /// prepared model is only built on explicit activation and served within
   /// `modelFreshnessMs`, so churn-level invalidation (value / created /
   /// destroyed / layout / rows) buys almost nothing — while forcing the app
   /// to generate a notification on its main thread for every mutation.
-  /// Notes re-rendering its note list during an iCloud sync burst is
-  /// exactly the moment that cost hurts. Keep only what drives mode,
+  /// A notes app re-rendering its list during a sync burst is exactly the
+  /// moment that cost hurts. Keep only what drives mode,
   /// border, and focus behaviour.
   static let lightObservedNotifications: [String] = [
     kAXFocusedUIElementChangedNotification,
@@ -307,9 +345,7 @@ final class AppMonitor {
   ]
 
   static func observedNotifications(forBundleIdentifier bundleIdentifier: String?) -> [String] {
-    guard let bundleIdentifier,
-      automaticPreparedModelExcludedBundleIdentifiers.contains(bundleIdentifier)
-    else { return observedNotifications }
+    guard OnDemandHintApps.contains(bundleIdentifier) else { return observedNotifications }
     return lightObservedNotifications
   }
 
@@ -336,6 +372,15 @@ final class AppMonitor {
       || notification == kAXApplicationShownNotification
   }
 
+  /// A move or resize names the window that changed, so the border and the
+  /// layout tracker can read its frame straight from that AX element. Every
+  /// other border-relevant notification still needs a WindowServer pass to
+  /// work out which window is now on top.
+  static func isWindowGeometryNotification(_ notification: String) -> Bool {
+    notification == kAXWindowMovedNotification as String
+      || notification == kAXWindowResizedNotification as String
+  }
+
   static func notificationMayChangeObservedWindow(_ notification: String) -> Bool {
     notification == kAXFocusedWindowChangedNotification
       || notification == kAXMainWindowChangedNotification
@@ -356,9 +401,9 @@ final class AppMonitor {
 
   func start() {
     installWorkspaceObservers()
-    // The tap source, AX observer sources, and all mode logic share the
-    // main run loop; when it stalls, input stalls system-wide. Record it.
-    mainThreadWatchdog.start()
+    // The tap source, AX observer sources, and all mode logic share the main
+    // run loop; when it stalls, input stalls system-wide. `ConfigReload`
+    // arms the recorder once the configured log level is known.
     wakeChromiumAccessibilityForAllRunningApps()
     if let app = NSWorkspace.shared.frontmostApplication {
       onFocusedAppChanged(to: app)
@@ -366,11 +411,11 @@ final class AppMonitor {
   }
 
   private func wakeChromiumAccessibilityForAllRunningApps() {
-    ChromiumAccessibilityWaker.wakeAllRunningApps(on: axQueue)
+    AccessibilityWaker.wakeAllRunningApps(on: axQueue)
   }
 
   func maybeWakeChromiumAccessibility(for app: NSRunningApplication) {
-    ChromiumAccessibilityWaker.maybeWake(app: app, on: axQueue)
+    AccessibilityWaker.maybeWake(app: app, on: axQueue)
   }
 
   func stop() {
@@ -392,8 +437,7 @@ final class AppMonitor {
       pid: pid,
       dirtyToken: dirtyTokens[pid] ?? 0,
       configRevision: configRevision,
-      now: DispatchTime.now(),
-      freshnessMs: Self.modelFreshnessMs)
+      now: DispatchTime.now())
   }
 
 }

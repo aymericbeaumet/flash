@@ -29,7 +29,10 @@
   ],
   "status": [
     "summary",
-    "details"
+    "label",
+    "details",
+    "percent",
+    "state"
   ],
   "listen": [
     "core:power.changed"

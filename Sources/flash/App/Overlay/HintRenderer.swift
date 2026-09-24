@@ -25,15 +25,21 @@ extension OverlayPanel {
     applyPanelFrame(frame)
 
     recycleAll()
-    hideAdjustment()
+    hideSelectionMarker()
     transientContentVisible = true
     commandPromptVisible = false
 
-    let bgTop = nsColor(fromHex: overlayConfig.hintBGTop) ?? .systemYellow
-    let bgBottom = nsColor(fromHex: overlayConfig.hintBGBottom) ?? bgTop
-    let fg = nsColor(fromHex: overlayConfig.hintFG) ?? .black
-    let border = nsColor(fromHex: overlayConfig.hintBorder)
+    // `[overlay.dark]` over `[overlay]` while the system appearance is dark.
+    let colors = hintColors
+    let bgTop = nsColor(fromHex: colors.bgTop) ?? .systemYellow
+    let bgBottom = nsColor(fromHex: colors.bgBottom) ?? bgTop
+    let fg = nsColor(fromHex: colors.fg) ?? .black
+    let border = nsColor(fromHex: colors.border)
     let fontSize = CGFloat(overlayConfig.fontSize)
+    // `[overlay] hint_placement` moves target chips, kept on their screen;
+    // grid cells and status-bar chips keep their own geometry.
+    let placement = overlayConfig.hintPlacement
+    let screenFrames = snapshot.screens.map(\.frame)
     // Resolve per-screen backing scale per chip below — but precompute
     // a sorted list of (screen, frameInPanelLocal) pairs once so the
     // per-chip lookup is a tight linear scan over (usually) one or two
@@ -75,13 +81,13 @@ extension OverlayPanel {
     // the chip looking like a normal `f` hint instead of a black
     // sentinel block.
     let importantBgTop =
-      nsColor(fromHex: overlayConfig.importantHintBGTop) ?? bgTop
+      nsColor(fromHex: colors.importantBGTop) ?? bgTop
     let importantBgBottom =
-      nsColor(fromHex: overlayConfig.importantHintBGBottom) ?? bgBottom
+      nsColor(fromHex: colors.importantBGBottom) ?? bgBottom
     let importantBorder =
-      nsColor(fromHex: overlayConfig.importantHintBorder) ?? border
+      nsColor(fromHex: colors.importantBorder) ?? border
     let importantFG =
-      nsColor(fromHex: overlayConfig.importantHintFG) ?? fg
+      nsColor(fromHex: colors.importantFG) ?? fg
     let importantGradientColors: [CGColor] = [
       importantBgBottom.cgColor, importantBgTop.cgColor,
     ]
@@ -123,11 +129,11 @@ extension OverlayPanel {
     if debugEnabled {
       newSublayers.append(debugShapeLayer)
     }
-    // Status bar goes in first so its opaque band sits *under* the hint chips —
-    // the status-bar link hints render over the bar instead of behind it. App
-    // hints never overlap the bar (they're filtered out of the menu-bar band by
-    // the visible-region test), so nothing else changes visually.
-    appendModeBadgeLayerIfNeeded(to: &newSublayers, panelFrame: frame)
+    // The status bar stays in its own window below this transient level, so the
+    // status-bar link hints render over the bar instead of behind it. App hints
+    // never overlap the bar (they're filtered out of the menu-bar band by the
+    // visible-region test), so nothing else changes visually.
+    syncStatusBarForTransientRender(appendingPromptLayersTo: &newSublayers, panelFrame: frame)
 
     hintLayers.reserveCapacity(hints.count)
     labelLayers.reserveCapacity(hints.count)
@@ -135,11 +141,11 @@ extension OverlayPanel {
     for (idx, hint) in hints.enumerated() {
       let targetFrame = hint.target.frame
       let isMouseGridHint = hint.target.providerID == "mouse_grid"
-      // At the final mouse-grid step the chip IS the click point — no
-      // gap-free cell tile is meaningful at that scale. Render those
-      // hints with the regular f-hint look so the cluster reads
-      // cleanly and individual chips never get a redundant translucent
-      // backdrop.
+      // When the clicking mouse-grid step has cells smaller than a chip, the
+      // chip IS the click point — no gap-free cell tile is meaningful at
+      // that scale. Render those hints with the regular f-hint look so the
+      // cluster reads cleanly and individual chips never get a redundant
+      // translucent backdrop. Larger clicking cells stay tiles.
       let isMouseGridFinalChip =
         isMouseGridHint && hint.target.role == MouseGrid.finalChipRole
       let local = CGRect(
@@ -195,10 +201,17 @@ extension OverlayPanel {
       // regular hints both use a centred fixed-size chip — the final
       // chip's targetFrame already IS the chip rect, so `chipFrame`
       // centres a fixed-size chip on it identical to the regular path.
-      let chipGlobal: CGRect =
-        (isMouseGridHint && !isMouseGridFinalChip)
-        ? targetFrame
-        : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
+      let chipGlobal: CGRect
+      if isMouseGridHint && !isMouseGridFinalChip {
+        chipGlobal = targetFrame
+      } else if isMouseGridHint || hint.target.providerID == "statusbar" {
+        chipGlobal = Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
+      } else {
+        chipGlobal = placement.chipFrame(
+          target: targetFrame, size: CGSize(width: chipW, height: chipHeight),
+          screen: screenFrames.count == 1
+            ? screenFrames[0] : HintPlacement.screen(for: targetFrame, among: screenFrames))
+      }
       let chipLocal = CGRect(
         x: chipGlobal.minX - frame.minX,
         y: chipGlobal.minY - frame.minY,
@@ -286,7 +299,7 @@ extension OverlayPanel {
         chip.cornerRadius = 3
         chip.borderWidth = 1
         if isMouseGridFinalChip {
-          // Final mouse-grid step only: make the chip background
+          // Mouse-grid cluster only: make the chip background
           // slightly translucent so the user can see what's behind the
           // cluster while picking the precise click target. The label
           // is a sub-layer that keeps its own (fully opaque) colour so
@@ -324,6 +337,7 @@ extension OverlayPanel {
       labelLayers.append(label)
     }
 
+    appendToastLayerIfNeeded(to: &newSublayers)
     contentLayer.sublayers = newSublayers
     if debugEnabled {
       rebuildDebugPath(visibleIndices: nil)
@@ -357,14 +371,8 @@ extension OverlayPanel {
 
   /// Render (or move) the `--adjust` marker: the matched target's outline plus
   /// a crosshair at the exact point the commit key will click. Coordinates are
-  /// NSScreen (bottom-left); layers live in panel-local space.
-  func showAdjustment(markerAt point: CGPoint, targetFrame: CGRect) {
-    adjustmentActive = true
-    showSelectionMarker(at: point, targetFrame: targetFrame)
-  }
-
-  /// The marker drawing alone, without entering the adjustment sub-state —
-  /// the `--search` selection highlight reuses it.
+  /// NSScreen (bottom-left); layers live in panel-local space. Drawn for the
+  /// `--adjust` point and the `--search` selection.
   func showSelectionMarker(at point: CGPoint, targetFrame: CGRect) {
     let origin = frame.origin
     let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
@@ -384,19 +392,26 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
     adjustmentMarkerLayer.isHidden = false
+    attachSelectionMarker()
     CATransaction.commit()
   }
 
-  func hideAdjustment() {
-    adjustmentActive = false
+  func hideSelectionMarker() {
     adjustmentMarkerLayer.isHidden = true
+  }
+
+  /// Every transient render rebuilds `contentLayer.sublayers` without the
+  /// marker, so each draw re-attaches it, above whatever it marks.
+  private func attachSelectionMarker() {
+    guard contentLayer.sublayers?.last !== adjustmentMarkerLayer else { return }
+    adjustmentMarkerLayer.removeFromSuperlayer()
+    contentLayer.addSublayer(adjustmentMarkerLayer)
   }
 
   /// Present pointer mode: frame + order the panel (so tap capture stays
   /// active — `keyboardCaptureIsActive` requires visibility), then draw the
   /// cursor ring. Subsequent moves go through `movePointerMarker`.
   func presentPointerMode(at point: CGPoint) {
-    pointerModeActive = true
     applyPanelFrame(OverlayPanel.unionScreenFrame())
     transientContentVisible = true
     movePointerMarker(to: point)
@@ -414,32 +429,101 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
     adjustmentMarkerLayer.isHidden = false
+    attachSelectionMarker()
     CATransaction.commit()
   }
 
   func hide() {
     FlashLog.trace(
-      "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
-        + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
-    // Belt-and-suspenders: never leave the cursor hidden once the overlay is gone.
-    showHintCursor()
-    hideAdjustment()
-    pointerModeActive = false
-    searchModeActive = false
+      "[overlay] hide transient=\(transientContentVisible) bar=\(modeSurface.barVisible) "
+        + "capture=\(modeSurface.capturesInput) input=\(inputMode)")
+    scheduleCursorVisibilityUpdate()
+    hideSelectionMarker()
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"
-    commandCaretLayer.isHidden = true
     hideCommandTextField()
     clearCandidateFinderResults()
     commandLineText = ""
     commandLineCursorIndex = 0
-    candidateFinderQuery = ""
     recycleAll()
-    renderModeBadgeOnlyOrHide()
+    if let current = toast, !current.outlivesTeardown {
+      toast = nil
+      current.layer.removeFromSuperlayer()
+    }
+    renderPersistentContent()
   }
 
-  func captureKeyboardInput() {
+  /// Escalating delays for the command-line key-recovery ladder. Activation is
+  /// granted asynchronously, so the first pass routinely runs before the panel
+  /// holds key; these retries cover that without becoming a resident poll.
+  static let commandLineKeyRecoveryDelaysMs = [30, 80, 160, 320, 640]
+
+  /// The ladder's next step, or nil once it is exhausted. `attempt` is the
+  /// number of retries already spent, so a fresh capture starts at 0 and each
+  /// retry advances exactly one rung. Restarting from 0 on every retry is what
+  /// turned this into an unbounded 30 ms loop that spun for seconds.
+  static func commandLineKeyRecoveryDelayMs(afterAttempt attempt: Int) -> Int? {
+    guard attempt >= 0, attempt < commandLineKeyRecoveryDelaysMs.count else { return nil }
+    return commandLineKeyRecoveryDelaysMs[attempt]
+  }
+
+  /// Which app to name as the source of an activation request.
+  ///
+  /// `NSWorkspace.frontmostApplication` settles asynchronously and can report
+  /// Flash itself. `activate(from:)` is the request that actually hands this
+  /// non-activating panel the key window, and gating it on that pointer meant
+  /// it was skipped in precisely the case with no other working remedy — the
+  /// app nominally active, no key window, and a retry ladder with nothing left
+  /// to try. Fall back to the app Flash last saw focused.
+  static func activationSourcePID(
+    workspaceFrontPID: pid_t?, lastNonFlashPID: pid_t?, currentPID: pid_t
+  ) -> pid_t? {
+    if let workspaceFrontPID, workspaceFrontPID != currentPID { return workspaceFrontPID }
+    if let lastNonFlashPID, lastNonFlashPID != currentPID { return lastNonFlashPID }
+    return nil
+  }
+
+  /// Whether the command line actually has a live caret: AppKit blinks the
+  /// field editor's insertion point only in a window it reports as key.
+  /// `shouldDrawInsertionPoint` is not that signal — it stays true for an
+  /// editing field in a panel that is not key yet, including right after a
+  /// reopen that is still waiting on activation — so recovery that trusted it
+  /// stopped before the caret ever appeared.
+  var commandLineHoldsKeyboardFocus: Bool {
+    guard isKeyWindow, let editor = commandTextField.currentEditor() else { return false }
+    return firstResponder === editor
+  }
+
+  /// Restart the field editor's insertion-point blink. The caret is AppKit's
+  /// own; Flash draws none. Idempotent, and it does not move the caret — the
+  /// selection is owned by `syncCommandTextFieldSelection` — so it is safe to
+  /// repeat.
+  func rearmCommandLineCaret() {
+    guard inputMode == .commandLine,
+      let editor = commandTextField.currentEditor() as? NSTextView
+    else { return }
+    editor.updateInsertionPointStateAndRestartTimer(true)
+  }
+
+  /// Delays for the post-open caret re-arm. Two turns: the next one, and one
+  /// far enough out to be past an activation handoff. Deliberately a fixed,
+  /// tiny list rather than a retry loop — arming is idempotent and there is no
+  /// state to poll for.
+  static let commandLineCaretRearmDelaysMs = [0, 80]
+
+  private func scheduleCommandLineCaretRearm() {
+    commandLineCaretRearmGeneration &+= 1
+    let generation = commandLineCaretRearmGeneration
+    for delayMs in Self.commandLineCaretRearmDelaysMs {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+        guard let self, self.commandLineCaretRearmGeneration == generation else { return }
+        self.rearmCommandLineCaret()
+      }
+    }
+  }
+
+  func captureKeyboardInput(recoveryAttempt: Int = 0) {
     let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
     // NORMAL / hints input is captured by the global keyboard tap, so we don't
@@ -447,7 +531,12 @@ extension OverlayPanel {
     // controls and there's no activation race to leak a key. Just float the
     // overlay above the content. (Command-line / modal still take the key
     // window below for their text fields, as does the no-tap fallback.)
-    if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
+    // Passive input never takes the keyboard from the focused app.
+    if inputMode == .passive {
+      orderFrontRegardless()
+      return
+    }
+    if tapCapturesInput {
       orderFrontRegardless()
       // If we still hold activation from a prior command-line / modal (which do
       // take the key window for their text fields), hand it back so the focused
@@ -479,6 +568,11 @@ extension OverlayPanel {
     // re-activation and the non-activating panel never regained key (`makeKey()`
     // alone doesn't grant it on this macOS), leaving no caret. Re-activate
     // whenever we aren't the key window so the panel reliably regains it.
+    // Deliberately still gated on `isKeyWindow`, not on caret liveness: the
+    // field editor is reused across opens, so a stale one can report a live
+    // caret before this open has activated Flash at all, and skipping
+    // activation there would send the user's keystrokes to the app behind.
+    // The request is idempotent, so asking once more costs nothing.
     if !NSApp.isActive || !isKeyWindow {
       requestApplicationActivationForKeyboardCapture()
     }
@@ -486,54 +580,70 @@ extension OverlayPanel {
     makeKeyAndOrderFront(nil)
     makeKey()
     let responderDescription: String
-    if inputMode == .commandLine {
+    if commandTextFieldIsLaidOut {
       commandTextField.isHidden = false
-      // The field editor is reused across open/close cycles. A *stale* editor can
-      // persist (so `currentEditor() != nil` even though the field isn't focused),
-      // making the refocus a no-op and leaving no caret on the 2nd+ open. The
-      // reliable "actually editing" signal is that the live first responder IS
-      // this field's editor. On a real (re)open it isn't, so force a clean refocus
-      // (resign first → rebuild the editor) and restart the blink timer; on an
-      // async-merge re-render the field IS editing, so leave it untouched.
-      let editing =
-        firstResponder != nil && firstResponder === commandTextField.currentEditor()
-      if !editing {
-        makeFirstResponder(nil)
-      }
+      // The field editor is reused across open/close cycles, and a reused one
+      // arrives carrying the previous session's insertion-point state. When
+      // that state already looked correct, nothing re-armed the blink and the
+      // command line opened with no visible cursor until the first keystroke
+      // redrew it — which is exactly the reported symptom: always able to
+      // type, cursor appears on the first character.
+      //
+      // The old code skipped the rebuild whenever the field was already
+      // "editing", to avoid stomping a live caret on an async candidate merge.
+      // That guard protects nothing here: this runs once per open, and the
+      // re-renders that merge late candidates never reach it (measured at one
+      // capture pass against five renders for a single open). So rebuild
+      // unconditionally and re-arm every time.
+      let hadEditor = commandTextField.currentEditor() != nil
+      makeFirstResponder(nil)
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
-      if !editing {
-        (commandTextField.currentEditor() as? NSTextView)?
-          .updateInsertionPointStateAndRestartTimer(true)
-      }
-      responderDescription = editing ? "command(edit)" : "command(refocus)"
+      rearmCommandLineCaret()
+      // Arming once is not enough. The blink only starts if AppKit considers
+      // the panel key at that instant, and this pass usually runs before the
+      // activation it just requested has settled. Re-arm once the turn has
+      // settled.
+      scheduleCommandLineCaretRearm()
+      responderDescription = hadEditor ? "command(rebuilt)" : "command(new)"
       FlashLog.trace(
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
           + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode) "
           + "editor=\(commandTextField.currentEditor() != nil)")
+      let editorView = commandTextField.currentEditor() as? NSTextView
+      let drawsCaretDescription = editorView?.shouldDrawInsertionPoint.description ?? "no_editor"
+      FlashLog.trace(
+        "[overlay] capture_keyboard_key attempt=\(recoveryAttempt) "
+          + "visible=\(isVisible) on_active_space=\(isOnActiveSpace) "
+          + "is_key=\(isKeyWindow) app_key_is_self=\(NSApp.keyWindow === self) "
+          + "app_active=\(NSApp.isActive) draws_caret=\(drawsCaretDescription)")
       // Activation is granted asynchronously on modern macOS, so a single
       // makeKey() pass can land before we're active and leave the field
       // caret dead — and the normal-mode recapture ladder deliberately
       // skips while a modal is up, so nothing would ever retry. Run a
       // short bounded ladder of our own until the panel actually holds
       // key. Any newer capture pass supersedes it (generation).
-      if !isKeyWindow {
-        commandLineKeyRecoveryGeneration &+= 1
-        let generation = commandLineKeyRecoveryGeneration
-        for delayMs in [30, 80, 160, 320, 640] {
-          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
-            [weak self] in
-            guard let self,
-              self.commandLineKeyRecoveryGeneration == generation,
-              self.inputMode == .commandLine,
-              !self.isKeyWindow
-            else { return }
-            FlashLog.trace("[overlay] capture_keyboard key_retry delay=\(delayMs)")
-            self.captureKeyboardInput()
-          }
-        }
-      } else {
-        commandLineKeyRecoveryGeneration &+= 1
+      commandLineKeyRecoveryGeneration &+= 1
+      guard !commandLineHoldsKeyboardFocus else { return }
+      guard let delayMs = Self.commandLineKeyRecoveryDelayMs(afterAttempt: recoveryAttempt)
+      else {
+        FlashLog.warn(
+          "[overlay] capture_keyboard key_recovery_exhausted attempts=\(recoveryAttempt) "
+            + "active=\(NSApp.isActive) app_key_is_self=\(NSApp.keyWindow === self); "
+            + "command line has no caret")
+        return
+      }
+      let generation = commandLineKeyRecoveryGeneration
+      let nextAttempt = recoveryAttempt + 1
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+        guard let self,
+          self.commandLineKeyRecoveryGeneration == generation,
+          self.inputMode == .commandLine,
+          !self.commandLineHoldsKeyboardFocus
+        else { return }
+        FlashLog.trace(
+          "[overlay] capture_keyboard key_retry delay=\(delayMs) attempt=\(nextAttempt)")
+        self.captureKeyboardInput(recoveryAttempt: nextAttempt)
       }
       return
     }
@@ -555,20 +665,24 @@ extension OverlayPanel {
       frontDescription = "nil"
     }
 
+    let sourcePID = Self.activationSourcePID(
+      workspaceFrontPID: front?.processIdentifier,
+      lastNonFlashPID: coordinator?.lastFocusedApplicationPID,
+      currentPID: current.processIdentifier)
     var acceptedFrom = false
-    if #available(macOS 14.0, *),
-      let front,
-      front.processIdentifier != current.processIdentifier
-    {
+    if #available(macOS 14.0, *) {
       NSApp.activate()
-      acceptedFrom = current.activate(from: front, options: [.activateAllWindows])
-    } else if #available(macOS 14.0, *) {
-      NSApp.activate()
+      if let sourcePID, let source = NSRunningApplication(processIdentifier: sourcePID),
+        !source.isTerminated
+      {
+        acceptedFrom = current.activate(from: source, options: [.activateAllWindows])
+      }
     }
     let acceptedDirect = current.activate(options: [.activateAllWindows])
     let activeAfterRequest = NSApp.isActive
     FlashLog.trace(
       "[overlay] capture_activation front=\(frontDescription) "
+        + "source=\(sourcePID.map(String.init) ?? "nil") "
         + "accepted_from=\(acceptedFrom) accepted_direct=\(acceptedDirect) "
         + "active=\(activeAfterRequest)")
     return activeAfterRequest || acceptedFrom || acceptedDirect
@@ -584,68 +698,52 @@ extension OverlayPanel {
   /// by `display`, `displayBanner`, and `ensurePanelFrame` so the
   /// "are we already at this frame?" branch is in one place.
   func applyPanelFrame(_ frame: CGRect) {
+    if statusBarWindow.frame != frame {
+      statusBarWindow.setFrame(frame, display: false)
+      statusBarWindow.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+      statusBarWindow.contentLayer.frame = statusBarWindow.contentView?.bounds ?? .zero
+    }
     guard self.frame != frame else { return }
     self.setFrame(frame, display: false)
     self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
     contentLayer.frame = contentView?.bounds ?? .zero
   }
 
+  /// Per keystroke: toggles each chip by prefix and re-renders only the
+  /// visible labels. Labels are unique within a set, so there is nothing to
+  /// memoize across chips; the visible-index set exists only for debug bounds.
   func filter(prefix: String, hints: [AssignedHint]) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     let upper = prefix.uppercased()
     let prefixLen = upper.count
-    let fontSize = CGFloat(overlayConfig.fontSize)
-    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-    let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
-    let importantFGNS = nsColor(fromHex: overlayConfig.importantHintFG) ?? fgNS
+    let labelFont = NSFont.monospacedSystemFont(
+      ofSize: CGFloat(overlayConfig.fontSize), weight: .bold)
+    let colors = hintColors
+    let fgNS = nsColor(fromHex: colors.fg) ?? .black
+    let importantFGNS = nsColor(fromHex: colors.importantFG) ?? fgNS
+    let tracksBounds = debugConfig.showHintsBounds
     var visible = Set<Int>()
-    var cache: [AttributedLabelKey: NSAttributedString] = [:]
-    cache.reserveCapacity(hints.count)
     for (idx, hint) in hints.enumerated() {
       guard idx < hintLayers.count, idx < labelLayers.count else { break }
-      let chip = hintLayers[idx]
       let matches = hint.display.hasPrefix(upper)
-      chip.isHidden = !matches
-      // Only rebuild the visible chips' labels — hidden chips don't
-      // contribute to what the user sees and there's nothing wasted in
-      // leaving their previous-prefix label state in place.
-      if matches {
-        visible.insert(idx)
-        let l = labelLayers[idx]
-        // Keep CATextLayer's own font in lockstep with the attributed
-        // string's weight — see the note in `display(hints:)`. Cheap;
-        // CATextLayer compares font references and noops on equal.
-        l.font = labelFont
-        let accented = hint.target.priority.usesAccentHintStyle
-        // Memoise per `(display, typedPrefixLen, accented)` — the accent
-        // variant's fg colour differs, so it can't share the regular cache key.
-        let labelFG: NSColor = accented ? importantFGNS : fgNS
-        let key = AttributedLabelKey(
-          display: hint.display,
-          typedPrefixLen: prefixLen,
-          accented: accented)
-        if let cached = cache[key] {
-          l.string = cached
-        } else {
-          let attr = Self.attributedLabel(
-            display: hint.display, typedPrefixLen: prefixLen,
-            font: labelFont, fgNS: labelFG)
-          cache[key] = attr
-          l.string = attr
-        }
-      }
+      hintLayers[idx].isHidden = !matches
+      // Hidden chips keep their previous label; nobody sees it.
+      guard matches else { continue }
+      if tracksBounds { visible.insert(idx) }
+      let label = labelLayers[idx]
+      // Keep CATextLayer's own font in lockstep with the attributed
+      // string's weight — see the note in `display(hints:)`. Cheap;
+      // CATextLayer compares font references and noops on equal.
+      label.font = labelFont
+      label.string = Self.attributedLabel(
+        display: hint.display, typedPrefixLen: prefixLen, font: labelFont,
+        fgNS: hint.target.priority.usesAccentHintStyle ? importantFGNS : fgNS)
     }
-    if debugConfig.showHintsBounds {
+    if tracksBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()
-  }
-
-  private struct AttributedLabelKey: Hashable {
-    let display: String
-    let typedPrefixLen: Int
-    let accented: Bool
   }
 
   /// Centered paragraph style — immutable, allocated once.
@@ -725,7 +823,6 @@ extension OverlayPanel {
     // alert/banner/hide ran, so it stayed gone until the next geometry event.
     // Transient renderers re-attach it via
     // `appendActiveWindowBorderLayerIfNeeded`.
-    commandCaretLayer.isHidden = true
     clearCandidateFinderResults()
     lastTargetLocalRects.removeAll(keepingCapacity: true)
   }
@@ -763,7 +860,9 @@ extension OverlayPanel {
   }
 
   /// Chip's bounding rect in global NSScreen coordinates, for a target
-  /// rect + uniform chip size.
+  /// rect + uniform chip size: the `corner` placement, which is also where
+  /// every hint's click aims (`[overlay] hint_placement` only moves the
+  /// drawn chip, `HintPlacement.chipFrame`).
   ///
   /// Centring is gated on height first:
   ///  - If the target's height is under 130 % of the chip height, the

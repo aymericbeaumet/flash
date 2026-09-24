@@ -1,0 +1,38 @@
+{
+  "id": "terminals",
+  "name": "Terminals",
+  "version": "0.1.0",
+  "description": "Declares the terminal emulators Flash applies its terminal rules to, and the shortcuts they bind for built-in pane actions where no tmux client hosts the focused terminal.",
+  "terminal_emulators": [
+    "org.alacritty",
+    "io.alacritty",
+    "com.apple.Terminal",
+    "com.mitchellh.ghostty",
+    "com.googlecode.iterm2",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "dev.warp.Warp-Stable",
+    "co.zeit.hyperterm",
+    "co.zeit.hyper"
+  ],
+  "action_keystrokes": {
+    "pane_next": {
+      "com.mitchellh.ghostty": "cmd+]",
+      "com.googlecode.iterm2": "cmd+]"
+    },
+    "pane_previous": {
+      "com.mitchellh.ghostty": "cmd+[",
+      "com.googlecode.iterm2": "cmd+["
+    }
+  },
+  "help": {
+    "topics": [
+      {
+        "name": "terminals",
+        "title": "Terminals",
+        "summary": "Terminal emulators and their built-in pane shortcuts.",
+        "body": "# Terminals\n\nThis bundled manifest-only plugin declares which apps are terminal emulators (`terminal_emulators`). Flash applies its terminal rules only to them: a Command chord the emulator would type as text is refused, pixel wheels are refused, and plugins scoped `only_terminals` (tmux) match them. It also declares the chords emulators bind for built-in actions: `pane_next` / `pane_previous` send Cmd-] / Cmd-[ in Ghostty and iTerm2 when no tmux client hosts the focused terminal; tmux still owns its panes first. Add an emulator by declaring it in a plugin of your own.\n"
+      }
+    ]
+  }
+}

@@ -16,9 +16,21 @@ import Foundation
 /// the named keys (return, tab, space, escape, delete, arrows,
 /// home/end, pageup/down). `0xNN` accepts a raw virtual-key for
 /// keys without a name.
-struct ParsedHotkey {
+struct ParsedHotkey: Hashable {
   let modifiers: UInt32  // Carbon modifier flags
   let virtualKey: UInt32  // Carbon virtual key code
+
+  var keyCode: CGKeyCode { CGKeyCode(virtualKey) }
+
+  /// The Carbon modifiers as the `CGEventFlags` the key synthesizer consumes.
+  var eventFlags: CGEventFlags {
+    var flags: CGEventFlags = []
+    if modifiers & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
+    if modifiers & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
+    if modifiers & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
+    if modifiers & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
+    return flags
+  }
 }
 
 enum HotkeySyntax {
@@ -53,6 +65,7 @@ enum HotkeySyntax {
     case "tab": return UInt32(kVK_Tab)
     case "space": return UInt32(kVK_Space)
     case "delete", "backspace": return UInt32(kVK_Delete)
+    case "delete_forward", "forward_delete": return UInt32(kVK_ForwardDelete)
     case "escape", "esc": return UInt32(kVK_Escape)
     case "left": return UInt32(kVK_LeftArrow)
     case "right": return UInt32(kVK_RightArrow)
@@ -81,6 +94,7 @@ enum HotkeySyntax {
     case kVK_Tab: return "tab"
     case kVK_Space: return "space"
     case kVK_Delete: return "delete"
+    case kVK_ForwardDelete: return "delete_forward"
     case kVK_Escape: return "escape"
     case kVK_LeftArrow: return "left"
     case kVK_RightArrow: return "right"

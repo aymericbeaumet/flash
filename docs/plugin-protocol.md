@@ -4,14 +4,14 @@ This is the complete, language-agnostic contract between Flash and a plugin.
 Any executable that speaks it over stdio is a valid plugin. The maintained
 Rust SDK (`docs/plugin-rust-sdk.md`) is the blessed implementation, not a wall.
 
-Normativity order: `Plugins/_flash_plugin_specs/protocol.json` (the
+Normativity order: `Plugins/_flash_plugin_rust/protocol.json` (the
 machine-readable constants: version, deadlines, quotas, error strings,
-capability registry) plus the conformance scenarios in
-`Plugins/_flash_plugin_specs/` **are** the specification. This prose explains
-them; the Rust SDK implements them; any divergence is a bug in the derived
-artifact, never in the spec. `Scripts/plugin-protocol-spec.py` runs the
-scenarios against any plugin process, host-free, and CI runs the full matrix
-against every bundled plugin and the Rust SDK conformance probe.
+capability registry, transport limits) **is** the specification, and the
+Rust SDK's wire/runtime tests plus its probe crate
+(`Plugins/_flash_plugin_rust/probe`) are the conformance authority that
+proves it. This prose explains the contract; the host asserts its constants
+against the same file; any divergence is a bug in the derived artifact, never
+in the contract.
 
 ## Process model
 
@@ -20,7 +20,14 @@ bundle; third-party plugins are listed in `[plugins] third_party` as
 `github:user/project@<commit-sha>` (full 40-character SHA, mandatory — the
 materializer fetches exactly that commit and refuses a mismatched checkout) or
 `file:<path>`. The manifest's optional `install` shell string (third-party
-only) runs sandboxed from the plugin root; `exec` is an argv array exec'd
+only) runs sandboxed from the plugin root on an asynchronous install job.
+The job owns a process group, drains both output pipes while it runs, retains
+at most 4 MiB stdout / 256 KiB stderr, and escalates timeout or cancellation
+from SIGTERM to SIGKILL after 500 ms. A stopped/replaced attempt cannot write
+an install stamp or launch a child. Install attempts for the same canonical
+root run in submission order across process replacements. Cancellation keeps
+ownership until the old group exits; cancelled waiting attempts never spawn.
+`exec` is an argv array exec'd
 directly with the scrubbed plugin environment — no shell wrap. Its first
 element resolves in order: absolute paths pass through, `./`-style paths
 resolve against the plugin root (official Rust plugins), and bare names resolve
@@ -44,30 +51,53 @@ which launches it (the `perform` deadline comfortably absorbs the startup
 budget) and then it stays running normally. Manifest-only plugins (no `exec`)
 never spawn at all.
 
+A *status-bound* plugin — `status` with no `sources`, `query` or `hints`, its
+`listen` subscriptions presumed to feed those segments — is resident only while
+the enabled status bar, its options, one of its popups or a desktop widget
+shows one of its segments; otherwise it is on-demand. A config reload that
+starts showing it spawns it; one that stops showing it stops the process and
+returns it to on-demand, unless a command started it, since on-demand plugins
+stay running once a command needs them. `:plugins` reports the effective
+activation.
+
 **Lifecycle state machine.**
 
 ```
-stopped → installing → launching → running → stopped
-              │            │          │
-              │   (no initialize reply│ (exit, write error, missed ping)
-              │    / version mismatch)▼
-              └────────► failed ◄── backoff restart loop (5 in 300 s → failed)
+initial / idle → installing → launching → running
+                   │            │          │
+                   └────────────┴──────────┴── failure → backoff → installing
+                                                        │
+                                               budget exhausted → failed
+stop → stopped (all attempt work invalidated)
 ```
 
 `launching` = spawned, awaiting the initialize reply; the host dispatches no
 other requests and no events until `running`. Restarts back off linearly
-(1..30 s); 5 restarts within 300 s parks the plugin in `failed` (recover with
-`:plugins reload` or a plugin-file change). The published catalog survives
+(1..30 s); after five retries within 300 s, another failure parks the plugin in `failed` (recover with
+`:plugins reload` or a plugin-file change). Successful initialize does not
+reset the rolling failure budget; even an initialize-then-crash loop parks.
+Lifecycle transitions belong to attempt generations. Stop/reload invalidates
+pending retries, installation completions, and transport work. Rejected
+initialize replies park immediately. The published catalog survives
 crashes and restarts (see `publish`) and is dropped on `failed` or unload;
 status segments clear on any teardown; in-flight `perform`s settle as errors.
+Asynchronous host RPC replies stay attached to the child that requested them:
+a replacement child can reuse an ID without receiving the old child's reply.
+
+Explicit reload and file changes reconcile the manifest through PluginManager.
+Unchanged definitions restart only the affected binaries and retain catalogs.
+A changed valid definition rebuilds its registrations, authorization, adapter,
+and process together and drops its previous catalog. An invalid replacement
+keeps the last validated definition running and reports its load error; fixing
+the file allows reconciliation to recover without a resident-app restart.
 A plugin should also exit when `FLASH_PLUGIN_PARENT_PID` dies.
 
 **Shutdown.** There is no shutdown method. The host closes the plugin's
 stdin; **stdin EOF is the shutdown signal** — run cleanup, exit 0. The host
 waits `shutdown_grace` (1 s), then SIGTERM, then (+0.5 s) SIGKILL.
 
-**Liveness.** There is no periodic heartbeat. Process death is caught by pipe
-EOF; a hung request is caught by its own deadline. The one residual probe: if
+**Liveness.** There is no periodic heartbeat. The process termination handler
+catches child exit; a hung request is caught by its own deadline. The one residual probe: if
 the host has received *no frame at all* from a plugin for `idle_before_ping`
 (60 s) and has nothing in flight, it sends `ping`; one missed reply (10 s)
 tears down and restarts. Any plugin frame — a publish, a log line, a response
@@ -78,18 +108,33 @@ conformant: pings never race in-flight requests.
 
 NDJSON on stdin/stdout: UTF-8, one JSON object per newline-terminated line, no
 envelope beyond `id`/`method`/`params`/`result` (`id`+`method` = request,
-`id` alone = response, `method` alone = notification). Ids are positive
-monotonic integers per sender; host and plugin counters are independent and
+`id` alone = response, `method` alone = notification), plus the host's
+optional `trace` on a request: the id (`^[0-9a-z]{1,16}$`) of the user
+interaction that caused it. A `log` notification emitted while serving that
+request carries it back as `params.trace` (the Rust SDK does both), so one
+interaction reads end to end across processes; see
+[observability](observability.md). Every request also carries `deadline_ms`,
+the milliseconds the host still waits for its reply as it writes it. Ids are positive
+monotonic integers per sender. Booleans and floating-point values are never
+integer IDs or protocol versions; `ok` and other Boolean fields accept only
+JSON booleans. Native process IDs are checked positive 32-bit integers.
+Host and plugin counters are independent and
 may overlap — an inbound `id`+`method` frame is always a request, never a
 reply. Exactly one reply per id'd request; responses to unknown ids are
-dropped. There is **no cancellation**: late replies are dropped and the
-deadline table is the contract. Lines are capped at 10 MiB in both
-directions; an undecodable or oversized line is dropped (never fatal) and the
+dropped. There is **no cancellation** message: late replies are dropped and
+the deadline table is the contract. A plugin may stop a handler whose answer
+would come too late: the Rust SDK drops a `search` or `hints` handler still
+running a tenth of `deadline_ms` (at most 50 ms) before it, which answers
+`{"ok": false, "error": "deadline exceeded"}` and logs a warning under the
+request's trace; `evaluate` and `perform` run to completion. Lines are capped at 10 MiB in both
+directions, excluding the terminating newline; an undecodable or oversized line is dropped (never fatal) and the
 stream self-heals at the next newline. An outbound response that would exceed
 the cap is replaced by `{"ok": false, "error": "response exceeded outbound
 frame limit"}` under the same id. stderr is diagnostics only — lines are
 logged but never treated as plugin failure; use the `log` notification for
-structured logging (recorded with `source = "plugin:<id>"`). Geometry is
+structured logging (recorded with `source = "plugin:<id>"`); stderr is logged
+as whole lines, each capped at 4 KiB, at most 20 per 10 s, and the rest are
+counted. Geometry is
 always NSScreen coordinates.
 
 **The response law.** Every `result` is a JSON object carrying boolean `ok`.
@@ -103,14 +148,15 @@ content, or config values.
 
 ## Deadlines
 
-One table, in `protocol.json`, that the host, Rust SDK, runner, and this
-doc all share:
+One table, in `protocol.json`, that the host, the Rust SDK, and this doc
+all share:
 
 | name | value | applies to |
 | --- | --- | --- |
 | `startup` | 5 s (config `[plugins] startup_timeout`) | `initialize` |
 | `query` | 50 ms | `evaluate` |
-| `live` | 1000 ms (config `[flashlight] live_query_timeout_ms`) | `search`, `hints` |
+| `live` | 1000 ms (config `[flashlight] live_query_timeout_ms`) | `search` |
+| `hints` | 500 ms (fixed; blocks the AX queue ahead of the prepared model) | `hints` |
 | `perform` | 10 s (per-entry `commands[].timeout_ms` overrides) | `perform` |
 | `ping` | 10 s | `ping` reply |
 | `idle_before_ping` | 60 s | inbound silence before a ping |
@@ -139,7 +185,9 @@ Notifications have no deadlines.
   globs: `core:flash.started`, `core:apps.changed|launched|terminated`,
   `core:focus.changed`, `core:window.focus.changed`, `core:ax.changed`,
   `core:clipboard.changed` (requires the `clipboard` capability),
-  `core:config.changed`, `core:power.changed`, `core:space.changed`, and
+  `core:config.changed`, `core:power.changed`, `core:space.changed`,
+  `core:status.observed` (which of the plugin's own status segments a
+  surface shows; see [Status observation](#status-observation)), and
   `core:session.opened` (the flashlight opened; advisory — eager plugins may
   refresh, nothing is required).
 - `evaluate` — `{query, scope, surface}` → `{"ok": true, "answers": [...]}`.
@@ -159,11 +207,18 @@ Notifications have no deadlines.
   cached-discovery path. The host owns commit: it posts the mouse event
   directly to the target app and never calls back into the plugin to
   activate a target. Use role `AXLink` for native-style semantic links (`f`
-  plain except Firefox-owned targets add Command; `F` Command-Shift), or
+  plain; `F` Command-Shift), or
   `FlashTerminalLink` for links inside terminal content (`f` Shift, `F`
-  Command-Shift). Non-link targets always receive a plain click. Targets:
-  `{id, frame{x,y,width,height}, role?, label?, url?, pid?,
-  enters_insert_mode?, priority?}`.
+  Command-Shift). Every target preserves the requested click modifiers. Targets:
+  `{id, frame{x,y,width,height}, role?, label?, url?, pid?, context_id?,
+  enters_insert_mode?, priority?}`. The nested `frame` is required; flat
+  coordinates and unknown target fields are rejected. Geometry must be finite
+  with positive width/height. One malformed target rejects the entire reply.
+  `context_id` is an optional non-empty opaque string identifying the live
+  source context containing the target. The host requires an exact match when
+  revalidating a captured hint; omitted/null means unspecified. Tmux includes
+  its backend, client tty, server process, session, window and pane identities,
+  so a reused pane label in another session cannot receive a captured click.
 - `perform` — the single effect method. Four kinds:
 
   ```json
@@ -191,6 +246,51 @@ Notifications have no deadlines.
   to a plugin in `failed`/unspawnable state — it settles as `unhandled`
   without burning the deadline (nothing could have started).
 
+### Status observation
+
+`core:status.observed` tells a plugin which of its own status segments a
+status surface currently shows, so work that only feeds a segment runs only
+while someone can see it. The `processes` plugin registers its top-N
+cadence only while `top_cpu` or `top_mem` is observed.
+
+```json
+{"method": "event", "params": {"name": "core:status.observed",
+  "payload": {"segments": ["focused_app_details", "top_cpu"]}}}
+```
+
+- **Payload.** `segments` is required: the complete set of this plugin's
+  observed segments as bare manifest `status` names (no
+  `flash.plugin.<id>.` prefix), each nonempty and listed once. The host
+  sends them sorted; order carries no meaning. `[]` is authoritative —
+  nothing is observed. Names the manifest does not declare never appear,
+  and no other plugin's segments do. Other payload keys are ignored.
+- **Observed.** A segment is observed while a live surface would resolve
+  `#{flash.plugin.<id>.<segment>}`: the enabled bar's template and the
+  options it expands, its named popups, and desktop widgets. These are the
+  references that keep a status-bound plugin resident, refined from plugin
+  ids to segment names. A disabled bar or a removed widget observes nothing.
+- **Delivery.** Filtered by `listen` like every other event, and not
+  capability-gated: segment names are manifest data, not user content. The
+  host sends the current set once right after the initialize reply (after
+  the `core:apps.changed` snapshot), even when it is empty, so every
+  restarted child starts from the truth. It sends it again whenever that
+  plugin's set changes — a configuration reload, the bar being enabled or
+  disabled, a widget appearing or disappearing — and never repeats an
+  unchanged set. Observation does not change activation or residency.
+- **Coalescing.** The set is a full replacement. Under event backlog
+  overload the plugin keeps only the latest one (see the SDK's replacement
+  slots), so intermediate sets may be skipped but the final set arrives.
+- **Rejection.** A payload whose `segments` is missing, null, not an array
+  of strings, or contains an empty or duplicate name is malformed. The Rust
+  SDK drops it whole with a content-free warning and does not deliver it.
+  The `status_observed` group in `fixtures/wire-values.fixture` pins these
+  cases; host tests of the payload it builds can consume the same group.
+
+A plugin keeps the segments it publishes correct regardless: observation
+schedules work, it does not filter what the host renders. A plugin that
+stops sampling for an unobserved segment should clear it (`""`), so a
+surface that shows it again never reads stale figures.
+
 ## Plugin → host
 
 Notifications:
@@ -208,17 +308,36 @@ Notifications:
   over-quota publish is rejected whole (content-free log) and the previous
   catalog is retained. An open flashlight refreshes from the store on a
   coalesced ≤1/s tick — lossless, since the store is already current.
-- `status` — `{"segments": {"name": "value"}}` for manifest-declared status
-  segments, rendered as `#{plugin:<id>.<segment>}`; `""` clears a segment;
-  undeclared names are ignored. Segments are live state: cleared on any
-  teardown (unlike catalogs).
+- `status` — `{"segments": {"name": value}}` for manifest-declared status
+  segments, rendered as `#{flash.plugin.<id>.<segment>}`. A value is markup
+  (`""` clears) or a carousel object
+  `{"prefix"?: markup, "lines": [markup], "cycle_seconds": >= 1}`: the host
+  rotates the lines on its own clock (a republish keeps the visible line until
+  its scheduled rotation), draws `prefix` still before the visible line, and
+  wraps that line in `#[cyc]…#[nocyc]` for the carousel transition; blank
+  lines are dropped, no lines clears, and a malformed object is rejected whole
+  with a content-free warning. Undeclared names are ignored. Segments are live
+  state: cleared on any teardown (unlike catalogs).
+- `poll` — `{"intervals": {"<name>": <seconds>}}`, the plugin's complete set of
+  cadences it wants the host to drive; an empty set stops its polling. Plugins
+  must not arm their own timers. The host folds every registration in the app
+  onto one clock (see the architecture guide) and delivers
+  `event {"name": "core:poll:<name>"}` when one is due, bypassing manifest
+  `listen` because the registration *is* the subscription. Names are
+  `[a-z0-9_-]`, the floor is 0.05 s, and a malformed frame is rejected whole.
+  Ticks are one-way and unacknowledged, so a plugin whose previous callback is
+  still running drops the ticks it missed rather than running back-to-back to
+  catch up. Reach for a cadence only when no event can tell you the value
+  changed.
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
   elapsed ms, method names — never query text, candidate data, clipboard
   content, config values, or event payloads).
 
 Host RPCs, capability-gated default-deny (checked per process against the
 manifest; the full method↔capability table lives in `protocol.json`):
-`host.ping`, `host.fetch` (`network_fetch`), `host.normal_mode_target` +
+`host.ping`, `host.fetch` (`network_fetch`), `host.normal_mode_target`
+(which also reports the focused window's WindowServer `window_id`, so a plugin
+can name a window without asking the user to pick one) +
 `host.activate` (`app_control`), `host.open` (`open`), `host.post_media_key`
 (`media_keys`), `host.process_table` + `host.signal` (`process_control`),
 `host.clipboard_write` (`clipboard`), `host.notify` (`notify`),
@@ -242,12 +361,17 @@ RPC open. The method returns
 plugin per second). `host.storage_get`/`host.storage_set` are a host-managed
 KV store persisted to `storage.json` in the plugin's data dir (`{"key"}` /
 `{"key", "value" | null}`; keys ≤ 128 B, values ≤ 64 KiB, 256 entries; null
-deletes). `host.post_global_key` accepts one `{key_code, modifiers}` chord
+deletes). `host.open` takes `{"url"}` or `{"bundle_id"}`; a URL's reply also
+names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
+plugin can confirm that app still has focus before acting on it.
+`host.post_global_key` accepts one `{key_code, modifiers}` chord
 posted through the host's session event stream for macOS-owned shortcuts and
 rejects unmodified input. The AX broker exists because `AXUIElement` cannot
 cross a process boundary: `host.ax_snapshot` BFS-walks a subtree (default
 cap 3000 nodes) and returns flat nodes with opaque handles; geometry in
-NSScreen coordinates. `capabilities` also includes `network` (composes
+NSScreen coordinates. An optional `deadline_ms` bounds the walk from the
+call's arrival: past it the reply carries the nodes reached so far and
+`"truncated": true`. `capabilities` also includes `network` (composes
 `network-outbound` into the sandbox profile), `network_fetch` (the host
 performs HTTPS GETs on the plugin's behalf via `host.fetch`, restricted to
 the manifest's `fetch_urls` prefixes, 8 s timeout, 1 MiB UTF-8 cap — the
@@ -283,7 +407,13 @@ they reject URLs: evaluators cannot manufacture navigation). There is
 deliberately no `run` effect — a host-executed argv would escape the
 plugin's sandbox; side effects that run commands belong in `perform`, inside
 the sandbox. Every bound rejects the complete payload atomically; nothing is
-silently truncated.
+silently truncated. Array byte quotas count the compact UTF-8 JSON encoding
+of `rows` or `answers`, including JSON syntax and string escaping, with literal
+Unicode and unescaped slashes; the surrounding request/response envelope is
+excluded. Publish and search apply the same catalog decoder and byte boundary.
+Optional values may be null, but present values must have the declared type.
+Perform outcomes form an exclusive union: success fields cannot accompany an
+error, and `unhandled` cannot accompany success or an error string.
 
 ## Manifest
 
@@ -294,8 +424,9 @@ read-denied, network and exec open), with its full output persisted for
 forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
-`mappings`, `help`, and `verbs` whose every entry declares a keystroke (the
-bundled `defaults` plugin is the exemplar). Anything process-bound is
+`mappings`, `help`, `action_keystrokes`, `terminal_emulators`,
+`on_demand_hints`, and `verbs` whose every entry declares a keystroke (the bundled `defaults` and `terminals` plugins are the
+exemplars). Anything process-bound is
 rejected. Loading is strict — unknown top-level or nested keys and malformed
 known fields are rejected outright, and new manifest surface only ever
 arrives together with a protocol change, so "unknown key" always means "typo
@@ -334,6 +465,10 @@ or stale host", never ambiguity.
   "verbs": [
     { "name": "example_save", "keystrokes": { "": "cmd+s" } }
   ],
+  "action_keystrokes": {
+    "tab_next": { "": "cmd+shift+]" },
+    "app_reload_force": { "": "cmd+shift+r", "com.apple.Safari": "cmd+option+r" }
+  },
   "mappings": [
     {
       "key": "R",
@@ -382,28 +517,73 @@ Section semantics:
 - **`status`** — status-bar segment names fed by the `status` notification.
 - **`verbs`** — CLI/mapping verbs; `keystrokes` lets the host handle fixed
   keystroke verbs without any plugin RPC.
-- **`mappings`** — key bindings scoped `all | normal | insert` (default
+- **`action_keystrokes`** — the chords an app binds for Flash's built-in
+  source actions: action name → bundle id → chord, where `""` covers every
+  app the root selector matches. The host sends the chord when no source
+  performs the action in the focused app; an app's own entry beats a
+  plugin-wide one, then selector specificity and `priority` decide. Names are
+  `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_new`,
+  `tab_close`, `tab_reopen`, `tab_move_next`, `tab_move_previous`,
+  `window_close`, `pane_next`, `pane_previous`, `pane_split_vertical`,
+  `pane_split_horizontal`, `pane_close`, `app_reload`, `app_reload_force`,
+  `resource_archive`, `resource_next`, `resource_previous`, `scroll_top` and
+  `scroll_bottom`; an unknown name or unparseable chord rejects the manifest.
+  Manifest-only plugins may declare it. App knowledge lives here, never in
+  the host.
+- **`terminal_emulators`** — bundle ids of apps this plugin declares as
+  terminal emulators. No protocol identifies one, so the host learns them as
+  data: across plugins the union gets the terminal rules (an unbound Command
+  chord is refused rather than typed, pixel wheels are refused) and matches
+  `only_terminals`. The bundled manifest-only `terminals` plugin declares the
+  common emulators.
+- **`on_demand_hints`** — bundle ids of apps whose accessibility tree costs
+  too much to warm in the background. Across plugins, the union is walked
+  only when hints are requested and observed with the reduced notification
+  set that drives mode, border and focus. The bundled `defaults` plugin
+  declares Notes.
+- **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
-  may scope with `only_bundle_ids`.
+  may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
+  when its final key is pressed again, as in config. Terminal mappings are local to a focused
+  status popup. Every global mapping registration is suspended while that view
+  owns input; only winning INSERT-active `enter_normal_mode` bindings are
+  inherited as terminal defaults, and explicit terminal bindings override them.
+  Terminal sequences use the shared key syntax without `<leader>`, implicit
+  counts, or register prefixes. See [terminal popup input](normal-mode.md#terminal-popup-input).
 
-`only_bundle_ids` may appear at the root and on mapping entries; root and
-entry selectors compound. The numeric manifest `priority` (default 25) is
+`only_bundle_ids` and `only_terminals` may appear at the root and on mapping
+entries; root and entry selectors compound. `only_terminals: true` scopes to
+the declared terminal emulators (the union of every plugin's
+`terminal_emulators`, see below) so a plugin never carries its own terminal
+allowlist; the registry
+instantiates such a plugin only while a known terminal runs, and its `hints`
+provider is consulted only in those apps, keeping hint activation elsewhere on
+the zero-hop prepared-model path. The numeric manifest `priority` (default 25) is
 scheduling/collision arbitration — do not confuse it with the semantic
 `sources[].priority` salience enum.
 
 ## Conformance workflow
 
-Shared protocol scenarios live under `Plugins/_flash_plugin_specs/` and are
-selected by the capabilities declared in each manifest. Put behavior that is
-specific to one plugin process in `Plugins/<id>/specs/*.json`; put a host/Rust
-SDK wire-contract regression in `Plugins/_flash_plugin_specs/regressions/`.
-For a protocol defect, land the smallest shared reproduction before changing
-the implementation.
+`Plugins/_flash_plugin_rust/protocol.json` pins the constants; the SDK's
+`cargo test` suite pins the behaviour. Wire and lifecycle rules — framing,
+ids, noise, the handshake, protocol mismatch, request decoding, notification
+shapes, shutdown draining, host-RPC correlation — are `WireHarness` tests in
+`Plugins/_flash_plugin_rust/src/runtime.rs`, driving the real serve loop over
+in-memory NDJSON streams. `Plugins/_flash_plugin_rust/fixtures/wire-values.fixture`
+is the malformed and boundary-value corpus the SDK and the host's XCTest
+suites both consume, and the probe crate `Plugins/_flash_plugin_rust/probe`
+drives a generic `plugin!`-generated plugin through every surface (catalog,
+evaluate, search, hints, the perform trichotomy, notifications, events,
+host-RPC arms) over the wire. For a protocol defect, land the failing test
+there before changing the implementation.
 
-`Plugins/_flash_plugin_specs/overrides.json` is the only skip/xfail escape
-hatch. Every entry needs a concrete reason. An expected failure that starts
-passing is reported as XPASS and fails the run, so remove the override as soon
-as the implementation catches up.
+Behaviour specific to one plugin — scripted host replies, the published
+catalog, status rows — is a `cargo test` in `Plugins/<id>` written against
+`flash_plugin::testing::Harness`. Real process spawning, manifest
+reconciliation and shutdown are the host XCTest suites' business;
+`PluginSandboxExecTests` compiles every bundled seatbelt profile and boots
+every built sandboxed plugin under its resolved profile with the scrubbed
+plugin environment.
 
 The complete gate is:
 
@@ -411,10 +591,9 @@ The complete gate is:
 ./Scripts/test-plugins.sh --lane all
 ```
 
-It validates the scenario schema, formats and lints every Rust crate, runs unit
-tests, builds all plugins and the generic Rust probe, and exercises the full
-wire matrix. Its sandbox lane separately runs the lifecycle/handshake and
-sources/publish scenarios under the real generated Seatbelt profiles.
+It formats and lints every Rust crate, runs the plugin-publication test and
+every crate's unit tests (the SDK workspace includes the probe), and builds
+all plugins.
 
 ### Seatbelt profile invariants
 
@@ -451,10 +630,9 @@ after external plugins exist is a migration, not an edit:
 9. Namespacing: row `source` names, storage keys, status segments, and log
    sources are plugin-id-scoped host-side.
 10. Content-free logging.
-11. Normativity order: `protocol.json` + conformance specs > this prose >
-    the Rust SDK.
+11. Normativity order: `protocol.json` + the SDK's conformance tests > this
+    prose > any implementation.
 
 Debugging is a first-class feature of this transport: run any plugin binary
-in a terminal and type NDJSON at it — no host required. The conformance
-runner does exactly that, and `Plugins/_flash_plugin_specs/schema.json`
-documents the scenario language for writing new specs.
+in a terminal and type NDJSON at it — no host required. The SDK's
+`WireHarness` does the same in-process from `cargo test`.

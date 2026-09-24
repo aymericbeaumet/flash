@@ -9,7 +9,6 @@ final class DebugServer {
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
   private var listener: NWListener?
   private var logSinkID: UUID?
-  private var stateTimer: DispatchSourceTimer?
   private var logs: [[String: Any]] = []
   private var eventConnections: [UUID: NWConnection] = [:]
   /// Last app-state snapshot — taken on the main thread, then confined to
@@ -61,7 +60,9 @@ final class DebugServer {
       listener.start(queue: queue)
       self.listener = listener
       startStateTimer()
-      logSinkID = FlashLog.addSink { [weak self] record in
+      // Follows `[debug] log_level`: the inspector shows what the log file
+      // gets, and never forces lower-level messages on hot paths to be built.
+      logSinkID = FlashLog.addSink(minLevel: nil) { [weak self] record in
         self?.append(record)
       }
     } catch {
@@ -74,8 +75,7 @@ final class DebugServer {
       FlashLog.removeSink(logSinkID)
     }
     logSinkID = nil
-    stateTimer?.cancel()
-    stateTimer = nil
+    PollScheduler.shared.unregister(Self.pollClientID)
     listener?.cancel()
     listener = nil
     for connection in eventConnections.values {
@@ -123,17 +123,19 @@ final class DebugServer {
     }
   }
 
+  /// The inspector page is a debug surface with no change notification of its
+  /// own, so it refreshes on a cadence — registered with the shared clock like
+  /// everything else, and only while a browser is actually listening.
   private func startStateTimer() {
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(
-      deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(150))
-    timer.setEventHandler { [weak self] in
+    PollScheduler.shared.register(
+      Self.pollClientID, everyMs: 1000, priority: .low, on: queue
+    ) { [weak self] in
       guard let self, !self.eventConnections.isEmpty else { return }
       self.refreshStateFromMain()
     }
-    stateTimer = timer
-    timer.resume()
   }
+
+  static let pollClientID = "core:debug_inspector"
 
   private func handle(_ connection: NWConnection) {
     guard Self.isLoopback(endpoint: connection.endpoint) else {
@@ -151,6 +153,14 @@ final class DebugServer {
         connection.cancel()
         return
       }
+      // A loopback peer is not enough: a web page can rebind its own hostname
+      // to 127.0.0.1 and read /state (clipboard, hints) and /logs through the
+      // victim's browser. That request carries the attacker's hostname.
+      guard Self.hostIsLoopback(request: request, port: self.listeningPort) else {
+        FlashLog.warn("[debug] http inspector refused a request for a foreign host")
+        self.sendText("forbidden", status: "403 Forbidden", connection: connection)
+        return
+      }
       let path = Self.requestPath(request)
       switch path {
       case "/":
@@ -158,7 +168,12 @@ final class DebugServer {
       case "/state":
         self.sendJSON(self.cachedState, connection: connection)
       case "/logs":
-        self.sendJSON(["logs": self.logs], connection: connection)
+        let trace = Self.queryValue("trace", in: request)
+        let logs =
+          trace.map { id in self.logs.filter { $0["trace"] as? String == id } } ?? self.logs
+        self.sendJSON(["logs": logs], connection: connection)
+      case "/traces":
+        self.sendJSON(["traces": Self.traceSummaries(self.logs)], connection: connection)
       case "/events":
         self.startEvents(connection)
       default:
@@ -267,6 +282,84 @@ final class DebugServer {
       \r
       \(body)
       """
+  }
+
+  /// The request's `Host` header names this loopback listener: 127.0.0.1,
+  /// localhost or [::1], on its own port.
+  static func hostIsLoopback(request: String, port: UInt16?) -> Bool {
+    let header = request.split(whereSeparator: \.isNewline).dropFirst().first { line in
+      line.lowercased().hasPrefix("host:")
+    }
+    guard let header else { return false }
+    let value = header.dropFirst("host:".count).trimmingCharacters(in: .whitespaces).lowercased()
+    for name in ["127.0.0.1", "localhost", "[::1]"] {
+      if value == name { return port == 80 }
+      if let port, value == "\(name):\(port)" { return true }
+    }
+    return false
+  }
+
+  /// Recent interactions (`Trace`), newest first: when each began and last
+  /// logged, how many lines it produced, its worst level, and which host and
+  /// plugin sources took part — the index into `/logs?trace=`.
+  static func traceSummaries(_ logs: [[String: Any]]) -> [[String: Any]] {
+    struct Summary {
+      var origin = ""
+      var first = Int64.max
+      var last = Int64.min
+      var lines = 0
+      var worst = FlashLog.Level.trace
+      var sources: [String] = []
+    }
+    var summaries: [String: Summary] = [:]
+    for log in logs {
+      guard let trace = log["trace"] as? String else { continue }
+      var summary = summaries[trace] ?? Summary()
+      let time = (log["time_unix_ms"] as? Int64) ?? Int64(log["time_unix_ms"] as? Int ?? 0)
+      summary.first = min(summary.first, time)
+      summary.last = max(summary.last, time)
+      summary.lines += 1
+      if let level = (log["level"] as? String).flatMap(FlashLog.Level.parse), level > summary.worst
+      {
+        summary.worst = level
+      }
+      if log["message"] as? String == "[trace] begin",
+        let origin = (log["fields"] as? [String: String])?["origin"]
+      {
+        summary.origin = origin
+      }
+      if let source = log["source"] as? String {
+        let owner = source.hasPrefix("plugin:") ? source : "core"
+        if !summary.sources.contains(owner) { summary.sources.append(owner) }
+      }
+      summaries[trace] = summary
+    }
+    return summaries.sorted { $0.value.first > $1.value.first }.prefix(200).map { trace, summary in
+      [
+        "trace": trace,
+        "origin": summary.origin,
+        "started_unix_ms": summary.first,
+        "duration_ms": summary.last - summary.first,
+        "lines": summary.lines,
+        "worst_level": summary.worst.name,
+        "sources": summary.sources,
+      ]
+    }
+  }
+
+  static func queryValue(_ name: String, in request: String) -> String? {
+    let first = request.split(separator: "\n", maxSplits: 1).first ?? ""
+    let parts = first.split(separator: " ")
+    guard parts.count >= 2,
+      let query = parts[1].split(separator: "?", maxSplits: 1).dropFirst().first
+    else { return nil }
+    for pair in query.split(separator: "&") {
+      let kv = pair.split(separator: "=", maxSplits: 1)
+      if kv.first == Substring(name), kv.count == 2 {
+        return String(kv[1]).removingPercentEncoding
+      }
+    }
+    return nil
   }
 
   private static func requestPath(_ request: String) -> String {

@@ -1,21 +1,14 @@
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use flash_plugin::status::{bytes_iec, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    inline_status_popup, run, run_command, CommandRequest, Context, PerformResponse,
+    run, sys, Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    StatusValue,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const HISTORY_SAMPLES: usize = 20;
-const DETAIL_LABEL_WIDTH: usize = 14;
-const VM_STAT: &str = "/usr/bin/vm_stat";
-const SYSCTL: &str = "/usr/sbin/sysctl";
-const KIB: u64 = 1024;
-const MIB: u64 = KIB * 1024;
-const GIB: u64 = MIB * 1024;
-const TIB: u64 = GIB * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MemorySnapshot {
@@ -35,11 +28,57 @@ impl MemorySnapshot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct StatusSegments {
-    summary: String,
-    details: String,
-    plain_details: String,
+/// The published segments: `label` is the bare bar text, `summary` adds the
+/// inline history in full mode, and the preview backs both `summary` and
+/// `details`. `percent` and `history` carry the same figures as plain
+/// integers for templates and widgets that scale or chart them themselves.
+#[derive(Debug, PartialEq, Eq)]
+struct Status {
+    label: Markup,
+    summary: Markup,
+    preview: Preview,
+    /// Used memory as an integer 0–100; unlike the label, never capped at 99.
+    percent: String,
+    /// The retained samples as space-separated integers, oldest first; empty
+    /// clears the segment.
+    history: String,
+}
+
+impl Status {
+    fn segments(&self) -> [(&'static str, StatusValue); 5] {
+        [
+            (
+                "summary",
+                StatusValue::text(self.summary.clone()).with_preview(self.preview.clone()),
+            ),
+            ("label", StatusValue::text(self.label.clone())),
+            ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.percent)),
+            ("history", plain(&self.history)),
+        ]
+    }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
+}
+
+/// Rounded to the nearest integer and clamped to 0–100; NaN reads as 0.
+fn whole_percent(value: f64) -> u8 {
+    if value > 0.0 {
+        value.min(100.0).round() as u8
+    } else {
+        0
+    }
+}
+
+fn percent_series(history: &History<HISTORY_SAMPLES>) -> String {
+    history
+        .iter()
+        .map(|sample| whole_percent(sample).to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,8 +117,8 @@ enum GatePolicy {
 #[derive(Default)]
 struct MonitorState {
     snapshot: Option<MemorySnapshot>,
-    history: VecDeque<f64>,
-    published: Option<StatusSegments>,
+    history: History<HISTORY_SAMPLES>,
+    published: Published<Status>,
     failure_logged: bool,
 }
 
@@ -142,12 +181,12 @@ async fn refresh_and_publish(
     let Some(_guard) = acquire_collection(gate, policy).await else {
         return;
     };
-    let result = collect_memory(ctx).await;
+    let result = sys::memory_stats().ok().and_then(snapshot_from).ok_or(());
     {
         let mut state = lock_state(state);
         match result {
             Ok(snapshot) => {
-                append_history(&mut state.history, snapshot.occupied_percent());
+                state.history.push(snapshot.occupied_percent());
                 state.snapshot = Some(snapshot);
                 state.failure_logged = false;
             }
@@ -165,23 +204,6 @@ async fn refresh_and_publish(
     publish_if_changed(ctx, state);
 }
 
-async fn collect_memory(ctx: &Context) -> Result<MemorySnapshot, ()> {
-    let vm_stat_argv = [VM_STAT.to_string()];
-    let sysctl_argv = [
-        SYSCTL.to_string(),
-        "hw.memsize".to_string(),
-        "vm.swapusage".to_string(),
-    ];
-    let (vm_stat, sysctl) = tokio::join!(
-        run_command(ctx, &vm_stat_argv, COMMAND_TIMEOUT),
-        run_command(ctx, &sysctl_argv, COMMAND_TIMEOUT)
-    );
-    if !vm_stat.ok || !sysctl.ok {
-        return Err(());
-    }
-    parse_memory(&vm_stat.stdout, &sysctl.stdout).ok_or(())
-}
-
 fn begin_collection(gate: &tokio::sync::Mutex<()>) -> Option<tokio::sync::MutexGuard<'_, ()>> {
     gate.try_lock().ok()
 }
@@ -197,26 +219,21 @@ async fn acquire_collection<'a>(
 }
 
 fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
-    let next = {
+    let segments = {
         let mut state = lock_state(state);
-        let snapshot = match state.snapshot.as_ref() {
-            Some(snapshot) => snapshot,
-            None => return,
+        let Some(snapshot) = state.snapshot.as_ref() else {
+            return;
         };
         let rendered = render_status(snapshot, &state.history, configured_summary_mode(ctx));
-        if state.published.as_ref() == Some(&rendered) {
+        let Some(status) = state.published.update(rendered) else {
             return;
-        }
-        state.published = Some(rendered.clone());
-        rendered
+        };
+        status.segments()
     };
-    ctx.status([
-        ("summary", next.summary.as_str()),
-        ("details", next.details.as_str()),
-    ]);
+    ctx.status(segments);
 }
 
-fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<StatusSegments> {
+fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<Status> {
     let state = lock_state(state);
     Some(render_status(
         state.snapshot.as_ref()?,
@@ -231,40 +248,31 @@ fn lock_state(state: &Arc<Mutex<MonitorState>>) -> std::sync::MutexGuard<'_, Mon
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn details_response(status: Option<StatusSegments>) -> PerformResponse {
+fn details_response(status: Option<Status>) -> PerformResponse {
     status
-        .map(|status| PerformResponse::ok().message(status.plain_details))
+        .map(|status| PerformResponse::ok().message(status.preview.render_plain()))
         .unwrap_or_else(|| PerformResponse::fail("memory information unavailable"))
 }
 
-fn parse_memory(vm_stat: &str, sysctl: &str) -> Option<MemorySnapshot> {
-    let page_size = parse_page_size(vm_stat)?;
-    let free_pages = vm_counter(vm_stat, "Pages free")?;
-    let speculative_pages = vm_counter(vm_stat, "Pages speculative").unwrap_or(0);
-    let wired_pages = vm_counter(vm_stat, "Pages wired down")?;
-    let compressed_pages = vm_counter(vm_stat, "Pages occupied by compressor").unwrap_or(0);
-
-    let total = sysctl
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("hw.memsize:"))?
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    if total == 0 {
+/// Same composition the old `vm_stat` + `sysctl` parser produced, from the
+/// kernel counters directly: free counts speculative pages, and every
+/// component is clamped to physical memory.
+fn snapshot_from(stats: sys::MemoryStats) -> Option<MemorySnapshot> {
+    let page_size = stats.page_size;
+    let total = stats.total_bytes;
+    if page_size == 0 || total == 0 {
         return None;
     }
-    let swap_line = sysctl
-        .lines()
-        .find(|line| line.trim().starts_with("vm.swapusage:"))?;
-    let swap_total = named_size(swap_line, "total")?;
-    let swap_used = named_size(swap_line, "used")?.min(swap_total);
+    let swap_total = stats.swap_total_bytes;
+    let swap_used = stats.swap_used_bytes.min(swap_total);
 
-    let free = free_pages
-        .checked_add(speculative_pages)?
+    let free = stats
+        .free_pages
+        .checked_add(stats.speculative_pages)?
         .checked_mul(page_size)?
         .min(total);
-    let wired = wired_pages.checked_mul(page_size)?.min(total);
-    let compressed = compressed_pages.checked_mul(page_size)?.min(total);
+    let wired = stats.wired_pages.checked_mul(page_size)?.min(total);
+    let compressed = stats.compressor_pages.checked_mul(page_size)?.min(total);
 
     Some(MemorySnapshot {
         total,
@@ -278,174 +286,55 @@ fn parse_memory(vm_stat: &str, sysctl: &str) -> Option<MemorySnapshot> {
     })
 }
 
-fn parse_page_size(raw: &str) -> Option<u64> {
-    let (_, after_marker) = raw.split_once("page size of ")?;
-    let digits = after_marker
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    let size = digits.parse::<u64>().ok()?;
-    (size > 0).then_some(size)
-}
-
-fn vm_counter(raw: &str, label: &str) -> Option<u64> {
-    raw.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if name.trim() != label {
-            return None;
-        }
-        value
-            .trim()
-            .trim_end_matches('.')
-            .replace(',', "")
-            .parse::<u64>()
-            .ok()
-    })
-}
-
-fn named_size(raw: &str, name: &str) -> Option<u64> {
-    let marker = format!("{name} =");
-    let (_, after_marker) = raw.split_once(&marker)?;
-    parse_size(after_marker.split_whitespace().next()?)
-}
-
-fn parse_size(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    let (number, multiplier) = match raw.as_bytes().last().copied()? {
-        b'K' | b'k' => (&raw[..raw.len() - 1], KIB),
-        b'M' | b'm' => (&raw[..raw.len() - 1], MIB),
-        b'G' | b'g' => (&raw[..raw.len() - 1], GIB),
-        b'T' | b't' => (&raw[..raw.len() - 1], TIB),
-        b'B' | b'b' => (&raw[..raw.len() - 1], 1),
-        character if character.is_ascii_digit() => (raw, 1),
-        _ => return None,
-    };
-    let value = number.parse::<f64>().ok()?;
-    let bytes = value * multiplier as f64;
-    if !bytes.is_finite() || bytes < 0.0 || bytes > u64::MAX as f64 {
-        return None;
-    }
-    Some(bytes.round() as u64)
-}
-
-fn append_history(history: &mut VecDeque<f64>, value: f64) {
-    history.push_back(value.clamp(0.0, 100.0));
-    while history.len() > HISTORY_SAMPLES {
-        history.pop_front();
-    }
-}
-
-fn sparkline(history: &VecDeque<f64>) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    history
-        .iter()
-        .map(|value| {
-            let index = (value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize;
-            BARS[index]
-        })
-        .collect()
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes >= TIB {
-        format!("{:.1} TB", bytes as f64 / TIB as f64)
-    } else if bytes >= GIB {
-        format!("{:.1} GB", bytes as f64 / GIB as f64)
-    } else if bytes >= MIB {
-        format!("{:.0} MB", bytes as f64 / MIB as f64)
-    } else if bytes >= KIB {
-        format!("{:.0} KB", bytes as f64 / KIB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn render_status(
     snapshot: &MemorySnapshot,
-    history: &VecDeque<f64>,
+    history: &History<HISTORY_SAMPLES>,
     summary_mode: SummaryMode,
-) -> StatusSegments {
+) -> Status {
     let percent = snapshot.occupied_percent();
-    let visible = visible_summary(snapshot, history, summary_mode);
-    let mut body = format!(
-        "Occupied: {} / {} ({percent:.0}%)\n\
-Free: {}\n\
-Wired: {} · Compressed: {}\n\
-Swap: {} / {}\n\
-Page size: {}",
-        format_bytes(snapshot.occupied),
-        format_bytes(snapshot.total),
-        format_bytes(snapshot.free),
-        format_bytes(snapshot.wired),
-        format_bytes(snapshot.compressed),
-        format_bytes(snapshot.swap_used),
-        format_bytes(snapshot.swap_total),
-        format_bytes(snapshot.page_size),
-    );
-    if !history.is_empty() {
-        body.push_str(&format!("\nHistory: {}", sparkline(history)));
-    }
-    let details = [
-        "#[fg=colour178]Memory#[default]".to_string(),
-        detail_row("Usage", &format!("{percent:>5.1} %")),
-        detail_row("Used", &format!("{:>10}", format_bytes(snapshot.occupied))),
-        detail_row("Total", &format!("{:>10}", format_bytes(snapshot.total))),
-        detail_row("Free", &format!("{:>10}", format_bytes(snapshot.free))),
-        detail_row("Wired", &format!("{:>10}", format_bytes(snapshot.wired))),
-        detail_row(
-            "Compressed",
-            &format!("{:>10}", format_bytes(snapshot.compressed)),
-        ),
-        detail_row(
-            "Swap used",
-            &format!("{:>10}", format_bytes(snapshot.swap_used)),
-        ),
-        detail_row(
-            "Swap total",
-            &format!("{:>10}", format_bytes(snapshot.swap_total)),
-        ),
-        detail_row(
-            "Page size",
-            &format!("{:>10}", format_bytes(snapshot.page_size)),
-        ),
-        detail_row("History", &padded_history(history)),
-    ]
-    .join("\n");
-    let plain_details = format!("Memory\n{body}");
-
-    StatusSegments {
-        summary: inline_status_popup(&visible, &details),
-        details,
-        plain_details,
-    }
-}
-
-fn detail_row(label: &str, value: &str) -> String {
-    format!(
-        "#[fg=colour245]{label:<width$}#[default]{value}",
-        width = DETAIL_LABEL_WIDTH
-    )
-}
-
-fn padded_history(history: &VecDeque<f64>) -> String {
-    let chart = sparkline(history);
-    let padding = HISTORY_SAMPLES.saturating_sub(chart.chars().count());
-    format!("{}{chart}", "·".repeat(padding))
-}
-
-fn visible_summary(
-    snapshot: &MemorySnapshot,
-    history: &VecDeque<f64>,
-    summary_mode: SummaryMode,
-) -> String {
-    let percent = snapshot.occupied_percent().min(99.0);
-    let mut visible =
-        format!("#[fg=colour178]MEM#[default] #[fg=colour245]{percent:>2.0}%#[default]");
+    let label = Markup::colored("MEM", Color::TITLE)
+        + " "
+        + Markup::colored(percent2(percent), Color::MUTED);
+    let mut summary = label.clone();
     if summary_mode == SummaryMode::Full && !history.is_empty() {
-        visible.push(' ');
-        visible.push_str(&sparkline(history));
+        summary += " ";
+        summary += sparkline_percent(history);
     }
-    visible
+    let bytes = |value: u64| format!("{:>10}", bytes_iec(value));
+    let composition = |value: u64| {
+        format!(
+            "{} · {:>5.1} %",
+            bytes(value),
+            value as f64 / snapshot.total as f64 * 100.0
+        )
+    };
+    let preview = Preview::new()
+        .title("Memory")
+        .note("Used includes cached and reclaimable pages")
+        .row("Usage", format!("{percent:>5.1} %"))
+        .row("Used", bytes(snapshot.occupied))
+        .row("Total", bytes(snapshot.total))
+        .row("Free", composition(snapshot.free))
+        .row("Wired", composition(snapshot.wired))
+        .row("Compressed", composition(snapshot.compressed))
+        .row("Swap used", bytes(snapshot.swap_used))
+        .row("Swap total", bytes(snapshot.swap_total))
+        .row(
+            "Swap free",
+            bytes_iec(snapshot.swap_total.saturating_sub(snapshot.swap_used)),
+        )
+        .row("Page size", bytes(snapshot.page_size))
+        .row(
+            "History",
+            sparkline_padded(&sparkline_percent(history), HISTORY_SAMPLES),
+        );
+    Status {
+        label,
+        summary,
+        preview,
+        percent: whole_percent(percent).to_string(),
+        history: percent_series(history),
+    }
 }
 
 fn main() {
@@ -454,9 +343,75 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-
     use super::*;
+
+    const GIB: u64 = 1 << 30;
+
+    fn history(samples: &[f64]) -> History<HISTORY_SAMPLES> {
+        let mut history = History::new();
+        for &sample in samples {
+            history.push(sample);
+        }
+        history
+    }
+
+    fn snapshot(total: u64, occupied: u64) -> MemorySnapshot {
+        MemorySnapshot {
+            total,
+            occupied,
+            free: total - occupied,
+            wired: 0,
+            compressed: 0,
+            swap_total: 0,
+            swap_used: 0,
+            page_size: 4096,
+        }
+    }
+
+    #[test]
+    fn details_explain_composition_and_remaining_swap() {
+        let snapshot = MemorySnapshot {
+            total: 16 * GIB,
+            occupied: 12 * GIB,
+            free: 4 * GIB,
+            wired: 2 * GIB,
+            compressed: GIB,
+            swap_total: 4 * GIB,
+            swap_used: GIB,
+            page_size: 16_384,
+        };
+        let details = render_status(&snapshot, &history(&[]), SummaryMode::Compact)
+            .preview
+            .render_plain();
+        assert!(details.contains("25.0 %"), "{details}");
+        assert!(details.contains("12.5 %"), "{details}");
+        assert!(details.contains("6.2 %"), "{details}");
+        assert!(details.contains("Swap free     3.0 GiB"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
+    }
+
+    #[test]
+    fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
+        for (occupied, expected) in [
+            (0, " 0%"),
+            (90, " 9%"),
+            (100, "10%"),
+            (999, "99%"),
+            (1000, "99%"),
+        ] {
+            let status = render_status(
+                &snapshot(1000, occupied),
+                &history(&[9.0]),
+                SummaryMode::Full,
+            );
+            let [(_, summary), (_, label), ..] = status.segments();
+            assert_eq!(
+                label.render().unwrap(),
+                format!("#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(summary.render().unwrap().contains("popup="));
+        }
+    }
 
     #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
@@ -468,66 +423,26 @@ mod tests {
 
     #[test]
     fn compact_memory_summary_caps_values_that_would_render_as_three_digits() {
-        let mut snapshot = MemorySnapshot {
-            total: 100,
-            occupied: 9,
-            free: 91,
-            wired: 0,
-            compressed: 0,
-            swap_total: 0,
-            swap_used: 0,
-            page_size: 4096,
+        let compact = |total, occupied| {
+            render_status(
+                &snapshot(total, occupied),
+                &History::new(),
+                SummaryMode::Compact,
+            )
+            .summary
         };
         assert_eq!(
-            visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245] 9%#[default]"
+            compact(100, 9).as_str(),
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245] 9%#[default]"
         );
-        snapshot.occupied = 10;
-        snapshot.free = 90;
         assert_eq!(
-            visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]10%#[default]"
+            compact(100, 10).as_str(),
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]10%#[default]"
         );
-        snapshot.total = 1_000;
-        snapshot.occupied = 999;
-        snapshot.free = 1;
         assert_eq!(
-            visible_summary(&snapshot, &VecDeque::new(), SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]99%#[default]"
+            compact(1_000, 999).as_str(),
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]99%#[default]"
         );
-    }
-
-    #[test]
-    fn parses_vm_stat_and_sysctl_with_runtime_page_size() {
-        let snapshot = parse_memory(
-            include_str!("../fixtures/vm_stat.txt"),
-            include_str!("../fixtures/sysctl.txt"),
-        )
-        .expect("memory snapshot");
-        assert_eq!(snapshot.page_size, 4096);
-        assert_eq!(snapshot.total, 17_179_869_184);
-        assert_eq!(snapshot.free, 120 * 4096);
-        assert_eq!(snapshot.wired, 300 * 4096);
-        assert_eq!(snapshot.compressed, 50 * 4096);
-        assert_eq!(snapshot.swap_total, 2_147_483_648);
-        assert_eq!(snapshot.swap_used, 537_395_200);
-        assert_eq!(snapshot.occupied, snapshot.total - snapshot.free);
-    }
-
-    #[test]
-    fn rejects_missing_page_size_total_and_required_counters() {
-        let sysctl = include_str!("../fixtures/sysctl.txt");
-        assert!(parse_memory("Pages free: 1.", sysctl).is_none());
-        assert!(parse_memory(
-            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages wired down: 1.",
-            sysctl
-        )
-        .is_none());
-        assert!(parse_memory(
-            include_str!("../fixtures/vm_stat.txt"),
-            "vm.swapusage: total = 0M used = 0M"
-        )
-        .is_none());
     }
 
     #[test]
@@ -539,31 +454,51 @@ mod tests {
         assert!(begin_collection(&gate).is_some());
     }
 
-    #[test]
-    fn parses_binary_swap_units_and_clamps_impossible_free_memory() {
-        assert_eq!(parse_size("1.5G"), Some(1_610_612_736));
-        assert_eq!(parse_size("512K"), Some(524_288));
-        let snapshot = parse_memory(
-            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 999999999.\nPages wired down: 1.",
-            "hw.memsize: 4096\nvm.swapusage: total = 0.00M used = 0.00M",
-        )
-        .expect("clamped snapshot");
-        assert_eq!(snapshot.free, 4096);
-        assert_eq!(snapshot.occupied, 0);
+    fn stats(free: u64, speculative: u64, wired: u64, compressor: u64) -> sys::MemoryStats {
+        sys::MemoryStats {
+            total_bytes: 17_179_869_184,
+            page_size: 4096,
+            free_pages: free,
+            speculative_pages: speculative,
+            wired_pages: wired,
+            compressor_pages: compressor,
+            swap_total_bytes: 2_147_483_648,
+            swap_used_bytes: 537_395_200,
+        }
     }
 
     #[test]
-    fn history_is_bounded_and_sparkline_is_deterministic() {
-        let mut history = VecDeque::new();
-        for value in 0..25 {
-            append_history(&mut history, f64::from(value) * 4.0);
-        }
-        assert_eq!(history.len(), HISTORY_SAMPLES);
-        assert_eq!(history.front().copied(), Some(20.0));
-        assert_eq!(
-            sparkline(&VecDeque::from([0.0, 12.5, 50.0, 87.5, 100.0])),
-            "▁▂▅▇█"
-        );
+    fn builds_the_snapshot_from_kernel_counters_with_runtime_page_size() {
+        let snapshot = snapshot_from(stats(100, 20, 300, 50)).expect("memory snapshot");
+        assert_eq!(snapshot.page_size, 4096);
+        assert_eq!(snapshot.total, 17_179_869_184);
+        assert_eq!(snapshot.free, 120 * 4096);
+        assert_eq!(snapshot.wired, 300 * 4096);
+        assert_eq!(snapshot.compressed, 50 * 4096);
+        assert_eq!(snapshot.swap_total, 2_147_483_648);
+        assert_eq!(snapshot.swap_used, 537_395_200);
+        assert_eq!(snapshot.occupied, snapshot.total - snapshot.free);
+    }
+
+    #[test]
+    fn rejects_zero_total_or_page_size() {
+        let mut zero_total = stats(1, 0, 1, 0);
+        zero_total.total_bytes = 0;
+        assert!(snapshot_from(zero_total).is_none());
+        let mut zero_page = stats(1, 0, 1, 0);
+        zero_page.page_size = 0;
+        assert!(snapshot_from(zero_page).is_none());
+    }
+
+    #[test]
+    fn clamps_impossible_free_memory_and_swap_used() {
+        let mut huge = stats(999_999_999, 0, 1, 0);
+        huge.total_bytes = 4096;
+        huge.swap_used_bytes = huge.swap_total_bytes + 1;
+        let snapshot = snapshot_from(huge).expect("clamped snapshot");
+        assert_eq!(snapshot.free, 4096);
+        assert_eq!(snapshot.occupied, 0);
+        assert_eq!(snapshot.swap_used, snapshot.swap_total);
     }
 
     #[test]
@@ -578,39 +513,135 @@ mod tests {
             swap_used: GIB,
             page_size: 16_384,
         };
-        let history = VecDeque::from([50.0, 75.0]);
+        let history = history(&[50.0, 75.0]);
         let rendered = render_status(&snapshot, &history, SummaryMode::Compact);
-        assert!(rendered.summary.starts_with("#[popup=inline:"));
-        assert!(rendered.summary.ends_with("#[nopopup]"));
-        assert!(rendered
-            .summary
-            .contains("MEM#[default] #[fg=colour245]75%#[default]"));
-        assert!(!rendered.summary.contains("▅▆"));
+        let [(_, summary), (_, label), (_, details), ..] = rendered.segments();
+        let summary = summary.render().unwrap();
+        assert!(summary.starts_with("#[popup=inline:"));
+        assert!(
+            summary.ends_with("]#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default]#[nopopup]")
+        );
+        assert!(!summary.contains("▅▆"));
         assert_eq!(
-            visible_summary(&snapshot, &history, SummaryMode::Compact),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]75%#[default]"
+            label.render().unwrap(),
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default]"
         );
         assert_eq!(
-            visible_summary(&snapshot, &history, SummaryMode::Full),
-            "#[fg=colour178]MEM#[default] #[fg=colour245]75%#[default] ▅▆"
+            render_status(&snapshot, &history, SummaryMode::Full)
+                .summary
+                .as_str(),
+            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default] ▅▆"
         );
         assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
         assert_eq!(
-            rendered.details,
-            "#[fg=colour178]Memory#[default]\n\
+            details.render().unwrap(),
+            "#[fg=#EBCB8B]Memory#[default]\n\
+#[fg=colour245]Used includes cached and reclaimable pages#[default]\n\
 #[fg=colour245]Usage         #[default] 75.0 %\n\
-#[fg=colour245]Used          #[default]   12.0 GB\n\
-#[fg=colour245]Total         #[default]   16.0 GB\n\
-#[fg=colour245]Free          #[default]    4.0 GB\n\
-#[fg=colour245]Wired         #[default]    2.0 GB\n\
-#[fg=colour245]Compressed    #[default]    512 MB\n\
-#[fg=colour245]Swap used     #[default]    1.0 GB\n\
-#[fg=colour245]Swap total    #[default]    4.0 GB\n\
-#[fg=colour245]Page size     #[default]     16 KB\n\
+#[fg=colour245]Used          #[default]    12 GiB\n\
+#[fg=colour245]Total         #[default]    16 GiB\n\
+#[fg=colour245]Free          #[default]   4.0 GiB ·  25.0 %\n\
+#[fg=colour245]Wired         #[default]   2.0 GiB ·  12.5 %\n\
+#[fg=colour245]Compressed    #[default]   512 MiB ·   3.1 %\n\
+#[fg=colour245]Swap used     #[default]   1.0 GiB\n\
+#[fg=colour245]Swap total    #[default]   4.0 GiB\n\
+#[fg=colour245]Swap free     #[default]3.0 GiB\n\
+#[fg=colour245]Page size     #[default]    16 KiB\n\
 #[fg=colour245]History       #[default]··················▅▆"
         );
-        assert!(!rendered.details.ends_with('\n'));
-        assert!(!rendered.plain_details.contains("#["));
-        assert!(rendered.plain_details.starts_with("Memory\nOccupied:"));
+        assert_eq!(
+            rendered.preview.render_plain(),
+            "Memory\n\
+Used includes cached and reclaimable pages\n\
+Usage          75.0 %\n\
+Used              12 GiB\n\
+Total             16 GiB\n\
+Free             4.0 GiB ·  25.0 %\n\
+Wired            2.0 GiB ·  12.5 %\n\
+Compressed       512 MiB ·   3.1 %\n\
+Swap used        1.0 GiB\n\
+Swap total       4.0 GiB\n\
+Swap free     3.0 GiB\n\
+Page size         16 KiB\n\
+History       ··················▅▆"
+        );
+    }
+
+    #[test]
+    fn unchanged_renders_stay_off_the_wire() {
+        let mut published = Published::new();
+        let history = history(&[50.0]);
+        let first = render_status(&snapshot(100, 50), &history, SummaryMode::Compact);
+        assert!(published.update(first).is_some());
+        let same = render_status(&snapshot(100, 50), &history, SummaryMode::Compact);
+        assert!(published.update(same).is_none());
+        let changed = render_status(&snapshot(100, 51), &history, SummaryMode::Compact);
+        assert!(published.update(changed).is_some());
+    }
+
+    fn wire(status: &Status) -> std::collections::BTreeMap<&'static str, String> {
+        status
+            .segments()
+            .into_iter()
+            .map(|(name, value)| (name, value.render().expect("preview fits inline")))
+            .collect()
+    }
+
+    #[test]
+    fn raw_segments_publish_plain_integers_with_history_oldest_first() {
+        let status = render_status(
+            &snapshot(16 * GIB, 12 * GIB),
+            &history(&[50.4, 62.5, 75.0]),
+            SummaryMode::Compact,
+        );
+        let segments = wire(&status);
+        assert_eq!(segments["percent"], "75");
+        assert_eq!(segments["history"], "50 63 75");
+        assert!(!segments["percent"].contains("#["));
+        assert!(!segments["history"].contains("#["));
+
+        let empty = wire(&render_status(
+            &snapshot(100, 0),
+            &History::new(),
+            SummaryMode::Compact,
+        ));
+        assert_eq!(empty["percent"], "0");
+        assert_eq!(empty["history"], "", "an empty history clears its segment");
+    }
+
+    #[test]
+    fn raw_percent_rounds_to_an_integer_without_the_label_cap() {
+        for (occupied, expected) in [
+            (0, "0"),
+            (4, "0"),
+            (5, "1"),
+            (95, "10"),
+            (994, "99"),
+            (996, "100"),
+            (1_000, "100"),
+        ] {
+            let status = render_status(
+                &snapshot(1_000, occupied),
+                &History::new(),
+                SummaryMode::Compact,
+            );
+            assert_eq!(status.percent, expected, "{occupied}");
+        }
+        assert!(
+            render_status(&snapshot(1_000, 996), &History::new(), SummaryMode::Compact)
+                .label
+                .as_str()
+                .contains("99%")
+        );
+        assert_eq!(whole_percent(f64::NAN), 0);
+        assert_eq!(whole_percent(-1.0), 0);
+        assert_eq!(whole_percent(101.0), 100);
+    }
+
+    #[test]
+    fn raw_history_keeps_the_newest_samples_oldest_first() {
+        let samples: Vec<f64> = (0..25).map(f64::from).collect();
+        let expected = (5..25).map(|value| value.to_string()).collect::<Vec<_>>();
+        assert_eq!(percent_series(&history(&samples)), expected.join(" "));
     }
 }

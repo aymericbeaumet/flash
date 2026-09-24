@@ -38,13 +38,15 @@ struct AXTraversalWorklist<Element> {
 /// not the per-app fork. See AGENTS.md ("Project layout") for the rationale.
 ///
 /// Performance contract:
-///   - Exactly one batched IPC per visited element via
-///     `AXUIElementCopyMultipleAttributeValues`.
-///   - Walks the full `kAXChildrenAttribute` tree, then supplements native
-///     table/outline containers with `kAXVisibleRowsAttribute` when available.
-///     This keeps the complete tree path deterministic while still catching
-///     virtualised native lists that expose rows only through the visible-row
-///     attribute.
+///   - One batched IPC per visited element via
+///     `AXUIElementCopyMultipleAttributeValues`, plus one single-attribute
+///     re-query only when the batch returned an error placeholder for the
+///     child list.
+///   - Walks the full `kAXChildrenAttribute` tree, except that a native
+///     table/outline walks its `kAXVisibleRowsAttribute` rows instead of every
+///     `kAXRowsAttribute` row (`tableChildren`): a scrolled-off row costs no
+///     batched read, and virtualised lists that expose rows only through the
+///     visible-row attribute are still caught.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
 ///   - Serial descent uses an explicit depth-first worklist rather than Swift
@@ -125,6 +127,19 @@ public final class AccessibilityProvider: FlashSource {
     "AXOption",
   ]
 
+  /// Generic web containers an app's own web UI makes clickable (see
+  /// `pressContainerFits`); never admitted on a browser page.
+  public static let webAppPressContainerRoles: Set<String> = ["AXGroup", "AXListItem"]
+
+  /// A pressable container is a control-sized card or row, not a page region:
+  /// at least 16 pt on each side and at most 35 % of the visible window.
+  public static func pressContainerFits(_ frame: CGRect, in visible: CGRect) -> Bool {
+    guard frame.width >= 16, frame.height >= 16 else { return false }
+    let visibleArea = visible.width * visible.height
+    guard visibleArea > 0 else { return false }
+    return frame.width * frame.height <= visibleArea * 0.35
+  }
+
   /// Roles whose descendant AXImage is considered decorative (already
   /// covered by the ancestor's hint). Hits the common Firefox case of
   /// `<a><img/>text</a>` exposing both AXLink and AXImage on the same
@@ -153,16 +168,10 @@ public final class AccessibilityProvider: FlashSource {
   /// subtree (e.g. inside an AXWebArea or a large AXGroup). Beyond
   /// two levels the dispatch overhead dominates the IPC win.
   public static let maxFanoutLevels: Int = 2
+  /// Concurrent subtree walkers per fan-out point (see the fan-out comment).
+  public static let maxFanoutWidth: Int = 8
 
   public init() {}
-
-  /// Firefox uses a scoped role-read wake below. Leaving
-  /// `AXEnhancedUserInterface` enabled outside that scope makes Accessibility
-  /// window moves animate slowly and often land incorrectly.
-  public static func shouldExplicitlyWakeAccessibility(bundleIdentifier: String) -> Bool {
-    !bundleIdentifier.hasPrefix("com.apple.")
-      && !FirefoxAccessibility.matches(bundleIdentifier: bundleIdentifier)
-  }
 
   public func supports(_ context: AppContext) -> Bool { true }
 
@@ -184,33 +193,43 @@ public final class AccessibilityProvider: FlashSource {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    let app = AXApp.make(pid: context.processID)
-    let selected = FirefoxAccessibility.withTree(
-      pid: context.processID,
-      bundleIdentifier: context.bundleIdentifier,
-      app: app
-    ) { app in
-      guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String)
-      else { return false }
-      let tabs = Self.tabElements(in: focusedWindow)
-      guard index <= tabs.count else { return false }
-      if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
-        RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
+    let pid = context.processID
+    let bundleIdentifier = context.bundleIdentifier
+    // The tab search is synchronous AX IPC over up to thousands of nodes and
+    // holds Firefox's per-process tree lock, so it never runs on the main run
+    // loop, which hosts the keyboard tap. Activation follows on main once the
+    // tab is pressed; the pressed tab is on screen, so no minimized-window
+    // restore is needed.
+    DispatchQueue.global(qos: .userInitiated).async {
+      let app = AXApp.make(pid: pid)
+      let selected = GeckoAccessibility.withTree(
+        pid: pid,
+        bundleIdentifier: bundleIdentifier,
+        app: app
+      ) { app in
+        guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String)
+        else { return false }
+        let tabs = Self.tabElements(in: focusedWindow)
+        guard index <= tabs.count else { return false }
+        let tab = tabs[index - 1]
+        let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+        return pressed
+          || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+            == .success
       }
-      let tab = tabs[index - 1]
-      let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
-      return pressed
-        || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
-          == .success
-    }
-    DispatchQueue.main.async {
-      completion(selected ? .performed(pid: context.processID) : .unhandled)
+      DispatchQueue.main.async {
+        if selected, let runningApp = NSRunningApplication(processIdentifier: pid) {
+          RunningApplicationActivation.activate(
+            runningApp, options: [.activateAllWindows], restoringMinimizedWindows: false)
+        }
+        completion(selected ? .performed(pid: pid) : .unhandled)
+      }
     }
   }
 
   public func documentURL(in context: AppContext) -> String? {
     let app = AXApp.make(pid: context.processID)
-    return FirefoxAccessibility.withTree(
+    return GeckoAccessibility.withTree(
       pid: context.processID,
       bundleIdentifier: context.bundleIdentifier,
       app: app
@@ -357,6 +376,177 @@ public final class AccessibilityProvider: FlashSource {
     return stringValue(v)
   }
 
+  private static func hintSnapshot(_ values: [Any], frame: CGRect) -> AXHintTargetSnapshot {
+    let value = stringValue(values[7]) ?? (values[7] as? NSNumber)?.stringValue
+    return AXHintTargetSnapshot(
+      role: values[0] as? String ?? "AXUnknown", subrole: values[10] as? String,
+      title: stringValue(values[5]), description: stringValue(values[6]), value: value,
+      url: urlValue(values[8]) ?? urlValue(values[11]),
+      enabled: values[3] as? Bool ?? true, hidden: values[9] as? Bool ?? false,
+      frame: frame)
+  }
+
+  private static func resolveHintPoint(
+    element: AXUIElement, captured: AXHintTargetSnapshot, preferred: CGPoint,
+    pid: pid_t, screenH: CGFloat, insideWebArea: Bool,
+    allowsInteractiveDescendants: Bool = false
+  ) -> CGPoint? {
+    guard let currentSnapshot = readHintSnapshot(element, screenH: screenH),
+      var point = captured.resolvedClickPoint(preferred: preferred, current: currentSnapshot)
+    else { return nil }
+    let frame = currentSnapshot.frame
+    if insideWebArea,
+      let firstCharacter = AXAttribute.boundsForRange(
+        element, location: 0, length: 1, screenH: screenH),
+      frame.height > firstCharacter.height * 1.5
+    {
+      point = CGPoint(x: firstCharacter.midX, y: firstCharacter.midY)
+    }
+
+    // A scrolled-out object can retain valid geometry underneath another
+    // control. Require the live hit to belong to the retained AX object.
+    //
+    // A single probe point is not enough to decide that. Wide containers —
+    // list rows and table cells above all — routinely carry a button or a link
+    // across their midpoint, and vetoing on that one sample dropped the whole
+    // gesture: the user pressed a hint label and nothing happened at all.
+    // Sample a few spots inside the element's live frame instead, and only
+    // give up when every one of them resolves to somebody else.
+    let application = AXApp.make(pid: pid)
+    for candidate in hintPointCandidates(preferred: point, in: frame) {
+      switch hitTestOutcome(
+        application: application, element: element, at: candidate, screenH: screenH,
+        allowsInteractiveDescendants: allowsInteractiveDescendants)
+      {
+      case .matches:
+        return candidate
+      case .unavailable:
+        // The hit test itself failed. It is a refinement, not a precondition,
+        // so fall back to what the overlay drew rather than eating the click.
+        return candidate
+      case .foreign:
+        continue
+      }
+    }
+    return nil
+  }
+
+  enum HintHitTestOutcome {
+    /// The probe point resolves to the retained element (or a non-interactive
+    /// descendant of it).
+    case matches
+    /// The probe point belongs to a different interactive control.
+    case foreign
+    /// The Accessibility hit test could not answer.
+    case unavailable
+  }
+
+  /// Probe points for the commit-time hit test, preferred point first, then a
+  /// short sweep of the element's own frame. The insets stay inside the frame
+  /// for any size, so a degenerate rect simply repeats its own centre and the
+  /// duplicates are dropped.
+  static func hintPointCandidates(preferred: CGPoint, in frame: CGRect) -> [CGPoint] {
+    guard frame.width > 0, frame.height > 0 else { return [preferred] }
+    let insetX = min(6, frame.width / 4)
+    let insetY = min(6, frame.height / 4)
+    let alternates = [
+      CGPoint(x: frame.minX + insetX, y: frame.midY),
+      CGPoint(x: frame.maxX - insetX, y: frame.midY),
+      CGPoint(x: frame.midX, y: frame.minY + insetY),
+      CGPoint(x: frame.midX, y: frame.maxY - insetY),
+    ]
+    var result = [preferred]
+    for candidate in alternates
+    where !result.contains(where: {
+      abs($0.x - candidate.x) < 1 && abs($0.y - candidate.y) < 1
+    }) {
+      result.append(candidate)
+    }
+    return result
+  }
+
+  private static func hitTestOutcome(
+    application: AXUIElement, element: AXUIElement, at point: CGPoint, screenH: CGFloat,
+    allowsInteractiveDescendants: Bool
+  ) -> HintHitTestOutcome {
+    var hit: AXUIElement?
+    guard
+      AXUIElementCopyElementAtPosition(
+        application, Float(point.x), Float(screenH - point.y), &hit) == .success
+    else { return .unavailable }
+    for _ in 0..<32 {
+      guard let current = hit else { return .unavailable }
+      if CFEqual(current, element) { return .matches }
+      // Scrolling targets their container, including its interactive children.
+      // Click hints must not redirect to a different interactive child.
+      if !allowsInteractiveDescendants, let role = AXAttribute.role(current),
+        ["AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem"]
+          .contains(role) || JumpTarget.textInputRoles.contains(role)
+      {
+        return .foreign
+      }
+      hit = AXAttribute.element(current, kAXParentAttribute as String)
+    }
+    return .unavailable
+  }
+
+  private static func readHintSnapshot(_ element: AXUIElement, screenH: CGFloat)
+    -> AXHintTargetSnapshot?
+  {
+    var raw: CFArray?
+    guard
+      AXUIElementCopyMultipleAttributeValues(
+        element, batchAttrs, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
+      let values = raw as? [Any], values.count == 12
+    else { return nil }
+    let frame: CGRect
+    if let position = axValue(values[1]), let size = axValue(values[2]),
+      let standardFrame = frameFromAX(pos: position, size: size, screenH: screenH)
+    {
+      frame = standardFrame
+    } else {
+      // System-owned AX surfaces such as Dock items may expose AXFrame alone.
+      var rawFrame: CFTypeRef?
+      guard AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &rawFrame) == .success,
+        let rawFrame, CFGetTypeID(rawFrame) == AXValueGetTypeID()
+      else { return nil }
+      var axFrame = CGRect.zero
+      guard AXValueGetValue(rawFrame as! AXValue, .cgRect, &axFrame),
+        axFrame.width >= 3, axFrame.height >= 3
+      else { return nil }
+      frame = CGRect(
+        x: axFrame.minX, y: screenH - axFrame.maxY, width: axFrame.width, height: axFrame.height)
+    }
+    return hintSnapshot(values, frame: frame)
+  }
+
+  /// Retain a separately discovered AX surface, such as a Dock item or scroll
+  /// container, with the same commit verification used by the ordinary walk.
+  /// Both capture and resolution run off main.
+  public static func captureTarget(
+    element: AXUIElement, id: String, pid: pid_t, screenH: CGFloat,
+    providerID: String, bundleIdentifier: String? = nil,
+    allowsInteractiveDescendants: Bool = false
+  ) -> JumpTarget? {
+    guard let snapshot = readHintSnapshot(element, screenH: screenH), !snapshot.hidden else {
+      return nil
+    }
+    return JumpTarget(
+      id: id, frame: snapshot.frame, role: snapshot.role,
+      accessibilityLabel: snapshot.title ?? snapshot.description ?? snapshot.value,
+      url: snapshot.url, pid: pid,
+      resolveClickPoint: { preferred in
+        GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { _ in
+          resolveHintPoint(
+            element: element, captured: snapshot, preferred: preferred,
+            pid: pid, screenH: screenH, insideWebArea: false,
+            allowsInteractiveDescendants: allowsInteractiveDescendants)
+        }
+      },
+      entersInsertMode: JumpTarget.isTextInput(role: snapshot.role, subrole: snapshot.subrole),
+      providerID: providerID)
+  }
+
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
@@ -391,12 +581,31 @@ public final class AccessibilityProvider: FlashSource {
     var idCounter: Int = 0
   }
 
-  /// Tentative target awaiting an action-name IPC. The candidate is fully
-  /// formed — if the action check passes, it's appended to
-  /// `confirmedTargets` as-is; otherwise dropped.
+  /// Tentative target awaiting one IPC. The candidate is fully formed; the
+  /// check decides whether it is kept, and whether it still enters INSERT.
   private struct PendingTarget {
     let candidate: JumpTarget
     let element: AXUIElement
+    var check: PendingCheck = .pressAction
+  }
+
+  private enum PendingCheck {
+    /// Kept only when the element exposes `AXPress`.
+    case pressAction
+    /// Always kept; a UIKit text-input role enters INSERT only when the
+    /// element can take keyboard focus (`IOSContent.canTakeKeyboardFocus`).
+    case keyboardFocus
+  }
+
+  /// What stays constant across one walk.
+  private struct WalkEnvironment {
+    let screenH: CGFloat
+    let visible: CGRect
+    let pid: pid_t
+    let bundleIdentifier: String
+    /// A web browser's web areas are pages, held to the semantic allowlist;
+    /// any other app's are its own interface.
+    let webAreasArePages: Bool
   }
 
   private struct WalkItem {
@@ -405,13 +614,14 @@ public final class AccessibilityProvider: FlashSource {
     let insideClickable: Bool
     let insideWebArea: Bool
     let insideExtensionDocument: Bool
+    let insideIOSContent: Bool
     let idPrefix: String
     let fanoutBudget: Int
   }
 
   public func discover(in context: AppContext) throws -> [JumpTarget] {
     let app = AXApp.make(pid: context.processID)
-    return try FirefoxAccessibility.withTree(
+    return try GeckoAccessibility.withTree(
       pid: context.processID,
       bundleIdentifier: context.bundleIdentifier,
       app: app
@@ -430,12 +640,13 @@ public final class AccessibilityProvider: FlashSource {
     // ones. Best-effort: errors are ignored because most apps don't
     // recognise these attributes and that's fine.
     //
-    // Skipped for Apple's own apps and Firefox. The flag is process-sticky for
-    // these apps and tells them an assistive client is permanently watching.
-    // SwiftUI-heavy apps like Notes respond with eager accessibility
-    // bookkeeping; Firefox is instead activated and restored by the scoped
-    // `FirefoxAccessibility.withTree` call above.
-    if Self.shouldExplicitlyWakeAccessibility(bundleIdentifier: context.bundleIdentifier) {
+    // Only runtimes that need it (`AppTraits.needsAccessibilityWake`). The
+    // flag is process-sticky and tells an app an assistive client is
+    // permanently watching: SwiftUI-heavy apps respond with eager
+    // accessibility bookkeeping, and Gecko is instead activated and restored
+    // by the scoped `GeckoAccessibility.withTree` call above.
+    let traits = AppTraits.of(bundleIdentifier: context.bundleIdentifier, pid: context.processID)
+    if traits.needsAccessibilityWake {
       let trueRef = kCFBooleanTrue as CFTypeRef
       _ = AXUIElementSetAttributeValue(
         app, "AXEnhancedUserInterface" as CFString, trueRef)
@@ -470,27 +681,44 @@ public final class AccessibilityProvider: FlashSource {
     // app launches and in some automated Firefox sessions), fall back to the
     // first reported app surface. This keeps the walk scoped to one
     // foreground-app surface without broadening to app/menu-bar children.
-    guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
+    // A surface that is not the focused window (a Picture in Picture player,
+    // the Stage Manager strip) is found by its frame instead, and never falls
+    // back to the focused window, whose targets would leak into its frame.
+    let roots: [AXUIElement]
+    switch context.walkRoot {
+    case .focusedWindow:
+      guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
+      roots = [focusedWindow]
+    case .elementsInFrame:
+      roots = Self.topLevelElements(in: app, meeting: clip, screenH: screenH)
+    }
 
     var state = WalkState()
-    // The root walk uses the "r" prefix; concurrent fan-out workers use
-    // "w<i>" (see depth-0 fan-out below). This keeps target IDs unique
-    // across the focused window's own target (if it's hinted) and the
-    // per-worker subtree results.
-    walk(
-      focusedWindow,
-      depth: 0,
+    let environment = WalkEnvironment(
       screenH: screenH,
       visible: clip,
       pid: context.processID,
       bundleIdentifier: context.bundleIdentifier,
-      insideClickable: false,
-      insideWebArea: false,
-      insideExtensionDocument: false,
-      idPrefix: "r",
-      fanoutBudget: Self.maxFanoutLevels,
-      state: &state
-    )
+      webAreasArePages: traits.isWebBrowser)
+    // The root walk uses the "r" prefix; concurrent fan-out workers use
+    // "w<i>" (see depth-0 fan-out below). This keeps target IDs unique
+    // across the focused window's own target (if it's hinted) and the
+    // per-worker subtree results. Further roots use "r<n>", whose workers
+    // become "r<n>w<i>".
+    for (index, root) in roots.enumerated() {
+      walk(
+        root,
+        depth: 0,
+        environment: environment,
+        insideClickable: false,
+        insideWebArea: false,
+        insideExtensionDocument: false,
+        insideIOSContent: false,
+        idPrefix: index == 0 ? "r" : "r\(index)",
+        fanoutBudget: Self.maxFanoutLevels,
+        state: &state
+      )
+    }
 
     // Parallel resolution of pending action-name checks. These are
     // tentative targets the walker buffered instead of paying an inline
@@ -502,6 +730,28 @@ public final class AccessibilityProvider: FlashSource {
     let survivors = resolvePendingActionChecks(state.pendingTargets)
     state.confirmedTargets.append(contentsOf: survivors)
     return state.confirmedTargets
+  }
+
+  /// The frame (NSScreen coords) of the window a walk of `pid` covers — its
+  /// focused, main or first top-level surface — so the visible-area step can
+  /// scope hints to that same window rather than to whichever of the app's
+  /// windows is frontmost: a tooltip or hover card above it has no targets,
+  /// and clipping the walk to it left none at all.
+  public static func walkedWindowFrame(
+    pid: pid_t, bundleIdentifier: String?, screenH: CGFloat
+  ) -> CGRect? {
+    GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { app in
+      guard let window = focusedOrFirstWindow(in: app) else { return nil }
+      var pos: CFTypeRef?
+      var size: CFTypeRef?
+      guard
+        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &pos) == .success,
+        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
+        let pos, let size, CFGetTypeID(pos) == AXValueGetTypeID(),
+        CFGetTypeID(size) == AXValueGetTypeID()
+      else { return nil }
+      return frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
+    }
   }
 
   private static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
@@ -520,6 +770,45 @@ public final class AccessibilityProvider: FlashSource {
       return windows.first { isTopLevelInteractionSurface($0) }
     }
     return nil
+  }
+
+  /// The app's windows whose frames meet `clip` — at least half of the
+  /// smaller of the two overlapping — or, for an agent that exposes none
+  /// there, its other top-level children that do (never its menu bar).
+  static func topLevelElements(
+    in app: AXUIElement, meeting clip: CGRect, screenH: CGFloat
+  ) -> [AXUIElement] {
+    func meetsClip(_ element: AXUIElement) -> Bool {
+      guard let frame = axFrame(of: element, screenH: screenH) else { return false }
+      let overlap = frame.intersection(clip)
+      guard !overlap.isNull, frame.width > 0, frame.height > 0 else { return false }
+      let smaller = min(frame.width * frame.height, clip.width * clip.height)
+      return overlap.width * overlap.height >= smaller / 2
+    }
+    var raw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) == .success,
+      let windows = raw as? [AXUIElement]
+    {
+      let matching = windows.filter(meetsClip)
+      if !matching.isEmpty { return matching }
+    }
+    raw = nil
+    guard AXUIElementCopyAttributeValue(app, kAXChildrenAttribute as CFString, &raw) == .success,
+      let children = raw as? [AXUIElement]
+    else { return [] }
+    return children.filter { role(of: $0) != (kAXMenuBarRole as String) && meetsClip($0) }
+  }
+
+  private static func axFrame(of element: AXUIElement, screenH: CGFloat) -> CGRect? {
+    var pos: CFTypeRef?
+    var size: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &pos) == .success,
+      AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+      let pos, let size, CFGetTypeID(pos) == AXValueGetTypeID(),
+      CFGetTypeID(size) == AXValueGetTypeID()
+    else { return nil }
+    return frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
   }
 
   private static func isTopLevelInteractionSurface(_ element: AXUIElement) -> Bool {
@@ -548,13 +837,11 @@ public final class AccessibilityProvider: FlashSource {
   private func walk(
     _ element: AXUIElement,
     depth: Int,
-    screenH: CGFloat,
-    visible: CGRect,
-    pid: pid_t,
-    bundleIdentifier: String,
+    environment: WalkEnvironment,
     insideClickable: Bool,
     insideWebArea: Bool,
     insideExtensionDocument: Bool,
+    insideIOSContent: Bool,
     idPrefix: String,
     fanoutBudget: Int,
     state: inout WalkState
@@ -566,34 +853,30 @@ public final class AccessibilityProvider: FlashSource {
         insideClickable: insideClickable,
         insideWebArea: insideWebArea,
         insideExtensionDocument: insideExtensionDocument,
+        insideIOSContent: insideIOSContent,
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget))
     while let item = worklist.pop() {
-      walkNode(
-        item,
-        screenH: screenH,
-        visible: visible,
-        pid: pid,
-        bundleIdentifier: bundleIdentifier,
-        worklist: &worklist,
-        state: &state)
+      walkNode(item, environment: environment, worklist: &worklist, state: &state)
     }
   }
 
   private func walkNode(
     _ item: WalkItem,
-    screenH: CGFloat,
-    visible: CGRect,
-    pid: pid_t,
-    bundleIdentifier: String,
+    environment: WalkEnvironment,
     worklist: inout AXTraversalWorklist<WalkItem>,
     state: inout WalkState
   ) {
+    let screenH = environment.screenH
+    let visible = environment.visible
+    let pid = environment.pid
+    let bundleIdentifier = environment.bundleIdentifier
     let element = item.element
     let depth = item.depth
     let insideClickable = item.insideClickable
     let insideWebArea = item.insideWebArea
     let insideExtensionDocument = item.insideExtensionDocument
+    let insideIOSContent = item.insideIOSContent
     let idPrefix = item.idPrefix
     let fanoutBudget = item.fanoutBudget
 
@@ -640,12 +923,42 @@ public final class AccessibilityProvider: FlashSource {
       insideWebArea
       && currentOrAncestorInsideExtensionDocument
       && (role.map { Self.webExtensionPopupPressRoles.contains($0) } ?? false)
+    // An app whose whole UI is a web view (Electron and other wrappers) makes
+    // its cards, list entries and clickable rows plain `AXGroup`/`AXListItem`
+    // elements with a press action — Slack's Activity feed, for one. A
+    // browser page keeps the Vimium-style allowlist above; an app's own web UI
+    // admits these through the deferred press check, sized like a control
+    // rather than a page region, and ranked below every semantic control in
+    // dedup so a wrapper never displaces the link it wraps.
+    var isAppWebPressContainer = false
+    if insideWebArea, !environment.webAreasArePages,
+      let role, Self.webAppPressContainerRoles.contains(role),
+      let posV = posValue, let sizeV = sizeValue,
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+    {
+      isAppWebPressContainer = Self.pressContainerFits(frame, in: visible)
+    }
+    // A UIKit app (Mac Catalyst, iPad) makes each conversation row or message
+    // one leaf `AXStaticText` (`IOSContent.cellRole`); sized like a control,
+    // it is the click target, ranked below semantic controls in dedup.
+    var isIOSContentCell = false
+    if insideIOSContent, !insideWebArea, role == IOSContent.cellRole,
+      allChildren?.isEmpty ?? true,
+      let posV = posValue, let sizeV = sizeValue,
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+    {
+      isIOSContentCell = Self.pressContainerFits(frame, in: visible)
+    }
     let baseAllowlist = insideWebArea ? Self.webClickableRoles : Self.roles
     var roleAllowed =
       role.map { baseAllowlist.contains($0) } ?? false
       || (insideWebArea && isRowOrCellRole)
       || isExtensionPopupPressRole
-    if roleAllowed, role == "AXImage", insideClickable {
+      || isAppWebPressContainer
+      || isIOSContentCell
+    // An image or UIKit text cell inside a button or link is that control's
+    // own content, already covered by its hint.
+    if roleAllowed, role == "AXImage" || isIOSContentCell, insideClickable {
       roleAllowed = false
     }
     // Vimium-parity heuristic for AXLink-only: drop anchors smaller
@@ -660,7 +973,7 @@ public final class AccessibilityProvider: FlashSource {
     // are taller than 13px).
     if roleAllowed, insideWebArea, role == "AXLink",
       let posV = posValue, let sizeV = sizeValue,
-      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       frame.width < 13, frame.height < 13
     {
       roleAllowed = false
@@ -669,7 +982,7 @@ public final class AccessibilityProvider: FlashSource {
     // disabled row/cell can still be the real click target (see the
     // row/cell branch), whereas every other disabled element stays inert.
     if let posV = posValue, let sizeV = sizeValue,
-      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
       roleAllowed, !hidden
     {
@@ -685,28 +998,18 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
-      // Multi-line web links report a union bounding box whose centre can fall
-      // in the empty gap between wrapped lines, so a synthesized click there
-      // misses. Resolve the first character's box centre instead — guaranteed
-      // on the element — lazily at commit (no hint-walk cost) and only when the
-      // target is clearly multi-line; single-line targets keep the proven
-      // frame centre.
-      let resolveClickPoint: (() -> CGPoint?)? =
-        insideWebArea
-        ? {
-          FirefoxAccessibility.withTree(
-            pid: pid,
-            bundleIdentifier: bundleIdentifier
-          ) { _ in
-            guard
-              let charRect = AXAttribute.boundsForRange(
-                captured, location: 0, length: 1, screenH: screenH),
-              frame.height > charRect.height * 1.5
-            else { return nil }
-            return CGPoint(x: charRect.midX, y: charRect.midY)
-          }
+      let snapshot = Self.hintSnapshot(vals, frame: frame)
+      let resolveClickPoint: (CGPoint) -> CGPoint? = { preferred in
+        GeckoAccessibility.withTree(
+          pid: pid,
+          bundleIdentifier: bundleIdentifier
+        ) { _ in
+          Self.resolveHintPoint(
+            element: captured, captured: snapshot, preferred: preferred,
+            pid: pid, screenH: screenH, insideWebArea: insideWebArea)
         }
-        : nil
+      }
+      let isTextInput = JumpTarget.isTextInput(role: capturedRole, subrole: subrole)
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
@@ -715,7 +1018,7 @@ public final class AccessibilityProvider: FlashSource {
         url: url,
         pid: pid,
         resolveClickPoint: resolveClickPoint,
-        entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
+        entersInsertMode: isTextInput,
         priority: isTabAnchor ? .urgent : .normal,
         providerID: identifier
       )
@@ -726,8 +1029,13 @@ public final class AccessibilityProvider: FlashSource {
         // HTML <tr>/<td> stays filtered while Slack/Discord/Electron
         // channel rows (which expose AXPress) come through; everything
         // else is confirmed.
-        if role == "AXImage" || (insideWebArea && isRowOrCell) || isExtensionPopupPressRole {
+        if role == "AXImage" || (insideWebArea && isRowOrCell) || isExtensionPopupPressRole
+          || isAppWebPressContainer
+        {
           state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
+        } else if isTextInput, insideIOSContent {
+          state.pendingTargets.append(
+            PendingTarget(candidate: candidate, element: captured, check: .keyboardFocus))
         } else {
           state.confirmedTargets.append(candidate)
         }
@@ -762,24 +1070,24 @@ public final class AccessibilityProvider: FlashSource {
     // may carry the real geometry.
     if depth > 0, !insideWebArea,
       let posV = posValue, let sizeV = sizeValue,
-      let elementFrame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      let elementFrame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       !elementFrame.isEmpty, !visible.intersects(elementFrame)
     {
       return
     }
 
-    // Always walk `kAXChildrenAttribute`. Native table/outline views sometimes
-    // expose their virtualised rows only through `kAXVisibleRowsAttribute`, so
-    // add that list as a supplement instead of replacing the child walk.
+    // Walk `kAXChildrenAttribute`, with a table's or outline's rows narrowed to
+    // its visible ones (`tableChildren`).
     //
     // **Single-attribute children fallback**: the batched IPC can
     // occasionally drop `kAXChildrenAttribute` (returns an error
-    // placeholder in vals[5] instead of the real child list — Firefox's
+    // placeholder in vals[4] instead of the real child list — Firefox's
     // a11y does this for `AXTabPanel` under concurrent IPC contention).
-    // Re-query that one attribute on its own when the batch came back
-    // empty.
+    // Re-query that one attribute on its own only for a placeholder: a
+    // genuinely empty child array is authoritative for every leaf, and
+    // re-querying leaves doubled the IPC count of a whole walk.
     var children: [AXUIElement] = allChildren ?? []
-    if children.isEmpty {
+    if allChildren == nil {
       var raw: CFTypeRef?
       if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
         == .success,
@@ -788,14 +1096,16 @@ public final class AccessibilityProvider: FlashSource {
         children = arr
       }
     }
-    children = Self.childrenIncludingVisibleRows(
-      for: element,
+    children = Self.tableChildren(
+      of: element,
       role: role,
+      insideWebArea: insideWebArea,
       children: children)
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
     let nowInsideExtensionDocument = currentOrAncestorInsideExtensionDocument
+    let nowInsideIOSContent = insideIOSContent || subrole == IOSContent.groupSubrole
 
     // Concurrent fan-out fires at the first multi-child node on each
     // walk path, up to `maxFanoutLevels` times per path. The original
@@ -811,12 +1121,10 @@ public final class AccessibilityProvider: FlashSource {
     // case; deeper than that the dispatch overhead dominates. Single-
     // child case falls through to the serial loop below.
     if fanoutBudget > 0, children.count > 1 {
-      let captureScreenH = screenH
-      let captureVisible = visible
-      let capturePid = pid
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
       let captureInsideExtensionDocument = nowInsideExtensionDocument
+      let captureInsideIOSContent = nowInsideIOSContent
       let captureDepth = depth
       let captureIdPrefix = idPrefix
       let captureNewBudget = fanoutBudget - 1
@@ -828,28 +1136,33 @@ public final class AccessibilityProvider: FlashSource {
       // the old lock-based append (order = worker scheduling) could flip which
       // of two equal-area overlapping targets survived dedup run-to-run.
       var workerStates = [WalkState](repeating: WalkState(), count: childrenSnapshot.count)
+      // Bounded width: the target's AX server is single-threaded, so more
+      // than a handful of concurrent IPC streams only queue behind each
+      // other while exploding GCD threads. Each worker owns a strided set of
+      // child slots; the merge below still runs in child order.
+      let width = min(childrenSnapshot.count, Self.maxFanoutWidth)
       workerStates.withUnsafeMutableBufferPointer { buf in
-        DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
-          var workerState = WalkState()
-          // Encode the fan-out level into the id prefix so ids stay
-          // unique across nested fan-out points. Outer fan-out emits
-          // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
-          let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
-          self.walk(
-            childrenSnapshot[i],
-            depth: captureDepth + 1,
-            screenH: captureScreenH,
-            visible: captureVisible,
-            pid: capturePid,
-            bundleIdentifier: bundleIdentifier,
-            insideClickable: captureInsideClickable,
-            insideWebArea: captureInsideWebArea,
-            insideExtensionDocument: captureInsideExtensionDocument,
-            idPrefix: childPrefix,
-            fanoutBudget: captureNewBudget,
-            state: &workerState
-          )
-          buf[i] = workerState
+        DispatchQueue.concurrentPerform(iterations: width) { worker in
+          for i in stride(from: worker, to: childrenSnapshot.count, by: width) {
+            var workerState = WalkState()
+            // Encode the fan-out level into the id prefix so ids stay
+            // unique across nested fan-out points. Outer fan-out emits
+            // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
+            let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
+            self.walk(
+              childrenSnapshot[i],
+              depth: captureDepth + 1,
+              environment: environment,
+              insideClickable: captureInsideClickable,
+              insideWebArea: captureInsideWebArea,
+              insideExtensionDocument: captureInsideExtensionDocument,
+              insideIOSContent: captureInsideIOSContent,
+              idPrefix: childPrefix,
+              fanoutBudget: captureNewBudget,
+              state: &workerState
+            )
+            buf[i] = workerState
+          }
         }
       }
       for workerState in workerStates {
@@ -866,16 +1179,17 @@ public final class AccessibilityProvider: FlashSource {
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
         insideExtensionDocument: nowInsideExtensionDocument,
+        insideIOSContent: nowInsideIOSContent,
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget)
     }
   }
 
-  /// Parallel resolution of action-name IPCs for tentative targets that
-  /// the walker bookkept during tree descent. Each
-  /// `AXUIElementCopyActionNames` is independent so they can run
-  /// concurrently, bounded by the target app's main-thread service rate
-  /// (and `DispatchQueue.concurrentPerform`'s thread pool sizing).
+  /// Parallel resolution of the one IPC each tentative target the walker
+  /// bookkept during tree descent still needs (see `PendingCheck`). Each
+  /// read is independent so they can run concurrently, bounded by the
+  /// target app's main-thread service rate (and
+  /// `DispatchQueue.concurrentPerform`'s thread pool sizing).
   ///
   /// The walk previously paid this IPC inline per element — for AWS
   /// Console (every page-tree AXGroup exposes `AXPress`) that doubled
@@ -883,29 +1197,42 @@ public final class AccessibilityProvider: FlashSource {
   /// web-heavy-app walk wall time.
   private func resolvePendingActionChecks(_ pending: [PendingTarget]) -> [JumpTarget] {
     if pending.isEmpty { return [] }
-    // Per-iteration write into a UInt8 buffer is byte-aligned and the
-    // indices are disjoint, so this is safe without locking.
+    // Per-iteration write into a one-byte enum buffer is byte-aligned and
+    // the indices are disjoint, so this is safe without locking.
     // (Concurrent reads of `pending` are also safe — it's a value
     // type, never mutated during the parallel pass.)
-    var keep = [UInt8](repeating: 0, count: pending.count)
-    keep.withUnsafeMutableBufferPointer { buf in
+    var outcomes = [PendingOutcome](repeating: .drop, count: pending.count)
+    outcomes.withUnsafeMutableBufferPointer { buf in
       DispatchQueue.concurrentPerform(iterations: pending.count) { i in
-        buf[i] = AXClick.hasPressAction(pending[i].element) ? 1 : 0
+        switch pending[i].check {
+        case .pressAction:
+          buf[i] = AXClick.hasPressAction(pending[i].element) ? .keep : .drop
+        case .keyboardFocus:
+          buf[i] =
+            IOSContent.canTakeKeyboardFocus(pending[i].element) ? .keep : .keepWithoutInsert
+        }
       }
     }
     var out: [JumpTarget] = []
     out.reserveCapacity(pending.count)
-    for (i, k) in keep.enumerated() where k == 1 {
-      out.append(pending[i].candidate)
+    for (i, outcome) in outcomes.enumerated() {
+      switch outcome {
+      case .drop: continue
+      case .keep: out.append(pending[i].candidate)
+      case .keepWithoutInsert: out.append(pending[i].candidate.enteringInsertMode(false))
+      }
     }
     return out
   }
 
+  private enum PendingOutcome: UInt8 {
+    case drop
+    case keep
+    case keepWithoutInsert
+  }
+
   private func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
 
   public static func isExtensionDocumentURL(_ value: String?) -> Bool {
@@ -921,31 +1248,58 @@ public final class AccessibilityProvider: FlashSource {
     "safari-web-extension",
   ]
 
-  private static func childrenIncludingVisibleRows(
-    for element: AXUIElement,
+  /// The children a table or outline is walked through. A native table's
+  /// scrolled-off rows (`kAXRowsAttribute` minus `kAXVisibleRowsAttribute`) are
+  /// left out: they lie outside the table's clip, so they could only yield
+  /// targets the user cannot see, and each would otherwise cost one batched
+  /// read before the offscreen prune dropped it — a 5,000-row list paid 5,000.
+  /// Two list reads replace them. Web tables keep every child: a page lays out
+  /// and reports its rows its own way.
+  private static func tableChildren(
+    of element: AXUIElement,
     role: String?,
+    insideWebArea: Bool,
     children: [AXUIElement]
   ) -> [AXUIElement] {
-    guard role == "AXTable" || role == "AXOutline" else { return children }
-    var rawRows: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(element, kAXVisibleRowsAttribute as CFString, &rawRows)
-        == .success,
-      let rows = rawRows as? [AXUIElement],
-      !rows.isEmpty
+    guard role == "AXTable" || role == "AXOutline",
+      let visibleRows = elementsAttribute(element, kAXVisibleRowsAttribute as String),
+      !visibleRows.isEmpty
     else { return children }
+    let rows = insideWebArea ? nil : elementsAttribute(element, kAXRowsAttribute as String)
+    return tableChildren(children: children, rows: rows, visibleRows: visibleRows)
+  }
 
-    var seen = Set<CFHashCode>()
-    var combined: [AXUIElement] = []
-    combined.reserveCapacity(children.count + rows.count)
-    for child in children + rows {
-      guard seen.insert(CFHash(child)).inserted else { continue }
+  /// `children` without the rows missing from `visibleRows`, then any visible
+  /// row the children lack (virtualised lists report rows only there), each
+  /// element once, in child order. An empty or unknown `visibleRows` is no
+  /// evidence that a row is off screen, so it drops nothing; unknown `rows`
+  /// drops nothing either.
+  static func tableChildren<Element: Hashable>(
+    children: [Element], rows: [Element]?, visibleRows: [Element]?
+  ) -> [Element] {
+    guard let visibleRows, !visibleRows.isEmpty else { return children }
+    let offscreen = Set(rows ?? []).subtracting(visibleRows)
+    var seen = Set<Element>()
+    var combined: [Element] = []
+    combined.reserveCapacity(visibleRows.count)
+    for child in children where !offscreen.contains(child) && seen.insert(child).inserted {
       combined.append(child)
+    }
+    for row in visibleRows where seen.insert(row).inserted {
+      combined.append(row)
     }
     return combined
   }
 
-  private func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
+  private static func elementsAttribute(_ element: AXUIElement, _ name: String) -> [AXUIElement]? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success else {
+      return nil
+    }
+    return raw as? [AXUIElement]
+  }
+
+  private static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
     guard AXValueGetType(pos) == .cgPoint, AXValueGetType(size) == .cgSize else { return nil }
     var origin = CGPoint.zero
     var sz = CGSize.zero

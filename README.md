@@ -1,315 +1,281 @@
-# flash [![CI](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml/badge.svg)](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml)
+# Flash [![CI](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml/badge.svg)](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml)
 
-**Click anything on macOS without reaching for the mouse.**
+**Your keyboard, all of macOS.**
 
-flash puts short keyboard hints over the clickable controls in the app you are using. Trigger it, type a hint, and keep moving. The hint overlay works across native apps, browsers, and Electron apps through macOS Accessibility—without screenshots, OCR, browser extensions, or per-app setup.
+Click anything, drive every app from a Vim-like normal mode, and build your own
+status bar and desktop widgets, all from one TOML file. Flash never reads your
+screen.
 
-Requires macOS 14 or later and the Accessibility permission.
+Coming from i3, sway or Hyprland with keynav, conky, polybar and rofi? This is
+that toolkit for macOS. Never edited a dotfile? Start with one hotkey.
 
-## Why flash?
+<!-- Demo: a 10–15 s GIF of hotkey → labels → typed hint → click, in a browser and a native app. -->
 
-- Jump directly to visible controls with a few keystrokes.
-- Reach any screen position with a keyboard-driven precision grid.
-- Add a Vim-like normal mode across macOS, with counts, sequences, and custom mappings.
-- Search apps, browser tabs, tmux windows, notes, emoji, and more from one command bar.
-- Extend it with managed plugins and app-aware actions.
-- Keep the desktop clean: no Dock icon, menu bar item, or preferences window.
+Flash is free and open source (MIT). It needs macOS 14 or later and the
+Accessibility permission, and nothing else.
+
+## What you get
+
+- **Hints.** Label every visible button, link, tab, and field, then click,
+  right-click, double-click, drag, or move the pointer to it. Menu bars, the
+  Dock, and Notification Center too.
+- **Keyboard grid.** The screen is split like the left half of your keyboard
+  (`12345` / `qwert` / `asdfg` / `zxcvb` on QWERTY, your layout's keys
+  otherwise). Press the key where you want to go, again to refine. Bisect mode
+  halves the screen with `hjkl`.
+- **Terminal hints.** The bundled tmux plugin labels panes, URLs, and file paths
+  inside your terminal.
+- **Normal mode.** A persistent, Vim-like layer over all of macOS: `f` for
+  hints, `[t` / `]t` for tabs, `gg` / `G`, `ctrl+d` / `ctrl+u` to scroll, `u` to
+  undo.
+- **flashlight.** A command bar that searches apps, browser tabs, tmux windows,
+  emoji, and plugin data, with inline math, unit, and currency answers.
+- **Status bar and desktop widgets.** tmux-format templates with meters,
+  sparklines, conditionals and shell jobs, fed by system plugins (CPU, memory,
+  disks, network, battery, top processes) or any command you write.
+- **Plugins.** Any program that speaks JSON lines over stdin and stdout; a Rust
+  SDK is included.
+
+Everything reloads live when you save. There is no preferences window; the
+menu-bar icon offers About, Open Configuration, and Quit.
 
 ## Install
 
-The current build is published through Homebrew:
-
-```bash
+```sh
 brew install --cask aymericbeaumet/tap/flash@nightly
 ```
 
-This installs `/Applications/Flash.app`, the `flash` CLI, and a login LaunchAgent. Open **System Settings → Privacy & Security → Accessibility**, enable Flash, then restart the app once.
+This installs `Flash.app` and the `flash` command, and starts Flash. Then:
 
-### Build from source
+1. **Allow the first launch.** Builds are not notarized yet. If macOS says it
+   could not verify Flash, open **System Settings → Privacy & Security** and
+   click **Open Anyway**.
+2. **Grant Accessibility.** Flash opens **System Settings → Privacy & Security →
+   Accessibility** for you. Turn Flash on.
 
-You will need macOS 14+, Xcode command-line tools, Rust, and either pnpm or npm.
+Nightly builds are ad-hoc signed, so macOS can drop the Accessibility grant
+after an update while the toggle still shows as on. If hints stop working after
+`brew upgrade`, remove Flash from the list with **−** and add it again.
 
-```bash
-git clone https://github.com/aymericbeaumet/flash.git
-cd flash
-./Scripts/install.sh --dev
-```
+To build from source, see [development](docs/development.md).
 
-The installer builds and signs the app, installs it in `/Applications`, starts the resident process, and walks through the one-time Accessibility grant. Use `./Scripts/install.sh --release` for a clean universal build.
+## Start easy, go deep
 
-## Make your first jump
+### 1. One hotkey
 
-Create `~/.config/flash/flash.toml` and add a global mapping:
-
-```toml
-[mode.all.mappings]
-"ctrl+space" = ["flash", "mouse_target"]
-```
-
-The config hot-reloads. Press Control-Space, then type the label shown on the target you want.
-
-Add a precision grid and the command bar with two more mappings:
+On first launch Flash creates `~/.config/flash/flash.toml` with one mapping:
 
 ```toml
 [mode.all.mappings]
-"ctrl+space" = ["flash", "mouse_target"]
-"ctrl+shift+space" = ["flash", "mouse_grid"]
-"ctrl+alt+space" = ["flash", "enter_command_mode", "--input=:flashlight", "--restore-mode"]
+"cmd+shift+space" = ["flash", "mouse_target"]
 ```
 
-Mappings call the same actions as the CLI, so anything you can run as `flash <verb>` can also be bound in config.
+Press **⌘⇧Space**, then type the letters on the control you want. Press Escape
+to cancel. Open the file from the menu-bar icon (**Open Configuration**);
+changes apply as soon as you save.
 
-## Go further
-
-### Normal mode
-
-Bind `enter_normal_mode` to turn macOS into a keyboard-first environment:
+### 2. Grid and search
 
 ```toml
 [mode.all.mappings]
-"ctrl+alt+n" = ["flash", "enter_normal_mode"]
-
-[statusbar]
-enabled = true
+"cmd+shift+space" = ["flash", "mouse_target"]                               # hints
+"cmd+shift+alt+space" = ["flash", "mouse_grid"]                             # keyboard grid
+"cmd+ctrl+alt+space" = ["flash", "enter_command_mode", "--input=:flashlight "] # search
 ```
 
-Normal mode includes familiar bindings such as `f` for current-context hint clicks, `F` for new-context hint clicks, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. `f` is a plain click in every app, including Firefox; terminal links add Shift only because the terminal needs it to handle the link. `F` sends Command-Shift to every target as one consistent new-context gesture. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). Vim's `a`, `A`, `i`, `I`, `o`, and `O` all enter insert mode; `I` keeps Flash's locked-insert behavior.
+In the grid, `1` is the top-left cell and `b` the bottom-right one. Each key
+zooms into its cell with the same keys, and the last step clicks. Backspace
+steps back, Tab moves to the next display; see [the grid keys](docs/normal-mode.md#mouse-grid).
 
-### Status-bar hover popups
+Keep the trailing space in `--input=:flashlight `: it opens search directly.
+Try `@emojis.glyphs fire` or `1234 euros in dollars`.
 
-Wrap any status text in `#[popup=<name>]…#[nopopup]` to attach a textual hover overlay. The popup follows the pointer, stays centered beneath it when screen edges allow, and can coexist with `#[link=…]` or named click ranges:
+Pick hotkeys that are free on your Mac. macOS uses Control-Space and
+Control-Option-Space to switch input sources, and many editors use
+Control-Space for completion.
+
+### 3. Normal mode
 
 ```toml
-[statusbar]
-enabled = true
-popup_fg = "#ECEFF4"
-popup_bg = "#2E3440F2"
-popup_border = "#4C566A"
-popup_border_size = 1
-popup_corner_radius = 8
-popup_padding = 8
-popup_max_width = 480
-popup_offset = 8
-template = "#[align=right]#[popup=quota]Quota 53%#[nopopup]"
-
-[statusbar.popup]
-quota = """
-#[fg=colour178,bold]Claude#[default]
-5-hour 53% remaining
-7-day 14% remaining
-"""
+[mode.all.mappings]
+"cmd+ctrl+[" = ["flash", "enter_normal_mode"]
+"cmd+ctrl+i" = ["flash", "enter_insert_mode"]
 ```
 
-Popup bodies preserve newlines and accept the status renderer’s regular variables and inline `fg`, `bg`, bold, italics, underline, dim, and reverse styles. Script, command, and cycle sources are evaluated by the ordinary status refresh scheduler; pointer movement only repositions already-rendered content.
+While NORMAL is active, keys that are not mapped are captured instead of typed.
+Press ⌘⌃I, click into a text field, or pick an input with `f` to type again.
+NORMAL stays active across app and tab switches. See
+[normal mode](docs/normal-mode.md) for every binding.
 
-Dynamic values such as carousel rows can carry their own body with
-`#[popup=inline:<percent-encoded-body>]…#[nopopup]`. Flash decodes the body as
-the same rich text used by named popups, while keeping it out of the bar's
-layout. Because the body travels in the same value as the visible row, an open
-popup updates atomically when the value changes.
-
-Left, centre, and right status lanes never overlap. Flash first contracts an
-explicit `#[shrink]…#[noshrink]` span, then applies a marker-safe ellipsis to
-the whole lane when needed; right-aligned lanes preserve their trailing values.
-
-### System monitors
-
-The bundled `cpu`, `memory`, `disks`, `network`, and `power` plugins form a
-text-first system monitor suite. Each publishes a compact `summary` status
-segment with an attached live hover popup and a standalone `details` segment
-for custom layouts. Compose the summaries in the status template for a single
-iStat-style strip:
+### 4. Status bar and widgets
 
 ```toml
 [statusbar]
 enabled = true
+
+[widgets.system]
+anchor = "top_right"
 template = """
-#[align=left]#{mode}
-#[align=center]#{active_app_name}
-#[align=right]#{plugin:cpu.summary}
-#[fg=colour245] · #{plugin:memory.summary}
-#[fg=colour245] · #{plugin:disks.summary}
-#[fg=colour245] · #{plugin:network.summary}
-#[fg=colour245] · #{plugin:power.summary}
-#[fg=colour245] · #{date}
+CPU #[meter=20]#{flash.plugin.cpu.percent}#[nometer] #[spark]#{flash.plugin.cpu.history}#[nospark]
+MEM #[meter=20]#{flash.plugin.memory.percent}#[nometer]
+#{flash.plugin.processes.top_cpu}
 """
 ```
 
-The modules cover CPU load and best-effort GPU activity, memory composition,
-mounted-volume capacity and disk I/O, default-interface traffic plus copyable
-addresses, and battery/power health. Use `:cpu`, `:memory`, `:disks`,
-`:network`, or `:power` for the current textual report, and
-`:flashlight @network.addresses` to copy an interface address. Date/time stays
-in the core status renderer (with the `timezones` plugin for lookup), and the
-dedicated `caffeinate` plugin remains the sole owner of sleep assertions.
-Passive network polling never requests Location access. Run `:network refresh`
-to request it explicitly when you want the current Wi-Fi name; refresh again
-after granting permission.
+The bar takes the top of the screen, so macOS auto-hides its own menu bar while
+it is enabled. Widgets sit on the desktop, below your windows. Start from the
+[status bar example](docs/examples/statusbar/README.md) or the
+[widget examples](docs/examples/widgets/README.md), and see
+[widgets](docs/widgets.md) for a conky migration table.
 
-The suite deliberately stays unprivileged: temperature sensors, fan control,
-CPU/GPU frequency, and S.M.A.R.T. details that require a helper are not
-invented from unstable or permission-heavy interfaces. Weather is not folded
-into `network`; it needs an explicit location/network policy and remains a
-separate plugin concern.
+### 5. Remap or remove anything
 
-### flashlight
-
-`:flashlight` is a fast, typo-tolerant command bar for locations and plugin data. Its default results include apps, browser tabs, tmux windows, and other destinations. Select an explicit source for richer searches:
-
-```text
-:flashlight @notes.notes inbox
-:flashlight @emojis.glyphs fire
-:flashlight @system.actions
-```
-
-Bare arithmetic, unit conversions, and currency conversions are answered inline. Use `:plugins` to inspect bundled integrations and their status, or `:about` to open the About Flash window.
-
-The bundled tmux source automatically merges every attached local server with
-remote tmux sessions launched through SSH or Mosh. It discovers terminal apps,
-PTYs, transports, hosts, tmux paths, and windows from the live process graph—no
-terminal- or host-specific configuration is required. Catalogs refresh in the
-background, keep their last good remote snapshot through brief disconnects,
-then expire it after two minutes without a successful refresh. Mosh-attached
-catalogs use short noninteractive SSH calls for inventory; the interactive Mosh
-transport remains independent. Otherwise-identical windows are labelled by
-host. The tmux source registers no keyboard mappings: terminal-native shortcuts
-can send the user's normal tmux prefix bindings with zero Flash round trips.
-Flash still resolves any discovered local or remote window from the finder.
-Tmux hint discovery recognizes quoted absolute paths (including spaces and
-Unicode), slash-separated relative paths, URLs, and ordinary filenames while
-excluding dotted source identifiers such as `JumpTarget.entersInsertMode`.
-Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
-so the terminal can open it in a new context. Flash does not open the value
-itself.
-Pane hints stay in NORMAL mode and preserve the requested click modifiers.
-
-### Useful actions
-
-```bash
-flash mouse_target                       # current-context click (terminal links add Shift)
-flash mouse_target --modifiers=cmd+shift # new-context gesture for every target
-flash mouse_target --secondary           # right-click
-flash mouse_target --double              # double-click
-flash mouse_target --middle              # middle-click
-flash mouse_target --triple              # triple-click
-flash mouse_target --move                # move the pointer only
-flash mouse_target --drag                # pick a grab point, then a drop point
-flash mouse_grid --drag                  # drag between two grid positions
-flash mouse_target --select              # click a start point, shift-click an end point
-flash mouse_grid --select                # select text between two grid positions
-flash mouse_target --multi               # click several targets; Escape ends the session
-flash mouse_repeat                       # re-click the last committed point
-flash mouse_target --adjust              # refine the click point before committing
-flash mouse_target --search              # type visible text to pick the target (seek & click)
-flash mouse_target --scope=screen        # hints across every app on the screen
-flash mouse_dock                         # hint the Dock's items
-flash mouse_statusbar                    # hint the menu-bar status items
-flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
-flash scroll_target                      # pick which scroll area the scroll keys drive
-# In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
-flash mouse_grid                         # target any screen position
-flash app_open --name=Firefox            # open or focus an app
-flash window_move --position=lefthalf    # tile the focused window
-flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
-flash enter_command_mode                 # open the command line
-flash help_show                          # show built-in help
-flash plugins                            # inspect plugins
-flash about                              # open the About Flash window
-flash quit                               # stop the resident app
-```
-
-Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
-
-`window_move` accepts named positions (`topleft`, `topright`, `bottomleft`,
-`bottomright`, `lefthalf`, `righthalf`, `tophalf`, `bottomhalf`, `maximized`,
-or `centered`) or a complete proportional frame. Proportional frames require
-`--x`, `--y`, `--width`, and `--height` together, each with a `%` suffix. `x`
-and `y` are offsets from the top-left of Flash's usable screen area, including
-its status-bar reservation on each display where the bar is configured to
-render. Flash retains that geometry as window intent: an explicit
-`--screen=+1` move, a resolution or usable-area change, and display
-attachment/removal all reapply it against the destination screen.
-
-## Configuration
-
-flash reads `$XDG_CONFIG_HOME/flash/flash.toml` when `XDG_CONFIG_HOME` is set, otherwise `~/.config/flash/flash.toml`. Changes apply without restarting.
-
-The canonical reference is [config.default.toml](config.default.toml). It documents hint alphabets, mappings, the status bar, flashlight ranking, plugins, and debug options.
-
-A compact example:
+Every default binding can be changed or removed, including the ones plugins add:
 
 ```toml
-[hints]
-keys = "<qwerty_homerow+qwerty_toprow>"
-min_length = 1
-
-[plugins]
-disabled = []
-third_party = []
-
-[flashlight]
-suggestion_count = 10
-
-[mode.normal]
-passthrough_keys = ["escape"]
-passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
-leader = "\\"
-
 [mode.normal.mappings]
-"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight"]
-"[a" = { action = ["flash", "app_previous"], repeat = true }
-"f" = ["flash", "mouse_target"]
-"F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
-"ctrl+f" = ["flash", "mouse_grid"]
-"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
+"t" = false                                        # remove a default
+"gb" = ["flash", "send_key", "--keys=cmd+shift+b"] # add your own
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; the defaults are Escape and Command, Control, Shift, and Option. Explicit mappings win. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. `mouse_target` and `mouse_grid` preserve that complete modifier set for every target. Terminal links additionally add Shift as a transport requirement. Thus `f` is a plain current-context click (Shift-click for terminal links), while `F` is the same Command-Shift new-context gesture everywhere.
+`flash config_check` validates the file without the app running, so it fits in
+a dotfiles CI job.
 
-## Use your existing hotkey tool
+### 6. Plugins
 
-Native mappings are the simplest option, but any launcher that can execute a command can trigger flash:
+Write a plugin in any language, or pin someone else's to a commit. Start with
+the [plugin cookbook](docs/plugin-cookbook.md).
 
-```lua
--- Hammerspoon
-hs.hotkey.bind({"ctrl", "alt"}, "f", function()
-  hs.execute("flash mouse_target")
-end)
+## Coming from Linux?
+
+| You used | In Flash |
+| --- | --- |
+| keynav, warpd grid | `mouse_grid`, keyboard-shaped, with `--bisect` |
+| Vimium, qutebrowser hints | `mouse_target`, in every app |
+| warpd normal mode | `mouse_pointer` |
+| conky | [desktop widgets](docs/widgets.md) |
+| polybar, waybar | `[statusbar]` with tmux formats |
+| rofi, dmenu | flashlight |
+| i3, sway, Hyprland modes | NORMAL / INSERT / COMMAND with `[mode.*.mappings]` |
+| i3 `move`, Hyprland dispatchers | `window_move` |
+| swaymsg, hyprctl | `flash <verb>`, `flash status --json` |
+| dotfiles | one `flash.toml`, live reload, `flash config_check` |
+
+## Privacy
+
+Flash asks for Accessibility only. It does not use Screen Recording, OCR, or
+Input Monitoring, and it has no telemetry, analytics, or update checks.
+
+- **Screen.** Hints come from the Accessibility tree and window geometry. Flash
+  never reads screen pixels. The optional `:screenshot` command runs macOS
+  `screencapture` and asks for Screen Recording only when you use it.
+- **Keyboard.** A keyboard tap is active only while Flash owns input (hints,
+  normal mode, the command bar). It decides whether to swallow or pass each key
+  and never records what you type in other apps. Queries you submit in Flash's
+  own command bar are kept in a local history.
+- **Network.** Flash's core has no network features. A few bundled plugins
+  fetch data, such as daily exchange rates, and remote tmux over SSH is off
+  until you list hosts. Disable any plugin with `[plugins] disabled = ["<id>"]`.
+- **Local data.** Clipboard history, command history, and ranking data stay in
+  `~/Library/Application Support/Flash`. Clipboard history skips items that
+  password managers mark as concealed or transient.
+
+The [privacy page](docs/privacy.md) lists every permission prompt, network
+request, and file for each plugin.
+
+## How it compares
+
+- **Neru** (MIT) is the closest open-source relative: hints, grid, recursive
+  grid, bisect, and scroll modes, controlled over a Unix socket. Its optional
+  OCR and contour detection need Screen Recording. Flash stays on
+  Accessibility only and adds normal mode, search, a status bar, and widgets.
+- **Homerow** is polished, closed source, and paid. Flash is free, MIT-licensed,
+  configured in a file, and goes beyond clicking.
+- **Vimac** was Homerow's open-source predecessor and is no longer maintained.
+- **Shortcat** is free and closed source, and clicks by typing visible text.
+  Flash has that as `mouse_target --search`, next to labels.
+- **Scoot** (BSD-3) offers element hints and a grid. Flash adds normal mode,
+  terminal hints, search, and plugins.
+- **Wooshy**, **Mouseless**, and **Superkey** are paid. Superkey's text seek
+  needs Screen Recording; Flash asks for Accessibility only.
+- **Vimium** and **Surfingkeys** work inside the browser only. Flash covers the
+  browser and every other app, with no extension.
+- **Raycast** and **Alfred** are launchers. flashlight covers apps, tabs, emoji,
+  and quick math, but Flash's focus is acting on what is on screen, and it runs
+  fine next to them.
+- **SketchyBar** is a scriptable bar. Flash's bar uses tmux formats and shares
+  its plugins with hints, search, and widgets.
+- **Übersicht** renders desktop widgets as web views, and **conky** needs
+  XQuartz on macOS. Flash widgets are native text layers fed by the same
+  collectors as the bar.
+- **Hammerspoon** is a Lua automation toolkit. Flash is a ready-made keyboard
+  layer in TOML, and Hammerspoon can drive it with `flash <verb>`.
+
+Flash only sees what an app exposes to Accessibility. Canvas-drawn interfaces
+and some games show no hints; use the grid there.
+
+## Performance
+
+Flash prepares each focused window's targets in the background as it changes,
+so most activations draw hints without walking the app. Every activation logs
+its latency from the keypress to the frame that shows the hints;
+[performance](docs/performance.md) has the method, the benchmark script, and
+measurements.
+
+## Troubleshooting
+
+- **Start with `flash doctor`.** It checks permissions, key capture, secure
+  input, your configuration, hotkeys taken by other apps, and plugins.
+- **No hints at all.** Check that Flash is enabled under Accessibility and
+  that a hotkey is mapped. Then see `~/Library/Logs/Flash/flash.log`.
+- **Hints stopped after an update.** Remove Flash from the Accessibility list
+  and add it again (see [Install](#install)).
+- **Missing or misplaced hints in one app.** Set
+  `[debug] show_hints_bounds = true` to draw what Flash sees, and please
+  [open an issue](https://github.com/aymericbeaumet/flash/issues) with the app
+  name and version.
+- **A hotkey does nothing.** Another app may own it; `flash doctor` lists
+  refused hotkeys. Flash reports invalid mappings when you save the file.
+- **Hints ignore your keys under a non-Latin input source.** Set
+  `[app] keyboard_layout = "auto"` (the default) or name a layout explicitly.
+
+## Quit and uninstall
+
+Quit from the menu-bar icon or with `flash quit`. Set `[app] autostart = false`
+to stop Flash from starting at login, and `[app] menu_bar_icon = false` to hide
+the icon.
+
+```sh
+brew uninstall --cask --zap flash@nightly
 ```
 
-```text
-# skhd
-ctrl + alt - f : flash mouse_target
-```
+`--zap` also removes your configuration, logs, and local data.
 
-Karabiner-Elements users can call `flash mouse_target` from a `shell_command` manipulator.
+## Community
 
-## Privacy and design
+Flash is young and moves fast. Bug reports with the app name and version, new
+plugins, and your bar and widget setups are all welcome: open an
+[issue](https://github.com/aymericbeaumet/flash/issues) or send a pull request
+adding your setup to [`docs/examples`](docs/examples).
 
-- The core app requires Accessibility, not Screen Recording or Input Monitoring. Integrations that access Notes, Reminders, Contacts, or other apps may request their own macOS grants.
-- The core never reads screen pixels, runs OCR, or stores or logs keystrokes.
-- Keyboard capture is active only while normal mode or a hint overlay owns input; modified global mappings use macOS hotkeys.
-- Hint coverage follows what an app exposes through Accessibility. The bundled tmux plugin fills the main gap for terminal panes.
-- Plugins are child processes owned by flash and communicate only through NDJSON over stdin/stdout (one JSON object per newline-terminated line).
+## Documentation
 
-## Develop
+- **Using Flash:** [configuration](docs/configuration.md) ·
+  [full default reference](config.default.toml) · [commands](docs/commands.md) ·
+  [normal mode](docs/normal-mode.md) · [flashlight](docs/flashlight.md) ·
+  [privacy](docs/privacy.md)
+- **Status bar and widgets:** [format](docs/status-format.md) ·
+  [widgets](docs/widgets.md) ·
+  [example](docs/examples/statusbar/README.md) · [calendar](docs/calendar.md) ·
+  [usage and system popups](docs/status-popups.md) ·
+  [terminal windows](docs/terminal-popups.md)
+- **Integrations and plugins:** [Firefox tabs add-on](docs/firefox-extension.md) ·
+  [writing a plugin](docs/plugin-cookbook.md) ·
+  [plugin protocol](docs/plugin-protocol.md) · [Rust SDK](docs/plugin-rust-sdk.md)
+- **Contributing:** [development and tests](docs/development.md) ·
+  [architecture](docs/architecture.md) · [observability](docs/observability.md) ·
+  [performance](docs/performance.md)
 
-Run the unit and guardrail suites, then install the real app before manual UI verification:
+## License
 
-```bash
-swift test
-./Scripts/test-plugins.sh --lane all   # plugin lint + units + builds + conformance matrix
-./Scripts/benchmark-plugins.py --build # report plugin startup, ping, RSS, and threads
-./Scripts/check-guardrails.sh
-./Scripts/install.sh --dev
-```
-
-Browser, native AppKit, and Electron integration suites are available separately:
-
-```bash
-./Scripts/test-integration-browser.sh
-./Scripts/test-integration-native.sh
-./Scripts/test-integration-electron.sh
-```
-
-`swift build` alone does not update the resident app in `/Applications`. See [AGENTS.md](AGENTS.md) for the architecture, source contracts, and repository guardrails.
+Flash is released under the [MIT License](LICENSE).

@@ -1,0 +1,29 @@
+# A developer corner in the bottom-left: the tmux session, window and pane of
+# the attached client, a repository's branch and pending changes through
+# #() shell jobs, and the last lines of a log file through a named source.
+# Set @repo and the log path below, then see README.md in this directory to
+# add it to flash.toml.
+
+[widgets.dev]
+anchor = "bottom_left"
+columns = 72
+bg = "#2E3440B3"
+interval = 10 # seconds between #() re-runs
+template = """
+#[fg=#A3BE8C bold]tmux#[default] \
+#{?flash.plugin.tmux.session,#{flash.plugin.tmux.session}:#{flash.plugin.tmux.window} \
+#[fg=#81A1C1]#{flash.plugin.tmux.pane},#[fg=#4C566A]no attached client}
+#[fg=#EBCB8B bold]git#[default]  #(git -C #{@repo} branch --show-current 2>/dev/null) \
+#[fg=#BF616A]#(git -C #{@repo} status --porcelain 2>/dev/null | wc -l | tr -d ' ') changed
+#[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
+#{flash.source.log}
+"""
+
+[widgets.dev.options]
+"@repo" = "~/src/project" # the repository to follow
+
+# ${tail ~/Library/Logs/dev-server.log 5} in conky: any file a dev server,
+# watcher or build writes. A leading ~ and $VARIABLES expand when it runs.
+[statusbar.sources.log]
+command = ["tail", "-n5", "~/Library/Logs/dev-server.log"]
+interval = 5

@@ -9,6 +9,24 @@ enum OverlayModeBadgeStyle {
   case command
 }
 
+/// What the overlay shows for the current mode, as one value. Only the mode
+/// executor writes it (`setModeSurface`); the bar, the pill, the border colour
+/// and capture all read it, so none of them can show a different mode.
+struct ModeSurface: Equatable {
+  /// The pill's text: the configured label for the mode.
+  var label: String
+  var style: OverlayModeBadgeStyle
+  /// `[statusbar] enabled`: whether the bar window is on screen. The command
+  /// line and the focus border render whether or not it is.
+  var barVisible: Bool
+  /// The overlay owns the keyboard as a command surface (idle NORMAL, the
+  /// command line).
+  var capturesInput: Bool
+
+  static let initial = ModeSurface(
+    label: "INSERT", style: .insert, barVisible: false, capturesInput: false)
+}
+
 struct CandidateDisplayItem: Equatable {
   var title: String
   var highlightedRanges: [Range<Int>] = []
@@ -33,32 +51,44 @@ struct OverlayPointerClick: Equatable {
   var frontmostPIDAtClick: pid_t = -1
 }
 
+extension NSScreen {
+  /// The CoreGraphics display behind this screen; absent for virtual screens.
+  var displayID: CGDirectDisplayID? {
+    (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+  }
+}
+
 final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
 
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
-  // The Flash status bar is an ordinary elevated window: above the focused
-  // app's normal windows so it stays visible, but a plain `.floating` level —
-  // NOT jammed against the menu-bar band one level under the system menu
-  // window, where it competed with the system menu bar for clicks. The native
-  // menu bar (app menus at the menu-bar window level 24, extras at
-  // `.statusBar`/25, and the auto-hide reveal the system draws on hover) sits
-  // well above `.floating`, so by pure window z-order it expands on top of
-  // Flash and takes the click; when it's tucked away, the band is Flash's.
-  // Normal-mode keystroke capture runs through the session CGEvent tap (not
-  // key focus), and the key-window fallback still works at this level (only
-  // `.statusBar`/25 is barred from becoming key).
+  // The overlay panel's persistent content is the active-window focus border:
+  // an ordinary elevated window above the focused app's normal windows but
+  // below Spotlight, banners and the Dock, and still allowed to become key for
+  // the no-tap key-window fallback (only `.statusBar`/25 is barred from key).
   static let persistentStatusWindowLevel: NSWindow.Level = .floating
-  // The status bar's *visual* lives on the `.floating` panel above, but its
-  // click windows must sit at the system menu-bar level: macOS only delivers
-  // menu-bar-band clicks to windows at (or above) that level — lower windows
-  // get nothing and the click falls through to the desktop. They don't steal
-  // native clicks despite outranking it, because they flip to click-through
-  // (`ignoresMouseEvents`) whenever the native menu bar is revealed; see
-  // `nativeMenuBarIsRevealed` / `menuBarRevealTimer`.
-  static let statusBarClickWindowLevel: NSWindow.Level = .statusBar
+  // The status bar lives in its own click-through window (`StatusBarWindow`)
+  // above the native menu bar: app menus at the menu-bar window level 24,
+  // extras at `.statusBar`/25, and the auto-hide reveal the system slides down
+  // from y<0 at those same levels. A reveal Flash did not ask for — a menu key
+  // equivalent flashing its title, Flash becoming active, a wake — therefore
+  // slides in behind the bar instead of painting over it for a second.
+  // The pointer is the one exception: while the probe sees the native bar
+  // actually revealed under it, the window drops to
+  // `statusBarYieldedWindowLevel` so reaching for the top edge still gets the
+  // real menu bar (`setStatusBarYieldsToNativeMenuBar`).
+  static let statusBarWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+  static let statusBarYieldedWindowLevel: NSWindow.Level = .floating
+  // The click windows sit above the bar window: macOS only delivers
+  // menu-bar-band clicks to windows at (or above) the menu-bar level — lower
+  // windows get nothing and the click falls through to the desktop. The bar
+  // window ignores mouse events, so the band's clicks reach them regardless.
+  // They don't steal native clicks despite outranking the menu bar, because
+  // they flip to click-through alongside the bar's yield.
+  static let statusBarClickWindowLevel = NSWindow.Level(
+    rawValue: NSWindow.Level.statusBar.rawValue + 2)
   static let candidateFinderHorizontalPadding: CGFloat = 8
   static let candidateFinderVerticalPadding: CGFloat = 7
   static let candidateFinderLineSpacing: CGFloat = 2
@@ -72,35 +102,21 @@ final class OverlayPanel: NSPanel {
   var hintLayerPool: [CAGradientLayer] = []
   var labelLayerPool: [CATextLayer] = []
   let modeBadgeLayer = CAGradientLayer()
-  let statusAppLabel = CATextLayer()
-  let modeBadgeButtonLayer = CAGradientLayer()
-  let modeBadgeLabel = CATextLayer()
-  /// Styled text that follows `#{mode}` in the `#[align=left]` bucket. The
-  /// mode pill itself only renders the mode label; anything after it (e.g.
-  /// `#{mode}#[fg=colour245] · HN …`) is a normal tmux-styled run rendered
-  /// here so it doesn't inherit the bold mode-pill palette.
-  let statusLeftTrailingLabel = CATextLayer()
-  /// The rotating `#{cycle:…}` run in the left-trailing region, rendered in its
-  /// own layer (clipped to one line) so it can slide vertically while the text
-  /// around it — the mode pill, the "HN" label — stays put.
-  let statusLeftTrailingCycleLayer = CATextLayer()
-  var lastRenderedLeftTrailingCycle: String?
-  /// Pooled overlay layers painting the primary bar's animated spans (see
-  /// `placeEffectOverlays`) — their opacity runs on render-server
-  /// animations, never a process timer.
-  var statusEffectOverlays: [CATextLayer] = []
-  let statusRightLabel = CATextLayer()
-  /// Status bars rendered on every non-main screen. Allocated lazily by
-  /// `configureSecondaryStatusBars` and pruned when displays disconnect.
-  /// Each entry mirrors the primary bar's text but uses its own screen's
-  /// native top-band height so users see the bar at the right vertical
-  /// position regardless of which monitor they look at.
-  var secondaryStatusBars: [SecondaryStatusBar] = []
+  lazy var primaryStatusBarSurface = NativeStatusBarSurface(backgroundLayer: modeBadgeLayer)
+  var secondaryStatusBars: [NativeStatusBarSurface] = []
+  /// Hosts `modeBadgeLayer` and the secondary bars; see `syncStatusBarWindow`.
+  let statusBarWindow: StatusBarWindow
   /// Which displays render the bar (`[statusbar] monitor`). `primary` skips the
   /// secondary (non-main) screen bars. Set by the AppDelegate on config load.
-  var statusBarMonitor: Config.StatusBar.Monitor = .all
-  /// One full-band click window per screen (the bar's visual lives on this
-  /// click-through panel, so these windows do the click work). They swallow
+  var statusBarMonitor: Config.StatusBar.Monitor = .all {
+    didSet { statusBarLayoutRevision &+= 1 }
+  }
+  /// Bumped whenever an input of the status-bar relayout changes; see
+  /// `ModeBadgeLayoutStamp`.
+  var statusBarLayoutRevision: UInt64 = 0
+  var lastModeBadgeLayoutStamp: ModeBadgeLayoutStamp?
+  /// One full-band click window per screen (the bar's visual lives on the
+  /// click-through `statusBarWindow`, so these windows do the click work). They swallow
   /// band clicks so a click on the bar never reveals the desktop, and open a
   /// `#[link=…]` run when the click lands on one. Pooled + repositioned on
   /// render. See `StatusBarClickPanel`.
@@ -113,79 +129,94 @@ final class OverlayPanel: NSPanel {
   /// screen so every meaningful status segment is hintable without duplicating
   /// mirrored bars. Empty while the bar is hidden.
   var statusBarInteractionsByScreen: [StatusBarScreenInteractions] = []
-  /// Named hover-popup hit regions use the click windows' existing tracking
-  /// areas but render into this panel so no extra event surface or event tap
-  /// is needed.
-  let statusPopupLayer = CALayer()
-  let statusPopupLabel = CATextLayer()
+  let statusTerminals = StatusTerminalRegistry()
+  lazy var statusPopupController: StatusPopupController = {
+    let controller = StatusPopupController(terminals: statusTerminals)
+    controller.sharingType = overlayConfig.screenCapture.sharingType
+    return controller
+  }()
   var statusBarPopupStyle = Config.StatusBar.PopupStyle() {
     didSet {
-      if oldValue != statusBarPopupStyle { hideStatusBarPopup() }
+      if oldValue != statusBarPopupStyle { statusPopupController.updateStyle(statusBarPopupStyle) }
     }
   }
   var statusBarPopupTexts: [String: String] = [:]
-  var statusModePopupName: String?
+  var statusBarPopupDocuments: [String: [FlashStatusTextSegment]] = [:]
   var activeStatusBarPopupName: String?
   var activeStatusBarPopupContent: String?
   var activeStatusBarPopupVisibleFrame: CGRect?
-  /// Repeating probe that flips the click windows to click-through while the
-  /// native (auto-hidden) menu bar is revealed, so native wins those clicks.
-  /// Runs on a utility queue (never the main run loop, which owns the
-  /// keyboard tap) and only while the pointer is in the top band — armed by
-  /// the click view's `mouseEntered`, self-stopping when the pointer leaves.
-  var menuBarRevealTimer: DispatchSourceTimer?
+  /// A banner or alert. It sits above whatever else the overlay shows and
+  /// never replaces it: a toast arriving mid-hint-session or over the command
+  /// line leaves both intact, and its expiry removes only itself.
+  struct Toast {
+    let layer: CALayer
+    let token: UInt64
+    /// Errors stay for their whole dwell; informational toasts go with the
+    /// next transient teardown (`hide`).
+    let outlivesTeardown: Bool
+  }
+  var toast: Toast?
+  var toastToken: UInt64 = 0
+  /// Whether the shared-clock probe that lowers the bar window and makes the
+  /// click windows click-through while the native (auto-hidden) menu bar is
+  /// revealed under the pointer is currently registered. macOS publishes no
+  /// reveal notification, so this is a poll of last resort — armed by the
+  /// click view's `mouseEntered` and dropped the moment the pointer leaves
+  /// the band, and ticked by `PollScheduler` rather than its own timer.
+  var menuBarRevealProbeArmed = false
   /// The probe's last observed reveal state. Written on the probe queue
   /// between `resume()` and `cancel()`, reset on the main thread around
   /// those edges — the timer lifecycle serializes the two.
   var menuBarRevealedShadow = false
+  /// True while the bar sits below a pointer-revealed native menu bar; see
+  /// `setStatusBarYieldsToNativeMenuBar`.
+  var statusBarYieldsToNativeMenuBar = false
   /// Invalidation token for the command-line key-window recovery ladder
   /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
   /// from a superseded pass die silently.
   var commandLineKeyRecoveryGeneration: UInt64 = 0
+
+  /// Supersedes a pending caret re-arm when a newer command-line open starts.
+  var commandLineCaretRearmGeneration: UInt64 = 0
+
   /// Dispatches a named `#[range=user|<name>]` status-bar click through the
   /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
   /// consumed by the click windows and the `f`-hint activation path.
   var statusBarActionHandler: ((String) -> Void)?
+  /// The argument requests restoring the previous app; false switches popups in place.
+  var statusBarPopupDismissHandler: ((Bool) -> Void)?
+  var statusBarTerminalPrepareHandler: ((String) -> Bool)?
+  /// Whether hovering `name` would have to fork a terminal child (a declared
+  /// terminal popup with no running session). Such popups dwell before they
+  /// spawn; see `showStatusBarPopup`.
+  var statusBarTerminalNeedsSpawnHandler: ((String) -> Bool)?
+  static let statusBarHoverDwellMs = 150
+  var statusBarHoverDwellName: String?
+  var statusBarHoverDwellWork: DispatchWorkItem?
+  var statusBarHoverGate = StatusBarHoverGate.ready
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
-  let commandCaretLayer = CALayer()
   let commandTextField = CommandLineTextField(frame: .zero)
   let candidateFinderResultsLayer = CAGradientLayer()
   let candidateFinderResultsLabel = CATextLayer()
   var candidateFinderResultRowLayers: [CATextLayer] = []
   let activeWindowBorderLayer = CAShapeLayer()
+  /// The window frame the border currently strokes; nil while it is hidden.
+  /// The one record of whether the border shows, written only by
+  /// `setActiveWindowBorder`. Its style is derived from `modeSurface.style` on
+  /// every stroke, never stored.
+  var activeWindowBorderFrame: CGRect?
   /// Bounding box + crosshair for the `--adjust` sub-state: outlines the
   /// matched target and marks the exact point the commit key will click.
   let adjustmentMarkerLayer = CAShapeLayer()
-  /// True while an `--adjust` hint session is in its post-match phase; routes
-  /// hints-mode keys to `HintAdjustmentInterpreter` instead of prefix typing.
-  var adjustmentActive = false
-  /// True while a `mouse_pointer` session owns the keyboard; routes hints-mode
-  /// keys to `PointerModeInterpreter`.
-  var pointerModeActive = false
-  /// True while a `--search` (seek & click) session owns the keyboard; routes
-  /// hints-mode keys to `HintSearchInterpreter`.
-  var searchModeActive = false
-  var modeBadgeVisible = false
-  var statusAppText = ""
-  var modeBadgeText = "INSERT"
-  /// Styled text that follows `#{mode}` in the `#[align=left]` bucket. Held
-  /// separately from `modeBadgeText` so a mode change (which rewrites only
-  /// the pill label) doesn't blow away the trailing run and flash it.
-  var statusLeftTrailingText = ""
-  var statusRightText = ""
-  /// Last content actually pushed to each status-bar text layer. A
-  /// re-render that leaves a segment unchanged skips the `.string`
-  /// reassignment + `setNeedsDisplay()` that would otherwise flash it.
-  /// Animated segments (`#[breathing]` / `#[blink]`) bypass the cache so
-  /// the effects tick keeps advancing.
-  var lastRenderedPill: String?
-  var lastRenderedPillStyle: OverlayModeBadgeStyle?
-  var lastRenderedLeftTrailing: String?
-  var lastRenderedCentre: String?
-  var lastRenderedRight: String?
-  var modeBadgeStyle: OverlayModeBadgeStyle = .insert
-  var modeBadgeCapturesInput = false
+  /// Which interpreter hints-mode keys reach; set only from the coordinator's
+  /// `HintSession.keyRoute`.
+  var hintKeyRoute = HintKeyRoute.labels {
+    didSet { if hintKeyRoute != oldValue { scheduleCursorVisibilityUpdate() } }
+  }
+  var modeSurface = ModeSurface.initial
+  var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
+  var statusBarHintSnapshot = StatusBarHintSnapshot.live
   var commandPromptVisible = false
   var commandPromptPrefix = ":"
   var candidateFinderResultsVisible = false
@@ -193,7 +224,6 @@ final class OverlayPanel: NSPanel {
   var candidateFinderResultsItems: [CandidateDisplayItem] = []
   var candidateFinderResultsShowsEmptyMessage = false
   var activeWindowBorderToken: UInt64 = 0
-  var transientDisplayToken: UInt64 = 0
   var transientContentVisible = false
   var suppressCommandTextFieldChange = false
 
@@ -204,35 +234,72 @@ final class OverlayPanel: NSPanel {
   let debugShapeLayer = CAShapeLayer()
   var lastTargetLocalRects: [CGRect] = []
 
+  /// Hosts `[overlay] click_feedback` rings in a layer-hosting view of its
+  /// own, above the drawing view, so rebuilding `contentLayer.sublayers`
+  /// never cuts a ring short.
+  let clickFeedbackLayer = CALayer()
+  /// Rings still animating; the panel stays ordered in until they finish.
+  var clickFeedbackRingsInFlight = 0
+
   weak var coordinator: OverlayCoordinator?
 
-  var overlayConfig: Config.Overlay = .init()
-  var debugConfig: Config.Debug = .init()
-  var mouseGridOpacity: Float = 0.5
-  var modeLabels: Config.Mode.Labels = .init()
-  var magicModifiers: ClickModifiers = .defaultMagic
-  var inputMode: OverlayInputMode = .hints {
+  /// Set at launch and on config reload. An unchanged value keeps the
+  /// status-bar layout memo and the border stroke.
+  var overlayConfig: Config.Overlay = .init() {
     didSet {
-      guard inputMode != oldValue else { return }
-      // Hide the mouse cursor while hints are on screen so it can't obscure a
-      // chip or distract from picking one; restore it for every other surface
-      // (normal, flashlight, command line, modal) and on dismissal.
-      if inputMode == .hints {
-        hideHintCursor()
-      } else {
-        showHintCursor()
-      }
+      guard overlayConfig != oldValue else { return }
+      statusBarLayoutRevision &+= 1
+      restyleActiveWindowBorder()
+      if overlayConfig.screenCapture != oldValue.screenCapture { applyScreenCaptureSharing() }
     }
   }
+  var debugConfig: Config.Debug = .init()
+  /// Whether macOS draws in dark mode, pushed by `AppearanceObserver` from
+  /// `NSApp.effectiveAppearance`. Selects `[overlay.dark]` at the next draw.
+  var darkAppearance = false
+  /// The chip colours for the current appearance.
+  var hintColors: Config.HintColors { overlayConfig.hintColors(dark: darkAppearance) }
+  var mouseGridOpacity: Float = 0.5
+  var modeLabels: Config.Mode.Labels = .init() {
+    didSet { statusBarLayoutRevision &+= 1 }
+  }
+  var magicModifiers: ClickModifiers = .defaultMagic
+  /// `[app] keyboard_layout`'s reference table, or nil while keys read as
+  /// typed. Set only by `KeyboardLayoutMonitor`; the key path reads it once
+  /// per key (`keyCharacters(for:)`).
+  var keyboardLayout: KeyboardLayout?
+  var inputMode: OverlayInputMode = .passive {
+    didSet { if inputMode != oldValue { scheduleCursorVisibilityUpdate() } }
+  }
+
+  /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
+  /// a chip or distract from picking one. Pointer mode is the exception — the
+  /// cursor is its interface, and so is a cursor-following grid. A projection
+  /// of `inputMode` and `hintKeyRoute`.
+  var hintCursorShouldHide: Bool { inputMode == .hints && !hintKeyRoute.showsCursor }
+
+  /// Apply `hintCursorShouldHide` once, at the end of the current turn: routing
+  /// can pass through intermediate values while a walk hands the keys to its
+  /// hints, and the cursor must not flicker through them.
+  func scheduleCursorVisibilityUpdate() {
+    guard !cursorVisibilityUpdateScheduled else { return }
+    cursorVisibilityUpdateScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.cursorVisibilityUpdateScheduled = false
+      if self.hintCursorShouldHide { self.hideHintCursor() } else { self.showHintCursor() }
+    }
+  }
+  private var cursorVisibilityUpdateScheduled = false
   /// Guards the ref-counted `CGDisplayHideCursor`/`CGDisplayShowCursor` so the
   /// cursor can never get stuck hidden across repeated hint renders.
   private var hintCursorHidden = false
-  func hideHintCursor() {
+  private func hideHintCursor() {
     guard !hintCursorHidden else { return }
     CGDisplayHideCursor(CGMainDisplayID())
     hintCursorHidden = true
   }
-  func showHintCursor() {
+  private func showHintCursor() {
     guard hintCursorHidden else { return }
     CGDisplayShowCursor(CGMainDisplayID())
     hintCursorHidden = false
@@ -255,16 +322,12 @@ final class OverlayPanel: NSPanel {
   var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
-  var normalModePassthroughKeyCodes = Set(
-    Config.Mode.defaultNormalPassthroughKeys.compactMap(HotkeySyntax.parseKey))
-  var normalModePassthroughModifiers = Config.Mode.defaultNormalPassthroughModifiers
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
   }
   var commandLineCursorIndex: Int = 0 {
     didSet { commandLineCursorIndex = min(max(commandLineCursorIndex, 0), commandLineText.count) }
   }
-  var candidateFinderQuery: String = ""
 
   // Fallback border colour when the configured `hint_border` is malformed.
   static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -285,14 +348,36 @@ final class OverlayPanel: NSPanel {
     /// status bar keeps a safety margin around it.
     var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)]
     var unionFrame: CGRect
+    /// The fixed primary display at origin (0, 0), independent of keyboard focus.
     var mainFrame: CGRect?
     var mainScale: CGFloat
     var mainVisibleFrame: CGRect
     var nativeStatusBarFallbackHeight: CGFloat
+    /// Each display's own native menu bar height, keyed by screen frame. A
+    /// notched built-in's bar is taller than an external's, so no single
+    /// measurement fits every display.
+    var nativeMenuBarHeights: [(screenFrame: CGRect, height: CGFloat)] = []
+
+    func nativeStatusBarFallbackHeight(forScreenFrame screenFrame: CGRect) -> CGFloat {
+      nativeMenuBarHeights.first { $0.screenFrame == screenFrame }?.height
+        ?? nativeStatusBarFallbackHeight
+    }
+
+    /// Width of the camera housing the centre recess mimics: the connected
+    /// notched display's, else the 16-inch MacBook Pro housing.
+    var referenceNotchWidth: CGFloat {
+      screens.compactMap { $0.notch?.width }.first ?? OverlayPanel.defaultNotchWidth
+    }
   }
+
+  static let defaultNotchWidth: CGFloat = 185
 
   private static var snapshotLock = os_unfair_lock_s()
   private static var cachedSnapshot: ScreenSnapshot?
+  /// Native menu bar heights per display. They change only with the display
+  /// topology, so a Space switch or wake rebuilds the snapshot from these
+  /// instead of scanning the window list again.
+  private static var cachedNativeMenuBarHeights: [CGDirectDisplayID: CGFloat]?
 
   static func currentScreenSnapshot() -> ScreenSnapshot {
     os_unfair_lock_lock(&snapshotLock)
@@ -308,17 +393,48 @@ final class OverlayPanel: NSPanel {
     return snapshot
   }
 
-  static func invalidateScreenSnapshot() {
+  /// Incremented with every invalidation so layout memos keyed on display
+  /// geometry (see `ModeBadgeLayoutStamp`) recompute after a screen change.
+  private(set) static var screenSnapshotRevision: UInt64 = 0
+
+  static func invalidateScreenSnapshot(remeasuringNativeMenuBars: Bool = false) {
     os_unfair_lock_lock(&snapshotLock)
     cachedSnapshot = nil
+    if remeasuringNativeMenuBars { cachedNativeMenuBarHeights = nil }
+    screenSnapshotRevision &+= 1
     os_unfair_lock_unlock(&snapshotLock)
   }
 
+  /// Re-read every display's native menu bar, invalidating the snapshot only
+  /// when a height moved. Returns whether one did. Main thread.
+  static func remeasureNativeMenuBars() -> Bool {
+    let measured = measureNativeMenuBarHeights()
+    os_unfair_lock_lock(&snapshotLock)
+    defer { os_unfair_lock_unlock(&snapshotLock) }
+    guard measured != cachedNativeMenuBarHeights else { return false }
+    cachedNativeMenuBarHeights = measured
+    cachedSnapshot = nil
+    screenSnapshotRevision &+= 1
+    return true
+  }
+
+  private static func nativeMenuBarHeightsByDisplay() -> [CGDirectDisplayID: CGFloat] {
+    os_unfair_lock_lock(&snapshotLock)
+    let cached = cachedNativeMenuBarHeights
+    os_unfair_lock_unlock(&snapshotLock)
+    if let cached { return cached }
+    let measured = measureNativeMenuBarHeights()
+    os_unfair_lock_lock(&snapshotLock)
+    cachedNativeMenuBarHeights = measured
+    os_unfair_lock_unlock(&snapshotLock)
+    return measured
+  }
+
   private static func buildScreenSnapshot() -> ScreenSnapshot {
-    var union: NSRect = .null
     var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)] = []
+    var displays: [(displayID: CGDirectDisplayID?, frame: CGRect)] = []
     for s in NSScreen.screens {
-      union = union.union(s.frame)
+      displays.append((s.displayID, s.frame))
       // A notched display exposes the areas LEFT and RIGHT of the camera
       // housing; the gap between them is the notch itself.
       var notch: CGRect?
@@ -333,15 +449,93 @@ final class OverlayPanel: NSPanel {
       }
       screens.append((s.backingScaleFactor, s.frame, s.visibleFrame, notch))
     }
-    if union.isNull, let main = NSScreen.main { union = main.frame }
-    let main = NSScreen.main ?? NSScreen.screens.first
+    let menuBars = resolveNativeMenuBarHeights(
+      screens: displays,
+      measured: nativeMenuBarHeightsByDisplay(),
+      appKitFallback: measureNativeStatusBarFallbackHeight)
+    return makeScreenSnapshot(
+      screens: screens,
+      nativeStatusBarFallbackHeight: menuBars.fallback,
+      nativeMenuBarHeights: menuBars.perScreen)
+  }
+
+  /// Pair each screen with its display's measured bar. A display without a
+  /// bar of its own (a secondary display when Displays have separate Spaces
+  /// is off) falls back to the primary display's. AppKit's app-wide
+  /// measurement, which follows whichever display last hosted the active menu
+  /// bar, is the last resort when the window list shows no bar at all.
+  static func resolveNativeMenuBarHeights(
+    screens: [(displayID: CGDirectDisplayID?, frame: CGRect)],
+    measured: [CGDirectDisplayID: CGFloat],
+    appKitFallback: () -> CGFloat
+  ) -> (perScreen: [(screenFrame: CGRect, height: CGFloat)], fallback: CGFloat) {
+    let perScreen = screens.compactMap { screen in
+      screen.displayID.flatMap { measured[$0] }.map { (screenFrame: screen.frame, height: $0) }
+    }
+    let fallback =
+      perScreen.first { $0.screenFrame.origin == .zero }?.height
+      ?? perScreen.first?.height
+      ?? appKitFallback()
+    return (perScreen, fallback)
+  }
+
+  /// The native menu bar on one display: the widest main-menu-level window
+  /// along its top edge, flush with it when revealed or parked just above it
+  /// while auto-hidden. Both inputs use WindowServer's top-left global space.
+  static func nativeMenuBarHeight(
+    displayBounds display: CGRect, menuBarWindows: [CGRect]
+  ) -> CGFloat? {
+    menuBarWindows.filter { bar in
+      bar.height > 0
+        && bar.minX >= display.minX - 1 && bar.maxX <= display.maxX + 1
+        && (abs(bar.minY - display.minY) <= 1 || abs(bar.maxY - display.minY) <= 1)
+    }
+    .max { $0.width < $1.width }?.height
+  }
+
+  /// Matches by window level and bounds only, like the reveal probe, so it
+  /// reads no window titles and needs no Screen Recording permission.
+  /// `.optionAll` because an auto-hidden bar is off-screen.
+  private static func measureNativeMenuBarHeights() -> [CGDirectDisplayID: CGFloat] {
+    guard
+      let infos = WindowSnapshot.windowList([.optionAll])
+    else { return [:] }
+    let menuLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
+    let ownPID = Int(getpid())
+    let bars = infos.compactMap { info -> CGRect? in
+      guard
+        info[kCGWindowLayer as String] as? Int == menuLayer,
+        info[kCGWindowOwnerPID as String] as? Int != ownPID,
+        let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+        let x = bounds["X"], let y = bounds["Y"],
+        let width = bounds["Width"], let height = bounds["Height"]
+      else { return nil }
+      return CGRect(x: x, y: y, width: width, height: height)
+    }
+    var heights: [CGDirectDisplayID: CGFloat] = [:]
+    for id in NSScreen.screens.compactMap(\.displayID) {
+      heights[id] = nativeMenuBarHeight(
+        displayBounds: CGDisplayBounds(id), menuBarWindows: bars)
+    }
+    return heights
+  }
+
+  static func makeScreenSnapshot(
+    screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)],
+    nativeStatusBarFallbackHeight: CGFloat,
+    nativeMenuBarHeights: [(screenFrame: CGRect, height: CGFloat)] = []
+  ) -> ScreenSnapshot {
+    let union = screens.reduce(CGRect.null) { $0.union($1.frame) }
+    // NSScreen.main follows the key window and can be a secondary display.
+    let primary = screens.first { $0.frame.origin == .zero } ?? screens.first
     return ScreenSnapshot(
       screens: screens,
-      unionFrame: union,
-      mainFrame: main?.frame,
-      mainScale: main?.backingScaleFactor ?? 2,
-      mainVisibleFrame: main?.visibleFrame ?? union,
-      nativeStatusBarFallbackHeight: measureNativeStatusBarFallbackHeight())
+      unionFrame: union.isNull ? .zero : union,
+      mainFrame: primary?.frame,
+      mainScale: primary?.scale ?? 2,
+      mainVisibleFrame: primary?.visibleFrame ?? .zero,
+      nativeStatusBarFallbackHeight: nativeStatusBarFallbackHeight,
+      nativeMenuBarHeights: nativeMenuBarHeights)
   }
 
   private static func measureNativeStatusBarFallbackHeight() -> CGFloat {
@@ -377,9 +571,11 @@ final class OverlayPanel: NSPanel {
   // build them once and reuse.
 
   private var screenParametersObserver: NSObjectProtocol?
+  private var statusBarOcclusionObserver: NSObjectProtocol?
 
   init() {
     let frame = OverlayPanel.unionScreenFrame()
+    statusBarWindow = StatusBarWindow(frame: frame)
     super.init(
       contentRect: frame,
       styleMask: [.borderless, .nonactivatingPanel],
@@ -391,7 +587,7 @@ final class OverlayPanel: NSPanel {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      OverlayPanel.invalidateScreenSnapshot()
+      OverlayPanel.invalidateScreenSnapshot(remeasuringNativeMenuBars: true)
       // A monitor was (un)plugged. The status bar is anchored to `NSScreen.main`
       // and the panel window spans the union of all screens; both just moved, so
       // without a re-layout the bar is stranded on coordinates that no longer
@@ -401,9 +597,21 @@ final class OverlayPanel: NSPanel {
       // (notably when unplugging the display that hosted the menu bar), so
       // re-anchor once more on the next runloop hop against the finalized layout.
       DispatchQueue.main.async {
-        OverlayPanel.invalidateScreenSnapshot()
+        OverlayPanel.invalidateScreenSnapshot(remeasuringNativeMenuBars: true)
         self?.statusBarDidChangeScreenParameters()
       }
+    }
+    // Coming back on screen (display wake, unlock, a full-screen cover gone)
+    // repaints the whole bar; see `reassertStatusBar`.
+    statusBarOcclusionObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification,
+      object: statusBarWindow,
+      queue: .main
+    ) { [weak self] _ in
+      guard let self else { return }
+      let visible = self.statusBarWindow.occlusionState.contains(.visible)
+      FlashLog.trace("[statusbar] occlusion visible=\(visible)")
+      if visible { self.reassertStatusBar(reason: "occlusion_visible") }
     }
     self.level = Self.persistentStatusWindowLevel
     self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -419,9 +627,21 @@ final class OverlayPanel: NSPanel {
 
     let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
     view.wantsLayer = true
-    view.layer = contentLayer
-    contentLayer.frame = view.bounds
+    // AppKit owns the editor's layers; Flash only replaces the drawing subtree.
+    let drawingView = NSView(frame: view.bounds)
+    drawingView.layer = contentLayer
+    drawingView.wantsLayer = true
+    drawingView.autoresizingMask = [.width, .height]
+    view.addSubview(drawingView)
+    contentLayer.frame = drawingView.bounds
     contentLayer.actions = OverlayPanel.noActions
+    let clickFeedbackView = NSView(frame: view.bounds)
+    clickFeedbackView.layer = clickFeedbackLayer
+    clickFeedbackView.wantsLayer = true
+    clickFeedbackView.autoresizingMask = [.width, .height]
+    view.addSubview(clickFeedbackView)
+    clickFeedbackLayer.frame = clickFeedbackView.bounds
+    clickFeedbackLayer.actions = OverlayPanel.noActions
 
     debugShapeLayer.fillColor = NSColor.clear.cgColor
     debugShapeLayer.strokeColor = NSColor.systemPink.cgColor
@@ -434,33 +654,6 @@ final class OverlayPanel: NSPanel {
     modeBadgeLayer.borderWidth = 0
     modeBadgeLayer.opacity = 1
     modeBadgeLayer.actions = OverlayPanel.noActions
-    statusAppLabel.alignmentMode = .left
-    statusAppLabel.actions = OverlayPanel.noActions
-    modeBadgeButtonLayer.cornerRadius = 4
-    modeBadgeButtonLayer.borderWidth = 0
-    modeBadgeButtonLayer.actions = OverlayPanel.noActions
-    modeBadgeLabel.alignmentMode = .center
-    modeBadgeLabel.actions = OverlayPanel.noActions
-    modeBadgeButtonLayer.sublayers = [modeBadgeLabel]
-    statusLeftTrailingLabel.alignmentMode = .left
-    statusLeftTrailingLabel.actions = OverlayPanel.noActions
-    statusLeftTrailingCycleLayer.alignmentMode = .left
-    statusLeftTrailingCycleLayer.actions = OverlayPanel.noActions
-    statusLeftTrailingCycleLayer.masksToBounds = true
-    statusLeftTrailingCycleLayer.isHidden = true
-    statusRightLabel.alignmentMode = .right
-    statusRightLabel.actions = OverlayPanel.noActions
-    statusPopupLayer.actions = OverlayPanel.noActions
-    statusPopupLayer.masksToBounds = true
-    statusPopupLayer.isHidden = true
-    statusPopupLabel.alignmentMode = .left
-    statusPopupLabel.isWrapped = true
-    statusPopupLabel.actions = OverlayPanel.noActions
-    statusPopupLayer.sublayers = [statusPopupLabel]
-    modeBadgeLayer.sublayers = [
-      statusAppLabel, modeBadgeButtonLayer, statusLeftTrailingLabel,
-      statusLeftTrailingCycleLayer, statusRightLabel,
-    ]
     commandPromptLayer.cornerRadius = 6
     commandPromptLayer.borderWidth = 1.5
     commandPromptLayer.masksToBounds = false
@@ -471,10 +664,8 @@ final class OverlayPanel: NSPanel {
     commandPromptLayer.actions = OverlayPanel.noActions
     commandPromptLabel.alignmentMode = .left
     commandPromptLabel.actions = OverlayPanel.noActions
-    commandCaretLayer.actions = OverlayPanel.noActions
-    commandCaretLayer.backgroundColor = Self.nordSnowStorm2CG
-    commandCaretLayer.isHidden = true
-    commandPromptLayer.sublayers = [commandPromptLabel, commandCaretLayer]
+    // No caret layer: the command text field's own AppKit caret is the only one.
+    commandPromptLayer.sublayers = [commandPromptLabel]
     // Match the command-input box exactly so the two stacked boxes read as
     // one surface — same corner radius and border weight as `commandPromptLayer`.
     candidateFinderResultsLayer.cornerRadius = 6
@@ -504,7 +695,7 @@ final class OverlayPanel: NSPanel {
   }
 
   deinit {
-    if let observer = screenParametersObserver {
+    for observer in [screenParametersObserver, statusBarOcclusionObserver].compactMap({ $0 }) {
       NotificationCenter.default.removeObserver(observer)
     }
     removePointerMonitors()
@@ -533,13 +724,21 @@ final class OverlayPanel: NSPanel {
     // blinking caret in a key window, so when we key while a command bar is open,
     // (re)focus the field and restart its blink — otherwise a cancel→reopen left
     // the caret missing until the next keystroke.
-    if inputMode == .commandLine {
+    if commandTextFieldIsLaidOut {
       commandTextField.isHidden = false
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
-      (commandTextField.currentEditor() as? NSTextView)?
-        .updateInsertionPointStateAndRestartTimer(true)
+      rearmCommandLineCaret()
     }
+  }
+
+  /// The command field may take focus only once its prompt is on screen and it
+  /// has been placed on it. Routing turns `.commandLine` a moment before the
+  /// first paint, and focusing the field before then showed it — and macOS's
+  /// input-source / caps-lock indicator, which anchors to the caret — at its
+  /// unplaced frame in the screen's bottom-left corner.
+  var commandTextFieldIsLaidOut: Bool {
+    inputMode == .commandLine && commandPromptVisible && !commandTextField.frame.isEmpty
   }
 
   /// True once the global keyboard tap is installed. NORMAL / hints capture then
@@ -549,11 +748,28 @@ final class OverlayPanel: NSPanel {
   /// key-window path is used — if the tap could not be created.
   var keyboardCaptureActive = false
 
+  /// The current hint session's capture path; pushed from
+  /// `HintSession.capture` with the rest of the session's projections.
+  var hintSessionCapture = KeyboardCaptureTap.SessionCapture.tap
+
+  /// Whether the tap routes the current input mode's keys: NORMAL, and a
+  /// hint session that did not start under secure input. Everything else
+  /// reads keys through the key window.
+  var tapCapturesInput: Bool {
+    guard keyboardCaptureActive else { return false }
+    switch inputMode {
+    case .normal: return true
+    case .hints: return hintSessionCapture == .tap
+    case .passive, .commandLine: return false
+    }
+  }
+
   var keyboardCaptureIsActive: Bool {
     // NORMAL / hints capture is owned by the keyboard tap, which doesn't depend
     // on key-window focus — being visible is enough. (The recapture machinery
     // keys off this, so reporting "active" here keeps it from churning.)
-    if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
+    if inputMode == .passive { return false }
+    if tapCapturesInput {
       return isVisible
     }
     if inputMode == .commandLine {
@@ -639,35 +855,32 @@ final class OverlayPanel: NSPanel {
 }
 
 protocol OverlayCoordinator: AnyObject {
+  /// The app Flash last saw focused (never Flash itself), so an activation
+  /// request can name a source when the workspace's frontmost pointer is stale.
+  var lastFocusedApplicationPID: pid_t? { get }
   func overlayDidCancel()
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
   /// One keystroke of the `--adjust` sub-state (edge snap, interpolation,
-  /// commit, cancel). Only called while `adjustmentActive` is set.
+  /// commit, cancel). Only called while `hintKeyRoute` is `.adjustment`.
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers)
-  /// One keystroke of pointer mode. Only called while `pointerModeActive`.
+  /// One keystroke of pointer mode. Only called while `hintKeyRoute` is `.pointer`.
   func overlayDidPointer(_ command: PointerModeCommand)
   /// One keystroke of the `--search` sub-state. Only called while
-  /// `searchModeActive`.
+  /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
-  /// `<space>` in the hints surface. Commits the mouse grid's centre cell
-  /// and returns `true` when mouse-grid mode is active; returns `false`
-  /// otherwise so the panel falls back to cancelling the overlay.
-  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool
+  /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
+  /// `.grid`.
+  func overlayDidGrid(_ command: MouseGridKeyCommand)
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
-  func overlayDidPassthroughNormalModeKey(_ event: NSEvent)
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool
   func overlayDidInsertCommandLineSelection() -> Bool
   func overlayDidSubmitCommandLine(_ command: String)
   func overlayDidForceSubmitCommandLineSelection()
-  func overlayDidCancelCandidateFinder()
-  func overlayDidUpdateCandidateFinderQuery(_ query: String)
-  func overlayDidMoveCandidateFinderSelection(_ delta: Int)
-  func overlayDidSubmitCandidateFinder()
   /// `[flashlight.aliases]` lookup hook. Returns the rewritten buffer +
   /// cursor when the latest keystroke landed on `<space>` after a
   /// registered shorthand bang (`!g ` → `!google `), `nil` otherwise.

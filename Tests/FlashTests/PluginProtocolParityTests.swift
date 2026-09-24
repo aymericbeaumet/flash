@@ -4,16 +4,16 @@ import XCTest
 @testable import flash
 
 /// Asserts the host's wire constants equal the machine-readable contract in
-/// `Plugins/_flash_plugin_specs/protocol.json` — the single source of truth.
+/// `Plugins/_flash_plugin_rust/protocol.json` — the single source of truth.
 /// A drift here means the host redefined the protocol without updating the
-/// spec (or vice versa), which repo rule 9 forbids shipping.
+/// contract (or vice versa), which repo rule 7 forbids shipping.
 final class PluginProtocolParityTests: XCTestCase {
   private func spec() throws -> [String: Any] {
     let url = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-      .appendingPathComponent("Plugins/_flash_plugin_specs/protocol.json")
+      .appendingPathComponent("Plugins/_flash_plugin_rust/protocol.json")
     let data = try Data(contentsOf: url)
     return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
   }
@@ -22,11 +22,29 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(try spec()["protocol_version"] as? Int, PluginProtocol.version)
   }
 
+  /// The host mints trace ids and checks those plugins echo back against
+  /// the pattern the contract pins.
+  func testTraceIDsMatchSpec() throws {
+    let trace = try XCTUnwrap(try spec()["trace"] as? [String: Any])
+    let pattern = try XCTUnwrap(trace["pattern"] as? String)
+    XCTAssertEqual(pattern, "^[0-9a-z]{1,16}$")
+    let minted = Trace.ID(value: UInt64(Date().timeIntervalSince1970 * 1000) << 12).text
+    XCTAssertNotNil(minted.range(of: pattern, options: .regularExpression), minted)
+    XCTAssertNotNil(Trace.ID(value: .max).text.range(of: pattern, options: .regularExpression))
+    for text in ["k3f9", "0", String(repeating: "z", count: 16)] {
+      XCTAssertTrue(Trace.isValid(text), text)
+    }
+    for text in ["", "K3F9", "k3-f9", String(repeating: "z", count: 17)] {
+      XCTAssertFalse(Trace.isValid(text), text)
+    }
+  }
+
   func testDeadlineTableMatchesSpec() throws {
     let deadlines = try XCTUnwrap(try spec()["deadlines_ms"] as? [String: Any])
     XCTAssertEqual(deadlines["startup"] as? Int, PluginProtocol.startupDeadlineMs)
     XCTAssertEqual(deadlines["query"] as? Int, PluginProtocol.queryDeadlineMs)
     XCTAssertEqual(deadlines["live"] as? Int, PluginProtocol.liveDeadlineMs)
+    XCTAssertEqual(deadlines["hints"] as? Int, PluginProtocol.hintsDeadlineMs)
     XCTAssertEqual(deadlines["perform"] as? Int, PluginProtocol.performDeadlineMs)
     XCTAssertEqual(deadlines["ping"] as? Int, PluginProtocol.pingDeadlineMs)
     XCTAssertEqual(deadlines["idle_before_ping"] as? Int, PluginProtocol.idleBeforePingMs)
@@ -78,9 +96,22 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(errors["host_closed"] as? String, PluginProtocol.hostClosedError)
     XCTAssertEqual(errors["host_call_timeout"] as? String, PluginProtocol.hostCallTimeoutError)
     XCTAssertEqual(errors["frame_overflow"] as? String, PluginProtocol.frameOverflowError)
+    XCTAssertEqual(errors["request_capacity"] as? String, PluginProtocol.requestCapacityError)
+    XCTAssertEqual(errors["host_call_capacity"] as? String, PluginProtocol.hostCallCapacityError)
+    XCTAssertEqual(errors["deadline_exceeded"] as? String, PluginProtocol.deadlineExceededError)
     XCTAssertEqual(
       errors["capability_denied"] as? String,
       PluginProtocol.capabilityDeniedError("<capability>"))
+  }
+
+  func testHostTransportAdmissionMatchesSpec() throws {
+    let limits = try XCTUnwrap(try spec()["transport_limits"] as? [String: Any])
+    XCTAssertEqual(limits["host_pending_requests"] as? Int, PluginProtocol.maxPendingRequests)
+    XCTAssertEqual(limits["host_host_rpcs"] as? Int, PluginProtocol.maxHostRPCs)
+    XCTAssertEqual(limits["host_outbound_frames"] as? Int, PluginProtocol.maxOutboundFrames)
+    XCTAssertEqual(limits["host_outbound_bytes"] as? Int, PluginProtocol.maxOutboundBytes)
+    XCTAssertEqual(limits["host_inbound_frames"] as? Int, PluginProtocol.maxInboundFrames)
+    XCTAssertEqual(limits["host_inbound_bytes"] as? Int, PluginProtocol.maxInboundBytes)
   }
 
   func testCapabilityRegistryMatchesSpec() throws {

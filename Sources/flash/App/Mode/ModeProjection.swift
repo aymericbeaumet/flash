@@ -11,16 +11,18 @@ enum ModeLabel: Equatable {
   case insert
   case normal
   case command
+  case terminal
 }
 
 extension Mode {
   /// The coarse insert/normal axis used by consumers that only care about that
   /// distinction and the pointer interaction policy. Command surfaces have a
-  /// separate mapping scope effect that unregisters Carbon mappings while the
-  /// field editor owns the keyboard.
+  /// separate mapping scope effect that selects all-mode and command-specific
+  /// Carbon mappings while the field editor owns the keyboard.
+  /// Terminal input uses the non-capturing axis and its local mapping scope.
   var flashMode: FlashMode {
     switch self {
-    case .disabled, .insert: return .insert
+    case .disabled, .insert, .terminal: return .insert
     case .normal, .command: return .normal
     }
   }
@@ -40,7 +42,7 @@ extension Mode {
     // sets a flag and re-renders instead of poking `overlay` fields directly.
     if nativeSurfaceSuspended { return false }
     switch self {
-    case .disabled, .insert:
+    case .disabled, .insert, .terminal:
       return false
     case .normal:
       return !hasHints && !activationInFlight
@@ -64,15 +66,14 @@ extension Mode {
     if nativeSurfaceSuspended, case .normal = self { return .normal }
     switch self {
     case .disabled, .insert:
-      return .hints
+      return hasHints || activationInFlight ? .hints : .passive
+    case .terminal:
+      return .normal
     case .normal:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
-    case .command(let scope, _):
-      switch scope {
-      case .commandLine: return .commandLine
-      case .finder: return .candidateFinder
-      }
+    case .command:
+      return .commandLine
     }
   }
 
@@ -82,6 +83,7 @@ extension Mode {
     case .disabled, .insert: return .insert
     case .normal: return .normal
     case .command: return .command
+    case .terminal: return .terminal
     }
   }
 
@@ -93,14 +95,7 @@ extension Mode {
     case .disabled, .insert: return .insert
     case .normal: return .normal
     case .command: return .command
+    case .terminal: return .command
     }
-  }
-
-  /// Whether the mode badge is intrinsically shown. The executor ANDs this with
-  /// `statusBarVisible` so `[statusbar] enabled` independently gates the bar.
-  var badgeVisibleIntrinsic: Bool {
-    // Advanced mode keeps the badge in both NORMAL and INSERT; with advanced
-    // off the bar still shows "INSERT" when the status bar is enabled.
-    true
   }
 }

@@ -5,27 +5,45 @@ import XCTest
 @testable import flash
 
 final class OverlayInputTests: XCTestCase {
+  func testCommandSurfacesDispatchMappedKeyEquivalentsBeforeEditing() throws {
+    let events = [
+      try keyEvent(
+        keyCode: kVK_ANSI_LeftBracket, characters: "[", modifierFlags: [.command, .control]),
+      try keyEvent(keyCode: kVK_Return, characters: "\r", modifierFlags: [.command]),
+    ]
+    for mode in [OverlayInputMode.commandLine] {
+      for event in events {
+        let panel = OverlayPanel()
+        let coordinator = SpyOverlayCoordinator()
+        panel.coordinator = coordinator
+        panel.inputMode = mode
+        coordinator.mappingEventsToHandle = 1
+
+        XCTAssertTrue(panel.performKeyEquivalent(with: event))
+        XCTAssertEqual(coordinator.mappingEventsToHandle, 0)
+        XCTAssertTrue(coordinator.submittedCommands.isEmpty)
+      }
+    }
+  }
+
   func testPresentedCommandLineUsesInPlaceRefresh() {
     XCTAssertTrue(
       OverlayPanel.commandLineCanRefreshInPlace(
         inputMode: .commandLine,
         commandPromptVisible: true,
-        modeBadgeVisible: true,
-        modeBadgeStyle: .command,
+        surfaceStyle: .command,
         panelVisible: true))
     XCTAssertFalse(
       OverlayPanel.commandLineCanRefreshInPlace(
         inputMode: .normal,
         commandPromptVisible: true,
-        modeBadgeVisible: true,
-        modeBadgeStyle: .command,
+        surfaceStyle: .command,
         panelVisible: true))
     XCTAssertFalse(
       OverlayPanel.commandLineCanRefreshInPlace(
         inputMode: .commandLine,
         commandPromptVisible: false,
-        modeBadgeVisible: true,
-        modeBadgeStyle: .command,
+        surfaceStyle: .command,
         panelVisible: true))
   }
   func testPlainLetterCommitsHintCharacter() {
@@ -194,91 +212,175 @@ final class OverlayInputTests: XCTestCase {
     }
   }
 
-  func testPlainSpaceRequestsCenterCommit() {
-    // `<space>` no longer hard-cancels at the interpreter — it becomes the
-    // fixed centre-of-grid key. The coordinator decides whether that's a
-    // center commit (mouse-grid mode) or a cancel (plain hints).
-    XCTAssertEqual(
-      OverlayInputInterpreter.action(
-        keyCode: 49,
-        modifierFlags: [],
-        charactersIgnoringModifiers: " "),
-      .commitCenter([]))
+  func testSpaceCancelsTargetHints() {
+    for flags: NSEvent.ModifierFlags in [[], [.shift]] {
+      XCTAssertEqual(
+        OverlayInputInterpreter.action(
+          keyCode: 49,
+          modifierFlags: flags,
+          charactersIgnoringModifiers: " "),
+        .cancel)
+    }
   }
 
-  func testShiftSpaceRidesShiftIntoCenterClick() {
-    // Same shift-pass-through invariant as the hint-commit path: shift
-    // always rides the synthesized click, so `shift+<space>` is a
-    // shift+click on the centre.
-    XCTAssertEqual(
-      OverlayInputInterpreter.action(
-        keyCode: 49,
-        modifierFlags: [.shift],
-        charactersIgnoringModifiers: " "),
-      .commitCenter([.shift]))
-  }
-
-  func testCommandSpaceCancelsWhenCommandNotMagic() {
-    // The magic-modifier cancel gate still guards `<space>`: an unlisted
-    // strict modifier cancels rather than slipping through as a center
-    // commit.
-    XCTAssertEqual(
-      OverlayInputInterpreter.action(
-        keyCode: 49,
-        modifierFlags: [.command],
-        charactersIgnoringModifiers: " ",
-        magicModifiers: []),
-      .cancel)
-  }
-
-  func testSpaceInHintsCommitsCenterWhenCoordinatorHandlesIt() throws {
+  func testSpaceInTargetLabelsCancelsTheOverlay() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
-    coordinator.commitCenterHandled = true  // mouse-grid mode active
     panel.coordinator = coordinator
     panel.inputMode = .hints
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: " ",
-        charactersIgnoringModifiers: " ",
-        isARepeat: false,
-        keyCode: 49))
 
-    panel.keyDown(with: event)
+    panel.keyDown(with: try keyEvent(keyCode: kVK_Space, characters: " "))
 
-    XCTAssertEqual(coordinator.commitCenterModifiers, [[]])
-    XCTAssertEqual(coordinator.cancelCount, 0)
-  }
-
-  func testSpaceInHintsCancelsWhenCoordinatorDeclinesCenter() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    coordinator.commitCenterHandled = false  // plain hints, not mouse grid
-    panel.coordinator = coordinator
-    panel.inputMode = .hints
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: " ",
-        charactersIgnoringModifiers: " ",
-        isARepeat: false,
-        keyCode: 49))
-
-    panel.keyDown(with: event)
-
-    XCTAssertEqual(coordinator.commitCenterModifiers.count, 1)
     XCTAssertEqual(coordinator.cancelCount, 1)
+    XCTAssertTrue(coordinator.gridCommands.isEmpty)
+  }
+
+  func testGridInterpreterKeymap() {
+    let qwerty = MouseGrid.Shape.keyboard(Alphabet.gridKeys(layoutName: "qwerty"))
+    func cmd(
+      _ keyCode: Int, _ typed: String? = nil, _ flags: NSEvent.ModifierFlags = [],
+      shape: MouseGrid.Shape? = nil, magic: ClickModifiers = .defaultMagic
+    ) -> MouseGridKeyCommand {
+      MouseGridInputInterpreter.command(
+        keyCode: UInt16(keyCode), modifierFlags: flags, typed: typed,
+        shape: shape ?? qwerty, magicModifiers: magic)
+    }
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q"), .cell("q", []))
+    XCTAssertEqual(cmd(kVK_ANSI_B, "b"), .cell("b", []))
+    // Shift rides the click; the cell comes from the unshifted character.
+    XCTAssertEqual(cmd(kVK_ANSI_1, "1", [.shift]), .cell("1", [.shift]))
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", [.command]), .cell("q", [.command]))
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", [.control], magic: [.command]), .cancel)
+    XCTAssertEqual(cmd(kVK_ANSI_H, "h"), .cancel, "not a key of the grid")
+    XCTAssertEqual(cmd(kVK_ANSI_Q, nil), .cancel)
+    XCTAssertEqual(cmd(kVK_Escape), .cancel)
+    XCTAssertEqual(cmd(kVK_Escape, nil, [.command]), .cancel)
+
+    XCTAssertEqual(cmd(kVK_Space, " "), .centre([]))
+    XCTAssertEqual(cmd(kVK_Space, " ", [.shift]), .centre([.shift]))
+    XCTAssertEqual(cmd(kVK_Return, "\r"), .commitHere([]))
+    XCTAssertEqual(cmd(kVK_ANSI_KeypadEnter, "\u{3}", [.option]), .commitHere([.option]))
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}"), .back)
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", [.command]), .reset)
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", [.option]), .reset)
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", [.control]), .cancel)
+    XCTAssertEqual(cmd(kVK_LeftArrow, nil, [.function, .numericPad]), .move(.left))
+    XCTAssertEqual(cmd(kVK_RightArrow), .move(.right))
+    XCTAssertEqual(cmd(kVK_UpArrow), .move(.up))
+    XCTAssertEqual(cmd(kVK_DownArrow), .move(.down))
+    XCTAssertEqual(cmd(kVK_Tab, "\t"), .screen(1))
+    XCTAssertEqual(cmd(kVK_Tab, "\t", [.shift]), .screen(-1))
+    XCTAssertEqual(cmd(kVK_ANSI_Grave, "`"), .toggleFollow)
+
+    XCTAssertEqual(cmd(kVK_ANSI_H, "h", shape: .bisect), .half(.left, []))
+    XCTAssertEqual(cmd(kVK_ANSI_J, "j", shape: .bisect), .half(.down, []))
+    XCTAssertEqual(cmd(kVK_ANSI_K, "k", shape: .bisect), .half(.up, []))
+    XCTAssertEqual(cmd(kVK_ANSI_L, "l", [.shift], shape: .bisect), .half(.right, [.shift]))
+    for key in ["y", "u", "b", "n"] {
+      XCTAssertEqual(cmd(0, key, shape: .bisect), .cell(Character(key), []))
+    }
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", shape: .bisect), .cancel)
+    XCTAssertEqual(cmd(kVK_Return, "\r", shape: .bisect), .commitHere([]))
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", shape: .bisect), .back)
+  }
+
+  func testGridTypedCharacterIsUnshiftedOnlyWhileShiftIsHeld() {
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(shiftHeld: true, unshifted: "1", ignoringModifiers: "!"),
+      "1")
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(shiftHeld: true, unshifted: "", ignoringModifiers: "!"),
+      "!")
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(shiftHeld: true, unshifted: nil, ignoringModifiers: "q"),
+      "q")
+    // Without Shift the event's own characters stand, so the native oracle's
+    // key-code-0 unicode events keep their text.
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(
+        shiftHeld: false, unshifted: "a", ignoringModifiers: "1"),
+      "1")
+  }
+
+  func testGridRouteSendsEveryKeyToTheGridAfterMappings() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .hints
+    panel.hintKeyRoute = .grid(
+      .keyboard(Alphabet.gridKeys(layoutName: "qwerty")), cursorFollows: false)
+    defer { panel.inputMode = .passive }
+
+    panel.keyDown(with: try keyEvent(keyCode: 0, characters: "1"))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_Space, characters: " "))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_H, characters: "h"))
+    coordinator.mappingEventsToHandle = 1
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_Q, characters: "q"))
+
+    XCTAssertEqual(coordinator.gridCommands, [.cell("1", []), .centre([]), .cancel])
+    XCTAssertEqual(coordinator.cancelCount, 0, "the grid owns its cancel")
+  }
+
+  /// Under a Russian source the F key types "а"; with a reference layout
+  /// every positional interpreter reads it as `f`, while `--search` keeps
+  /// the typed text it matches against.
+  func testAReferenceLayoutFeedsEveryPositionalInterpreterButSearch() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .hints
+    defer { panel.inputMode = .passive }
+
+    panel.hintKeyRoute = .labels
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    XCTAssertEqual(coordinator.committedPrefixes, ["f", "f"])
+
+    panel.hintKeyRoute = .grid(
+      .keyboard(Alphabet.gridKeys(layoutName: "qwerty")), cursorFollows: false)
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_Q, characters: "й"))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_1, characters: "!", modifierFlags: [.shift]))
+    XCTAssertEqual(coordinator.gridCommands, [.cell("q", []), .cell("1", [.shift])])
+
+    panel.hintKeyRoute = .pointer
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_H, characters: "р"))
+    XCTAssertEqual(coordinator.pointerCommands, [.move(dx: -1, dy: 0, fine: false)])
+
+    panel.hintKeyRoute = .adjustment
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_L, characters: "д"))
+    XCTAssertEqual(coordinator.adjustCommands, [.snapRight])
+
+    panel.hintKeyRoute = .search
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    XCTAssertEqual(coordinator.searchCommands, [.append("а")])
+  }
+
+  func testAReferenceLayoutFeedsNormalMode() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .normal
+    defer { panel.inputMode = .passive }
+
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_G, characters: "п"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_G, characters: "п"))
+    XCTAssertEqual(
+      coordinator.normalModeActions.map { $0.0?.command },
+      [.mouseTarget(.click(.leftClick, modifiers: [])), .scroll(.top)])
+  }
+
+  func testWithoutAReferenceLayoutKeysReadAsTyped() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .hints
+    defer { panel.inputMode = .passive }
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
+    XCTAssertEqual(coordinator.committedPrefixes, ["а"])
   }
 
   func testCommandLineUsesNativeTextFieldResponder() {
@@ -508,45 +610,14 @@ final class OverlayInputTests: XCTestCase {
     }
   }
 
-  func testPointerIntentMonitorRunsForCapturingNormalModeBadge() {
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .normal,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: true))
-    XCTAssertFalse(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .hints,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: true))
-    XCTAssertFalse(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .normal,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: true))
-    // Idle NORMAL runs the monitor even when keyboard capture is temporarily
-    // suppressed, so a click on the focused app can still enter insert.
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .normal,
-        modeBadgeVisible: true,
-        modeBadgeCapturesInput: false))
-  }
-
-  func testPointerIntentMonitorRunsForCommandLineAndCandidateFinder() {
-    // Clicking outside the command bar / candidate list must dismiss
-    // them, regardless of mode-badge visibility — those input modes are
-    // never on screen without a panel the user can click out of.
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .commandLine,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: false))
-    XCTAssertTrue(
-      OverlayPanel.pointerIntentMonitorShouldRun(
-        inputMode: .candidateFinder,
-        modeBadgeVisible: false,
-        modeBadgeCapturesInput: false))
+  func testPointerIntentMonitorRunsForIdleNormalAndTheCommandLine() {
+    // Idle NORMAL runs the monitor — with or without the status bar, and while
+    // keyboard capture is suppressed — so a click on the focused app enters
+    // insert; clicking outside the command line dismisses it.
+    XCTAssertTrue(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .normal))
+    XCTAssertTrue(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .commandLine))
+    XCTAssertFalse(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .hints))
+    XCTAssertFalse(OverlayPanel.pointerIntentMonitorShouldRun(inputMode: .passive))
   }
 
   func testConfiguredModifiedNormalMappingDoesNotLockOutBracketTabSequence() throws {
@@ -579,7 +650,13 @@ final class OverlayInputTests: XCTestCase {
     panel.processNormalModeKey(
       try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
     XCTAssertEqual(panel.normalModePending, "")
-    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabPrev])
+    XCTAssertEqual(
+      coordinator.normalModeActions.map(\.0?.command),
+      [
+        .sendKey(
+          keys: "cmd+shift+[", keyCode: CGKeyCode(kVK_ANSI_LeftBracket),
+          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
+      ])
   }
 
   func testConfiguredModifiedNormalMappingDoesNotLockOutRightBracketTabSequence() throws {
@@ -612,7 +689,13 @@ final class OverlayInputTests: XCTestCase {
     panel.processNormalModeKey(
       try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
     XCTAssertEqual(panel.normalModePending, "")
-    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
+    XCTAssertEqual(
+      coordinator.normalModeActions.map(\.0?.command),
+      [
+        .sendKey(
+          keys: "cmd+shift+]", keyCode: CGKeyCode(kVK_ANSI_RightBracket),
+          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
+      ])
   }
 
   func testRepeatableBracketAppMappingRepeatsOnFinalKey() throws {
@@ -637,46 +720,6 @@ final class OverlayInputTests: XCTestCase {
       NormalModeInterpreter.canonicalizeMappingKey("[a"))
   }
 
-  func testKeyWindowFallbackPassesUnmappedModifierChordWhenEnabled() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
-
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [.command],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: "'",
-        charactersIgnoringModifiers: "'",
-        isARepeat: false,
-        keyCode: UInt16(kVK_ANSI_Quote)))
-
-    XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertEqual(panel.normalModePending, "")
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Quote)])
-  }
-
-  func testKeyWindowFallbackPassesConfiguredEscapeKey() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
-
-    let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
-
-    XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_Escape)])
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-  }
-
   func testKeyWindowFallbackKeepsExplicitEscapeMappingInNormalMode() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
@@ -689,32 +732,28 @@ final class OverlayInputTests: XCTestCase {
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.scroll(.top)])
   }
 
-  func testKeyWindowFallbackConsumesEscapeWhenPassthroughIsDisabled() throws {
+  func testKeyWindowFallbackConsumesEscapeByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughKeyCodes = []
 
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
   }
 
-  func testKeyWindowFallbackConsumesUnmappedModifierChordWhenDisabled() throws {
+  func testKeyWindowFallbackConsumesUnmappedModifierChordByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModePassthroughModifiers = []
 
     let event = try XCTUnwrap(
       NSEvent.keyEvent(
@@ -732,7 +771,6 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
     XCTAssertEqual(panel.normalModePending, "")
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
   }
 
   func testKeyWindowFallbackKeepsExplicitShiftMappingInNormalMode() throws {
@@ -740,7 +778,13 @@ final class OverlayInputTests: XCTestCase {
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModeMappings =
+      ConfigLoader.parse(
+        """
+        [mode.normal.mappings]
+        "A" = ["flash", "enter_insert_mode"]
+        """
+      ).mode.compiledNormal
 
     let event = try keyEvent(
       keyCode: kVK_ANSI_A,
@@ -750,25 +794,6 @@ final class OverlayInputTests: XCTestCase {
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.insertMode])
-    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
-  }
-
-  func testKeyWindowFallbackPassesUnknownShiftShortcut() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .normal
-    panel.normalModeMappings = Config.default.mode.compiledNormal
-
-    let event = try keyEvent(
-      keyCode: kVK_ANSI_Q,
-      characters: "Q",
-      charactersIgnoringModifiers: "q",
-      modifierFlags: [.shift])
-
-    XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Q)])
   }
 
   func testNormalModeConsumesDeadKeyEventWithoutCharacters() throws {
@@ -841,10 +866,68 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(thin.maxY + 0.5, thick.maxY + 1.5, accuracy: 0.001)
   }
 
+  func testCursorHidesOnlyWhileHintLabelsOwnTheKeys() {
+    let panel = OverlayPanel()
+    for mode in [OverlayInputMode.passive, .normal, .commandLine] {
+      panel.inputMode = mode
+      XCTAssertFalse(panel.hintCursorShouldHide, "\(mode)")
+    }
+    panel.inputMode = .hints
+    let keys = MouseGrid.Shape.keyboard(Alphabet.gridKeys(layoutName: "qwerty"))
+    for route in [
+      HintKeyRoute.labels, .search, .adjustment, .grid(keys, cursorFollows: false),
+    ] {
+      panel.hintKeyRoute = route
+      XCTAssertTrue(panel.hintCursorShouldHide, "\(route)")
+    }
+    // Pointer mode and a cursor-following grid steer the cursor; it must stay
+    // visible.
+    for route in [HintKeyRoute.pointer, .grid(keys, cursorFollows: true)] {
+      panel.hintKeyRoute = route
+      XCTAssertFalse(panel.hintCursorShouldHide, "\(route)")
+    }
+    panel.inputMode = .passive
+    panel.hintKeyRoute = .labels
+  }
+
+  func testActiveWindowBorderIsStrokedInTheStyleOfTheBadgeShown() {
+    let panel = OverlayPanel()
+    defer {
+      panel.setActiveWindowBorder(around: nil)
+      panel.setModeSurface(
+        .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+    }
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+    let window = CGRect(x: 10, y: 10, width: 300, height: 200)
+    panel.setActiveWindowBorder(around: window)
+    XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordAuroraGreenCG)
+    XCTAssertEqual(panel.activeWindowBorderLayer.lineWidth, 1)
+
+    // A badge change re-strokes the shown border at once, including the
+    // command surface, which never goes through the border's own update path.
+    panel.setModeSurface(
+      .init(label: "INSERT", style: .insert, barVisible: false, capturesInput: false))
+    XCTAssertEqual(panel.activeWindowBorderFrame, window)
+    XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordFrost2CG)
+    XCTAssertEqual(panel.activeWindowBorderLayer.lineWidth, 2)
+    XCTAssertGreaterThan(panel.activeWindowBorderLayer.shadowOpacity, 0)
+    panel.setModeSurface(
+      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false))
+    XCTAssertEqual(panel.activeWindowBorderLayer.strokeColor, OverlayPanel.nordAuroraPurpleCG)
+    XCTAssertEqual(panel.activeWindowBorderLayer.shadowOpacity, 0)
+
+    // A hidden border stays hidden across badge changes.
+    panel.setActiveWindowBorder(around: nil)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+    XCTAssertNil(panel.activeWindowBorderFrame)
+    XCTAssertNil(panel.activeWindowBorderLayer.path)
+  }
+
   func testActiveWindowBorderStaysBehindCommandAndCandidateLayers() {
     let panel = OverlayPanel()
-    panel.activeWindowBorderLayer.path = CGPath(
-      rect: CGRect(x: 0, y: 0, width: 100, height: 100), transform: nil)
+    panel.setActiveWindowBorder(around: CGRect(x: 0, y: 0, width: 100, height: 100))
     var layers: [CALayer] = [panel.commandPromptLayer, panel.candidateFinderResultsLayer]
 
     panel.appendActiveWindowBorderLayerIfNeeded(to: &layers)
@@ -856,7 +939,7 @@ final class OverlayInputTests: XCTestCase {
 
   func testModeBadgeWidthUsesLongestConfiguredLabel() {
     let compact = OverlayPanel.modeBadgeWidth(
-      labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C"),
+      labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C", terminal: "T"),
       currentText: "N",
       fontSize: 12)
     let full = OverlayPanel.modeBadgeWidth(
@@ -912,29 +995,32 @@ private func keyEvent(
 }
 
 private final class SpyOverlayCoordinator: OverlayCoordinator {
+  var lastFocusedApplicationPID: pid_t? { nil }
   var commandLineSelectionDeltas: [Int] = []
   var insertSelectionCount = 0
   var submittedCommands: [String] = []
   var mappingEventsToHandle = 0
-  var passthroughEvents: [NSEvent] = []
   var normalModeActions: [(MappingCommand?, Int)] = []
   var cancelCount = 0
-  var commitCenterModifiers: [ClickModifiers] = []
-  /// What `overlayDidCommitCenter` reports back — `true` mimics being in
-  /// mouse-grid mode (center handled), `false` mimics plain hints (the
-  /// panel then cancels).
-  var commitCenterHandled = false
+  var gridCommands: [MouseGridKeyCommand] = []
+  var committedPrefixes: [String] = []
+  var adjustCommands: [HintAdjustmentCommand] = []
+  var pointerCommands: [PointerModeCommand] = []
+  var searchCommands: [HintSearchCommand] = []
 
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
-  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
-  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {}
-  func overlayDidPointer(_ command: PointerModeCommand) {}
-  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {}
-  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
-    commitCenterModifiers.append(clickModifiers)
-    return commitCenterHandled
+  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {
+    committedPrefixes.append(prefix)
   }
+  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {
+    adjustCommands.append(command)
+  }
+  func overlayDidPointer(_ command: PointerModeCommand) { pointerCommands.append(command) }
+  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {
+    searchCommands.append(command)
+  }
+  func overlayDidGrid(_ command: MouseGridKeyCommand) { gridCommands.append(command) }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
     if action != nil {
@@ -945,9 +1031,6 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     guard mappingEventsToHandle > 0 else { return false }
     mappingEventsToHandle -= 1
     return true
-  }
-  func overlayDidPassthroughNormalModeKey(_ event: NSEvent) {
-    passthroughEvents.append(event)
   }
   func overlayDidCancelCommandLine() {}
   func overlayDidUpdateCommandLine(
@@ -967,14 +1050,110 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     submittedCommands.append(command)
   }
   func overlayDidForceSubmitCommandLineSelection() {}
-  func overlayDidCancelCandidateFinder() {}
-  func overlayDidUpdateCandidateFinderQuery(_ query: String) {}
-  func overlayDidMoveCandidateFinderSelection(_ delta: Int) {}
-  func overlayDidSubmitCandidateFinder() {}
   func overlayExpandFlashlightAlias(
     _ text: String,
     cursorIndex: Int
   ) -> (text: String, cursorIndex: Int)? {
     nil
+  }
+}
+
+/// The command line only shows a caret while its panel holds the key window.
+/// Activation is asynchronous, so a short recovery ladder covers the gap —
+/// these cover the two ways that ladder used to fail.
+final class CommandLineKeyRecoveryTests: XCTestCase {
+  func testTheLadderAdvancesThroughEscalatingDelays() {
+    let delays = (0..<OverlayPanel.commandLineKeyRecoveryDelaysMs.count).map {
+      OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: $0)
+    }
+    XCTAssertEqual(delays, [30, 80, 160, 320, 640])
+  }
+
+  func testTheLadderIsExhaustedInsteadOfLoopingForever() {
+    // The regression: every retry restarted the ladder, so only its first rung
+    // ever fired and the command line retried every 30 ms for seconds.
+    let count = OverlayPanel.commandLineKeyRecoveryDelaysMs.count
+    XCTAssertNil(OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: count))
+    XCTAssertNil(OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: count + 40))
+  }
+
+  func testANegativeAttemptCountCannotRearmTheLadder() {
+    XCTAssertNil(OverlayPanel.commandLineKeyRecoveryDelayMs(afterAttempt: -1))
+  }
+
+  func testTheLadderIsBoundedInTotalWaiting() {
+    XCTAssertLessThan(OverlayPanel.commandLineKeyRecoveryDelaysMs.reduce(0, +), 2_000)
+  }
+
+  func testTheWorkspaceFrontmostAppIsTheActivationSource() {
+    XCTAssertEqual(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: 4242, lastNonFlashPID: 77, currentPID: 5),
+      4242)
+  }
+
+  func testTheLastFocusedAppTakesOverWhenTheFrontmostPointerNamesFlash() {
+    // The regression: `activate(from:)` was skipped whenever the frontmost
+    // pointer reported Flash — stale or not — which is exactly the state the
+    // ladder could not recover from.
+    XCTAssertEqual(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: 5, lastNonFlashPID: 77, currentPID: 5),
+      77)
+  }
+
+  func testTheLastFocusedAppTakesOverWhenThereIsNoFrontmostPointer() {
+    XCTAssertEqual(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: nil, lastNonFlashPID: 77, currentPID: 5),
+      77)
+  }
+
+  func testThereIsNoActivationSourceWhenOnlyFlashIsKnown() {
+    XCTAssertNil(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: 5, lastNonFlashPID: 5, currentPID: 5))
+    XCTAssertNil(
+      OverlayPanel.activationSourcePID(
+        workspaceFrontPID: nil, lastNonFlashPID: nil, currentPID: 5))
+  }
+}
+
+/// The command line's caret is armed by restarting the field editor's blink
+/// timer, which only takes effect if AppKit considers the panel key at that
+/// instant. The panel does not receive `becomeKey`, so the arming is repeated
+/// on later turns rather than left to a notification that never arrives.
+final class CommandLineCaretRearmTests: XCTestCase {
+  func testTheCaretIsRearmedOnTheNextTurnAndOncePastAHandoff() {
+    XCTAssertEqual(OverlayPanel.commandLineCaretRearmDelaysMs, [0, 80])
+  }
+
+  func testTheRearmIsAFixedListRatherThanARetryLoop() {
+    // Arming is idempotent and there is no state to poll for, so this must
+    // stay a short fixed schedule. An unbounded ladder here is what spun the
+    // main thread for seconds in the key-recovery path.
+    XCTAssertLessThanOrEqual(OverlayPanel.commandLineCaretRearmDelaysMs.count, 3)
+    XCTAssertEqual(
+      OverlayPanel.commandLineCaretRearmDelaysMs.sorted(),
+      OverlayPanel.commandLineCaretRearmDelaysMs)
+    XCTAssertLessThan(OverlayPanel.commandLineCaretRearmDelaysMs.reduce(0, +), 500)
+  }
+
+  func testTheFirstRearmRunsOnTheVeryNextTurn() {
+    XCTAssertEqual(OverlayPanel.commandLineCaretRearmDelaysMs.first, 0)
+  }
+}
+
+/// The command line has exactly one caret: its text field's own AppKit
+/// insertion point. A Flash-drawn caret layer beside it blinked out of phase
+/// and in a different style.
+final class CommandLineSingleCaretTests: XCTestCase {
+  func testThePromptDrawsNoCaretOfItsOwn() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer { panel.orderOut(nil) }
+    panel.displayCommandLine(":hel")
+
+    XCTAssertEqual(panel.commandPromptLayer.sublayers ?? [], [panel.commandPromptLabel])
   }
 }

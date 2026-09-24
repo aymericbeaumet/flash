@@ -1,0 +1,44 @@
+# A large clock, the date, this month's calendar and today's agenda, stacked
+# in the top-left corner. A widget has one font size, so the clock, the date
+# and the agenda are three widgets placed one under the other.
+#
+# The agenda needs an optional external tool, icalBuddy or khal. Without one
+# the calendar still shows and the agenda stays empty. icalBuddy reads macOS
+# Calendar, so its first run asks for Calendar access in Flash's name (see
+# docs/privacy.md). See README.md in this directory to add these to flash.toml.
+
+[widgets.clock]
+anchor = "top_left"
+font_size = 56
+fg = "#ECEFF4"
+template = "#[bold]%H:%M"
+
+[widgets.date]
+anchor = "top_left"
+gap_y = 106 # 24 + the clock's 82-point height (a 56-point line plus padding)
+font_size = 18
+fg = "#81A1C1"
+template = "%A %-d %B"
+
+[widgets.agenda]
+anchor = "top_left"
+gap_y = 148 # 106 + the date's 38-point height + 4
+columns = 44
+bg = "#2E3440B3"
+template = """
+#{flash.calendar}
+#[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
+#[fg=#EBCB8B bold]Today#[default]
+#{flash.source.agenda}
+"""
+
+# Today's remaining events, one per line: "09:30 Standup".
+# icalBuddy: `brew install ical-buddy`.
+[statusbar.sources.agenda]
+command = [
+  "icalBuddy", "-n", "-nc", "-nrd", "-ea", "-b", "", "-iep", "datetime,title",
+  "-po", "datetime,title", "-ps", "| |", "-eed", "-tf", "%H:%M", "-df", "", "eventsToday",
+]
+interval = 300
+# khal instead (`brew install khal`, then configure its calendars):
+# command = ["khal", "list", "--day-format", "", "--format", "{start-time} {title}", "today", "today"]

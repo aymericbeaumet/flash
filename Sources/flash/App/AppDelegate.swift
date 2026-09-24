@@ -6,12 +6,8 @@ import FlashCore
 enum InsertModeTransitionReason: Equatable {
   case explicitCommand
   case normalModeInput
-  case lockedNormalModeInput
   case pointerClick
   case hintCommit
-  case advancedModeDisabled
-  case secureInput
-  case normalModePassthrough
 
   var logValue: String {
     switch self {
@@ -19,51 +15,15 @@ enum InsertModeTransitionReason: Equatable {
       return "explicit_command"
     case .normalModeInput:
       return "normal_mode_input"
-    case .lockedNormalModeInput:
-      return "locked_normal_mode_input"
     case .pointerClick:
       return "pointer_click"
     case .hintCommit:
       return "hint_commit"
-    case .advancedModeDisabled:
-      return "advanced_mode_disabled"
-    case .secureInput:
-      return "secure_input"
-    case .normalModePassthrough:
-      return "normal_mode_passthrough"
     }
   }
-
-  var locksInsertMode: Bool {
-    self == .lockedNormalModeInput
-  }
-}
-
-struct ModeOverlaySnapshot: Equatable {
-  var text: String
-  var visible: Bool
-  var captureInput: Bool
-  var inputMode: OverlayInputMode
-  var refreshActiveWindowBorder: Bool
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
-  enum HintCommitBehavior {
-    case click
-    case copyURL
-    case moveMouse
-    case drag
-    case select
-    case multiClick
-    case adjustClick
-    case searchClick
-    case mouseGridClick
-    case mouseGridMove
-    case mouseGridDrag
-    case mouseGridSelect
-    case mouseGridMulti
-  }
-
   struct MovementEntry {
     enum Kind {
       case app
@@ -111,6 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   var config = Config.default
   let pluginManager = PluginManager()
+  /// `[app] keyboard_layout`'s reference table, rebuilt off the key path and
+  /// handed to the overlay.
+  let keyboardLayoutMonitor = KeyboardLayoutMonitor()
   let wifiInfoProvider = WiFiInfoProvider()
   let statusItemController = StatusItemController()
   /// Flat-JSON frecency persistence — keyed by stable item key
@@ -122,14 +85,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Bumped on every keystroke. The scoring queue captures it at
   /// submission time and discards any late DB walk that returns after
   /// the user has typed past the query.
-  var candidateFinderIndexGenerationCounter: UInt64 = 0
   var registry: SourceRegistry!
   var monitor: AppMonitor!
   var debugServer: DebugServer?
   var overlay: OverlayPanel!
+  /// Pushes the system appearance to the overlay for `[overlay.dark]`.
+  var appearanceObserver: AppearanceObserver?
   var statusBarController: FlashStatusBarController?
+  /// Desktop widget windows; the status controller evaluates their lines.
+  var widgetController: WidgetController?
+  var statusTerminalEnvironmentReady = false
+  var terminalReturnApplicationPID: pid_t?
+  let mainRunLoopStallObserver = MainRunLoopStallObserver()
+  /// The swallowed Escape that closed a hover preview; its routing, queued
+  /// right behind, must not also reach a mapping or the interpreter.
+  var tapEscapeClosedPopup = false
+  var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
+  /// Trailing-edge coalescer for config file events (one reload per burst).
+  var configReloadWork: DispatchWorkItem?
+  /// Bytes of the config file at the last applied reload; an event that
+  /// leaves them unchanged (editor temp/rename dance, `touch`) is a no-op.
+  var lastAppliedConfigFileContents: Data?
+  var autoLaunchReconciled = false
   let mappings = MappingsCoordinator()
   let windowLayoutManager = WindowLayoutManager()
   /// Per-focused-app effective mapping tables (config + applicable plugin
@@ -139,33 +118,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The effective mode last handed to `MappingsCoordinator`, so a focus
   /// change only re-registers Carbon hotkeys when the chord set changed.
   var lastAppliedMappingMode: Config.Mode?
-  var lastConfigErrorAlertMessage: String?
-  var configErrorAlertVisible = false
+  /// The config error last shown: its message, so an unchanged error is not
+  /// re-shown on every reload, and its toast, so clearing the error closes
+  /// that toast and never another one.
+  struct ShownConfigError {
+    let message: String
+    let toastToken: UInt64
+  }
+  var shownConfigError: ShownConfigError?
 
-  /// The transient hint / mouse-grid session content. Reset in one move
-  /// (`clearHintSessionState`), so a new session field can't leak by being
-  /// forgotten in a hand-maintained reset list. The named accessors below
-  /// forward to it so existing call sites keep their field names.
-  var hintSession = HintSession()
-  var currentHints: [AssignedHint] {
-    get { hintSession.hints }
-    set { hintSession.hints = newValue }
-  }
-  var currentPrefix: String {
-    get { hintSession.prefix }
-    set { hintSession.prefix = newValue }
-  }
-  /// The pointer action a committed hint performs. NOT part of `hintSession`:
-  /// the mouse-grid commit reads it *after* the session reset, so it must
-  /// outlive `clearHintSessionState()`.
-  var pendingAction: JumpAction = .leftClick
-  var pendingHintCommitBehavior: HintCommitBehavior {
-    get { hintSession.commitBehavior }
-    set { hintSession.commitBehavior = newValue }
-  }
-  var pendingClickModifiers: ClickModifiers {
-    get { hintSession.presetClickModifiers }
-    set { hintSession.presetClickModifiers = newValue }
+  /// Owns transient hint content and any primary button held by pointer mode.
+  /// The overlay's key routing and the focus border's visibility are
+  /// projections of it, pushed here on every change so neither keeps a copy
+  /// that could disagree.
+  var hintSession = HintSession() {
+    didSet {
+      guard let overlay else { return }
+      overlay.hintKeyRoute = hintSession.keyRoute
+      overlay.hintSessionCapture = hintSession.capture
+      if oldValue.isActive != hintSession.isActive {
+        refreshOverlayInputRouting()
+        updateActiveWindowBorder(
+          reason: hintSession.isActive ? "hint_session_started" : "hint_session_ended")
+      }
+    }
   }
   /// The single source of truth for the app's mode. Every UI-facing fact
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
@@ -174,10 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The coarse insert/normal axis, projected from the unified mode.
   var flashMode: FlashMode { modeStore.mode.flashMode }
   /// Advanced mode (the normal/insert system) is configured — true unless the
-  /// mode is `.disabled`, i.e. the user has an `enter_normal_mode` binding.
+  /// mode is `.disabled`, i.e. the user has an all-mode `leave_mode` or `enter_normal_mode` binding.
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
-  var modeBadgeEnabled: Bool { modeStore.mode != .disabled }
+  var modeBadgeEnabled: Bool { modeStore.mode.advancedEnabled }
   /// Whether the persistent top status bar is shown. Mirrors
   /// `config.statusBar.enabled` and is the sole condition for the bar — set
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
@@ -186,132 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
   let registers = RegisterStore()
-  var candidateFinderCandidates: [Candidate] = [] {
-    didSet {
-      // Each flashlight session freezes one source snapshot. Bump the
-      // epoch only when that snapshot's observable candidate identity
-      // changes; selection movement and repeated renders should keep the
-      // filter and incremental scoring caches intact.
-      if Self.candidatePoolsCarrySameSourceIDs(oldValue, candidateFinderCandidates) {
-        return
-      }
-      candidateFinderCandidatesEpoch &+= 1
-      candidateFinderFilteredPoolCache = nil
-      candidateFinderIncrementalCache = nil
-    }
-  }
-
-  /// Fast pool-equality probe for candidate-finder cache invalidation. It
-  /// checks stable scalar identity only, avoiding attributed-display work while
-  /// still noticing same-source tab/window rows whose titles or URLs changed.
-  static func candidatePoolsCarrySameSourceIDs(
-    _ lhs: [Candidate],
-    _ rhs: [Candidate]
-  ) -> Bool {
-    guard lhs.count == rhs.count else { return false }
-    for index in lhs.indices {
-      let left = lhs[index]
-      let right = rhs[index]
-      if left.sourceID != right.sourceID
-        || left.source != right.source
-        || left.title != right.title
-        || left.url?.absoluteString != right.url?.absoluteString
-        || left.sourcePayload != right.sourcePayload
-      {
-        return false
-      }
-    }
-    return true
-  }
-  /// Monotonic counter bumped on every `candidateFinderCandidates`
-  /// reassignment so the filtered-pool cache can detect a stale base
-  /// without comparing 2k-entry arrays element-wise per keystroke.
-  var candidateFinderCandidatesEpoch: UInt64 = 0
-  /// One-slot cache for the per-keystroke pool filter. While the user
-  /// types into flashlight the base pool and selectors stay constant — so
-  /// re-filtering 2k+ candidates on every keystroke is pure waste. The
-  /// cache is invalidated whenever the underlying array or the filter
-  /// signature differs from the prior key.
-  var candidateFinderFilteredPoolCache: (epoch: UInt64, signature: String, pool: [Candidate])?
-  /// Frozen alongside `candidateFinderCandidates` when a flashlight session
-  /// opens. Source descriptors come from plugin manifests/native sources, so
-  /// do that lookup once per session instead of rebuilding the table on every
-  /// keystroke.
-  var candidateFinderPrecedenceTable: CandidateFinder.PrecedenceTable = .default
-  /// Session-local candidate normalization is CPU-only but can take tens of
-  /// milliseconds for installed apps or the full emoji catalog. Keep that work
-  /// off AppKit's main thread; generation checks still publish only the active
-  /// session's immutable prepared arrays.
-  let candidateFinderPreparationQueue = DispatchQueue(
-    label: "com.flash.candidate-preparation",
-    qos: .userInitiated,
-    attributes: .concurrent)
-  /// Incremental-narrowing cache for fuzzy scoring. When the next query
-  /// extends the previous one (`mo` → `mor` → `moria`), no candidate
-  /// that failed `mo` can pass `mor`, so we only need to re-score the
-  /// previous match set. Each keystroke narrows the candidate space and
-  /// the scoring path gets faster as the user types. Invalidated when
-  /// the pool epoch or attribute-filter signature change, since either
-  /// shifts the candidate base.
-  var candidateFinderIncrementalCache:
-    (normalizedQuery: String, matches: [CandidateMatch], epoch: UInt64, signature: String)?
-  var candidateFinderMatches: [CandidateMatch] = []
-  var candidateFinderSelectedIndex = 0
-  /// Ephemeral answer rows returned by query evaluators for the exact current
-  /// input. They are deliberately separate from the frozen catalog so they can
-  /// occupy a fixed lane above fuzzy matches without polluting later queries.
-  var candidateFinderQueryAnswers: [Candidate] = []
-  var candidateFinderQueryEvaluationText = ""
-  /// Dedup key for live-source pulls: `session\u{1F}filter\u{1F}text`. A
-  /// re-render at an unchanged scoped query never refires `search`.
-  var candidateFinderLiveQueryKey: String?
-  /// Independent from the flashlight-session generation: every bare query
-  /// supersedes the prior evaluator fan-out even within one open surface.
-  var candidateFinderQueryEvaluationGeneration: UInt64 = 0
-  /// The exact evaluator generation whose aggregate reply is still pending.
-  /// Return/Tab/Cmd-Return use this to defer selection until the answer lane is
-  /// final for the current input.
-  var candidateFinderQueryEvaluationInFlightGeneration: UInt64?
-  /// A reply may have arrived while its answer rows are still waiting for the
-  /// coalesced re-render. Keep submission gated until that render has actually
-  /// rebuilt `candidateFinderMatches`.
-  var candidateFinderQueryEvaluationSettledGeneration: UInt64?
+  let finder = CandidateFinderSession()
   /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
   /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
   /// then surfaced through `debugStateJSON`.
   var clipboardEntries: [ClipboardModalEntry] = []
-  var candidateFinderCurrentQuery = ""
-  var candidateFinderScope: CandidateScope = .all
-  /// Bumped every time a flashlight session is (re)seeded. Plugin replies and
-  /// the first-paint deadline capture this value so work from a closed or
-  /// superseded session cannot publish a stale snapshot.
-  var candidateFinderSessionGeneration: UInt64 = 0
-  /// Initial location rows are collected behind a session-local fan-in barrier.
-  /// The prompt renders while this exists, but the result list stays hidden
-  /// until the barrier publishes one frozen snapshot.
-  var candidateFinderInitialBarrier: CandidateSnapshotBarrier?
-  var candidateFinderInitialDeadlineWork: DispatchWorkItem?
-  /// Distinguishes a valid empty frozen snapshot from a session that has not
-  /// started gathering yet.
-  var candidateFinderInitialSnapshotReady = false
-  /// Return/Tab/Cmd-Return pressed during either the initial catalog gather or
-  /// the at-most-50-ms query evaluator fan-in is replayed against the exact
-  /// completed query generation.
-  var candidateFinderSubmissionDeferral = CandidateSubmissionDeferral()
-  /// Non-location plugin stores already pulled into this flashlight session.
-  /// Track providers individually so an explicit `@emojis.glyphs` query does
-  /// not deserialize every unrelated catalog, while a later `@notes.notes`
-  /// query can still fetch its own provider.
-  var candidateFinderFetchedNonLocationSourceIDs = Set<String>()
-  /// Prepared opt-in replies that finished while the deterministic initial
-  /// location snapshot was still being normalized. They are published with
-  /// that first snapshot instead of being overwritten or causing an extra
-  /// intermediate render.
-  var candidateFinderDeferredNonLocationSnapshots: [String: [Candidate]] = [:]
-  /// Non-location sources remain lazy and may reply in a burst after the user
-  /// explicitly selects one. Coalesce those opt-in updates within a runloop
-  /// turn; the initial location snapshot never uses this incremental path.
-  var candidateFinderMergeRerenderScheduled = false
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
@@ -334,34 +189,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineHistoryCursor: Int?
   var commandLineHistoryStash: String = ""
   var selectedInitialMode = false
-  var sourceAppPID: pid_t? {
-    get { hintSession.sourceAppPID }
-    set { hintSession.sourceAppPID = newValue }
-  }
-  var mouseGridRegion: MouseGrid.Region? {
-    get { hintSession.mouseGridRegion }
-    set { hintSession.mouseGridRegion = newValue }
-  }
-  var mouseGridDepth: Int {
-    get { hintSession.mouseGridDepth }
-    set { hintSession.mouseGridDepth = newValue }
-  }
-  var dragSourcePoint: CGPoint? {
-    get { hintSession.dragSourcePoint }
-    set { hintSession.dragSourcePoint = newValue }
-  }
-  var mouseGridInitialRegion: MouseGrid.Region? {
-    get { hintSession.mouseGridInitialRegion }
-    set { hintSession.mouseGridInitialRegion = newValue }
-  }
-  var adjustingHint: AssignedHint? {
-    get { hintSession.adjustingHint }
-    set { hintSession.adjustingHint = newValue }
-  }
-  var adjustPoint: CGPoint? {
-    get { hintSession.adjustPoint }
-    set { hintSession.adjustPoint = newValue }
-  }
   /// The last click Flash committed (hints, grid, or multi session), replayed
   /// by `mouse_repeat`. Deliberately outside `hintSession`: it must survive
   /// the session reset so a repeat works after the overlay is gone.
@@ -376,11 +203,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
   var movementNavigationTargetKey: String?
+  var movementCatalogSnapshot: (pid: pid_t, keys: Set<String>)?
   var ambientLocationRecordToken: UInt64 = 0
   var movementLocationResolutionGeneration: UInt64 = 0
   var sourceItemResolutionGeneration: UInt64 = 0
   var appCurrent: pid_t?
   var observedFocusedAppPID: pid_t?
+  var lastFocusedApplicationPID: pid_t? {
+    observedFocusedAppPID.flatMap { $0 == getpid() ? nil : $0 }
+  }
   var appBackStack: [pid_t] = []
   var appForwardStack: [pid_t] = []
   var appNavigationTargetPID: pid_t?
@@ -388,8 +219,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var localNotificationTokens: [NSObjectProtocol] = []
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
-  var normalModeCaptureRecoveryToken: UInt64 = 0
-  var normalModeCaptureRecoveryRecaptureToken: UInt64?
   /// Consolidated recapture-suppression windows (was three parallel `Date?`
   /// fields). The named accessors below forward to it so existing call sites and
   /// tests keep their field names while the storage + predicate live in one
@@ -413,8 +242,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
   /// re-established (recapture or any mode transition). Keeps `overlay.inputMode`
   /// and the badge's capture flag from drifting away from the mode.
-  var nativeSurfaceSuspended = false
-  var aboutWindowVisible = false
+  var nativeSurfaceSuspended = false {
+    didSet { if oldValue != nativeSurfaceSuspended { refreshOverlayInputRouting() } }
+  }
+  var aboutWindowVisible = false {
+    didSet { if oldValue != aboutWindowVisible { refreshOverlayInputRouting() } }
+  }
   var normalModePendingCommandToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
@@ -422,52 +255,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// (no grant) falls back to the legacy key-window capture in
   /// `captureKeyboardInput`.
   var keyboardCaptureTap: KeyboardCaptureTap?
+  /// See `noteSecureInput`.
+  var secureInputObserved = false
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
-  var activeWindowBorderTrackedFrame: CGRect?
+  var activeWindowBorderUpdateGeneration: UInt64 = 0
+  /// The authoritative front-window read queued for the next main turn.
+  var activeWindowBorderPendingRead: ActiveWindowBorderRead?
+  /// Last frame observed for each app's front window, fed by the AX geometry
+  /// notifications Flash already subscribes to, so an app switch paints the
+  /// right rectangle on the activation itself and the window-list read on the
+  /// next main turn corrects it.
+  var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
-  /// The activation generation-token machine (stale-walk rejection). The named
-  /// accessors below forward to it so existing call sites keep working; the
-  /// `begin`/`complete`/`supersede`/`invalidate` operations are the consolidated
-  /// home for what were scattered inline three-field mutations.
-  var activationLifecycle = ActivationLifecycle()
-  /// Set while an activation walk is in flight on the AX queue. New URL
-  /// events that arrive during this window are dropped, not queued. Same
-  /// guard rejects re-entry if hints are already on screen.
-  var activationInFlight: Bool {
-    get { activationLifecycle.inFlight }
-    set { activationLifecycle.inFlight = newValue }
+  var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
+    didSet {
+      if oldValue.inFlight != activationLifecycle.inFlight { refreshOverlayInputRouting() }
+    }
   }
-  /// Bumped on every `activate(action:)` *and* every `cancelOverlay()`.
-  /// The discovery completion captures the value at activation time and
-  /// only renders if it still matches when the walk finishes. This is what
-  /// prevents a stale walk from rendering hints over the wrong app after
-  /// the user dismisses or switches focus mid-flight.
-  var activationGen: UInt64 {
-    get { activationLifecycle.generation }
-    set { activationLifecycle.generation = newValue }
-  }
+  var activationInFlight: Bool { activationLifecycle.inFlight }
+  var activationGen: UInt64 { activationLifecycle.generation }
   /// AX trust is checked once per session — until we observe `true`, we
   /// re-query each time. Once granted, the value is sticky for the rest
   /// of the run. Saves one IPC per activation in the steady state.
   /// Reset to `false` if an activation walk returns zero targets, which
   /// is the symptom of permission revocation mid-session.
   var cachedAccessibilityTrusted: Bool = false
-  var activationInFlightGeneration: UInt64? {
-    get { activationLifecycle.inFlightGeneration }
-    set { activationLifecycle.inFlightGeneration = newValue }
-  }
   var lastPermissionPromptAt: Date?
+  /// Launched without Accessibility and still waiting for the grant; see
+  /// `checkAccessibilityAtLaunch`.
+  var awaitingAccessibilityGrant = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // First, so the cached primary-screen height refreshes before any other
+    // screen-parameter observer reads it.
+    ScreenSpace.startObserving()
+    mainRunLoopStallObserver.start()
     // Resolve the login-shell environment once, off the main thread, so every
     // `script:`/`command:` task, mapping, and plugin inherits the same PATH
     // and tooling the user has in their terminal. A GUI launch from Finder/
     // launchd would otherwise hand children a bare environment. Until this
     // lands the seeded cache (process env + PATH fallback) keeps commands
     // usable, so the spawn need not block startup.
-    DispatchQueue.global(qos: .userInitiated).async {
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       FlashProcessEnvironment.shared.refresh()
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.statusTerminalEnvironmentReady = true
+        self.reloadTerminalPopupConfiguration()
+      }
     }
+    // First run: give the user a working shortcut before the first load.
+    StarterConfig.seedIfNeeded(environment: ProcessInfo.processInfo.environment)
     config = ConfigLoader.load()
     FlashTunables.apply(config)
     frecencyStore = FrecencyStore(
@@ -495,22 +333,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         pid: pid, notification: notification, observedWindow: window)
     }
     monitor.focusedWindowDidResolve = { [weak self] pid, window in
-      guard let self, self.currentNonFlashContext()?.processID == pid else { return }
+      // Identity, not a window-list scan: resolution fires on every focus
+      // swap, and the list's top window can belong to another app.
+      guard let self, self.currentNonFlashRunningApplication()?.processIdentifier == pid
+      else { return }
       self.windowLayoutManager.observedFocusedWindow(
         pid: pid,
         window: window,
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor)
+      // A launching app activates before it has a window, so the stroke found
+      // nothing; its focused window resolving is the first sign one exists.
+      if self.overlay.activeWindowBorderFrame == nil {
+        self.updateActiveWindowBorder(reason: "focused_window_resolved")
+      }
     }
     monitor.start()
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
     }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
-      guard let context = self?.normalModeContext() ?? self?.currentNonFlashContext() else {
-        return nil
-      }
-      return (pid: context.processID, bundleID: context.bundleIdentifier)
+      guard let self,
+        let context = self.normalModeDispatchContext()
+      else { return nil }
+      let window = HintWindowSnapshot.current(
+        pid: context.processID, primaryHeight: self.monitor.primaryScreenHeight())
+      return (
+        pid: context.processID, bundleID: context.bundleIdentifier, windowID: window?.number
+      )
     }
     pluginManager.onNotifyRequested = { [weak self] message, durationMs in
       self?.overlay.displayBanner(message, durationMs: durationMs)
@@ -518,6 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.wifiInfoProvider = wifiInfoProvider
     pluginManager.onCatalogsChanged = { [weak self] in
       self?.handlePluginCatalogsChanged()
+      self?.recordPublishedLocations()
     }
     pluginManager.onSyntheticKeysRequested = { [weak self] pid, chords, intervalMs in
       for (index, chord) in chords.enumerated() {
@@ -535,49 +386,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
       return NormalModeDispatcher.sendGlobalKey(virtualKey: key, flags: flags)
     }
-    pluginManager.cacheRunningApplicationsSnapshot(runningApplicationsSnapshot())
+    pluginManager.cacheRunningApplicationsSnapshot(Self.runningApplicationsSnapshot())
     pluginManager.start(config: config)
-    configureDebugServer(for: config)
 
     overlay = OverlayPanel()
     overlay.coordinator = self
     overlay.overlayConfig = config.overlay
+    appearanceObserver = AppearanceObserver(NSApplication.shared) { [weak self] dark in
+      self?.overlay.darkAppearance = dark
+    }
     overlay.debugConfig = config.debug
     overlay.statusBarPopupStyle = config.statusBar.popupStyle
     overlay.modeLabels = config.mode.labels
-    overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
+    overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
-    overlay.normalModePassthroughKeyCodes = config.mode.normalPassthroughKeyCodes
-    overlay.normalModePassthroughModifiers = config.mode.normalPassthroughModifiers
+    keyboardLayoutMonitor.onChange = { [weak self] state in
+      self?.overlay.keyboardLayout = state.reference.table
+    }
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
     overlay.warmPool(count: 256)
+    widgetController = WidgetController(setVisible: { [weak self] name, visible in
+      self?.statusBarController?.setWidgetVisible(name: name, visible)
+      self?.pluginManager.setWidgetVisible(name: name, visible)
+    })
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
       popupTemplates: config.statusBar.popups,
+      options: config.statusBar.options,
+      sources: config.statusBar.sources,
+      terminalPopupNames: Set(config.terminals.keys),
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
-      })
+      },
+      widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
+    // Once at launch; afterwards the tap and hint activations refresh it.
+    noteSecureInput(IsSecureEventInputEnabled())
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
+    configureTerminalPopupInput()
     statusItemController.aboutVisibilityDidChange = { [weak self] visible in
       self?.aboutWindowVisibilityDidChange(visible)
     }
 
-    let dispatch: (URLCommand) -> Void = { [weak self] cmd in
-      self?.handleURLCommand(cmd)
-    }
-    urlHandler = URLEventHandler(handler: dispatch)
+    urlHandler = URLEventHandler(
+      handler: { [weak self] cmd in Trace.ensure(.cli) { self?.handleURLCommand(cmd) ?? false } },
+      rejected: { [weak self] command in self?.warnUnsupportedCommand(command) },
+      queries: URLEventHandler.QueryAnswers(
+        status: { [weak self] in self?.statusReport().data ?? Data("{}".utf8) },
+        doctor: { [weak self] reply in
+          guard let self else { return reply(Data("{}".utf8)) }
+          self.runDoctor { reply($0.data) }
+        }))
     mappings.start(
       dispatch: { [weak self] action in
         self?.dispatchNativeMappingAction(action)
-      },
-      currentMode: { [weak self] in self?.flashMode ?? .insert })
+      })
     modeStore.perform = { [weak self] effects, previous, next in
       self?.applyModeEffects(effects, previous: previous, next: next)
     }
@@ -592,46 +461,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     watchConfigFile()
     selectInitialModeIfNeeded()
-    logPermissionState()
+    configureDebugServer(for: config)
+    checkAccessibilityAtLaunch()
     installDismissObservers()
-    startClipboardMonitor()
+    reconcileClipboardMonitor()
     startPowerSourceMonitor()
-    startKeyboardCaptureTap()
     pluginManager.emit(
       PluginEvent(
         name: "core:flash.started", payload: [:], bundleID: nil))
     emitRunningApplicationsChanged(reason: "launch")
   }
 
-  func handleURLCommand(_ cmd: URLCommand) {
+  @discardableResult
+  func handleURLCommand(_ cmd: URLCommand) -> Bool {
     FlashLog.trace(
-      "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(currentHints.count) "
+      "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight) overlay=\(String(describing: overlay?.inputMode))")
     switch cmd {
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: nil)
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
-    case .mouseGrid(let command):
-      activateMouseGrid(command, contextOverride: nil)
+    case .mouseGrid(let request):
+      activateMouseGrid(request, contextOverride: nil)
     case .mouseRepeat:
       performMouseRepeat()
     case .mousePointer:
       enterPointerMode()
+    case .mouseButton(let request):
+      performMouseButton(request)
     case .focusInput:
       focusTextInputInNormalMode(index: 1)
     case .scrollTarget:
       activateScrollTargetHints()
     case .mouseDock:
       activateDockHints()
-    case .mouseStatusBar:
-      activateStatusItemHints()
+    case .mouseMenuBar:
+      activateMenuBarHints()
+    case .mouseNotifications:
+      activateNotificationHints()
     case .normalMode:
       enterNormalMode()
+    case .leaveMode:
+      leaveMode()
+    case .terminalShow(let name):
+      showTerminal(named: name)
+    case .terminalDismiss:
+      dismissTerminal()
+    case .terminalRestart(let name):
+      restartStatusTerminal(named: name)
+    case .terminalQuit(let name):
+      quitStatusTerminal(named: name)
     case .insertMode:
       enterInsertMode()
-    case .lockedInsertMode:
-      enterInsertMode(reason: .lockedNormalModeInput)
     case .commandMode:
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
@@ -646,15 +528,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .sendKey, .sendKeys:
       performMappedCommand(cmd)
     case .showAlert(let alert):
-      configErrorAlertVisible = false
-      lastConfigErrorAlertMessage = nil
+      shownConfigError = nil
       overlay.displayAlert(
         alert.message,
         duration: alert.duration,
         style: .from(alert.style))
     case .dismissAlert:
-      configErrorAlertVisible = false
-      lastConfigErrorAlertMessage = nil
+      shownConfigError = nil
       overlay.dismissAlert()
     case .showUsage(let topic):
       showHelp(topic: topic)
@@ -669,17 +549,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .openApp(let name):
       openSourceItem(matching: name)
     case .pluginCommand(let command, let subcommand, let args):
-      pluginManager.invoke(
+      let dispatched = pluginManager.invoke(
         command: command,
         subcommand: subcommand,
         args: args,
         raw: cmd.diagnosticDescription,
         in: pluginSelectorContext()
       ) { [weak self] ok, pid, stdout, navigationURL in
-        guard ok else { return }
+        guard ok else {
+          self?.warnCommandFailure(cmd.diagnosticDescription)
+          return
+        }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
+      if !dispatched { warnUnsupportedCommand(cmd.diagnosticDescription) }
+      return dispatched
     case .moveWindow(let params):
       // Use the *non-Flash* frontmost app as the move target. Without
       // this, normal-mode capture (which activates Flash to satisfy the
@@ -708,14 +593,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         in: pluginSelectorContext(for: target),
         focusedPID: target?.processID
       ) { [weak self] ok, pid, stdout, navigationURL in
-        guard ok else { return }
+        guard ok else {
+          self?.warnCommandFailure(cmd.diagnosticDescription)
+          return
+        }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
       if !dispatched {
-        FlashLog.debug("[plugin_verb] no plugin claims verb=\(name)")
+        warnUnsupportedCommand(cmd.diagnosticDescription)
       }
+      return dispatched
     }
+    return true
+  }
+
+  /// An unknown or unsupported command does nothing visible: a typo on the
+  /// command line or a key with no handler in this app is not an error worth
+  /// a toast. The log keeps the diagnostic, and the CLI still gets its
+  /// rejection reply.
+  func warnUnsupportedCommand(_ command: String) {
+    FlashLog.warn(URLEventHandler.rejectionMessage(command), source: "core:Command")
+  }
+
+  func warnCommandFailure(_ command: String) {
+    displayCommandWarning("Command failed or was not handled: \(command). Check :logs for details.")
+  }
+
+  private func displayCommandWarning(_ message: String) {
+    FlashLog.warn(message, source: "core:Command")
+    overlay.displayAlert(message, duration: 8, style: .error)
   }
 
   private func installDismissObservers() {
@@ -741,12 +648,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         return
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.terminalInputMappings?.flush()
+        self.overlay.hideStatusBarPopup()
         let secureUI = Self.activeWindowBorderSecureUISuspendsSession(
           bundleIdentifier: app.bundleIdentifier)
         self.setActiveWindowBorderSessionSuspended(
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
         self.applyFocusedApplicationChange(app, reason: "focus_changed", emitFocusEvent: true)
         self.cancelOverlay()
+        // Move the stroke on the activation itself rather than waiting for the
+        // new app's first AX geometry notification. `app` is authoritative
+        // here; the workspace's frontmost pointer is not yet. The recovery
+        // ticks then absorb an app that reports its window geometry late.
+        self.updateActiveWindowBorder(reason: "app_activated", activated: app)
+        self.scheduleActiveWindowBorderReconciliation(
+          delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "app_activated")
         if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
           self.scheduleNormalModeRecapture()
         }
@@ -766,8 +682,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.reconcileFrontmostApplication(reason: "space_changed")
       self.cancelOverlay()
+      self.overlay.reassertStatusBar(reason: "space_changed")
       self.scheduleActiveWindowBorderReconciliation(
-        delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
+        delaysMs: [0] + Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
       self.pluginManager.emit(
         PluginEvent(
           name: "core:space.changed", payload: [:], bundleID: nil))
@@ -781,7 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
-      self.registry.refreshRunningApplications()
+      self.registry.scheduleRunningApplicationsRefresh()
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.pluginManager.emit(
           PluginEvent(
@@ -804,9 +721,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
-      self.registry.refreshRunningApplications()
+      self.registry.scheduleRunningApplicationsRefresh()
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
+        self.forgetActiveWindowBorderFrames(for: app.processIdentifier)
         if app.processIdentifier == self.observedFocusedAppPID {
           self.hideActiveWindowBorder(reason: "app_terminated")
           DispatchQueue.main.async {
@@ -843,6 +761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
+      self.overlay.reassertStatusBar(reason: "session_active")
       self.setActiveWindowBorderSessionSuspended(
         false, source: .session, reason: "session_active")
       // The secure login surface may have activated without a corresponding
@@ -864,6 +783,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
+      self?.overlay.reassertStatusBar(reason: "screens_wake")
       self?.setActiveWindowBorderSessionSuspended(
         false, source: .screens, reason: "screens_wake")
     }
@@ -880,6 +800,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
+      self?.overlay.reassertStatusBar(reason: "system_wake")
       self?.setActiveWindowBorderSessionSuspended(
         false, source: .systemSleep, reason: "system_wake")
     }
@@ -897,13 +818,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.windowLayoutManager.screenParametersDidChange(
         statusBarReservesSpace: self.statusBarVisible,
-        statusBarMonitor: self.config.statusBar.monitor
-      ) { [weak self] _ in
-        // The semantic window restore runs off-main. Repaint only after each
-        // recovery pass has applied its AX frame so the border cannot sample
-        // the pre-handoff geometry and remain on the disconnected display.
-        self?.updateActiveWindowBorder(reason: "screen_layout_recovered")
-      }
+        statusBarMonitor: self.config.statusBar.monitor,
+        beforeRecoveryPass: { [weak self] in self?.overlay.settleNativeMenuBarHeights() },
+        afterRecoveryPass: { [weak self] _ in self?.windowLayoutRecovered() })
       // OverlayPanel invalidates its screen snapshot from the same notification.
       // Redraw on the next main turn so the border path uses the rebuilt union.
       DispatchQueue.main.async {
@@ -927,13 +844,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // updating the status-bar label left app-scoped plugin mappings stale,
       // so terminal chords such as tmux's `cmd+shift+[` leaked to Alacritty.
       self.reconcileFrontmostApplication(reason: "resign_key")
-      if !self.currentHints.isEmpty {
+      if !self.hintSession.hints.isEmpty {
         self.cancelOverlay()
         return
       }
       if self.flashMode == .normal {
         self.scheduleNormalModeRecaptureAfterPointerFocusLoss()
       }
+    }
+  }
+
+  /// Key-path reconcile. The focused app can change through the system app
+  /// switcher without a workspace notification landing before the next
+  /// keydown, so app-scoped plugin chords must be matched against the actual
+  /// frontmost app. This runs inside the tap callback, so it does zero work
+  /// when the event already names the observed frontmost pid, one workspace
+  /// lookup otherwise, and the full focus refresh only on a real change.
+  func reconcileFrontmostApplication(forKeyTargetingPID targetPID: pid_t) {
+    if targetPID > 0, targetPID == observedFocusedAppPID { return }
+    guard let front = NSWorkspace.shared.frontmostApplication,
+      front.processIdentifier != observedFocusedAppPID,
+      front.bundleIdentifier != Bundle.main.bundleIdentifier,
+      !Self.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: front.bundleIdentifier)
+    else { return }
+    FlashLog.trace(
+      "[focus] key_reconcile target_pid=\(targetPID) observed=\(observedFocusedAppPID ?? 0) "
+        + "front=\(front.processIdentifier)")
+    // This runs inside the synchronous tap callback. Settle only what this
+    // keystroke's swallow decision reads — the observed app and its effective
+    // mappings — and let the rest of the focus change (plugin events,
+    // running-app snapshots, activation history) follow on the next turn.
+    let pid = front.processIdentifier
+    observedFocusedAppPID = pid
+    refreshEffectiveMappings(for: front.bundleIdentifier)
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.observedFocusedAppPID == pid else { return }
+      self.applyFocusedApplicationChange(front, reason: "key_down", emitFocusEvent: true)
     }
   }
 
@@ -953,7 +899,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshFocusDependentState(for: app)
     if flashMode == .normal {
       normalModeTargetPID = app.processIdentifier
-      suppressEditableFocus(for: app.processIdentifier)
     }
   }
 
@@ -965,6 +910,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     observedFocusedAppPID = app.processIdentifier
     refreshFocusDependentState(for: app)
     if emitFocusEvent {
+      overlay.dismissEphemeralStatusBarPopup(reason: "focus_changed")
       pluginManager.emit(
         PluginEvent(
           name: "core:focus.changed",
@@ -979,20 +925,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     if flashMode == .normal {
       normalModeTargetPID = app.processIdentifier
-      suppressEditableFocus(for: app.processIdentifier)
     }
   }
 
   private func refreshFocusDependentState(for app: NSRunningApplication) {
     statusBarController?.updateFocusedApplication(app)
-    registry.refreshRunningApplications()
+    registry.scheduleRunningApplicationsRefresh()
     refreshEffectiveMappings(for: app.bundleIdentifier)
   }
 
-  /// Start the in-process pasteboard watcher and bridge its callback onto the
-  /// `clipboard.changed` plugin event. Owning the watch here keeps plugins
-  /// free of polling — the clipboard plugin just subscribes to the event.
-  private func startClipboardMonitor() {
+  /// Run the in-process pasteboard watcher only while a plugin subscribes to
+  /// `clipboard.changed`. macOS publishes no pasteboard notification, so this
+  /// is the one unavoidable poll on that path — and with no subscriber there
+  /// is nothing to poll for. Owning the watch here keeps plugins free of
+  /// polling; the clipboard plugin just subscribes to the event.
+  func reconcileClipboardMonitor() {
+    let wanted = pluginManager.hasListener(for: "core:clipboard.changed")
+    guard wanted != (clipboardMonitor != nil) else { return }
+    guard wanted else {
+      clipboardMonitor?.stop()
+      clipboardMonitor = nil
+      FlashLog.debug("[clipboard] watcher stopped: no subscriber")
+      return
+    }
+    FlashLog.debug("[clipboard] watcher started")
     clipboardMonitor = ClipboardMonitor { [weak self] text in
       guard let self else { return }
       self.pluginManager.emit(
@@ -1027,7 +983,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// overlay to be the key window. Requires the Accessibility grant (which Flash
   /// already needs); if it's missing the tap won't create and we transparently
   /// fall back to key-window capture.
-  private func startKeyboardCaptureTap() {
+  func startKeyboardCaptureTap() {
+    guard keyboardCaptureTap == nil else { return }
     guard AXIsProcessTrusted() else {
       FlashLog.warn("[tap] no accessibility grant — using key-window capture for normal mode")
       return
@@ -1040,134 +997,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.keyboardCaptureActive = true
   }
 
-  /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
-  /// thread. INSERT is never touched (keys flow straight to the focused app);
-  /// NORMAL captures keys except configured passthrough keys. Modified chords are handled by the
-  /// interpreter too:
-  /// `normalModeMappings` carries the same compiled set the Carbon registry does,
-  /// and the session tap swallows the event before Carbon dispatch, so there's no
-  /// double-fire. An unmapped keypress matching a configured passthrough key or
-  /// carrying a configured passthrough modifier instead passes through unchanged
-  /// and switches Flash to INSERT. Command-line /
-  /// modal / candidate-finder own the key window and type into their own fields,
-  /// so the tap leaves those alone.
+  /// Whether the keyboard tap swallows a `keyDown`: the pure
+  /// `KeyboardCaptureTap.decide`, then only the effects that decision needs.
+  /// Runs on the main thread inside the synchronous tap callback on every
+  /// keystroke, so nothing here resolves the keyboard layout or touches
+  /// AppKit. NORMAL is hermetic: `normalModeMappings` carries the same
+  /// compiled set the Carbon registry does, and the session tap swallows the
+  /// event before Carbon dispatch, so there's no double-fire.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
-    // A focused secure text field (password) turns on secure event input.
-    // Never intercept keystrokes bound for it — they must reach the field, and
-    // a keyboard tap swallowing secure input is exactly what that mechanism
-    // exists to prevent. Reflect it as INSERT (like focusing any text input) so
-    // the badge/state match. Checked first, so even the first keystroke isn't
-    // swallowed before the mode transition lands.
-    if IsSecureEventInputEnabled() {
-      if flashMode == .normal, overlay.inputMode == .normal {
-        enterInsertMode(reason: .secureInput, targetPID: currentNonFlashContext()?.processID)
-      }
-      return false
-    }
-    let aboutOwnsNativeKeyboard = Self.aboutWindowShouldOwnNativeKeyboard(
-      visible: aboutWindowVisible,
-      hasTransientInput: !currentHints.isEmpty || hintSession.pointerModeActive,
-      activationInFlight: activationInFlight)
-    if aboutOwnsNativeKeyboard || nativeSurfaceSuspended {
-      let flags = event.flags
-      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-      let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-      let passthroughModifierFlags = KeyModifier.cgEventFlags(
-        config.mode.normalPassthroughModifiers)
-      let shouldEnterInsert =
-        aboutOwnsNativeKeyboard
-        && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
-          flashMode: flashMode,
-          modifierFlags: flags,
-          hasMapping: hasMapping,
-          isPassthroughKey: overlay.normalModePassthroughKeyCodes.contains(keyCode),
-          passthroughModifierFlags: passthroughModifierFlags)
-      if shouldEnterInsert {
-        let targetPID = normalModeTargetPID
-        DispatchQueue.main.async { [weak self] in
-          guard let self, self.flashMode == .normal else { return }
-          self.enterInsertMode(
-            reason: .normalModePassthrough,
-            targetPID: targetPID)
-        }
-      }
-      return KeyboardCaptureTap.shouldSwallow(
-        flashMode: flashMode,
-        inputMode: overlay.inputMode,
-        hasMapping: hasMapping,
-        nativeSurfaceOwnsKeyboard: true)
-    }
-    // INSERT is otherwise transparent so typing flows to the focused app. But a
-    // modified chord bound to an active mapping (`[mode.all]` / `[mode.insert]`)
-    // must still fire Flash's action. Historically that went only through a
-    // Carbon hotkey — a slower keypress→dispatch route than this session tap —
-    // which is why *leaving* insert (⌘⌃[ → NORMAL) lagged while *entering* it
-    // (`i`, swallowed right here) was instant, and why the app also saw the
-    // chord. Handle mapped chords on the same fast tap path instead: swallow
-    // (so the app never receives the chord) and let `routeTapCapturedKey` fire
-    // the mapping. Only *mapped* chords are swallowed — ordinary typing and
-    // unmapped chords (⌘C, ⌘Tab, …) still pass straight through, and
-    // `hasMapping` matches only modified chords so a bare key can never match.
-    if flashMode == .insert {
-      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-      let flags = event.flags
-      if flags.contains(.maskCommand) || flags.contains(.maskControl)
-        || flags.contains(.maskAlternate)
-      {
-        reconcileFrontmostApplication(reason: "key_down")
-      }
-      return mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
-    }
-    guard flashMode == .normal, overlay.inputMode == .normal else {
-      return KeyboardCaptureTap.shouldSwallow(
-        flashMode: flashMode,
-        inputMode: overlay.inputMode)
-    }
-    // In NORMAL, an unmapped keypress matching a configured passthrough key or
-    // carrying a configured passthrough modifier is NOT swallowed — the original
-    // event flows to the app / system natively. Not swallowing (rather than
-    // swallow + re-post) is what makes system-level chords like ⌘Tab work. A
-    // mapped keypress is still swallowed and fired by `routeTapCapturedKey`.
-    //
-    // Runs synchronously on every keystroke, so the decision reads raw CGEvent
-    // fields — no `NSEvent(cgEvent:)`, which resolves the keyboard layout and
-    // made holding a modifier + repeating a key (⌘Tab Tab Tab) feel laggier
-    // than INSERT.
-    guard overlay.inputMode == .normal else { return true }
     let flags = event.flags
-    let passthroughModifierFlags = KeyModifier.cgEventFlags(
-      config.mode.normalPassthroughModifiers)
-    let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-    let isPassthroughKey = overlay.normalModePassthroughKeyCodes.contains(keyCode)
-    let usesPassthroughModifier = !flags.intersection(passthroughModifierFlags).isEmpty
-    guard isPassthroughKey || usesPassthroughModifier else { return true }
-    // The focused app can change through the system app switcher without a
-    // workspace notification landing before the next keydown. Reconcile here
-    // before deciding mapped-vs-passthrough so app-scoped plugin chords (tmux
-    // `cmd+shift+[` / `cmd+shift+]`) are registered for the actual frontmost
-    // app instead of leaking to the terminal as plain text.
-    reconcileFrontmostApplication(reason: "key_down")
-    let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
-    let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
+    let decision = KeyboardCaptureTap.decide(
+      isTerminal: modeStore.mode.isTerminal,
       flashMode: flashMode,
       inputMode: overlay.inputMode,
-      modifierFlags: flags,
-      hasMapping: hasMapping,
-      isPassthroughKey: isPassthroughKey,
-      passthroughModifierFlags: passthroughModifierFlags)
-    guard !shouldSwallow else { return true }
-
-    // Keep the NORMAL mapping scope installed until the original event has
-    // continued downstream. Switching synchronously would register INSERT-only
-    // Carbon mappings soon enough to steal this very chord. The next main-loop
-    // turn runs after the event has reached the app / WindowServer.
-    DispatchQueue.main.async { [weak self] in
-      guard let self, self.flashMode == .normal, self.overlay.inputMode == .normal else { return }
-      self.enterInsertMode(
-        reason: .normalModePassthrough,
-        targetPID: self.currentNonFlashContext()?.processID)
+      aboutWindowVisible: aboutWindowVisible,
+      aboutWindowOwnsKeyboard: Self.aboutWindowShouldOwnNativeKeyboard(
+        visible: aboutWindowVisible,
+        hasTransientInput: hintSession.isActive,
+        activationInFlight: activationInFlight),
+      nativeSurfaceSuspended: nativeSurfaceSuspended,
+      isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
+        || flags.contains(.maskAlternate),
+      isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
+        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty,
+      ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil)
+    switch decision {
+    case .pass:
+      return false
+    case .swallow:
+      return !tapReadsSecureInput()
+    case .swallowIfInsertChordIsMapped:
+      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+      reconcileFrontmostApplication(
+        forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
+      guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
+      return !tapReadsSecureInput()
+    case .closeEphemeralPopup:
+      guard !tapReadsSecureInput() else { return false }
+      tapEscapeClosedPopup = true
+      // Out of the synchronous tap callback: hiding a panel is AppKit work.
+      DispatchQueue.main.async { [weak self] in
+        self?.overlay.dismissEphemeralStatusBarPopup(reason: "escape")
+      }
+      return true
+    case .swallowIfNativeSurfaceKeyIsMapped:
+      guard !tapReadsSecureInput() else { return false }
+      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+      return keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
     }
-    return false
+  }
+
+  /// The swallow decision's secure-input read. Every swallow yields to a
+  /// focused password field; a change it sees is published on the next
+  /// turn, outside the synchronous tap callback.
+  private func tapReadsSecureInput() -> Bool {
+    let enabled = IsSecureEventInputEnabled()
+    if enabled != secureInputObserved {
+      DispatchQueue.main.async { [weak self] in self?.noteSecureInput(enabled) }
+    }
+    return enabled
   }
 
   private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {
@@ -1185,32 +1073,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// keys) go to the overlay interpreter. Modified chords aren't in the
   /// interpreter's compiled set may live in the Carbon matcher or participate
   /// in a multi-key sequence. Try Carbon first, then fall back to the normal
-  /// interpreter. Passthrough chords never reach here because the tap leaves
-  /// them native.
+  /// interpreter.
   func routeTapCapturedKey(_ event: NSEvent) {
-    // A chord the tap swallowed in INSERT is an active mapping (see
-    // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
-    // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.
-    if flashMode == .insert {
-      _ = mappings.handle(event: event)
+    MainThreadWatchdog.note("tap_key")
+    if tapEscapeClosedPopup {
+      tapEscapeClosedPopup = false
       return
     }
-    if overlay.inputMode == .normal {
+    Trace.begin(.key, triggeredAt: event.timestamp) { routeTracedKey(event) }
+  }
+
+  private func routeTracedKey(_ event: NSEvent) {
+    // HID timestamp → this main-thread turn: the tap-side latency budget.
+    FlashLog.debug(
+      "[latency] tap_to_route ms="
+        + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+    switch overlay.inputMode {
+    case .passive:
+      // A chord the tap swallowed in INSERT is an active mapping (see
+      // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
+      // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.
+      _ = mappings.handle(event: event)
+      return
+    case .normal:
       let strict = event.modifierFlags.intersection([.command, .control, .option])
-      if !strict.isEmpty {
-        if mappings.handle(event: event) { return }
-      }
+      if !strict.isEmpty, mappings.handle(event: event) { return }
+    case .hints, .commandLine:
+      break
     }
     overlay.handleTapCapturedKey(event)
   }
 
   func emitRunningApplicationsChanged(reason: String) {
     pluginManager.emitRunningApplicationsChanged(
-      reason: reason,
-      applications: runningApplicationsSnapshot())
+      reason: reason, snapshot: Self.runningApplicationsSnapshot)
   }
 
-  func runningApplicationsSnapshot() -> [[String: Any]] {
+  /// Thread-safe: `NSRunningApplication` properties read atomically.
+  static func runningApplicationsSnapshot() -> [[String: Any]] {
     NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
       guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
       return [
@@ -1224,6 +1124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
+    activationLifecycle.invalidate()
+    clearHintSessionState()
+    releaseHeldMouseButton(reason: "quit")
+    ActionDispatcher.waitForPendingMouseEvents()
     activeWindowBorderReconciliationGeneration &+= 1
     for token in workspaceTokens {
       NSWorkspace.shared.notificationCenter.removeObserver(token)
@@ -1243,8 +1147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clipboardMonitor = nil
     powerSourceMonitor?.stop()
     powerSourceMonitor = nil
-    statusBarController?.stop()
+    statusBarController?.stopAndWait()
     statusBarController = nil
+    widgetController?.stop()
+    widgetController = nil
+    terminalInputMappings?.flush()
+    overlay.statusPopupController.dismiss()
+    overlay.statusTerminals.shutdown()
     monitor?.stop()
     pluginManager.stop()
     debugServer?.stop()

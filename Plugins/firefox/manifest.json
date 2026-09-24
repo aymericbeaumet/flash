@@ -2,7 +2,7 @@
   "id": "firefox",
   "name": "firefox",
   "version": "0.1.0",
-  "description": "Surface Firefox tabs in the flashlight (AX-backed) and handle Firefox source actions (tab_select).",
+  "description": "Surface Firefox tabs in the flashlight (optional add-on bridge, Accessibility fallback) and handle Firefox source actions (tab_select).",
   "sandbox": {},
   "exec": [
     "./flash-plugin-firefox"
@@ -10,19 +10,34 @@
   "priority": 30,
   "capabilities": [
     "accessibility",
-    "app_control"
+    "app_control",
+    "clipboard"
   ],
   "navigation": [
     "flash-firefox"
   ],
   "only_bundle_ids": [
     "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition"
+    "org.mozilla.firefoxdeveloperedition",
+    "org.mozilla.nightly"
   ],
   "listen": [
     "core:apps.changed",
     "core:focus.changed",
-    "core:window.focus.changed"
+    "core:window.focus.changed",
+    "core:session.opened"
+  ],
+  "commands": [
+    {
+      "command": "firefox",
+      "subcommand": "setup",
+      "description": "How to install the Firefox tab-bridge add-on"
+    },
+    {
+      "command": "firefox",
+      "subcommand": "status",
+      "description": "Report the Firefox tab-bridge state (counts only)"
+    }
   ],
   "sources": [
     {
@@ -33,5 +48,40 @@
   ],
   "actions": [
     "tab_select"
-  ]
+  ],
+  "action_keystrokes": {
+    "tab_next": {
+      "": "cmd+shift+]"
+    },
+    "tab_previous": {
+      "": "cmd+shift+["
+    },
+    "tab_last": {
+      "": "cmd+9"
+    },
+    "tab_new": {
+      "": "cmd+t"
+    },
+    "tab_reopen": {
+      "": "cmd+shift+t"
+    },
+    "app_reload": {
+      "": "cmd+r"
+    },
+    "app_reload_force": {
+      "": "cmd+shift+r"
+    },
+    "scroll_top": {
+      "": "cmd+up"
+    },
+    "scroll_bottom": {
+      "": "cmd+down"
+    },
+    "tab_move_previous": {
+      "": "ctrl+shift+pageup"
+    },
+    "tab_move_next": {
+      "": "ctrl+shift+pagedown"
+    }
+  }
 }

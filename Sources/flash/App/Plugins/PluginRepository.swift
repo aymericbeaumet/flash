@@ -155,7 +155,7 @@ struct PluginRepository {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles])
         else { continue }
-        for child in children {
+        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
           let root = child.resolvingSymlinksInPath()
           guard fm.fileExists(atPath: root.appendingPathComponent("manifest.json").path) else {
             continue

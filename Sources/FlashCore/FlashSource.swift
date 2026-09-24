@@ -64,10 +64,10 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// integrations use this for app-specific motions such as Gmail's
   /// newer/older conversation buttons.
   public static let resourceNavigation = FlashSourceCapabilities(rawValue: 1 << 14)
-  /// Source handles `cmd+[`/`cmd+]` (`pane_previous`/`pane_next`): cycle the
+  /// Source handles `[p`/`]p` (`pane_previous`/`pane_next`): cycle the
   /// active split *inside* the focused window. Tmux is the canonical case
-  /// (`select-pane -t :.-`/`:.+`); no browser has an analogue, so off-terminal
-  /// apps fall back to re-emitting the native ⌘[ / ⌘] chord.
+  /// (`select-pane -t :.-`/`:.+`); a terminal without a tmux client receives
+  /// its native ⌘[ / ⌘] split chord instead, and other apps ignore the pair.
   public static let paneNavigation = FlashSourceCapabilities(rawValue: 1 << 15)
   /// Source handles `pane_split_vertical` / `pane_split_horizontal`: create a
   /// new split inside the focused window. Tmux is the canonical case; the
@@ -375,7 +375,7 @@ public enum SourceAction: Sendable, Equatable {
     switch self {
     case .tabSelect: return "tab_select"
     case .tabNext: return "tab_next"
-    case .tabPrev: return "tab_prev"
+    case .tabPrev: return "tab_previous"
     case .tabFirst: return "tab_first"
     case .tabLast: return "tab_last"
     case .tabNew: return "tab_new"
@@ -397,6 +397,17 @@ public enum SourceAction: Sendable, Equatable {
     }
   }
 
+  /// Every action by wire name, for manifests that declare the actions a
+  /// plugin performs (`actions`); the parameters of a representative value
+  /// don't matter there.
+  public static let byWireName: [String: SourceAction] = Dictionary(
+    uniqueKeysWithValues: [
+      SourceAction.tabSelect(index: 1), .tabNext, .tabPrev, .tabFirst, .tabLast, .tabNew,
+      .tabClose, .tabMovePrev, .tabMoveNext, .tabReopen, .paneNext, .panePrev,
+      .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
+      .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom,
+    ].map { ($0.wireName, $0) })
+
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
   /// Only ``tabSelect`` currently carries one (the 1-based tab index).
   public var wireExtras: [String: Any] {
@@ -404,6 +415,60 @@ public enum SourceAction: Sendable, Equatable {
     case .tabSelect(let index): return ["index": index]
     case .reload(let force): return force ? ["force": true] : [:]
     default: return [:]
+    }
+  }
+}
+
+/// A normal-mode action a source may perform, named as users map it. The
+/// name is also a key of a plugin manifest's `action_keystrokes` table: the
+/// chord the host sends in an app when no source performs the action there.
+public enum SourceActionName: String, CaseIterable, Sendable {
+  case tabNext = "tab_next"
+  case tabPrevious = "tab_previous"
+  case tabFirst = "tab_first"
+  case tabLast = "tab_last"
+  case tabNew = "tab_new"
+  case tabClose = "tab_close"
+  case tabReopen = "tab_reopen"
+  case tabMoveNext = "tab_move_next"
+  case tabMovePrevious = "tab_move_previous"
+  case windowClose = "window_close"
+  case paneNext = "pane_next"
+  case panePrevious = "pane_previous"
+  case paneSplitVertical = "pane_split_vertical"
+  case paneSplitHorizontal = "pane_split_horizontal"
+  case paneClose = "pane_close"
+  case appReload = "app_reload"
+  case appReloadForce = "app_reload_force"
+  case resourceArchive = "resource_archive"
+  case resourceNext = "resource_next"
+  case resourcePrevious = "resource_previous"
+  case scrollTop = "scroll_top"
+  case scrollBottom = "scroll_bottom"
+
+  public var action: SourceAction {
+    switch self {
+    case .tabNext: return .tabNext
+    case .tabPrevious: return .tabPrev
+    case .tabFirst: return .tabFirst
+    case .tabLast: return .tabLast
+    case .tabNew: return .tabNew
+    case .tabClose, .windowClose: return .tabClose
+    case .tabReopen: return .tabReopen
+    case .tabMoveNext: return .tabMoveNext
+    case .tabMovePrevious: return .tabMovePrev
+    case .paneNext: return .paneNext
+    case .panePrevious: return .panePrev
+    case .paneSplitVertical: return .paneSplitVertical
+    case .paneSplitHorizontal: return .paneSplitHorizontal
+    case .paneClose: return .paneClose
+    case .appReload: return .reload(force: false)
+    case .appReloadForce: return .reload(force: true)
+    case .resourceArchive: return .archive
+    case .resourceNext: return .resourceNext
+    case .resourcePrevious: return .resourcePrevious
+    case .scrollTop: return .scrollTop
+    case .scrollBottom: return .scrollBottom
     }
   }
 }
@@ -426,17 +491,34 @@ public struct SourceActionResult: Sendable {
   public let targetPID: pid_t?
   public let disposition: Disposition
   public let navigationURL: URL?
+  /// Why a claimed action failed, as the source reported it (content-free).
+  public let failureReason: String?
+  /// The source that performed or failed the action, set by the registry.
+  public private(set) var source: String?
 
-  public init(targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil) {
+  public init(
+    targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil,
+    failureReason: String? = nil
+  ) {
     self.targetPID = targetPID
     self.disposition = disposition
     self.navigationURL = navigationURL
+    self.failureReason = failureReason
   }
 
   public var didPerform: Bool { disposition == .performed }
 
+  /// This result, attributed to the source that produced it.
+  public func attributed(to source: String) -> SourceActionResult {
+    var result = self
+    result.source = source
+    return result
+  }
+
   public static let unhandled = SourceActionResult(targetPID: nil, disposition: .unhandled)
-  public static let failed = SourceActionResult(targetPID: nil, disposition: .failed)
+  public static func failed(reason: String?) -> SourceActionResult {
+    SourceActionResult(targetPID: nil, disposition: .failed, failureReason: reason)
+  }
   public static func performed(pid: pid_t?, navigationURL: URL? = nil) -> SourceActionResult {
     SourceActionResult(targetPID: pid, disposition: .performed, navigationURL: navigationURL)
   }

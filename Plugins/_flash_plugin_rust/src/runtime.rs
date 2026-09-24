@@ -5,34 +5,42 @@
 //! pipe, so a dead host ends the loop.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::sync::mpsc;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use tokio::sync::{mpsc, Semaphore};
+use tokio::task::JoinSet;
 
-use crate::context::{context_from_env, Context, HostPending};
-use crate::emit::{Emitter, MAX_FRAME_BYTES, OUTBOUND_QUEUE_CAPACITY};
+use crate::context::{assemble_context, Context, PluginEnv};
+use crate::emit::{Emitter, OutboundFrame, MAX_FRAME_BYTES, OUTBOUND_QUEUE_CAPACITY};
+use crate::events::EventMailbox;
+use crate::framing::{FrameReader, Record};
 use crate::types::{
     ActionRequest, CommandRequest, EvaluateRequest, EvaluateResponse, Event, Frame, HintsRequest,
     HintsResponse, NavigateRequest, Perform, PerformResponse, RunningApplication, SearchRequest,
     SearchResponse,
 };
 
-const EVENT_QUEUE_CAPACITY: usize = 256;
+pub(crate) const REQUEST_CAPACITY: usize = 16;
+pub(crate) const REQUEST_BYTES: usize = 32 * 1024 * 1024;
+const REQUEST_OVERLOAD_ERROR: &str = "plugin request capacity exceeded";
 
 /// Wire-protocol version echoed at `initialize`. A mismatch is terminal:
 /// reply `ok: false` with the canonical error, flush, exit 0. MUST stay equal
-/// to `protocol_version` in `Plugins/_flash_plugin_specs/protocol.json`.
+/// to `protocol_version` in `Plugins/_flash_plugin_rust/protocol.json`.
 const PROTOCOL_VERSION: u64 = 1;
 
-/// Canonical protocol error strings (spec-pinned in protocol.json).
+/// Canonical protocol error strings (pinned in `protocol.json`).
 const INITIALIZE_REPEATED_ERROR: &str = "initialize may only be called once";
+
+/// After stdin EOF, shutdown callbacks and output draining share this one
+/// deadline; a hung `on_shutdown` cannot keep the process alive past it.
+const SHUTDOWN_DEADLINE: Duration = Duration::from_millis(750);
 
 /// A Flash plugin as the runtime sees it. Plugin crates never implement this
 /// directly — the [`plugin!`](crate::plugin) macro generates the typed
@@ -100,9 +108,29 @@ pub trait Plugin: Send + Sync + 'static {
     }
 }
 
-struct InboundEvent {
-    event: Event,
-    running_applications: Vec<RunningApplication>,
+/// Answer a request whose handler ran out of its deadline, and say so in the
+/// log under the request's trace.
+async fn deadline_exceeded(ctx: &Context, id: Value, method: &str, deadline: Option<Duration>) {
+    let deadline_ms = deadline.map_or(0, |deadline| deadline.as_millis());
+    ctx.log_fields(
+        "warn",
+        &format!("[plugin] {method} exceeded its deadline"),
+        BTreeMap::from([
+            ("method".to_string(), method.to_string()),
+            ("deadline_ms".to_string(), deadline_ms.to_string()),
+        ]),
+    );
+    ctx.emit
+        .respond(
+            id,
+            json!({ "ok": false, "error": crate::deadline::DEADLINE_EXCEEDED_ERROR }),
+        )
+        .await;
+}
+
+pub(crate) struct InboundEvent {
+    pub(crate) event: Event,
+    pub(crate) running_applications: Vec<RunningApplication>,
 }
 
 #[derive(Deserialize)]
@@ -116,7 +144,7 @@ struct EventWire {
 struct EventPayload {
     #[serde(default)]
     bundle_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pid: Option<i64>,
     #[serde(default)]
     front_window_frame: Option<Frame>,
@@ -124,21 +152,34 @@ struct EventPayload {
     text: Option<String>,
     #[serde(default)]
     running_applications: Vec<RunningApplication>,
+    #[serde(default)]
+    segments: Option<Vec<String>>,
 }
 
-fn decode_event(params: Value) -> Result<InboundEvent, String> {
+/// The host's report of which of this plugin's status segments a surface
+/// currently shows. Its payload is a complete replacement set.
+pub(crate) const STATUS_OBSERVED_EVENT: &str = "core:status.observed";
+
+pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
     match serde_json::from_value::<EventWire>(params) {
-        Ok(wire) if !wire.name.trim().is_empty() => Ok(InboundEvent {
+        Ok(wire) if wire.name.trim().is_empty() => Err("event name must not be empty".to_string()),
+        Ok(wire)
+            if wire.name == STATUS_OBSERVED_EVENT
+                && !crate::wire::valid_segment_set(wire.payload.segments.as_deref()) =>
+        {
+            Err("invalid event params".to_string())
+        }
+        Ok(wire) => Ok(InboundEvent {
             event: Event {
                 name: wire.name,
                 bundle_id: wire.payload.bundle_id,
                 pid: wire.payload.pid,
                 front_window_frame: wire.payload.front_window_frame,
                 text: wire.payload.text,
+                segments: wire.payload.segments,
             },
             running_applications: wire.payload.running_applications,
         }),
-        Ok(_) => Err("event name must not be empty".to_string()),
         Err(_) => Err("invalid event params".to_string()),
     }
 }
@@ -177,12 +218,15 @@ fn decode_perform(params: Value) -> Result<Perform, String> {
 /// slow refresh from overtaking a newer event. The running-app snapshot is
 /// replaced before the `core:apps.changed` callback runs, so handlers always
 /// observe the list that motivated their invocation.
-async fn run_event_worker<P: Plugin>(
-    plugin: Arc<P>,
-    ctx: Context,
-    mut events: mpsc::Receiver<InboundEvent>,
-) {
-    while let Some(inbound) = events.recv().await {
+async fn run_event_worker<P: Plugin>(plugin: Arc<P>, ctx: Context, events: Arc<EventMailbox>) {
+    loop {
+        let inbound = events.next().await;
+        if let Some(name) = inbound.event.name.strip_prefix("core:poll:") {
+            // Infrastructure, not plugin-visible: `interval` callbacks are
+            // the subscription.
+            ctx.deliver_poll_tick(name);
+            continue;
+        }
         if inbound.event.name == "core:apps.changed" {
             // The empty list is authoritative too: a terminated final app
             // must clear the snapshot before plugin code rebuilds from it.
@@ -206,61 +250,84 @@ pub fn run<P: Plugin>(plugin: P) {
 }
 
 async fn serve<P: Plugin>(plugin: P) {
+    serve_streams(
+        plugin,
+        PluginEnv::from_process(),
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+    )
+    .await;
+}
+
+/// The serve loop over explicit streams and environment, so tests can run
+/// it over in-memory pipes with a synthetic identity.
+pub(crate) async fn serve_streams<P, R, W>(plugin: P, env: PluginEnv, input: R, output: W)
+where
+    P: Plugin,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let plugin = Arc::new(plugin);
-    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_QUEUE_CAPACITY);
-    let writer = tokio::spawn(async move {
+    let (out_tx, mut out_rx) = mpsc::channel::<OutboundFrame>(OUTBOUND_QUEUE_CAPACITY);
+    let mut writer = tokio::spawn(async move {
         // Each payload is already one newline-terminated JSON line; flush
         // every frame to keep latency low.
-        let mut out = BufWriter::with_capacity(64 * 1024, tokio::io::stdout());
+        let mut out = BufWriter::with_capacity(64 * 1024, output);
         while let Some(payload) = out_rx.recv().await {
-            if out.write_all(&payload).await.is_err() {
+            if out.write_all(&payload.payload).await.is_err() {
                 break;
             }
-            let _ = out.flush().await;
+            if out.flush().await.is_err() {
+                break;
+            }
         }
     });
 
-    let host_pending: HostPending = Arc::new(Mutex::new(HashMap::new()));
-    let ctx = context_from_env(
-        Emitter::new(out_tx),
-        host_pending.clone(),
-        Arc::new(AtomicU64::new(0)),
-    );
+    let ctx = assemble_context(env, Emitter::new(out_tx));
     ctx.prepare_dirs().await;
 
-    let (event_tx, event_rx) = mpsc::channel::<InboundEvent>(EVENT_QUEUE_CAPACITY);
-    let event_worker = tokio::spawn(run_event_worker(plugin.clone(), ctx.clone(), event_rx));
-
-    let mut stdin = BufReader::new(tokio::io::stdin());
-    let mut line: Vec<u8> = Vec::new();
+    let events = Arc::new(EventMailbox::default());
+    let event_worker = tokio::spawn(run_event_worker(
+        plugin.clone(),
+        ctx.clone(),
+        events.clone(),
+    ));
+    let slots = Arc::new(Semaphore::new(REQUEST_CAPACITY));
+    let request_bytes = Arc::new(Semaphore::new(REQUEST_BYTES));
+    let mut tasks = JoinSet::new();
+    let mut stdin = FrameReader::new(BufReader::new(input), MAX_FRAME_BYTES);
     let mut initialized = false;
     let mut mismatch_exit = false;
-    loop {
-        // One frame per newline-terminated line. EOF means the host closed
-        // our stdin (it owns the pipe) — that is the shutdown signal.
-        line.clear();
-        match stdin.read_until(b'\n', &mut line).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        if line.last() == Some(&b'\n') {
-            line.pop();
-        }
+    let mut writer_finished = false;
+    'frames: loop {
+        // Buffered input can contain hundreds of complete frames. Give the
+        // writer/workers a turn without ever waiting for their progress.
+        tokio::task::yield_now().await;
+        while tasks.try_join_next().is_some() {}
+        let record = tokio::select! {
+            record = stdin.next() => record,
+            _ = &mut writer => { writer_finished = true; break; }
+        };
+        let line = match record {
+            Ok(Record::Frame(line)) => line,
+            Ok(Record::Oversized) => {
+                ctx.log("warn", "[plugin] dropped oversized inbound frame");
+                continue;
+            }
+            Ok(Record::Truncated | Record::Eof) | Err(_) => break,
+        };
         if line.is_empty() {
             continue;
         }
-        // Oversized and undecodable lines are dropped (never fatal); the
-        // stream self-heals at the next newline.
-        if line.len() > MAX_FRAME_BYTES {
-            ctx.log_fields(
-                "warn",
-                "[plugin] dropped oversized inbound frame",
-                BTreeMap::from([
-                    ("encoded_bytes".to_string(), line.len().to_string()),
-                    ("limit_bytes".to_string(), MAX_FRAME_BYTES.to_string()),
-                ]),
-            );
-            continue;
+        // A reader-side reply must never await stdout capacity: handlers can
+        // be waiting for a host response that only this reader can deliver.
+        macro_rules! reply {
+            ($id:expr, $result:expr $(,)?) => {
+                if ctx.emit.try_respond($id, $result).is_err() {
+                    eprintln!("[plugin] control reply queue unavailable; closing transport");
+                    break 'frames;
+                }
+            };
         }
         let Ok(frame) = serde_json::from_slice::<Value>(&line) else {
             ctx.log("warn", "[plugin] dropped undecodable frame");
@@ -276,20 +343,21 @@ async fn serve<P: Plugin>(plugin: P) {
             .unwrap_or("")
             .to_string();
         let params = frame.get("params").cloned().unwrap_or_else(|| json!({}));
+        let trace = crate::trace::from_envelope(&frame);
+        let deadline = crate::deadline::from_envelope(&frame);
 
         // Frame triage: id+method = request, id alone = the host's response
         // to a plugin-initiated call, method alone = notification.
         if method.is_empty() {
             if let Some(request_id) = id.as_u64() {
-                if let Some(tx) = host_pending
-                    .lock()
-                    .ok()
-                    .and_then(|mut pending| pending.remove(&request_id))
-                {
-                    let result = frame.get("result").cloned().unwrap_or(Value::Null);
-                    let _ = tx.send(result);
-                }
+                let result = frame.get("result").cloned().unwrap_or(Value::Null);
+                let result = if crate::wire::valid_result("host", &result) {
+                    result
+                } else {
+                    json!({ "ok": false, "error": "invalid host response" })
+                };
                 // Responses to unknown ids are dropped silently.
+                ctx.resolve_host_call(request_id, result);
             }
             continue;
         }
@@ -298,7 +366,7 @@ async fn serve<P: Plugin>(plugin: P) {
             if method == "event" {
                 match decode_event(params) {
                     Ok(event) => {
-                        if event_tx.try_send(event).is_err() {
+                        if !events.push(event, line.len()) {
                             ctx.log("warn", "[plugin] event queue full; dropped event");
                         }
                     }
@@ -308,17 +376,34 @@ async fn serve<P: Plugin>(plugin: P) {
             continue;
         }
 
+        if id.as_u64().is_none_or(|id| id == 0) {
+            continue;
+        }
+        let permits = if matches!(method.as_str(), "evaluate" | "search" | "hints" | "perform") {
+            match (
+                slots.clone().try_acquire_owned(),
+                request_bytes
+                    .clone()
+                    .try_acquire_many_owned(line.len() as u32),
+            ) {
+                (Ok(slot), Ok(bytes)) => Some((slot, bytes)),
+                _ => {
+                    reply!(id, json!({ "ok": false, "error": REQUEST_OVERLOAD_ERROR }));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         match method.as_str() {
             "initialize" => {
                 if initialized {
                     // The one non-terminal protocol NAK: reply and keep
                     // serving.
-                    ctx.emit
-                        .respond(
-                            id,
-                            json!({ "ok": false, "error": INITIALIZE_REPEATED_ERROR }),
-                        )
-                        .await;
+                    reply!(
+                        id,
+                        json!({ "ok": false, "error": INITIALIZE_REPEATED_ERROR }),
+                    );
                     continue;
                 }
                 let host_version = params
@@ -326,18 +411,16 @@ async fn serve<P: Plugin>(plugin: P) {
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 if host_version != PROTOCOL_VERSION {
-                    ctx.emit
-                        .respond(
-                            id,
-                            json!({
-                                "ok": false,
-                                "protocol_version": PROTOCOL_VERSION,
-                                "error": format!(
-                                    "protocol version mismatch: host v{host_version}, plugin v{PROTOCOL_VERSION}"
-                                ),
-                            }),
-                        )
-                        .await;
+                    reply!(
+                        id,
+                        json!({
+                            "ok": false,
+                            "protocol_version": PROTOCOL_VERSION,
+                            "error": format!(
+                                "protocol version mismatch: host v{host_version}, plugin v{PROTOCOL_VERSION}"
+                            ),
+                        }),
+                    );
                     // A version mismatch is terminal: flush and exit 0.
                     mismatch_exit = true;
                     break;
@@ -345,126 +428,872 @@ async fn serve<P: Plugin>(plugin: P) {
                 initialized = true;
                 // Reply immediately — no warm-catalog wait; on_start runs
                 // after the reply and publishes when ready.
-                ctx.emit
-                    .respond(
-                        id,
-                        json!({ "ok": true, "protocol_version": PROTOCOL_VERSION }),
-                    )
-                    .await;
+                reply!(
+                    id,
+                    json!({ "ok": true, "protocol_version": PROTOCOL_VERSION }),
+                );
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
-                tokio::spawn(async move { plugin.on_start(ctx).await });
+                tasks.spawn(async move { plugin.on_start(ctx).await });
             }
-            "ping" => ctx.emit.respond(id, json!({ "ok": true })).await,
+            "ping" => reply!(id, json!({ "ok": true })),
             "evaluate" => match decode::<EvaluateRequest>(params, "evaluate") {
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tokio::spawn(async move {
+                    tasks.spawn(crate::trace::scope(trace, async move {
+                        let _permits = permits;
                         let response = plugin.evaluate(request);
                         let answers =
                             serde_json::to_value(&response.answers).unwrap_or_else(|_| json!([]));
                         ctx.emit
                             .respond(id, json!({ "ok": true, "answers": answers }))
                             .await;
-                    });
+                    }));
                 }
                 Err(error) => {
-                    ctx.emit
-                        .respond(id, json!({ "ok": false, "error": error }))
-                        .await
+                    reply!(id, json!({ "ok": false, "error": error }));
                 }
             },
             "search" => match decode::<SearchRequest>(params, "search") {
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tokio::spawn(async move {
-                        let response = plugin.on_search(ctx.clone(), request).await;
+                    tasks.spawn(crate::trace::scope(trace, async move {
+                        let _permits = permits;
+                        let handler = plugin.on_search(ctx.clone(), request);
+                        let Some(response) = crate::deadline::within(deadline, handler).await
+                        else {
+                            deadline_exceeded(&ctx, id, "search", deadline).await;
+                            return;
+                        };
                         let rows =
                             serde_json::to_value(&response.rows).unwrap_or_else(|_| json!([]));
                         ctx.emit
                             .respond(id, json!({ "ok": true, "rows": rows }))
                             .await;
-                    });
+                    }));
                 }
                 Err(error) => {
-                    ctx.emit
-                        .respond(id, json!({ "ok": false, "error": error }))
-                        .await
+                    reply!(id, json!({ "ok": false, "error": error }));
                 }
             },
             "hints" => match decode::<HintsRequest>(params, "hints") {
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tokio::spawn(async move {
-                        let response = plugin.on_hints(ctx.clone(), request).await;
+                    tasks.spawn(crate::trace::scope(trace, async move {
+                        let _permits = permits;
+                        let handler = plugin.on_hints(ctx.clone(), request);
+                        let Some(response) = crate::deadline::within(deadline, handler).await
+                        else {
+                            deadline_exceeded(&ctx, id, "hints", deadline).await;
+                            return;
+                        };
                         let targets =
                             serde_json::to_value(&response.targets).unwrap_or_else(|_| json!([]));
                         let mut result = json!({ "ok": true, "targets": targets });
                         if let Some(pid) = response.context_pid {
                             result["context_pid"] = json!(pid);
                         }
+                        if !crate::wire::valid_result("hints", &result) {
+                            result = json!({ "ok": false, "error": "invalid hints response" });
+                        }
                         ctx.emit.respond(id, result).await;
-                    });
+                    }));
                 }
                 Err(error) => {
-                    ctx.emit
-                        .respond(id, json!({ "ok": false, "error": error }))
-                        .await
+                    reply!(id, json!({ "ok": false, "error": error }));
                 }
             },
             "perform" => match decode_perform(params) {
                 Ok(request) => {
                     let plugin = plugin.clone();
                     let ctx = ctx.clone();
-                    tokio::spawn(async move {
+                    tasks.spawn(crate::trace::scope(trace, async move {
+                        let _permits = permits;
                         let response = plugin.perform(ctx.clone(), request).await;
                         ctx.emit.respond(id, response.to_value()).await;
-                    });
+                    }));
                 }
                 Err(error) => {
-                    ctx.emit
-                        .respond(id, json!({ "ok": false, "error": error }))
-                        .await
+                    reply!(id, json!({ "ok": false, "error": error }));
                 }
             },
             other => {
-                ctx.emit
-                    .respond(
-                        id,
-                        json!({ "ok": false, "error": format!("unknown method: {other}") }),
-                    )
-                    .await
+                reply!(
+                    id,
+                    json!({ "ok": false, "error": format!("unknown method: {other}") }),
+                );
             }
         }
     }
-
     // The worker may be mid-handler; a closing plugin owes the host nothing
     // further, so cancel instead of draining.
     event_worker.abort();
     let _ = event_worker.await;
-    // Wake every in-flight call_host with the closed sentinel (dropping the
-    // senders resolves their receivers as errors).
-    if let Ok(mut pending) = host_pending.lock() {
-        pending.clear();
-    }
+    // Wake every in-flight call_host with the closed sentinel.
+    ctx.abandon_host_calls();
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_DEADLINE;
     if !mismatch_exit {
-        plugin.on_shutdown(ctx.clone()).await;
+        let _ = tokio::time::timeout_at(deadline, plugin.on_shutdown(ctx.clone())).await;
     }
     // Detached interval/background tasks may retain Context clones
     // indefinitely. Close their shared emitter explicitly, then drain queued
     // frames before the runtime drops and cancels those tasks.
     ctx.emit.close();
     drop(ctx);
-    let _ = writer.await;
+    if !writer_finished
+        && tokio::time::timeout_at(deadline, &mut writer)
+            .await
+            .is_err()
+    {
+        writer.abort();
+        let _ = writer.await;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::context::test_context;
+    use crate::emit::MAX_FRAME_BYTES;
+    use crate::testing::{test_env, WireHarness};
+    use crate::types::{Candidate, JumpTarget, QueryAnswer};
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    const INITIALIZE: &str = r#"{"id":1,"method":"initialize","params":{"protocol_version":1}}"#;
+
+    fn initialize() -> Value {
+        serde_json::from_str(INITIALIZE).unwrap()
+    }
+
+    fn command(id: u64, subcommand: &str) -> Value {
+        json!({ "id": id, "method": "perform", "params": {
+            "kind": "command", "command": "test", "subcommand": subcommand, "args": [], "raw": ""
+        }})
+    }
+
+    /// Serve `plugin` and complete the handshake.
+    async fn serve<P: Plugin>(plugin: P) -> WireHarness {
+        let mut wire = WireHarness::new(plugin);
+        wire.send(initialize()).await;
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 1, "result": { "ok": true, "protocol_version": 1 } })
+        );
+        wire
+    }
+
+    /// A plugin exercising every surface the runtime routes.
+    #[derive(Default)]
+    struct TestPlugin {
+        publish_on_start: bool,
+        hang_on_shutdown: bool,
+        shutdown_ran: Arc<AtomicBool>,
+    }
+
+    impl Plugin for TestPlugin {
+        async fn on_start(&self, ctx: Context) {
+            if self.publish_on_start {
+                ctx.publish(vec![Candidate::new("test.items", "warm")]);
+            }
+        }
+
+        fn evaluate(&self, request: EvaluateRequest) -> EvaluateResponse {
+            if request.query == "one" {
+                return EvaluateResponse::answers(vec![QueryAnswer::copy_text("one", Some("s"))]);
+            }
+            EvaluateResponse::default()
+        }
+
+        async fn on_search(&self, _: Context, request: SearchRequest) -> SearchResponse {
+            if request.query == "hit" {
+                return SearchResponse::rows(vec![Candidate::new("test.items", "hit")]);
+            }
+            SearchResponse::default()
+        }
+
+        async fn on_hints(&self, _: Context, request: HintsRequest) -> HintsResponse {
+            if request.bundle_id.as_deref() == Some("slow") {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            if request.bundle_id.as_deref() == Some("invalid") {
+                // A zero-width frame fails the shared target validation.
+                return HintsResponse::targets(vec![JumpTarget::new(
+                    "t",
+                    Frame::new(0.0, 0.0, 0.0, 10.0),
+                )]);
+            }
+            HintsResponse::targets(vec![JumpTarget::new(
+                "t1",
+                Frame::new(-10.5, 20.0, 30.0, 40.0),
+            )
+            .role("AXLink")
+            .context_id("surface-1")
+            .label("one")])
+            .context_pid(77)
+        }
+
+        async fn perform(&self, ctx: Context, request: Perform) -> PerformResponse {
+            let Perform::Command(command) = request else {
+                return PerformResponse::unhandled();
+            };
+            match command.subcommand.as_str() {
+                "notify" => {
+                    ctx.status([(" state ", "on"), ("", "dropped")]);
+                    ctx.log_fields(
+                        "warn",
+                        "hello",
+                        BTreeMap::from([("k".to_string(), "v".to_string())]),
+                    );
+                    PerformResponse::ok()
+                }
+                "oversized" => {
+                    ctx.publish(vec![Candidate::new(
+                        "test.items",
+                        "x".repeat(MAX_FRAME_BYTES),
+                    )]);
+                    ctx.publish(vec![Candidate::new("test.items", "fits")]);
+                    PerformResponse::ok()
+                }
+                "host-ping" => {
+                    let result = ctx.call_host("host.ping", json!({})).await;
+                    PerformResponse::ok().message(result.to_string())
+                }
+                _ => PerformResponse::unhandled(),
+            }
+        }
+
+        async fn on_shutdown(&self, ctx: Context) {
+            self.shutdown_ran.store(true, Ordering::SeqCst);
+            if self.hang_on_shutdown {
+                std::future::pending::<()>().await;
+            }
+            ctx.log("info", "shutdown");
+        }
+    }
+
+    #[tokio::test]
+    async fn handshake_echoes_the_version_and_naks_a_repeated_initialize() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 2, "method": "ping", "params": {} }))
+            .await;
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        wire.send(json!({ "id": 3, "method": "initialize", "params": { "protocol_version": 1 } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(3).await,
+            json!({ "ok": false, "error": INITIALIZE_REPEATED_ERROR })
+        );
+        // Still serving after the NAK.
+        wire.send(json!({ "id": 4, "method": "ping", "params": {} }))
+            .await;
+        assert_eq!(wire.recv_response(4).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn unknown_methods_reply_the_canonical_error() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 7, "method": "driver.unknown", "params": { "x": -1912.5 } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(7).await,
+            json!({ "ok": false, "error": "unknown method: driver.unknown" })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn notifications_are_never_replied() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:window.focus.changed",
+            "payload": { "bundle_id": "dev.flash.test", "pid": 999,
+                "front_window_frame": { "x": -1912.5, "y": -140.25, "width": 1512.0, "height": 982.0 } }
+        }}))
+        .await;
+        // A plugin that never looks at the status observation is unaffected
+        // by it: the default hook ignores it and nothing answers.
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:status.observed", "payload": { "segments": ["state"] }
+        }}))
+        .await;
+        wire.send(json!({ "method": "driver.mystery", "params": { "noise": true } }))
+            .await;
+        wire.send(json!({ "id": 8, "method": "ping", "params": {} }))
+            .await;
+        // The ping reply is the very next frame: nothing answered the notifications.
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 8, "result": { "ok": true } })
+        );
+        wire.close_stdin().await;
+        assert!(wire
+            .finished()
+            .await
+            .iter()
+            .all(|frame| frame["method"] == "log"));
+    }
+
+    #[tokio::test]
+    async fn protocol_mismatch_replies_then_terminates_without_running_shutdown() {
+        for (version, host) in [
+            (json!(99), "99"),
+            (json!(true), "0"),
+            (json!(1.0), "0"),
+            (json!("1"), "0"),
+            (json!(0), "0"),
+            (json!(-1), "0"),
+            (json!(2147483648_u64), "2147483648"),
+        ] {
+            let shutdown_ran = Arc::new(AtomicBool::new(false));
+            let mut wire = WireHarness::new(TestPlugin {
+                shutdown_ran: shutdown_ran.clone(),
+                ..TestPlugin::default()
+            });
+            wire.send(json!({ "id": 1, "method": "initialize", "params": { "protocol_version": version } }))
+                .await;
+            assert_eq!(
+                wire.recv().await,
+                json!({ "id": 1, "result": {
+                    "ok": false,
+                    "protocol_version": 1,
+                    "error": format!("protocol version mismatch: host v{host}, plugin v1"),
+                }}),
+                "{version}"
+            );
+            // No EOF from the host: the mismatch itself ends the loop.
+            assert!(wire.finished().await.is_empty(), "{version}");
+            assert!(!shutdown_ran.load(Ordering::SeqCst), "{version}");
+        }
+    }
+
+    #[tokio::test]
+    async fn batched_frames_are_each_answered_exactly_once() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send_raw(
+            br#"{"id":10,"method":"ping","params":{}}
+{"id":11,"method":"ping","params":{}}
+{"id":12,"method":"driver.unknown","params":{}}
+{"id":13,"method":"ping","params":{}}
+{"id":14,"method":"ping","params":{}}
+"#,
+        )
+        .await;
+        let mut replies = Vec::new();
+        for _ in 0..5 {
+            replies.push(wire.recv().await);
+        }
+        replies.sort_by_key(|frame| frame["id"].as_u64());
+        assert_eq!(
+            replies,
+            [
+                json!({ "id": 10, "result": { "ok": true } }),
+                json!({ "id": 11, "result": { "ok": true } }),
+                json!({ "id": 12, "result": { "ok": false, "error": "unknown method: driver.unknown" } }),
+                json!({ "id": 13, "result": { "ok": true } }),
+                json!({ "id": 14, "result": { "ok": true } }),
+            ]
+        );
+        wire.close_stdin().await;
+        assert!(
+            wire.finished()
+                .await
+                .iter()
+                .all(|frame| frame.get("id").is_none()),
+            "no duplicate replies"
+        );
+    }
+
+    #[tokio::test]
+    async fn ids_round_trip_and_malformed_ids_are_ignored() {
+        let mut wire = serve(TestPlugin::default()).await;
+        for id in [7_u64, 7, 9007199254740991] {
+            wire.send(json!({ "id": id, "method": "ping", "params": {} }))
+                .await;
+            assert_eq!(
+                wire.recv().await,
+                json!({ "id": id, "result": { "ok": true } })
+            );
+        }
+        for id in [json!(0), json!(-1), json!(1.5), json!(true), json!("x")] {
+            wire.send(json!({ "id": id, "method": "ping", "params": {} }))
+                .await;
+        }
+        wire.send(json!({ "id": 8, "method": "ping", "params": {} }))
+            .await;
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 8, "result": { "ok": true } })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn wire_noise_is_dropped_and_ping_survives() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send_raw(b"\n").await;
+        wire.send_raw(b"this is not json\n").await;
+        wire.send_raw(b"{\"truncated\": \n").await;
+        wire.send(json!({ "method": "driver.mystery", "params": { "noise": true } }))
+            .await;
+        wire.send(json!({ "id": 424242, "result": { "ok": true } }))
+            .await;
+        wire.send(json!({ "id": 4, "method": "ping", "params": {} }))
+            .await;
+        let mut frames = Vec::new();
+        loop {
+            let frame = wire.recv().await;
+            let reply = frame.get("id").is_some();
+            frames.push(frame);
+            if reply {
+                break;
+            }
+        }
+        let (reply, dropped) = frames.split_last().unwrap();
+        assert_eq!(*reply, json!({ "id": 4, "result": { "ok": true } }));
+        assert_eq!(
+            dropped.len(),
+            2,
+            "one warning per undecodable line: {dropped:?}"
+        );
+        for frame in dropped {
+            assert_eq!(frame["method"], "log");
+            assert_eq!(
+                frame["params"]["message"],
+                "[plugin] dropped undecodable frame"
+            );
+        }
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn oversized_inbound_lines_are_dropped_with_a_warning() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send_raw(&vec![b'x'; MAX_FRAME_BYTES + 1]).await;
+        wire.send_raw(b"\n").await;
+        wire.send(json!({ "id": 4, "method": "ping", "params": {} }))
+            .await;
+        let warning = wire.recv().await;
+        assert_eq!(warning["method"], "log");
+        assert_eq!(warning["params"]["level"], "warn");
+        assert_eq!(
+            warning["params"]["message"],
+            "[plugin] dropped oversized inbound frame"
+        );
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 4, "result": { "ok": true } })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn unicode_params_and_invalid_surrogates_do_not_break_the_loop() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 5, "method": "driver.unicode", "params": {
+            "text": "héllo ⚡ 世界 🧪 éé\u{0301} \t\u{001f}"
+        }}))
+        .await;
+        assert_eq!(
+            wire.recv_response(5).await,
+            json!({ "ok": false, "error": "unknown method: driver.unicode" })
+        );
+        wire.send_raw(br#"{"id":6,"method":"driver.surrogate","params":{"s":"\ud800"}}"#)
+            .await;
+        wire.send_raw(b"\n").await;
+        wire.send(json!({ "id": 7, "method": "ping", "params": {} }))
+            .await;
+        let dropped = wire.recv().await;
+        assert_eq!(
+            dropped["params"]["message"],
+            "[plugin] dropped undecodable frame"
+        );
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 7, "result": { "ok": true } })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn on_start_runs_after_the_initialize_reply() {
+        let mut wire = WireHarness::new(TestPlugin {
+            publish_on_start: true,
+            ..TestPlugin::default()
+        });
+        wire.send(initialize()).await;
+        assert_eq!(wire.recv().await["result"]["ok"], true);
+        assert_eq!(
+            wire.recv().await,
+            json!({ "method": "publish", "params": { "rows": [{ "source": "test.items", "title": "warm" }] } })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn unknown_perform_kinds_are_errors_not_fallbacks() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 5, "method": "perform", "params": { "kind": "zzz-probe" } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(5).await,
+            json!({ "ok": false, "error": "unknown perform kind: zzz-probe" })
+        );
+        wire.send(json!({ "id": 6, "method": "ping", "params": {} }))
+            .await;
+        assert_eq!(wire.recv_response(6).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn evaluate_and_search_reply_their_arrays_even_when_empty() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 2, "method": "evaluate", "params": { "surface": "flashlight", "scope": "", "query": "one" } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": true, "answers": [
+                { "title": "one", "subtitle": "s", "effect": { "type": "copy_text", "text": "one" } }
+            ]})
+        );
+        wire.send(json!({ "id": 3, "method": "evaluate", "params": { "surface": "flashlight", "scope": "", "query": "zzz" } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(3).await,
+            json!({ "ok": true, "answers": [] })
+        );
+        wire.send(
+            json!({ "id": 4, "method": "search", "params": { "query": "hit", "scope": "" } }),
+        )
+        .await;
+        assert_eq!(
+            wire.recv_response(4).await,
+            json!({ "ok": true, "rows": [{ "source": "test.items", "title": "hit" }] })
+        );
+        wire.send(
+            json!({ "id": 5, "method": "search", "params": { "query": "zzz", "scope": "" } }),
+        )
+        .await;
+        assert_eq!(
+            wire.recv_response(5).await,
+            json!({ "ok": true, "rows": [] })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn hints_replies_carry_targets_and_context_pid_or_the_validation_error() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 2, "method": "hints", "params": { "bundle_id": "dev.flash.test", "pid": 999 } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": true, "context_pid": 77, "targets": [
+                { "id": "t1", "frame": { "x": -10.5, "y": 20.0, "width": 30.0, "height": 40.0 }, "role": "AXLink", "label": "one", "context_id": "surface-1" }
+            ]})
+        );
+        wire.send(json!({ "id": 3, "method": "hints", "params": { "bundle_id": "invalid" } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(3).await,
+            json!({ "ok": false, "error": "invalid hints response" })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_request_params_reply_the_method_specific_error() {
+        let mut wire = serve(TestPlugin::default()).await;
+        for (id, method, params) in [
+            (2, "evaluate", json!({ "query": 42 })),
+            (3, "search", json!({ "query": 42 })),
+            (4, "hints", json!({ "pid": 2147483648_u64 })),
+            (
+                5,
+                "perform",
+                json!({ "kind": "command", "command": "x", "args": "not-an-array" }),
+            ),
+            (6, "perform", json!({ "kind": "resolve" })),
+        ] {
+            wire.send(json!({ "id": id, "method": method, "params": params }))
+                .await;
+            assert_eq!(
+                wire.recv_response(id).await,
+                json!({ "ok": false, "error": format!("invalid {method} params") })
+            );
+        }
+        wire.send(json!({ "id": 7, "method": "ping", "params": {} }))
+            .await;
+        assert_eq!(wire.recv_response(7).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn eof_runs_shutdown_and_drains_its_log_before_returning() {
+        let shutdown_ran = Arc::new(AtomicBool::new(false));
+        let mut wire = serve(TestPlugin {
+            shutdown_ran: shutdown_ran.clone(),
+            ..TestPlugin::default()
+        })
+        .await;
+        wire.close_stdin().await;
+        let frames = wire.finished().await;
+        assert!(shutdown_ran.load(Ordering::SeqCst));
+        assert_eq!(
+            frames,
+            [
+                json!({ "method": "log", "params": { "level": "info", "message": "shutdown", "fields": {} } })
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_bounded_by_the_deadline() {
+        let mut wire = serve(TestPlugin {
+            hang_on_shutdown: true,
+            ..TestPlugin::default()
+        })
+        .await;
+        wire.close_stdin().await;
+        let started = Instant::now();
+        assert!(wire.finished().await.is_empty());
+        let elapsed = started.elapsed();
+        assert!(elapsed >= SHUTDOWN_DEADLINE, "{elapsed:?}");
+        assert!(elapsed < SHUTDOWN_DEADLINE * 2, "{elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_notifications_are_dropped_whole_without_blocking() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(command(2, "oversized")).await;
+        assert_eq!(
+            wire.recv_notification("publish").await,
+            json!({ "rows": [{ "source": "test.items", "title": "fits" }] })
+        );
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn status_and_log_notifications_carry_their_canonical_shapes() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(command(2, "notify")).await;
+        assert_eq!(
+            wire.recv().await,
+            json!({ "method": "status", "params": { "segments": { "state": "on" } } })
+        );
+        assert_eq!(
+            wire.recv().await,
+            json!({ "method": "log", "params": { "level": "warn", "message": "hello", "fields": { "k": "v" } } })
+        );
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// The host names the interaction on the request envelope; every line the
+    /// handler logs carries it back, and nothing else does.
+    #[tokio::test]
+    async fn a_traced_request_logs_under_its_trace() {
+        let mut wire = serve(TestPlugin::default()).await;
+        let mut request = command(2, "notify");
+        request["trace"] = json!("k3f9");
+        wire.send(request).await;
+        assert_eq!(wire.recv().await["method"], "status");
+        assert_eq!(
+            wire.recv().await,
+            json!({ "method": "log", "params": {
+                "level": "warn", "message": "hello", "fields": { "k": "v" }, "trace": "k3f9"
+            } })
+        );
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        let mut malformed = command(3, "notify");
+        malformed["trace"] = json!("NOT-VALID");
+        wire.send(malformed).await;
+        assert_eq!(wire.recv().await["method"], "status");
+        assert!(wire.recv().await["params"].get("trace").is_none());
+        assert_eq!(wire.recv_response(3).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// A read-only handler past its deadline is dropped and answers in time;
+    /// one within it, or without a deadline, answers normally.
+    #[tokio::test]
+    async fn a_hints_handler_past_its_deadline_answers_deadline_exceeded() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({
+            "id": 2, "method": "hints", "deadline_ms": 60, "trace": "k3f9",
+            "params": { "bundle_id": "slow", "pid": 1 }
+        }))
+        .await;
+        let log = wire.recv().await;
+        assert_eq!(
+            log["params"]["message"],
+            "[plugin] hints exceeded its deadline"
+        );
+        assert_eq!(log["params"]["fields"]["deadline_ms"], "60");
+        assert_eq!(log["params"]["trace"], "k3f9");
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": false, "error": "deadline exceeded" })
+        );
+        wire.send(json!({
+            "id": 3, "method": "hints", "deadline_ms": 500,
+            "params": { "bundle_id": "dev.flash.test", "pid": 1 }
+        }))
+        .await;
+        assert_eq!(wire.recv_response(3).await["ok"], true);
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_host_responses_become_the_invalid_host_response_sentinel() {
+        let mut wire = serve(TestPlugin::default()).await;
+        for (id, reply) in [
+            (2, json!({ "result": { "ok": "yes" } })),
+            (3, json!({ "result": { "ok": false } })),
+            (4, json!({})),
+        ] {
+            wire.send(command(id, "host-ping")).await;
+            let request = wire.recv().await;
+            assert_eq!(request["method"], "host.ping");
+            let mut response = reply;
+            response["id"] = request["id"].clone();
+            wire.send(response).await;
+            let result = wire.recv_response(id).await;
+            assert_eq!(result["ok"], true);
+            let message = result["message"].as_str().unwrap();
+            assert!(message.contains("invalid host response"), "{message}");
+        }
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn unread_stdout_cannot_hold_the_runtime_open_after_eof() {
+        let (output, _unread) = tokio::io::duplex(1);
+        let input = INITIALIZE.as_bytes();
+        let plugin = WaitingPlugin {
+            requests: Arc::new(AtomicUsize::new(0)),
+            observed_apps: Arc::new(Mutex::new(None)),
+        };
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            serve_streams(plugin, test_env("unread", json!({})), input, output),
+        )
+        .await
+        .unwrap();
+    }
+
+    struct WaitingPlugin {
+        requests: Arc<AtomicUsize>,
+        observed_apps: Arc<Mutex<Option<usize>>>,
+    }
+
+    impl Plugin for WaitingPlugin {
+        async fn on_search(&self, _: Context, _: SearchRequest) -> SearchResponse {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            std::future::pending().await
+        }
+
+        async fn on_event(&self, ctx: Context, event: Event) {
+            if event.text.as_deref() == Some("hold") {
+                assert_eq!(
+                    ctx.call_host("host.ping", json!({})).await,
+                    json!({"ok":true})
+                );
+            }
+            *self.observed_apps.lock().unwrap() = Some(ctx.running_applications().len());
+        }
+    }
+
+    #[tokio::test]
+    async fn live_reader_preserves_final_snapshot_while_event_handler_awaits_host_rpc() {
+        let observed = Arc::new(Mutex::new(None));
+        let mut wire = serve(WaitingPlugin {
+            requests: Arc::new(AtomicUsize::new(0)),
+            observed_apps: observed.clone(),
+        })
+        .await;
+        wire.send(json!({"method":"event","params":{"name":"core:apps.changed","payload":{"text":"hold","running_applications":[{"pid":7,"bundle_id":"first"}]}}})).await;
+        let rpc = wire.recv().await;
+        assert_eq!(rpc["method"], "host.ping");
+        for _ in 0..300 {
+            wire.send(json!({"method":"event","params":{"name":"core:apps.changed","payload":{"running_applications":[{"pid":8,"bundle_id":"older"}]}}})).await;
+        }
+        wire.send(json!({"method":"event","params":{"name":"core:apps.changed","payload":{"running_applications":[]}}})).await;
+        wire.send(json!({"id":2,"method":"ping"})).await;
+        assert_eq!(wire.recv().await["id"], 2);
+        wire.send(json!({"id":rpc["id"],"result":{"ok":true}}))
+            .await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while *observed.lock().unwrap() != Some(0) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn request_overload_is_bounded_and_keeps_ping_and_eof_responsive() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let mut wire = serve(WaitingPlugin {
+            requests: requests.clone(),
+            observed_apps: Arc::new(Mutex::new(None)),
+        })
+        .await;
+        for id in 2..=(REQUEST_CAPACITY + 2) {
+            wire.send(json!({"id":id,"method":"search","params":{"query":"wait"}}))
+                .await;
+        }
+        let overload = wire.recv().await;
+        assert_eq!(overload["result"]["error"], REQUEST_OVERLOAD_ERROR);
+        assert_eq!(requests.load(Ordering::SeqCst), REQUEST_CAPACITY);
+        wire.send(json!({"id":100,"method":"ping"})).await;
+        assert_eq!(wire.recv().await["id"], 100);
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn runtime_does_not_dispatch_unterminated_json_at_eof() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let mut wire = serve(WaitingPlugin {
+            requests: requests.clone(),
+            observed_apps: Arc::new(Mutex::new(None)),
+        })
+        .await;
+        wire.send_raw(br#"{"id":2,"method":"search","params":{"query":"wait"}}"#)
+            .await;
+        wire.close_stdin().await;
+        assert!(wire.finished().await.is_empty());
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn malformed_events_are_rejected_instead_of_becoming_default_events() {
@@ -482,6 +1311,88 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(event.running_applications.len(), 1);
+        assert_eq!(event.event.segments, None);
+
+        // The status observation requires its complete segment set.
+        assert!(decode_event(json!({ "name": "core:status.observed", "payload": {} })).is_err());
+        let observed = decode_event(json!({
+            "name": "core:status.observed",
+            "payload": { "segments": ["top_cpu", "top_mem"] }
+        }))
+        .unwrap();
+        assert_eq!(
+            observed.event.segments,
+            Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
+        );
+    }
+
+    /// Each delivered event's name and segment set.
+    type Observed = Arc<Mutex<Vec<(String, Option<Vec<String>>)>>>;
+
+    struct ObservingPlugin {
+        events: Observed,
+    }
+
+    impl Plugin for ObservingPlugin {
+        async fn on_event(&self, _: Context, event: Event) {
+            self.events
+                .lock()
+                .unwrap()
+                .push((event.name, event.segments));
+        }
+    }
+
+    /// `core:status.observed` reaches the event hook carrying the complete
+    /// observed set, an empty set included; a malformed set is dropped whole
+    /// with a content-free warning and never reaches the plugin.
+    #[tokio::test]
+    async fn status_observation_reaches_the_event_hook_with_its_segments() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut wire = serve(ObservingPlugin {
+            events: events.clone(),
+        })
+        .await;
+        let observed = |segments: Value| {
+            json!({ "method": "event", "params": {
+                "name": "core:status.observed", "payload": { "segments": segments }
+            }})
+        };
+        wire.send(observed(json!(["top_cpu", "top_mem"]))).await;
+        wire.send(observed(json!(["top_cpu", "top_cpu"]))).await;
+        wire.send(observed(json!("top_cpu"))).await;
+        wire.send(observed(json!([]))).await;
+        wire.send(json!({ "id": 2, "method": "ping", "params": {} }))
+            .await;
+        for _ in 0..2 {
+            let warning = wire.recv().await;
+            assert_eq!(
+                warning["params"]["message"],
+                "[plugin] dropped event (invalid event params)"
+            );
+        }
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 2, "result": { "ok": true } })
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.lock().unwrap().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                (
+                    "core:status.observed".to_string(),
+                    Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
+                ),
+                ("core:status.observed".to_string(), Some(Vec::new())),
+            ]
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
     }
 
     #[test]
@@ -515,16 +1426,6 @@ mod tests {
         assert!(decode_perform(json!({ "kind": "resolve" })).is_err());
     }
 
-    #[test]
-    fn malformed_request_params_are_rejected_without_default_fallback() {
-        assert!(decode::<CommandRequest>(
-            json!({ "command": "x", "args": "not-an-array" }),
-            "perform"
-        )
-        .is_err());
-        assert!(decode::<EvaluateRequest>(json!({ "query": 42 }), "evaluate").is_err());
-    }
-
     struct RecordingPlugin {
         observations: Arc<Mutex<Vec<(String, String)>>>,
     }
@@ -554,15 +1455,15 @@ mod tests {
         let plugin = Arc::new(RecordingPlugin {
             observations: observations.clone(),
         });
-        let (event_tx, event_rx) = mpsc::channel(4);
-        let worker = tokio::spawn(run_event_worker(plugin, ctx, event_rx));
+        let events = Arc::new(EventMailbox::default());
+        let worker = tokio::spawn(run_event_worker(plugin, ctx, events.clone()));
 
         for (marker, bundle) in [
             ("first", "com.example.First"),
             ("second", "com.example.Second"),
         ] {
-            event_tx
-                .send(InboundEvent {
+            assert!(events.push(
+                InboundEvent {
                     event: Event {
                         name: "core:apps.changed".to_string(),
                         text: Some(marker.to_string()),
@@ -573,12 +1474,19 @@ mod tests {
                         pid: 1,
                         localized_name: String::new(),
                     }],
-                })
-                .await
-                .unwrap();
+                },
+                100
+            ));
         }
-        drop(event_tx);
-        worker.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while observations.lock().unwrap().len() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        worker.abort();
+        let _ = worker.await;
 
         // The slow first handler must not be overtaken by the second event,
         // and each callback observes exactly the snapshot that motivated it.
@@ -589,23 +1497,5 @@ mod tests {
                 ("second".to_string(), "com.example.Second".to_string()),
             ]
         );
-    }
-
-    #[tokio::test]
-    async fn bounded_event_queue_rejects_excess_work_without_waiting() {
-        let (event_tx, _event_rx) = mpsc::channel(1);
-        let event = || InboundEvent {
-            event: Event {
-                name: "core:focus.changed".to_string(),
-                ..Event::default()
-            },
-            running_applications: Vec::new(),
-        };
-
-        event_tx.try_send(event()).unwrap();
-        assert!(matches!(
-            event_tx.try_send(event()),
-            Err(mpsc::error::TrySendError::Full(_))
-        ));
     }
 }

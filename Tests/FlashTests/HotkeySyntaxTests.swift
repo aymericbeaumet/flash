@@ -92,42 +92,6 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(HotkeySyntax.parse(hotkey: ""))
   }
 
-  func testAllScopeCommandMappingsDispatchInNormalMode() {
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .all,
-        currentMode: .normal,
-        modifiers: UInt32(cmdKey)))
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .all,
-        currentMode: .insert,
-        modifiers: UInt32(cmdKey)))
-  }
-
-  func testNormalScopeCommandMappingsDispatchInNormalMode() {
-    // `[mode.normal.mappings]` cmd-prefixed mappings must fire when in
-    // normal mode. The previous behaviour blocked them, which meant
-    // configuring `"cmd+a" = ["flash", "..."]` under `[mode.normal.mappings]`
-    // silently did nothing.
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .normal,
-        modifiers: UInt32(cmdKey | shiftKey)))
-    XCTAssertTrue(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .normal,
-        modifiers: UInt32(optionKey)))
-    // Normal-scope cmd-mappings must NOT fire when we're in insert mode.
-    XCTAssertFalse(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .insert,
-        modifiers: UInt32(cmdKey)))
-  }
-
   func testScopeIsActiveGovernsCarbonRegistration() {
     // The mapping scope filters Carbon registrations through
     // `scopeIsActive`. A `.normal`-scope mapping (e.g. `cmd+tab`) must
@@ -143,6 +107,9 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .normal))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.insert, for: .insert))
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .command))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .normal))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.command, for: .insert))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.command, for: .command))
   }
 
   func testDefaultNormalMappingsOmitCmdChords() {
@@ -178,13 +145,13 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.click(.tripleClick, modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--middle"])?.command,
-      .mouseGrid(.click(.middleClick, modifiers: [])))
+      .mouseGrid(.init(.click(.middleClick, modifiers: []))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--drag"])?.command,
       .mouseTarget(.drag(modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--drag"])?.command,
-      .mouseGrid(.drag(modifiers: [])))
+      .mouseGrid(.init(.drag(modifiers: []))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--drag", "--modifiers=alt"])?.command,
       .mouseTarget(.drag(modifiers: .option)))
@@ -193,7 +160,7 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.select(modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--select"])?.command,
-      .mouseGrid(.select(modifiers: [])))
+      .mouseGrid(.init(.select(modifiers: []))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--multi"])?.command,
       .mouseTarget(.multi(.leftClick, modifiers: [])))
@@ -202,19 +169,35 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.multi(.rightClick, modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--multi", "--modifiers=cmd"])?.command,
-      .mouseGrid(.multi(.leftClick, modifiers: .command)))
+      .mouseGrid(.init(.multi(.leftClick, modifiers: .command))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--move"])?.command,
       .mouseTarget(.move))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--move"])?.command,
-      .mouseGrid(.move))
+      .mouseGrid(.init(.move)))
+    // Retired aliases are rejected, not translated.
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_snipe", "--move"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_click"]))
+    // Bisect and zoom-to-depth combine with every click flag.
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "mouse_snipe", "--move"])?.command,
-      .mouseGrid(.move))
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--bisect", "--secondary"])?.command,
+      .mouseGrid(.init(.click(.rightClick, modifiers: []), bisect: true)))
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "mouse_click"])?.command,
-      .mouseTarget(.click(.leftClick, modifiers: [])))
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--bisect", "--drag"])?.command,
+      .mouseGrid(.init(.drag(modifiers: []), bisect: true)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=2", "--move"])?.command,
+      .mouseGrid(.init(.move, zoomToDepth: 2)))
+    XCTAssertEqual(
+      parseMappingCommand(
+        argv: ["flash", "mouse_grid", "--zoom-to-depth=1", "--bisect", "--double"])?.command,
+      .mouseGrid(.init(.click(.doubleClick, modifiers: []), zoomToDepth: 1, bisect: true)))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=0"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=-1"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=deep"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--bisect"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--zoom-to-depth=1"]))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--modifiers=cmd"])?.command,
       .mouseTarget(.click(.leftClick, modifiers: .command)))
@@ -222,7 +205,7 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(
         argv: ["flash", "mouse_grid", "--modifiers=shift+command+ctrl"]
       )?.command,
-      .mouseGrid(.click(.leftClick, modifiers: [.command, .control, .shift])))
+      .mouseGrid(.init(.click(.leftClick, modifiers: [.command, .control, .shift]))))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--modifiers=bogus"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--modifiers="]))
     XCTAssertNil(
@@ -287,7 +270,17 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_dock"])?.command, .mouseDock)
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "mouse_statusbar"])?.command, .mouseStatusBar)
+      parseMappingCommand(argv: ["flash", "mouse_menubar"])?.command, .mouseMenuBar)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_notifications"])?.command, .mouseNotifications)
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "mouse_statusbar"]),
+      "mouse_menubar replaced it; no alias remains")
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_menubar", "--secondary"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_notifications", "--multi"]))
+    XCTAssertEqual(URLCommand.mouseMenuBar.diagnosticDescription, "flash mouse_menubar")
+    XCTAssertEqual(
+      URLCommand.mouseNotifications.diagnosticDescription, "flash mouse_notifications")
   }
 
   func testParseEnterCommandRestoreMode() {
@@ -499,9 +492,7 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testParseFlashModeActions() {
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "enter_insert_mode"])?.command, .insertMode)
-    XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "enter_locked_insert_mode"])?.command,
-      .lockedInsertMode)
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_locked_insert_mode"]))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "url_copy"])?.command, .copyURL)
@@ -540,6 +531,8 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "pane_split_horizontal"])?.command,
       .paneSplitHorizontal)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_close"])?.command, .paneClose)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_next"])?.command, .paneNext)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_previous"])?.command, .panePrev)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "history_back"])?.command, .historyBack)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "history_forward"])?.command, .historyForward)

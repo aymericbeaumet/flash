@@ -7,15 +7,7 @@ enum ConfigLoader {
   /// config AND creation of a higher-precedence one (e.g. user adds
   /// `$XDG_CONFIG_HOME/flash/flash.toml` while running with
   /// `~/.config/flash/flash.toml`).
-  static func candidatePaths(arguments: [String], environment: [String: String]) -> [URL] {
-    for arg in arguments.dropFirst() {
-      if arg.hasPrefix("--config=") {
-        let p = String(arg.dropFirst("--config=".count))
-        if !p.isEmpty {
-          return [URL(fileURLWithPath: (p as NSString).expandingTildeInPath)]
-        }
-      }
-    }
+  static func candidatePaths(environment: [String: String]) -> [URL] {
     if let p = environment["FLASH_CONFIG"], !p.isEmpty {
       return [URL(fileURLWithPath: (p as NSString).expandingTildeInPath)]
     }
@@ -30,8 +22,8 @@ enum ConfigLoader {
     return out
   }
 
-  static func resolvePath(arguments: [String], environment: [String: String]) -> URL {
-    let candidates = candidatePaths(arguments: arguments, environment: environment)
+  static func resolvePath(environment: [String: String]) -> URL {
+    let candidates = candidatePaths(environment: environment)
     let fm = FileManager.default
     if let existing = candidates.first(where: { fm.fileExists(atPath: $0.path) }) {
       return existing
@@ -62,32 +54,30 @@ enum ConfigLoader {
 
   /// Production entry point. Layers, in override order (low → high):
   /// the default config embedded in the app bundle, then the user's TOML
-  /// file, then environment-variable overrides and command-line overrides.
-  /// **Precedence (high → low): CLI flag > env var > user TOML > embedded
+  /// file, then environment-variable overrides.
+  /// **Precedence (high → low): env var > user TOML > embedded
   /// default TOML > built-in Swift default.** Parsing the embedded default
   /// on every launch also revalidates it: any diagnostic it produces is a
   /// Flash bug, and is logged with the file's name.
   static func load() -> Config {
-    let args = CommandLine.arguments
     let env = ProcessInfo.processInfo.environment
     var layers: [Layer] = []
     if let defaults = embeddedDefaultLayer() { layers.append(defaults) }
-    let url = resolvePath(arguments: args, environment: env)
+    let url = resolvePath(environment: env)
     if let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     {
       layers.append(Layer(text: text, sourceURL: url.resolvingSymlinksInPath()))
     }
-    let parsed = parseLayers(layers, environment: env)
-    return applyOverrides(to: parsed, arguments: args, environment: env)
+    return parseLayers(layers, environment: env)
   }
 
   /// The default config bundled into the app (`Resources/config.default.toml`
   /// at build time). nil in unit tests and non-bundle contexts — the Swift
   /// struct defaults then stand alone, as before.
-  static func embeddedDefaultLayer() -> Layer? {
+  static func embeddedDefaultLayer(in bundle: Bundle = .main) -> Layer? {
     guard
-      let url = Bundle.main.url(forResource: "config.default", withExtension: "toml"),
+      let url = bundle.url(forResource: "config.default", withExtension: "toml"),
       let text = try? String(contentsOf: url, encoding: .utf8)
     else { return nil }
     return Layer(
@@ -120,7 +110,7 @@ enum ConfigLoader {
     var config = Config()
     var pendingModeMappings: [PendingModeMapping] = []
 
-    for layer in layers {
+    for layer in layers + environmentLayers(environment) {
       let diagnosticsBefore = config.diagnostics.count
       let locations = ConfigSourceLocationIndex(text: layer.text)
       do {
@@ -139,15 +129,26 @@ enum ConfigLoader {
       } catch {
         config.addDiagnostic("TOML parse error: \(error)")
       }
-      if let label = layer.diagnosticLabel {
-        for index in diagnosticsBefore..<config.diagnostics.count {
-          config.diagnostics[index] = ConfigDiagnostic(
-            message: "\(label): \(config.diagnostics[index].message)",
-            location: config.diagnostics[index].location)
-        }
+      for index in diagnosticsBefore..<config.diagnostics.count {
+        let diagnostic = config.diagnostics[index]
+        config.diagnostics[index] = ConfigDiagnostic(
+          message: layer.diagnosticLabel.map { "\($0): \(diagnostic.message)" }
+            ?? diagnostic.message,
+          location: diagnostic.location,
+          file: diagnostic.file ?? layer.sourceURL?.path)
       }
     }
 
+    let terminalNames = Set(config.terminals.keys).union(config.invalidTerminalNames)
+    for name in config.statusBar.popups.keys.sorted() where terminalNames.contains(name) {
+      let path = "statusbar.popup.\(name)"
+      config.addDiagnostic(
+        "\(path) is already a terminal name; rename the popup document",
+        location: config.valueLocations[path])
+      config.statusBar.popups.removeValue(forKey: name)
+      config.statusBar.popupSourceURLs.removeValue(forKey: name)
+      config.clearLocation(path: path)
+    }
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
@@ -331,38 +332,50 @@ enum ConfigLoader {
     var scope: ModeScope
     var rawKey: String
     var key: String
-    var action: MappingCommand
-    var repeatsOnFinalKey: Bool
+    var value: ParsedModeMappingValue
     var location: ConfigLocation
+    /// The file that defined it, for diagnostics raised after every layer.
+    var file: String?
   }
 
-  private struct ParsedModeMappingValue {
-    var action: MappingCommand
-    var repeatsOnFinalKey: Bool
+  /// A mapping entry's value: a command, or `false`, which removes the key
+  /// from its table.
+  private enum ParsedModeMappingValue {
+    case mapping(MappingCommand, repeatsOnFinalKey: Bool)
+    case removal
   }
 
   private enum ModeMappingValueError: Error {
     case invalidShape
-    case invalidAction
+    case invalidCommandValue
     case invalidRepeat
+    case invalidCommand(String)
+    case queryCommand(String)
     case unknownOption(String)
 
     func message(mappingKey: String) -> String {
       switch self {
       case .invalidShape:
         return
-          "mapping \"\(mappingKey)\" must be a non-empty string array or "
-          + "{ action = [\"flash\", \"<verb>\", ...], repeat = true }"
-      case .invalidAction:
+          "mapping \"\(mappingKey)\" must be a non-empty string array, "
+          + "{ command = [\"flash\", \"<verb>\", ...], repeat = true }, or false to remove it"
+      case .invalidCommandValue:
         return
-          "mapping \"\(mappingKey)\".action must be a non-empty string array — "
-          + "[\"flash\", \"<verb>\", ...] or [<argv>...]"
+          "mapping \"\(mappingKey)\".command must be a non-empty string array — "
+          + "[\"flash\", \"<verb>\", ...] or [<argv>...]; write "
+          + "\"\(mappingKey)\" = false to remove it"
+      case .invalidCommand(let command):
+        return "mapping \"\(mappingKey)\": " + URLEventHandler.rejectionMessage(command)
+      case .queryCommand(let verb):
+        return
+          "mapping \"\(mappingKey)\": \(FlashQuery.reservationMessage(verb) ?? verb), "
+          + "not from a mapping"
       case .invalidRepeat:
         return "mapping \"\(mappingKey)\".repeat must be true or false"
       case .unknownOption(let option):
         return
           "mapping \"\(mappingKey)\": unknown option '\(option)' — "
-          + "valid options are action and repeat"
+          + "valid options are command and repeat"
       }
     }
   }
@@ -387,6 +400,8 @@ enum ConfigLoader {
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
     applyStatusBar(
       section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyTerminals(section("terminal"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyWidgets(section("widgets"), locations: locations, into: &config)
     applyFlashlight(section("flashlight"), locations: locations, into: &config)
     applyMode(
       section("mode"),
@@ -431,15 +446,18 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     let sectionKeys: [String: Set<String>] = [
-      "app": ["menu_bar_icon", "autostart"],
-      "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
+      "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
+      "hints": [
+        "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
+        "mouse_grid_keys", "mouse_grid_cursor_follow", "restore_pointer",
+      ],
       "open": ["ignored_apps", "app_directories"],
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
       ],
       "statusbar": [
         "enabled", "template", "monitor", "interval", "click", "font_size",
-        "command_timeout", "notch_margin", "popup", "popup_fg", "popup_bg",
+        "command_timeout", "notch_margin", "popup", "options", "sources", "popup_fg", "popup_bg",
         "popup_border", "popup_border_size", "popup_corner_radius", "popup_padding",
         "popup_max_width", "popup_offset",
       ],
@@ -449,23 +467,25 @@ enum ConfigLoader {
         "live_query_timeout_ms",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "scroll_step",
-        "scroll_page_fraction", "click_hold_ms", "send_key_interval_ms",
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
+        "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
+        "click_hold_ms", "send_key_interval_ms",
       ],
       "overlay": [
         "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
         "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
         "important_hint_border", "window_border", "window_border_size",
-        "window_border_color", "alert_duration", "banner_duration_ms",
+        "window_border_color", "alert_duration", "banner_duration_ms", "hint_placement",
+        "dark", "click_feedback", "screen_capture",
       ],
       "debug": [
         "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
         "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
       ],
     ]
-    // `plugin` is a known top-level section but carries user-defined
-    // `[plugin.<id>]` tables, so its keys are not enumerated.
-    let knownSections = Set(sectionKeys.keys).union(["plugin"])
+    // Plugin settings, terminal declarations and widgets use user-defined
+    // table names; `applyWidgets` checks each widget's own keys.
+    let knownSections = Set(sectionKeys.keys).union(["plugin", "terminal", "widgets"])
     warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
     for (section, known) in sectionKeys {
       guard let table = root[section]?.table else { continue }
@@ -549,9 +569,8 @@ enum ConfigLoader {
       message: "hints.magic_modifiers must be an array of strings", locations: locations,
       into: &config
     ) { value, config in
-      // Diagnose unknown tokens instead of silently dropping them (the
-      // passthrough_modifiers list already diagnoses this exact typo class),
-      // and assign only the recognised ones.
+      // Diagnose unknown tokens instead of silently dropping them, and assign
+      // only the recognised ones.
       let unknown = KeyModifier.parseList(value).unknown
       if !unknown.isEmpty {
         config.addDiagnostic(
@@ -575,6 +594,33 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { (0.0...1.0).contains($0) },
       assign: { value, config in
         config.hints.mouseGridOpacity = value
+      })
+    applyStringArray(
+      table["mouse_grid_keys"], path: ["hints", "mouse_grid_keys"],
+      message: "hints.mouse_grid_keys must be an array of strings, one per keyboard row",
+      locations: locations, into: &config
+    ) { value, config in
+      // A malformed matrix keeps the previous layer's value.
+      if let problem = MouseGridKeys.problem(in: value) {
+        config.addDiagnostic(
+          problem.message, location: locations.location(for: ["hints", "mouse_grid_keys"]))
+        return
+      }
+      config.hints.mouseGridKeys = value
+    }
+    applyBool(
+      table["mouse_grid_cursor_follow"], path: ["hints", "mouse_grid_cursor_follow"],
+      message: "hints.mouse_grid_cursor_follow must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.mouseGridCursorFollow = value
+      })
+    applyBool(
+      table["restore_pointer"], path: ["hints", "restore_pointer"],
+      message: "hints.restore_pointer must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.restorePointer = value
       })
   }
 
@@ -786,6 +832,14 @@ enum ConfigLoader {
     ) { value, config in
       config.app.autostart = value
     }
+    applyString(
+      table["keyboard_layout"], path: ["app", "keyboard_layout"],
+      message:
+        "app.keyboard_layout must be \"auto\" or an input-source ID such as "
+        + "\"com.apple.keylayout.US\"",
+      locations: locations, into: &config,
+      validate: { KeyboardLayout.Setting($0) != nil },
+      assign: { value, config in config.app.keyboardLayout = value })
   }
 
   private static func applyStatusBarTail(
@@ -800,9 +854,7 @@ enum ConfigLoader {
       into: &config
     ) { value, config in
       config.statusBar.template.template = value
-      // Relative `#{script:…}` paths resolve against the file that DEFINED
-      // the template — with layered configs that may be an earlier layer
-      // than the last one parsed, so remember it here.
+      // Retain the defining layer rather than the last layer parsed.
       config.statusBar.templateSourceURL = sourceURL
     }
     applyString(
@@ -891,7 +943,8 @@ enum ConfigLoader {
         guard !trimmedName.isEmpty else { continue }
         guard let template = value.string else {
           config.addDiagnostic(
-            "statusbar.popup.\(name) must be a quoted template string", location: location)
+            "statusbar.popup.\(name) must be a template string; declare commands in [terminal.\(name)]",
+            location: location)
           continue
         }
         config.statusBar.popups[trimmedName] = FlashStatusBarTemplate(
@@ -900,6 +953,8 @@ enum ConfigLoader {
         config.recordLocation(path: "statusbar.popup.\(trimmedName)", location: location)
       }
     }
+    applyStatusBarOptionsAndSources(
+      table, locations: locations, sourceURL: sourceURL, into: &config)
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)
     {
@@ -916,13 +971,370 @@ enum ConfigLoader {
               "statusbar.click.\(name) must be a valid URL or a [\"flash\", \"<verb>\", …] action array",
               location: location)
           }
-        } else if let action = parseMappingActionValue(value, sourceURL: sourceURL) {
+        } else if let action = parseMappingCommandValue(value, sourceURL: sourceURL) {
           config.statusBar.clickActions[trimmedName] = .command(action)
           config.recordLocation(path: "statusbar.click.\(trimmedName)", location: location)
         } else {
           config.addDiagnostic(
             "statusbar.click.\(name) must be a URL string or a [\"flash\", \"<verb>\", …] action array",
             location: location)
+        }
+      }
+    }
+  }
+
+  private static func statusProcessInteger(
+    _ table: TOMLTable, key: String, fallback: Int, range: ClosedRange<Int>,
+    path: String, location: ConfigLocation?, into config: inout Config
+  ) -> Int? {
+    guard let value = table[key] else { return fallback }
+    guard let integer = value.int ?? value.double.flatMap({ Int(exactly: $0) }),
+      range.contains(integer)
+    else {
+      config.addDiagnostic(
+        "\(path).\(key) must be an integer between \(range.lowerBound) and \(range.upperBound)",
+        location: location)
+      return nil
+    }
+    return integer
+  }
+
+  private static func parseStatusProcess(
+    _ table: TOMLTable, path: String, sourceURL: URL?, allowedKeys: Set<String>,
+    location: ConfigLocation?, into config: inout Config
+  ) -> (command: [String], workingDirectory: String?, environment: [String: String])? {
+    func invalid(_ message: String) {
+      config.addDiagnostic("\(path) \(message)", location: location)
+    }
+    if let key = table.keys.sorted().first(where: { !allowedKeys.contains($0) }) {
+      invalid("contains unknown key \"\(key)\"")
+      return nil
+    }
+    guard let values = table["command"]?.array, !values.isEmpty,
+      values.allSatisfy({ $0.string != nil }),
+      let head = values.first?.string, !head.isEmpty
+    else {
+      invalid("command must be a nonempty array of strings")
+      return nil
+    }
+    let command =
+      [head.hasPrefix("$") ? head : resolveCommandArgument(head, sourceURL: sourceURL)]
+      + values.dropFirst().compactMap(\.string)
+    guard command.allSatisfy({ !$0.utf8.contains(0) }) else {
+      invalid("command must not contain NUL bytes")
+      return nil
+    }
+    var directory: String?
+    if let value = table["working_directory"] {
+      guard let raw = value.string, !raw.isEmpty, !raw.utf8.contains(0) else {
+        invalid("working_directory must be a nonempty path string")
+        return nil
+      }
+      directory =
+        raw.hasPrefix("$")
+        ? raw
+        : resolveCommandArgument(
+          raw.hasPrefix("/") || raw.hasPrefix("~") ? raw : "./" + raw,
+          sourceURL: sourceURL)
+    }
+    var environment: [String: String] = [:]
+    if let value = table["env"] {
+      guard let entries = value.table else {
+        invalid("env must be a table of strings")
+        return nil
+      }
+      for (key, entry) in entries {
+        guard !key.isEmpty, !key.contains("="), !key.utf8.contains(0),
+          let string = entry.string, !string.utf8.contains(0)
+        else {
+          invalid("env must have valid environment names and string values")
+          return nil
+        }
+        environment[key] = string
+      }
+    }
+    return (command, directory, environment)
+  }
+
+  private static func applyStatusBarOptionsAndSources(
+    _ table: TOMLTable, locations: ConfigSourceLocationIndex, sourceURL: URL?,
+    into config: inout Config
+  ) {
+    if let options = sectionTable(
+      table["options"], name: "statusbar.options", locations: locations, into: &config)
+    {
+      for (key, value) in options {
+        guard let string = value.string else {
+          config.addDiagnostic(
+            "statusbar.options.\(key) must be a string",
+            location: locations.location(for: ["statusbar", "options", key]))
+          continue
+        }
+        config.statusBar.options[key] = string
+      }
+    }
+    guard
+      let sources = sectionTable(
+        table["sources"], name: "statusbar.sources", locations: locations, into: &config)
+    else { return }
+    for (name, value) in sources {
+      let path = "statusbar.sources.\(name)"
+      let location = locations.location(for: ["statusbar", "sources", name])
+      guard let definition = value.table else {
+        config.addDiagnostic("\(path) must be a table with command argv", location: location)
+        continue
+      }
+      guard
+        let parsed = parseStatusProcess(
+          definition, path: path, sourceURL: sourceURL,
+          allowedKeys: [
+            "command", "working_directory", "env", "interval", "cycle_interval", "history",
+          ],
+          location: location, into: &config),
+        let interval = statusProcessInteger(
+          definition, key: "interval",
+          fallback: Int(config.statusBar.refreshIntervalSeconds), range: 0...86400,
+          path: path, location: location, into: &config),
+        let history = statusProcessInteger(
+          definition, key: "history", fallback: 0, range: 2...512,
+          path: path, location: location, into: &config)
+      else { continue }
+      if definition["history"] != nil, definition["cycle_interval"] != nil {
+        config.addDiagnostic(
+          "\(path) history keeps numeric samples and cannot combine with cycle_interval",
+          location: location)
+        continue
+      }
+      var cycle: Double?
+      if definition["cycle_interval"] != nil {
+        guard
+          let seconds = statusProcessInteger(
+            definition, key: "cycle_interval", fallback: 60,
+            range: 1...86400, path: path, location: location, into: &config)
+        else { continue }
+        cycle = Double(seconds)
+      }
+      config.statusBar.sources[name] = FlashStatusBarSourceDefinition(
+        command: parsed.command, workingDirectory: parsed.workingDirectory,
+        environment: parsed.environment, intervalSeconds: Double(interval),
+        cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds,
+        historyLength: history > 0 ? history : nil)
+      if definition["interval"] == nil {
+        config.statusBar.sourcesUsingDefaultInterval.insert(name)
+      } else {
+        config.statusBar.sourcesUsingDefaultInterval.remove(name)
+      }
+    }
+  }
+
+  private static func applyTerminals(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, sourceURL: URL?,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    for (name, value) in table {
+      let path = "terminal.\(name)"
+      let location = locations.location(for: ["terminal", name])
+      guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+      else {
+        config.addDiagnostic(
+          "terminal names must be nonempty and contain no control characters", location: location)
+        continue
+      }
+      guard let definition = value.table else {
+        config.addDiagnostic("\(path) must be a table with command argv", location: location)
+        config.invalidTerminalNames.insert(name)
+        continue
+      }
+      guard definition["persistent"] == nil || definition["persistent"]?.bool != nil else {
+        config.addDiagnostic("\(path).persistent must be a boolean", location: location)
+        config.invalidTerminalNames.insert(name)
+        continue
+      }
+      guard
+        let parsed = parseStatusProcess(
+          definition, path: path, sourceURL: sourceURL,
+          allowedKeys: ["command", "working_directory", "env", "columns", "rows", "persistent"],
+          location: location, into: &config),
+        let columns = statusProcessInteger(
+          definition, key: "columns", fallback: 100, range: 1...1000,
+          path: path, location: location, into: &config),
+        let rows = statusProcessInteger(
+          definition, key: "rows", fallback: 28, range: 1...1000,
+          path: path, location: location, into: &config)
+      else {
+        config.invalidTerminalNames.insert(name)
+        continue
+      }
+      config.terminals[name] = .init(
+        command: parsed.command, workingDirectory: parsed.workingDirectory,
+        environment: parsed.environment, columns: columns, rows: rows,
+        persistent: definition["persistent"]?.bool ?? false)
+      config.invalidTerminalNames.remove(name)
+      config.recordLocation(path: path, location: location)
+    }
+  }
+
+  private static let widgetKeys: Set<String> = [
+    "enabled", "template", "screen", "anchor", "gap_x", "gap_y", "columns", "max_columns",
+    "font", "font_size", "line_spacing", "fg", "bg", "border", "border_size", "corner_radius",
+    "padding", "interval", "hide_from_capture", "options",
+  ]
+
+  /// `[widgets.<name>]` tables. Like every section, a later layer overrides
+  /// only the keys it sets; templates compile once every layer is applied.
+  private static func applyWidgets(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    guard let table else { return }
+    for (name, value) in table {
+      let path = ["widgets", name]
+      let dotted = "widgets.\(name)"
+      guard !name.isEmpty,
+        name.unicodeScalars.allSatisfy({
+          $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-")
+        })
+      else {
+        config.addDiagnostic(
+          "widget name '\(name)' must use only letters, digits, '_' and '-'",
+          location: locations.location(for: path))
+        continue
+      }
+      guard let definition = value.table else {
+        config.addDiagnostic(
+          "\(dotted) must be a table of keys ([\(dotted)] on its own line)",
+          location: locations.location(for: path))
+        continue
+      }
+      warnUnknownKeys(
+        in: definition, known: widgetKeys, path: path, locations: locations, into: &config)
+      if config.widgets[name] == nil { config.widgets[name] = Config.Widget() }
+      func key(_ key: String) -> [String] { path + [key] }
+      applyBool(
+        definition["enabled"], path: key("enabled"),
+        message: "\(dotted).enabled must be true or false", locations: locations, into: &config
+      ) { value, config in config.widgets[name]?.enabled = value }
+      applyString(
+        definition["template"], path: key("template"),
+        message: "\(dotted).template must be a template string", locations: locations,
+        into: &config
+      ) { value, config in
+        config.widgets[name]?.template.template = value.replacingOccurrences(
+          of: "\r\n", with: "\n")
+      }
+      if let screen = definition["screen"] {
+        let parsed: Config.Widget.Screen?
+        switch (screen.string?.lowercased(), screen.int) {
+        case ("primary", _): parsed = .primary
+        case ("all", _): parsed = .all
+        case (nil, let index?) where (1...64).contains(index): parsed = .index(index)
+        default: parsed = nil
+        }
+        if let parsed {
+          config.widgets[name]?.screen = parsed
+          config.recordLocation(
+            path: "\(dotted).screen", location: locations.location(for: key("screen")))
+        } else {
+          config.addDiagnostic(
+            "\(dotted).screen must be \"primary\", \"all\" or a display number from 1 "
+              + "(displays count left to right)",
+            location: locations.location(for: key("screen")))
+        }
+      }
+      applyString(
+        definition["anchor"], path: key("anchor"),
+        message: "\(dotted).anchor must be one of "
+          + Config.Widget.Anchor.allCases.map(\.rawValue).joined(separator: ", "),
+        locations: locations, into: &config,
+        validate: { Config.Widget.Anchor(rawValue: $0) != nil },
+        assign: { value, config in
+          config.widgets[name]?.anchor = .init(rawValue: value) ?? .topLeft
+        })
+      for (field, keyPath) in [
+        ("gap_x", \Config.Widget.gapX), ("gap_y", \Config.Widget.gapY),
+      ] {
+        applyDouble(
+          definition[field], path: key(field),
+          message: "\(dotted).\(field) must be a number between 0 and 4096 (points)",
+          locations: locations, into: &config, validate: { (0...4_096).contains($0) },
+          assign: { value, config in config.widgets[name]?[keyPath: keyPath] = value })
+      }
+      applyInt(
+        definition["columns"], path: key("columns"),
+        message: "\(dotted).columns must be an integer between 0 and 1000 (0 fits the content)",
+        locations: locations, into: &config, validate: { (0...1_000).contains($0) },
+        assign: { value, config in config.widgets[name]?.columns = value })
+      applyInt(
+        definition["max_columns"], path: key("max_columns"),
+        message: "\(dotted).max_columns must be an integer between 1 and 1000",
+        locations: locations, into: &config, validate: { (1...1_000).contains($0) },
+        assign: { value, config in config.widgets[name]?.maxColumns = value })
+      applyString(
+        definition["font"], path: key("font"),
+        message: "\(dotted).font must be a font name string", locations: locations,
+        into: &config
+      ) { value, config in
+        config.widgets[name]?.font = value
+        if StatusWidgetFont.resolve(name: value, size: 13) == nil {
+          config.addDiagnostic(
+            "\(dotted).font '\(value)' is not an installed monospaced font; "
+              + "using the system monospaced font",
+            location: locations.location(for: key("font")))
+        }
+      }
+      for (field, keyPath, range, unit) in [
+        ("font_size", \Config.Widget.fontSize, 6.0...200.0, "points"),
+        ("line_spacing", \Config.Widget.lineSpacing, 0.0...200.0, "points"),
+        ("border_size", \Config.Widget.borderSize, 0.0...64.0, "points"),
+        ("corner_radius", \Config.Widget.cornerRadius, 0.0...200.0, "points"),
+        ("padding", \Config.Widget.padding, 0.0...200.0, "points"),
+      ] {
+        applyDouble(
+          definition[field], path: key(field),
+          message: "\(dotted).\(field) must be a number between "
+            + "\(Int(range.lowerBound)) and \(Int(range.upperBound)) (\(unit))",
+          locations: locations, into: &config, validate: { range.contains($0) },
+          assign: { value, config in config.widgets[name]?[keyPath: keyPath] = value })
+      }
+      applyString(
+        definition["fg"], path: key("fg"),
+        message: "\(dotted).fg must be a hex color like #RRGGBB", locations: locations,
+        into: &config, validate: { $0.hasPrefix("#") && $0.count == 7 && isValidHexColor($0) },
+        assign: { value, config in config.widgets[name]?.foreground = value })
+      for (field, keyPath) in [
+        ("bg", \Config.Widget.background), ("border", \Config.Widget.border),
+      ] {
+        applyString(
+          definition[field], path: key(field),
+          message: "\(dotted).\(field) must be a hex color like #RRGGBB or #RRGGBBAA",
+          locations: locations, into: &config,
+          validate: { $0.hasPrefix("#") && isValidHexColor($0) },
+          assign: { value, config in config.widgets[name]?[keyPath: keyPath] = value })
+      }
+      applyInt(
+        definition["interval"], path: key("interval"),
+        message:
+          "\(dotted).interval must be an integer between 0 and 86400 "
+          + "(seconds; 0 follows statusbar.interval)",
+        locations: locations, into: &config, validate: { (0...86_400).contains($0) },
+        assign: { value, config in config.widgets[name]?.intervalSeconds = Double(value) })
+      applyBool(
+        definition["hide_from_capture"], path: key("hide_from_capture"),
+        message: "\(dotted).hide_from_capture must be true or false", locations: locations,
+        into: &config
+      ) { value, config in config.widgets[name]?.hideFromCapture = value }
+      if let options = sectionTable(
+        definition["options"], name: "\(dotted).options", locations: locations, into: &config)
+      {
+        for (option, value) in options {
+          guard let string = value.string else {
+            config.addDiagnostic(
+              "\(dotted).options.\(option) must be a string",
+              location: locations.location(for: key("options") + [option]))
+            continue
+          }
+          config.widgets[name]?.options[option] = string
         }
       }
     }
@@ -1037,21 +1449,23 @@ enum ConfigLoader {
         let command = parsed["command"],
         (1...32).contains(normal.count),
         (1...32).contains(insert.count),
-        (1...32).contains(command.count)
+        (1...32).contains(command.count),
+        (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count)
       {
-        for key in parsed.keys where !["normal", "insert", "command"].contains(key) {
+        for key in parsed.keys where !["normal", "insert", "command", "terminal"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
           normal: normal,
           insert: insert,
-          command: command)
+          command: command,
+          terminal: parsed["terminal"] ?? config.mode.labels.terminal)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
-          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\" } "
+          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\" } "
             + "with each label 1-32 characters",
           location: location)
       }
@@ -1072,12 +1486,28 @@ enum ConfigLoader {
       assign: { value, config in
         config.mode.scrollStep = value
       })
-    applyDouble(
-      table["scroll_page_fraction"], path: ["mode", "scroll_page_fraction"],
-      message: "mode.scroll_page_fraction must be a number between 0.05 and 1.0",
-      locations: locations, into: &config, validate: { (0.05...1.0).contains($0) },
+    applyInt(
+      table["scroll_step_lines"], path: ["mode", "scroll_step_lines"],
+      message: "mode.scroll_step_lines must be an integer between 1 and 1000 (lines)",
+      locations: locations, into: &config, validate: { (1...1000).contains($0) },
       assign: { value, config in
-        config.mode.scrollPageFraction = value
+        config.mode.scrollStepLines = value
+      })
+    applyInt(
+      table["scroll_page_lines"], path: ["mode", "scroll_page_lines"],
+      message: "mode.scroll_page_lines must be an integer between 1 and 1000 (lines)",
+      locations: locations, into: &config, validate: { (1...1000).contains($0) },
+      assign: { value, config in
+        config.mode.scrollPageLines = value
+      })
+    applyInt(
+      table["scroll_smooth_ms"], path: ["mode", "scroll_smooth_ms"],
+      message:
+        "mode.scroll_smooth_ms must be an integer between 0 and \(SmoothScroll.maxDurationMs) (ms; 0 scrolls at once)",
+      locations: locations, into: &config,
+      validate: { (0...SmoothScroll.maxDurationMs).contains($0) },
+      assign: { value, config in
+        config.mode.scrollSmoothMs = value
       })
     applyInt(
       table["click_hold_ms"], path: ["mode", "click_hold_ms"],
@@ -1110,37 +1540,6 @@ enum ConfigLoader {
         assign: { value, config in
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
-      applyStringArray(
-        normal["passthrough_keys"], path: ["mode", "normal", "passthrough_keys"],
-        message: "mode.normal.passthrough_keys must be an array of key names",
-        locations: locations, into: &config,
-        assign: { value, config in
-          for token in value where HotkeySyntax.parseKey(token) == nil {
-            config.addDiagnostic(
-              "mode.normal.passthrough_keys: unknown key \"\(token)\"",
-              location: locations.location(for: ["mode", "normal", "passthrough_keys"]))
-          }
-          // Keep only the tokens that parse — carrying known-invalid
-          // entries in the live config helps nobody.
-          config.mode.normalPassthroughKeys = value.filter { HotkeySyntax.parseKey($0) != nil }
-        })
-      applyStringArray(
-        normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
-        message:
-          "mode.normal.passthrough_modifiers must be an array of "
-          + "\"cmd\"/\"ctrl\"/\"shift\"/\"alt\"",
-        locations: locations, into: &config,
-        assign: { value, config in
-          let unknown = KeyModifier.parseList(value).unknown
-          for token in unknown {
-            config.addDiagnostic(
-              "mode.normal.passthrough_modifiers: unknown modifier \"\(token)\" "
-                + "(use cmd/ctrl/shift/alt)",
-              location: locations.location(for: ["mode", "normal", "passthrough_modifiers"]))
-          }
-          let unknownSet = Set(unknown)
-          config.mode.normalPassthroughModifiers = value.filter { !unknownSet.contains($0) }
-        })
       applyModeMappingTable(
         sectionTable(
           normal["mappings"], name: "mode.normal.mappings", locations: locations, into: &config),
@@ -1151,14 +1550,10 @@ enum ConfigLoader {
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in normal
-      where key != "leader" && key != "passthrough_keys" && key != "passthrough_modifiers"
-        && key != "mappings"
-      {
+      for (key, _) in normal where key != "leader" && key != "mappings" {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
-            + "[mode.normal.mappings]; valid keys are leader, "
-            + "passthrough_keys, passthrough_modifiers, mappings",
+            + "[mode.normal.mappings]; valid keys are leader, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }
@@ -1181,23 +1576,46 @@ enum ConfigLoader {
       }
     }
 
-    if let insert = sectionTable(
-      table["insert"], name: "mode.insert", locations: locations, into: &config)
-    {
+    for scope in [ModeScope.insert, .terminal] {
+      let name = scope.rawValue
+      guard
+        let scoped = sectionTable(
+          table[name], name: "mode.\(name)", locations: locations, into: &config)
+      else { continue }
       applyModeMappingTable(
         sectionTable(
-          insert["mappings"], name: "mode.insert.mappings", locations: locations, into: &config),
-        scope: .insert,
-        path: ["mode", "insert", "mappings"],
+          scoped["mappings"], name: "mode.\(name).mappings", locations: locations, into: &config),
+        scope: scope,
+        path: ["mode", name, "mappings"],
         locations: locations,
         sourceURL: sourceURL,
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in insert where key != "mappings" {
+      for (key, _) in scoped where key != "mappings" {
         config.addDiagnostic(
-          "mode.insert: unknown key '\(key)' — mappings belong under [mode.insert.mappings]",
-          location: locations.location(for: ["mode", "insert", key]))
+          "mode.\(name): unknown key '\(key)' — mappings belong under [mode.\(name).mappings]",
+          location: locations.location(for: ["mode", name, key]))
+      }
+    }
+
+    if let command = sectionTable(
+      table["command"], name: "mode.command", locations: locations, into: &config)
+    {
+      applyModeMappingTable(
+        sectionTable(
+          command["mappings"], name: "mode.command.mappings", locations: locations, into: &config),
+        scope: .command,
+        path: ["mode", "command", "mappings"],
+        locations: locations,
+        sourceURL: sourceURL,
+        pendingModeMappings: &pendingModeMappings,
+        into: &config)
+
+      for (key, _) in command where key != "mappings" {
+        config.addDiagnostic(
+          "mode.command: unknown key '\(key)' — mappings belong under [mode.command.mappings]",
+          location: locations.location(for: ["mode", "command", key]))
       }
     }
   }
@@ -1307,6 +1725,66 @@ enum ConfigLoader {
       assign: { value, config in
         config.overlay.bannerDurationMs = value
       })
+    applyString(
+      table["hint_placement"], path: ["overlay", "hint_placement"],
+      message: "overlay.hint_placement must be one of "
+        + HintPlacement.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", "),
+      locations: locations, into: &config, validate: { HintPlacement(rawValue: $0) != nil },
+      assign: { value, config in
+        if let placement = HintPlacement(rawValue: value) {
+          config.overlay.hintPlacement = placement
+        }
+      })
+    applyBool(
+      table["click_feedback"], path: ["overlay", "click_feedback"],
+      message: "overlay.click_feedback must be true or false", locations: locations,
+      into: &config
+    ) { value, config in
+      config.overlay.clickFeedback = value
+    }
+    applyString(
+      table["screen_capture"], path: ["overlay", "screen_capture"],
+      message: "overlay.screen_capture must be \"show\" or \"hide\"",
+      locations: locations, into: &config,
+      validate: { ScreenCaptureVisibility(rawValue: $0) != nil },
+      assign: { value, config in
+        if let visibility = ScreenCaptureVisibility(rawValue: value) {
+          config.overlay.screenCapture = visibility
+        }
+      })
+    applyDarkOverlay(
+      sectionTable(table["dark"], name: "overlay.dark", locations: locations, into: &config),
+      locations: locations, into: &config)
+  }
+
+  /// `[overlay.dark]`: the colour keys of `[overlay]`, drawn under a dark
+  /// appearance. Empty keeps the `[overlay]` colour.
+  private static func applyDarkOverlay(
+    _ table: TOMLTable?,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    let keys: [(String, WritableKeyPath<Config.Overlay.DarkHintColors, String>)] = [
+      ("hint_fg", \.hintFG), ("hint_bg_top", \.hintBGTop), ("hint_bg_bottom", \.hintBGBottom),
+      ("hint_border", \.hintBorder), ("important_hint_fg", \.importantHintFG),
+      ("important_hint_bg_top", \.importantHintBGTop),
+      ("important_hint_bg_bottom", \.importantHintBGBottom),
+      ("important_hint_border", \.importantHintBorder),
+    ]
+    for (key, field) in keys {
+      applyString(
+        table[key], path: ["overlay", "dark", key],
+        message:
+          "overlay.dark.\(key) must be a hex color like #RRGGBB or #RRGGBBAA (empty keeps overlay.\(key))",
+        locations: locations, into: &config, validate: { $0.isEmpty || isValidHexColor($0) },
+        assign: { value, config in
+          config.overlay.dark[keyPath: field] = value
+        })
+    }
+    warnUnknownKeys(
+      in: table, known: Set(keys.map(\.0)), path: ["overlay", "dark"], locations: locations,
+      into: &config)
   }
 
   private static func applyDebug(
@@ -1404,9 +1882,9 @@ enum ConfigLoader {
             scope: scope,
             rawKey: key,
             key: canonical,
-            action: parsed.action,
-            repeatsOnFinalKey: parsed.repeatsOnFinalKey,
-            location: location ?? ConfigLocation(line: 1, column: 1)))
+            value: parsed,
+            location: location ?? ConfigLocation(line: 1, column: 1),
+            file: sourceURL?.path))
       case .failure(let error):
         config.addDiagnostic(
           error.message(mappingKey: key),
@@ -1566,6 +2044,15 @@ enum ConfigLoader {
       key: key,
       action: action,
       repeatsOnFinalKey: repeatsOnFinalKey)
+    // Mapping a key a lower layer removed takes it back.
+    if let removed = config.mode.unmapped[scope] {
+      let remaining = removed.filter {
+        $0 != key
+          && (mapping.nativeHotkey == nil
+            || ModeMapping.parseNativeHotkey($0) != mapping.nativeHotkey)
+      }
+      config.mode.unmapped[scope] = remaining.isEmpty ? nil : remaining
+    }
     switch scope {
     case .all:
       config.mode.all.removeAll { $0.key == key }
@@ -1576,9 +2063,34 @@ enum ConfigLoader {
     case .insert:
       config.mode.insert.removeAll { $0.key == key }
       config.mode.insert.append(mapping)
+    case .terminal:
+      config.mode.terminal.removeAll { $0.key == key }
+      config.mode.terminal.append(mapping)
+    case .command:
+      config.mode.command.removeAll { $0.key == key }
+      config.mode.command.append(mapping)
     }
   }
 
+  /// `"<key>" = false`: delete the key from its table, including a chord
+  /// spelled another way, and remember it so plugin mappings stay off it.
+  private static func removeModeMapping(scope: ModeScope, key: String, into config: inout Config) {
+    config.mode.unmapped[scope, default: []].insert(key)
+    let chord = ModeMapping.parseNativeHotkey(key)
+    let removed: (ModeMapping) -> Bool = { mapping in
+      mapping.key == key || (chord != nil && mapping.nativeHotkey == chord)
+    }
+    switch scope {
+    case .all: config.mode.all.removeAll(where: removed)
+    case .normal: config.mode.normal.removeAll(where: removed)
+    case .insert: config.mode.insert.removeAll(where: removed)
+    case .terminal: config.mode.terminal.removeAll(where: removed)
+    case .command: config.mode.command.removeAll(where: removed)
+    }
+  }
+
+  /// Every layer's entries in layer order, so a later layer's removal or
+  /// re-mapping of a key wins.
   private static func applyPendingModeMappings(
     _ mappings: [PendingModeMapping],
     into config: inout Config
@@ -1587,327 +2099,179 @@ enum ConfigLoader {
       if mapping.key.contains("<leader>"), mapping.scope != .normal {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" uses <leader> outside [mode.normal.mappings]",
-          location: mapping.location)
+          location: mapping.location, file: mapping.file)
         continue
       }
       guard let key = resolvedMappingKey(mapping.key, scope: mapping.scope, config: config) else {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" uses <leader> but mode.normal.leader is not set",
-          location: mapping.location)
+          location: mapping.location, file: mapping.file)
         continue
       }
-      setModeMapping(
-        scope: mapping.scope,
-        key: key,
-        action: mapping.action,
-        repeatsOnFinalKey: mapping.repeatsOnFinalKey,
-        into: &config)
+      if mapping.scope == .command, ModeMapping.parseNativeHotkey(key) == nil {
+        config.addDiagnostic(
+          "mapping \"\(mapping.rawKey)\" in [mode.command.mappings] must be a single modified key",
+          location: mapping.location, file: mapping.file)
+        continue
+      }
+      switch mapping.value {
+      case .mapping(let action, let repeatsOnFinalKey):
+        setModeMapping(
+          scope: mapping.scope,
+          key: key,
+          action: action,
+          repeatsOnFinalKey: repeatsOnFinalKey,
+          into: &config)
+      case .removal:
+        removeModeMapping(scope: mapping.scope, key: key, into: &config)
+      }
     }
   }
 
   private static func applyStatusBarTemplates(into config: inout Config) {
-    let normalizedTemplate = FlashStatusBarTemplateEngine.normalizedTemplate(
+    for name in config.statusBar.sources.keys {
+      if config.statusBar.sourcesUsingDefaultInterval.contains(name) {
+        config.statusBar.sources[name]?.intervalSeconds = config.statusBar.refreshIntervalSeconds
+      }
+      config.statusBar.sources[name]?.timeoutSeconds = config.statusBar.commandTimeoutSeconds
+    }
+    func optionDependencies(
+      _ options: [String: String], path: String, into config: inout Config
+    ) -> [String: StatusFormatDependencies] {
+      var dependencies: [String: StatusFormatDependencies] = [:]
+      for name in options.keys.sorted() {
+        let program = StatusFormatProgram.compile(
+          source: options[name] ?? "", origin: StatusFormatOrigin("\(path).\(name)"))
+        recordStatusFormatDiagnostics(program, path: "\(path).\(name)", into: &config)
+        dependencies[name] = program.dependencies
+      }
+      return dependencies
+    }
+    let sharedOptions = optionDependencies(
+      config.statusBar.options, path: "statusbar.options", into: &config)
+    /// `path` is the dotted config path, also the program's origin. Widget
+    /// templates may read `flash.widget.*`; elsewhere those values exist only
+    /// inside widgets, so a shared option may mention them but a bar or popup
+    /// template may not.
+    func compiled(
+      _ text: String, path: String, options: [String: String],
+      optionDependencies: [String: StatusFormatDependencies], widget: Bool = false,
+      into config: inout Config
+    ) -> FlashStatusBarTemplate {
+      let program = StatusFormatProgram.compile(source: text, origin: StatusFormatOrigin(path))
+      recordStatusFormatDiagnostics(program, path: path, into: &config)
+      var dependencies = program.dependencies
+      for option in optionDependencies.values { dependencies.formUnion(option) }
+      var variables: [FlashStatusBarTemplateVariable] = []
+      func diagnose(_ message: String) {
+        config.addDiagnostic("\(path) \(message)", location: config.valueLocations[path])
+      }
+      for token in dependencies.values.sorted() {
+        let source: FlashStatusBarSource?
+        if let sdk = FlashStatusBarTemplateEngine.sdkValue(for: token) {
+          source = .sdk(sdk)
+        } else if token.hasPrefix("flash.plugin.") {
+          let field = String(token.dropFirst("flash.plugin.".count))
+          switch field {
+          case "loaded_count": source = .plugin(.loadedCount)
+          case "ready_count": source = .plugin(.readyCount)
+          case "error_count": source = .plugin(.errorCount)
+          default:
+            if let dot = field.lastIndex(of: "."), dot != field.startIndex,
+              field.index(after: dot) < field.endIndex
+            {
+              source = .plugin(
+                .statusSegment(
+                  pluginID: String(field[..<dot]),
+                  name: String(field[field.index(after: dot)...])))
+            } else {
+              source = nil
+              diagnose("has invalid plugin value \(token)")
+            }
+          }
+        } else if token.hasPrefix("flash.source.") || token.hasPrefix("flash.history.") {
+          source = nil
+          let history = token.hasPrefix("flash.history.")
+          let name = String(token.dropFirst((history ? "flash.history." : "flash.source.").count))
+          if config.statusBar.sources[name] == nil {
+            diagnose("references undefined source \(name)")
+          } else if history, config.statusBar.sources[name]?.historyLength == nil {
+            diagnose("reads \(token), but statusbar.sources.\(name) sets no history")
+          }
+        } else if token.hasPrefix("flash.widget.") {
+          source = nil
+          let known = widget && ["flash.widget.name", "flash.widget.columns"].contains(token)
+          if !known, widget || program.dependencies.values.contains(token) {
+            diagnose("has unknown Flash value \(token)")
+          }
+        } else {
+          source = nil
+          if token.hasPrefix("flash.") { diagnose("has unknown Flash value \(token)") }
+        }
+        if let source {
+          variables.append(.init(id: "\(path).\(token)", token: token, source: source))
+        }
+      }
+      return FlashStatusBarTemplate(
+        template: text, variables: variables,
+        options: options, sourceNames: Set(config.statusBar.sources.keys),
+        origin: StatusFormatOrigin(path))
+    }
+    let normalized = FlashStatusBarTemplateEngine.normalizedTemplate(
       config.statusBar.template.template)
-    let variables = parseStatusBarTemplateVariables(
-      normalizedTemplate,
-      path: "template",
-      sourceURL: config.statusBar.templateSourceURL,
-      commandTimeout: config.statusBar.commandTimeoutSeconds,
-      into: &config)
-    config.statusBar.template = FlashStatusBarTemplate(
-      template: normalizedTemplate,
-      variables: variables)
-
+    config.statusBar.template = compiled(
+      normalized, path: "statusbar.template", options: config.statusBar.options,
+      optionDependencies: sharedOptions, into: &config)
     for name in config.statusBar.popups.keys.sorted() {
       guard let popup = config.statusBar.popups[name] else { continue }
-      // The one-line status template intentionally removes source newlines;
-      // popup bodies are multiline documents, so only normalize line endings.
-      let normalizedPopup = popup.template
-        .replacingOccurrences(of: "\r\n", with: "\n")
+      let text = popup.template.replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
-      let path = "popup.\(name)"
-      let variables = parseStatusBarTemplateVariables(
-        normalizedPopup,
-        path: path,
-        sourceURL: config.statusBar.popupSourceURLs[name],
-        commandTimeout: config.statusBar.commandTimeoutSeconds,
-        into: &config)
-      config.statusBar.popups[name] = FlashStatusBarTemplate(
-        template: normalizedPopup,
-        variables: variables)
+      config.statusBar.popups[name] = compiled(
+        text, path: "statusbar.popup.\(name)", options: config.statusBar.options,
+        optionDependencies: sharedOptions, into: &config)
     }
-  }
-
-  private static func parseStatusBarTemplateVariables(
-    _ raw: String,
-    path: String,
-    sourceURL: URL?,
-    commandTimeout: TimeInterval = 6,
-    into config: inout Config
-  ) -> [FlashStatusBarTemplateVariable] {
-    var variables: [FlashStatusBarTemplateVariable] = []
-    var index = raw.startIndex
-
-    func appendToken(_ token: String, source: FlashStatusBarSource) {
-      if variables.contains(where: { $0.token == token }) {
-        return
+    for name in config.widgets.keys.sorted() {
+      guard let widget = config.widgets[name] else { continue }
+      let path = "widgets.\(name)"
+      guard !widget.template.template.isEmpty else {
+        if widget.enabled {
+          config.addDiagnostic(
+            "\(path).template is required", location: config.valueLocations[path])
+        }
+        continue
       }
-      variables.append(
-        FlashStatusBarTemplateVariable(
-          id: statusBarVariableID(token, path: path),
-          token: token,
-          source: source))
-    }
-
-    // Recursive registration: a `#{…}` body may be a plain variable, a
-    // modifier wrapping one (`=N:`, `s///:`, `pN:`), or a conditional /
-    // comparator whose arguments are themselves format strings. Command and
-    // cycle sources must be discovered wherever they sit so their sections
-    // get scheduled.
-    func registerLeaf(_ token: String, rawBody: String) {
-      if let source = parseStatusBarTemplateSource(
-        token, sourceURL: sourceURL, commandTimeout: commandTimeout)
+      var dependencies = sharedOptions
+      for (option, local) in optionDependencies(
+        widget.options, path: "\(path).options", into: &config)
       {
-        appendToken(token, source: source)
-      } else {
+        dependencies[option] = local
+      }
+      let options = config.statusBar.options.merging(widget.options) { _, local in local }
+      let template = compiled(
+        widget.template.template, path: "\(path).template", options: options,
+        optionDependencies: dependencies, widget: true, into: &config)
+      config.widgets[name]?.template = template
+      let interactive = ([widget.template.template] + Array(widget.options.values))
+        .flatMap(StatusFormatDocument.styleTokens(in:))
+        .compactMap { token in
+          ["link=", "popup=", "range="].first { token.lowercased().hasPrefix($0) }
+        }
+      if widget.enabled, !interactive.isEmpty {
         config.addDiagnostic(
-          "statusbar.\(path) template variable \"\(rawBody)\" must be mode, active_app_name, active_bundle_identifier, date, host, host_short, user, uid, pid, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in a tmux modifier: #{=N:…}, #{?cond,a,b}, #{s/re/repl/:…}, #{pN:…}); tmux session/window/pane state renders through #{plugin:tmux.<segment>}",
-          location: config.valueLocations["statusbar.\(path)"])
+          "\(path) uses \(Set(interactive).sorted().joined(separator: ", ")) but widgets are "
+            + "click-through; links, popups and click ranges do nothing there",
+          location: config.valueLocations["\(path).template"])
       }
     }
-
-    func registerOperand(_ operand: String, rawBody: String) {
-      let trimmed = operand.trimmed
-      guard !trimmed.isEmpty else { return }
-      if trimmed.contains("#{") {
-        registerFormatString(trimmed)
-      } else {
-        registerLeaf(trimmed, rawBody: rawBody)
-      }
-    }
-
-    func registerBody(_ body: String) {
-      if body.hasPrefix("?") {
-        let args = FlashStatusBarMarkup.splitFormatArguments(body.dropFirst())
-        guard args.count >= 2 else {
-          config.addDiagnostic(
-            "statusbar.\(path) conditional \"#{\(body)}\" must be #{?condition,true,false}",
-            location: config.valueLocations["statusbar.\(path)"])
-          return
-        }
-        registerOperand(args[0], rawBody: body)
-        for branch in args.dropFirst() { registerFormatString(branch) }
-        return
-      }
-      for op in FlashStatusBarTemplateEngine.FormatExpansion.comparators
-      where body.hasPrefix(op + ":") {
-        // Comparator arguments are FORMAT strings at render time — literal
-        // text compares as itself (`#{==:#{mode},NORMAL}`). Only nested
-        // `#{…}` bodies name variables, so a bare literal like NORMAL must
-        // not be validated (and rejected) as a variable name.
-        for arg in FlashStatusBarMarkup.splitFormatArguments(body.dropFirst(op.count + 1)) {
-          registerFormatString(arg)
-        }
-        return
-      }
-      if body.hasPrefix("s/") {
-        if let substitution =
-          FlashStatusBarTemplateEngine.FormatExpansion.parseSubstitution(body)
-        {
-          registerOperand(substitution.operand, rawBody: body)
-        } else {
-          config.addDiagnostic(
-            "statusbar.\(path) substitution \"#{\(body)}\" must be #{s/pattern/replacement/:variable}",
-            location: config.valueLocations["statusbar.\(path)"])
-        }
-        return
-      }
-      if let padding = FlashStatusBarTemplateEngine.FormatExpansion.parsePadding(body) {
-        registerOperand(padding.operand, rawBody: body)
-        return
-      }
-      let (token, _) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
-      registerOperand(token, rawBody: body)
-    }
-
-    func registerFormatString(_ format: String) {
-      var i = format.startIndex
-      while i < format.endIndex {
-        guard format[i] == "#",
-          let next = format.index(i, offsetBy: 1, limitedBy: format.endIndex),
-          next < format.endIndex
-        else {
-          i = format.index(after: i)
-          continue
-        }
-        if format[next] == "#" {
-          i = format.index(after: next)
-          continue
-        }
-        if format[next] == "{",
-          let close = FlashStatusBarMarkup.matchingBrace(in: format, openingAt: next)
-        {
-          registerBody(String(format[format.index(after: next)..<close]).trimmed)
-          i = format.index(after: close)
-          continue
-        }
-        i = format.index(after: i)
-      }
-    }
-
-    while index < raw.endIndex {
-      // `##` is a literal `#` per tmux's escape convention — skip both so
-      // we don't trip on the second `#` looking like the start of a token.
-      if raw[index] == "#",
-        let next = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        next < raw.endIndex,
-        raw[next] == "#"
-      {
-        index = raw.index(after: next)
-        continue
-      }
-      if raw[index] == "#",
-        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        open < raw.endIndex,
-        raw[open] == "{"
-      {
-        guard let close = FlashStatusBarMarkup.matchingBrace(in: raw, openingAt: open) else {
-          config.addDiagnostic(
-            "statusbar.\(path) contains an unterminated template variable",
-            location: config.valueLocations["statusbar.\(path)"])
-          return variables
-        }
-        let bodyStart = raw.index(after: open)
-        registerBody(String(raw[bodyStart..<close]).trimmed)
-        index = raw.index(after: close)
-        continue
-      }
-      if raw[index] == "#",
-        let aliasIndex = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        aliasIndex < raw.endIndex,
-        let token = FlashStatusBarTemplateEngine.tmuxShortFormatToken(for: raw[aliasIndex]),
-        let source = parseStatusBarTemplateSource(
-          token, sourceURL: sourceURL, commandTimeout: commandTimeout)
-      {
-        appendToken(token, source: source)
-        index = raw.index(after: aliasIndex)
-        continue
-      }
-      index = raw.index(after: index)
-    }
-
-    return variables
   }
 
-  private static func statusBarVariableID(_ token: String, path: String = "template") -> String {
-    "statusbar.\(path).\(token)"
-  }
-
-  private static func parseStatusBarTemplateSource(
-    _ token: String,
-    sourceURL: URL?,
-    commandTimeout: TimeInterval = 6
-  ) -> FlashStatusBarSource? {
-    let trimmed = token.trimmed
-    guard !trimmed.isEmpty else { return nil }
-    if let sdkValue = FlashStatusBarTemplateEngine.sdkValue(for: trimmed) {
-      return .sdk(sdkValue)
-    }
-
-    // Any other bare identifier is a config error (the caller emits the
-    // diagnostic). The old dialect accepted every tmux-looking name and
-    // rendered it as "", which silently swallowed typos and the tmux-state
-    // names (`session_name`, `window_name`, …) that now render through
-    // `#{plugin:tmux.<segment>}`.
-    guard let colon = trimmed.firstIndex(of: ":") else { return nil }
-    let kind = String(trimmed[..<colon]).lowercased()
-    let body = String(trimmed[trimmed.index(after: colon)...])
-      .trimmed
-    guard !body.isEmpty else { return nil }
-
-    // Split an optional `=arg` off the kind: `script=30` → ("script", "30").
-    // The arg is a per-source poll cadence in seconds (`#{script=30:…}`,
-    // `#{command=30:…}`), except for cycle where it is `R` (rotation) or
-    // `R/N` (rotation / poll).
-    let kindName: String
-    let kindArg: String?
-    if let eq = kind.firstIndex(of: "=") {
-      kindName = String(kind[..<eq])
-      kindArg = String(kind[kind.index(after: eq)...])
-    } else {
-      kindName = kind
-      kindArg = nil
-    }
-
-    func parsedRefreshSeconds(_ raw: String?) -> TimeInterval?? {
-      // Returns .some(nil) for "no arg", .some(value) for a valid arg, and
-      // nil (outer) for an invalid arg so callers can reject the token.
-      guard let raw else { return .some(nil) }
-      guard let value = Int(raw), value > 0 else { return nil }
-      return .some(TimeInterval(value))
-    }
-
-    func scriptCommand(_ body: String, refreshSeconds: TimeInterval?) -> FlashStatusBarCommand? {
-      // `#{script:path}` runs the script with no args; `#{script:path --foo
-      // --bar}` passes the trailing whitespace-separated tokens through as
-      // positional argv. Splitting on whitespace is intentionally crude —
-      // the templates only pass simple option flags and the user wrote the
-      // string by hand.
-      let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-      guard let scriptPath = parts.first else { return nil }
-      let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
-      let args = Array(parts.dropFirst())
-      if args.isEmpty {
-        return .script(
-          resolved, timeoutSeconds: commandTimeout, refreshSeconds: refreshSeconds)
-      }
-      return .scriptWithArgs(
-        resolved, args: args, timeoutSeconds: commandTimeout, refreshSeconds: refreshSeconds)
-    }
-
-    switch kindName {
-    case "plugin":
-      guard kindArg == nil else { return nil }
-      switch body {
-      case "loaded_count": return .plugin(.loadedCount)
-      case "ready_count": return .plugin(.readyCount)
-      case "error_count": return .plugin(.errorCount)
-      default:
-        guard let dot = body.lastIndex(of: ".") else { return nil }
-        let pluginID = String(body[..<dot]).trimmed
-        let segmentName = String(body[body.index(after: dot)...]).trimmed
-        guard !pluginID.isEmpty, !segmentName.isEmpty else { return nil }
-        return .plugin(.statusSegment(pluginID: pluginID, name: segmentName))
-      }
-    case "script":
-      guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
-      guard let command = scriptCommand(body, refreshSeconds: refresh) else { return nil }
-      return .command(command)
-    case "command":
-      guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
-      return .command(.shell(body, timeoutSeconds: commandTimeout, refreshSeconds: refresh))
-    case "cycle":
-      // `#{cycle:path}` rotates its output lines every 60 s; `#{cycle=R:path}`
-      // every R seconds. `#{cycle=R/N:path}` additionally re-runs the script
-      // every N seconds (default: max(R, [statusbar] interval) — a cycle can't
-      // show lines faster than it rotates, so polling faster is waste).
-      var period = 60
-      var refresh: TimeInterval?
-      if let kindArg {
-        let pieces = kindArg.split(separator: "/", omittingEmptySubsequences: false)
-        guard pieces.count <= 2, let parsedPeriod = Int(pieces[0]), parsedPeriod > 0 else {
-          return nil
-        }
-        period = parsedPeriod
-        if pieces.count == 2 {
-          guard let parsedRefresh = Int(pieces[1]), parsedRefresh > 0 else { return nil }
-          refresh = TimeInterval(parsedRefresh)
-        }
-      }
-      guard let command = scriptCommand(body, refreshSeconds: refresh) else { return nil }
-      return .cycle(command: command, periodSeconds: period)
-    default:
-      return nil
+  private static func recordStatusFormatDiagnostics(
+    _ program: StatusFormatProgram, path: String, into config: inout Config
+  ) {
+    for diagnostic in program.diagnostics {
+      config.addDiagnostic(
+        "\(path): \(diagnostic.message) (format byte \(diagnostic.span.bytes.lowerBound))",
+        location: config.valueLocations[path])
     }
   }
 
@@ -1930,14 +2294,23 @@ enum ConfigLoader {
     _ value: any TOMLValueConvertible,
     sourceURL: URL?
   ) -> Result<ParsedModeMappingValue, ModeMappingValueError> {
+    // `false` removes the key; `true` means nothing.
+    if let flag = value.bool {
+      return flag ? .failure(.invalidShape) : .success(.removal)
+    }
     if let table = value.table {
-      if let unknown = table.keys.sorted().first(where: { $0 != "action" && $0 != "repeat" }) {
+      if let unknown = table.keys.sorted().first(where: { $0 != "command" && $0 != "repeat" }) {
         return .failure(.unknownOption(unknown))
       }
-      guard let actionValue = table["action"],
-        let action = parseMappingActionValue(actionValue, sourceURL: sourceURL)
+      guard let commandValue = table["command"],
+        let action = parseMappingCommandValue(commandValue, sourceURL: sourceURL)
       else {
-        return .failure(.invalidAction)
+        if let commandValue = table["command"], let argv = stringArrayValue(commandValue),
+          !argv.isEmpty
+        {
+          return .failure(commandError(argv))
+        }
+        return .failure(.invalidCommandValue)
       }
       let repeatsOnFinalKey: Bool
       if let repeatValue = table["repeat"] {
@@ -1946,16 +2319,29 @@ enum ConfigLoader {
       } else {
         repeatsOnFinalKey = false
       }
-      return .success(
-        ParsedModeMappingValue(action: action, repeatsOnFinalKey: repeatsOnFinalKey))
+      return .success(.mapping(action, repeatsOnFinalKey: repeatsOnFinalKey))
     }
-    guard let action = parseMappingActionValue(value, sourceURL: sourceURL) else {
+    guard let action = parseMappingCommandValue(value, sourceURL: sourceURL) else {
+      if let argv = stringArrayValue(value), let head = argv.first, !head.isEmpty {
+        return .failure(commandError(argv))
+      }
       return .failure(.invalidShape)
     }
-    return .success(ParsedModeMappingValue(action: action, repeatsOnFinalKey: false))
+    return .success(.mapping(action, repeatsOnFinalKey: false))
   }
 
-  private static func parseMappingActionValue(
+  /// Why a non-empty argv did not resolve: a CLI query named as a Flash
+  /// verb, or an unknown verb or invalid arguments.
+  private static func commandError(_ argv: [String]) -> ModeMappingValueError {
+    if argv.count >= 2, mappingCommandHeadNamesFlash(argv[0]),
+      FlashQuery(rawValue: argv[1]) != nil
+    {
+      return .queryCommand(argv[1])
+    }
+    return .invalidCommand(argv.joined(separator: " "))
+  }
+
+  private static func parseMappingCommandValue(
     _ value: any TOMLValueConvertible,
     sourceURL: URL?
   ) -> MappingCommand? {
@@ -1968,11 +2354,7 @@ enum ConfigLoader {
     // Flash verb args may legitimately contain slashes (`--input=...`,
     // `--name=/Applications/...`) and must not be path-resolved.
     let resolvedHead = resolveCommandArgument(head, sourceURL: sourceURL)
-    if mappingCommandHeadNamesFlash(head) || mappingCommandHeadNamesFlash(resolvedHead) {
-      return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
-    }
-    let resolved = argv.map { resolveCommandArgument($0, sourceURL: sourceURL) }
-    return parseMappingCommand(argv: resolved)
+    return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
   }
 
   private static func resolveCommandArgument(_ value: String, sourceURL: URL?) -> String {

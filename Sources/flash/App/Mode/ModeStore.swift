@@ -9,6 +9,9 @@ import Foundation
 // practice) simply apply no effects.
 final class ModeStore {
   private(set) var mode: Mode
+  private enum Delivery { case idle, performing }
+  private var delivery = Delivery.idle
+  private var pendingEvents: [ModeEvent] = []
 
   /// Installed by the executor (AppDelegate). Receives the effects plus the
   /// previous/next mode so it can run leave/enter bookkeeping.
@@ -20,10 +23,16 @@ final class ModeStore {
 
   @discardableResult
   func dispatch(_ event: ModeEvent) -> Mode {
-    let previous = mode
-    let (next, effects) = ModeReducer.reduce(mode, event)
-    mode = next
-    perform?(effects, previous, next)
-    return next
+    pendingEvents.append(event)
+    guard delivery == .idle else { return mode }
+    delivery = .performing
+    defer { delivery = .idle }
+    while !pendingEvents.isEmpty {
+      let previous = mode
+      let (next, effects) = ModeReducer.reduce(mode, pendingEvents.removeFirst())
+      mode = next
+      perform?(effects, previous, next)
+    }
+    return mode
   }
 }

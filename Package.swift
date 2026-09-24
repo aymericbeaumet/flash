@@ -39,10 +39,21 @@ let package = Package(
     .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0")
   ],
   targets: [
+    .binaryTarget(name: "GhosttyVt", path: "build/ghostty/ghostty-vt.xcframework"),
+    // The terminal hot path (frame extraction, cell decoding, drawing) stays
+    // optimized in the incremental dev build too: these two small modules are
+    // exactly the per-cell loops an unoptimized build makes visibly sluggish.
+    .target(
+      name: "CFlashTerminal", dependencies: ["GhosttyVt"], path: "Sources/CFlashTerminal",
+      publicHeadersPath: "include",
+      cSettings: [.unsafeFlags(["-O2"], .when(configuration: .debug))]),
+    .target(
+      name: "FlashTerminal", dependencies: ["CFlashTerminal"],
+      swiftSettings: strictSwiftSettings + [.unsafeFlags(["-O"], .when(configuration: .debug))]),
     .executableTarget(
       name: "flash",
       dependencies: [
-        "FlashCore", "FlashProviders",
+        "FlashCore", "FlashProviders", "FlashTerminal",
         .product(name: "TOMLKit", package: "TOMLKit"),
       ],
       path: "Sources/flash",
@@ -100,9 +111,12 @@ let package = Package(
       swiftSettings: strictSwiftSettings
     ),
     .testTarget(
+      name: "TerminalTests", dependencies: ["FlashTerminal", "CFlashTerminal"],
+      swiftSettings: strictSwiftSettings),
+    .testTarget(
       name: "FlashTests",
       dependencies: [
-        "flash", "FlashCore", "FlashProviders",
+        "flash", "FlashCore", "FlashProviders", "FlashTerminal",
         "FlashIntegrationTestSupport", "FlashBrowserTestSupport",
       ],
       path: "Tests/FlashTests",

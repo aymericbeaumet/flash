@@ -47,10 +47,12 @@ enum PluginRuntimeState: String {
 }
 
 /// How (and whether) a plugin's child process is scheduled. Derived from the
-/// manifest alone.
+/// manifest and, for a status-bound plugin, whether a status surface shows it.
 enum PluginActivation: String {
   /// Spawned at startup and kept running: the manifest declares `sources`,
-  /// `query`, `hints`, `status`, or `listen`.
+  /// `query`, `hints`, `status`, or `listen` — a status-bound plugin
+  /// (`PluginManifest.isStatusBound`) only while the enabled bar or a desktop
+  /// widget shows it.
   case resident
   /// Stays unspawned until its first `perform` (the perform deadline absorbs
   /// the startup budget), then remains running.
@@ -71,6 +73,9 @@ struct PluginEvent {
   /// Process id of the focused app for the event. Some events embed this
   /// in `payload.pid` already.
   var pid: pid_t?
+  /// The wire frame for this event, encoded once by `PluginManager.emit` and
+  /// shared by every listener instead of re-serializing the payload per plugin.
+  var encodedFrame: Data?
 }
 
 struct PluginStatus {
@@ -133,6 +138,28 @@ struct PluginStatus {
   }
 }
 
+/// One published status segment: plain markup, or a carousel whose lines the
+/// host rotates on its own clock (`FlashStatusBarCycleState`), rendering
+/// `prefix` once before the visible line and wrapping that line in
+/// `#[cyc]…#[nocyc]` so it takes the carousel transition.
+enum PluginStatusSegment: Equatable {
+  case text(String)
+  case carousel(prefix: String, lines: [String], cycleSeconds: TimeInterval)
+
+  static func carouselLine(prefix: String, line: String) -> String {
+    prefix + "#[cyc]" + line + "#[nocyc]"
+  }
+
+  /// The segment as the debug inspector shows it.
+  var debugText: String {
+    switch self {
+    case .text(let text): return text
+    case .carousel(let prefix, let lines, let seconds):
+      return "\(prefix)⟳\(Int(seconds))s " + lines.joined(separator: " | ")
+    }
+  }
+}
+
 /// The four fields the status bar actually renders, published every clock
 /// tick and focus change. Unlike `PluginStatus` this carries no rusage
 /// sample and no commands copy — keep it allocation-light.
@@ -140,7 +167,7 @@ struct PluginStatusBarInfo {
   var id: String
   var state: String
   var hasError: Bool
-  var statusSegments: [String: String]
+  var statusSegments: [String: PluginStatusSegment]
 }
 
 /// One reply to the unified `perform` method: the universal trichotomy.
@@ -160,10 +187,18 @@ struct PluginWireTarget {
   var role: String?
   var label: String?
   var url: String?
+  var contextID: String? = nil
   var pid: pid_t?
   var entersInsertMode: Bool
   var sourceID: String
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.
   var priority: FlashPriority
+
+  func capturedTarget(contextPID: pid_t) -> JumpTarget {
+    JumpTarget(
+      id: id, frame: frame, role: role, accessibilityLabel: label, url: url,
+      contextID: contextID, pid: pid ?? contextPID, entersInsertMode: entersInsertMode,
+      priority: priority, providerID: sourceID)
+  }
 }

@@ -1,5 +1,8 @@
-# Python drives the language-neutral protocol conformance runner. Official
-# plugins are Rust crates built with rustup-managed Cargo; build-plugins.sh
-# uses rustup's multi-target support for universal release builds.
+# Python drives the plugin publication test (Scripts/test-build-plugins.py),
+# the status-format oracle, the plugin benchmark, the fixture collector and
+# the inline helpers in the build scripts. Official plugins are Rust crates
+# built with rustup-managed Cargo; build-plugins.sh uses rustup's
+# multi-target support for universal release builds.
 [tools]
-python = "3.13"
+python = "3.14"
+zig = "0.16.0"

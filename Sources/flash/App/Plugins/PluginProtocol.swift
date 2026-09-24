@@ -1,7 +1,7 @@
 import Foundation
 
 /// The host's copy of the plugin wire-protocol constants. The single source
-/// of truth is `Plugins/_flash_plugin_specs/protocol.json`;
+/// of truth is `Plugins/_flash_plugin_rust/protocol.json`;
 /// `PluginProtocolParityTests` reads that file and asserts every value here
 /// equals it, so a drift fails the build instead of shipping a skewed host.
 enum PluginProtocol {
@@ -17,9 +17,12 @@ enum PluginProtocol {
   static let startupDeadlineMs = 5_000
   /// Per-keystroke `evaluate`.
   static let queryDeadlineMs = 50
-  /// `search` + `hints` (late replies dropped, non-fatal). Config
+  /// `search` (late replies dropped, non-fatal). Config
   /// `[flashlight] live_query_timeout_ms` tunes the live value.
   static let liveDeadlineMs = 1_000
+  /// Activation `hints` pull. Blocks the AX queue ahead of the prepared
+  /// model, so it is a fixed latency ceiling rather than a config knob.
+  static let hintsDeadlineMs = 500
   /// All four `perform` kinds; a manifest `commands[].timeout_ms` overrides
   /// per entry.
   static let performDeadlineMs = 10_000
@@ -52,6 +55,15 @@ enum PluginProtocol {
   static let maxFetchResponseBytes = 1_048_576
   static let fetchTimeoutMs = 8_000
 
+  // MARK: - Transport admission (per child)
+
+  static let maxPendingRequests = 64
+  static let maxHostRPCs = 64
+  static let maxOutboundFrames = 256
+  static let maxOutboundBytes = 20 * 1_024 * 1_024
+  static let maxInboundFrames = 256
+  static let maxInboundBytes = 20 * 1_024 * 1_024
+
   // MARK: - Perform
 
   /// The four `perform` kinds, the universal action vocabulary.
@@ -69,6 +81,10 @@ enum PluginProtocol {
   static let hostClosedError = "host closed stdin"
   static let hostCallTimeoutError = "host call timed out"
   static let frameOverflowError = "response exceeded outbound frame limit"
+  static let requestCapacityError = "plugin request capacity exceeded"
+  static let hostCallCapacityError = "host call capacity exceeded"
+  /// A plugin's read-only handler ran out of the request's `deadline_ms`.
+  static let deadlineExceededError = "deadline exceeded"
   static func capabilityDeniedError(_ capability: String) -> String {
     "missing \(capability) capability"
   }

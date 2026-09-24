@@ -41,7 +41,6 @@ extension AppDelegate {
   func watchConfigFile() {
     teardownConfigWatchers()
     let candidates = ConfigLoader.candidatePaths(
-      arguments: CommandLine.arguments,
       environment: ProcessInfo.processInfo.environment)
     var watchedDirs = Set<String>()
     for url in candidates {
@@ -51,6 +50,15 @@ extension AppDelegate {
         attachWatcher(forPath: dir)
       }
     }
+    // Re-arming the watchers above is always needed (the inode may have been
+    // replaced); re-applying the config is not when its bytes are unchanged.
+    let contents = try? Data(
+      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
+    if let lastAppliedConfigFileContents, contents == lastAppliedConfigFileContents {
+      FlashLog.trace("[config] reload_skipped reason=unchanged")
+      return
+    }
+    lastAppliedConfigFileContents = contents
     reloadConfig()
   }
 
@@ -70,12 +78,23 @@ extension AppDelegate {
     let mask: DispatchSource.FileSystemEvent =
       [.write, .delete, .rename, .extend]
     let source = makeWatcher(fd: fd, eventMask: mask) { [weak self] _ in
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) {
-        [weak self] in
-        self?.watchConfigFile()
-      }
+      self?.scheduleConfigReload()
     }
     configSources.append(source)
+  }
+
+  /// One editor save produces a burst of vnode events (write, extend, attrib,
+  /// rename of the temp file, …). Coalesce the burst into a single trailing
+  /// re-watch + reload instead of one synchronous reload per event.
+  private func scheduleConfigReload() {
+    configReloadWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.configReloadWork = nil
+      self.watchConfigFile()
+    }
+    configReloadWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
   }
 
   private func makeWatcher(
@@ -98,6 +117,7 @@ extension AppDelegate {
   /// then publish to overlay + monitor under their internal locks. Every
   /// future activation snapshots the new config at the start of its walk.
   private func reloadConfig() {
+    MainThreadWatchdog.note("config_reload")
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
@@ -105,6 +125,8 @@ extension AppDelegate {
       FlashProcessEnvironment.shared.refresh()
     }
     let cfg = ConfigLoader.load()
+    if hintSession.isActive || activationInFlight { cancelOverlay() }
+    let previousAutostart = config.app.autostart
     // Rebuild the frecency store only when its tuning actually changed —
     // reconstruction reloads the on-disk snapshot, which is fine but not
     // worth doing on every unrelated reload.
@@ -138,19 +160,32 @@ extension AppDelegate {
     // config on every load — the TOML file is the single source of truth
     // for both (defaults: visible + autostart).
     statusItemController.apply(enabled: cfg.app.menuBarIcon)
-    AutoLaunch.reconcile(enabled: cfg.app.autostart)
+    // SMAppService status/register is an XPC round trip; reconcile once at
+    // startup and afterwards only when the setting changes.
+    if !autoLaunchReconciled || cfg.app.autostart != previousAutostart {
+      autoLaunchReconciled = true
+      AutoLaunch.reconcile(enabled: cfg.app.autostart)
+    }
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     overlay.statusBarPopupStyle = cfg.statusBar.popupStyle
     overlay.modeLabels = cfg.mode.labels
-    overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
+    overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
-    overlay.normalModePassthroughKeyCodes = cfg.mode.normalPassthroughKeyCodes
-    overlay.normalModePassthroughModifiers = cfg.mode.normalPassthroughModifiers
+    // Rebuilt on every load: the setting may have changed, and so may the
+    // installed layouts an explicit input-source ID names.
+    keyboardLayoutMonitor.apply(setting: KeyboardLayout.Setting(cfg.app.keyboardLayout) ?? .auto)
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
       popupTemplates: cfg.statusBar.popups,
+      options: cfg.statusBar.options,
+      sources: cfg.statusBar.sources,
+      terminalPopupNames: Set(cfg.terminals.keys).union(
+        cfg.invalidTerminalNames.intersection(
+          overlay.statusTerminals.definitions.keys)),
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
+    statusBarController?.setBar(enabled: cfg.statusBar.enabled)
+    statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
     pluginManager.emit(
@@ -159,28 +194,35 @@ extension AppDelegate {
         payload: [:],
         bundleID: nil))
     configureDebugServer(for: cfg)
+    // After the inspector's sink is added or removed: the ping watchdog runs
+    // only while debug output has a reader.
+    monitor.mainThreadWatchdog.setEnabled(FlashLog.wouldEmit(.debug))
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
-    registry.refreshRunningApplications()
+    registry.scheduleRunningApplicationsRefresh()
     monitor.updateConfig(cfg)
     // The status bar's visibility is an explicit, standalone config switch —
     // it is NOT derived from advanced mode. `[statusbar] enabled` alone
     // decides whether the bar (and its reserved screen space) appears.
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
-    applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
+    NativeMenuBarAutoHide.reconcile(hidden: statusBarVisible)
+    windowLayoutManager.setDeclaredLayouts(cfg.mode.declaredWindowLayouts)
     windowLayoutManager.screenParametersDidChange(
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
       forceRecovery: false)
-    if statusBarVisible {
+    // The status controller runs for the bar and for desktop widgets alike.
+    if statusBarVisible || !cfg.enabledWidgets.isEmpty {
       statusBarController?.start()
     } else {
       statusBarController?.stop()
-      overlay.setStatusRightText("")
     }
-    // Advanced mode is on iff an `enter_normal_mode` binding exists. Turning it
-    // off drops to a non-capturing insert; the reducer re-renders either way.
+    widgetController?.apply(
+      widgets: cfg.enabledWidgets, statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: cfg.statusBar.monitor, screenCapture: cfg.overlay.screenCapture)
+    // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
+    // off disables capture; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
     applyModeOverlay()
     // Recompute the effective mappings (config defaults + plugin mappings)
@@ -190,6 +232,7 @@ extension AppDelegate {
     invalidateEffectiveMappings()
     refreshEffectiveMappings(
       for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    reloadTerminalPopupConfiguration()
   }
 
   /// Plugins emit a state notification on every log line, lifecycle
@@ -201,6 +244,7 @@ extension AppDelegate {
     pluginStateRefreshWork?.cancel()
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
+      self.reconcileClipboardMonitor()
       self.statusBarController?.refreshPluginSections()
       self.debugServer?.broadcastState()
     }
@@ -285,8 +329,39 @@ extension AppDelegate {
         "localized_name": app?.localizedName ?? NSNull(),
         "pid": focusedPID,
       ],
-      "mode": "\(flashMode)",
+      "mode": String(describing: modeStore.mode.label),
+      "hints": hintSession.hints.map { hint -> [String: Any] in
+        [
+          "label": hint.label,
+          "accessibility_label": hint.target.accessibilityLabel ?? "",
+          "role": hint.target.role ?? "",
+          "enters_insert_mode": hint.target.entersInsertMode,
+          "frame": [
+            "x": hint.target.frame.origin.x,
+            "y": hint.target.frame.origin.y,
+            "width": hint.target.frame.width,
+            "height": hint.target.frame.height,
+          ],
+        ]
+      },
+      "hint_command": String(describing: hintSession.command),
+      "activation_in_flight": activationInFlight,
+      "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),
+      "statusbar": overlay?.statusBarDiagnostics() ?? [:],
+      "widgets": widgetController?.diagnostics() ?? [:],
+      "windows": NSApp.windows.map { window -> [String: Any] in
+        [
+          "class": String(describing: type(of: window)),
+          "frame": [
+            Double(window.frame.minX), Double(window.frame.minY), Double(window.frame.width),
+            Double(window.frame.height),
+          ],
+          "visible": window.isVisible,
+          "level": window.level.rawValue,
+          "number": window.windowNumber,
+        ]
+      },
       "plugins": statuses.map(\.jsonObject),
     ]
   }
@@ -297,56 +372,16 @@ extension AppDelegate {
     dispatchMode(.startup(advancedEnabled: hasNormalModeBinding(config)))
   }
 
-  func applySystemStatusBarSpaceReservation(enabled: Bool) {
-    let current = NSApp.presentationOptions
-    let updated = Self.systemStatusBarSpaceReservationPresentationOptions(
-      current: current,
-      enabled: enabled)
-    let changed = updated != current
-    if changed {
-      NSApp.presentationOptions = updated
-    }
-    FlashLog.debug("[statusbar] system_menu_bar_reservation enabled=\(enabled) changed=\(changed)")
-  }
-
-  static func systemStatusBarSpaceReservationPresentationOptions(
-    current: NSApplication.PresentationOptions,
-    enabled: Bool
-  ) -> NSApplication.PresentationOptions {
-    var options = current
-    if enabled {
-      options.remove(.autoHideMenuBar)
-    }
-    return options
-  }
-
   private func showConfigErrorAlertIfNeeded(for cfg: Config) {
     guard let message = cfg.loadingErrorAlertMessage else {
-      lastConfigErrorAlertMessage = nil
-      if configErrorAlertVisible {
-        configErrorAlertVisible = false
-        overlay.dismissAlert()
+      if let shown = shownConfigError {
+        shownConfigError = nil
+        overlay.dismissToast(token: shown.toastToken)
       }
       return
     }
-    guard message != lastConfigErrorAlertMessage else { return }
-    lastConfigErrorAlertMessage = message
-    configErrorAlertVisible = true
+    guard message != shownConfigError?.message else { return }
     overlay.displayAlert(message, duration: 8, style: .error)
-  }
-
-  func logPermissionState() {
-    let trusted = AXIsProcessTrusted()
-    // Seed the activation-path cache so the very first ctrl+space
-    // doesn't pay the AX IPC cost just to discover the user already
-    // granted permission at some prior session.
-    if trusted { cachedAccessibilityTrusted = true }
-    if !trusted {
-      FlashLog.warn(
-        "[ax] accessibility permission not granted. "
-          + "Grant it in System Settings → Privacy & Security → Accessibility "
-          + "for /Applications/Flash.app."
-      )
-    }
+    shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
 }

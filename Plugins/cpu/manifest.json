@@ -20,11 +20,15 @@
   ],
   "status": [
     "summary",
-    "details"
+    "label",
+    "details",
+    "percent",
+    "history",
+    "load",
+    "uptime"
   ],
   "sandbox": {
     "exec": [
-      "/usr/sbin/iostat",
       "/usr/sbin/ioreg"
     ]
   }

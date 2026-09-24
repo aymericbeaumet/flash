@@ -1,27 +1,29 @@
-use std::collections::VecDeque;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use flash_plugin::status::{duration_hours_minutes, percent, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    escape_status_text, inline_status_popup, run, run_command, CommandRequest, Context, Event,
-    PerformResponse, RefreshGate,
+    run, run_command, Color, CommandRequest, Context, Event, History, Markup, PerformResponse,
+    Preview, Published, RefreshGate, StatusValue, Style,
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// Safety poll only: `core:power.changed` (an IOKit power-source notification
+/// the host relays) drives every charge, source, and state change, so the
+/// timer merely bounds how stale the display can get if an event is missed.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
-const HISTORY_LEN: usize = 20;
-const DETAIL_LABEL_WIDTH: usize = 14;
 const PMSET: &str = "/usr/bin/pmset";
 const IOREG: &str = "/usr/sbin/ioreg";
 
+type ChargeHistory = History<20>;
+
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-static LAST_GOOD: LazyLock<Mutex<Option<StatusSegments>>> = LazyLock::new(|| Mutex::new(None));
+static LAST_GOOD: LazyLock<Mutex<Published<PowerStatus>>> = LazyLock::new(Mutex::default);
 static LAST_HEALTH: LazyLock<Mutex<Option<BatteryHealth>>> = LazyLock::new(|| Mutex::new(None));
 static LAST_HEALTH_ATTEMPT: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 static REFRESH_FAILURE_LOGGED: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
-static CHARGE_HISTORY: LazyLock<Mutex<VecDeque<f64>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static CHARGE_HISTORY: LazyLock<Mutex<ChargeHistory>> = LazyLock::new(Mutex::default);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BatteryState {
@@ -62,10 +64,35 @@ struct BatteryHealth {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct StatusSegments {
-    summary: String,
-    details: String,
-    plain_details: String,
+struct PowerStatus {
+    summary: Markup,
+    label: Markup,
+    preview: Preview,
+    /// Battery charge as a plain integer 0–100; empty (cleared) without a
+    /// battery.
+    percent: String,
+    /// `charging`, `discharging`, `charged` or `ac`; empty when unknown.
+    state: &'static str,
+}
+
+impl PowerStatus {
+    fn segments(&self) -> [(&'static str, StatusValue); 5] {
+        [
+            (
+                "summary",
+                StatusValue::text(self.summary.clone()).with_preview(self.preview.clone()),
+            ),
+            ("label", StatusValue::text(self.label.clone())),
+            ("details", StatusValue::text(self.preview.render())),
+            ("percent", plain(&self.percent)),
+            ("state", plain(self.state)),
+        ]
+    }
+}
+
+/// A raw segment's value as literal text: no styling and no preview.
+fn plain(value: &str) -> StatusValue {
+    StatusValue::text(Markup::text(value))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,7 +137,7 @@ impl FlashPlugin for Power {
 
     async fn on_event(&self, ctx: Context, event: Event) {
         if event.name == "core:power.changed" {
-            let _ = refresh_and_publish(&ctx, true).await;
+            let _ = refresh_and_publish(&ctx, false).await;
         }
     }
 
@@ -126,7 +153,7 @@ impl FlashPlugin for Power {
     }
 }
 
-async fn refresh_and_publish(ctx: &Context, force_health: bool) -> Option<StatusSegments> {
+async fn refresh_and_publish(ctx: &Context, force_health: bool) -> Option<PowerStatus> {
     REFRESH_GATE
         .run(ctx, move |ctx, _applications| {
             collect_and_publish(ctx, force_health)
@@ -134,10 +161,7 @@ async fn refresh_and_publish(ctx: &Context, force_health: bool) -> Option<Status
         .await
 }
 
-async fn try_refresh_and_publish(
-    ctx: &Context,
-    force_health: bool,
-) -> Option<Option<StatusSegments>> {
+async fn try_refresh_and_publish(ctx: &Context, force_health: bool) -> Option<Option<PowerStatus>> {
     REFRESH_GATE
         .try_run(ctx, move |ctx, _applications| {
             collect_and_publish(ctx, force_health)
@@ -145,7 +169,7 @@ async fn try_refresh_and_publish(
         .await
 }
 
-async fn collect_and_publish(ctx: Context, force_health: bool) -> Option<StatusSegments> {
+async fn collect_and_publish(ctx: Context, force_health: bool) -> Option<PowerStatus> {
     let health_due = {
         let last_attempt = LAST_HEALTH_ATTEMPT
             .lock()
@@ -213,10 +237,9 @@ async fn collect_and_publish(ctx: Context, force_health: bool) -> Option<StatusS
         let mut history = CHARGE_HISTORY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(battery) = snapshot.battery.as_ref() {
-            push_history(&mut history, f64::from(battery.percent));
-        } else {
-            history.clear();
+        match snapshot.battery.as_ref() {
+            Some(battery) => history.push(f64::from(battery.percent)),
+            None => history.clear(),
         }
         history.clone()
     };
@@ -226,19 +249,13 @@ async fn collect_and_publish(ctx: Context, force_health: bool) -> Option<StatusS
         configured_summary_mode(&ctx),
         &history,
     );
-    let should_publish = {
+    {
         let mut last = LAST_GOOD
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = last.as_ref() != Some(&status);
-        *last = Some(status.clone());
-        changed
-    };
-    if should_publish {
-        ctx.status([
-            ("summary", status.summary.as_str()),
-            ("details", status.details.as_str()),
-        ]);
+        if let Some(changed) = last.update(status.clone()) {
+            ctx.status(changed.segments());
+        }
     }
     Some(status)
 }
@@ -261,17 +278,18 @@ fn first_failure(already_logged: &mut bool, failed: bool) -> bool {
     }
 }
 
-fn details_response(status: Option<StatusSegments>) -> PerformResponse {
+fn details_response(status: Option<PowerStatus>) -> PerformResponse {
     status
-        .map(|status| PerformResponse::ok().message(status.plain_details))
+        .map(|status| PerformResponse::ok().message(status.preview.render_plain()))
         .unwrap_or_else(|| PerformResponse::fail("power information unavailable"))
 }
 
-fn last_good() -> Option<StatusSegments> {
+fn last_good() -> Option<PowerStatus> {
     LAST_GOOD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+        .last()
+        .cloned()
 }
 
 fn parse_pmset_snapshot(raw: &str) -> Option<PowerSnapshot> {
@@ -320,8 +338,7 @@ fn parse_ioreg_health(raw: &str) -> Option<BatteryHealth> {
         cycle_count: ioreg_u64(raw, "CycleCount"),
         design_capacity: ioreg_u64(raw, "DesignCapacity"),
         maximum_capacity: ioreg_u64(raw, "AppleRawMaxCapacity")
-            .or_else(|| ioreg_u64(raw, "NominalChargeCapacity"))
-            .or_else(|| ioreg_u64(raw, "MaxCapacity")),
+            .or_else(|| ioreg_u64(raw, "NominalChargeCapacity")),
         temperature_centi_celsius: ioreg_u64(raw, "Temperature")
             .filter(|temperature| *temperature <= 10_000),
         adapter_watts: ioreg_u64(raw, "Watts"),
@@ -354,71 +371,49 @@ fn render_status(
     snapshot: &PowerSnapshot,
     health: Option<&BatteryHealth>,
     summary_mode: SummaryMode,
-    history: &VecDeque<f64>,
-) -> StatusSegments {
-    let mut rows = match snapshot.battery {
-        Some(ref battery) => vec![
-            format!("Charge: {}%", battery.percent),
-            format!("State: {}", battery.state.label()),
-            format!("Source: {}", snapshot.source.label()),
-            format!("Estimate: {}", estimate_label(battery)),
-        ],
-        None => vec![
-            "Charge: Not installed".to_string(),
-            "State: Not installed".to_string(),
-            format!("Source: {}", snapshot.source.label()),
-            "Estimate: Unavailable".to_string(),
-        ],
-    };
-    if let Some(health) = health {
-        match (health.maximum_capacity, health.design_capacity) {
-            (Some(maximum), Some(design)) if design > 0 => {
-                let percent =
-                    ((u128::from(maximum) * 100) + u128::from(design / 2)) / u128::from(design);
-                let suffix = health
-                    .condition
-                    .as_deref()
-                    .map(|condition| format!(" ({condition})"))
-                    .unwrap_or_default();
-                rows.push(format!("Health: {percent}% of design{suffix}"));
-            }
-            (_, _) => {
-                if let Some(condition) = health.condition.as_deref() {
-                    rows.push(format!("Health: {condition}"));
-                }
-            }
-        }
-        if let Some(cycles) = health.cycle_count {
-            rows.push(format!("Cycles: {cycles}"));
-        }
-        if let Some(temperature) = health.temperature_centi_celsius {
-            rows.push(format!(
-                "Temperature: {}.{}°C",
-                temperature / 100,
-                (temperature % 100) / 10
-            ));
-        }
-        if snapshot.source == PowerSource::Adapter {
-            if let Some(watts) = health.adapter_watts {
-                rows.push(format!("Adapter: {watts} W"));
-            }
-        }
-    }
-    let plain_details = rows.join("\n");
-    let details = render_popup_details(snapshot, health, history);
-    let visible = visible_summary(snapshot, summary_mode);
-    StatusSegments {
-        summary: inline_status_popup(&visible, &details),
-        details,
-        plain_details,
+    history: &ChargeHistory,
+) -> PowerStatus {
+    // Charge is slow-moving, so it reads true and plain: no 99 cap like the
+    // fast metrics, and no padding either — it crosses a width boundary so
+    // rarely that a reserved column would cost more than the shift saves.
+    let charge = snapshot.battery.as_ref().map_or_else(
+        || "—".to_string(),
+        |battery| percent(f64::from(battery.percent)),
+    );
+    PowerStatus {
+        summary: visible_summary(snapshot, summary_mode),
+        label: Markup::colored("BAT", Color::TITLE) + " " + Markup::colored(charge, Color::MUTED),
+        preview: preview(snapshot, health, history),
+        percent: snapshot
+            .battery
+            .as_ref()
+            .map(|battery| battery.percent.to_string())
+            .unwrap_or_default(),
+        state: raw_state(snapshot),
     }
 }
 
-fn render_popup_details(
+/// The battery's own state wins; otherwise the source decides. `ac` covers an
+/// adapter with no battery (a desktop) or a battery held without charging.
+fn raw_state(snapshot: &PowerSnapshot) -> &'static str {
+    match (
+        snapshot.battery.as_ref().map(|battery| battery.state),
+        snapshot.source,
+    ) {
+        (Some(BatteryState::Charging), _) => "charging",
+        (Some(BatteryState::Charged), _) => "charged",
+        (Some(BatteryState::Discharging), _)
+        | (Some(BatteryState::Unknown), PowerSource::Battery) => "discharging",
+        (_, PowerSource::Adapter) => "ac",
+        _ => "",
+    }
+}
+
+fn preview(
     snapshot: &PowerSnapshot,
     health: Option<&BatteryHealth>,
-    history: &VecDeque<f64>,
-) -> String {
+    history: &ChargeHistory,
+) -> Preview {
     let battery = snapshot.battery.as_ref();
     let health_percent =
         health.and_then(
@@ -429,102 +424,87 @@ fn render_popup_details(
                 _ => None,
             },
         );
-    let rows = [
-        "#[fg=colour178]Battery#[default]".to_string(),
-        detail_row(
+    Preview::new()
+        .title("Battery")
+        .row(
             "Charge",
-            &battery
-                .map(|battery| format!("{:>3} %", battery.percent))
-                .unwrap_or_else(|| "    —".to_string()),
-        ),
-        detail_row(
+            battery.map_or_else(
+                || "    —".to_string(),
+                |battery| format!("{:>3} %", battery.percent),
+            ),
+        )
+        .row(
             "State",
-            battery
-                .map(|battery| battery.state.label())
-                .unwrap_or("Not installed"),
-        ),
-        detail_row("Source", snapshot.source.label()),
-        detail_row(
+            battery.map_or("Not installed", |battery| battery.state.label()),
+        )
+        .row("Source", snapshot.source.label())
+        .row(
             "Estimate",
-            &battery
-                .map(estimate_label)
-                .unwrap_or_else(|| "Unavailable".to_string()),
-        ),
-        detail_row(
+            battery.map_or_else(|| "Unavailable".to_string(), estimate_label),
+        )
+        .row(
             "Health",
-            &health_percent
-                .map(|percent| format!("{percent:>3} %"))
-                .unwrap_or_else(|| "    —".to_string()),
-        ),
-        detail_row(
+            health_percent.map_or_else(|| "    —".to_string(), |percent| format!("{percent:>3} %")),
+        )
+        .row(
+            "Design",
+            health
+                .and_then(|health| health.design_capacity)
+                .map_or_else(|| "—".to_string(), |capacity| format!("{capacity} mAh")),
+        )
+        .row(
+            "Full charge",
+            health
+                .and_then(|health| health.maximum_capacity)
+                .map_or_else(|| "—".to_string(), |capacity| format!("{capacity} mAh")),
+        )
+        .row(
             "Condition",
-            &health
+            health
                 .and_then(|health| health.condition.as_deref())
-                .map(escape_status_text)
-                .unwrap_or_else(|| "—".to_string()),
-        ),
-        detail_row(
+                .map_or_else(|| Markup::from("—"), Markup::text),
+        )
+        .row(
             "Cycles",
-            &health
-                .and_then(|health| health.cycle_count)
-                .map(|cycles| format!("{cycles:>10}"))
-                .unwrap_or_else(|| "         —".to_string()),
-        ),
-        detail_row(
+            health.and_then(|health| health.cycle_count).map_or_else(
+                || "         —".to_string(),
+                |cycles| format!("{cycles:>10}"),
+            ),
+        )
+        .row(
             "Temperature",
-            &health
+            health
                 .and_then(|health| health.temperature_centi_celsius)
-                .map(|temperature| format!("{:>5.1} °C", temperature as f64 / 100.0))
-                .unwrap_or_else(|| "    — °C".to_string()),
-        ),
-        detail_row(
+                .map_or_else(
+                    || "    — °C".to_string(),
+                    |temperature| format!("{:>5.1} °C", temperature as f64 / 100.0),
+                ),
+        )
+        .row(
             "Adapter",
-            &health
+            health
                 .and_then(|health| health.adapter_watts)
                 .filter(|_| snapshot.source == PowerSource::Adapter)
-                .map(|watts| format!("{watts:>3} W"))
-                .unwrap_or_else(|| "  — W".to_string()),
-        ),
-        detail_row("History", &padded_history(history)),
-    ];
-    rows.join("\n")
+                .map_or_else(|| "  — W".to_string(), |watts| format!("{watts:>3} W")),
+        )
+        .row(
+            "History",
+            sparkline_padded(&sparkline_percent(history), ChargeHistory::CAPACITY),
+        )
 }
 
-fn detail_row(label: &str, value: &str) -> String {
-    format!(
-        "#[fg=colour245]{label:<width$}#[default]{value}",
-        width = DETAIL_LABEL_WIDTH
-    )
-}
-
-fn push_history(history: &mut VecDeque<f64>, value: f64) {
-    if history.len() == HISTORY_LEN {
-        history.pop_front();
+fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Markup {
+    if snapshot.source == PowerSource::Adapter
+        && snapshot
+            .battery
+            .as_ref()
+            .is_some_and(|battery| battery.percent == 100)
+    {
+        return Markup::colored(Markup::range("BAT", "bat-prefs"), Color::TITLE);
     }
-    history.push_back(value.clamp(0.0, 100.0));
-}
-
-fn sparkline(history: &VecDeque<f64>) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    history
-        .iter()
-        .map(|value| {
-            let index = (value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize;
-            BARS[index]
-        })
-        .collect()
-}
-
-fn padded_history(history: &VecDeque<f64>) -> String {
-    let chart = sparkline(history);
-    let padding = HISTORY_LEN.saturating_sub(chart.chars().count());
-    format!("{}{chart}", "·".repeat(padding))
-}
-
-fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> String {
     let (mut value, breathing) = match snapshot.battery {
         Some(ref battery) => (
-            format!("{:>2}%", battery.percent),
+            percent(f64::from(battery.percent)),
             snapshot.source == PowerSource::Adapter,
         ),
         None => ("—".to_string(), false),
@@ -533,26 +513,20 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Strin
         let secondary = snapshot
             .battery
             .as_ref()
-            .and_then(|battery| battery.estimate_minutes.map(natural_duration))
+            .and_then(|battery| battery.estimate_minutes.map(duration_hours_minutes))
             .unwrap_or_else(|| snapshot.source.label().to_string());
         value.push_str(" · ");
         value.push_str(&secondary);
     }
-    let breathing_open = if breathing { "#[breathing]" } else { "" };
-    let breathing_close = if breathing { "#[nobreathing]" } else { "" };
-    format!(
-        "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{breathing_open}{value}{breathing_close}#[norange]#[default]#[pop-default]"
-    )
-}
-
-fn natural_duration(minutes: u32) -> String {
-    let hours = minutes / 60;
-    let minutes = minutes % 60;
-    match (hours, minutes) {
-        (0, minutes) => format!("{minutes}m"),
-        (hours, 0) => format!("{hours}h"),
-        (hours, minutes) => format!("{hours}h {minutes}m"),
+    if breathing {
+        value = format!("#[breathing]{value}#[nobreathing]");
     }
+    Markup::colored("BAT", Color::TITLE)
+        + " "
+        + Markup::raw(format!(
+            "#[push-default]#[range=user|bat-prefs {}]{value}#[norange]#[default]#[pop-default]",
+            Style::fg(Color::MUTED)
+        ))
 }
 
 impl BatteryState {
@@ -603,10 +577,10 @@ fn battery_estimate_minutes(raw: &str) -> Option<u32> {
 fn estimate_label(battery: &BatterySnapshot) -> String {
     match (battery.state, battery.estimate_minutes) {
         (BatteryState::Charging, Some(minutes)) if minutes > 0 => {
-            format!("Full in {}", natural_duration(minutes))
+            format!("Full in {}", duration_hours_minutes(minutes))
         }
         (BatteryState::Discharging, Some(minutes)) if minutes > 0 => {
-            format!("{} remaining", natural_duration(minutes))
+            format!("{} remaining", duration_hours_minutes(minutes))
         }
         (BatteryState::Charged, _) => "Fully charged".to_string(),
         _ => "Unavailable".to_string(),
@@ -651,6 +625,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn label_keeps_charge_width_and_leaves_popup_interactions_to_the_template() {
+        // Charge is slow-moving, so unlike the fast metrics it reads true and
+        // unpadded: a plain 16% or 100%, not a reserved column.
+        for (percent, expected) in [
+            (None, "—"),
+            (Some(0), "0%"),
+            (Some(9), "9%"),
+            (Some(16), "16%"),
+            (Some(99), "99%"),
+            (Some(100), "100%"),
+        ] {
+            let snapshot = PowerSnapshot {
+                source: PowerSource::Adapter,
+                battery: percent.map(|percent| BatterySnapshot {
+                    percent,
+                    state: BatteryState::Charging,
+                    estimate_minutes: Some(90),
+                }),
+            };
+            let status = render_status(&snapshot, None, SummaryMode::Full, &ChargeHistory::new());
+            assert_eq!(
+                status.label.as_str(),
+                format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{expected}#[default]")
+            );
+            assert!(!status.preview.is_empty());
+        }
+    }
+
+    #[test]
+    fn publishes_the_preview_inline_on_the_summary_only() {
+        let mut harness = flash_plugin::testing::Harness::new("power");
+        let snapshot = parse_pmset_snapshot(CHARGING).unwrap();
+        let status = render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new());
+        harness.context().status(status.segments());
+        let frames = harness.drain_status();
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
+        assert!(frames[0]["summary"].ends_with(&format!("]{}#[nopopup]", status.summary)));
+        assert_eq!(frames[0]["label"], status.label.as_str());
+        assert!(!frames[0]["label"].contains("popup="));
+        assert_eq!(frames[0]["details"], status.preview.render().as_str());
+        assert_eq!(frames[0]["percent"], "73");
+        assert_eq!(frames[0]["state"], "charging");
+    }
+
+    #[test]
     fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
         assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
         assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
@@ -659,8 +679,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_power_summary_uses_grey_two_column_percentage() {
-        for (percent, expected) in [(9, " 9%"), (10, "10%"), (100, "100%")] {
+    fn compact_power_summary_uses_a_grey_unpadded_percentage() {
+        for (percent, expected) in [(9, "9%"), (16, "16%"), (99, "99%"), (100, "100%")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
                 battery: Some(BatterySnapshot {
@@ -670,9 +690,9 @@ mod tests {
                 }),
             };
             assert_eq!(
-                visible_summary(&snapshot, SummaryMode::Compact),
+                visible_summary(&snapshot, SummaryMode::Compact).as_str(),
                 format!(
-                    "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{expected}#[norange]#[default]#[pop-default]"
+                    "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{expected}#[norange]#[default]#[pop-default]"
                 )
             );
         }
@@ -680,9 +700,11 @@ mod tests {
             source: PowerSource::Adapter,
             battery: None,
         };
-        assert!(visible_summary(&no_battery, SummaryMode::Compact).contains(
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
-        ));
+        assert!(visible_summary(&no_battery, SummaryMode::Compact)
+            .as_str()
+            .contains(
+                "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
+            ));
     }
 
     const DISCHARGING: &str = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=35127395) 26%; discharging; 6:26 remaining present: true";
@@ -770,11 +792,12 @@ mod tests {
             &snapshot,
             Some(&health),
             SummaryMode::Compact,
-            &VecDeque::new(),
+            &ChargeHistory::new(),
         )
-        .details;
-        assert!(!details.contains("SECRET"));
-        assert!(!details.to_ascii_lowercase().contains("serial"));
+        .preview
+        .render();
+        assert!(!details.as_str().contains("SECRET"));
+        assert!(!details.as_str().to_ascii_lowercase().contains("serial"));
     }
 
     #[test]
@@ -792,42 +815,127 @@ mod tests {
             &snapshot,
             Some(&health),
             SummaryMode::Compact,
-            &VecDeque::new(),
+            &ChargeHistory::new(),
         );
 
         assert_eq!(
-            visible_summary(&snapshot, SummaryMode::Compact),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
+            visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
+        assert!(visible_summary(&snapshot, SummaryMode::Full)
+            .as_str()
+            .contains("73% · 1h 24m"));
+        assert!(status.label.as_str().contains("73%"));
+        let details = status.preview.render();
         assert_eq!(
-            visible_summary(&snapshot, SummaryMode::Full),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73% · 1h 24m#[nobreathing]#[norange]#[default]#[pop-default]"
-        );
-        assert!(status.summary.starts_with("#[popup=inline:"));
-        assert!(status.summary.ends_with("#[nopopup]"));
-        assert!(status
-            .summary
-            .contains("]#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs"));
-        assert_eq!(
-            status.details,
-            "#[fg=colour178]Battery#[default]\n\
+            details.as_str(),
+            "#[fg=#EBCB8B]Battery#[default]\n\
 #[fg=colour245]Charge        #[default] 73 %\n\
 #[fg=colour245]State         #[default]Charging\n\
 #[fg=colour245]Source        #[default]AC adapter\n\
 #[fg=colour245]Estimate      #[default]Full in 1h 24m\n\
 #[fg=colour245]Health        #[default] 91 %\n\
+#[fg=colour245]Design        #[default]6075 mAh\n\
+#[fg=colour245]Full charge   #[default]5528 mAh\n\
 #[fg=colour245]Condition     #[default]Good ##[fg=colour196] ##1\n\
 #[fg=colour245]Cycles        #[default]       187\n\
 #[fg=colour245]Temperature   #[default] 30.3 °C\n\
 #[fg=colour245]Adapter       #[default] 67 W\n\
 #[fg=colour245]History       #[default]····················"
         );
-        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
+        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(HEALTH_REFRESH_INTERVAL, Duration::from_secs(30));
-        assert!(!status.details.ends_with('\n'));
-        assert!(status
-            .plain_details
-            .contains("Health: 91% of design (Good #[fg=colour196] #1)"));
+        assert!(!details.as_str().ends_with('\n'));
+        assert_eq!(
+            status.preview.render_plain(),
+            "Battery\n\
+Charge         73 %\n\
+State         Charging\n\
+Source        AC adapter\n\
+Estimate      Full in 1h 24m\n\
+Health         91 %\n\
+Design        6075 mAh\n\
+Full charge   5528 mAh\n\
+Condition     Good #[fg=colour196] #1\n\
+Cycles               187\n\
+Temperature    30.3 °C\n\
+Adapter        67 W\n\
+History       ····················"
+        );
+    }
+
+    #[test]
+    fn summary_keeps_percentage_except_when_full_on_ac_power() {
+        for (source, percent, label_only) in [
+            (PowerSource::Adapter, 0, false),
+            (PowerSource::Adapter, 73, false),
+            (PowerSource::Adapter, 99, false),
+            (PowerSource::Adapter, 100, true),
+            (PowerSource::Battery, 0, false),
+            (PowerSource::Battery, 73, false),
+            (PowerSource::Battery, 99, false),
+            (PowerSource::Battery, 100, false),
+            (PowerSource::Unknown, 73, false),
+            (PowerSource::Unknown, 100, false),
+        ] {
+            for state in [
+                BatteryState::Charging,
+                BatteryState::Charged,
+                BatteryState::Discharging,
+                BatteryState::Unknown,
+            ] {
+                let snapshot = PowerSnapshot {
+                    source,
+                    battery: Some(BatterySnapshot {
+                        percent,
+                        state,
+                        estimate_minutes: None,
+                    }),
+                };
+                for mode in [SummaryMode::Compact, SummaryMode::Full] {
+                    let status = render_status(&snapshot, None, mode, &ChargeHistory::new());
+                    let visible = visible_summary(&snapshot, mode).into_string();
+                    assert!(!status.label.is_empty(), "{snapshot:?} {mode:?}");
+                    assert!(!status.preview.is_empty(), "{snapshot:?} {mode:?}");
+                    assert!(!status.label.as_str().contains("popup="));
+                    assert_eq!(status.summary.as_str(), visible, "{snapshot:?} {mode:?}");
+                    assert!(visible.contains("range=user|bat-prefs"));
+                    if label_only {
+                        assert_eq!(
+                            visible, "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
+                            "{snapshot:?} {mode:?}"
+                        );
+                    } else {
+                        assert!(
+                            visible.contains(&format!("{percent}%")),
+                            "{snapshot:?} {mode:?}"
+                        );
+                        if mode == SummaryMode::Full {
+                            assert!(visible.contains(source.label()));
+                        }
+                    }
+                    assert!(status
+                        .preview
+                        .render_plain()
+                        .contains(&format!("Charge        {percent:>3} %")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_pmset_battery_keeps_bat_label_across_charging_states() {
+        for state in ["charging", "finishing charge", "charged"] {
+            let raw = format!(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; {state}; 0:00 remaining present: true"
+            );
+            let snapshot = parse_pmset_snapshot(&raw).unwrap();
+            assert_eq!(
+                visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+                "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
+                "{state}"
+            );
+        }
     }
 
     #[test]
@@ -837,17 +945,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            visible_summary(&snapshot, SummaryMode::Compact),
-            "#[fg=colour178]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
+            visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
-            render_status(&snapshot, None, SummaryMode::Compact, &VecDeque::new()).details,
-            "#[fg=colour178]Battery#[default]\n\
+            render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new())
+                .preview
+                .render()
+                .as_str(),
+            "#[fg=#EBCB8B]Battery#[default]\n\
 #[fg=colour245]Charge        #[default] 25 %\n\
 #[fg=colour245]State         #[default]Discharging\n\
 #[fg=colour245]Source        #[default]Battery\n\
 #[fg=colour245]Estimate      #[default]Unavailable\n\
 #[fg=colour245]Health        #[default]    —\n\
+#[fg=colour245]Design        #[default]—\n\
+#[fg=colour245]Full charge   #[default]—\n\
 #[fg=colour245]Condition     #[default]—\n\
 #[fg=colour245]Cycles        #[default]         —\n\
 #[fg=colour245]Temperature   #[default]    — °C\n\
@@ -866,24 +979,45 @@ mod tests {
     }
 
     #[test]
-    fn formats_natural_duration() {
-        assert_eq!(natural_duration(24), "24m");
-        assert_eq!(natural_duration(60), "1h");
-        assert_eq!(natural_duration(84), "1h 24m");
+    fn charge_history_fills_the_chart_from_the_right() {
+        let mut history = ChargeHistory::new();
+        history.push(0.0);
+        history.push(100.0);
+        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
+        let details = render_status(&snapshot, None, SummaryMode::Compact, &history)
+            .preview
+            .render();
+        assert!(details
+            .as_str()
+            .ends_with("#[fg=colour245]History       #[default]··················▁█"));
     }
 
     #[test]
-    fn charge_history_is_bounded_and_left_padded_to_stable_width() {
-        let mut history = VecDeque::new();
-        for value in 0..25 {
-            push_history(&mut history, f64::from(value) * 4.0);
-        }
-        assert_eq!(history.len(), HISTORY_LEN);
-        assert_eq!(history.front(), Some(&20.0));
-        assert_eq!(
-            padded_history(&VecDeque::from([0.0, 100.0])),
-            "··················▁█"
-        );
+    fn details_show_original_and_current_battery_capacity() {
+        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
+        let health = BatteryHealth {
+            design_capacity: Some(5_000),
+            maximum_capacity: Some(4_000),
+            ..BatteryHealth::default()
+        };
+        let details = preview(&snapshot, Some(&health), &ChargeHistory::new()).render_plain();
+        assert!(details.contains("Design        5000 mAh"), "{details}");
+        assert!(details.contains("Full charge   4000 mAh"), "{details}");
+        assert!(details.lines().all(|line| line.chars().count() <= 50));
+    }
+
+    #[test]
+    fn battery_percentage_capacity_is_never_interpreted_as_milliamphours() {
+        let health = parse_ioreg_health(
+            r#""DesignCapacity" = 5000
+"MaxCapacity" = 100"#,
+        )
+        .unwrap();
+        assert_eq!(health.maximum_capacity, None);
+        let snapshot = parse_pmset_snapshot(DISCHARGING).unwrap();
+        let details = preview(&snapshot, Some(&health), &ChargeHistory::new()).render_plain();
+        assert!(!details.contains("100 mAh"));
+        assert!(details.contains("Health            —"), "{details}");
     }
 
     #[test]
@@ -906,5 +1040,51 @@ mod tests {
         assert!(!first_failure(&mut logged, true));
         assert!(!first_failure(&mut logged, false));
         assert!(first_failure(&mut logged, true));
+    }
+
+    fn raw(raw: &str) -> (String, &'static str) {
+        let snapshot = parse_pmset_snapshot(raw).expect("pmset snapshot");
+        let status = render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new());
+        (status.percent, status.state)
+    }
+
+    #[test]
+    fn raw_segments_publish_plain_charge_and_state() {
+        assert_eq!(raw(CHARGING), ("73".to_string(), "charging"));
+        assert_eq!(raw(DISCHARGING), ("26".to_string(), "discharging"));
+        assert_eq!(
+            raw("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; charged; 0:00 remaining present: true"),
+            ("100".to_string(), "charged")
+        );
+        assert_eq!(
+            raw("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 80%; AC attached; not charging present: true"),
+            ("80".to_string(), "ac"),
+            "a battery held on the adapter is neither charging nor discharging"
+        );
+        assert_eq!(
+            raw("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 0%; (no estimate) present: true"),
+            ("0".to_string(), "discharging")
+        );
+    }
+
+    #[test]
+    fn desktop_without_a_battery_clears_percent_and_reports_ac() {
+        let mut harness = flash_plugin::testing::Harness::new("power");
+        let snapshot = parse_pmset_snapshot(
+            "Now drawing from 'AC Power'\nNo batteries are currently installed.",
+        )
+        .unwrap();
+        let status = render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new());
+        harness.context().status(status.segments());
+        let frames = harness.drain_status();
+        assert_eq!(frames[0]["percent"], "", "no battery clears the segment");
+        assert_eq!(frames[0]["state"], "ac");
+
+        let unknown = PowerSnapshot {
+            source: PowerSource::Unknown,
+            battery: None,
+        };
+        let status = render_status(&unknown, None, SummaryMode::Compact, &ChargeHistory::new());
+        assert_eq!((status.percent.as_str(), status.state), ("", ""));
     }
 }

@@ -1,21 +1,44 @@
 import AppKit
 import ApplicationServices
 import FlashCore
+import FlashProviders
 
-/// Hints beyond the focused app: the Dock (`mouse_dock`) and the menu-bar
-/// status items (`mouse_statusbar`). Wooshy-parity coverage without new
-/// permissions — the Dock is read through its own AX tree under the existing
-/// Accessibility grant, and status items come from WindowServer geometry
-/// (`CGWindowListCopyWindowInfo`, layer 25, geometry only — never content).
+/// Hints beyond the focused app's window: the Dock (`mouse_dock`), the menu
+/// bar (`mouse_menubar`) and Notification Center (`mouse_notifications`).
+/// Wooshy-parity coverage without new permissions — the Dock, the focused
+/// app's menu titles and Notification Center are read through their AX trees
+/// under the existing Accessibility grant, and status items come from
+/// WindowServer geometry (`CGWindowListCopyWindowInfo`, layer 25, geometry
+/// only — never content). Every commit is a click `ActionDispatcher` posts.
 extension AppDelegate {
-  /// Role stamped on status-item targets so the commit path suspends for the
-  /// menu the click opens (same rule as right-click context menus).
+  /// Provider of `mouse_menubar` targets, app menu titles and status items
+  /// alike. Committing one opens a menu that owns the keyboard, so the commit
+  /// path suspends NORMAL for it (the right-click context-menu rule).
+  static let menuBarProviderID = "mouse_menubar"
+  static let notificationsProviderID = "mouse_notifications"
+  /// Role of a status-item target, which has WindowServer geometry but no AX
+  /// element.
   static let statusItemHintRole = "FlashStatusItem"
 
-  func activateDockHints() {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
+  static func hintOpensMenuBarMenu(_ target: JumpTarget) -> Bool {
+    target.providerID == menuBarProviderID
+  }
+
+  /// Where a committed hint aims before its target resolves. Most hints aim
+  /// at their chip, which sits on the target; a menu title, status item or
+  /// notification control is clicked at its centre instead — a banner's chip
+  /// sits on its top-left corner, where the close button appears on hover.
+  static func hintCommitPoint(for hint: AssignedHint, fontSize: CGFloat) -> CGPoint {
+    let provider = hint.target.providerID
+    if provider == menuBarProviderID || provider == notificationsProviderID {
+      return CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
     }
+    let chip = OverlayPanel.chipFrame(for: hint, fontSize: fontSize)
+    return CGPoint(x: chip.midX, y: chip.midY)
+  }
+
+  func activateDockHints() {
+    guard prepareHintActivation(.dock) else { return }
     guard
       let dock = NSWorkspace.shared.runningApplications.first(where: {
         $0.bundleIdentifier == "com.apple.dock"
@@ -26,38 +49,120 @@ extension AppDelegate {
       return
     }
     let pid = dock.processIdentifier
+    let screenH = ActionDispatcher.primaryScreenHeight()
+    let token = activationLifecycle.begin()
+    applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let items = Self.dockItems(pid: pid)
+      let targets = Self.dockTargets(pid: pid, screenH: screenH)
       DispatchQueue.main.async {
-        guard let self else { return }
-        let screenH = ActionDispatcher.primaryScreenHeight()
-        let targets = items.enumerated().map { index, item in
-          JumpTarget(
-            id: "dock_item_\(index)",
-            frame: CGRect(
-              x: item.frame.minX, y: screenH - item.frame.maxY,
-              width: item.frame.width, height: item.frame.height),
-            role: "AXDockItem",
-            accessibilityLabel: item.title,
-            pid: pid,
-            entersInsertMode: false,
-            providerID: "mouse_dock")
-        }
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
         self.presentSystemSurfaceHints(targets, pid: pid, surface: "mouse_dock")
       }
     }
   }
 
-  func activateStatusItemHints() {
-    if activationInFlight || !currentHints.isEmpty {
-      cancelOverlay()
+  /// `mouse_menubar`: the focused app's menu titles, Apple menu first, then
+  /// the status items. Committing a title opens its menu.
+  func activateMenuBarHints() {
+    guard prepareHintActivation(.menuBar) else { return }
+    let token = activationLifecycle.begin()
+    let ownPID = ProcessInfo.processInfo.processIdentifier
+    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screens = NSScreen.screens.map(\.frame)
+    // The flashlight or the command bar may hold activation; the menus on
+    // screen belong to the app that owns the menu bar.
+    let menuOwner =
+      NSWorkspace.shared.menuBarOwningApplication
+      .flatMap { $0.processIdentifier == ownPID ? nil : $0 }
+      ?? currentNonFlashRunningApplication()
+    let ownerPID = menuOwner?.processIdentifier
+    let ownerBundle = menuOwner?.bundleIdentifier
+    applyModeOverlay()
+    let raw = WindowSnapshot.windowList() ?? []
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let menus =
+        ownerPID.map {
+          Self.menuTitleTargets(
+            pid: $0, bundleIdentifier: ownerBundle, screenH: screenH, screens: screens)
+        } ?? []
+      let targets = menus + Self.statusItemTargets(raw, ownPID: Int(ownPID), screenH: screenH)
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        self.presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_menubar")
+      }
     }
+  }
+
+  /// `mouse_notifications`: what Notification Center shows. Silent when it
+  /// shows nothing.
+  func activateNotificationHints() {
+    guard prepareHintActivation(.notifications) else { return }
+    guard
+      let center = NSWorkspace.shared.runningApplications.first(where: {
+        $0.bundleIdentifier == NotificationCenterSurface.bundleIdentifier
+      })
+    else {
+      FlashLog.debug("[mouse_notifications] notification_center_not_running")
+      applyModeOverlay()
+      return
+    }
+    let pid = center.processIdentifier
+    let screenH = ActionDispatcher.primaryScreenHeight()
+    let token = activationLifecycle.begin()
+    applyModeOverlay()
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let targets = Self.notificationTargets(pid: pid, screenH: screenH)
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        self.presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_notifications")
+      }
+    }
+  }
+
+  /// The menu owner's `AXMenuBarItem`s on screen, in bar order.
+  private static func menuTitleTargets(
+    pid: pid_t, bundleIdentifier: String?, screenH: CGFloat, screens: [CGRect]
+  ) -> [JumpTarget] {
+    let app = AXApp.make(pid: pid)
+    return MenuBarSource.menuBarItems(of: app).enumerated().compactMap { index, item in
+      guard
+        let target = AccessibilityProvider.captureTarget(
+          element: item, id: "menu_bar_item_\(pid)_\(index)", pid: pid, screenH: screenH,
+          providerID: menuBarProviderID, bundleIdentifier: bundleIdentifier),
+        target.role == "AXMenuBarItem",
+        screens.contains(where: { $0.intersects(target.frame) })
+      else { return nil }
+      return target
+    }
+  }
+
+  /// Notification Center's pressable elements as targets. They carry no pid:
+  /// Notification Center never becomes the frontmost app, so the commit must
+  /// not wait for it to activate; the notification's own app comes forward
+  /// when the click opens it.
+  private static func notificationTargets(pid: pid_t, screenH: CGFloat) -> [JumpTarget] {
+    let elements = NotificationCenterSurface.pressableElements(
+      in: NotificationCenterSurface.readWindows(pid: pid, screenH: screenH))
+    return elements.enumerated().compactMap { index, element in
+      guard
+        let target = AccessibilityProvider.captureTarget(
+          element: element, id: "notification_\(index)", pid: pid, screenH: screenH,
+          providerID: notificationsProviderID,
+          bundleIdentifier: NotificationCenterSurface.bundleIdentifier)
+      else { return nil }
+      return JumpTarget(
+        id: target.id, frame: target.frame, role: target.role,
+        accessibilityLabel: target.accessibilityLabel, url: target.url,
+        resolveClickPoint: target.resolveClickPoint, entersInsertMode: false,
+        providerID: target.providerID)
+    }
+  }
+
+  static func statusItemTargets(
+    _ raw: [[String: Any]], ownPID: Int, screenH: CGFloat
+  ) -> [JumpTarget] {
     // Layer 25 (`.statusBar`) windows are the menu-bar extras. Geometry only;
     // Flash's own click windows are excluded by pid.
-    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
-    let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
-    let screenH = ActionDispatcher.primaryScreenHeight()
     var targets: [JumpTarget] = []
     for window in raw {
       guard
@@ -65,29 +170,33 @@ extension AppDelegate {
         layer == NSWindow.Level.statusBar.rawValue,
         let ownerPID = window[kCGWindowOwnerPID as String] as? Int,
         ownerPID != ownPID,
+        let windowNumber = window[kCGWindowNumber as String] as? CGWindowID,
         let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
         let x = bounds["X"], let y = bounds["Y"],
         let width = bounds["Width"], let height = bounds["Height"],
         width >= 8, width <= 400, height >= 8, height <= 44
       else { continue }
       let ownerName = window[kCGWindowOwnerName as String] as? String
+      let frame = CGRect(x: x, y: screenH - y - height, width: width, height: height)
       targets.append(
         JumpTarget(
-          id: "status_item_\(targets.count)",
-          // CG window bounds are top-left origin; flip to NSScreen.
-          frame: CGRect(x: x, y: screenH - y - height, width: width, height: height),
+          id: "status_item_\(ownerPID)_\(windowNumber)",
+          frame: frame,
           role: Self.statusItemHintRole,
           accessibilityLabel: ownerName,
           pid: pid_t(ownerPID),
+          resolveClickPoint: { preferred in
+            guard
+              let current = HintWindowSnapshot.current(
+                pid: pid_t(ownerPID), primaryHeight: screenH, windowNumber: windowNumber),
+              current.layer == layer
+            else { return nil }
+            return JumpTarget.relocatedClickPoint(preferred, from: frame, to: current.frame)
+          },
           entersInsertMode: false,
-          providerID: "mouse_statusbar"))
+          providerID: menuBarProviderID))
     }
-    guard !targets.isEmpty else {
-      FlashLog.debug("[mouse_statusbar] no_status_items")
-      applyModeOverlay()
-      return
-    }
-    presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_statusbar")
+    return targets
   }
 
   private func presentSystemSurfaceHints(
@@ -98,24 +207,20 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    sourceAppPID = pid
-    pendingAction = .leftClick
-    pendingClickModifiers = []
-    pendingHintCommitBehavior = .click
-    currentPrefix = ""
-    overlay.overlayConfig = config.overlay
+    hintSession.sourceAppPID = pid
+    hintSession.command = .click(.leftClick, modifiers: [])
+    hintSession.surface = .targets
+    hintSession.prefix = ""
     overlay.debugConfig = config.debug
     let hints = assignHints(targets)
     activationLifecycle.invalidate()
-    currentHints = hints
+    hintSession.hints = hints
     applyModeOverlay()
-    overlay.display(hints: hints)
+    presentHints(hints, prepared: .miss, pid: pid, surface: surface)
     FlashLog.debug("[\(surface)] displayed targets=\(hints.count)")
   }
 
-  /// Dock items: title + frame (AX top-left coordinates) of every
-  /// `AXDockItem` in the Dock's list.
-  private static func dockItems(pid: pid_t) -> [(title: String?, frame: CGRect)] {
+  private static func dockTargets(pid: pid_t, screenH: CGFloat) -> [JumpTarget] {
     let app = AXApp.make(pid: pid)
     var listRaw: CFTypeRef?
     guard
@@ -123,7 +228,7 @@ extension AppDelegate {
         == .success,
       let lists = listRaw as? [AXUIElement]
     else { return [] }
-    var items: [(String?, CGRect)] = []
+    var targets: [JumpTarget] = []
     for list in lists {
       var childrenRaw: CFTypeRef?
       guard
@@ -138,22 +243,14 @@ extension AppDelegate {
             == .success,
           (roleRaw as? String) == "AXDockItem"
         else { continue }
-        var frameRaw: CFTypeRef?
-        guard
-          AXUIElementCopyAttributeValue(child, "AXFrame" as CFString, &frameRaw) == .success,
-          let frameValue = frameRaw,
-          CFGetTypeID(frameValue) == AXValueGetTypeID()
-        else { continue }
-        var frame = CGRect.zero
-        guard AXValueGetValue((frameValue as! AXValue), .cgRect, &frame) else { continue }
-        var titleRaw: CFTypeRef?
-        let title =
-          AXUIElementCopyAttributeValue(child, kAXTitleAttribute as CFString, &titleRaw)
-            == .success
-          ? titleRaw as? String : nil
-        items.append((title, frame))
+        if let target = AccessibilityProvider.captureTarget(
+          element: child, id: "dock_item_\(targets.count)", pid: pid, screenH: screenH,
+          providerID: "mouse_dock", bundleIdentifier: "com.apple.dock")
+        {
+          targets.append(target)
+        }
       }
     }
-    return items
+    return targets
   }
 }

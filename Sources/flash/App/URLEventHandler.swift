@@ -23,25 +23,36 @@ enum URLCommand: Hashable {
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
   case mouseTargetScreen(MouseCommand)
-  case mouseGrid(MouseCommand)
+  case mouseGrid(MouseGridRequest)
   /// Re-click the last Flash-committed click point (sticky click). Repeats
   /// honour normal-mode counts (`3` + mapped key clicks three times).
   case mouseRepeat
   /// Freestyle keyboard cursor control (pointer mode).
   case mousePointer
+  /// Press, release or toggle a button at the pointer; moves drag while it
+  /// is held.
+  case mouseButton(MouseButtonRequest)
   /// Focus the first (or count-th) editable text input in the focused window
-  /// and enter INSERT — Vimium's `gi`.
+  /// while preserving the current mode.
   case focusInput
   /// Hint-label the focused window's scroll areas; committing moves the
   /// pointer into the chosen one so subsequent scroll verbs land there.
   case scrollTarget
   /// Hint-label the Dock's items (apps, minimized windows, trash).
   case mouseDock
-  /// Hint-label the menu-bar status items (WindowServer geometry only).
-  case mouseStatusBar
+  /// Hint-label the menu bar: the focused app's menu titles (AX) and the
+  /// status items (WindowServer geometry only).
+  case mouseMenuBar
+  /// Hint-label what Notification Center shows: banners, alerts and their
+  /// buttons, and the panel when it is open.
+  case mouseNotifications
   case normalMode
+  case leaveMode
+  case terminalShow(name: String?)
+  case terminalDismiss
+  case terminalRestart(name: String?)
+  case terminalQuit(name: String?)
   case insertMode
-  case lockedInsertMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
   case reload(force: Bool)
@@ -82,9 +93,10 @@ enum URLCommand: Hashable {
   case tabMovePrev
   case tabMoveNext
   case tabReopen
-  /// Cycle to the next / previous split inside the focused window. Terminal
-  /// sources (tmux) claim these via the `pane_navigation` source action;
-  /// every other app falls back to the native ⌘] / ⌘[ chord.
+  /// Cycle to the next / previous split inside the focused terminal window.
+  /// Terminal sources (tmux) claim these via the `pane_navigation` source
+  /// action; a terminal without one receives the native ⌘] / ⌘[ chord, and
+  /// non-terminal apps ignore the verb.
   case paneNext
   case panePrev
   /// Create a side-by-side or stacked split inside the focused window.
@@ -142,6 +154,29 @@ struct AlertCommand: Hashable {
     if style != .standard {
       tokens.append("--style=\(style.rawValue)")
     }
+    return tokens
+  }
+}
+
+/// `mouse_grid`: the click the grid commits, plus how the grid starts.
+struct MouseGridRequest: Hashable {
+  var mouse: MouseCommand
+  /// `--zoom-to-depth=N`: start N steps deep on the cell under the pointer.
+  var zoomToDepth: Int?
+  /// `--bisect`: halves and quadrants instead of the keyboard-shaped grid.
+  var bisect: Bool
+
+  init(_ mouse: MouseCommand, zoomToDepth: Int? = nil, bisect: Bool = false) {
+    self.mouse = mouse
+    self.zoomToDepth = zoomToDepth
+    self.bisect = bisect
+  }
+
+  /// Arg tokens in diagnostic form: the mouse tokens, then the grid's own.
+  var argTokens: [String] {
+    var tokens = mouse.argTokens
+    if bisect { tokens.append("--bisect") }
+    if let zoomToDepth { tokens.append("--zoom-to-depth=\(zoomToDepth)") }
     return tokens
   }
 }
@@ -266,10 +301,26 @@ struct MoveWindowParams: Hashable {
 }
 
 final class URLEventHandler: NSObject {
-  private let handler: (URLCommand) -> Void
+  /// The resident's answers to `flash status` and `flash doctor`: UTF-8 JSON
+  /// the CLI reads from the reply's direct object. A table of its own, apart
+  /// from the verb table, so neither a mapping nor a plugin can reach it.
+  struct QueryAnswers {
+    var status: () -> Data
+    /// Completes on the main thread once its checks finish.
+    var doctor: (@escaping (Data) -> Void) -> Void
+  }
 
-  init(handler: @escaping (URLCommand) -> Void) {
+  private let handler: (URLCommand) -> Bool
+  private let rejected: (String) -> Void
+  private let queries: QueryAnswers
+
+  init(
+    handler: @escaping (URLCommand) -> Bool, rejected: @escaping (String) -> Void,
+    queries: QueryAnswers
+  ) {
     self.handler = handler
+    self.rejected = rejected
+    self.queries = queries
     super.init()
     NSAppleEventManager.shared().setEventHandler(
       self,
@@ -283,26 +334,93 @@ final class URLEventHandler: NSObject {
     _ event: NSAppleEventDescriptor,
     withReplyEvent reply: NSAppleEventDescriptor
   ) {
+    // An activation dates from the event's arrival (`[latency] hints_visible`).
+    let arrivedAt = ProcessInfo.processInfo.systemUptime
     guard
       let verb = event.paramDescriptor(forKeyword: FlashCLI.verbKey)?.stringValue,
       !verb.isEmpty
     else { return }
     let argsJSON = event.paramDescriptor(forKeyword: FlashCLI.argsKey)?.stringValue ?? "{}"
+    if let query = FlashQuery(rawValue: verb) {
+      answer(query, argsJSON: argsJSON, reply: reply)
+      return
+    }
     // CLI / AppleEvent path uses `parseOrPluginVerb` so a `flash <verb>`
     // call can reach plugin-registered verbs. Config-load goes through
     // strict `parse` instead, so a stale verb in `[mode.*.mappings]`
     // still surfaces as a config error rather than a silent runtime miss.
-    guard let cmd = Self.parseOrPluginVerb(verb: verb, args: Self.decodeArgs(json: argsJSON)) else {
+    guard let args = Self.decodeArgs(json: argsJSON) else {
+      Self.reject(reply: reply, message: "Invalid command or arguments")
       return
     }
-    handler(cmd)
+    let invocation =
+      (["flash", verb]
+      + args.keys.sorted().map {
+        "--\($0)=\(args[$0] ?? "")"
+      }).joined(separator: " ")
+    let message = Self.rejectionMessage(invocation)
+    guard let cmd = Self.parseOrPluginVerb(verb: verb, args: args) else {
+      rejected(invocation)
+      Self.reject(reply: reply, message: message)
+      return
+    }
+    if !Trace.triggered(at: arrivedAt, { handler(cmd) }) {
+      Self.reject(reply: reply, message: message)
+    }
+  }
+
+  /// Reply to a query with its JSON. `doctor` suspends the event while its
+  /// checks run off the main thread and resumes it with the report.
+  private func answer(_ query: FlashQuery, argsJSON: String, reply: NSAppleEventDescriptor) {
+    guard query.answeredByResident else {
+      Self.reject(
+        reply: reply, message: "flash \(query.rawValue) runs in the flash CLI, not the resident")
+      return
+    }
+    // Output options such as `--json` belong to the CLI; the resident's
+    // answer takes none.
+    guard Self.decodeArgs(json: argsJSON)?.isEmpty == true else {
+      Self.reject(reply: reply, message: "flash \(query.rawValue) takes no resident arguments")
+      return
+    }
+    switch query {
+    case .status:
+      Self.setDirectObject(queries.status(), on: reply)
+    case .doctor:
+      let manager = NSAppleEventManager.shared()
+      guard let suspension = manager.suspendCurrentAppleEvent() else { return }
+      queries.doctor { data in
+        Self.setDirectObject(data, on: manager.replyAppleEvent(forSuspensionID: suspension))
+        manager.resume(withSuspensionID: suspension)
+      }
+    case .configCheck:
+      break
+    }
+  }
+
+  static func setDirectObject(_ json: Data, on reply: NSAppleEventDescriptor) {
+    guard
+      let descriptor = NSAppleEventDescriptor(descriptorType: DescType(typeUTF8Text), data: json)
+    else { return }
+    reply.setParam(descriptor, forKeyword: AEKeyword(keyDirectObject))
+  }
+
+  static func rejectionMessage(_ invocation: String) -> String {
+    "Unsupported command or invalid arguments: \(invocation). Check the command and its configuration or mapping."
+  }
+
+  private static func reject(reply: NSAppleEventDescriptor, message: String) {
+    reply.setParam(
+      NSAppleEventDescriptor(int32: Int32(errAEEventNotHandled)),
+      forKeyword: AEKeyword(keyErrorNumber))
+    reply.setParam(NSAppleEventDescriptor(string: message), forKeyword: AEKeyword(keyErrorString))
   }
 
   /// Look up a verb in the dispatch table and turn its args dict into a
   /// resolved ``URLCommand``. Returns nil for unknown verbs or for verbs
-  /// whose required parameters are missing/invalid — callers (the AE
-  /// handler, the mapping config loader) treat nil as "ignore" and emit a
-  /// diagnostic where appropriate.
+  /// whose required parameters are missing/invalid. The AppleEvent handler
+  /// rejects the invocation with an error reply; config loading emits a
+  /// located diagnostic naming the rejected command.
   ///
   /// Strict by design: plugin-registered verbs are NOT resolved here so the
   /// mapping/CLI parsers reject stale verbs at config-load time. Runtime
@@ -310,8 +428,7 @@ final class URLEventHandler: NSObject {
   /// back to a ``URLCommand/pluginVerb(name:args:)`` when the built-in table
   /// misses but the name looks like a plugin verb.
   static func parse(verb: String, args: [String: String]) -> URLCommand? {
-    guard let parser = Self.commands[verb] else { return nil }
-    return parser(VerbArgs(args: args))
+    commands[verb]?.command(arguments: args)
   }
 
   /// Same as ``parse(verb:args:)`` but, on a built-in miss for an
@@ -321,10 +438,8 @@ final class URLEventHandler: NSObject {
   /// so stale verbs surface a clear failure instead of silently turning
   /// into no-op plugin calls.
   static func parseOrPluginVerb(verb: String, args: [String: String]) -> URLCommand? {
-    if let cmd = Self.parse(verb: verb, args: args) {
-      return cmd
-    }
-    if Self.looksLikePluginVerb(verb) {
+    if Self.commands[verb] != nil { return Self.parse(verb: verb, args: args) }
+    if FlashQuery(rawValue: verb) == nil, Self.looksLikePluginVerb(verb) {
       return .pluginVerb(name: verb, args: args)
     }
     return nil
@@ -345,205 +460,285 @@ final class URLEventHandler: NSObject {
     return verb.unicodeScalars.dropFirst().allSatisfy { tail.contains($0) }
   }
 
-  /// JSON object → `[String: String]`. Non-string values are stringified so
-  /// numeric `index=1` round trips cleanly without a typed schema.
-  private static func decodeArgs(json: String) -> [String: String] {
-    guard
-      let data = json.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return [:] }
-    var out: [String: String] = [:]
-    for (key, value) in object {
-      if let string = value as? String {
-        out[key] = string
-      } else if let bool = value as? Bool {
-        out[key] = bool ? "true" : "false"
-      } else {
-        out[key] = String(describing: value)
-      }
-    }
-    return out
+  private static func decodeArgs(json: String) -> [String: String]? {
+    guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)),
+      let arguments = object as? [String: String]
+    else { return nil }
+    return arguments
   }
 
   /// Dispatch table keyed by verb name. Adding a new verb is a two-step
   /// change: add a case to `URLCommand`, then add the parser closure here.
   /// `AppDelegate` switches exhaustively over `URLCommand` so the compiler
   /// flags any missed wiring.
-  private static let commands: [String: (VerbArgs) -> URLCommand?] = [
-    "mouse_target": { a in
-      switch a.value("scope") {
-      case nil, "app":
-        return mouseCommand(a).map(URLCommand.mouseTarget)
-      case "screen":
-        // Screen scope is click-only: session flags (drag/select/multi/…)
-        // assume a single-app session.
-        guard let command = mouseCommand(a), case .click = command else { return nil }
-        return .mouseTargetScreen(command)
-      default:
-        return nil
-      }
-    },
-    // The grid IS the precision surface, so `--adjust` is a config error there.
-    "mouse_grid": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },
-    "mouse_snipe": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },
-    "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
-    "mouse_repeat": { a in a.args.isEmpty ? .mouseRepeat : nil },
-    "mouse_pointer": { a in a.args.isEmpty ? .mousePointer : nil },
-    "focus_input": { a in a.args.isEmpty ? .focusInput : nil },
-    "scroll_target": { a in a.args.isEmpty ? .scrollTarget : nil },
-    "mouse_dock": { a in a.args.isEmpty ? .mouseDock : nil },
-    "mouse_statusbar": { a in a.args.isEmpty ? .mouseStatusBar : nil },
-    "enter_normal_mode": { _ in .normalMode },
-    "enter_insert_mode": { _ in .insertMode },
-    "enter_locked_insert_mode": { _ in .lockedInsertMode },
-    "enter_command_mode": { a in
-      guard let raw = a.value("input") else {
-        return a.args.isEmpty ? .commandMode : nil
-      }
-      guard !raw.isEmpty else { return nil }
-      // Strip every leading `:` and feed the rest through verbatim. A single
-      // `:` is later prepended by `commandLineBuffer(from:)`. Trailing spaces
-      // are meaningful and must NOT be trimmed: `--input=:flashlight ` opens
-      // the flashlight verb with an empty query (all candidates) while
-      // `--input=:flashlight` instead surfaces completions for commands that
-      // start with `flashlight`. The user gets full control over which
-      // behaviour they want.
-      let normalized = String(raw.drop(while: { $0 == ":" }))
-      return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
-    },
-    "scroll_left": { _ in .scroll(.left) },
-    "scroll_right": { _ in .scroll(.right) },
-    "scroll_up": { _ in .scroll(.up) },
-    "scroll_down": { _ in .scroll(.down) },
-    "scroll_half_page_up": { _ in .scroll(.halfPageUp) },
-    "scroll_half_page_down": { _ in .scroll(.halfPageDown) },
-    "scroll_top": { _ in .scroll(.top) },
-    "scroll_bottom": { _ in .scroll(.bottom) },
-    "app_reload": { a in .reload(force: a.bool("force")) },
-    "app_undo": { _ in .undo },
-    "app_redo": { _ in .redo },
-    "resource_archive": { _ in .archive },
-    "resource_next": { _ in .resourceNext },
-    "resource_previous": { _ in .resourcePrevious },
-    "window_close": { _ in .close },
-    "tab_close": { _ in .tabClose },
-    "app_find": { _ in .find },
-    "app_open_finder": { a in .candidateFinder(all: a.bool("all")) },
-    "url_copy": { _ in .copyURL },
-    "yank_selection": { a in .yankSelection(register: registerArg(a)) },
-    "paste": { a in .paste(register: registerArg(a)) },
-    "tab_next": { _ in .tabNext },
-    "tab_previous": { _ in .tabPrev },
-    "tab_first": { _ in .tabFirst },
-    "tab_last": { _ in .tabLast },
-    "tab_select": { a in .tabSelect(index: a.int("index")) },
-    "tab_move_previous": { _ in .tabMovePrev },
-    "tab_move_next": { _ in .tabMoveNext },
-    "tab_reopen": { _ in .tabReopen },
-    "pane_next": { _ in .paneNext },
-    "pane_previous": { _ in .panePrev },
-    "pane_split_vertical": { _ in .paneSplitVertical },
-    "pane_split_horizontal": { _ in .paneSplitHorizontal },
-    "pane_close": { _ in .paneClose },
-    "history_back": { _ in .historyBack },
-    "history_forward": { _ in .historyForward },
-    "movement_back": { _ in .movementBack },
-    "movement_forward": { _ in .movementForward },
-    "app_previous": { _ in .appPrev },
-    "app_next": { _ in .appNext },
-    "app_quit": { a in .quitApp(force: a.bool("force")) },
-    "app_save_and_quit": { a in .saveAndQuit(force: a.bool("force")) },
-    "tab_new": { _ in .tabNew },
-    "alert_show": { alertCommand($0) },
-    "alert_dismiss": { _ in .dismissAlert },
-    "help_show": { a in .showUsage(topic: a.value("topic")) },
-    "plugins": { _ in .showPlugins },
-    "about": { _ in .showAbout },
-    "hints_dismiss": { _ in .dismissHints },
-    "quit": { _ in .quit },
-    "app_open": { a in
-      guard let name = a.value("name"), !name.isEmpty else { return nil }
-      return .openApp(name: name)
-    },
-    "plugin_command": { a in
-      guard let command = a.value("command"), !command.isEmpty,
-        let subcommand = a.value("subcommand"), !subcommand.isEmpty
-      else { return nil }
-      let args =
-        a.value("args")?
-        .split(separator: " ", omittingEmptySubsequences: true)
-        .map(String.init) ?? []
-      return .pluginCommand(command: command, subcommand: subcommand, args: args)
-    },
-    "window_move": windowMoveCommand,
-    "send_key": sendKeyCommand,
-    "send_keys": sendKeysCommand,
+  private static let mouseParameters: [VerbParameter] = [
+    .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
+    .flag("move"), .flag("drag"), .flag("select"), .flag("multi"),
+    .flag("adjust"), .flag("search"), .text("modifiers", "cmd+ctrl+alt+shift"),
   ]
 
-  static let usageText = """
-    flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi|--adjust] [--modifiers=cmd+ctrl+alt+shift]
-    flash mouse_grid [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi] [--modifiers=cmd+ctrl+alt+shift]
-    flash enter_normal_mode
-    flash enter_insert_mode
-    flash enter_locked_insert_mode
-    flash enter_command_mode
-    flash scroll_left
-    flash scroll_right
-    flash scroll_up
-    flash scroll_down
-    flash scroll_half_page_up
-    flash scroll_half_page_down
-    flash scroll_top
-    flash scroll_bottom
-    flash app_reload [--force]
-    flash app_undo
-    flash app_redo
-    flash resource_archive
-    flash resource_next
-    flash resource_previous
-    flash window_close
-    flash tab_close
-    flash app_find
-    flash app_open_finder [--all]
-    flash enter_command_mode --input='<text>' [--restore-mode]
-    flash url_copy
-    flash yank_selection [--register=<name>]
-    flash paste [--register=<name>]
-    flash tab_next
-    flash tab_previous
-    flash tab_first
-    flash tab_last
-    flash tab_select --index=<n>
-    flash tab_move_previous
-    flash tab_move_next
-    flash tab_reopen
-    flash pane_next
-    flash pane_previous
-    flash pane_split_vertical
-    flash pane_split_horizontal
-    flash pane_close
-    flash history_back
-    flash history_forward
-    flash movement_back
-    flash movement_forward
-    flash app_previous
-    flash app_next
-    flash app_quit [--force]
-    flash app_save_and_quit [--force]
-    flash tab_new
-    flash alert_show --message=<text> [--duration=<seconds>] [--style=standard|error]
-    flash alert_dismiss
-    flash about
-    flash hints_dismiss
-    flash app_open --name=<app>
-    flash window_move [--position=<slot> | --x=<percent> --y=<percent> --width=<percent> --height=<percent>] [--screen=<n>]
-    flash send_key --keys=<hotkey>
-    flash send_keys --keys=<hotkey,hotkey,...>
-    flash quit
-    flash help_show [--topic=<topic>]
-    flash plugins
-    flash plugin_command --command=<command> --subcommand=<subcommand> [--args=<space-separated>]
-    """
+  private static let commands: [String: VerbDefinition] = [
+    "mouse_target": .init(
+      mouseParameters + [.text("scope", "app|screen")],
+      parse: { a in
+        switch a.value("scope") {
+        case nil, "app":
+          return mouseCommand(a).map(URLCommand.mouseTarget)
+        case "screen":
+          // Screen scope is click-only: session flags (drag/select/multi/…)
+          // assume a single-app session.
+          guard let command = mouseCommand(a), case .click = command else { return nil }
+          return .mouseTargetScreen(command)
+        default:
+          return nil
+        }
+      }),
+    // The grid IS the precision surface, so `--adjust` and `--search` are
+    // config errors there.
+    "mouse_grid": .init(
+      mouseParameters.filter { !["adjust", "search"].contains($0.name) }
+        + [.flag("bisect"), .integer("zoom_to_depth")],
+      parse: { a in
+        mouseCommand(a, allowAdjust: false).map {
+          .mouseGrid(
+            MouseGridRequest($0, zoomToDepth: a.int("zoom_to_depth"), bisect: a.bool("bisect")))
+        }
+      }),
+
+    "mouse_repeat": .init(parse: { a in a.args.isEmpty ? .mouseRepeat : nil }),
+
+    "mouse_pointer": .init(parse: { a in a.args.isEmpty ? .mousePointer : nil }),
+
+    "mouse_button": .init(
+      [
+        .text("state", "down|up|toggle", required: true), .flag("secondary"), .flag("middle"),
+      ],
+      parse: { a in
+        guard let state = a.value("state").flatMap(MouseButtonState.init(rawValue:)) else {
+          return nil
+        }
+        switch (a.bool("secondary"), a.bool("middle")) {
+        case (false, false): return .mouseButton(.init(state: state, button: .primary))
+        case (true, false): return .mouseButton(.init(state: state, button: .secondary))
+        case (false, true): return .mouseButton(.init(state: state, button: .middle))
+        case (true, true): return nil
+        }
+      }),
+
+    "focus_input": .init(parse: { a in a.args.isEmpty ? .focusInput : nil }),
+
+    "scroll_target": .init(parse: { a in a.args.isEmpty ? .scrollTarget : nil }),
+
+    "mouse_dock": .init(parse: { a in a.args.isEmpty ? .mouseDock : nil }),
+
+    "mouse_menubar": .init(parse: { a in a.args.isEmpty ? .mouseMenuBar : nil }),
+
+    "mouse_notifications": .init(parse: { a in a.args.isEmpty ? .mouseNotifications : nil }),
+
+    "enter_normal_mode": .init(parse: { _ in .normalMode }),
+
+    "terminal_show": .init(
+      [.text("name", "terminal")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }),
+          args.value("name").map({ !$0.trimmed.isEmpty }) ?? true
+        else { return nil }
+        return .terminalShow(name: args.value("name"))
+      }),
+
+    "terminal_dismiss": .init(parse: { args in args.args.isEmpty ? .terminalDismiss : nil }),
+
+    "terminal_restart": .init(
+      [.text("name", "terminal-or-popup")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+          return nil
+        }
+        return .terminalRestart(name: args.value("name"))
+      }),
+    "terminal_quit": .init(
+      [.text("name", "terminal-or-popup")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+          return nil
+        }
+        return .terminalQuit(name: args.value("name"))
+      }),
+
+    "leave_mode": .init(parse: { a in a.args.isEmpty ? .leaveMode : nil }),
+
+    "enter_insert_mode": .init(parse: { _ in .insertMode }),
+
+    "enter_command_mode": .init(
+      [.text("input", "text"), .flag("restore_mode")],
+      parse: { a in
+        guard let raw = a.value("input") else {
+          return a.args.isEmpty ? .commandMode : nil
+        }
+        guard !raw.isEmpty else { return nil }
+        // Strip every leading `:` and feed the rest through verbatim. A single
+        // `:` is later prepended by `commandLineBuffer(from:)`. Trailing spaces
+        // are meaningful and must NOT be trimmed: `--input=:flashlight ` opens
+        // the flashlight verb with an empty query (all candidates) while
+        // `--input=:flashlight` instead surfaces completions for commands that
+        // start with `flashlight`. The user gets full control over which
+        // behaviour they want.
+        let normalized = String(raw.drop(while: { $0 == ":" }))
+        return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
+      }),
+
+    "scroll_left": .init(parse: { _ in .scroll(.left) }),
+
+    "scroll_right": .init(parse: { _ in .scroll(.right) }),
+
+    "scroll_up": .init(parse: { _ in .scroll(.up) }),
+
+    "scroll_down": .init(parse: { _ in .scroll(.down) }),
+
+    "scroll_half_page_up": .init(parse: { _ in .scroll(.halfPageUp) }),
+
+    "scroll_half_page_down": .init(parse: { _ in .scroll(.halfPageDown) }),
+
+    "scroll_top": .init(parse: { _ in .scroll(.top) }),
+
+    "scroll_bottom": .init(parse: { _ in .scroll(.bottom) }),
+
+    "app_reload": .init([.flag("force")], parse: { a in .reload(force: a.bool("force")) }),
+
+    "app_undo": .init(parse: { _ in .undo }),
+
+    "app_redo": .init(parse: { _ in .redo }),
+
+    "resource_archive": .init(parse: { _ in .archive }),
+
+    "resource_next": .init(parse: { _ in .resourceNext }),
+
+    "resource_previous": .init(parse: { _ in .resourcePrevious }),
+
+    "window_close": .init(parse: { _ in .close }),
+
+    "tab_close": .init(parse: { _ in .tabClose }),
+
+    "app_find": .init(parse: { _ in .find }),
+
+    "app_open_finder": .init([.flag("all")], parse: { a in .candidateFinder(all: a.bool("all")) }),
+
+    "url_copy": .init(parse: { _ in .copyURL }),
+
+    "yank_selection": .init(
+      [.text("register", "name")], parse: { a in .yankSelection(register: registerArg(a)) }),
+
+    "paste": .init([.text("register", "name")], parse: { a in .paste(register: registerArg(a)) }),
+
+    "tab_next": .init(parse: { _ in .tabNext }),
+
+    "tab_previous": .init(parse: { _ in .tabPrev }),
+
+    "tab_first": .init(parse: { _ in .tabFirst }),
+
+    "tab_last": .init(parse: { _ in .tabLast }),
+
+    "tab_select": .init([.integer("index")], parse: { a in .tabSelect(index: a.int("index")) }),
+
+    "tab_move_previous": .init(parse: { _ in .tabMovePrev }),
+
+    "tab_move_next": .init(parse: { _ in .tabMoveNext }),
+
+    "tab_reopen": .init(parse: { _ in .tabReopen }),
+
+    "pane_next": .init(parse: { _ in .paneNext }),
+
+    "pane_previous": .init(parse: { _ in .panePrev }),
+
+    "pane_split_vertical": .init(parse: { _ in .paneSplitVertical }),
+
+    "pane_split_horizontal": .init(parse: { _ in .paneSplitHorizontal }),
+
+    "pane_close": .init(parse: { _ in .paneClose }),
+
+    "history_back": .init(parse: { _ in .historyBack }),
+
+    "history_forward": .init(parse: { _ in .historyForward }),
+
+    "movement_back": .init(parse: { _ in .movementBack }),
+
+    "movement_forward": .init(parse: { _ in .movementForward }),
+
+    "app_previous": .init(parse: { _ in .appPrev }),
+
+    "app_next": .init(parse: { _ in .appNext }),
+
+    "app_quit": .init([.flag("force")], parse: { a in .quitApp(force: a.bool("force")) }),
+
+    "app_save_and_quit": .init(
+      [.flag("force")], parse: { a in .saveAndQuit(force: a.bool("force")) }),
+
+    "tab_new": .init(parse: { _ in .tabNew }),
+
+    "alert_show": .init(
+      [
+        .text("message", "text", required: true), .text("duration", "seconds"),
+        .text("style", "standard|error"),
+      ], parse: { alertCommand($0) }),
+
+    "alert_dismiss": .init(parse: { _ in .dismissAlert }),
+
+    "help_show": .init(
+      [.text("topic", "topic")], parse: { a in .showUsage(topic: a.value("topic")) }),
+
+    "plugins": .init(parse: { _ in .showPlugins }),
+
+    "about": .init(parse: { _ in .showAbout }),
+
+    "hints_dismiss": .init(parse: { _ in .dismissHints }),
+
+    "quit": .init(parse: { _ in .quit }),
+
+    "app_open": .init(
+      [.text("name", "app", required: true)],
+      parse: { a in
+        guard let name = a.value("name"), !name.isEmpty else { return nil }
+        return .openApp(name: name)
+      }),
+
+    "plugin_command": .init(
+      [
+        .text("command", "command", required: true),
+        .text("subcommand", "subcommand", required: true), .text("args", "space-separated"),
+      ],
+      parse: { a in
+        guard let command = a.value("command"), !command.isEmpty,
+          let subcommand = a.value("subcommand"), !subcommand.isEmpty
+        else { return nil }
+        let args =
+          a.value("args")?
+          .split(separator: " ", omittingEmptySubsequences: true)
+          .map(String.init) ?? []
+        return .pluginCommand(command: command, subcommand: subcommand, args: args)
+      }),
+
+    "window_move": .init(
+      [
+        .text("position", "slot"), .text("x", "percent"), .text("y", "percent"),
+        .text("width", "percent"), .text("height", "percent"), .text("screen", "n"),
+      ], parse: windowMoveCommand),
+
+    "send_key": .init([.text("keys", "hotkey", required: true)], parse: sendKeyCommand),
+
+    "send_keys": .init(
+      [.text("keys", "hotkey,hotkey,...", required: true)], parse: sendKeysCommand),
+
+  ]
+
+  static var usageText: String {
+    commands.keys.sorted().compactMap { syntax(for: $0, prefix: "flash ") }.joined(separator: "\n")
+  }
+
+  static func syntax(for name: String, prefix: String) -> String? {
+    guard let definition = commands[name] else { return nil }
+    let arguments = definition.parameters.map(\.syntax).joined(separator: " ")
+    return prefix + name + (arguments.isEmpty ? "" : " " + arguments)
+  }
 }
 
 extension URLEventHandler {
@@ -556,12 +751,25 @@ extension URLEventHandler {
 
       Every resident action has a verb name. The same verb table is used by
       the `flash` CLI (which AppleEvents the verb to the resident) and by
-      mapping config (which writes `["flash", "<verb>", "key=value", ...]`
+      mapping config (which writes `["flash", "<verb>", "--key=value", ...]`
       arrays and resolves them in-process).
 
+      `flash status`, `flash doctor` and `flash config_check` are CLI queries,
+      not verbs: they report (as text, or JSON with `--json`) and cannot be
+      mapped. `:doctor` runs the doctor's checks from the command line.
+
       `mouse_target` selects an app-discovered target. `mouse_grid` selects
-      a precise screen position by repeatedly narrowing a deterministic
-      grid.
+      a precise screen position: the screen splits like the left half of
+      the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
+      `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its
+      cell. `--bisect` halves the region instead (h/j/k/l, or y/u/b/n for a
+      quadrant); `--zoom-to-depth=N` starts N steps deep under the pointer.
+      `--multi` keeps clicking, discovering the targets again after each
+      click. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
+      the status items) and `mouse_notifications` (Notification Center's
+      banners, alerts and buttons) hint surfaces outside the focused window.
+      `mouse_button --state=down|up|toggle` holds a button where the pointer
+      is, so Flash's pointer moves drag until it is released.
 
       `window_move` accepts either a named `position` or a complete
       percentage frame (`x`, `y`, `width`, and `height`, each suffixed with
@@ -642,16 +850,17 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   let search = a.bool("search")
   if (adjust || search) && !allowAdjust { return nil }
   if [drag, select, multi, adjust, search].filter({ $0 }).count > 1 { return nil }
-  if a.bool("move") {
-    return (modifiers.isEmpty && !drag && !select && !multi && !adjust && !search)
-      ? .move : nil
-  }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
     a.bool("double") ? .doubleClick : nil,
     a.bool("middle") ? .middleClick : nil,
     a.bool("triple") ? .tripleClick : nil,
   ].compactMap { $0 }
+  if a.bool("move") {
+    return
+      (modifiers.isEmpty && variants.isEmpty && !drag && !select && !multi && !adjust && !search)
+      ? .move : nil
+  }
   if drag { return variants.isEmpty ? .drag(modifiers: modifiers) : nil }
   if select { return variants.isEmpty ? .select(modifiers: modifiers) : nil }
   if variants.count > 1 { return nil }
@@ -661,7 +870,7 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }
 
-/// `flash send_key keys=<hotkey>` synthesizes one modified keystroke to
+/// `flash send_key --keys=<hotkey>` synthesizes one modified keystroke to
 /// the focused app. `keys` uses the exact same syntax as a config hotkey
 /// (`cmd+option+r`, `shift+tab`, `0x24`), so a plugin can override a
 /// built-in keystroke (e.g. Safari's hard refresh is `cmd+option+r`, not
@@ -675,10 +884,10 @@ private func sendKeyCommand(_ a: VerbArgs) -> URLCommand? {
   return .sendKey(
     keys: keys,
     keyCode: CGKeyCode(parsed.virtualKey),
-    flagsRawValue: cgEventFlags(carbon: parsed.modifiers).rawValue)
+    flagsRawValue: parsed.eventFlags.rawValue)
 }
 
-/// `flash send_keys keys=<hotkey,hotkey,...>` synthesizes a short key sequence
+/// `flash send_keys --keys=<hotkey,hotkey,...>` synthesizes a short key sequence
 /// to the focused app. It is primarily for app-local multi-stroke shortcuts
 /// such as Gmail's `g` then `i` navigation commands.
 private func sendKeysCommand(_ a: VerbArgs) -> URLCommand? {
@@ -693,20 +902,9 @@ private func sendKeysCommand(_ a: VerbArgs) -> URLCommand? {
       return nil
     }
     keyCodes.append(CGKeyCode(parsed.virtualKey))
-    flagsRawValues.append(cgEventFlags(carbon: parsed.modifiers).rawValue)
+    flagsRawValues.append(parsed.eventFlags.rawValue)
   }
   return .sendKeys(keys: keys, keyCodes: keyCodes, flagsRawValues: flagsRawValues)
-}
-
-/// Translate Carbon modifier flags (as `HotkeySyntax` emits) into the
-/// `CGEventFlags` the synthesizer consumes.
-private func cgEventFlags(carbon: UInt32) -> CGEventFlags {
-  var flags: CGEventFlags = []
-  if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
-  if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
-  if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
-  if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
-  return flags
 }
 
 private func windowMoveCommand(_ a: VerbArgs) -> URLCommand? {

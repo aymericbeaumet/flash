@@ -1,0 +1,261 @@
+import AppKit
+import Carbon.HIToolbox
+import FlashCore
+import QuartzCore
+
+enum HintActivationRequest {
+  case target(MouseCommand, AppContext?)
+  case screen(MouseCommand)
+  case grid(MouseGridRequest, AppContext?)
+  case pointer
+  case scroll
+  case dock
+  case menuBar
+  case notifications
+  case repeatLast(Int)
+}
+
+extension AppDelegate {
+  /// AX/plugin verification may block, so it shares the discovery queue rather
+  /// than the keyboard loop. Cancellation or replacement invalidates its token.
+  func resolveHintPoints(
+    _ selections: [(target: JumpTarget, point: CGPoint)],
+    completion: @escaping (AppDelegate, [CGPoint]) -> Void
+  ) {
+    guard !activationLifecycle.inFlight else { return }
+    guard selections.contains(where: { $0.target.resolveClickPoint != nil }) else {
+      completion(self, selections.map(\.point))
+      return
+    }
+    let token = activationLifecycle.begin()
+    monitor.axQueue.async { [weak self] in
+      var points: [CGPoint] = []
+      for selection in selections {
+        guard let point = selection.target.resolvedClickPoint(preferred: selection.point) else {
+          // The gesture is dropped here: the user pressed a hint label and
+          // gets no click at all, so this is warn-level, not a trace crumb.
+          FlashLog.warn(
+            "[commit] captured_target_unavailable provider=\(selection.target.providerID) "
+              + "role=\(selection.target.role ?? "?") "
+              + "point=(\(Int(selection.point.x)),\(Int(selection.point.y))); click dropped")
+          DispatchQueue.main.async {
+            guard let self, self.activationLifecycle.complete(token: token) else { return }
+            self.cancelOverlay()
+          }
+          return
+        }
+        points.append(point)
+      }
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        completion(self, points)
+      }
+    }
+  }
+
+  /// Judge a grid point the way discovery judges a hint target — is it a text
+  /// input? — before the click lands, so `F` enters INSERT under `f`'s rule.
+  /// The AX hit-test runs on the geometry queue under the same commit token as
+  /// `resolveHintPoints`, so a cancelled or replaced session drops it.
+  func resolveGridClickTarget(
+    at point: CGPoint,
+    completion: @escaping (AppDelegate, NormalModePointerPolicy.ClickTarget) -> Void
+  ) {
+    guard !activationLifecycle.inFlight else { return }
+    let token = activationLifecycle.begin()
+    let topLeft = CGPoint(x: point.x, y: ActionDispatcher.primaryScreenHeight() - point.y)
+    monitor.geometryQueue.async { [weak self] in
+      let entersInsert = AXTextInputProbe.isTextInput(at: topLeft)
+      DispatchQueue.main.async {
+        guard let self, self.activationLifecycle.complete(token: token) else { return }
+        FlashLog.trace("[commit] grid_target text_input=\(entersInsert)")
+        completion(self, .grid(entersInsertMode: entersInsert))
+      }
+    }
+  }
+
+  func prepareHintActivation(_ request: HintActivationRequest) -> Bool {
+    guard activationLifecycle.requestReplacement(request) else { return false }
+    switch modeStore.mode {
+    case .command: dispatchMode(.closeCommand(reason: "hint_activation"))
+    case .terminal: dismissTerminal(restoreApplication: false)
+    default: break
+    }
+    cancelPointerInsertHandoff(reason: "hint_replaced")
+    overlay.hide()
+    clearHintSessionState()
+    beginHintSession()
+    return true
+  }
+
+  /// Fix how the new session reads keys, and arm its latency probe while
+  /// still inside the interaction that asked for it.
+  private func beginHintSession() {
+    let secure = IsSecureEventInputEnabled()
+    noteSecureInput(secure)
+    hintSession.capture = KeyboardCaptureTap.sessionCapture(
+      tapInstalled: keyboardCaptureTap != nil, secureInputEnabled: secure)
+    if secure, keyboardCaptureTap != nil {
+      FlashLog.info("[activation] capture=key_window reason=secure_input")
+    }
+    hintSession.latencyProbe = HintLatencyProbe.arm(Trace.currentTrigger)
+  }
+
+  /// Draw an activation's hints. The first display of an activation also
+  /// logs `[latency] hints_visible`, from the completion of the Core
+  /// Animation transaction that commits them.
+  func presentHints(
+    _ hints: [AssignedHint], prepared: HintLatencyProbe.Prepared, pid: pid_t?, surface: String
+  ) {
+    guard let probe = hintSession.latencyProbe else {
+      overlay.display(hints: hints)
+      return
+    }
+    hintSession.latencyProbe = nil
+    let bundleIdentifier = pid.flatMap { NSRunningApplication(processIdentifier: $0) }?
+      .bundleIdentifier
+    let appClass = HintLatencyProbe.appClass(AppTraits.cached(bundleIdentifier: bundleIdentifier))
+    let targets = hints.count
+    CATransaction.begin()
+    CATransaction.setCompletionBlock {
+      let line = probe.line(
+        visibleAt: ProcessInfo.processInfo.systemUptime, prepared: prepared, targets: targets,
+        appClass: appClass, surface: surface)
+      Trace.run(in: probe.trace) { FlashLog.info(line) }
+    }
+    overlay.display(hints: hints)
+    CATransaction.commit()
+  }
+
+  /// Whether secure input was on the last time Flash looked — at a hint
+  /// activation, or when the tap read it for a keystroke. Published as
+  /// `#{flash.secure_input}`; never polled.
+  func noteSecureInput(_ enabled: Bool) {
+    guard enabled != secureInputObserved else { return }
+    secureInputObserved = enabled
+    FlashLog.debug("[input] secure_input=\(enabled ? "on" : "off")")
+    statusBarController?.updateSecureInput(enabled)
+  }
+
+  private func performHintActivation(_ request: HintActivationRequest) {
+    switch request {
+    case .target(let command, let context):
+      activateMouseTarget(
+        command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
+    case .screen(let command): activateScreenScopeHints(command)
+    case .grid(let request, let context):
+      activateMouseGrid(
+        request, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
+    case .pointer: enterPointerMode()
+    case .scroll: activateScrollTargetHints()
+    case .dock: activateDockHints()
+    case .menuBar: activateMenuBarHints()
+    case .notifications: activateNotificationHints()
+    case .repeatLast(let count): performMouseRepeat(repeatCount: count)
+    }
+  }
+
+  /// The token covers the delay, dispatch, and completion. Input which has
+  /// started always finishes; cancellation only suppresses its UI/mode outcome.
+  /// How long a commit will wait for the target app to actually come
+  /// forward. Long enough for a real handoff, short enough that an app which
+  /// refuses activation still gets its click instead of the gesture vanishing.
+  static let frontmostHandoffTimeoutMs = 400
+
+  /// Whether the click has to wait for a focus handoff at all.
+  static func hintCommitNeedsFrontmostHandoff(
+    targetPID: pid_t?, frontmostPID: pid_t?
+  ) -> Bool {
+    guard let targetPID else { return false }
+    return targetPID != frontmostPID
+  }
+
+  /// `NSRunningApplication.activate` is advisory and asynchronous: it returns
+  /// long before the app is frontmost. A click posted in that window lands on
+  /// whoever still is — macOS spends it raising a window, or another app eats
+  /// it outright — which is the hint click that "doesn't go through". Wait for
+  /// the workspace to confirm the switch instead of guessing at a delay, and
+  /// fall back after `frontmostHandoffTimeoutMs` so a refusing app cannot
+  /// strand the gesture.
+  func whenFrontmost(pid: pid_t, then body: @escaping () -> Void) {
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+      body()
+      return
+    }
+    var observer: NSObjectProtocol?
+    var settled = false
+    let finish: (Bool) -> Void = { confirmed in
+      guard !settled else { return }
+      settled = true
+      if let observer { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+      if !confirmed {
+        FlashLog.warn(
+          "[click] focus handoff timed out pid=\(pid) "
+            + "after=\(Self.frontmostHandoffTimeoutMs)ms; clicking anyway")
+      }
+      body()
+    }
+    observer = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+    ) { note in
+      let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+      guard app?.processIdentifier == pid else { return }
+      finish(true)
+    }
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.frontmostHandoffTimeoutMs)
+    ) { finish(false) }
+  }
+
+  /// `feedbackAt` is where `[overlay] click_feedback` draws its ring; a
+  /// recorded click draws it at its own point.
+  func performHintCommit(
+    awaitingFrontmost awaitedPID: pid_t? = nil,
+    recording click: LastCommittedClick? = nil,
+    feedbackAt feedbackPoint: CGPoint? = nil,
+    action: @escaping (@escaping () -> Void) -> Void,
+    completion: @escaping (AppDelegate) -> Void
+  ) {
+    MainThreadWatchdog.note("hint_commit")
+    guard let token = activationLifecycle.prepareCommit() else { return }
+    applyModeOverlay(captureOverride: false)
+    let feedbackPoint = feedbackPoint ?? click?.point
+    let start = { [weak self] in
+      guard let self, self.activationLifecycle.startCommit(token: token) else { return }
+      if let click { self.lastCommittedClick = click }
+      // The ring follows the click onto the queue, never ahead of it.
+      defer {
+        if let feedbackPoint, self.config.overlay.clickFeedback {
+          self.overlay.showClickFeedback(at: feedbackPoint)
+        }
+      }
+      action { [weak self] in
+        guard let self,
+          let result = self.activationLifecycle.completeCommit(token: token)
+        else { return }
+        if self.hintSession.hints.isEmpty { self.overlay.releaseStatusBarHintSnapshot() }
+        if result.applyOutcome { completion(self) }
+        if !result.applyOutcome, result.replacement == nil {
+          self.applyModeOverlay()
+          self.scheduleNormalModeRecapture()
+        }
+        if let replacement = result.replacement { self.performHintActivation(replacement) }
+      }
+    }
+    if let awaitedPID {
+      whenFrontmost(pid: awaitedPID, then: start)
+    } else {
+      start()
+    }
+  }
+
+  /// Forget the session. A button `mouse_button` or pointer mode's `v`
+  /// holds survives it — a `--move` commit or a replacing activation carries
+  /// the drag on — until Escape, `leave_mode` or quit releases it.
+  func clearHintSessionState(preservingStatusBarSnapshot: Bool = false) {
+    hintSession = HintSession()
+    if !preservingStatusBarSnapshot, !activationLifecycle.isCommitting {
+      overlay.releaseStatusBarHintSnapshot()
+    }
+  }
+}

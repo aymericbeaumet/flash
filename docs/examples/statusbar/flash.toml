@@ -1,0 +1,36 @@
+# Merge these sections into flash.toml; no companion files are required.
+[statusbar]
+enabled = true
+popup_max_width = 480
+template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=right]#{T:@right}"
+
+[statusbar.options]
+"@left" = "#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}"
+"@centre" = "#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]"
+"@right" = """
+#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+#[popup=claude]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink]#[nopopup] #[popup=codex]#[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
+#[fg=colour245] · #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup] #[popup=memory]#{flash.plugin.memory.label}#[nopopup] #[popup=disks]#{flash.plugin.disks.label}#[nopopup] #[popup=network]#{flash.plugin.network.label}#[nopopup] #[popup=battery]#{flash.plugin.power.label}#[nopopup]
+#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
+"""
+
+[statusbar.popup]
+active-app = """
+#[fg=#EBCB8B]#{flash.active_app_name}#[default]
+#{flash.plugin.processes.focused_app_details}
+"""
+
+claude = "#{flash.plugin.aiproviders.claude_details}"
+codex = "#{flash.plugin.aiproviders.codex_details}"
+cpu = "#{flash.plugin.cpu.details}"
+memory = "#{flash.plugin.memory.details}"
+disks = "#{flash.plugin.disks.details}"
+network = "#{flash.plugin.network.details}"
+battery = "#{flash.plugin.power.details}"
+date = "#{flash.calendar}"
+
+[plugin.feed]
+label = "AGGR"
+url = "https://aggr.aymericbeaumet.com/rss.xml"
+refresh_interval = 300
+cycle_interval = 30

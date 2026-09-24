@@ -62,6 +62,16 @@ check_absent_except \
   'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
+# `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
+# main-thread Core Animation commit until SkyLight's 500 ms timeout, freezing
+# main with it. `WindowSnapshot.windowList` is the one door and always runs the
+# read on main.
+check_absent_except \
+  "window-list reads go through WindowSnapshot.windowList (main thread only)" \
+  "CGWindowListCopyWindowInfo\\(" \
+  '/WindowSnapshot\.swift:' \
+  "${PROD_SWIFT[@]}"
+
 # Every production app AX element must carry a bounded messaging timeout, or a
 # wedged app beachballs Flash's main thread for the 6s system default. The
 # AXApp.make factory applies the timeout; nothing else may call the raw API.
@@ -90,6 +100,33 @@ check_absent_except \
   "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu([^[:alnum:]_]|$)|setActivationPolicy\\(\\.regular" \
   '^Sources/flash/App/StatusItemController\.swift:|NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
+
+# Hard rule 1 names every UI surface; each draws in one of these windows. A new
+# NSWindow/NSPanel subclass is a new surface and needs the rule amended first.
+check_absent_except \
+  "NSWindow/NSPanel subclasses are limited to the sanctioned surfaces" \
+  "class [A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*(NSPanel|NSWindow)([^[:alnum:]_]|$)" \
+  'class (OverlayPanel|StatusBarWindow|StatusBarClickPanel|StatusPopupPanel|AboutWindow|WidgetWindow)[[:space:]]*:' \
+  "${PROD_SWIFT[@]}"
+
+# Desktop widgets alone sit at desktop level (above the wallpaper, below the
+# Finder's icons and every app window), and only in their own window.
+check_absent_except \
+  "desktop window levels belong to WidgetWindow" \
+  "CGWindowLevelForKey\\(\\.desktop|kCGDesktop" \
+  '/WidgetWindow\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+# Widgets are click-through and never take focus.
+widget_window=Sources/flash/App/Overlay/WidgetWindow.swift
+if [[ ! -f "$widget_window" ]] || ! search_paths -q 'ignoresMouseEvents = true' "$widget_window"; then
+  echo "GUARDRAIL FAILED: $widget_window must set ignoresMouseEvents = true" >&2
+  fail=1
+fi
+check_absent \
+  "widget windows never take mouse input or key/main focus" \
+  "ignoresMouseEvents = false|canBecomeKey: Bool \\{ true|canBecomeMain: Bool \\{ true" \
+  "$widget_window"
 
 check_absent \
   "the help_show verb is routed to the alert toast instead of the help overlay" \
@@ -190,6 +227,13 @@ if [[ -d Plugins ]]; then
     "plugin installs must stay localized to FLASH_PLUGIN_DATA_DIR" \
     "sudo|brew install|npm install -g|deno install -g|/usr/local/bin|\\$HOME/\\.local/bin|~/\\.local/bin" \
     Plugins
+fi
+
+if tracked="$(git ls-files -- 'Tests/BrowserSnapshots/snapshots/collected-*' 'Tests/BrowserSnapshots/allowlists/collected-*')" &&
+  [[ -n "$tracked" ]]; then
+  echo "GUARDRAIL FAILED: collected browser captures are personal browsing data and must stay untracked" >&2
+  echo "$tracked" >&2
+  fail=1
 fi
 
 if [[ $fail -ne 0 ]]; then

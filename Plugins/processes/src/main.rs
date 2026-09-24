@@ -1,18 +1,27 @@
+mod top;
+
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use flash_plugin::{run, Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate};
+use flash_plugin::status::{bytes_iec, duration_uptime};
+use flash_plugin::{
+    run, Candidate, CommandRequest, Context, Event, Markup, PerformResponse, Preview, RefreshGate,
+};
 use serde_json::Value;
 
 const SOURCE_PROCESSES: &str = "processes.processes";
-const POLL_SECONDS: u64 = 10;
-const FOCUSED_STATUS_POLL_SECONDS: u64 = 5;
+const POLL_SECONDS: u64 = 30;
+const FOCUSED_STATUS_POLL_SECONDS: u64 = 10;
+/// A burst of focus changes (cmd-tab through several apps) samples only the
+/// app the user settles on.
+const FOCUS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 const SLOW_REFRESH_MS: u128 = 1_000;
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static FOCUSED_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static FOCUSED_STATE: LazyLock<Mutex<FocusedState>> =
     LazyLock::new(|| Mutex::new(FocusedState::default()));
+static TOP: LazyLock<top::TopSampler> = LazyLock::new(top::TopSampler::default);
 
 struct Processes;
 
@@ -20,6 +29,7 @@ flash_plugin::plugin!(Processes);
 
 impl FlashPlugin for Processes {
     async fn on_start(&self, ctx: Context) {
+        top::warn_invalid_top_count(&ctx);
         // A failed initial listing publishes nothing — the host serves its
         // last-good catalog (which survives restarts) while a background
         // retry warms this process.
@@ -48,9 +58,19 @@ impl FlashPlugin for Processes {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
+        if let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        {
+            // The top-N cadence runs only while a surface shows a top table;
+            // the immediate sample runs detached from the event worker.
+            drop(TOP.observe(&ctx, segments));
+            return;
+        }
         if matches!(
             event.name.as_str(),
-            "core:apps.launched" | "core:apps.terminated"
+            "core:apps.launched" | "core:apps.terminated" | "core:session.opened"
         ) {
             refresh_candidates(&ctx).await;
         }
@@ -66,6 +86,10 @@ impl FlashPlugin for Processes {
                 focused_app_placeholder(&sample.app, "Collecting metrics…"),
             );
             tokio::spawn(async move {
+                tokio::time::sleep(FOCUS_REFRESH_DEBOUNCE).await;
+                if !focused_sample_is_current(&sample) {
+                    return;
+                }
                 refresh_focused_status(&ctx).await;
             });
         }
@@ -140,7 +164,7 @@ struct FocusedProcessMetrics {
     memory_bytes: u64,
     mem_percent: f64,
     process_count: u64,
-    network_socket_count: u64,
+    socket_count: u64,
     thread_count: u64,
     uptime_seconds: u64,
     disk_read_bytes: u64,
@@ -188,6 +212,13 @@ impl FocusedState {
     fn is_current(&self, sample: &FocusedSample) -> bool {
         self.generation == sample.generation && self.app.as_ref() == Some(&sample.app)
     }
+}
+
+fn focused_sample_is_current(sample: &FocusedSample) -> bool {
+    FOCUSED_STATE
+        .lock()
+        .map(|state| state.is_current(sample))
+        .unwrap_or(false)
 }
 
 async fn initialize_focused_status(ctx: &Context) {
@@ -239,7 +270,7 @@ fn focused_process_metrics(response: &Value, pid: i64) -> Option<FocusedProcessM
         memory_bytes: row.get("memory_bytes")?.as_u64()?,
         mem_percent: row.get("mem_percent")?.as_f64()?,
         process_count: row.get("process_count")?.as_u64()?,
-        network_socket_count: row.get("network_socket_count")?.as_u64()?,
+        socket_count: row.get("socket_count")?.as_u64()?,
         thread_count: row.get("thread_count")?.as_u64()?,
         uptime_seconds: row.get("uptime_seconds")?.as_u64()?,
         disk_read_bytes: row.get("disk_read_bytes")?.as_u64()?,
@@ -247,36 +278,43 @@ fn focused_process_metrics(response: &Value, pid: i64) -> Option<FocusedProcessM
     })
 }
 
+/// The `focused_app_details` segment feeds a document template, so the rows
+/// are rendered plain: the template owns colour.
 fn focused_app_details(app: &FocusedApp, metrics: &FocusedProcessMetrics) -> String {
-    [
-        format!("Bundle: {}", bundle_label(app)),
-        format!("PID: {} · Process: {}", app.pid, metrics.comm),
-        format!("CPU: {:.1}%", metrics.cpu_percent),
-        format!(
-            "Memory: {} ({:.1}%)",
-            format_bytes(metrics.memory_bytes),
-            metrics.mem_percent
-        ),
-        format!(
-            "Network: {} IPv4/IPv6 sockets",
-            metrics.network_socket_count
-        ),
-        format!(
-            "Processes: {} · Threads: {}",
-            metrics.process_count, metrics.thread_count,
-        ),
-        format!("Uptime: {}", format_duration(metrics.uptime_seconds)),
-        format!(
-            "Disk I/O: {} read · {} written",
-            format_bytes(metrics.disk_read_bytes),
-            format_bytes(metrics.disk_write_bytes)
-        ),
-    ]
-    .join("\n")
+    focused_app_identity(app)
+        .row("Process", Markup::text(&metrics.comm))
+        .row("CPU", format!("{:.1}%", metrics.cpu_percent))
+        .row(
+            "Memory",
+            format!(
+                "{} ({:.1}%)",
+                bytes_iec(metrics.memory_bytes),
+                metrics.mem_percent
+            ),
+        )
+        .row("Sockets", metrics.socket_count.to_string())
+        .row("Processes", metrics.process_count.to_string())
+        .row("Threads", metrics.thread_count.to_string())
+        .row("Uptime", duration_uptime(metrics.uptime_seconds))
+        .row(
+            "Disk I/O",
+            format!(
+                "{} read · {} written",
+                bytes_iec(metrics.disk_read_bytes),
+                bytes_iec(metrics.disk_write_bytes)
+            ),
+        )
+        .render_plain()
 }
 
 fn focused_app_placeholder(app: &FocusedApp, state: &str) -> String {
-    format!("Bundle: {}\nPID: {}\n{state}", bundle_label(app), app.pid)
+    focused_app_identity(app).note(state).render_plain()
+}
+
+fn focused_app_identity(app: &FocusedApp) -> Preview {
+    Preview::new()
+        .row("Bundle", Markup::text(bundle_label(app)))
+        .row("PID", app.pid.to_string())
 }
 
 fn bundle_label(app: &FocusedApp) -> &str {
@@ -285,39 +323,6 @@ fn bundle_label(app: &FocusedApp) -> &str {
         "Unavailable"
     } else {
         bundle
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    if bytes < 1_024 {
-        return format!("{bytes} B");
-    }
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1_024.0 && unit < UNITS.len() - 1 {
-        value /= 1_024.0;
-        unit += 1;
-    }
-    if value.fract().abs() < 0.05 || value >= 100.0 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-fn format_duration(seconds: u64) -> String {
-    let days = seconds / 86_400;
-    let hours = seconds % 86_400 / 3_600;
-    let minutes = seconds % 3_600 / 60;
-    if days > 0 {
-        format!("{days}d {hours}h")
-    } else if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else if minutes > 0 {
-        format!("{minutes}m")
-    } else {
-        format!("{seconds}s")
     }
 }
 
@@ -553,7 +558,7 @@ mod tests {
             memory_bytes: 1_610_612_736,
             mem_percent: 6.25,
             process_count: 9,
-            network_socket_count: 7,
+            socket_count: 7,
             thread_count: 42,
             uptime_seconds: 7_384,
             disk_read_bytes: 536_870_912,
@@ -562,7 +567,28 @@ mod tests {
 
         assert_eq!(
             focused_app_details(&app, &metrics),
-            "Bundle: org.mozilla.firefox\nPID: 4242 · Process: firefox\nCPU: 12.5%\nMemory: 1.5 GB (6.2%)\nNetwork: 7 IPv4/IPv6 sockets\nProcesses: 9 · Threads: 42\nUptime: 2h 3m\nDisk I/O: 512 MB read · 64 MB written"
+            "Bundle        org.mozilla.firefox\n\
+PID           4242\n\
+Process       firefox\n\
+CPU           12.5%\n\
+Memory        1.5 GiB (6.2%)\n\
+Sockets       7\n\
+Processes     9\n\
+Threads       42\n\
+Uptime        2h 3m\n\
+Disk I/O      512 MiB read · 64 MiB written"
+        );
+    }
+
+    #[test]
+    fn focused_app_details_keep_literal_hashes_from_external_names() {
+        let app = FocusedApp {
+            pid: 7,
+            bundle_id: "com.example.#[dev]".into(),
+        };
+        assert_eq!(
+            focused_app_placeholder(&app, "Metrics unavailable"),
+            "Bundle        com.example.#[dev]\nPID           7\nMetrics unavailable"
         );
     }
 
@@ -574,7 +600,7 @@ mod tests {
         };
         assert_eq!(
             focused_app_placeholder(&app, "Collecting metrics…"),
-            "Bundle: com.example.Editor\nPID: 99\nCollecting metrics…"
+            "Bundle        com.example.Editor\nPID           99\nCollecting metrics…"
         );
     }
 
@@ -592,7 +618,7 @@ mod tests {
                 "memory_bytes": 2048,
                 "mem_percent": 0.5,
                 "process_count": 4,
-                "network_socket_count": 2,
+                "socket_count": 2,
                 "thread_count": 3,
                 "uptime_seconds": 4,
                 "disk_read_bytes": 5,
@@ -602,7 +628,7 @@ mod tests {
 
         let metrics = focused_process_metrics(&response, 42).expect("metrics");
         assert_eq!(metrics.comm, "right");
-        assert_eq!(metrics.network_socket_count, 2);
+        assert_eq!(metrics.socket_count, 2);
         assert_eq!(metrics.process_count, 4);
         assert_eq!(metrics.disk_write_bytes, 6);
     }
@@ -650,5 +676,33 @@ mod tests {
             })
             .is_none());
         assert!(state.is_current(&current));
+    }
+
+    #[tokio::test]
+    async fn startup_publishes_the_scripted_process_table_as_titled_rows() {
+        use flash_plugin::testing::Harness;
+
+        let mut harness = Harness::new("processes");
+        let ctx = harness.context();
+        let startup = tokio::spawn(async move { Processes.on_start(ctx).await });
+
+        let (id, method, params) = harness.next_host_request().await.expect("table read");
+        assert_eq!(method, "host.process_table");
+        assert_eq!(params, serde_json::json!({ "sample_window_ms": 150 }));
+        assert!(harness.reply_host(
+            id,
+            serde_json::json!({ "ok": true, "processes": [
+                { "pid": 1, "comm": "launchd", "cpu_percent": 0.4, "mem_percent": 0.1 }
+            ]})
+        ));
+        startup.await.unwrap();
+
+        let rows = harness.drain_published_rows().expect("catalog published");
+        assert!(!rows.is_empty());
+        for row in &rows {
+            assert_eq!(row.source, SOURCE_PROCESSES);
+            assert!(!row.title.is_empty());
+        }
+        assert_eq!(rows[0].title, "launchd");
     }
 }

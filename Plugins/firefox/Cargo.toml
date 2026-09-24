@@ -8,6 +8,15 @@ license = "MIT"
 name = "flash-plugin-firefox"
 path = "src/main.rs"
 
+# Firefox's native-messaging host for the bundled tab-bridge add-on. FIREFOX
+# spawns this one, per message, with Mozilla's 4-byte length framing — it is
+# not a Flash plugin, never appears in a manifest `exec`, and the repository
+# scanner cannot reach it (it looks exactly one level below Plugins/ for a
+# manifest.json).
+[[bin]]
+name = "flash-plugin-firefox-bridge"
+path = "src/bridge.rs"
+
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
 serde = { version = "1", features = ["derive"] }

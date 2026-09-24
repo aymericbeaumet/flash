@@ -41,7 +41,13 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     }
     return caps
   }
+  /// Registry-level gate (is any matching app running?); the per-context
+  /// selector match happens in `supports(_:)`. A terminal-scoped plugin is
+  /// instantiated only while a known terminal emulator runs, and is never
+  /// consulted for hints in any other app — which is what keeps the warm
+  /// prepared-model path zero-hop outside terminals.
   var activationPolicy: FlashSourceActivationPolicy {
+    if plugin.manifest.selector.onlyTerminals { return .terminalBundles }
     let manifestBundles = Set(plugin.manifest.onlyBundleIDs)
     return manifestBundles.isEmpty ? .always : .bundleIDs(manifestBundles)
   }
@@ -86,7 +92,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   func discover(in context: AppContext) throws -> [JumpTarget] {
     plugin.discoverTargets(
       context: context,
-      timeout: Double(FlashTunables.flashlightLiveQueryTimeoutMs) / 1_000)
+      timeout: Double(FlashTunables.hintProviderTimeoutMs) / 1_000)
   }
 
   /// Warm candidates are a synchronous host-memory read of the push-based
@@ -209,8 +215,8 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
       return .performed(pid: pid, navigationURL: navigationURL)
     case .unhandled:
       return .unhandled
-    case .failed:
-      return .failed
+    case .failed(let reason):
+      return .failed(reason: reason)
     }
   }
 
@@ -219,39 +225,8 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   }
 
   private static func sourceActionCapabilities(_ actions: [String]) -> FlashSourceCapabilities {
-    var caps: FlashSourceCapabilities = []
-    for action in actions {
-      switch action {
-      case "tab_select":
-        caps.insert(.tabSelection)
-      case "tab_next", "tab_prev", "tab_previous", "tab_first", "tab_last":
-        caps.insert(.tabNavigation)
-      case "tab_new":
-        caps.insert(.tabCreation)
-      case "tab_close":
-        caps.insert(.tabClosing)
-      case "tab_move_previous", "tab_move_next":
-        caps.insert(.tabReorder)
-      case "pane_next", "pane_previous":
-        caps.insert(.paneNavigation)
-      case "pane_split_vertical", "pane_split_horizontal":
-        caps.insert(.paneSplitting)
-      case "pane_close":
-        caps.insert(.paneClosing)
-      case "tab_reopen":
-        caps.insert(.tabReopen)
-      case "scroll_top", "scroll_bottom":
-        caps.insert(.scrollExtremes)
-      case "app_reload":
-        caps.insert(.reload)
-      case "resource_archive":
-        caps.insert(.resourceArchiving)
-      case "resource_next", "resource_previous":
-        caps.insert(.resourceNavigation)
-      default:
-        break
-      }
+    actions.reduce(into: []) { caps, name in
+      if let action = SourceAction.byWireName[name] { caps.insert(action.requiredCapability) }
     }
-    return caps
   }
 }

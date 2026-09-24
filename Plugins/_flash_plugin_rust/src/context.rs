@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
 use crate::emit::Emitter;
 use crate::process::{self, ManagedChild, ManagedChildError};
-use crate::types::{Candidate, PerformResponse, RunningApplication};
+use crate::status::{PreviewTooLarge, StatusSegment, StatusValue};
+use crate::types::{Candidate, Event, PerformResponse, RunningApplication};
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
@@ -29,9 +30,9 @@ const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
 const DEFAULT_COMMAND_SLOW_THRESHOLD: Duration = Duration::from_secs(1);
 
-/// Canonical `call_host` sentinels (spec-pinned): `call_host` never errors and
-/// never returns nil — host death and the call timeout arrive as these result
-/// objects instead.
+/// Canonical `call_host` sentinels (pinned in `protocol.json`): `call_host`
+/// never errors and never returns nil — host death and the call timeout
+/// arrive as these result objects instead.
 const HOST_CLOSED_ERROR: &str = "host closed stdin";
 const HOST_TIMEOUT_ERROR: &str = "host call timed out";
 
@@ -43,6 +44,9 @@ const HOST_TIMEOUT_ERROR: &str = "host call timed out";
 pub struct NormalModeTarget {
     pub pid: i64,
     pub bundle_id: String,
+    /// The frontmost window's WindowServer id, when it has one. Metadata
+    /// only — it names a window without reading anything from it.
+    pub window_id: Option<i64>,
 }
 
 /// Per-process runtime handed to every plugin callback. Holds identity, the
@@ -61,6 +65,63 @@ pub struct Context {
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
     running_applications: Arc<Mutex<Vec<RunningApplication>>>,
+    poll: Arc<PollRegistry>,
+}
+
+/// Cadences this plugin has asked the host to drive. Plugins never arm their
+/// own timers: `interval` registers a period with the core, which folds every
+/// registration in the app onto one clock and sends a `core:poll:<name>` event
+/// when each is due. The broadcast fans those ticks out to the waiting tasks;
+/// a receiver that lags because its callback is still running simply misses
+/// ticks, which is the backpressure we want from an overrunning collector.
+pub(crate) struct PollRegistry {
+    intervals: Mutex<BTreeMap<String, f64>>,
+    ticks: broadcast::Sender<String>,
+    counter: AtomicU64,
+}
+
+/// A live cadence registration. Dropping it changes nothing — the callback
+/// keeps running — but it lets a poller whose useful rate varies (a retry
+/// backoff, an idle backend) move its own deadline instead of registering at
+/// its fastest rate and discarding most ticks.
+pub struct PollHandle {
+    name: String,
+    ctx: Context,
+}
+
+impl PollHandle {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Re-register at a new cadence, effective from the host's next plan.
+    pub fn set_period(&self, period: Duration) {
+        self.ctx.repoll(&self.name, Some(period));
+    }
+
+    /// Stop the cadence. The callback stays alive but never ticks again.
+    pub fn cancel(&self) {
+        self.ctx.repoll(&self.name, None);
+    }
+}
+
+impl PollRegistry {
+    fn new() -> Self {
+        Self {
+            intervals: Mutex::new(BTreeMap::new()),
+            ticks: broadcast::channel(64).0,
+            counter: AtomicU64::new(0),
+        }
+    }
+
+    /// Names are host-validated (`[a-z0-9_-]`), and the host carries them in
+    /// the event name, so keep them boring and unique.
+    fn register(&self, period: Duration) -> (String, BTreeMap<String, f64>) {
+        let name = format!("i{}", self.counter.fetch_add(1, Ordering::Relaxed));
+        let mut intervals = self.intervals.lock().expect("poll registry");
+        intervals.insert(name.clone(), period.as_secs_f64());
+        (name, intervals.clone())
+    }
 }
 
 /// Serializes refresh producers and snapshots running applications only after
@@ -95,6 +156,66 @@ impl RefreshGate {
         let _guard = self.inner.try_lock().ok()?;
         let applications = ctx.running_applications();
         Some(operation(ctx.clone(), applications).await)
+    }
+}
+
+/// Tells which host events can change what a plugin reads from a set of apps
+/// (tab lists over AppleScript, an AX tree, …), so an event-driven refresh
+/// runs only for those and a poll catches the rest. Remembers the previously
+/// focused bundle and the apps' running instances between calls: keep one per
+/// plugin in a `static`.
+#[derive(Debug, Default)]
+pub struct AppWatch {
+    focused: Mutex<Option<String>>,
+    instances: Mutex<Option<Vec<(String, i64)>>>,
+}
+
+impl AppWatch {
+    pub const fn new() -> Self {
+        Self {
+            focused: Mutex::new(None),
+            instances: Mutex::new(None),
+        }
+    }
+
+    /// Whether `event` can change the watched apps, those whose bundle id
+    /// `ours` accepts: focus moving into, within or out of one; one launching
+    /// or quitting; the set of their running instances changing (`running`
+    /// is read for `core:apps.changed` only); a flashlight session opening.
+    /// No other event can.
+    pub fn touches(
+        &self,
+        event: &Event,
+        running: impl FnOnce() -> Vec<RunningApplication>,
+        ours: impl Fn(&str) -> bool,
+    ) -> bool {
+        match event.name.as_str() {
+            "core:session.opened" => true,
+            "core:focus.changed" | "core:window.focus.changed" => {
+                let current = event.bundle_id.clone().unwrap_or_default();
+                let previous = self
+                    .focused
+                    .lock()
+                    .ok()
+                    .and_then(|mut focused| focused.replace(current.clone()));
+                ours(&current) || previous.is_some_and(|previous| ours(&previous))
+            }
+            "core:apps.launched" | "core:apps.terminated" => {
+                event.bundle_id.as_deref().is_none_or(&ours)
+            }
+            "core:apps.changed" => {
+                let mut instances: Vec<(String, i64)> = running()
+                    .into_iter()
+                    .filter(|app| ours(&app.bundle_id))
+                    .map(|app| (app.bundle_id, app.pid))
+                    .collect();
+                instances.sort();
+                self.instances.lock().map_or(true, |mut last| {
+                    last.replace(instances.clone()) != Some(instances)
+                })
+            }
+            _ => false,
+        }
     }
 }
 
@@ -154,23 +275,62 @@ impl Context {
 
     /// Publish status-bar segment values declared by this plugin's
     /// `status` manifest section (the `status` notification). The host
-    /// exposes each value as `#{plugin:<plugin-id>.<segment>}` in
-    /// `[statusbar].template`. An EMPTY value clears the segment host-side.
+    /// exposes each value as `#{flash.plugin.<plugin-id>.<segment>}` in
+    /// `[statusbar].template`. Every value is a [`StatusValue`] (plain
+    /// strings convert as ready-made markup); an EMPTY value clears the
+    /// segment host-side. A preview that would exceed the host's inline
+    /// limit is dropped with a content-free warning and the visible text is
+    /// published alone.
     pub fn status<I, K, V>(&self, segments: I)
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: Into<StatusSegment>,
     {
         let mut object = serde_json::Map::new();
         for (name, value) in segments {
             let name = name.as_ref().trim();
-            let value = value.as_ref().trim();
-            if !name.is_empty() {
-                object.insert(name.to_string(), json!(value));
+            if name.is_empty() {
+                continue;
             }
+            let wire = match value.into() {
+                StatusSegment::Value(value) => json!(self.render_status_value(name, &value).trim()),
+                StatusSegment::Carousel(carousel) => {
+                    let lines: Vec<String> = carousel
+                        .lines
+                        .iter()
+                        .map(|line| self.render_status_value(name, line).trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect();
+                    json!({
+                        "prefix": carousel.prefix.as_str(),
+                        "lines": lines,
+                        "cycle_seconds": carousel.cycle.as_secs_f64().max(1.0),
+                    })
+                }
+            };
+            object.insert(name.to_string(), wire);
         }
         self.emit.notify("status", json!({ "segments": object }));
+    }
+
+    /// The wire string for one value; a preview above the host's inline limit
+    /// is dropped with a content-free warning so the visible text still lands.
+    fn render_status_value(&self, name: &str, value: &StatusValue) -> String {
+        match value.render() {
+            Ok(rendered) => rendered,
+            Err(PreviewTooLarge { encoded_bytes }) => {
+                self.log_fields(
+                    "warn",
+                    "[plugin] status preview exceeds the inline limit; published without it",
+                    BTreeMap::from([
+                        ("segment".to_string(), name.to_string()),
+                        ("encoded_bytes".to_string(), encoded_bytes.to_string()),
+                    ]),
+                );
+                value.visible.as_str().to_string()
+            }
+        }
     }
 
     /// Structured, content-free logging (the `log` notification): counts,
@@ -200,8 +360,15 @@ impl Context {
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.host_pending.lock() {
+            if pending.len() >= HOST_CALL_CAPACITY {
+                return json!({ "ok": false, "error": "host call capacity exceeded" });
+            }
             pending.insert(id, tx);
         }
+        let _pending_call = PendingCall {
+            pending: self.host_pending.clone(),
+            id,
+        };
         let outcome = tokio::time::timeout(timeout, async {
             self.emit.request(id, method, params).await?;
             rx.await.map_err(|_| crate::emit::EmitError::Closed)
@@ -219,7 +386,7 @@ impl Context {
             Ok(Err(crate::emit::EmitError::Rejected)) => {
                 json!({ "ok": false, "error": "host call exceeded outbound frame limit" })
             }
-            Ok(Err(crate::emit::EmitError::Closed)) => {
+            Ok(Err(crate::emit::EmitError::Closed | crate::emit::EmitError::Full)) => {
                 json!({ "ok": false, "error": HOST_CLOSED_ERROR })
             }
             Err(_) => {
@@ -237,6 +404,24 @@ impl Context {
                 );
                 json!({ "ok": false, "error": HOST_TIMEOUT_ERROR })
             }
+        }
+    }
+
+    /// Fulfil the in-flight host call `id` with the host's `result`; `false`
+    /// when no call awaits that id (late and unsolicited replies are dropped).
+    pub(crate) fn resolve_host_call(&self, id: u64, result: Value) -> bool {
+        self.host_pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&id))
+            .is_some_and(|tx| tx.send(result).is_ok())
+    }
+
+    /// Drop every in-flight host call so each waiter observes the closed
+    /// sentinel (a dropped sender resolves its receiver as an error).
+    pub(crate) fn abandon_host_calls(&self) {
+        if let Ok(mut pending) = self.host_pending.lock() {
+            pending.clear();
         }
     }
 
@@ -311,7 +496,14 @@ impl Context {
         if pid <= 0 || bundle_id.is_empty() {
             return None;
         }
-        Some(NormalModeTarget { pid, bundle_id })
+        Some(NormalModeTarget {
+            pid,
+            bundle_id,
+            window_id: result
+                .get("window_id")
+                .and_then(Value::as_i64)
+                .filter(|id| *id > 0),
+        })
     }
 
     /// Activate (raise) the app owning `pid` (`host.activate`). Requires the
@@ -356,8 +548,9 @@ impl Context {
 
     /// Sample one process through `host.process_table`. Exact-PID mode also
     /// includes resident bytes, lifetime disk I/O, uptime, thread count, and
-    /// the current IPv4/IPv6 socket count. The host performs the libproc work
-    /// off its main thread. Requires the `process_control` capability.
+    /// the open socket descriptor count across the process tree. CPU is the
+    /// delta since the host's previous sample of that pid, so steady polling
+    /// never sleeps host-side. Requires the `process_control` capability.
     pub async fn process_metrics(&self, pid: i64, sample_window_ms: Option<u64>) -> Value {
         let mut params = json!({ "pid": pid });
         if let Some(window) = sample_window_ms {
@@ -505,22 +698,76 @@ impl Context {
             .unwrap_or_default()
     }
 
-    /// Run one background refresh at a fixed interval. The first tick waits for
-    /// `period`; callers perform their authoritative initial refresh in
-    /// `on_start`. The callback is awaited before scheduling the next tick, so
-    /// one interval can never overlap itself.
-    pub fn interval<F, Fut>(&self, period: Duration, mut callback: F) -> tokio::task::JoinHandle<()>
+    /// Run one background refresh at a fixed cadence.
+    ///
+    /// This does **not** arm a timer in the plugin. It registers `period` with
+    /// the host, which drives every poller in Flash — core watchers included —
+    /// from a single clock, and ticks this callback when the registration is
+    /// due. The first tick waits for `period`; callers perform their
+    /// authoritative initial refresh in `on_start`. The callback is awaited
+    /// before the next tick is accepted, so one cadence can never overlap
+    /// itself; ticks that arrive meanwhile are dropped rather than queued.
+    ///
+    /// Reach for this only when nothing else can tell you the value changed.
+    /// An event (`on_event`) is always preferable, and the host exposes one
+    /// for every source it can observe.
+    pub fn interval<F, Fut>(&self, period: Duration, mut callback: F) -> PollHandle
     where
         F: FnMut(Context) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        let (name, intervals) = self.poll.register(period);
+        self.emit.notify("poll", json!({ "intervals": intervals }));
+        let mut ticks = self.poll.ticks.subscribe();
         let ctx = self.clone();
-        tokio::spawn(async move {
+        let handle = PollHandle {
+            name: name.clone(),
+            ctx: self.clone(),
+        };
+        drop(tokio::spawn(async move {
             loop {
-                tokio::time::sleep(period).await;
-                callback(ctx.clone()).await;
+                match ticks.recv().await {
+                    Ok(fired) if fired == name => {
+                        callback(ctx.clone()).await;
+                        // The host cannot see that this callback was still
+                        // running — a tick is a one-way frame — so the skip
+                        // happens here: anything that arrived while it ran is
+                        // a stale deadline, and running the collector
+                        // back-to-back to catch up is exactly the pile-up a
+                        // shared clock exists to prevent.
+                        while ticks.try_recv().is_ok() {}
+                    }
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
             }
-        })
+        }));
+        handle
+    }
+
+    /// Fan a host tick out to the tasks waiting on that registration.
+    pub(crate) fn deliver_poll_tick(&self, name: &str) {
+        drop(self.poll.ticks.send(name.to_string()));
+    }
+
+    /// Replace or remove one registration and republish the complete set, so
+    /// the host's view is always the plugin's whole answer rather than a diff
+    /// it has to reconcile.
+    fn repoll(&self, name: &str, period: Option<Duration>) {
+        let intervals = {
+            let mut intervals = self.poll.intervals.lock().expect("poll registry");
+            match period {
+                Some(period) => {
+                    intervals.insert(name.to_string(), period.as_secs_f64());
+                }
+                None => {
+                    intervals.remove(name);
+                }
+            }
+            intervals.clone()
+        };
+        self.emit.notify("poll", json!({ "intervals": intervals }));
     }
 
     pub(crate) async fn prepare_dirs(&self) {
@@ -535,6 +782,22 @@ impl Context {
             self.bin_dir(),
         ] {
             let _ = tokio::fs::create_dir_all(dir).await;
+        }
+    }
+}
+
+/// Aborting a request handler also releases its host correlation entry.
+struct PendingCall {
+    pending: HostPending,
+    id: u64,
+}
+
+pub(crate) const HOST_CALL_CAPACITY: usize = 64;
+
+impl Drop for PendingCall {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(&self.id);
         }
     }
 }
@@ -554,35 +817,40 @@ fn wifi_ssid_from_response(response: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn env_or(name: &str, fallback: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+/// The identity, data directory and settings Flash injects through the
+/// `FLASH_PLUGIN_*` environment.
+pub(crate) struct PluginEnv {
+    pub(crate) plugin_id: String,
+    pub(crate) version: String,
+    pub(crate) data_dir: Option<PathBuf>,
+    pub(crate) config: Value,
 }
 
-/// Build a [`Context`] from the `FLASH_PLUGIN_*` environment Flash injects.
-pub(crate) fn context_from_env(
-    emit: Emitter,
-    host_pending: HostPending,
-    host_counter: Arc<AtomicU64>,
-) -> Context {
-    let data_dir = std::env::var("FLASH_PLUGIN_DATA_DIR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
-    let config = std::env::var("FLASH_PLUGIN_CONFIG")
-        .ok()
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
-    Context {
-        plugin_id: env_or("FLASH_PLUGIN_ID", "plugin"),
-        version: env_or("FLASH_PLUGIN_VERSION", "0.0.0"),
-        data_dir,
-        emit,
-        config,
-        host_pending,
-        host_counter,
-        running_applications: Arc::new(Mutex::new(Vec::new())),
+impl PluginEnv {
+    pub(crate) fn from_process() -> Self {
+        let env_or = |name: &str, fallback: &str| {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        Self {
+            plugin_id: env_or("FLASH_PLUGIN_ID", "plugin"),
+            version: env_or("FLASH_PLUGIN_VERSION", "0.0.0"),
+            data_dir: std::env::var("FLASH_PLUGIN_DATA_DIR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from),
+            config: parse_config(std::env::var("FLASH_PLUGIN_CONFIG").ok().as_deref()),
+        }
     }
+}
+
+/// `FLASH_PLUGIN_CONFIG` carries the `[plugin.<id>]` settings as a JSON
+/// object. Configuration is optional at the protocol level, so an absent,
+/// empty, malformed or non-object value is an empty table — never a refusal
+/// to start.
+pub(crate) fn parse_config(raw: Option<&str>) -> Value {
+    raw.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
 }
 
 // ---------------------------------------------------------------------------
@@ -621,7 +889,7 @@ impl CommandOutput {
 /// Run `osascript -e <script>` with the same sandboxed env + timeout as
 /// `run_command`.
 pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
-    run_command(
+    let output = run_command(
         ctx,
         &[
             "/usr/bin/osascript".to_string(),
@@ -630,7 +898,75 @@ pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> Co
         ],
         timeout,
     )
-    .await
+    .await;
+    // The error number names the failure (-1743: not authorized to send Apple
+    // events, -600: the app is not running) without the message's content.
+    if let Some(code) = (!output.ok)
+        .then(|| osascript_error_code(&output.stderr))
+        .flatten()
+    {
+        if let Some(suppressed) = admit_subprocess_warning(&format!("osascript:{code}")) {
+            let mut fields = BTreeMap::from([
+                ("error_code".to_string(), code.to_string()),
+                ("status".to_string(), output.status.to_string()),
+            ]);
+            if suppressed > 0 {
+                fields.insert("suppressed".to_string(), suppressed.to_string());
+            }
+            ctx.log_fields("warn", "[plugin] osascript failed", fields);
+        }
+    }
+    output
+}
+
+/// The AppleScript error number osascript ends its error line with:
+/// `…: execution error: <message> (-1743)`.
+fn osascript_error_code(stderr: &str) -> Option<i64> {
+    let line = stderr.trim_end();
+    let inner = line.strip_suffix(')')?;
+    let open = inner.rfind('(')?;
+    inner[open + 1..].parse().ok()
+}
+
+/// One warning per kind of subprocess trouble per window: a plugin polling a
+/// failing or slow program would otherwise log it on every tick.
+const SUBPROCESS_WARNING_WINDOW: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+struct WarningGate {
+    /// Per key: when the last warning was admitted, and how many were held
+    /// back since.
+    admitted: HashMap<String, (Instant, u64)>,
+}
+
+impl WarningGate {
+    /// `Some(held back since the last one)` when a warning for `key` may be
+    /// logged at `now`, `None` when it is held back.
+    fn admit(&mut self, key: &str, now: Instant) -> Option<u64> {
+        match self.admitted.get_mut(key) {
+            Some((last, held)) if now.duration_since(*last) < SUBPROCESS_WARNING_WINDOW => {
+                *held += 1;
+                None
+            }
+            Some((last, held)) => {
+                *last = now;
+                Some(std::mem::take(held))
+            }
+            None => {
+                self.admitted.insert(key.to_string(), (now, 0));
+                Some(0)
+            }
+        }
+    }
+}
+
+static SUBPROCESS_WARNINGS: std::sync::LazyLock<Mutex<WarningGate>> =
+    std::sync::LazyLock::new(|| Mutex::new(WarningGate::default()));
+
+fn admit_subprocess_warning(key: &str) -> Option<u64> {
+    SUBPROCESS_WARNINGS
+        .lock()
+        .map_or(Some(0), |mut gate| gate.admit(key, Instant::now()))
 }
 
 /// Run a subprocess with Flash's plugin sandbox environment: the plugin data
@@ -755,36 +1091,6 @@ fn configure_command(ctx: &Context, command: &mut tokio::process::Command) {
         );
 }
 
-/// Escape plain text before inserting it into a rich status value.
-///
-/// The status grammar uses `#` to open markup and `##` for a literal hash.
-/// Apply this only to externally sourced text, not to intentional markup.
-pub fn escape_status_text(value: &str) -> String {
-    value.replace('#', "##")
-}
-
-/// Attach a self-contained rich popup to a visible status-bar value.
-///
-/// The popup body is encoded byte-for-byte so status markup, newlines, and
-/// non-ASCII text survive the `#[popup=inline:…]` marker without being parsed
-/// as part of the surrounding status template.
-pub fn inline_status_popup(visible: &str, body: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-    let mut encoded = String::with_capacity(body.len());
-    for byte in body.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-    }
-
-    format!("#[popup=inline:{encoded}]{visible}#[nopopup]")
-}
-
 fn command_latency_requires_warning(
     output: &CommandOutput,
     elapsed: Duration,
@@ -804,16 +1110,20 @@ fn log_command_latency(
     if !command_latency_requires_warning(output, elapsed, slow_threshold) {
         return;
     }
-    ctx.log_fields(
-        "warn",
-        "[plugin] subprocess slow",
-        BTreeMap::from([
-            ("executable".to_string(), executable.to_string()),
-            ("elapsed_ms".to_string(), elapsed.as_millis().to_string()),
-            ("timeout_ms".to_string(), timeout.as_millis().to_string()),
-            ("status".to_string(), output.status.to_string()),
-        ]),
-    );
+    let timed_out = output.status == 124;
+    let Some(suppressed) = admit_subprocess_warning(&format!("{executable}:{timed_out}")) else {
+        return;
+    };
+    let mut fields = BTreeMap::from([
+        ("executable".to_string(), executable.to_string()),
+        ("elapsed_ms".to_string(), elapsed.as_millis().to_string()),
+        ("timeout_ms".to_string(), timeout.as_millis().to_string()),
+        ("status".to_string(), output.status.to_string()),
+    ]);
+    if suppressed > 0 {
+        fields.insert("suppressed".to_string(), suppressed.to_string());
+    }
+    ctx.log_fields("warn", "[plugin] subprocess slow", fields);
 }
 
 /// Wrap `value` as an AppleScript string literal (escaping `\` and `"`).
@@ -833,39 +1143,36 @@ pub fn shorten(value: &str) -> String {
     format!("{head}...")
 }
 
-/// Assemble a [`Context`] from parts with fresh host-RPC state. Shared by the
-/// crate-internal tests and the public [`crate::testing`] harness; the
-/// production path stays [`context_from_env`].
-pub(crate) fn assemble_context(
-    plugin_id: String,
-    version: String,
-    data_dir: PathBuf,
-    emit: Emitter,
-    config: Value,
-) -> Context {
+/// Assemble a [`Context`] with fresh host-RPC state. The runtime feeds it the
+/// process environment; the [`crate::testing`] harnesses feed it a synthetic
+/// one.
+pub(crate) fn assemble_context(env: PluginEnv, emit: Emitter) -> Context {
     Context {
-        plugin_id,
-        version,
-        data_dir: Some(data_dir),
+        plugin_id: env.plugin_id,
+        version: env.version,
+        data_dir: env.data_dir,
         emit,
-        config,
+        config: env.config,
         host_pending: Arc::new(Mutex::new(HashMap::new())),
         host_counter: Arc::new(AtomicU64::new(0)),
         running_applications: Arc::new(Mutex::new(Vec::new())),
+        poll: Arc::new(PollRegistry::new()),
     }
 }
 
 #[cfg(test)]
-pub(crate) fn test_context_with_rx() -> (Context, tokio::sync::mpsc::Receiver<Vec<u8>>) {
+pub(crate) fn test_context_with_rx() -> (
+    Context,
+    tokio::sync::mpsc::Receiver<crate::emit::OutboundFrame>,
+) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
-    let ctx = assemble_context(
-        "test".to_string(),
-        "0.0.0".to_string(),
-        PathBuf::from("."),
-        Emitter::new(tx),
-        json!({}),
-    );
-    (ctx, rx)
+    let env = PluginEnv {
+        plugin_id: "test".to_string(),
+        version: "0.0.0".to_string(),
+        data_dir: Some(PathBuf::from(".")),
+        config: json!({}),
+    };
+    (assemble_context(env, Emitter::new(tx)), rx)
 }
 
 #[cfg(test)]
@@ -876,6 +1183,131 @@ pub(crate) fn test_context() -> Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_event(name: &str, bundle: &str) -> Event {
+        Event {
+            name: name.to_string(),
+            bundle_id: Some(bundle.to_string()),
+            ..Event::default()
+        }
+    }
+
+    fn app(bundle: &str, pid: i64) -> RunningApplication {
+        RunningApplication {
+            bundle_id: bundle.to_string(),
+            pid,
+            ..RunningApplication::default()
+        }
+    }
+
+    #[test]
+    fn subprocess_warnings_are_admitted_once_a_window_with_a_held_back_count() {
+        let mut gate = WarningGate::default();
+        let start = Instant::now();
+        assert_eq!(gate.admit("osascript:false", start), Some(0));
+        assert_eq!(
+            gate.admit("osascript:false", start + Duration::from_secs(10)),
+            None
+        );
+        assert_eq!(
+            gate.admit("osascript:false", start + Duration::from_secs(20)),
+            None
+        );
+        assert_eq!(gate.admit("osascript:true", start), Some(0), "per key");
+        assert_eq!(
+            gate.admit("osascript:false", start + SUBPROCESS_WARNING_WINDOW),
+            Some(2)
+        );
+        assert_eq!(
+            gate.admit("osascript:false", start + SUBPROCESS_WARNING_WINDOW * 3),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn osascript_errors_are_read_by_number_alone() {
+        assert_eq!(
+            osascript_error_code(
+                "35:120: execution error: Not authorized to send Apple events to Safari. (-1743)\n"
+            ),
+            Some(-1743)
+        );
+        assert_eq!(
+            osascript_error_code("execution error: (it) broke (-600)"),
+            Some(-600)
+        );
+        assert_eq!(osascript_error_code("Connection invalid"), None);
+        assert_eq!(osascript_error_code(""), None);
+    }
+
+    #[test]
+    fn app_watch_passes_only_events_that_touch_the_watched_apps() {
+        let watch = AppWatch::new();
+        let ours = |bundle: &str| bundle == "com.example.browser";
+        let none = Vec::new;
+        let focus = |bundle| app_event("core:focus.changed", bundle);
+
+        assert!(!watch.touches(&focus("com.example.editor"), none, ours));
+        assert!(
+            watch.touches(&focus("com.example.browser"), none, ours),
+            "into"
+        );
+        assert!(
+            watch.touches(
+                &app_event("core:window.focus.changed", "com.example.browser"),
+                none,
+                ours
+            ),
+            "within"
+        );
+        assert!(
+            watch.touches(&focus("com.example.mail"), none, ours),
+            "out of"
+        );
+        assert!(!watch.touches(&focus("com.example.editor"), none, ours));
+
+        let launched = |bundle| app_event("core:apps.launched", bundle);
+        assert!(watch.touches(&launched("com.example.browser"), none, ours));
+        assert!(!watch.touches(&launched("com.example.editor"), none, ours));
+
+        let changed = app_event("core:apps.changed", "");
+        let browser = || vec![app("com.example.browser", 7), app("com.example.editor", 8)];
+        assert!(watch.touches(&changed, browser, ours), "first snapshot");
+        let another_app = || vec![app("com.example.editor", 9), app("com.example.browser", 7)];
+        assert!(!watch.touches(&changed, another_app, ours));
+        let relaunched = || vec![app("com.example.browser", 10)];
+        assert!(watch.touches(&changed, relaunched, ours));
+
+        assert!(watch.touches(&app_event("core:session.opened", ""), none, ours));
+        assert!(!watch.touches(&app_event("core:clipboard.changed", ""), none, ours));
+    }
+
+    #[tokio::test]
+    async fn host_call_admission_is_bounded_and_abort_releases_pending_entries() {
+        let (ctx, _rx) = test_context_with_rx();
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..HOST_CALL_CAPACITY {
+            let ctx = ctx.clone();
+            calls.spawn(async move {
+                ctx.call_host_timeout("host.ping", json!({}), Duration::from_secs(60))
+                    .await
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while ctx.host_pending.lock().unwrap().len() != HOST_CALL_CAPACITY {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            ctx.call_host("host.ping", json!({})).await["error"],
+            "host call capacity exceeded"
+        );
+        calls.abort_all();
+        while calls.join_next().await.is_some() {}
+        assert!(ctx.host_pending.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn running_applications_snapshot_is_clone_isolated() {
@@ -920,33 +1352,198 @@ mod tests {
         assert!(ctx.host_pending.lock().unwrap().is_empty());
     }
 
+    #[test]
+    fn config_parses_to_the_settings_object_or_an_empty_table() {
+        assert_eq!(
+            parse_config(Some(r#"{"greeting":"hi","n":3}"#)),
+            json!({ "greeting": "hi", "n": 3 })
+        );
+        for raw in [
+            None,
+            Some(""),
+            Some("{}"),
+            Some("{not json"),
+            Some("[1]"),
+            Some("\"x\""),
+        ] {
+            assert_eq!(parse_config(raw), json!({}), "{raw:?}");
+        }
+    }
+
     #[tokio::test]
-    async fn wifi_ssid_sends_explicit_authorization_intent() {
-        for request_authorization in [false, true] {
-            let (ctx, mut rx) = test_context_with_rx();
-            let pending = ctx.host_pending.clone();
-            let request = tokio::spawn(async move { ctx.wifi_ssid(request_authorization).await });
+    async fn typed_host_wrappers_emit_their_registry_method_and_pinned_params() {
+        use crate::testing::Harness;
+        use std::pin::Pin;
 
-            let frame: Value = serde_json::from_slice(&rx.recv().await.unwrap()).unwrap();
-            assert_eq!(frame["method"], json!("host.wifi_info"));
-            assert_eq!(
-                frame["params"],
-                json!({ "request_authorization": request_authorization })
-            );
-            let id = frame["id"].as_u64().unwrap();
-            pending
-                .lock()
-                .unwrap()
-                .remove(&id)
-                .unwrap()
-                .send(json!({
-                    "ok": true,
-                    "present": true,
-                    "ssid": "Atelier"
-                }))
-                .unwrap();
-
-            assert_eq!(request.await.unwrap().as_deref(), Some("Atelier"));
+        type Call = Box<dyn FnOnce(Context) -> Pin<Box<dyn Future<Output = Value> + Send>>>;
+        macro_rules! call {
+            (|$ctx:ident| $body:expr) => {
+                Box::new(
+                    |$ctx: Context| -> Pin<Box<dyn Future<Output = Value> + Send>> {
+                        Box::pin(async move { json!($body) })
+                    },
+                ) as Call
+            };
+        }
+        // One permissive reply satisfies every wrapper's result decoder.
+        let host_reply = json!({
+            "ok": true, "present": true, "ssid": "Atelier", "body": "b",
+            "pid": 7, "bundle_id": "com.example.App", "value": "v"
+        });
+        let table: Vec<(&str, Value, Call, Value)> = vec![
+            (
+                "host.ping",
+                json!({}),
+                call!(|ctx| ctx.ping_host().await),
+                json!(true),
+            ),
+            (
+                "host.wifi_info",
+                json!({ "request_authorization": false }),
+                call!(|ctx| ctx.wifi_ssid(false).await),
+                json!("Atelier"),
+            ),
+            (
+                "host.wifi_info",
+                json!({ "request_authorization": true }),
+                call!(|ctx| ctx.wifi_ssid(true).await),
+                json!("Atelier"),
+            ),
+            (
+                "host.fetch",
+                json!({ "url": "https://example.com/x" }),
+                call!(|ctx| ctx.fetch("https://example.com/x").await.unwrap()),
+                json!("b"),
+            ),
+            (
+                "host.normal_mode_target",
+                json!({}),
+                call!(|ctx| ctx
+                    .normal_mode_target()
+                    .await
+                    .map(|target| (target.pid, target.bundle_id))),
+                json!([7, "com.example.App"]),
+            ),
+            (
+                "host.activate",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.activate(7).await),
+                json!(true),
+            ),
+            (
+                "host.open",
+                json!({ "url": "https://example.com/x" }),
+                call!(|ctx| ctx.open_url("https://example.com/x").await),
+                json!(true),
+            ),
+            (
+                "host.open",
+                json!({ "bundle_id": "com.example.App" }),
+                call!(|ctx| ctx.open_app("com.example.App").await),
+                json!(true),
+            ),
+            (
+                "host.post_media_key",
+                json!({ "key_code": 16 }),
+                call!(|ctx| ctx.post_media_key(16).await),
+                json!(true),
+            ),
+            (
+                "host.process_table",
+                json!({ "sample_window_ms": 150 }),
+                call!(|ctx| ctx.process_table(Some(150)).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.process_table",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.process_metrics(7, None).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.signal",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.signal(7).await.is_ok()),
+                json!(true),
+            ),
+            (
+                "host.clipboard_write",
+                json!({ "text": "copy" }),
+                call!(|ctx| ctx.clipboard_write("copy").await),
+                json!(true),
+            ),
+            (
+                "host.notify",
+                json!({ "message": "hi", "duration_ms": 900 }),
+                call!(|ctx| ctx.notify("hi", Some(900)).await),
+                json!(true),
+            ),
+            (
+                "host.storage_get",
+                json!({ "key": "k" }),
+                call!(|ctx| ctx.storage_get("k").await),
+                json!("v"),
+            ),
+            (
+                "host.storage_set",
+                json!({ "key": "k", "value": null }),
+                call!(|ctx| ctx.storage_set("k", None).await),
+                json!(true),
+            ),
+            (
+                "host.post_keys",
+                json!({ "pid": 7, "keys": [] }),
+                call!(|ctx| ctx.post_keys(json!({ "pid": 7, "keys": [] })).await),
+                json!(true),
+            ),
+            (
+                "host.post_global_key",
+                json!({ "key_code": 4, "modifiers": ["command"] }),
+                call!(|ctx| ctx.post_global_key(4, &["command"]).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_snapshot",
+                json!({ "pid": 7 }),
+                call!(|ctx| ctx.ax_snapshot(json!({ "pid": 7 })).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_snapshot",
+                json!({ "pid": 8 }),
+                call!(|ctx| ctx
+                    .ax_snapshot_timeout(json!({ "pid": 8 }), Duration::from_secs(1))
+                    .await["ok"]
+                    .clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_perform",
+                json!({ "handle": 3, "action": "AXPress" }),
+                call!(|ctx| ctx.ax_perform(3, "AXPress").await),
+                json!(true),
+            ),
+            (
+                "host.ax_set",
+                json!({ "handle": 3, "attribute": "AXFocused", "value": true }),
+                call!(|ctx| ctx.ax_set(3, "AXFocused", true).await),
+                json!(true),
+            ),
+            (
+                "host.ax_select_child",
+                json!({ "parent": 3, "child": 4 }),
+                call!(|ctx| ctx.ax_select_child(3, 4).await),
+                json!(true),
+            ),
+        ];
+        let mut harness = Harness::new("host-rpc");
+        for (method, params, call, expected) in table {
+            let task = tokio::spawn(call(harness.context()));
+            let (id, actual_method, actual_params) =
+                harness.next_host_request().await.expect(method);
+            assert_eq!((actual_method.as_str(), actual_params), (method, params));
+            assert!(harness.reply_host(id, host_reply.clone()), "{method}");
+            assert_eq!(task.await.unwrap(), expected, "{method}");
         }
     }
 
@@ -1044,55 +1641,150 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inline_status_popup_percent_encodes_markup_whitespace_and_unicode() {
-        assert_eq!(
-            inline_status_popup(
-                "CPU 18%",
-                "#[fg=colour178,bold]CPU#[default]\nCafé: 18% / 82%"
-            ),
-            "#[popup=inline:%23%5Bfg%3Dcolour178%2Cbold%5DCPU%23%5Bdefault%5D%0ACaf%C3%A9%3A%2018%25%20%2F%2082%25]CPU 18%#[nopopup]"
-        );
+    fn drain_frames(
+        rx: &mut tokio::sync::mpsc::Receiver<crate::emit::OutboundFrame>,
+    ) -> Vec<Value> {
+        let mut frames = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            frames.push(serde_json::from_slice(&frame.payload).unwrap());
+        }
+        frames
     }
 
     #[test]
-    fn status_text_escapes_literal_hashes_before_rich_rendering() {
+    fn status_renders_values_trims_them_and_drops_unnamed_segments() {
+        use crate::status::{Preview, StatusValue};
+
+        let (ctx, mut rx) = test_context_with_rx();
+        ctx.status([
+            (
+                " summary ",
+                StatusValue::text(" v ").with_preview(Preview::from_markup("b")),
+            ),
+            ("", StatusValue::text("ignored")),
+            ("cleared", StatusValue::empty()),
+        ]);
+        ctx.status([("raw", "#[bold]on#[default]")]);
+        ctx.status([("owned", String::from(" x "))]);
+
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 3);
         assert_eq!(
-            escape_status_text("Backup #[fg=colour196] #1"),
-            "Backup ##[fg=colour196] ##1"
+            frames[0]["params"]["segments"],
+            json!({ "summary": "#[popup=inline:b] v #[nopopup]", "cleared": "" })
+        );
+        assert_eq!(
+            frames[1]["params"]["segments"],
+            json!({ "raw": "#[bold]on#[default]" })
+        );
+        assert_eq!(frames[2]["params"]["segments"], json!({ "owned": "x" }));
+    }
+
+    #[test]
+    fn oversized_status_preview_publishes_the_visible_text_with_a_content_free_warning() {
+        use crate::status::{Preview, StatusValue, MAX_INLINE_PREVIEW_ENCODED_BYTES};
+
+        let (ctx, mut rx) = test_context_with_rx();
+        let body = "secret ".repeat(MAX_INLINE_PREVIEW_ENCODED_BYTES);
+        ctx.status([(
+            "summary",
+            StatusValue::text("CPU 18%").with_preview(Preview::from_markup(body.as_str())),
+        )]);
+
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0]["method"], json!("log"));
+        assert_eq!(frames[0]["params"]["level"], json!("warn"));
+        let fields = frames[0]["params"]["fields"].as_object().unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields["segment"], json!("summary"));
+        assert!(
+            fields["encoded_bytes"]
+                .as_str()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                > MAX_INLINE_PREVIEW_ENCODED_BYTES
+        );
+        assert!(!frames[0].to_string().contains("secret"));
+        assert_eq!(
+            frames[1]["params"]["segments"],
+            json!({ "summary": "CPU 18%" })
         );
     }
 
     #[tokio::test]
-    async fn context_interval_waits_for_first_tick_and_never_overlaps_itself() {
-        let ctx = test_context();
-        let calls = Arc::new(AtomicU64::new(0));
-        let in_flight = Arc::new(AtomicU64::new(0));
-        let max_in_flight = Arc::new(AtomicU64::new(0));
-        let handle = ctx.interval(Duration::from_millis(5), {
-            let calls = calls.clone();
-            let in_flight = in_flight.clone();
-            let max_in_flight = max_in_flight.clone();
+    async fn context_interval_registers_with_the_host_and_never_overlaps_itself() {
+        let (ctx, mut rx) = test_context_with_rx();
+        let period = Duration::from_millis(50);
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel(4);
+        let (finished_tx, mut finished_rx) = tokio::sync::mpsc::channel(4);
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        ctx.interval(period, {
+            let release = release.clone();
             move |_| {
-                let calls = calls.clone();
-                let in_flight = in_flight.clone();
-                let max_in_flight = max_in_flight.clone();
+                let started_tx = started_tx.clone();
+                let finished_tx = finished_tx.clone();
+                let release = release.clone();
                 async move {
-                    let active = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                    max_in_flight.fetch_max(active, Ordering::SeqCst);
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(8)).await;
-                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    started_tx.send(()).await.unwrap();
+                    release.acquire().await.unwrap().forget();
+                    finished_tx.send(()).await.unwrap();
                 }
             }
         });
 
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        tokio::time::sleep(Duration::from_millis(32)).await;
-        handle.abort();
+        // The plugin arms no timer of its own: it publishes the cadence and
+        // waits for the host, which drives every poller in the app.
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["method"], json!("poll"));
+        let intervals = frames[0]["params"]["intervals"].as_object().unwrap();
+        assert_eq!(intervals.len(), 1);
+        let name = intervals.keys().next().unwrap().clone();
+        assert_eq!(intervals[&name], json!(period.as_secs_f64()));
 
-        assert!(calls.load(Ordering::SeqCst) >= 2);
-        assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // Nothing runs until the host says so.
+            assert!(
+                tokio::time::timeout(period, started_rx.recv())
+                    .await
+                    .is_err(),
+                "a callback ran without a host tick"
+            );
+
+            ctx.deliver_poll_tick(&name);
+            started_rx.recv().await.expect("first tick starts");
+
+            // Ticks arriving while the callback is still running are dropped,
+            // not queued behind it.
+            for _ in 0..4 {
+                ctx.deliver_poll_tick(&name);
+            }
+            assert!(
+                tokio::time::timeout(period, started_rx.recv())
+                    .await
+                    .is_err(),
+                "a second callback started while the first was blocked"
+            );
+
+            release.add_permits(1);
+            finished_rx.recv().await.expect("first callback finishes");
+
+            // A tick for another registration is ignored.
+            ctx.deliver_poll_tick("someone-else");
+            assert!(
+                tokio::time::timeout(period, started_rx.recv())
+                    .await
+                    .is_err(),
+                "a foreign registration's tick ran this callback"
+            );
+
+            ctx.deliver_poll_tick(&name);
+            started_rx.recv().await.expect("next tick starts");
+        })
+        .await
+        .expect("interval observations complete within the test deadline");
     }
 
     #[tokio::test]

@@ -6,28 +6,36 @@ import Foundation
 // are the old automatic triggers (app/element focus-change exit, browser URL
 // polling, timed focus-exit probes, pointer-handoff deferrals). The mouse
 // can ENTER insert (`clickResolved`) but nothing here can make it LEAVE insert
-// except `enterNormal` (a keyboard request).
+// except explicit keyboard requests (`enterNormal` / `leaveMode`).
 enum ModeEvent: Equatable {
   // MARK: User-explicit
 
-  /// `i` / `I` / `/` / `t` — the user asked to type. `reason.locksInsertMode`
-  /// decides the `locked` bit. `targetPID` is the app to hand the keyboard to.
-  case enterInsert(reason: InsertModeTransitionReason, targetPID: pid_t?)
+  /// The user asked to type. `targetPID` is the app to hand the keyboard to.
+  case enterInsert(targetPID: pid_t?)
 
-  /// The user's normal-mode hotkey / mapped `.normalMode`. THE ONLY event that
-  /// leaves insert.
+  /// The user's explicit normal-mode hotkey / mapped `.normalMode`.
   case enterNormal(targetPID: pid_t?)
+
+  /// Close the current transient surface, or leave INSERT for NORMAL.
+  /// Active hints are dismissed without changing their underlying base mode.
+  case leaveMode(hasHints: Bool, targetPID: pid_t?)
 
   /// `:` / flashlight / `enterCommand`. `restoreMode` mirrors the old
   /// `restore_mode=1` verbs: when true the surface returns to the entry mode,
   /// otherwise it returns to NORMAL (or to disabled when advanced mode is off).
-  case openCommand(scope: CommandScope, restoreMode: Bool)
+  case openCommand(restoreMode: Bool)
 
   /// Command-line submit or cancel — both close the surface to its `restoreTo`.
   case closeCommand(reason: String)
 
-  /// A primary click resolved by its source: physical and mouse-grid clicks
-  /// enter INSERT, while semantic hints honor `JumpTarget.entersInsertMode`.
+  /// A popup body was clicked and its local view became the input owner.
+  case openTerminal
+
+  /// Restore the base mode; an explicit dismissal can reactivate its prior app.
+  case closeTerminal(targetPID: pid_t?)
+
+  /// A click resolved by its source: physical clicks enter INSERT; primary
+  /// hint and mouse-grid clicks enter it on a text input.
   /// From INSERT this never leaves insert.
   case clickResolved(entersInsert: Bool, targetPID: pid_t?)
 

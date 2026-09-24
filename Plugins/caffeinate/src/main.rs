@@ -5,12 +5,14 @@ use std::time::Duration;
 
 use flash_plugin::{
     run, spawn_managed, CommandRequest, Context, ManagedChild, ManagedChildError, PerformResponse,
+    StatusValue,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 const CAFFEINATE: &str = "/usr/bin/caffeinate";
 const TERMINATION_GRACE: Duration = Duration::from_millis(250);
+const USAGE: &str = "usage: caffeinate on|toggle [minutes]";
 
 struct Caffeinate {
     state: Arc<Mutex<AssertionState>>,
@@ -61,10 +63,12 @@ flash_plugin::plugin!(Caffeinate);
 
 impl FlashPlugin for Caffeinate {
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
-        let minutes = command
-            .args
-            .first()
-            .and_then(|argument| argument.parse::<i128>().ok());
+        let starts = matches!(command.subcommand.as_str(), "on" | "toggle");
+        let minutes = match parse_minutes(&command.args) {
+            Ok(minutes) => minutes,
+            Err(()) if starts => return PerformResponse::fail(USAGE),
+            Err(()) => None,
+        };
         let mut expiry = None;
         let mut replace_expiry = false;
         let mut state = self.state.lock().await;
@@ -154,16 +158,12 @@ impl Caffeinate {
         &self,
         ctx: &Context,
         state: &mut AssertionState,
-        minutes: Option<i128>,
+        minutes: Option<u64>,
     ) -> Result<Option<(u64, Duration)>, ManagedChildError> {
         stop(state).await?;
+        let seconds = minutes.map(|minutes| minutes * 60);
         let mut argv = self.command_prefix.clone();
-        argv.push("-di".to_string());
-        let seconds = minutes.map(|value| value.saturating_mul(60));
-        if let Some(seconds) = seconds {
-            argv.push("-t".to_string());
-            argv.push(seconds.to_string());
-        }
+        argv.extend(caffeinate_args(std::process::id(), seconds));
         let child = spawn_managed(ctx, &argv)?;
         let Some(seconds) = seconds else {
             *state = AssertionState::Indefinite { child };
@@ -171,12 +171,31 @@ impl Caffeinate {
         };
         let token = self.next_token.fetch_add(1, Ordering::Relaxed) + 1;
         *state = AssertionState::Timed { token, child };
-        let delay = u64::try_from(seconds)
-            .ok()
-            .map(Duration::from_secs)
+        let delay = Some(Duration::from_secs(seconds))
             .filter(|delay| tokio::time::Instant::now().checked_add(*delay).is_some());
         Ok(delay.map(|delay| (token, delay)))
     }
+}
+
+/// The optional `[minutes]` argument, a whole number; `Err` for anything
+/// else rather than silently keeping the Mac awake indefinitely.
+fn parse_minutes(args: &[String]) -> Result<Option<u64>, ()> {
+    args.first()
+        .map(|argument| argument.parse::<u32>().map(u64::from).map_err(|_| ()))
+        .transpose()
+}
+
+/// Display and idle sleep prevented, for `seconds` if bounded. `-w` ties the
+/// assertion to this plugin: should the plugin die without reaping it (a
+/// crash, a SIGKILL past the shutdown grace), caffeinate exits with it
+/// instead of keeping the Mac awake with no owner.
+fn caffeinate_args(plugin_pid: u32, seconds: Option<u64>) -> Vec<String> {
+    let mut args = vec!["-di".to_string(), "-w".to_string(), plugin_pid.to_string()];
+    if let Some(seconds) = seconds {
+        args.push("-t".to_string());
+        args.push(seconds.to_string());
+    }
+    args
 }
 
 fn reconcile(state: &mut AssertionState) -> Result<(), ManagedChildError> {
@@ -212,7 +231,12 @@ fn performed(state: &AssertionState) -> PerformResponse {
 }
 
 fn emit_state(ctx: &Context, state: &AssertionState) {
-    ctx.status([("state", if state.pid().is_some() { "on" } else { "" })]);
+    let value = if state.pid().is_some() {
+        StatusValue::text("on")
+    } else {
+        StatusValue::empty()
+    };
+    ctx.status([("state", value)]);
 }
 
 fn schedule_expiry(
@@ -313,8 +337,8 @@ mod tests {
         assert!(invoke(&plugin, &harness, "on", &["0"]).await.is_ok());
         for _ in 0..50 {
             if matches!(*plugin.state.lock().await, AssertionState::Stopped) {
-                let frames = harness.drain();
-                assert_eq!(frames.last().unwrap()["params"]["segments"]["state"], "");
+                let frames = harness.drain_status();
+                assert_eq!(frames.last().unwrap()["state"], "");
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -352,6 +376,34 @@ mod tests {
 
         let response = invoke(&plugin, &harness, "on", &[]).await;
         assert_eq!(response.error_message(), Some("plugin is shutting down"));
+    }
+
+    #[test]
+    fn the_assertion_is_tied_to_the_plugin_and_bounded_by_minutes() {
+        assert_eq!(caffeinate_args(42, None), ["-di", "-w", "42"]);
+        assert_eq!(
+            caffeinate_args(42, Some(300)),
+            ["-di", "-w", "42", "-t", "300"]
+        );
+        assert_eq!(parse_minutes(&[]), Ok(None));
+        assert_eq!(parse_minutes(&["5".to_string()]), Ok(Some(5)));
+        for invalid in ["-5", "1h", "", "4294967296"] {
+            assert_eq!(parse_minutes(&[invalid.to_string()]), Err(()), "{invalid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_minutes_fail_without_starting_a_process() {
+        let (plugin, harness) = fixture().await;
+        for subcommand in ["on", "toggle"] {
+            let response = invoke(&plugin, &harness, subcommand, &["-5"]).await;
+            assert_eq!(response.error_message(), Some(USAGE));
+        }
+        assert!(matches!(
+            *plugin.state.lock().await,
+            AssertionState::Stopped
+        ));
+        assert!(invoke(&plugin, &harness, "off", &["-5"]).await.is_ok());
     }
 
     #[tokio::test]

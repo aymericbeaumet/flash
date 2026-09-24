@@ -158,21 +158,18 @@ final class StatusItemController: NSObject {
   }
 
   @objc private func openRepo() {
-    NSWorkspace.shared.open(Self.repoURL)
+    NSWorkspace.shared.open(
+      Self.repoURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
   }
 
   @objc private func openConfiguration() {
-    let url = ConfigLoader.resolvePath(
-      arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment)
-    let fm = FileManager.default
-    if !fm.fileExists(atPath: url.path) {
-      // First open on a fresh machine: seed an empty file so the editor
-      // has something to save into.
-      try? fm.createDirectory(
-        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-      fm.createFile(atPath: url.path, contents: Data())
-    }
-    NSWorkspace.shared.open(url)
+    let environment = ProcessInfo.processInfo.environment
+    // The file may have been deleted since launch: re-seed the starter so the
+    // editor opens something to save into.
+    StarterConfig.seedIfNeeded(environment: environment)
+    let url = ConfigLoader.resolvePath(environment: environment)
+    NSWorkspace.shared.open(
+      url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
   }
 
   @objc private func quit() {

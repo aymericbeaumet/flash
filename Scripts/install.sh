@@ -85,8 +85,9 @@ fi
 
 # A running Flash with no Accessibility grant is silently broken: NORMAL mode
 # falls back to key-window capture and stops catching keys. TCC grants can't be
-# scripted, so walk the user through the one-time grant and finish the job —
-# the tap is only created at launch, so Flash must be restarted once enabled.
+# scripted, so walk the user through the one-time grant and finish the job.
+# The running app installs the tap when the grant arrives; restarting here
+# verifies the tap deterministically.
 if [[ "$TAP_STATUS" != "ok" && -n "${NEW_PIDS:-}" ]]; then
   echo
   echo "⚠️  Flash is running but can't capture keys yet — macOS hasn't granted it"
@@ -117,7 +118,7 @@ echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
 echo "  flash mouse_target"
-echo "  flash mouse_target secondary=1"
+echo "  flash mouse_target --secondary"
 echo "  flash hints_dismiss"
-echo "  flash flash_quit"
+echo "  flash quit"
 echo "  flash help_show"

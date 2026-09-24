@@ -1,0 +1,290 @@
+# Terminal windows and status popups
+
+Every status popup and shortcut window binds a real PTY `TerminalSession`.
+They share one terminal registry, terminal mode, input mappings, exit commands,
+and renderer. Declare custom commands under `[terminal.<name>]`;
+`#[popup=<name>]` and `terminal_show --name=<name>` present the same session.
+`[statusbar.popup]` contains rich text displayed by the system `less` pager.
+A configured terminal takes precedence over text with the same name.
+
+The default terminal-mode shortcuts are Command-R to restart immediately,
+Command-Q to quit the child, and Command-W to hide the window. Persistent
+sessions restart automatically after a quit or exit; every other terminal
+closes when its process ends. Hiding keeps persistent sessions running and
+stops nonpersistent sessions. Override these in `[mode.terminal.mappings]`.
+Both process commands accept an optional `--name`;
+without one they operate on the focused terminal. For generated text pagers,
+Command-R consumes the latest collected content, while Command-Q or Command-W
+ends the pager and removes its private snapshot file.
+
+`persistent = true` starts a session after the login-shell environment resolves,
+even if the status bar is disabled or no template refers to it. Hiding it keeps
+the process and history. The default, `persistent = false`, gives every opening
+a fresh process and stops it when dismissed. A popup the enabled status bar
+shows is loaded ahead either way, so hovering only makes it visible: a
+nonpersistent one keeps its next process running hidden, started once the
+previous one is gone (a program holding a lock, such as newsboat's cache, can
+start again). A preloaded process that exits on its own is started again with
+the restart backoff below. Any other nonpersistent terminal starts on an
+explicit opening, or on hover after a 150 ms dwell with the pointer still on
+the span, so sweeping across the bar never forks one child per span. Continued
+hover reuses the existing process. One named session is shared across displays.
+
+```toml
+[statusbar]
+template = "#[popup=system]System#[nopopup]"
+
+[terminal.system]
+persistent = true
+command = ["/usr/bin/top", "-s", "2"]
+columns = 80
+rows = 24
+# working_directory = "~/workspace"
+# env = { EXAMPLE = "value" }
+
+[mode.terminal.mappings]
+"cmd+r" = ["flash", "terminal_restart"]
+"cmd+q" = ["flash", "terminal_quit"]
+"cmd+w" = ["flash", "terminal_dismiss"]
+```
+
+Commands are argv arrays, with the shared [environment and path resolution](configuration.md#executables-and-opaque-arguments). Only the executable and explicit working directory resolve against the defining configuration file; remaining arguments stay opaque. Set `working_directory = "."` for arguments relative to that directory. Shell syntax needs an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Commands inherit the resolved environment and use `TERM=xterm-256color` and `COLORTERM=truecolor`. The inherited `NO_COLOR` setting is removed because these children own a color-capable PTY; an explicit `[terminal.<name>] env = { NO_COLOR = "1" }` still opts that terminal out of colors. Configured foreground and background colors apply before spawning, so startup terminal queries see the same palette as the popup. A popup has a real controlling PTY with ordinary shell job control, terminal responses, input modes, alternate screens, and resize notifications.
+
+Configured terminals start at their declared grid, defaulting to 100 columns by
+28 rows. Presentation clamps it to the available screen and sends a real PTY
+resize. Hidden persistent sessions retain their last nonzero grid. Font, colors,
+placement, and size changes preserve the child; changing command, working
+directory, or environment replaces only that named session. Removing a declaration
+stops it.
+
+Only persistent sessions restart automatically after exit. The first retry
+waits 100 ms; repeated exits within one second back off to 1, 2, 4, 8, 16, then
+at most 30 seconds. Running for at least one second resets the delay. The final
+screen remains visible while waiting. `terminal_restart` restarts immediately
+(optionally `--name=system`). Removing or replacing a declaration and quitting
+Flash cancel pending retries. Temporary sessions close and are removed on exit
+or dismissal.
+
+Hover placement remains centered below the pointer and clamped to the hovered screen. Leaving the originating status segment hides an ordinary preview immediately, and so does a click anywhere outside Flash's status bar, any change of focused app or window, a bare Escape (swallowed while a preview shows, except in the command line and during hints), or `enter_normal_mode`; the preview then stays closed until the pointer leaves its segment. Left- or right-click a popup label to pin it and focus its terminal; repeated clicks keep it open. It stays anchored while the pointer moves into the popup or over other segments. Clicking another popup label switches views. Configured click actions and links retain their normal left-click action; right-click or Option-click pins their popup. Close a pinned popup with Command-W or a configured terminal exit mapping. Menu reveal, focus loss, removed anchors, and other Flash surfaces dismiss presentation. Persistent children keep running; nonpersistent children stop.
+
+Terminal focus has its own mode. Global mappings are suspended while local terminal mappings run before native copy/paste and terminal input. Pending sequences preserve the order of key presses, releases, and modifier changes; a matched mapping consumes its releases. Replays retain the originating session and restart generation, so a late release cannot enter a replacement child. Only effective INSERT mappings for `enter_normal_mode` or `leave_mode` are inherited as terminal exit mappings; explicit terminal mappings override them. Plain Escape remains available to the TUI. Exiting through an inherited NORMAL mapping restores the previously focused application. Losing focus to another app does not steal focus back.
+
+Selecting text and Command-C work in every terminal. Shift-click opens HTTP(S)
+links, including printed URLs and terminal hyperlinks (OSC 8), without forwarding
+the click to the child. Wrapped URLs remain one link. Shift-drag selects text
+even when a TUI requests mouse reporting; dragging never opens a link. Command-V
+uses Ghostty's paste encoder and respects bracketed paste mode. macOS input-method
+composition is local to the terminal view.
+
+## Generated status popups
+
+Calendar, feed, and plugin text runs in `/usr/bin/less -R --mouse` over a private
+registry-owned snapshot file. Styled runs become terminal escape sequences;
+literal control characters are made inert before serialization. The existing
+status cache supplies the content, so opening a pager starts no new collector.
+
+Changed content refreshes while hovering. Once the pager has focus, its content
+and search remain stable; reopen it or use Command-R to consume the latest
+collected values. Dismissal stops the child and removes its snapshot.
+
+`[statusbar] popup_max_width = 480` fits 50 content columns at the standard
+13-point font with 10-point padding and a one-point border. The pager reserves
+one footer row. Long values wrap and content taller than the screen scrolls
+inside the pager. Configured commands keep their own `columns` and `rows`.
+
+## Shortcut terminals
+
+`flash terminal_show` opens a fresh login shell in the home directory. Each
+invocation attaches to its own process. `flash terminal_dismiss` closes the
+focused terminal and restores the previous application. Exiting, killing,
+closing, or hiding a fresh shell removes its session, window, and scrollback
+permanently. It never restarts automatically. Command-R can explicitly restart
+it while it is open; Command-Q ends it. Each later invocation creates a new
+identity.
+
+Flash keeps one spare login shell running so the window opens on a live prompt
+instead of waiting for the shell's startup files. The spare starts after the
+login environment resolves whenever a mapping binds the unnamed
+`terminal_show`, and every open consumes the spare and immediately warms the
+next one. It parses output but builds no frames until a window binds it, and
+it is an ordinary one-shot session otherwise: a spare whose process ends is
+forgotten, and the next open spawns directly.
+
+Bind a fresh shell explicitly in the desired scopes:
+
+```toml
+[mode.all.mappings]
+"alt+space" = ["flash", "terminal_show"]
+
+[mode.terminal.mappings]
+"alt+space" = ["flash", "terminal_show"]
+```
+
+The terminal-scope binding also creates a new shell while another terminal has
+focus. Fresh shell exit restores the captured app; clicking another app keeps
+focus where the user moved it.
+
+Declare a named terminal to launch a particular process:
+
+```toml
+[terminal.bonsai]
+command = ["bonsai", "hq", "--no-open", "--port", "0"]
+persistent = true
+working_directory = "~"
+columns = 120
+rows = 36
+
+[mode.normal.mappings]
+"'b" = ["flash", "terminal_show", "--name=bonsai"]
+# A fresh shell, with no declaration required:
+"'t" = ["flash", "terminal_show"]
+
+[mode.terminal.mappings]
+"cmd+w" = ["flash", "terminal_dismiss"]
+"cmd+r" = ["flash", "terminal_restart"]
+"cmd+q" = ["flash", "terminal_quit"]
+```
+
+Named definitions accept `command`, `working_directory`, `env`, `columns`,
+`rows`, and `persistent`. The default is `persistent = false` and a 100 × 28
+grid: the name then identifies a command template, and each opening gets a
+fresh process. With `persistent = true`, Flash starts the session after its
+login environment resolves, even when hidden or the status bar is disabled.
+Reopening preserves the process, screen, and history, and the session restarts
+after its process exits. A nonpersistent terminal closes its window and releases
+its session as soon as the process ends, like the unnamed `terminal_show` shell.
+
+Windows appear centered on the focused application's screen and clamp to its
+available area. One terminal window is presented at a time; changing windows
+hides a persistent session and stops a fresh one. Status hover and article
+rotation cannot replace a standalone window. Explicitly dismissing a status
+popup suppresses reopening until the pointer leaves its segment. Clicking another app dismisses
+it without taking focus back. Plain Escape remains available to the process;
+terminal mappings and the inherited NORMAL shortcut can close the window.
+
+The Bonsai example suppresses automatic browser opening and chooses an available
+port; the TUI runs inside Flash. Its process must remain in the foreground.
+Use `flash terminal_show --name=bonsai` from the CLI or `:terminal_show
+--name=bonsai` from Flash's command line. `terminal_restart --name=bonsai`
+restarts the named persistent session. A nonpersistent name resolves to the
+focused instance of that template; without a name it restarts the focused
+terminal, including a fresh shell. Explicit restarts apply to every terminal;
+automatic ones only to persistent sessions.
+
+## Hover diagnostics
+
+Set `[debug] log_level = "debug"` (or `"trace"`) to record hover diagnostics in
+`~/Library/Logs/Flash/flash.log`. The existing log rotation retains three older
+10 MiB segments. Test runs leave the resident log alone: their default disk
+logging is disabled, while stderr and in-memory test sinks remain available.
+File-writer tests use temporary destinations. Diagnostics include:
+
+- `Status hover regions changed`: per-window region indices, hashed popup IDs,
+  local rectangles, and content byte counts.
+- `Status hover target changed`: entry/exit or a changed target, pointer
+  position, link hit, popup ID, and whether the window is passing mouse input
+  through. Repeated movement within the same target is suppressed.
+- `Status popup presentation changed` / `Status popup layout changed`: the
+  same hashed ID, dismissal reason, terminal grid, cache reuse, frame readiness,
+  rendering state, and actual panel visibility.
+- `Status terminal state changed`: terminal child lifecycle records, including
+  PID, exit status, and spawn failure category and reason, without command arguments or output.
+- `Status terminal restart scheduled`: attempt number and retry delay under
+  `core:StatusTerminalRegistry.restart`, correlated by hashed popup ID.
+- `Status menu reveal changed`: whether the native menu bar has taken over the
+  band, lowering the bar window beneath it. `Status inline popup rejected`
+  reports an invalid or oversized marker.
+
+These records exclude article text, URLs, terminal contents, and raw popup
+names. Feed refresh outcomes and plugin lifecycle events remain under
+`source = "plugin:feed"`. A healthy plugin with no hover target points to hit
+regions or input routing; a target with no visible panel points to presentation.
+Mouse-enter and stationary refresh must carry the same compiled popup content
+through coordinate conversion, preserving literal text and styles.
+
+## Ownership and resource bounds
+
+`FlashTerminal` owns a serial worker queue per terminal. The queue performs PTY I/O, VT parsing, input encoding, resize, and immutable frame extraction. A C-only `forkpty`/`execve` boundary prepares the controlling terminal; Swift never runs in the post-fork child. The child resets signal dispositions and closes unrelated inherited descriptors. Flash reports executable or working-directory failures through the session state.
+
+Persistent children keep running and their output is parsed while hidden, but no frame is built for it: a session only snapshots its grid and hops to the main thread while a visible view wants frames (`TerminalSession.setWantsFrames`), and re-showing publishes one frame immediately. Frames publish on the leading edge: output after a quiet period is snapshotted at once, and only a burst inside the 16 ms interval waits for its end, so a keystroke echo never pays a coalescing window and continuous output settles at about 60 Hz. A snapshot reads libghostty's per-row dirty flags and reuses the previous frame's cells for clean rows, so steady-state output costs one row, not the grid; the frame carries the changed row set and a generation counter, and a snapshot with nothing visible moved is not published at all. Viewport scrolls, resizes, resets, and palette changes rebuild every row. Hidden views do not draw. Automatic restarts stop after ten consecutive failed starts (a session that ran for at least a second resets the count); the session then stays exited until an explicit restart or a definition change. There is no PTY polling loop. A visible blinking cursor or blinking text uses a local half-second redraw timer, which stops when hidden. Scrollback is capped at approximately 2,000 lines and 4 MiB; libghostty applies limits at its internal page boundaries. The input queue is bounded at 4 MiB; an input batch exceeding available capacity reports rejection without recording its contents.
+
+Generated pager snapshots are written on a utility queue only when their bytes
+change. Their private files and temporary directories belong to the registry
+alongside the child; dismissal, startup failure, and shutdown remove them.
+
+Flash owns the child and its terminal process groups. Stop sends hangup and termination, allows a bounded grace period, escalates to kill, then closes the
+PTY before a bounded nonblocking reap. Exceptional kernel
+exit delays are tracked by an in-process reaper and logged; they never block
+the main thread indefinitely. The registry retains retiring sessions until
+asynchronous stop completes, and application shutdown stops active and retiring
+children. Commands should remain in the foreground; popup declarations are not a mechanism for launching detached services.
+
+## Build and verification
+
+The backend pins libghostty-vt to `622b4eecd7d2ce1a10930537c17f0d61abdba817` and Zig 0.16.0. `Scripts/build-ghostty.sh --dev` downloads the pinned source with a SHA-256 check and caches a native macOS static XCFramework under `build/ghostty`. `--release` combines arm64 and x86_64 into the macOS slice. It does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
+
+Run the bootstrap before direct SwiftPM commands on a fresh checkout:
+
+```sh
+mise install
+./Scripts/build-ghostty.sh --dev
+swift test --filter TerminalTests
+```
+
+The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap this dependency automatically. Development deployment remains `./Scripts/install.sh --dev`.
+
+`TerminalTests`, `TerminalLinkTests`, and `TerminalSnapshotTests` exercise real
+PTY startup, styled and Unicode output, link interaction, redraws, hidden-frame
+suppression, and session rebinding. They also cover controlling-terminal
+dimensions, retained exit screens, input, resize, explicit restart, failed spawn,
+and bounded shutdown/reaping. Unicode grapheme clustering remains enabled after
+reset. Direct VT tests cover incremental snapshots, terminal queries, application
+cursor input, Ctrl-C, Kitty modifiers and releases, bracketed paste, alternate
+screens, and scrollback. Pure text tests cover control sanitization and cell widths.
+App tests cover pager ownership and cleanup, placement, preview dismissal, pinned
+focus, and mapping precedence.
+
+Crash recovery tests kill real children in hover previews, pinned popups, and
+standalone windows. Persistent replacements retain their presentation; temporary
+sessions close and are released. Registry tests cover hidden persistent recovery
+and cancellation of pending retries on removal.
+
+## Native status drawing
+
+The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label uses that same width, so entering terminal mode does not shift adjacent segments. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
+
+The terminal view draws from the frame with damage tracking: a frame that
+directly follows the previous one invalidates only the rows the terminal
+reported as changed plus the old and new cursor rows, and a blink toggle
+repaints the cursor row alone unless the frame carries blinking cells. The view
+is layer-backed with asynchronous drawing, so a repaint is recorded on the main
+thread and rasterised by the render server. Backgrounds paint as merged runs of
+one colour and cells on the terminal's own background need no fill at all.
+Consecutive single-width ASCII cells with the same font and colour draw as one
+Core Text line; wide, non-ASCII, or differently styled cells still draw alone in
+their own clipped cell so shaping never shifts a neighbour. Laid-out lines are
+cached by text, font variant, and colour, and colours are cached as `CGColor`
+values. Font variants and the cell size are cached per font change. The
+`FlashTerminal` and `CFlashTerminal` modules compile optimized in the
+incremental dev build too, so the daily-driver bundle runs the same per-cell
+code as a release build.
+
+Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects, carousel transitions, and in-place value crossfades run on Core Animation without a redraw timer. The hover wash updates immediately, follows the visible text rather than outer separator spaces, and refreshes when the layout changes under a stationary pointer.
+
+`monitor = "primary"` selects the display at desktop origin `(0, 0)`. Moving
+keyboard focus to another display does not move the bar or reserve status-bar
+space there. `monitor = "all"` draws a bar on every display.
+
+Use `#[align=absolute-centre]` for a label at the physical center of the screen. Native tmux `#[align=centre]` instead centers the space remaining between the left and right content, so unequal side widths shift that label.
+
+For separate quota and system metrics with terminal detail popups, see the
+[ready-to-use configurations](examples/statusbar/README.md).
+
+`leave_mode` is inherited from effective INSERT-active mappings just like
+`enter_normal_mode`. It hides the popup and restores its saved mode and external
+app; an explicit terminal binding still takes precedence. For a shared exit:
+
+```toml
+[mode.all.mappings]
+"cmd+ctrl+[" = ["flash", "leave_mode"]
+```

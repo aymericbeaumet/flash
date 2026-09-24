@@ -37,13 +37,36 @@ extension NormalModeDispatcher {
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
     else { return false }
+    let modifiers =
+      flags.isEmpty || !UIKitApps.hostsUIKit(pid: pid) ? [] : UIKitApps.modifierKeys(in: flags)
+    var held: CGEventFlags = []
+    for modifier in modifiers {
+      held.insert(modifier.flag)
+      postModifierKey(modifier.key, down: true, flags: held, source: source, to: pid)
+    }
     down.flags = flags
     up.flags = flags
     down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     down.postToPid(pid)
     up.postToPid(pid)
+    for modifier in modifiers.reversed() {
+      held.remove(modifier.flag)
+      postModifierKey(modifier.key, down: false, flags: held, source: source, to: pid)
+    }
     return true
+  }
+
+  /// A modifier key's own press or release (see `UIKitApps`); `flags` is the
+  /// modifier state after it.
+  private static func postModifierKey(
+    _ key: CGKeyCode, down: Bool, flags: CGEventFlags, source: CGEventSource?, to pid: pid_t
+  ) {
+    guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
+    else { return }
+    event.flags = flags
+    event.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    event.postToPid(pid)
   }
 
   /// Post one modifier chord to the session event stream so macOS can handle
@@ -281,7 +304,7 @@ extension NormalModeDispatcher {
     "AXTextField", "AXTextArea",
   ]
 
-  /// `focus_input` (Vimium `gi`): focus the `index`-th (1-based) editable
+  /// `focus_input`: focus the `index`-th (1-based) editable
   /// text input of the focused window, in reading order (top-to-bottom, then
   /// left-to-right — AX frames are top-left-origin, so ascending y is
   /// downwards). Returns false when no input exists in the walk budget.
@@ -336,10 +359,10 @@ extension NormalModeDispatcher {
     "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox",
   ]
 
-  /// Frames (AX top-left coordinates) of the focused window's scroll areas in
-  /// BFS order — nested scrollers are all reported so the user can hint the
-  /// inner one. Tiny decorative scrollers are skipped.
-  static func scrollAreaFrames(pid: pid_t, maxNodes: Int = 2000) -> [CGRect] {
+  /// Retained scroll areas in BFS order, including nested containers.
+  static func scrollAreaTargets(
+    pid: pid_t, screenH: CGFloat, bundleIdentifier: String, maxNodes: Int = 2000
+  ) -> [JumpTarget] {
     let app = AXApp.make(pid: pid)
     guard
       let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
@@ -347,14 +370,18 @@ extension NormalModeDispatcher {
     else { return [] }
     var queue = [window]
     var cursor = 0
-    var frames: [CGRect] = []
+    var targets: [JumpTarget] = []
     while cursor < queue.count, cursor < maxNodes {
       let element = queue[cursor]
       cursor += 1
-      if role(of: element) == "AXScrollArea", let frame = frame(of: element),
-        frame.width >= 40, frame.height >= 40
+      if role(of: element) == "AXScrollArea",
+        let target = AccessibilityProvider.captureTarget(
+          element: element, id: "scroll_area_\(targets.count)", pid: pid, screenH: screenH,
+          providerID: "scroll_target", bundleIdentifier: bundleIdentifier,
+          allowsInteractiveDescendants: true),
+        target.frame.width >= 40, target.frame.height >= 40
       {
-        frames.append(frame)
+        targets.append(target)
       }
       var raw: CFTypeRef?
       if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
@@ -364,6 +391,6 @@ extension NormalModeDispatcher {
         queue.append(contentsOf: children)
       }
     }
-    return frames
+    return targets
   }
 }

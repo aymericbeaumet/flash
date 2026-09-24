@@ -58,11 +58,13 @@ parse_mode() {
 kill_all_flash() {
   # Both product flavors ("Flash" release, "Flash 🧪" dev) share the bundle
   # id and must never run concurrently — quit and kill every variant.
-  "$CLI_LINK_PATH" flash_quit >/dev/null 2>&1 ||
-    "/Applications/$APP_NAME.app/Contents/MacOS/flash" flash_quit >/dev/null 2>&1 ||
-    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" flash_quit >/dev/null 2>&1 ||
+  "$CLI_LINK_PATH" quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
     true
   pkill -f "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" 2>/dev/null || true
+  # A resident started through the CLI symlink with no arguments.
+  pkill -fx "$CLI_LINK_PATH" 2>/dev/null || true
   killall "$APP_NAME 🧪" 2>/dev/null || true
   osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 &
   local quit_pid=$!
@@ -222,6 +224,9 @@ assemble_app() {
   # the base layer under the user's flash.toml (ConfigLoader.load), which
   # also revalidates it on every launch.
   cp "$PROJECT_DIR/config.default.toml" "$STAGING_PATH/Contents/Resources/config.default.toml"
+  cp "$PROJECT_DIR/Resources/Ghostty-LICENSE" "$STAGING_PATH/Contents/Resources/Ghostty-LICENSE"
+  cp "$PROJECT_DIR/Resources/tmux-LICENSE" "$STAGING_PATH/Contents/Resources/tmux-LICENSE"
+  cp "$PROJECT_DIR/Resources/utf8proc-LICENSE" "$STAGING_PATH/Contents/Resources/utf8proc-LICENSE"
   # Stamp the exact commit this bundle was assembled from (the About panel
   # reads FlashGitCommit).
   local git_commit
@@ -244,7 +249,7 @@ assemble_app() {
     local plugins_dest="$STAGING_PATH/Contents/Resources/Plugins"
     for manifest in "$PROJECT_DIR"/Plugins/*/manifest.json; do
       [[ -e "$manifest" ]] || continue
-      local dir id bin
+      local dir id bin companion
       dir="$(dirname "$manifest")"
       id="$(basename "$dir")"
       bin="$dir/flash-plugin-$id"
@@ -257,8 +262,20 @@ assemble_app() {
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1
         fi
-        cp "$bin" "$plugins_dest/$id/flash-plugin-$id"
-        chmod +x "$plugins_dest/$id/flash-plugin-$id"
+        # Every binary the crate produced, not only the manifest `exec`: the
+        # firefox crate also ships the Firefox-spawned native-messaging host
+        # for its tab-bridge add-on. sign_app signs each of them.
+        for companion in "$dir"/flash-plugin-*; do
+          [[ -f "$companion" ]] || continue
+          cp "$companion" "$plugins_dest/$id/$(basename "$companion")"
+          chmod +x "$plugins_dest/$id/$(basename "$companion")"
+        done
+      fi
+      # Plugin-owned payloads that are not Mach-Os but must ship with the
+      # plugin: the Firefox add-on source the user loads by hand.
+      if [[ -d "$dir/extension" ]]; then
+        rm -rf "$plugins_dest/$id/extension"
+        cp -R "$dir/extension" "$plugins_dest/$id/extension"
       fi
     done
   else

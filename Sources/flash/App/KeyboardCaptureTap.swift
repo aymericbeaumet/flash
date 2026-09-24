@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 
-/// A session-level `CGEventTap` for `keyDown` events that lets Flash capture
+/// A session-level `CGEventTap` for `keyDown` / `keyUp` events that lets Flash capture
 /// NORMAL / hints keystrokes **without** making the overlay the key window.
 ///
 /// The old model made the overlay key (and activated Flash) to receive normal-
@@ -20,6 +20,30 @@ final class KeyboardCaptureTap {
   private var runLoopSource: CFRunLoopSource?
   private let shouldSwallow: (CGEvent) -> Bool
   private let handle: (NSEvent) -> Void
+  /// Releases pair with the presses this tap swallowed. Main-thread only: the
+  /// tap source runs in the main run loop.
+  private var swallowedKeys = SwallowedKeys()
+
+  /// Which key releases must be swallowed: exactly those whose press was.
+  ///
+  /// A terminal running the Kitty keyboard protocol (any modern TUI editor
+  /// turns it on) encodes key RELEASES to the pty, so passing the release of a
+  /// key whose press NORMAL consumed leaks an escape sequence into the app.
+  /// Pairing on the press rather than the current mode means a mode change
+  /// mid-keypress can neither leak a release nor strand one an app is waiting
+  /// for. Extracted so the rule is unit-testable without a live `CGEventTap`.
+  struct SwallowedKeys {
+    private var codes: Set<Int64> = []
+    var isEmpty: Bool { codes.isEmpty }
+
+    mutating func press(_ code: Int64, swallowed: Bool) {
+      if swallowed { codes.insert(code) }
+    }
+
+    mutating func releaseIsSwallowed(_ code: Int64) -> Bool {
+      codes.remove(code) != nil
+    }
+  }
 
   init(
     shouldSwallow: @escaping (CGEvent) -> Bool,
@@ -29,50 +53,93 @@ final class KeyboardCaptureTap {
     self.handle = handle
   }
 
-  /// Pure swallow decision. NORMAL captures keys unless an unmapped keypress
-  /// matches a configured passthrough key or carries a configured passthrough
-  /// modifier. Passthrough input continues unchanged and moves Flash to INSERT
-  /// at the AppDelegate edge. Every hint key is captured; INSERT and key-window
-  /// surfaces are left untouched unless an explicit mapping owns the key.
-  ///
-  /// Extracted as a static, side-effect-free function so the tap's single most
-  /// security-sensitive decision is unit-testable without a live `CGEventTap`.
-  static func shouldSwallow(
-    flashMode: FlashMode,
-    inputMode: OverlayInputMode,
-    modifierFlags: CGEventFlags = [],
-    hasMapping: Bool = false,
-    isPassthroughKey: Bool = false,
-    passthroughModifierFlags: CGEventFlags = [],
-    nativeSurfaceOwnsKeyboard: Bool = false
-  ) -> Bool {
-    if nativeSurfaceOwnsKeyboard { return hasMapping }
-    guard flashMode == .normal else { return false }
-    switch inputMode {
-    case .normal:
-      let usesPassthroughModifier =
-        !modifierFlags.intersection(passthroughModifierFlags).isEmpty
-      if isPassthroughKey || usesPassthroughModifier, !hasMapping {
-        return false
-      }
-      return true
-    case .hints:
-      return true
-    case .commandLine, .candidateFinder:
-      return false
-    }
+  /// What the tap does with one `keyDown`, decided from state alone. The
+  /// effects a decision needs — the secure-input syscall, the frontmost-app
+  /// reconcile, a mapping lookup — are evaluated by the caller only for the
+  /// decision that asks for them, cheapest first. Every swallow yields to a
+  /// focused secure text field (password), whose keys always pass.
+  enum Decision: Equatable {
+    case pass
+    case swallow
+    /// INSERT: a modified chord is swallowed when an active mapping claims it
+    /// in the actual frontmost app (reconciled first: the app switcher may
+    /// have changed it without a notification yet).
+    case swallowIfInsertChordIsMapped
+    /// A native surface (About window, suspended session) owns the keyboard:
+    /// only a key a mapping or the NORMAL interpreter claims is swallowed.
+    case swallowIfNativeSurfaceKeyIsMapped
+    /// A bare Escape while a status-bar hover preview shows closes the
+    /// preview, in any base mode, instead of reaching the app.
+    case closeEphemeralPopup
   }
 
-  static func shouldEnterInsertAfterNativeSurfacePassthrough(
+  /// The tap's single most security-sensitive decision, side-effect free so
+  /// the whole mode × input × ownership table is unit-testable without a
+  /// live `CGEventTap`.
+  static func decide(
+    isTerminal: Bool,
     flashMode: FlashMode,
-    modifierFlags: CGEventFlags,
-    hasMapping: Bool,
-    isPassthroughKey: Bool,
-    passthroughModifierFlags: CGEventFlags
-  ) -> Bool {
-    guard flashMode == .normal, !hasMapping else { return false }
-    return isPassthroughKey
-      || !modifierFlags.intersection(passthroughModifierFlags).isEmpty
+    inputMode: OverlayInputMode,
+    aboutWindowVisible: Bool,
+    aboutWindowOwnsKeyboard: Bool,
+    nativeSurfaceSuspended: Bool,
+    isModifiedChord: Bool,
+    isBareEscape: Bool = false,
+    ephemeralPopupShown: Bool = false
+  ) -> Decision {
+    // A terminal popup's own view owns input.
+    if isTerminal { return .pass }
+    let nativeSurfaceShown = aboutWindowVisible || nativeSurfaceSuspended
+    // A hint session owns the keyboard in every base mode.
+    if inputMode == .hints, !nativeSurfaceShown { return .swallow }
+    // The command line takes Escape itself; anywhere else a shown preview
+    // is what Escape closes.
+    if isBareEscape, ephemeralPopupShown, inputMode != .commandLine, !nativeSurfaceShown {
+      return .closeEphemeralPopup
+    }
+    // INSERT is transparent so typing flows to the focused app, but a modified
+    // chord bound to an active mapping fires Flash's action on this fast path
+    // (swallowed, so the app never sees it). The highest-rate branch: a bare
+    // key returns here without any lookup.
+    if flashMode == .insert, !nativeSurfaceShown {
+      return isModifiedChord ? .swallowIfInsertChordIsMapped : .pass
+    }
+    if aboutWindowOwnsKeyboard || nativeSurfaceSuspended {
+      return .swallowIfNativeSurfaceKeyIsMapped
+    }
+    return shouldSwallow(flashMode: flashMode, inputMode: inputMode) ? .swallow : .pass
+  }
+
+  /// How one hint session receives its keys.
+  enum SessionCapture: String, Equatable {
+    /// This tap swallows and routes them.
+    case tap
+    /// The overlay takes the key window and reads them through `keyDown`.
+    case keyWindow = "key_window"
+  }
+
+  /// Decided once, when a hint or grid session starts. Secure input (a
+  /// focused password field) keeps keys from every event tap, so a session
+  /// opened under it takes the key window: the labels the user types then
+  /// land in Flash instead of the password field. Without a tap the key
+  /// window is the only capture.
+  static func sessionCapture(tapInstalled: Bool, secureInputEnabled: Bool) -> SessionCapture {
+    tapInstalled && !secureInputEnabled ? .tap : .keyWindow
+  }
+
+  /// NORMAL and hints capture every key; INSERT and key-window surfaces are
+  /// left untouched.
+  static func shouldSwallow(flashMode: FlashMode, inputMode: OverlayInputMode) -> Bool {
+    switch inputMode {
+    case .hints:
+      // A hint session owns every key whatever the base mode: hints opened
+      // from INSERT or with advanced mode off must still get their labels.
+      return true
+    case .normal:
+      return flashMode == .normal
+    case .passive, .commandLine:
+      return false
+    }
   }
 
   /// Create + install the tap. Returns false if the OS refused it (no
@@ -84,7 +151,7 @@ final class KeyboardCaptureTap {
     // window (`StatusLinkCatcherPanel`) through normal Cocoa hit-testing — the
     // tap deliberately never inspects or swallows mouse events, so native menus,
     // screenshots, and drags that begin in the bar band are untouched.
-    let maskedTypes: [CGEventType] = [.keyDown]
+    let maskedTypes: [CGEventType] = [.keyDown, .keyUp]
     var mask: CGEventMask = 0
     for t in maskedTypes { mask |= CGEventMask(1) << CGEventMask(t.rawValue) }
     let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -141,7 +208,14 @@ final class KeyboardCaptureTap {
     {
       return passthrough
     }
-    guard type == .keyDown, me.shouldSwallow(event) else { return passthrough }
+    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+    if type == .keyUp {
+      return me.swallowedKeys.releaseIsSwallowed(keyCode) ? nil : passthrough
+    }
+    guard type == .keyDown else { return passthrough }
+    let swallow = me.shouldSwallow(event)
+    me.swallowedKeys.press(keyCode, swallowed: swallow)
+    guard swallow else { return passthrough }
     if let ns = NSEvent(cgEvent: event) {
       // The swallow (returning nil) is synchronous, so the key never reaches
       // the app; defer the (possibly heavy) handling so the callback returns

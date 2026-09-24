@@ -47,8 +47,8 @@ final class PluginSystemTests: XCTestCase {
           "subtitle": NSNull(),
           "effect": ["type": "copy_text", "text": "2"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertEqual(answer.title, "2")
 
     // Required fields stay required: null means absent, and an absent query
@@ -56,8 +56,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(
       decodeQueryAnswer(
         from: ["title": "x", "effect": NSNull()],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testPluginRowCannotSpoofRoutingOwner() throws {
@@ -159,21 +159,20 @@ final class PluginSystemTests: XCTestCase {
   }
 
   func testPluginHintTargetCannotSpoofProviderOwnership() throws {
-    let target = try XCTUnwrap(
-      PluginWireCodec.target(
-        from: [
-          "id": "hint",
-          "frame": [
-            "x": 10,
-            "y": 20,
-            "width": 30,
-            "height": 40,
-          ],
-          "source_id": "plugin:attacker",
+    let target = PluginWireCodec.target(
+      from: [
+        "id": "hint",
+        "frame": [
+          "x": 10,
+          "y": 20,
+          "width": 30,
+          "height": 40,
         ],
-        sourceID: "plugin:safe"))
+        "source_id": "plugin:attacker",
+      ],
+      sourceID: "plugin:safe")
 
-    XCTAssertEqual(target.sourceID, "plugin:safe")
+    XCTAssertNil(target, "routing ownership never crosses the wire")
   }
 
   func testQueryAnswerHasANarrowShapeAndGetsHostOwnedSemantics() throws {
@@ -184,14 +183,14 @@ final class PluginSystemTests: XCTestCase {
           "subtitle": "1+1",
           "effect": ["type": "copy_text", "text": "2"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     guard case .copyText(let text) = candidate.effect else {
       return XCTFail("expected copy_text effect")
     }
     XCTAssertEqual(text, "2")
-    XCTAssertEqual(candidate.source, "calculator")
-    XCTAssertEqual(candidate.sourceID, "plugin:calculator")
+    XCTAssertEqual(candidate.source, "answers")
+    XCTAssertEqual(candidate.sourceID, "plugin:answers")
     XCTAssertEqual(candidate.kind, .plugin("query_answer"))
     XCTAssertEqual(candidate.priority, .urgent)
     XCTAssertTrue(candidate.finishesCommand)
@@ -203,16 +202,16 @@ final class PluginSystemTests: XCTestCase {
           "title": "unsafe",
           "effect": ["type": "unknown", "text": "unsafe"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertNil(
       decodeQueryAnswer(
         from: [
           "title": "empty",
           "effect": ["type": "copy_text", "text": ""],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertNil(
       decodeQueryAnswer(
         from: [
@@ -220,8 +219,8 @@ final class PluginSystemTests: XCTestCase {
           "url": "https://example.com",
           "effect": ["type": "copy_text", "text": "spoof"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
     XCTAssertNil(
       decodeQueryAnswer(
         from: [
@@ -232,8 +231,8 @@ final class PluginSystemTests: XCTestCase {
             "url": "https://example.com",
           ],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testQueryEvaluatorAnswerPayloadsAreRejectedAtomicallyAboveTheCap() {
@@ -245,14 +244,14 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       PluginWireCodec.queryAnswers(
         from: Array(repeating: answer, count: 16),
-        sourceID: "plugin:calculator",
-        source: "calculator")?.count,
+        sourceID: "plugin:answers",
+        source: "answers")?.count,
       16)
     XCTAssertNil(
       PluginWireCodec.queryAnswers(
         from: Array(repeating: answer, count: 17),
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testQueryAnswerFieldAndAggregateLimitsAreStrict() {
@@ -265,8 +264,8 @@ final class PluginSystemTests: XCTestCase {
           "title": oversizedField,
           "effect": ["type": "copy_text", "text": "x"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
 
     let largeAnswer: [String: Any] = [
       "title": String(repeating: "t", count: PluginProtocol.maxAnswerFieldBytes),
@@ -281,8 +280,8 @@ final class PluginSystemTests: XCTestCase {
         from: Array(
           repeating: largeAnswer,
           count: PluginProtocol.maxAnswers),
-        sourceID: "plugin:calculator",
-        source: "calculator"),
+        sourceID: "plugin:answers",
+        source: "answers"),
       "individually valid answers must still fit the aggregate response budget")
   }
 
@@ -354,8 +353,8 @@ final class PluginSystemTests: XCTestCase {
           "title": "nav",
           "effect": ["type": "open", "url": "https://example.com"],
         ],
-        sourceID: "plugin:calculator",
-        source: "calculator"))
+        sourceID: "plugin:answers",
+        source: "answers"))
   }
 
   func testPluginProtocolVersionRequiresExactV1() {
@@ -368,6 +367,40 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["protocol_version": 3]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["ok": true]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(nil))
+  }
+
+  func testJSONScalarTypesAndPerformVariantsAreStrict() throws {
+    func object(_ json: String) throws -> [String: Any] {
+      try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+    for json in [#"{"protocol_version":true}"#, #"{"protocol_version":1.5}"#] {
+      XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(try object(json)), json)
+    }
+    XCTAssertNil(PluginWireCodec.okPayload(try object(#"{"ok":1}"#)))
+    for json in [
+      #"{"ok":true,"error":"contradiction"}"#,
+      #"{"ok":false,"unhandled":true,"error":"effect failed"}"#,
+      #"{"ok":true,"target_pid":"123"}"#,
+      #"{"ok":true,"navigation_url":"relative/path"}"#,
+    ] {
+      guard case .failed = PluginWireCodec.performOutcome(from: try object(json)) else {
+        XCTFail("malformed perform result must fail: \(json)")
+        continue
+      }
+    }
+  }
+
+  func testCatalogQuotaCountsEncodedJSONAndHintsRequireNestedFrames() throws {
+    let rows = Array(
+      repeating: ["source": "safe", "title": String(repeating: "\n", count: 3_000)], count: 1_000)
+    XCTAssertGreaterThan(
+      try JSONSerialization.data(withJSONObject: rows).count, PluginProtocol.maxCatalogBytes)
+    XCTAssertTrue(
+      PluginWireCodec.catalogRows(from: rows, sourceID: "plugin:safe", allowedSources: ["safe"])
+        == nil)
+    XCTAssertNil(
+      PluginWireCodec.target(
+        from: ["id": "flat", "x": 0, "y": 0, "width": 1, "height": 1], sourceID: "plugin:safe"))
   }
 
   // MARK: - The perform trichotomy
@@ -572,10 +605,30 @@ final class PluginSystemTests: XCTestCase {
     process.applyStatusSegments(["segments": ["window": "2"]])
     XCTAssertEqual(
       process.statusBarInfo().statusSegments,
-      ["session": "main", "window": "2"])
+      ["session": .text("main"), "window": .text("2")])
     // "" clears one segment; undeclared names are ignored.
     process.applyStatusSegments(["segments": ["session": "", "undeclared": "x"]])
-    XCTAssertEqual(process.statusBarInfo().statusSegments, ["window": "2"])
+    XCTAssertEqual(process.statusBarInfo().statusSegments, ["window": .text("2")])
+    // A carousel object is a typed segment the host rotates; malformed
+    // objects are rejected whole and no lines clears.
+    process.applyStatusSegments([
+      "segments": [
+        "session": [
+          "prefix": "NEWS ", "lines": ["one", " ", "two"], "cycle_seconds": 30,
+        ]
+      ]
+    ])
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments["session"],
+      .carousel(prefix: "NEWS ", lines: ["one", "two"], cycleSeconds: 30))
+    process.applyStatusSegments(["segments": ["session": ["lines": ["x"], "cycle_seconds": 0]]])
+    process.applyStatusSegments(["segments": ["session": ["lines": [1], "cycle_seconds": 5]]])
+    process.applyStatusSegments(["segments": ["session": ["cycle_seconds": 5]]])
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments["session"],
+      .carousel(prefix: "NEWS ", lines: ["one", "two"], cycleSeconds: 30))
+    process.applyStatusSegments(["segments": ["session": ["lines": [" "], "cycle_seconds": 5]]])
+    XCTAssertNil(process.statusBarInfo().statusSegments["session"])
   }
 
   // MARK: - Activation derivation
@@ -617,6 +670,38 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       try activation(#", "verbs": [{"name": "v", "keystrokes": {"": "cmd+s"}}]"#),
       .manifestOnly)
+  }
+
+  func testStatusBoundPluginIsResidentOnlyWhileObserved() throws {
+    func manifest(_ extra: String) throws -> PluginManifest {
+      try decodedManifest(
+        """
+        {
+          "id": "bound",
+          "name": "Bound",
+          "version": "1.0.0",
+          "description": "fixture"\(extra)
+        }
+        """
+      )
+    }
+    // Status, the listen subscriptions feeding it, and perform surfaces.
+    let bound = try manifest(
+      #", "exec": ["/usr/bin/true"], "status": ["state"], "listen": ["core:power.changed"], "#
+        + #""commands": [{"command": "x", "description": "x"}]"#)
+    XCTAssertTrue(bound.isStatusBound)
+    XCTAssertEqual(bound.activation(statusObserved: true), .resident)
+    XCTAssertEqual(bound.activation(statusObserved: false), .onDemand)
+    // Any other resident surface keeps the plugin resident regardless.
+    for extra in [
+      #", "sources": [{"name": "a.b"}]"#, #", "query": {}"#, #", "hints": {}"#,
+    ] {
+      let other = try manifest(#", "exec": ["/usr/bin/true"], "status": ["state"]"# + extra)
+      XCTAssertFalse(other.isStatusBound, extra)
+      XCTAssertEqual(other.activation(statusObserved: false), .resident, extra)
+    }
+    let listening = try manifest(#", "exec": ["/usr/bin/true"], "listen": ["core:apps.*"]"#)
+    XCTAssertEqual(listening.activation(statusObserved: false), .resident)
   }
 
   // MARK: - Manifest schema
@@ -751,6 +836,51 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  func testManifestOnlyTerminalsScopesToHostTerminalList() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "tmuxish",
+          "name": "tmuxish",
+          "version": "0.1.0",
+          "description": "Terminal-scoped hints",
+          "exec": ["/usr/bin/true"],
+          "only_terminals": true,
+          "hints": { "fallback_on_empty": true }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertTrue(manifest.selector.onlyTerminals)
+    XCTAssertTrue(manifest.onlyBundleIDs.isEmpty)
+    let selector = CompiledPluginSelector(manifest.selector)
+    XCTAssertFalse(selector.isEmpty)
+    TerminalEmulatorFixture.declareOfficial()
+    XCTAssertTrue(TerminalEmulators.contains("com.mitchellh.ghostty"))
+    XCTAssertTrue(selector.matches(PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
+    XCTAssertTrue(selector.matches(PluginSelectorContext(bundleID: "org.alacritty")))
+    XCTAssertFalse(selector.matches(PluginSelectorContext(bundleID: "org.mozilla.firefox")))
+    XCTAssertFalse(selector.matches(PluginSelectorContext(bundleID: nil)))
+    XCTAssertEqual(selector.specificity(in: PluginSelectorContext(bundleID: "org.alacritty")), 1)
+    XCTAssertNil(selector.specificity(in: PluginSelectorContext(bundleID: "org.mozilla.firefox")))
+
+    let compound = CompiledPluginSelector(
+      PluginSelector(onlyBundleIDs: ["org.alacritty"], onlyTerminals: true))
+    XCTAssertTrue(compound.matches(PluginSelectorContext(bundleID: "org.alacritty")))
+    XCTAssertFalse(compound.matches(PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
+  }
+
+  func testBundledTmuxManifestIsTerminalScoped() throws {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Plugins/tmux")
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertTrue(manifest.selector.onlyTerminals)
+    XCTAssertEqual(manifest.hints?.fallbackOnEmpty, true)
+  }
+
   func testManifestDecodesSurfacesAcrossKinds() throws {
     let root = try temporaryPluginRoot(
       manifest:
@@ -815,20 +945,26 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "id": "slack",
-          "name": "Slack",
+          "id": "spotify",
+          "name": "Spotify",
           "version": "0.1.0",
-          "description": "Slack",
+          "description": "Spotify",
           "install": "true",
           "exec": ["/usr/bin/true"],
           "mappings": [
-            { "key": "q", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] },
+            { "key": "q", "command": ["flash", "plugin_command", "--command=spotify", "--subcommand=run"] },
             {
               "key": "ctrl+k",
               "mode": "insert",
               "command": ["flash", "hints_dismiss"],
-              "only_bundle_ids": ["com.tinyspeck.slackmacgap"],
-              "priority": 40
+              "only_bundle_ids": ["com.spotify.client"],
+              "priority": 40,
+              "repeat": true
+            },
+            {
+              "key": "cmd+r",
+              "mode": "terminal",
+              "command": ["flash", "enter_normal_mode"]
             }
           ]
         }
@@ -836,7 +972,7 @@ final class PluginSystemTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
 
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.mappings.count, 2)
+    XCTAssertEqual(manifest.mappings.count, 3)
 
     let first = try XCTUnwrap(manifest.mappings.first)
     XCTAssertEqual(first.key, "q")
@@ -844,12 +980,108 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(first.scope, .normal)
     XCTAssertTrue(first.selector.onlyBundleIDs.isEmpty, "only_bundle_ids defaults to []")
     XCTAssertNil(first.priority, "priority is optional")
+    XCTAssertFalse(first.repeatsOnFinalKey, "repeat defaults to false")
 
     let second = manifest.mappings[1]
     XCTAssertEqual(second.mode, "insert")
     XCTAssertEqual(second.scope, .insert)
-    XCTAssertEqual(second.selector.onlyBundleIDs, ["com.tinyspeck.slackmacgap"])
+    XCTAssertEqual(second.selector.onlyBundleIDs, ["com.spotify.client"])
     XCTAssertEqual(second.priority, 40)
+    XCTAssertTrue(second.repeatsOnFinalKey)
+    XCTAssertEqual(manifest.mappings[2].scope, .terminal)
+  }
+
+  func testManifestDecodesActionKeystrokesAndRejectsUnknownActionsOrChords() throws {
+    let valid = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "chords",
+          "name": "Chords",
+          "version": "1.0.0",
+          "description": "Action keystrokes",
+          "only_bundle_ids": ["com.example.browser", "com.example.other"],
+          "action_keystrokes": {
+            "tab_next": { "": "cmd+shift+]" },
+            "app_reload_force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" }
+          }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: valid) }
+    let manifest = try PluginManifest.load(from: valid)
+    XCTAssertEqual(manifest.activation, .manifestOnly, "action keystrokes need no process")
+    XCTAssertEqual(manifest.actionKeystrokes[.tabNext], ["": "cmd+shift+]"])
+    XCTAssertEqual(manifest.actionKeystrokes[.appReloadForce]?["com.example.other"], "cmd+option+r")
+
+    for (fragment, message) in [
+      (#""tab_sideways": { "": "cmd+k" }"#, "unknown action: tab_sideways"),
+      (#""tab_next": { "": "cmd+shift+nope" }"#, "is not a chord"),
+    ] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "badchords",
+            "name": "Bad chords",
+            "version": "1.0.0",
+            "description": "Invalid action keystrokes",
+            "action_keystrokes": { \(fragment) }
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+        XCTAssertTrue(String(describing: error).contains(message), "\(error)")
+      }
+    }
+  }
+
+  func testManifestActionsMustNameSourceActions() throws {
+    for (action, valid) in [("tab_previous", true), ("tab_prev", false), ("tab_sideways", false)] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "acts",
+            "name": "Acts",
+            "version": "1.0.0",
+            "description": "Declared actions",
+            "exec": ["/usr/bin/true"],
+            "actions": ["\(action)"]
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      if valid {
+        XCTAssertEqual(try PluginManifest.load(from: root).actions, [action])
+      } else {
+        XCTAssertThrowsError(try PluginManifest.load(from: root), action)
+      }
+    }
+    XCTAssertEqual(SourceAction.byWireName["tab_previous"], .tabPrev)
+    XCTAssertEqual(SourceAction.byWireName.count, 21, "one entry per action")
+  }
+
+  /// App shortcuts are plugin data: the browsers and firefox plugins own the
+  /// browser chords (Safari's own hard reload included), `defaults` Messages'
+  /// conversation chord, `terminals` the emulators' split traversal.
+  func testOfficialManifestsOwnEveryAppSpecificChord() throws {
+    func manifest(_ id: String) throws -> PluginManifest {
+      try PluginManifest.load(
+        from: try XCTUnwrap(officialPluginRoots().first { $0.lastPathComponent == id }))
+    }
+    let browsers = try manifest("browsers")
+    XCTAssertEqual(browsers.actionKeystrokes[.tabNext]?[""], "cmd+shift+]")
+    XCTAssertEqual(browsers.actionKeystrokes[.scrollBottom]?[""], "cmd+down")
+    XCTAssertEqual(browsers.actionKeystrokes[.appReloadForce]?["com.apple.Safari"], "cmd+option+r")
+    let firefox = try manifest("firefox")
+    XCTAssertTrue(firefox.onlyBundleIDs.contains("org.mozilla.nightly"))
+    XCTAssertEqual(firefox.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
+    let defaults = try manifest("defaults")
+    XCTAssertEqual(defaults.actionKeystrokes[.tabNext]?["com.apple.MobileSMS"], "ctrl+tab")
+    XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])
+    XCTAssertEqual(
+      defaults.mappings.filter(\.repeatsOnFinalKey).map(\.key).sorted(), ["[t", "]t"])
+    let terminals = try manifest("terminals")
+    XCTAssertEqual(terminals.activation, .manifestOnly)
+    XCTAssertTrue(
+      Set(terminals.terminalEmulators).isSuperset(of: ["org.alacritty", "com.mitchellh.ghostty"]))
+    XCTAssertEqual(terminals.actionKeystrokes[.paneNext]?["com.mitchellh.ghostty"], "cmd+]")
   }
 
   func testManifestRejectsInvalidMappingMode() throws {
@@ -872,7 +1104,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode command must be all, normal, or insert"))
+          "plugin mapping mode command must be all, normal, insert, or terminal"))
     }
   }
 
@@ -998,6 +1230,31 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains("requires verb needs_rpc to declare a default"))
+    }
+  }
+
+  func testQueryNamesAreReservedAgainstPluginVerbs() throws {
+    for name in ["status", "doctor", "config_check"] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "reserved",
+            "name": "Reserved",
+            "version": "1.0.0",
+            "description": "fixture",
+            "install": "true",
+            "verbs": [
+              { "name": "\(name)", "keystrokes": { "": "cmd+s" } }
+            ]
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root), name) { error in
+        XCTAssertTrue(
+          String(describing: error).contains("plugin verb \(name) is reserved"),
+          String(describing: error))
+      }
+      XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: name, args: [:]), name)
     }
   }
 
@@ -1231,13 +1488,13 @@ final class PluginSystemTests: XCTestCase {
         "SSH_AUTH_SOCK": "/tmp/agent.sock",
       ],
       overrides: [
-        "FLASH_PLUGIN_ID": "calculator",
+        "FLASH_PLUGIN_ID": "answers",
         "FLASH_PLUGIN_CONFIG": "{}",
       ])
 
     XCTAssertEqual(environment["HOME"], "/Users/demo")
     XCTAssertEqual(environment["PATH"], "/opt/homebrew/bin:/usr/bin")
-    XCTAssertEqual(environment["FLASH_PLUGIN_ID"], "calculator")
+    XCTAssertEqual(environment["FLASH_PLUGIN_ID"], "answers")
     XCTAssertNil(environment["AWS_SECRET_ACCESS_KEY"])
     XCTAssertNil(environment["SLACK_API_TOKEN"])
     XCTAssertNil(environment["SSH_AUTH_SOCK"])
@@ -1293,7 +1550,9 @@ final class PluginSystemTests: XCTestCase {
 
     XCTAssertEqual(records.first?.source, "core:test")
     XCTAssertEqual(records.last?.source, "plugin:spotify")
-    XCTAssertTrue(FlashLog.jsonLine(records[0]).contains("\"source\":\"core:test\""))
+    XCTAssertTrue(
+      String(decoding: FlashLog.jsonLineData(records[0]), as: UTF8.self)
+        .contains("\"source\":\"core:test\""))
   }
 
   // MARK: - Clipboard dashboard decode
@@ -1436,18 +1695,12 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - Subprocess smoke tests (wire-level, host-free)
 
-  func testOfficialPluginsRespondOverNDJSONWithMockedCLIs() throws {
-    let cases = [
-      ("slack", "slack"),
-      ("spotify", "spotify_player"),
-    ]
-    for (pluginID, binary) in cases {
-      try runPluginSmoke(pluginID: pluginID, binary: binary)
-    }
+  func testOfficialPluginRespondsOverNDJSONWithMockedCLI() throws {
+    try runPluginSmoke(pluginID: "spotify", binary: "spotify_player")
   }
 
   func testRustPluginExitsWhenHostClosesStdin() throws {
-    try runPluginStdinEOFSmoke(pluginID: "calculator")
+    try runPluginStdinEOFSmoke(pluginID: "answers")
   }
 
   func testNewPluginScaffoldIsStrictlyDecodableAndBuilds() throws {

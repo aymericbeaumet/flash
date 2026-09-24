@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -71,6 +72,73 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(height, 30)
   }
 
+  func testNativeMenuBarHeightReadsTheBarAlongEachDisplaysOwnTopEdge() {
+    // WindowServer space: top-left origin, Y down. The laptop sits below the
+    // external, so its folded bar parks inside the external's bottom rows.
+    let external = CGRect(x: 0, y: 0, width: 2048, height: 1152)
+    let laptop = CGRect(x: 160, y: 1152, width: 1728, height: 1117)
+    let foldedExternalBar = CGRect(x: 0, y: -30, width: 2048, height: 30)
+    let foldedLaptopBar = CGRect(x: 160, y: 1119, width: 1728, height: 33)
+    let bars = [foldedExternalBar, foldedLaptopBar]
+
+    XCTAssertEqual(
+      OverlayPanel.nativeMenuBarHeight(displayBounds: external, menuBarWindows: bars), 30)
+    XCTAssertEqual(
+      OverlayPanel.nativeMenuBarHeight(displayBounds: laptop, menuBarWindows: bars), 33)
+    XCTAssertEqual(
+      OverlayPanel.nativeMenuBarHeight(
+        displayBounds: laptop,
+        menuBarWindows: [CGRect(x: 160, y: 1152, width: 1728, height: 33)]),
+      33, "a revealed bar sits flush with the display's top edge")
+    XCTAssertNil(
+      OverlayPanel.nativeMenuBarHeight(displayBounds: laptop, menuBarWindows: [foldedExternalBar]))
+  }
+
+  func testEachDisplayReservesItsOwnNativeMenuBarHeight() {
+    // AppKit's app-wide measurement follows whichever display last hosted the
+    // active menu bar. Applied to every display, it flipped the laptop's band
+    // between its visible-frame reserve (32) and its notched bar (33), and the
+    // external's between 30 and 33, so a restored window missed the slot the
+    // next `window_move` computed.
+    let external = CGRect(x: 0, y: 0, width: 2048, height: 1152)
+    let laptop = CGRect(x: 160, y: -1117, width: 1728, height: 1117)
+    let laptopVisible = CGRect(x: 160, y: -1117, width: 1728, height: 1085)
+    let barless = CGRect(x: 2048, y: 0, width: 1920, height: 1080)
+    let resolved = OverlayPanel.resolveNativeMenuBarHeights(
+      screens: [
+        (displayID: 1, frame: laptop), (displayID: 2, frame: external),
+        (displayID: 3, frame: barless),
+      ],
+      measured: [1: 33, 2: 30],
+      appKitFallback: {
+        XCTFail("a measured bar makes the AppKit measurement unnecessary")
+        return 0
+      })
+    let snapshot = OverlayPanel.makeScreenSnapshot(
+      screens: [
+        (scale: 2, frame: laptop, visibleFrame: laptopVisible, notch: nil),
+        (scale: 2, frame: external, visibleFrame: external, notch: nil),
+        (scale: 1, frame: barless, visibleFrame: barless, notch: nil),
+      ],
+      nativeStatusBarFallbackHeight: resolved.fallback,
+      nativeMenuBarHeights: resolved.perScreen)
+    func band(_ frame: CGRect, visible: CGRect) -> CGFloat {
+      OverlayPanel.nativeStatusBarHeight(
+        screenFrame: frame, visibleFrame: visible,
+        fallbackHeight: snapshot.nativeStatusBarFallbackHeight(forScreenFrame: frame))
+    }
+
+    XCTAssertEqual(band(laptop, visible: laptopVisible), 33)
+    XCTAssertEqual(band(external, visible: external), 30)
+    XCTAssertEqual(
+      band(barless, visible: barless), 30,
+      "a display without a bar of its own follows the primary display's")
+    XCTAssertEqual(
+      OverlayPanel.resolveNativeMenuBarHeights(
+        screens: [(displayID: 2, frame: external)], measured: [:], appKitFallback: { 24 }
+      ).fallback, 24)
+  }
+
   func testStatusBarFrameUsesExactPerScreenNativeStatusBarHeight() {
     let frame = OverlayPanel.statusBarFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
@@ -84,14 +152,6 @@ final class StatusBarTests: XCTestCase {
         screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
         visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079)))
     XCTAssertEqual(frame.maxY, 1117)
-  }
-
-  func testStatusLeftAndRightTextDoNotUseTmuxFramePipes() {
-    XCTAssertEqual(OverlayPanel.statusLeftText(modeText: "NORMAL"), "NORMAL")
-    XCTAssertEqual(
-      OverlayPanel.statusRightDisplayText("#[fg=colour178]Sat Jun 13 09:08"),
-      "#[fg=colour178]Sat Jun 13 09:08")
-    XCTAssertEqual(OverlayPanel.statusRightDisplayText(""), "")
   }
 
   func testSegmentsCaptureLinkMarkers() {
@@ -138,12 +198,16 @@ final class StatusBarTests: XCTestCase {
 
   func testPopupWrappedModePillKeepsItsHoverName() {
     XCTAssertEqual(
-      FlashStatusBarRenderer.popupNameForPill(
-        in: "#[popup=mode-help]#[pill]NORMAL#[nopill]#[nopopup] · rest"),
+      FlashStatusBarRenderer.segments(
+        from: "#[popup=mode-help]#[pill]NORMAL#[nopill]#[nopopup] · rest"
+      )
+      .first(where: \.pill)?.popup,
       "mode-help")
     XCTAssertNil(
-      FlashStatusBarRenderer.popupNameForPill(
-        in: "#[pill]NORMAL#[nopill] #[popup=rest]rest#[nopopup]"))
+      FlashStatusBarRenderer.segments(
+        from: "#[pill]NORMAL#[nopill] #[popup=rest]rest#[nopopup]"
+      )
+      .first(where: \.pill)?.popup)
   }
 
   func testPopupRunsMergeAdjacentStyledSegmentsAndIgnoreUnknownDefinitions() {
@@ -175,7 +239,10 @@ final class StatusBarTests: XCTestCase {
 
     XCTAssertEqual(rendered.string, "aStoryz")
     XCTAssertEqual(popupRuns.count, 1)
-    XCTAssertEqual(popupRuns[0].name, "inline-0")
+    XCTAssertTrue(popupRuns[0].name.hasPrefix("inline-"))
+    XCTAssertEqual(
+      popupRuns[0].name,
+      FlashStatusBarRenderer.popupRuns(from: raw, font: font, popupTexts: [:]).runs.first?.name)
     XCTAssertEqual(
       popupRuns[0].content,
       "#[fg=colour178,bold]Preview#[default] body")
@@ -219,10 +286,6 @@ final class StatusBarTests: XCTestCase {
         font: font
       ).string,
       "visible")
-  }
-
-  func testPopupTextLayerWrapsLongText() {
-    XCTAssertTrue(OverlayPanel().statusPopupLabel.isWrapped)
   }
 
   func testPopupLayoutKeepsExactPaddingOnEveryEdge() {
@@ -288,7 +351,11 @@ final class StatusBarTests: XCTestCase {
       ])
 
     XCTAssertEqual(regions.count, 2)
-    XCTAssertEqual(regions[0], StatusBarHintRegion(rect: hoverRect, action: .hover("memory")))
+    XCTAssertEqual(
+      regions[0],
+      StatusBarHintRegion(
+        rect: hoverRect,
+        action: .hover(.init(rect: hoverRect, name: "memory", content: "Memory details"))))
     XCTAssertEqual(regions[1], StatusBarHintRegion(rect: clickRect, action: .click(url)))
   }
 
@@ -351,21 +418,6 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(blink.calculationMode, .discrete)
   }
 
-  func testSplitLeftRegionKeepsModePillSeparateFromTrailingStyledRun() {
-    // Plain `#{mode}` left bucket → all pill, no trailing run.
-    let plain = OverlayPanel.splitLeftRegion("NORMAL")
-    XCTAssertEqual(plain.pill, "NORMAL")
-    XCTAssertEqual(plain.trailing, "")
-
-    // `#{mode}` followed by styled content → the first `#[…]` marker is
-    // the boundary; everything after it keeps its own styling instead of
-    // leaking the bold mode-pill palette.
-    let mixed = OverlayPanel.splitLeftRegion(
-      "NORMAL#[fg=colour245] · #[fg=colour178]HN#[fg=colour245] story")
-    XCTAssertEqual(mixed.pill, "NORMAL")
-    XCTAssertEqual(mixed.trailing, "#[fg=colour245] · #[fg=colour178]HN#[fg=colour245] story")
-  }
-
   func testParsesMonitorScope() {
     XCTAssertEqual(ConfigLoader.parse("").statusBar.monitor, .all)
     XCTAssertEqual(
@@ -399,8 +451,11 @@ final class StatusBarTests: XCTestCase {
       popup_offset = 7
 
       [statusbar.popup]
-      quota = '''#[fg=colour178,bold]Claude#[default]
-      #{script:/tmp/quota.sh --details=claude}'''
+      quota = '''#[fg=#EBCB8B,bold]Claude#[default]
+      #{flash.source.quota}'''
+
+      [statusbar.sources.quota]
+      command = ["/tmp/quota.sh", "--details=claude"]
       """)
 
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
@@ -415,9 +470,8 @@ final class StatusBarTests: XCTestCase {
     let popup = c.statusBar.popups["quota"]
     XCTAssertEqual(
       popup?.template,
-      "#[fg=colour178,bold]Claude#[default]\n#{script:/tmp/quota.sh --details=claude}")
-    XCTAssertEqual(popup?.variables.count, 1)
-    XCTAssertEqual(popup?.variables.first?.token, "script:/tmp/quota.sh --details=claude")
+      "#[fg=#EBCB8B,bold]Claude#[default]\n#{flash.source.quota}")
+    XCTAssertTrue(popup?.program.dependencies.values.contains("flash.source.quota") == true)
   }
 
   func testInvalidPopupStyleIsDiagnosedAndKeepsDefaults() {
@@ -435,66 +489,43 @@ final class StatusBarTests: XCTestCase {
   }
 
   func testPopupTemplateRenderingPreservesNewlinesAndDynamicValues() {
-    let variable = FlashStatusBarTemplateVariable(
-      id: "statusbar.popup.quota.script:/tmp/quota.sh --details=claude",
-      token: "script:/tmp/quota.sh --details=claude",
-      source: .command(.scriptWithArgs("/tmp/quota.sh", args: ["--details=claude"])))
     let model = FlashStatusBarTemplateEngine.render(
       template: Config.StatusBar.defaultTemplate,
       popupTemplates: [
         "quota": FlashStatusBarTemplate(
-          template: "#[fg=colour178]Claude#[default]\n#{script:/tmp/quota.sh --details=claude}",
-          variables: [variable])
+          template: "#[fg=colour178]Claude#[default]\n#{flash.source.quota}")
       ],
       context: FlashStatusBarContext(),
-      dynamicValues: [variable.id: "5-hour 75% remaining\n7-day 70% remaining"])
-
+      dynamicValues: ["quota": "5-hour 75% remaining\n7-day 70% remaining"])
     XCTAssertEqual(
-      model.popupTexts["quota"],
-      "#[fg=colour178]Claude#[default]\n5-hour 75% remaining\n7-day 70% remaining")
+      model.popupDocuments["quota"]?.map(\.text).joined(),
+      "Claude\n5-hour 75% remaining\n7-day 70% remaining")
+    XCTAssertEqual(
+      model.popupDocuments["quota"]?.first(where: { !$0.text.isEmpty })?.foreground, .palette(178))
   }
 
   func testPopupTemplateRenderingTrimsOnlyBoundaryNewlines() {
     let model = FlashStatusBarTemplateEngine.render(
       template: Config.StatusBar.defaultTemplate,
       popupTemplates: [
-        "details": FlashStatusBarTemplate(
-          template: "\n\nFirst line\n\nLast line\n",
-          variables: [])
+        "details": FlashStatusBarTemplate(template: "\n\nFirst line\n\nLast line\n")
       ],
       context: FlashStatusBarContext())
-
-    XCTAssertEqual(model.popupTexts["details"], "First line\n\nLast line")
+    XCTAssertEqual(model.popupDocuments["details"]?.map(\.text).joined(), "First line\n\nLast line")
   }
 
   func testDynamicPopupValueChangesTheModelWhileVisibleTextStaysFixed() {
-    let variable = FlashStatusBarTemplateVariable(
-      id: "statusbar.popup.metrics.script:/tmp/metrics.sh",
-      token: "script:/tmp/metrics.sh",
-      source: .command(.script("/tmp/metrics.sh")))
-    let template = FlashStatusBarTemplate(
-      template: "#[align=right]#[popup=metrics]SYS#[nopopup]",
-      variables: [])
-    let popups = [
-      "metrics": FlashStatusBarTemplate(
-        template: "#{script:/tmp/metrics.sh}",
-        variables: [variable])
-    ]
-
+    let template = FlashStatusBarTemplate(template: "#[align=right,popup=metrics]SYS#[nopopup]")
+    let popups = ["metrics": FlashStatusBarTemplate(template: "#{flash.source.metrics}")]
     let first = FlashStatusBarTemplateEngine.render(
-      template: template,
-      popupTemplates: popups,
-      context: FlashStatusBarContext(),
-      dynamicValues: [variable.id: "CPU 12%\nMEM 34%"])
+      template: template, popupTemplates: popups,
+      context: FlashStatusBarContext(), dynamicValues: ["metrics": "CPU 12%\nMEM 34%"])
     let second = FlashStatusBarTemplateEngine.render(
-      template: template,
-      popupTemplates: popups,
-      context: FlashStatusBarContext(),
-      dynamicValues: [variable.id: "CPU 56%\nMEM 78%"])
-
-    XCTAssertEqual(first.rightText, second.rightText)
+      template: template, popupTemplates: popups,
+      context: FlashStatusBarContext(), dynamicValues: ["metrics": "CPU 56%\nMEM 78%"])
+    XCTAssertEqual(first.rightDocument, second.rightDocument)
     XCTAssertNotEqual(first, second)
-    XCTAssertEqual(second.popupTexts["metrics"], "CPU 56%\nMEM 78%")
+    XCTAssertEqual(second.popupDocuments["metrics"]?.map(\.text).joined(), "CPU 56%\nMEM 78%")
   }
 
   func testVisiblePopupRefreshesContentInPlaceAtTheLatestPointer() {
@@ -514,7 +545,8 @@ final class StatusBarTests: XCTestCase {
     let secondPointer = CGPoint(
       x: visibleFrame.midX + 80,
       y: visibleFrame.midY + 20)
-    let layer = panel.statusPopupLayer
+    let popup = panel.statusPopupController
+    defer { panel.hideStatusBarPopup() }
 
     panel.refreshStatusBarPopup(
       popups: [
@@ -525,7 +557,7 @@ final class StatusBarTests: XCTestCase {
       ],
       at: firstPointer,
       screenSnapshot: snapshot)
-    let firstFrame = layer.frame
+    let firstFrame = popup.frame
 
     panel.refreshStatusBarPopup(
       popups: [
@@ -537,53 +569,61 @@ final class StatusBarTests: XCTestCase {
       at: secondPointer,
       screenSnapshot: snapshot)
 
-    XCTAssertTrue(panel.statusPopupLayer === layer, "a refresh must reuse the visible surface")
-    XCTAssertFalse(layer.isHidden)
+    XCTAssertTrue(panel.statusPopupController === popup, "a refresh must reuse the visible surface")
+    XCTAssertTrue(popup.isVisible)
     XCTAssertEqual(panel.activeStatusBarPopupName, "metrics")
     XCTAssertEqual(panel.activeStatusBarPopupContent, "CPU 56%\nMEM 78%")
     XCTAssertEqual(
-      (panel.statusPopupLabel.string as? NSAttributedString)?.string,
+      popup.content,
       "CPU 56%\nMEM 78%")
-    XCTAssertEqual(layer.frame.size, firstFrame.size)
+    XCTAssertEqual(popup.frame.size, firstFrame.size)
     XCTAssertEqual(
-      layer.frame.midX - firstFrame.midX,
+      popup.frame.midX - firstFrame.midX,
       secondPointer.x - firstPointer.x,
       accuracy: 0.001)
     XCTAssertEqual(
-      layer.frame.midY - firstFrame.midY,
+      popup.frame.midY - firstFrame.midY,
       secondPointer.y - firstPointer.y,
       accuracy: 0.001)
 
     let padding = CGFloat(panel.statusBarPopupStyle.padding)
     let border = CGFloat(panel.statusBarPopupStyle.borderWidth)
-    let label = panel.statusPopupLabel.frame
+    let label = popup.terminalView.frame
     XCTAssertEqual(label.minX - border, padding, accuracy: 0.001)
     XCTAssertEqual(label.minY - border, padding, accuracy: 0.001)
-    XCTAssertEqual(layer.frame.width - label.maxX - border, padding, accuracy: 0.001)
-    XCTAssertEqual(layer.frame.height - label.maxY - border, padding, accuracy: 0.001)
+    XCTAssertEqual(popup.frame.width - label.maxX - border, padding, accuracy: 0.001)
+    XCTAssertEqual(popup.frame.height - label.maxY - border, padding, accuracy: 0.001)
+
+    let anchor = StatusBarPopupRegion(
+      rect: CGRect(x: secondPointer.x - 5, y: secondPointer.y - 5, width: 10, height: 10),
+      name: "metrics", content: "CPU 56%\nMEM 78%")
+    panel.refreshStatusBarPopup(popups: [anchor], at: secondPointer, screenSnapshot: snapshot)
+    let insidePopup = CGPoint(x: popup.frame.midX, y: popup.frame.midY)
+    XCTAssertFalse(anchor.rect.contains(insidePopup))
+    for _ in 0..<2 {
+      panel.refreshStatusBarPopup(popups: [anchor], at: insidePopup, screenSnapshot: snapshot)
+      XCTAssertFalse(popup.isVisible, "the popup body must not retain or revive the preview")
+      XCTAssertNil(panel.activeStatusBarPopupName)
+    }
   }
 
-  func testParsesCycleToken() {
+  func testParsesNamedCyclingSources() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#{cycle:~/hn.sh} #{cycle=90:~/x.sh --flag}"
+      template = "#{flash.source.news} #{flash.source.other}"
+      [statusbar.sources.news]
+      command = ["/bin/sh", "~/hn.sh"]
+      cycle_interval = 60
+      [statusbar.sources.other]
+      command = ["/bin/sh", "~/x.sh", "--flag"]
+      cycle_interval = 90
       """)
-    let vars = c.statusBar.template.variables
-    guard
-      case .cycle(_, let defaultPeriod)? =
-        vars.first(where: { $0.token == "cycle:~/hn.sh" })?.source
-    else { return XCTFail("expected a cycle variable") }
-    XCTAssertEqual(defaultPeriod, 60)
-    guard
-      case .cycle(_, let customPeriod)? =
-        vars.first(where: { $0.token == "cycle=90:~/x.sh --flag" })?.source
-    else { return XCTFail("expected a cycle=90 variable") }
-    XCTAssertEqual(customPeriod, 90)
-    // Cycle runs a subprocess (a command section) and is also its own
-    // cycleSections bucket.
-    XCTAssertEqual(c.statusBar.template.commandSections.count, 2)
-    XCTAssertEqual(c.statusBar.template.cycleSections.count, 2)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+    XCTAssertEqual(c.statusBar.sources["news"]?.cycleIntervalSeconds, 60)
+    XCTAssertEqual(c.statusBar.sources["other"]?.cycleIntervalSeconds, 90)
+    XCTAssertEqual(c.statusBar.sources["other"]?.command, ["/bin/sh", "~/x.sh", "--flag"])
+    XCTAssertEqual(c.statusBar.template.sourceNames, ["news", "other"])
   }
 
   func testParsesStatusBarInterval() {
@@ -617,71 +657,62 @@ final class StatusBarTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#{script=30:~/bin/quota.sh --claude} #{command=10:date} #{cycle=45/300:~/bin/hn.sh}"
+      template = "#{flash.source.quota} #{flash.source.clock} #{flash.source.news}"
+      [statusbar.sources.quota]
+      command = ["/bin/sh", "~/bin/quota.sh", "--claude"]
+      interval = 30
+      [statusbar.sources.clock]
+      command = ["/bin/sh", "-lc", "date"]
+      interval = 10
+      [statusbar.sources.news]
+      command = ["/bin/sh", "~/bin/hn.sh"]
+      interval = 300
+      cycle_interval = 45
       """)
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
-    let template = c.statusBar.template
     XCTAssertEqual(
-      template.variables[0].source,
-      .command(
-        FlashStatusBarCommand(
-          argv: ["/bin/sh", "~/bin/quota.sh", "--claude"], refreshSeconds: 30)))
+      c.statusBar.sources["quota"],
+      FlashStatusBarSourceDefinition(
+        command: ["/bin/sh", "~/bin/quota.sh", "--claude"], intervalSeconds: 30))
     XCTAssertEqual(
-      template.variables[1].source,
-      .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date"], refreshSeconds: 10)))
+      c.statusBar.sources["clock"],
+      FlashStatusBarSourceDefinition(
+        command: ["/bin/sh", "-lc", "date"], intervalSeconds: 10))
     XCTAssertEqual(
-      template.variables[2].source,
-      .cycle(
-        command: FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/hn.sh"], refreshSeconds: 300),
-        periodSeconds: 45))
+      c.statusBar.sources["news"],
+      FlashStatusBarSourceDefinition(
+        command: ["/bin/sh", "~/bin/hn.sh"], intervalSeconds: 300, cycleIntervalSeconds: 45))
   }
 
   func testInvalidPerSourceRefreshIntervalDiagnoses() {
-    for template in ["#{script=0:~/bin/x.sh}", "#{script=abc:~/bin/x.sh}", "#{cycle=45/0:~/x.sh}"] {
+    for option in ["interval = -1", "interval = \"abc\"", "cycle_interval = 0"] {
       let c = ConfigLoader.parse(
         """
-        [statusbar]
-        template = "\(template)"
+        [statusbar.sources.bad]
+        command = ["/bin/sh", "~/bin/x.sh"]
+        \(option)
         """)
       XCTAssertTrue(
-        c.loadingDiagnostics.contains { $0.message.contains("template variable") },
-        "expected a diagnostic for \(template)")
+        c.loadingDiagnostics.contains { $0.message.contains("statusbar.sources.bad.") },
+        "expected a diagnostic for \(option)")
+      XCTAssertNil(c.statusBar.sources["bad"])
     }
   }
 
-  func testEffectiveRefreshSecondsResolution() {
-    // Command: global fallback, explicit override, global 0 = poll off
-    // (unless the source opted in explicitly).
-    XCTAssertEqual(
-      FlashStatusBarController.effectiveRefreshSeconds(
-        source: .command(.shell("date")), globalSeconds: 5),
-      5)
-    XCTAssertEqual(
-      FlashStatusBarController.effectiveRefreshSeconds(
-        source: .command(.shell("date", refreshSeconds: 30)), globalSeconds: 5),
-      30)
-    XCTAssertNil(
-      FlashStatusBarController.effectiveRefreshSeconds(
-        source: .command(.shell("date")), globalSeconds: 0))
-    XCTAssertEqual(
-      FlashStatusBarController.effectiveRefreshSeconds(
-        source: .command(.shell("date", refreshSeconds: 30)), globalSeconds: 0),
-      30)
-    // Cycle: never re-fetch faster than it rotates (max(rotation, global))
-    // unless an explicit `/N` says so.
-    XCTAssertEqual(
-      FlashStatusBarController.effectiveRefreshSeconds(
-        source: .cycle(command: .script("/tmp/x.sh"), periodSeconds: 60), globalSeconds: 5),
-      60)
-    XCTAssertEqual(
-      FlashStatusBarController.effectiveRefreshSeconds(
-        source: .cycle(
-          command: .script("/tmp/x.sh", refreshSeconds: 300), periodSeconds: 60),
-        globalSeconds: 5),
-      300)
-    // Non-command sources never poll.
-    XCTAssertNil(
-      FlashStatusBarController.effectiveRefreshSeconds(source: .sdk(.date), globalSeconds: 5))
+  func testSourceRefreshIntervalsResolveAtConfigurationLoad() {
+    for (global, override, expected) in [(5, nil, 5), (5, 30, 30), (0, nil, 0), (0, 30, 30)] {
+      let c = ConfigLoader.parse(
+        """
+        [statusbar]
+        interval = \(global)
+        [statusbar.sources.clock]
+        command = ["date"]
+        \(override.map { "interval = \($0)" } ?? "")
+        """)
+      XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+      XCTAssertEqual(c.statusBar.sources["clock"]?.intervalSeconds, Double(expected))
+      XCTAssertNil(c.statusBar.sources["clock"]?.cycleIntervalSeconds)
+    }
   }
 
   func testCycleRefreshKeepsVisibleLineAcrossReorderingUntilItsDeadline() {
@@ -741,492 +772,6 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(slow.nextRotationAt, 130)
   }
 
-  func testDefaultTemplateRendersModeAndRightSections() {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-    let now = Date(timeIntervalSince1970: 1_780_000_000)
-    let template = Config.StatusBar.defaultTemplate
-
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(
-        activeAppName: "Safari",
-        activeBundleIdentifier: "com.apple.Safari",
-        modeLabel: "NORMAL",
-        now: now,
-        calendar: calendar))
-
-    XCTAssertEqual(model.appText, "")
-    XCTAssertEqual(model.modeText, "#[pill]NORMAL#[nopill]")
-    XCTAssertEqual(model.rightText, "#[fg=colour178]Thu May 28 20:26")
-    XCTAssertFalse(model.rightText.contains("ip-status"))
-    XCTAssertFalse(model.rightText.contains("range=user"))
-  }
-
-  func testStatusTemplateCanReadPluginState() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=right]#{plugin:ready_count}/#{plugin:error_count}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "ready",
-          token: "plugin:ready_count",
-          source: .plugin(.readyCount)),
-        FlashStatusBarTemplateVariable(
-          id: "errors",
-          token: "plugin:error_count",
-          source: .plugin(.errorCount)),
-      ])
-
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(
-        pluginStatuses: [
-          pluginStatus(id: "ok", state: "running", lastError: nil),
-          pluginStatus(id: "bad", state: "failed", lastError: "boom"),
-        ]))
-
-    XCTAssertEqual(model.rightText, "1/1")
-  }
-
-  func testStatusTemplateCanReadPluginStatusSegment() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=right]#{plugin:power.summary}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "power-summary",
-          token: "plugin:power.summary",
-          source: .plugin(.statusSegment(pluginID: "power", name: "summary")))
-      ])
-
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(
-        pluginStatuses: [
-          pluginStatus(
-            id: "power",
-            state: "running",
-            lastError: nil,
-            statusSegments: [
-              "summary": "#[range=user|bat-prefs fg=colour178]BAT 82%#[norange]"
-            ])
-        ]))
-
-    // Ranges ride through the model — the renderer turns them into
-    // actionable spans instead of stripping them.
-    XCTAssertEqual(
-      model.rightText, "#[range=user|bat-prefs fg=colour178]BAT 82%#[norange]")
-  }
-
-  func testMissingPluginStatusSegmentRendersEmpty() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=right]#{plugin:power.summary}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "power-summary",
-          token: "plugin:power.summary",
-          source: .plugin(.statusSegment(pluginID: "power", name: "summary")))
-      ])
-
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(
-        pluginStatuses: [
-          pluginStatus(id: "power", state: "running", lastError: nil)
-        ]))
-
-    XCTAssertEqual(model.rightText, "")
-  }
-
-  func testAlignMarkersRouteToLeftCentreRightBuckets() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]L#[align=centre]C#[align=right]R",
-      variables: [])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext())
-    XCTAssertEqual(model.modeText, "L")
-    XCTAssertEqual(model.appText, "C")
-    XCTAssertEqual(model.rightText, "R")
-  }
-
-  func testStatusTemplateIgnoresNewlinesWhenRendering() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]L\n#[align=centre]C\r\n#[align=right]R",
-      variables: [])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext())
-    XCTAssertEqual(model.modeText, "L")
-    XCTAssertEqual(model.appText, "C")
-    XCTAssertEqual(model.rightText, "R")
-  }
-
-  func testHostPrimitiveVariablesRenderAndTmuxStateTokensDoNot() {
-    // #H/#h and the OS primitives resolve in the engine; the removed
-    // tmux-state dialect does not — an unregistered #{window_name} renders
-    // empty and #S is no longer a recognized alias, so it stays literal.
-    // (Config loading rejects both up front; this is the render-side
-    // behavior for hand-built templates.)
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#H #{host_short} #{user} #{uid} #{pid} #{window_name}#S",
-      variables: [])
-
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(
-        hostName: "macbook.local",
-        userName: "ab",
-        userID: 501,
-        processID: 4242))
-
-    XCTAssertEqual(model.modeText, "macbook.local macbook ab 501 4242 #S")
-  }
-
-  func testAmericanCenterAliasMatchesBritishCentre() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=center]C",
-      variables: [])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext())
-    XCTAssertEqual(model.appText, "C")
-  }
-
-  func testStyleMarkersFlowIntoCurrentAlignmentBucket() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=right]#[fg=colour245]styled",
-      variables: [])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext())
-    XCTAssertEqual(model.rightText, "#[fg=colour245]styled")
-    XCTAssertTrue(model.modeText.isEmpty)
-  }
-
-  func testDoubleHashEscapesLiteralPound() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]##count##: 42",
-      variables: [])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext())
-    XCTAssertEqual(model.modeText, "#count#: 42")
-  }
-
-  func testTokenTruncationHeadKeepsFirstNChars() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{=4:mode}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode",
-          token: "mode",
-          source: .sdk(.modeLabel))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(modeLabel: "COMMAND"))
-    XCTAssertEqual(model.modeText, "#[pill]COMM#[nopill]")
-  }
-
-  func testTokenTruncationTailKeepsLastNChars() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{=-4:mode}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode",
-          token: "mode",
-          source: .sdk(.modeLabel))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(modeLabel: "COMMAND"))
-    XCTAssertEqual(model.modeText, "#[pill]MAND#[nopill]")
-  }
-
-  func testTokenTruncationLeavesShortValueUntouched() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{=10:mode}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode",
-          token: "mode",
-          source: .sdk(.modeLabel))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(modeLabel: "NORMAL"))
-    XCTAssertEqual(model.modeText, "#[pill]NORMAL#[nopill]")
-  }
-
-  func testTokenTruncationEllipsisGlyphCountsTowardBudget() {
-    // `=4…` → 3 visible characters + the ellipsis glyph = 4 cells wide.
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.parseTokenTruncation("=4…:mode").truncation,
-      .head(4, ellipsis: true))
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{=4…:mode}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template, context: FlashStatusBarContext(modeLabel: "COMMAND"))
-    XCTAssertEqual(model.modeText, "#[pill]COM…#[nopill]")
-  }
-
-  func testTokenTruncationAsciiDotsAreAcceptedAsEllipsis() {
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.parseTokenTruncation("=4...:mode").truncation,
-      .head(4, ellipsis: true))
-  }
-
-  private func renderLeft(
-    _ template: String,
-    modeLabel: String = "NORMAL",
-    dynamicValues: [String: String] = [:],
-    variables: [FlashStatusBarTemplateVariable] = []
-  ) -> String {
-    var vars = variables
-    if !vars.contains(where: { $0.token == "mode" }) {
-      vars.append(
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel)))
-    }
-    let model = FlashStatusBarTemplateEngine.render(
-      template: FlashStatusBarTemplate(template: template, variables: vars),
-      context: FlashStatusBarContext(modeLabel: modeLabel),
-      dynamicValues: dynamicValues)
-    return model.modeText
-  }
-
-  func testConditionalExpandsTruthyAndFalsyBranches() {
-    // #{?cond,a,b} — tmux ternary. The mode label is non-empty → truthy.
-    XCTAssertEqual(renderLeft("#{?mode,on,off}"), "on")
-    // Unknown variables render empty → falsy.
-    XCTAssertEqual(renderLeft("#{?session_name,on,off}"), "off")
-    // Missing false-branch renders nothing.
-    XCTAssertEqual(renderLeft("#{?session_name,on}"), "")
-    // Branches are format strings: variables and style markers expand.
-    XCTAssertEqual(
-      renderLeft("#{?mode,mode=#{mode},-}"), "mode=#[pill]NORMAL#[nopill]")
-    XCTAssertEqual(renderLeft("#{?mode,#[fg=colour196]hot,-}"), "#[fg=colour196]hot")
-  }
-
-  func testComparatorsAndLogicOperators() {
-    XCTAssertEqual(renderLeft("#{==:#{mode},NORMAL}", modeLabel: "NORMAL"), "1")
-    XCTAssertEqual(renderLeft("#{==:#{mode},INSERT}", modeLabel: "NORMAL"), "0")
-    XCTAssertEqual(renderLeft("#{!=:#{mode},INSERT}", modeLabel: "NORMAL"), "1")
-    // Numeric comparison when both sides parse as numbers.
-    XCTAssertEqual(renderLeft("#{<:9,10}"), "1")
-    XCTAssertEqual(renderLeft("#{>:9,10}"), "0")
-    XCTAssertEqual(renderLeft("#{>=:10,10}"), "1")
-    XCTAssertEqual(renderLeft("#{&&:1,1}"), "1")
-    XCTAssertEqual(renderLeft("#{&&:1,0}"), "0")
-    XCTAssertEqual(renderLeft("#{||:0,1}"), "1")
-    // The canonical composition: ternary over a comparison.
-    XCTAssertEqual(
-      renderLeft("#{?#{==:#{mode},NORMAL},N,other}", modeLabel: "NORMAL"), "N")
-    XCTAssertEqual(
-      renderLeft("#{?#{==:#{mode},NORMAL},N,other}", modeLabel: "INSERT"), "other")
-  }
-
-  func testSubstitutionModifier() {
-    XCTAssertEqual(renderLeft("#{s/NOR/nor/:mode}"), "#[pill]norMAL#[nopill]")
-    // All occurrences replace; \1 backreferences work; /i flag.
-    let vars = [
-      FlashStatusBarTemplateVariable(
-        id: "statusbar.template.script:/tmp/x.sh",
-        token: "script:/tmp/x.sh",
-        source: .command(.script("/tmp/x.sh")))
-    ]
-    XCTAssertEqual(
-      renderLeft(
-        "#{s/a/o/:script:/tmp/x.sh}",
-        dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
-        variables: vars),
-      "bonono")
-    XCTAssertEqual(
-      renderLeft(
-        "#{s/(b)an/\\1un/:script:/tmp/x.sh}",
-        dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
-        variables: vars),
-      "bunana")
-    XCTAssertEqual(
-      renderLeft(
-        "#{s/BAN/x/i:script:/tmp/x.sh}",
-        dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
-        variables: vars),
-      "xana")
-  }
-
-  func testPaddingModifier() {
-    XCTAssertEqual(renderLeft("[#{p10:mode}]", modeLabel: "AB"), "[#[pill]AB#[nopill]        ]")
-    XCTAssertEqual(renderLeft("[#{p-10:mode}]", modeLabel: "AB"), "[        #[pill]AB#[nopill]]")
-    // Already-wide values pass through unpadded.
-    XCTAssertEqual(renderLeft("[#{p2:mode}]", modeLabel: "NORMAL"), "[#[pill]NORMAL#[nopill]]")
-  }
-
-  func testMarkerTruncationForm() {
-    // tmux `#{=/N/marker:…}`: marker appended when trimmed, NOT counted
-    // toward N (unlike the Flash `…` extension).
-    XCTAssertEqual(renderLeft("#{=/3/->:mode}", modeLabel: "COMMAND"), "#[pill]COM->#[nopill]")
-    XCTAssertEqual(renderLeft("#{=-/3/<-:mode}", modeLabel: "COMMAND"), "#[pill]<-AND#[nopill]")
-    XCTAssertEqual(renderLeft("#{=/9/->:mode}", modeLabel: "COMMAND"), "#[pill]COMMAND#[nopill]")
-  }
-
-  func testStrftimeExpandsTemplateLiteralsOnly() {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone.current
-    let now = Date(timeIntervalSince1970: 1_750_000_000)
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]%Y and 100%% and #{mode}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(modeLabel: "NORMAL", now: now, calendar: calendar))
-    var tm = tm()
-    var time = time_t(now.timeIntervalSince1970)
-    localtime_r(&time, &tm)
-    XCTAssertEqual(
-      model.modeText, "\(1900 + tm.tm_year) and 100% and #[pill]NORMAL#[nopill]")
-    // `%` in a resolved value survives (strftime runs BEFORE expansion,
-    // tmux semantics), and templates with % refresh on the clock.
-    XCTAssertTrue(template.needsClockRefresh)
-  }
-
-  func testDefaultAndPushPopDefaultStyleScoping() {
-    let segments = FlashStatusBarRenderer.segments(
-      from: "#[fg=colour178]a#[default]b#[fg=colour196 push-default]c#[fg=colour31]d#[default]e")
-    XCTAssertEqual(segments[0].foreground, .palette(178))  // a
-    XCTAssertEqual(segments[1].foreground, .palette(245))  // b — reset to region default
-    XCTAssertEqual(segments[2].foreground, .palette(196))  // c — new default pushed
-    XCTAssertEqual(segments[3].foreground, .palette(31))  // d
-    XCTAssertEqual(segments[4].foreground, .palette(196))  // e — default = pushed style
-  }
-
-  func testConditionalRegistersNestedCommandSections() {
-    // A script buried in a conditional branch must still get scheduled.
-    let c = ConfigLoader.parse(
-      """
-      [statusbar]
-      template = "#{?#{==:#{mode},NORMAL},#{script=30:~/bin/x.sh},#{cycle:~/bin/y.sh}}"
-      """)
-    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
-    let tokens = c.statusBar.template.commandSections.map(\.token)
-    XCTAssertTrue(tokens.contains("script=30:~/bin/x.sh"), "\(tokens)")
-    XCTAssertTrue(tokens.contains("cycle:~/bin/y.sh"), "\(tokens)")
-    XCTAssertEqual(c.statusBar.template.cycleSections.count, 1)
-  }
-
-  func testFitToWidthShrinksOnlyTheElasticSpan() {
-    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-    let raw =
-      "HN #[shrink]A very long story title that absolutely overflows the region#[noshrink]"
-      + " (domain.com) ↗"
-    // Room for the fixed parts plus ~10 title characters.
-    let fixedWidth = ceil(
-      FlashStatusBarRenderer.attributedStatusString(
-        from: "HN  (domain.com) ↗", font: font
-      ).size().width)
-    let available = fixedWidth + 80
-    let fitted = FlashStatusBarRenderer.fitToWidth(raw, font: font, available: available)
-    // The elastic span shrank with an ellipsis; the fixed label, domain, and
-    // arrow all survive at full width.
-    XCTAssertTrue(fitted.contains("…"), fitted)
-    XCTAssertTrue(fitted.hasPrefix("HN #[shrink]A"), fitted)
-    XCTAssertTrue(fitted.contains("#[noshrink] (domain.com) ↗"), fitted)
-    let fittedWidth = ceil(
-      FlashStatusBarRenderer.attributedStatusString(from: fitted, font: font).size().width)
-    XCTAssertLessThanOrEqual(fittedWidth, available)
-
-    // Already fits → untouched. No elastic span → untouched (legacy).
-    XCTAssertEqual(
-      FlashStatusBarRenderer.fitToWidth(raw, font: font, available: 100_000), raw)
-    XCTAssertEqual(
-      FlashStatusBarRenderer.fitToWidth("no span", font: font, available: 10), "no span")
-  }
-
-  func testFitToWidthPreservesMarkersInsideTheSpan() {
-    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-    let raw =
-      "#[link=https://x]#[shrink]abcdefghijklmnopqrstuvwxyz#[noshrink]#[nolink] tail"
-    let fitted = FlashStatusBarRenderer.fitToWidth(raw, font: font, available: 120)
-    // The closing markers survive the cut, so the link never bleeds into
-    // the fixed tail.
-    XCTAssertTrue(fitted.contains("#[nolink] tail"), fitted)
-    XCTAssertTrue(fitted.contains("…"), fitted)
-  }
-
-  func testFitToWidthFallsBackToWholeRunTruncationFromEitherEdge() {
-    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-    let raw =
-      "#[cyc]#[link=https://example.com]#[popup=metrics]"
-      + "CPU 22% · GPU 60% · MEM 98% · BAT 100%"
-      + "#[nopopup]#[nolink]#[nocyc]"
-    let available: CGFloat = 100
-
-    let leading = OverlayPanel.fitStatusBarText(
-      raw, font: font, available: available)
-    let trailing = OverlayPanel.fitStatusBarText(
-      raw, font: font, available: available, fromTail: true)
-
-    let leadingText = FlashStatusBarRenderer.attributedStatusString(
-      from: leading, font: font
-    ).string
-    let trailingText = FlashStatusBarRenderer.attributedStatusString(
-      from: trailing, font: font
-    ).string
-    XCTAssertTrue(leadingText.hasSuffix("…"), leadingText)
-    XCTAssertTrue(trailingText.hasPrefix("…"), trailingText)
-    XCTAssertTrue(trailingText.hasSuffix("BAT 100%"), trailingText)
-    XCTAssertTrue(leading.contains("#[nopopup]"), leading)
-    XCTAssertTrue(trailing.contains("#[popup=metrics]"), trailing)
-    XCTAssertTrue(leading.contains("#[nolink]"), leading)
-    XCTAssertTrue(trailing.contains("#[link=https://example.com]"), trailing)
-    XCTAssertTrue(leading.contains("#[cyc]"), leading)
-    XCTAssertTrue(trailing.contains("#[nocyc]"), trailing)
-    XCTAssertLessThanOrEqual(
-      ceil(FlashStatusBarRenderer.attributedStatusString(from: leading, font: font).size().width),
-      available)
-    XCTAssertLessThanOrEqual(
-      ceil(FlashStatusBarRenderer.attributedStatusString(from: trailing, font: font).size().width),
-      available)
-  }
-
-  func testFitToWidthHidesContentWhenEvenEllipsisDoesNotFit() {
-    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-    XCTAssertEqual(
-      OverlayPanel.fitStatusBarText("overflow", font: font, available: 1), "")
-  }
-
-  func testTruncatedCycleLineKeepsBothSlideSentinels() {
-    // Regression: the user's `#{=80…:cycle:hn.sh}` — any line longer than
-    // the cap used to lose the trailing `#[nocyc]` sentinel, so
-    // `splitCycleRun` failed and the slide animation silently died.
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{=10…:cycle:/tmp/hn.sh}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.cycle:/tmp/hn.sh",
-          token: "cycle:/tmp/hn.sh",
-          source: .cycle(command: .script("/tmp/hn.sh"), periodSeconds: 60))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(),
-      dynamicValues: [
-        "statusbar.template.cycle:/tmp/hn.sh":
-          "A headline much longer than the ten-character cap"
-      ])
-    XCTAssertTrue(model.modeText.contains("#[cyc]"), model.modeText)
-    XCTAssertTrue(model.modeText.contains("#[nocyc]"), model.modeText)
-    // Exactly 10 visible characters survive (9 + the ellipsis glyph).
-    XCTAssertTrue(model.modeText.contains("A headlin…"), model.modeText)
-  }
-
   func testFullPaletteHexAndNamedColorsParse() {
     let segments = FlashStatusBarRenderer.segments(
       from: "#[fg=colour31]a#[fg=#5E81AC]b#[fg=green]c#[fg=default]d#[bg=nonsense]e")
@@ -1235,117 +780,8 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(segments[2].foreground, .palette(2))
     XCTAssertEqual(segments[3].foreground, .defaultForeground)
     // An unknown bg word stays default-background (no phantom grey fill).
-    XCTAssertEqual(segments[4].background, .defaultBackground)
-  }
-
-  func testTokenTruncationLeavesShortValueWithoutEllipsis() {
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(
-        "NORMAL", truncation: .head(10, ellipsis: true)),
-      "NORMAL")
-  }
-
-  func testTokenTruncationCountsVisibleCharsNotStyleMarkers() {
-    // Markers pass through without counting; the kept run keeps its
-    // formatting and the ellipsis inherits the still-open style. Markers
-    // PAST the cut survive too — dropping them is how a trimmed cycle
-    // line used to lose its closing `#[nocyc]`/`#[noitalics]` and leak
-    // state into whatever rendered next.
-    let styled = "#[fg=colour178]HN#[fg=colour245] #[italics]hello world#[noitalics]"
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(styled, truncation: .head(6, ellipsis: true)),
-      "#[fg=colour178]HN#[fg=colour245] #[italics]he…#[noitalics]")
-    // A bare `#` (not `#[`) is an ordinary visible character.
-    let literalHash = FlashStatusBarTemplateEngine.applyTruncation(
-      "C# rocks", truncation: .head(2, ellipsis: false))
-    XCTAssertEqual(literalHash, "C##")
-    XCTAssertEqual(
-      FlashStatusBarRenderer.attributedStatusString(
-        from: literalHash,
-        font: .monospacedSystemFont(ofSize: 13, weight: .medium)
-      ).string,
-      "C#")
-  }
-
-  func testTruncatedPluginTextKeepsEscapedMarkupLiteralOnRender() {
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{=30…:plugin:disks.details}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "disks-details",
-          token: "plugin:disks.details",
-          source: .plugin(.statusSegment(pluginID: "disks", name: "details")))
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(
-        pluginStatuses: [
-          pluginStatus(
-            id: "disks",
-            state: "running",
-            lastError: nil,
-            statusSegments: [
-              "details": "Backup ##[fg=colour196] volume name that overflows"
-            ])
-        ]))
-
-    let segments = FlashStatusBarRenderer.segments(from: model.modeText)
-    let rendered = segments.map(\.text).joined()
-    XCTAssertTrue(rendered.contains("#[fg=colour196]"), rendered)
-    XCTAssertTrue(rendered.hasSuffix("…"), rendered)
-    XCTAssertTrue(segments.allSatisfy { $0.foreground == .colour245 })
-  }
-
-  func testTokenTruncationTailKeepsTrailingVisibleWindowWithLeadingEllipsis() {
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(
-        "abcdef", truncation: .tail(4, ellipsis: true)),
-      "…def")
-  }
-
-  func testTokenTruncationDropsWhitespaceAdjacentToEllipsis() {
-    // When the trim lands on a space the glyph sits flush against the text —
-    // no "foo …". `=5…` keeps 4 visible cells ("foo" + the dropped space),
-    // and the trailing space is removed before the glyph is appended.
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(
-        "foo bar", truncation: .head(5, ellipsis: true)),
-      "foo…")
-    // Tail side: the leading space is dropped before the glyph is prepended.
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(
-        "bar foo", truncation: .tail(5, ellipsis: true)),
-      "…foo")
-    // Multiple adjacent spaces are all trimmed.
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation(
-        "ab   cd", truncation: .head(6, ellipsis: true)),
-      "ab…")
-  }
-
-  func testEllipsisTruncationAppliesToStyledScriptValueAtRender() {
-    // A `#{=N…:script:…}` wrapper trims the resolved (styled) command
-    // output to N visible cells, keeping markers and ellipsising the rest.
-    let template = FlashStatusBarTemplate(
-      template: "#[align=left]#{mode} · #{=8…:script:/tmp/hn.sh}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel)),
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.script:/tmp/hn.sh",
-          token: "script:/tmp/hn.sh",
-          source: .command(.script("/tmp/hn.sh"))),
-      ])
-    let model = FlashStatusBarTemplateEngine.render(
-      template: template,
-      context: FlashStatusBarContext(modeLabel: "NORMAL"),
-      dynamicValues: [
-        "statusbar.template.script:/tmp/hn.sh":
-          "#[fg=colour178]HN#[fg=colour245] hello world"
-      ])
-    // "HN hello" = 8 visible cells → "HN hell" (7) + "…", markers intact.
-    XCTAssertEqual(
-      model.modeText, "#[pill]NORMAL#[nopill] · #[fg=colour178]HN#[fg=colour245] hell…")
+    XCTAssertEqual(segments.last?.text, "de")
+    XCTAssertEqual(segments.last?.background, .defaultBackground)
   }
 
   func testStyleSegmentParserHonoursItalicsUnderlineDimReverseBackground() {
@@ -1374,14 +810,18 @@ final class StatusBarTests: XCTestCase {
     XCTAssertFalse(done.reverse)
   }
 
-  func testInsertModeButtonPaletteUsesBlueBackground() {
-    XCTAssertEqual(OverlayPanel.insertPalette.topCG, OverlayPanel.nordFrost2CG)
+  func testInsertModeButtonPaletteUsesBlueBackgroundLitFromTheTop() {
+    XCTAssertEqual(
+      OverlayPanel.insertPalette.topCG,
+      OverlayPanel.lifted(OverlayPanel.nordFrost2, by: 0.12).cgColor)
     XCTAssertEqual(OverlayPanel.insertPalette.bottomCG, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(OverlayPanel.insertPalette.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
 
-  func testCommandModeButtonPaletteUsesHighlightedBackground() {
-    XCTAssertEqual(OverlayPanel.commandPaletteValue.topCG, OverlayPanel.nordAuroraPurpleCG)
+  func testCommandModeButtonPaletteUsesHighlightedBackgroundLitFromTheTop() {
+    XCTAssertEqual(
+      OverlayPanel.commandPaletteValue.topCG,
+      OverlayPanel.lifted(OverlayPanel.nordAuroraPurple, by: 0.12).cgColor)
     XCTAssertEqual(OverlayPanel.commandPaletteValue.bottomCG, OverlayPanel.nordAuroraPurpleCG)
     XCTAssertEqual(OverlayPanel.commandPaletteValue.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
@@ -1420,53 +860,6 @@ final class StatusBarTests: XCTestCase {
       accuracy: 0.001)
   }
 
-  func testStatusBarHidesActiveAppAndUsesConstantModeFont() {
-    let panel = OverlayPanel()
-    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    panel.setStatusBarModel(
-      FlashStatusBarModel(
-        appText: "",
-        modeText: "NORMAL",
-        rightText: "#[fg=colour178]Sat Jun 13 09:08"))
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
-
-    XCTAssertTrue(panel.statusAppLabel.isHidden)
-    XCTAssertEqual(panel.modeBadgeLabel.alignmentMode, .center)
-    XCTAssertEqual(
-      panel.modeBadgeLabel.fontSize,
-      OverlayPanel.modeIndicatorFontSize(statusBarFontSize: 13))
-    XCTAssertEqual(
-      panel.statusRightLabel.fontSize,
-      OverlayPanel.statusBarFontSize(overlayFontSize: 12))
-  }
-
-  func testModePillAndCentreLaneStayFixedAcrossConfiguredModeLabels() {
-    let panel = OverlayPanel()
-    let labels = Config.Mode.Labels(normal: "N", insert: "INSERT", command: "COMMAND MODE")
-    panel.modeLabels = labels
-    panel.setStatusBarModel(
-      FlashStatusBarModel(
-        appText: "ACTIVE APP",
-        modeText: labels.normal,
-        rightText: "BAT 100% · Fri 15:09"))
-
-    var pillFrames: [CGRect] = []
-    var centreFrames: [CGRect] = []
-    for (label, style) in [
-      (labels.normal, OverlayModeBadgeStyle.normal),
-      (labels.insert, .insert),
-      (labels.command, .command),
-    ] {
-      panel.updateModeBadge(text: label, visible: true, captureInput: false, style: style)
-      renderStatusBar(panel)
-      pillFrames.append(panel.modeBadgeButtonLayer.frame)
-      centreFrames.append(panel.statusAppLabel.frame)
-    }
-
-    XCTAssertTrue(pillFrames.dropFirst().allSatisfy { $0 == pillFrames[0] })
-    XCTAssertTrue(centreFrames.dropFirst().allSatisfy { $0 == centreFrames[0] })
-  }
-
   func testModePillWidthIsOwnedOnlyByConfiguredLabels() {
     let labels = Config.Mode.Labels(normal: "N", insert: "INSERT", command: "COMMAND")
     let configuredWidth = OverlayPanel.modeBadgeWidth(
@@ -1481,82 +874,6 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(transientWidth, configuredWidth)
   }
 
-  func testOverflowingRightRegionNeverPaintsAcrossVisibleCentreRegion() {
-    let panel = OverlayPanel()
-    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    panel.setStatusBarModel(
-      FlashStatusBarModel(
-        appText: "Claude 53% · Fable 10% · Codex 42%",
-        modeText: "#[pill]NORMAL#[nopill] · HN compact title",
-        rightText: String(repeating: "CPU 22% · GPU 60% · MEM 98% · ", count: 5)
-          + "BAT 100% · Fri Sep 4 15:09"))
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
-    renderStatusBar(panel)
-
-    XCTAssertFalse(panel.statusAppLabel.isHidden)
-    XCTAssertFalse(panel.statusRightLabel.isHidden)
-    XCTAssertGreaterThanOrEqual(
-      panel.statusRightLabel.frame.minX,
-      panel.statusAppLabel.frame.maxX + OverlayPanel.statusBarMinimumGap)
-    guard let rendered = panel.statusRightLabel.string as? NSAttributedString else {
-      return XCTFail("expected attributed right-region content")
-    }
-    XCTAssertLessThanOrEqual(ceil(rendered.size().width), panel.statusRightLabel.frame.width)
-  }
-
-  func testNonNotchedStatusBarReservesStableCentreLaneBeforeSideContent() {
-    let panel = OverlayPanel()
-    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    let centre = "ACTIVE APP"
-    panel.setStatusBarModel(
-      FlashStatusBarModel(
-        appText: centre,
-        modeText: "#[pill]NORMAL#[nopill] " + String(repeating: "left segment ", count: 80),
-        rightText: String(repeating: "right segment ", count: 80) + "BAT 100% · Fri 15:09"))
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
-    renderStatusBar(panel)
-
-    XCTAssertFalse(panel.statusAppLabel.isHidden)
-    XCTAssertEqual(
-      (panel.statusAppLabel.string as? NSAttributedString)?.string,
-      centre)
-    XCTAssertEqual(
-      panel.statusAppLabel.frame.midX,
-      panel.modeBadgeLayer.frame.width / 2,
-      accuracy: 0.5)
-    XCTAssertLessThanOrEqual(
-      panel.statusLeftTrailingLabel.frame.maxX + OverlayPanel.statusBarMinimumGap,
-      panel.statusAppLabel.frame.minX)
-    XCTAssertGreaterThanOrEqual(
-      panel.statusRightLabel.frame.minX,
-      panel.statusAppLabel.frame.maxX + OverlayPanel.statusBarMinimumGap)
-
-    let reservedCentreFrame = panel.statusAppLabel.frame
-    panel.setStatusBarModel(
-      FlashStatusBarModel(
-        appText: centre,
-        modeText: "#[pill]NORMAL#[nopill] left",
-        rightText: "BAT 100% · Fri 15:09"))
-    renderStatusBar(panel)
-
-    XCTAssertEqual(panel.statusAppLabel.frame, reservedCentreFrame)
-  }
-
-  func testNotchedStatusBarHidesCentreLane() {
-    let panel = OverlayPanel()
-    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    panel.setStatusBarModel(
-      FlashStatusBarModel(
-        appText: "ACTIVE APP",
-        modeText: "NORMAL",
-        rightText: "BAT 100% · Fri 15:09"))
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
-
-    renderStatusBar(panel, notch: CGRect(x: 660, y: 875, width: 120, height: 25))
-
-    XCTAssertTrue(panel.statusAppLabel.isHidden)
-  }
-
   func testStatusBarUsesCurvedScreenEdgePadding() {
     XCTAssertEqual(OverlayPanel.statusBarEdgePadding, 13)
   }
@@ -1569,7 +886,8 @@ final class StatusBarTests: XCTestCase {
     // re-anchor must snap the panel back onto the current union frame.
     let panel = OverlayPanel()
     panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: true, capturesInput: false))
 
     // Strand the panel on a stale, wrong frame (as if a monitor it spanned was
     // just removed). A small on-screen rect is never constrained away.
@@ -1579,7 +897,7 @@ final class StatusBarTests: XCTestCase {
     panel.statusBarDidChangeScreenParameters()
 
     XCTAssertEqual(panel.frame, OverlayPanel.unionScreenFrame())
-    XCTAssertTrue(panel.modeBadgeVisible)
+    XCTAssertTrue(panel.modeSurface.barVisible)
   }
 
   func testCommandPromptLayerHasWindowSeparatingShadow() {
@@ -1590,12 +908,11 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(panel.commandPromptLayer.shadowRadius, 0)
   }
 
-  func testPersistentStatusBarIsPlainWindowBelowNativeMenuBar() {
-    // The bar is an ordinary elevated window (`.floating`): above the focused
-    // app's normal windows, but well below the native menu bar (app menus at
-    // `.mainMenu`/24, extras at `.statusBar`/25) so the menu bar wins the
-    // z-order and expands on top of Flash. Not jammed against the menu-bar band
-    // at `.mainMenu - 1`, where it competed with the system menu bar for clicks.
+  func testPersistentOverlayPanelStaysPlainFloatingWindow() {
+    // The overlay panel's persistent content is the focus border: an ordinary
+    // elevated window above the focused app's normal windows, below the native
+    // menu bar, Spotlight and banners, and still allowed to become key for the
+    // no-tap fallback.
     XCTAssertEqual(
       OverlayPanel.windowLevelForOverlayContent(
         inputMode: .normal,
@@ -1607,12 +924,78 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
       NSWindow.Level.floating.rawValue)
-    XCTAssertGreaterThan(
-      OverlayPanel.persistentStatusWindowLevel.rawValue,
-      NSWindow.Level.normal.rawValue)
     XCTAssertLessThan(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
       NSWindow.Level.mainMenu.rawValue)
+  }
+
+  func testStatusBarWindowOutranksNativeMenuBarAndYieldsOnlyToThePointer() {
+    // Repro for the bar "flashing" for a second: with the system menu bar set
+    // to auto-hide, a reveal (a menu key equivalent flashing its title, Flash
+    // becoming active, a wake) slid the native menu bar (level 24) and its
+    // extras (25) down over a bar that lived on the `.floating` overlay panel.
+    // The bar window must outrank both and stay below the transient overlay —
+    // and drop back under the menu bar only while the reveal probe sees it
+    // revealed under the pointer, so the top edge still reaches it.
+    XCTAssertGreaterThan(
+      OverlayPanel.statusBarWindowLevel.rawValue, NSWindow.Level.mainMenu.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.statusBarWindowLevel.rawValue, NSWindow.Level.statusBar.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.statusBarClickWindowLevel.rawValue, OverlayPanel.statusBarWindowLevel.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.transientOverlayWindowLevel.rawValue, OverlayPanel.statusBarWindowLevel.rawValue)
+    XCTAssertEqual(
+      OverlayPanel.statusBarWindowLevel(yieldingToNativeMenuBar: false),
+      OverlayPanel.statusBarWindowLevel)
+    XCTAssertEqual(
+      OverlayPanel.statusBarWindowLevel(yieldingToNativeMenuBar: true),
+      OverlayPanel.statusBarYieldedWindowLevel)
+    XCTAssertLessThan(
+      OverlayPanel.statusBarYieldedWindowLevel.rawValue, NSWindow.Level.mainMenu.rawValue)
+  }
+
+  func testStatusBarLayersLiveInTheirOwnWindowAndSurviveTransientTeardown() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    defer {
+      panel.setModeSurface(
+        .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+      panel.orderOut(nil)
+    }
+
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: true, capturesInput: false))
+    XCTAssertTrue(panel.modeBadgeLayer.superlayer === panel.statusBarWindow.contentLayer)
+    XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === panel.modeBadgeLayer } ?? false)
+    XCTAssertTrue(panel.statusBarWindow.isVisible)
+    XCTAssertTrue(panel.statusBarWindow.ignoresMouseEvents)
+    XCTAssertEqual(panel.statusBarWindow.frame, panel.frame)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+
+    // A transient teardown rebuilds the overlay panel's layer tree from
+    // scratch; the bar must not be detached (the old one-second blank).
+    panel.hide()
+    XCTAssertTrue(panel.modeBadgeLayer.superlayer === panel.statusBarWindow.contentLayer)
+    XCTAssertTrue(panel.statusBarWindow.isVisible)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+    XCTAssertTrue(panel.statusBarClickWindows.allSatisfy { !$0.ignoresMouseEvents })
+
+    // A pointer-driven reveal lowers the bar; folding away restores it, and so
+    // does tearing the probe down with a reveal still latched.
+    panel.setStatusBarYieldsToNativeMenuBar(true)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarYieldedWindowLevel)
+    panel.setStatusBarYieldsToNativeMenuBar(false)
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+    panel.setStatusBarYieldsToNativeMenuBar(true)
+    panel.stopMenuBarRevealTracking()
+    XCTAssertEqual(panel.statusBarWindow.level, OverlayPanel.statusBarWindowLevel)
+
+    panel.setModeSurface(
+      .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+    XCTAssertFalse(panel.statusBarWindow.isVisible)
+    XCTAssertNil(panel.modeBadgeLayer.superlayer)
   }
 
   func testTransientSurfacesUseElevatedOverlayWindowLevel() {
@@ -1724,19 +1107,227 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(wide, 2_000)
   }
 
-  func testSystemStatusBarSpaceReservationRemovesMenuBarAutoHide() {
-    let current: NSApplication.PresentationOptions = [.autoHideDock, .autoHideMenuBar]
-    let enabled = AppDelegate.systemStatusBarSpaceReservationPresentationOptions(
-      current: current,
-      enabled: true)
-    let disabled = AppDelegate.systemStatusBarSpaceReservationPresentationOptions(
-      current: enabled,
-      enabled: false)
+  func testNativeMenuBarAutoHideOnlyReversesTheHideFlashItselfApplied() {
+    typealias AutoHide = NativeMenuBarAutoHide
+    // Enabling the bar hides the native menu bar and claims the change.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: true, current: false, owned: false),
+      .init(write: true, owned: true))
+    // Already hidden by the user: adopt it without claiming it.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: true, current: true, owned: false),
+      .init(write: nil, owned: false))
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: true, current: true, owned: true),
+      .init(write: nil, owned: true))
+    // Disabling the bar restores only a menu bar Flash hid ...
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: false, current: true, owned: true),
+      .init(write: false, owned: false))
+    // ... and never a preference the user set themselves.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: false, current: true, owned: false),
+      .init(write: nil, owned: false))
+    // Nothing to undo when the user already un-hid it; ownership is released.
+    XCTAssertEqual(
+      AutoHide.reconciliation(hidden: false, current: false, owned: true),
+      .init(write: nil, owned: false))
+  }
 
-    XCTAssertFalse(enabled.contains(.autoHideMenuBar))
-    XCTAssertTrue(enabled.contains(.autoHideDock))
-    XCTAssertFalse(disabled.contains(.autoHideMenuBar))
-    XCTAssertTrue(disabled.contains(.autoHideDock))
+  func testErrorAlertsSurviveTransientTeardownAndInfoToastsDoNot() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissAlert()
+      panel.orderOut(nil)
+    }
+    XCTAssertTrue(OverlayPanel.AlertStyle.error.outlivesTeardown)
+    XCTAssertFalse(OverlayPanel.AlertStyle.standard.outlivesTeardown)
+
+    // An error has to stay readable: a dismiss observer firing during the
+    // restart churn used to wipe it within the same event loop.
+    panel.displayAlert("Something broke", duration: 30, style: .error)
+    let error = try? XCTUnwrap(panel.toast?.layer)
+    panel.hide()
+    XCTAssertTrue(panel.toast?.layer === error, "an error outlives a transient teardown")
+    XCTAssertTrue(panel.contentLayer.sublayers?.last === error, "and stays on top")
+    panel.dismissAlert()
+    XCTAssertNil(panel.toast)
+    XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === error } ?? false)
+
+    // An informational toast keeps the get-out-of-the-way behaviour.
+    panel.displayAlert("Sleep ON", duration: 30, style: .standard)
+    XCTAssertNotNil(panel.toast)
+    panel.hide()
+    XCTAssertNil(panel.toast)
+  }
+
+  func testWalkthroughBannerSurvivesTheSettingsActivationTeardown() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissToast()
+      panel.orderOut(nil)
+    }
+    // Opening System Settings activates it, and the dismiss observer tears the
+    // overlay down; the Accessibility walkthrough followed there must stay.
+    panel.displayBanner("walkthrough", durationMs: 0, outlivesTeardown: true)
+    let walkthrough = panel.toast?.layer
+    XCTAssertNotNil(walkthrough)
+    panel.hide()
+    XCTAssertTrue(panel.toast?.layer === walkthrough)
+
+    panel.displayBanner("Copied", durationMs: 0)
+    panel.hide()
+    XCTAssertNil(panel.toast, "other banners still get out of the way")
+  }
+
+  func testCommandLineRendersWithTheBarDisabledAndLeavesItOff() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.setModeSurface(
+        .init(label: "NORMAL", style: .normal, barVisible: false, capturesInput: false))
+      panel.orderOut(nil)
+    }
+    panel.setModeSurface(
+      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false),
+      render: false)
+    panel.displayCommandLine(":help")
+
+    XCTAssertTrue(
+      panel.contentLayer.sublayers?.contains { $0 === panel.commandPromptLayer } ?? false)
+    XCTAssertFalse(panel.statusBarWindow.isVisible, "the command line does not force the bar on")
+    XCTAssertFalse(panel.modeSurface.barVisible)
+  }
+
+  func testCommandFieldIsNotFocusedBeforeItsPromptIsLaidOut() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer { panel.orderOut(nil) }
+    // Routing turns `.commandLine` a moment before the first paint.
+    panel.inputMode = .commandLine
+    XCTAssertFalse(panel.commandTextFieldIsLaidOut)
+    panel.becomeKey()
+    XCTAssertTrue(panel.commandTextField.isHidden, "an unplaced field would sit in the corner")
+    XCTAssertNil(panel.commandTextField.currentEditor())
+
+    panel.setModeSurface(
+      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false),
+      render: false)
+    panel.displayCommandLine(":help")
+    XCTAssertTrue(panel.commandTextFieldIsLaidOut)
+    XCTAssertFalse(panel.commandTextField.frame.isEmpty)
+    panel.inputMode = .passive
+  }
+
+  func testClearingAnOlderToastLeavesTheCurrentOne() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissToast()
+      panel.orderOut(nil)
+    }
+    panel.displayAlert("config error", duration: 30, style: .error)
+    let configError = panel.toastToken
+    panel.displayBanner("Copied", durationMs: 0)
+    let banner = panel.toast?.layer
+
+    // The config error resolving must not close the banner that replaced it.
+    panel.dismissToast(token: configError)
+    XCTAssertTrue(panel.toast?.layer === banner)
+  }
+
+  func testAToastNeverTearsDownTheHintsItAppearsOver() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.hide()
+      panel.orderOut(nil)
+    }
+    let hint = AssignedHint(
+      target: JumpTarget(
+        id: "a", frame: CGRect(x: 40, y: 40, width: 60, height: 20), role: "AXButton", pid: 42,
+        providerID: "test"),
+      label: "a")
+    panel.display(hints: [hint])
+    let chips = panel.hintLayers
+    XCTAssertFalse(chips.isEmpty)
+
+    panel.displayBanner("Copied", durationMs: 0)
+    XCTAssertTrue(panel.transientContentVisible, "the hint session is still on screen")
+    XCTAssertTrue(
+      chips.allSatisfy { chip in panel.contentLayer.sublayers?.contains { $0 === chip } ?? false })
+    XCTAssertTrue(panel.contentLayer.sublayers?.last === panel.toast?.layer)
+
+    // Expiry removes the toast alone.
+    panel.dismissToast(token: panel.toast?.token)
+    XCTAssertNil(panel.toast)
+    XCTAssertTrue(panel.transientContentVisible)
+    XCTAssertTrue(
+      chips.allSatisfy { chip in panel.contentLayer.sublayers?.contains { $0 === chip } ?? false })
+  }
+
+  func testPagerPromptRowIsClippedOnlyForNoninteractivePreviews() {
+    XCTAssertTrue(StatusPopupController.hidesPagerPromptRow(rows: 6, interactive: false))
+    XCTAssertFalse(StatusPopupController.hidesPagerPromptRow(rows: 6, interactive: true))
+    // A single-row popup would be left with nothing to draw.
+    XCTAssertFalse(StatusPopupController.hidesPagerPromptRow(rows: 1, interactive: false))
+  }
+
+  func testOnlyWindowMoveAndResizeResolveGeometryFromTheObservedElement() {
+    XCTAssertTrue(AppMonitor.isWindowGeometryNotification(kAXWindowMovedNotification as String))
+    XCTAssertTrue(AppMonitor.isWindowGeometryNotification(kAXWindowResizedNotification as String))
+    // Everything else still needs a WindowServer pass to find the top window.
+    for notification in [
+      kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification,
+      kAXWindowCreatedNotification, kAXWindowMiniaturizedNotification,
+      kAXWindowDeminiaturizedNotification, kAXUIElementDestroyedNotification,
+      kAXApplicationHiddenNotification, kAXApplicationShownNotification,
+    ] {
+      XCTAssertFalse(AppMonitor.isWindowGeometryNotification(notification as String), notification)
+      XCTAssertTrue(
+        AppMonitor.notificationMayChangeActiveWindowBorder(
+          notification as String, observedElementIsFocusedWindow: true),
+        notification)
+    }
+  }
+
+  func testWatchdogRunsOnlyWhileItsOutputIsReadable() {
+    let previous = FlashLog.wouldEmit(.debug)
+    defer { FlashLog.setLevel(previous ? .debug : .info) }
+    FlashLog.setLevel(.info)
+    XCTAssertFalse(FlashLog.wouldEmit(.debug))
+    XCTAssertTrue(FlashLog.wouldEmit(.warn))
+    FlashLog.setLevel(.trace)
+    XCTAssertTrue(FlashLog.wouldEmit(.debug))
+  }
+
+  func testAXWindowGeometryConvertsIntoTheSameScreenSpaceAsTheWindowServerScan() {
+    // The border's fast path reads a moved window's frame from AX instead of
+    // scanning the window list, so the conversion has to land in NSScreen
+    // space (primary bottom-left origin, Y-up) or a drag would draw the
+    // stroke somewhere else entirely.
+    let primaryHeight: CGFloat = 1000
+    // A window 40pt below the primary's top edge, 300pt tall.
+    XCTAssertEqual(
+      WindowMover.nsRectFromAX(
+        position: CGPoint(x: 120, y: 40), size: CGSize(width: 400, height: 300),
+        primaryHeight: primaryHeight),
+      CGRect(x: 120, y: 660, width: 400, height: 300))
+    // Flush with the primary's top-left corner.
+    XCTAssertEqual(
+      WindowMover.nsRectFromAX(
+        position: .zero, size: CGSize(width: 800, height: primaryHeight),
+        primaryHeight: primaryHeight),
+      CGRect(x: 0, y: 0, width: 800, height: primaryHeight))
+    // A display to the left of and above the primary keeps its negative
+    // origin rather than being clamped into the primary's box.
+    XCTAssertEqual(
+      WindowMover.nsRectFromAX(
+        position: CGPoint(x: -1920, y: -200), size: CGSize(width: 600, height: 400),
+        primaryHeight: primaryHeight),
+      CGRect(x: -1920, y: 800, width: 600, height: 400))
   }
 
   func testStatusBarLinkClickAcceptsStationaryAndSmallJitter() {
@@ -1849,35 +1440,19 @@ final class StatusBarTests: XCTestCase {
   func testRightStatusComposesTmuxStatusRightOrder() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-    var components = DateComponents()
-    components.calendar = calendar
-    components.timeZone = calendar.timeZone
-    components.year = 2026
-    components.month = 6
-    components.day = 13
-    components.hour = 7
-    components.minute = 8
-    let now = components.date!
-    let config = ConfigLoader.parse(
-      """
-      [statusbar]
-      template = "#[align=left]#{mode}#[align=right]#{script:~/bin/agent-status.sh}#[fg=colour245] · #{script:~/bin/battery-status.sh}#[fg=colour245] · #{date}"
-      """)
-
-    let text = FlashStatusBarTemplateEngine.render(
-      template: config.statusBar.template,
+    let now = Date(timeIntervalSince1970: 1_781_334_480)
+    let template = FlashStatusBarTemplate(
+      template:
+        "#[align=right]#{flash.source.agent} · #{flash.source.battery} · #{flash.date}")
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
       context: FlashStatusBarContext(now: now, calendar: calendar),
-      dynamicValues: statusBarCommandValues(
-        template: config.statusBar.template,
-        agent: "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h",
-        battery: "#[range=user|bat-prefs fg=colour178]82%#[norange]")
-    ).rightText
-
-    XCTAssertEqual(
-      text,
-      "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h#[fg=colour245] · "
-        + "#[range=user|bat-prefs fg=colour178]82%#[norange]#[fg=colour245] · "
-        + "#[fg=colour178]Sat Jun 13 07:08")
+      dynamicValues: [
+        "agent": "#[fg=colour178]Cdx#[default] 90%↻3h",
+        "battery": "#[range=user|bat-prefs,fg=colour178]82%#[norange]",
+      ])
+    XCTAssertTrue(model.rightDocument.map(\.text).joined().hasPrefix("Cdx 90%↻3h · 82% · "))
+    XCTAssertEqual(model.rightDocument.first(where: { $0.text == "82%" })?.range, "bat-prefs")
   }
 
   func testClickRangesBecomeActionableSegments() {
@@ -2032,34 +1607,4 @@ final class StatusBarTests: XCTestCase {
       accuracy: 0.001)
   }
 
-  private func pluginStatus(
-    id: String,
-    state: String,
-    lastError: String?,
-    statusSegments: [String: String] = [:]
-  ) -> PluginStatusBarInfo {
-    PluginStatusBarInfo(
-      id: id,
-      state: state,
-      hasError: !(lastError ?? "").isEmpty,
-      statusSegments: statusSegments)
-  }
-
-  private func statusBarCommandValues(
-    template: FlashStatusBarTemplate,
-    agent: String,
-    battery: String
-  ) -> [String: String] {
-    var values: [String: String] = [:]
-    for section in template.commandSections {
-      guard case .command(let command) = section.source else { continue }
-      let argv = command.argv.joined(separator: " ")
-      if argv.contains("agent-status.sh") {
-        values[section.id] = agent
-      } else if argv.contains("battery-status.sh") {
-        values[section.id] = battery
-      }
-    }
-    return values
-  }
 }

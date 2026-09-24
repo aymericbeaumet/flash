@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "Flash Tab Bridge",
+  "version": "0.1.0",
+  "description": "Mirror Firefox tab titles, URLs and strip positions to the Flash firefox plugin. One-way and read-only: no content scripts, no host permissions, no page access.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "flash-tab-bridge@aymericbeaumet.com",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "tabs",
+    "nativeMessaging"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": true
+  }
+}

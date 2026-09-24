@@ -23,6 +23,10 @@ struct WindowSnapshot {
     let layer: Int
     /// NSScreen-coord bounds (origin bottom-left of primary).
     let nsBounds: CGRect
+    /// A fully transparent window covers nothing.
+    var alpha: Double = 1
+
+    var occludes: Bool { alpha > 0.05 }
   }
 
   /// All on-screen windows in z-order (front-most first).
@@ -39,22 +43,66 @@ struct WindowSnapshot {
   /// returned targets against `visibleRegions` afterward.
   let activeWindowFrame: CGRect?
 
+  /// The one door to `CGWindowListCopyWindowInfo`, and it always opens on main.
+  ///
+  /// The call synchronizes with this process's pending Core Animation
+  /// transaction while holding the WindowServer connection lock. Issued from a
+  /// background thread it deadlocks against a main-thread commit that carries
+  /// WindowServer actions until SkyLight's 500 ms timeout, freezing main with
+  /// it (sampled: `SLSConnectionSynchronizeSLSCATransaction` against
+  /// `SLSConnectionSetLastSLSCATransaction`). On main the two can never
+  /// overlap. Background callers hop with `DispatchQueue.main.sync`, so main
+  /// must never wait synchronously on a queue that reads the window list.
+  static func windowList(
+    _ options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+  ) -> [[String: Any]]? {
+    guard Thread.isMainThread else { return DispatchQueue.main.sync { windowList(options) } }
+    return CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+  }
+
   static func build(
     primaryH: CGFloat,
     onlyComputingVisibleRegionsFor focusedPid: pid_t,
-    ignoringPids: Set<pid_t> = []
+    ignoringPids: Set<pid_t> = [],
+    walkedWindowFrame: CGRect? = nil
   )
     -> WindowSnapshot
   {
-    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+    // One main-thread hop for both: the window list and who is frontmost.
+    let read = { () -> ([[String: Any]]?, pid_t?) in
+      (
+        WindowSnapshot.windowList([.optionOnScreenOnly, .excludeDesktopElements]),
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+      )
+    }
+    let (info, frontmostPID) = Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+    guard let info else {
       return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
     let entries = entries(from: info, primaryH: primaryH)
       .filter { !ignoringPids.contains($0.pid) }
-    return build(
-      entries: entries,
-      focusedPid: focusedPid)
+    let snapshot = build(
+      entries: entries, focusedPid: focusedPid, walkedWindowFrame: walkedWindowFrame)
+    guard focusedPid == frontmostPID, snapshot.activeWindowFrame != nil,
+      snapshot.visibleRegions[focusedPid]?.isEmpty ?? true
+    else { return snapshot }
+    // The frontmost app's window sits above every other app's normal-level
+    // window, so finding it fully covered by them means the window list still
+    // has the previous app on top — a z-order lag that left every hint request
+    // made just after an app switch empty. Recompute without those; floating
+    // and higher layers still cover it.
+    let repaired = build(
+      entries: entries, focusedPid: focusedPid, frontmostLayerLag: true,
+      walkedWindowFrame: walkedWindowFrame)
+    let covering = entries.prefix {
+      $0.nsBounds != snapshot.activeWindowFrame || $0.pid != focusedPid
+    }
+    .filter { $0.occludes && $0.nsBounds.intersects(snapshot.activeWindowFrame ?? .null) }
+    .map { "\($0.pid):\($0.layer)" }
+    FlashLog.warn(
+      "[discover] frontmost_window_covered pid=\(focusedPid) covering=\(covering) "
+        + "repaired=\(!(repaired.visibleRegions[focusedPid]?.isEmpty ?? true))")
+    return repaired
   }
 
   static func entries(from info: [[String: Any]], primaryH: CGFloat) -> [Entry] {
@@ -75,12 +123,23 @@ struct WindowSnapshot {
         width: cgBounds.width,
         height: cgBounds.height
       )
-      entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns))
+      let alpha = (w[kCGWindowAlpha as String] as? Double) ?? 1
+      entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns, alpha: alpha))
     }
     return entries
   }
 
-  static func build(entries: [Entry], focusedPid: pid_t) -> WindowSnapshot {
+  /// `frontmostLayerLag` drops other apps' layer-0 windows from the occluders:
+  /// only for the frontmost app, whose window can be under them only while the
+  /// window list lags an activation.
+  /// `walkedWindowFrame` is the window the AX walk covers (its focused
+  /// window). When one of the app's surfaces matches it, that is the active
+  /// surface, and the app's windows above it — a tooltip, a hover card, a
+  /// preview — only occlude; otherwise the frontmost surface is used.
+  static func build(
+    entries: [Entry], focusedPid: pid_t, frontmostLayerLag: Bool = false,
+    walkedWindowFrame: CGRect? = nil
+  ) -> WindowSnapshot {
     // The "active window" is the front-most interaction surface owned by the
     // focused pid. CGWindowList returns windows in z-order, so the first hit
     // is the right one. Every other window — including other windows of the
@@ -96,9 +155,14 @@ struct WindowSnapshot {
     // over so the border and hint scope stay on the real surface; the card still
     // occludes its little patch like any other window.
     let layer0App = entries.filter { $0.pid == focusedPid && $0.layer == 0 }.map(\.nsBounds)
-    var activeWindowIndex: Int? = nil
+    var activeWindowIndex: Int? = walkedWindowFrame.flatMap { walked in
+      entries.firstIndex {
+        $0.pid == focusedPid && isInteractionSurfaceLayer($0.layer)
+          && framesMatch($0.nsBounds, walked)
+      }
+    }
     for (idx, e) in entries.enumerated()
-    where e.pid == focusedPid && isInteractionSurfaceLayer(e.layer) {
+    where activeWindowIndex == nil && e.pid == focusedPid && isInteractionSurfaceLayer(e.layer) {
       if e.layer == 0, isAnchoredCard(e.nsBounds, amongLayer0App: layer0App) { continue }
       activeWindowIndex = idx
       break
@@ -131,6 +195,8 @@ struct WindowSnapshot {
           byPid[e.pid, default: []].append(contentsOf: fragments)
         }
       }
+      guard e.occludes else { continue }
+      if frontmostLayerLag, e.pid != focusedPid, e.layer == 0 { continue }
       occluders.append(e.nsBounds)
     }
 
@@ -145,16 +211,21 @@ struct WindowSnapshot {
   /// surface of EVERY pid in `focusedPids` is hintable (occluded by all
   /// higher-z windows); everything else purely occludes. Same painter's
   /// algorithm, anchored-card promotion, and fragmentation guard as the
-  /// single-pid build.
+  /// single-pid build. `excludingIndexes` are surfaces of their own
+  /// (`ScreenScopeSurfaces`, a browser's Picture in Picture player), never
+  /// their app's front surface; they still occlude.
   static func buildMultiSurfaceVisibleRegions(
     entries: [Entry],
-    focusedPids: Set<pid_t>
+    focusedPids: Set<pid_t>,
+    excludingIndexes: Set<Int> = []
   ) -> [pid_t: [CGRect]] {
     var activeIndexes = Set<Int>()
     for pid in focusedPids {
       let layer0App = entries.filter { $0.pid == pid && $0.layer == 0 }.map(\.nsBounds)
       for (idx, entry) in entries.enumerated()
-      where entry.pid == pid && isInteractionSurfaceLayer(entry.layer) {
+      where entry.pid == pid && isInteractionSurfaceLayer(entry.layer)
+        && !excludingIndexes.contains(idx)
+      {
         if entry.layer == 0, isAnchoredCard(entry.nsBounds, amongLayer0App: layer0App) {
           continue
         }
@@ -167,27 +238,42 @@ struct WindowSnapshot {
     occluders.reserveCapacity(entries.count)
     for (idx, entry) in entries.enumerated() {
       if activeIndexes.contains(idx) {
-        var fragments: [CGRect] = [entry.nsBounds]
-        for occluder in occluders {
-          if fragments.isEmpty { break }
-          var next: [CGRect] = []
-          next.reserveCapacity(fragments.count * 2)
-          for frag in fragments {
-            subtract(frag, hole: occluder, into: &next)
-          }
-          if next.count > 32 {
-            fragments = next
-            break
-          }
-          fragments = next
-        }
+        let fragments = visibleFragments(of: entry.nsBounds, under: occluders)
         if !fragments.isEmpty {
           byPid[entry.pid, default: []].append(contentsOf: fragments)
         }
       }
-      occluders.append(entry.nsBounds)
+      if entry.occludes { occluders.append(entry.nsBounds) }
     }
     return byPid
+  }
+
+  /// The visible part of the window at `index`: its bounds minus every
+  /// occluding window in front of it. Empty when it is out of range or fully
+  /// covered.
+  static func visibleRegions(ofEntryAt index: Int, in entries: [Entry]) -> [CGRect] {
+    guard entries.indices.contains(index) else { return [] }
+    let occluders = entries[..<index].filter(\.occludes).map(\.nsBounds)
+    return visibleFragments(of: entries[index].nsBounds, under: occluders)
+  }
+
+  /// `rect` minus `occluders`, with the same fragmentation guard as `build`.
+  private static func visibleFragments(of rect: CGRect, under occluders: [CGRect]) -> [CGRect] {
+    var fragments: [CGRect] = [rect]
+    for occluder in occluders {
+      if fragments.isEmpty { break }
+      var next: [CGRect] = []
+      next.reserveCapacity(fragments.count * 2)
+      for frag in fragments {
+        subtract(frag, hole: occluder, into: &next)
+      }
+      if next.count > 32 {
+        fragments = next
+        break
+      }
+      fragments = next
+    }
+    return fragments
   }
 
   static func topApplicationWindowFrame(entries: [Entry], focusedPid: pid_t) -> CGRect? {
@@ -211,6 +297,13 @@ struct WindowSnapshot {
   /// A card qualifies only when it's fully contained (modulo a few px of slop)
   /// within a same-app layer-0 window whose area is ≥ `1 / anchoredCardMaxAreaFraction`×
   /// larger, so same-size sibling windows and substantial dialogs are left alone.
+  /// The AX frame and the WindowServer bounds of one window agree to within a
+  /// few points (shadows and rounding differ between the two).
+  static func framesMatch(_ a: CGRect, _ b: CGRect, tolerance: CGFloat = 4) -> Bool {
+    abs(a.minX - b.minX) <= tolerance && abs(a.minY - b.minY) <= tolerance
+      && abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
+  }
+
   static func isAnchoredCard(_ frame: CGRect, amongLayer0App parents: [CGRect]) -> Bool {
     let area = frame.width * frame.height
     guard area > 0 else { return false }
