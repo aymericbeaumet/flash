@@ -149,6 +149,10 @@ Surface requests that would violate these constraints before implementing them.
   out of the deny, canonicalize symlinked paths, and retain secret-read denies.
   Local socket connections require network capability. Do not widen the sandbox
   to host credentialed network CLIs that require the subprocess shape.
+  Sandboxed HTTPS clients verify against bundled roots (reqwest
+  `tls_certs_only` over `webpki-root-certs`): the platform verifier needs the
+  trust service and keychains the sandbox denies. After a TLS dependency bump,
+  confirm a live fetch under the sandbox, not only unit tests.
 - Config validation is shared by all layers; preserve authored values and derive
   only after overrides. Only executable/working-directory fields receive path
   resolution; argv tails stay opaque. Update whole-section default parity tests.

@@ -15,6 +15,9 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 roxmltree = "0.21"
 scraper = { version = "0.27", default-features = false }
 serde_json = "1"
+# Mozilla roots for rustls: the sandbox denies the macOS trust service and
+# keychains that reqwest's default platform verifier needs.
+webpki-root-certs = "1"
 # The SDK feature set plus `net`: reqwest needs tokio's TCP driver.
 tokio = { version = "1", default-features = false, features = [
   "rt",

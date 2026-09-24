@@ -281,6 +281,7 @@ dependencies = [
  "scraper",
  "serde_json",
  "tokio",
+ "webpki-root-certs",
 ]
 
 [[package]]

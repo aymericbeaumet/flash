@@ -80,13 +80,7 @@ impl FlashPlugin for Feed {
                 return;
             }
         };
-        let client = match Client::builder()
-            .timeout(FETCH_TIMEOUT)
-            .connect_timeout(Duration::from_secs(4))
-            .redirect(reqwest::redirect::Policy::limited(3))
-            .user_agent("Flash Feed/0.1")
-            .build()
-        {
+        let client = match http_client() {
             Ok(client) => client,
             Err(_) => {
                 ctx.log("warn", "[feed] HTTP client initialization failed");
@@ -193,6 +187,23 @@ fn publish(ctx: &Context, segments: Option<state::Segments>) {
     }
 }
 
+/// The feed's HTTP client. Certificates are verified against the bundled
+/// Mozilla roots: the plugin's deny-default sandbox blocks the macOS trust
+/// service and keychains that reqwest's default platform verifier relies on,
+/// which turned every fetch into a TLS failure.
+fn http_client() -> reqwest::Result<Client> {
+    let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .filter_map(|der| reqwest::Certificate::from_der(der).ok());
+    Client::builder()
+        .tls_certs_only(roots)
+        .timeout(FETCH_TIMEOUT)
+        .connect_timeout(Duration::from_secs(4))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .user_agent("Flash Feed/0.1")
+        .build()
+}
+
 async fn fetch_articles(client: &Client, url: &Url) -> Result<Vec<feed::Article>, &'static str> {
     let mut response = client
         .get(url.clone())
@@ -234,6 +245,17 @@ mod tests {
     use flash_plugin::testing::Harness;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn http_client_verifies_against_every_bundled_root() {
+        let parsed = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .filter(|der| reqwest::Certificate::from_der(der).is_ok())
+            .count();
+        assert!(parsed > 100);
+        assert_eq!(parsed, webpki_root_certs::TLS_SERVER_ROOT_CERTS.len());
+        assert!(http_client().is_ok());
+    }
 
     #[test]
     fn intervals_have_defaults_and_require_bounded_positive_integer_seconds() {
