@@ -2,6 +2,11 @@ import AppKit
 import FlashCore
 import Foundation
 
+/// Evaluates every status surface — the bar and each desktop widget — over
+/// one source/job registry and one `PollScheduler` deadline. Each surface is
+/// memoized on the inputs it last read, so a publish re-evaluates only the
+/// surfaces whose inputs changed; a skipped surface keeps contributing the
+/// sources, jobs and clock its last evaluation required.
 final class FlashStatusBarController {
   private weak var overlay: OverlayPanel?
   private let queue: DispatchQueue
@@ -19,13 +24,55 @@ final class FlashStatusBarController {
   /// Monotonic across lifecycles, so no fire can outlive the run that armed it.
   private var timerGeneration: UInt64 = 0
 
-  /// Deadlines exist only while the bar runs: stopping drops them with the
-  /// state, so a stopped controller can never hold a clock tick or a pending
-  /// publish that a later start would fire.
+  /// Deadlines exist only while the controller runs: stopping drops them with
+  /// the state, so a stopped controller can never hold a clock tick or a
+  /// pending publish that a later start would fire.
   private struct Schedule {
-    var nextClock: TimeInterval?
+    /// Clock-driven re-evaluation, one deadline per refresh interval in use:
+    /// surfaces sharing an interval share its tick.
+    var clocks: [TimeInterval: TimeInterval] = [:]
     var pendingJobPublish: TimeInterval?
     var nextWakeup: TimeInterval?
+  }
+
+  /// One surface's last evaluation: the inputs it read (an identical capture
+  /// skips it) and what it required of the shared registry.
+  private struct SurfaceState {
+    var memo:
+      (
+        dependencies: StatusFormatDependencies,
+        inputs: FlashStatusBarTemplateEngine.EvaluationInputs
+      )?
+    var jobs: [StatusFormatJobRequest] = []
+    var sources: Set<String> = []
+    var needsClock = false
+
+    func isCurrent(_ native: StatusFormatContext) -> Bool {
+      guard let memo else { return false }
+      return FlashStatusBarTemplateEngine.EvaluationInputs.capture(
+        dependencies: memo.dependencies, native: native) == memo.inputs
+    }
+
+    mutating func record(
+      _ dependencies: StatusFormatDependencies, jobs: [StatusFormatJobRequest],
+      native: StatusFormatContext
+    ) {
+      memo = (
+        dependencies,
+        FlashStatusBarTemplateEngine.EvaluationInputs.capture(
+          dependencies: dependencies, native: native)
+      )
+      self.jobs = jobs
+      (sources, needsClock) = FlashStatusBarTemplateEngine.requirements(of: dependencies)
+    }
+  }
+
+  private struct WidgetState {
+    var spec: StatusWidgetSpec
+    /// False while every window of the widget is occluded: it then requires
+    /// nothing, so its sources, jobs and clock stop.
+    var visible = true
+    var surface = SurfaceState()
   }
 
   private enum Lifecycle {
@@ -50,6 +97,18 @@ final class FlashStatusBarController {
   private var nextJobToken: UInt64 = 0
   private var requiredSources: Set<String> = []
   private var requiredJobs: [String: StatusFormatJobRequest] = [:]
+  /// The bar's surface; nil while `[statusbar] enabled` is off.
+  private var bar: SurfaceState? = SurfaceState()
+  private var widgets: [String: WidgetState] = [:]
+  /// Set when a surface evaluated, appeared, disappeared or changed
+  /// visibility: the registry is reconciled against the union again.
+  private var requirementsChanged = true
+  private let widgetSink: ((String, [StatusFormatDocument]) -> Void)?
+  /// Each widget's last published lines, as handed to `widgetSink`.
+  private(set) var lastPublishedWidgets: [String: [StatusFormatDocument]] = [:]
+  /// How often each surface ("bar" or a widget's name) evaluated: what the
+  /// tests observe to pin that unchanged surfaces are skipped.
+  private(set) var surfaceEvaluations: [String: Int] = [:]
 
   private struct SourceRecord {
     let definition: FlashStatusBarSourceDefinition
@@ -57,10 +116,15 @@ final class FlashStatusBarController {
     var job: (any StatusCommandTask)?
     var value: String?
     var cycle: FlashStatusBarCycleState?
+    /// Numeric outputs, oldest first, kept to `historyLength` — and kept
+    /// while no surface reads the source, so showing it again has a past.
+    var history: [String] = []
   }
 
   private struct ShellRecord {
     let command: String
+    /// Refresh cadence: the fastest interval of the surfaces showing it.
+    var interval: TimeInterval
     var schedule = StatusJobSchedule()
     var job: (any StatusCommandTask)?
     var value: String?
@@ -78,9 +142,6 @@ final class FlashStatusBarController {
   private var modeLabel = "INSERT"
   private var secureInput = false
   private(set) var lastPublishedModel: FlashStatusBarModel?
-  /// Inputs of the last evaluation; an identical capture skips the evaluation.
-  private var lastEvaluation:
-    (dependencies: StatusFormatDependencies, inputs: FlashStatusBarTemplateEngine.EvaluationInputs)?
   private let popupCache = FlashStatusBarTemplateEngine.PopupEvaluationCache()
 
   init(
@@ -99,8 +160,10 @@ final class FlashStatusBarController {
         queue: queue, argv: invocation.argv,
         environment: invocation.environment, workingDirectory: invocation.workingDirectory,
         timeoutSeconds: invocation.timeoutSeconds, onLine: onLine, onCompletion: onCompletion)
-    }
+    },
+    widgetSink: ((String, [StatusFormatDocument]) -> Void)? = nil
   ) {
+    self.widgetSink = widgetSink
     self.scheduler = scheduler
     self.queue = queue
     self.clock = clock
@@ -121,8 +184,9 @@ final class FlashStatusBarController {
       if case .stopped = self.lifecycle {
         self.lifecycle = .running(Schedule())
         // A restart plans afresh: an evaluation cached before the stop would
-        // take the unchanged-inputs shortcut and never re-arm the clock.
-        self.lastEvaluation = nil
+        // take the unchanged-inputs shortcut and never re-run its commands.
+        self.bar?.memo = nil
+        for name in self.widgets.keys { self.widgets[name]?.surface.memo = nil }
       }
       self.publishCurrentModel()
     }
@@ -147,7 +211,55 @@ final class FlashStatusBarController {
     sourceRecords.removeAll()
     shellRecords.removeAll()
     pluginCycles.removeAll()
+    requirementsChanged = true
     stopJobs(jobs)
+  }
+
+  /// `[statusbar] enabled`: whether the bar is a surface. The controller keeps
+  /// running for widgets while the bar is off.
+  func setBar(enabled: Bool) {
+    queue.async { [weak self] in
+      guard let self, enabled != (self.bar != nil) else { return }
+      self.bar = enabled ? SurfaceState() : nil
+      self.requirementsChanged = true
+      self.publishCurrentModel()
+    }
+  }
+
+  /// The enabled widgets. A widget whose spec changed evaluates afresh; one
+  /// that disappeared releases what only it required.
+  func updateWidgets(_ specs: [String: StatusWidgetSpec]) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      var widgets: [String: WidgetState] = [:]
+      for (name, spec) in specs {
+        var widget = self.widgets[name] ?? WidgetState(spec: spec)
+        if widget.spec != spec {
+          widget.spec = spec
+          widget.surface = SurfaceState()
+        }
+        widgets[name] = widget
+      }
+      for name in self.widgets.keys where specs[name] == nil {
+        self.lastPublishedWidgets.removeValue(forKey: name)
+        self.surfaceEvaluations.removeValue(forKey: name)
+      }
+      self.widgets = widgets
+      self.requirementsChanged = true
+      self.publishCurrentModel()
+    }
+  }
+
+  /// Whether any window of the widget can be seen. An occluded widget drops
+  /// out of the required sources, jobs and clock until it shows again.
+  func setWidgetVisible(name: String, _ visible: Bool) {
+    queue.async { [weak self] in
+      guard let self, let widget = self.widgets[name], widget.visible != visible else { return }
+      self.widgets[name]?.visible = visible
+      self.requirementsChanged = true
+      FlashLog.debug("[widgets] \(visible ? "visible" : "occluded") name=\(name)")
+      self.publishCurrentModel()
+    }
   }
 
   func updateModeLabel(_ label: String) {
@@ -189,7 +301,7 @@ final class FlashStatusBarController {
     queue.async { [weak self] in
       guard let self else { return }
       self.template = template
-      self.lastEvaluation = nil
+      self.bar?.memo = nil
       self.popupCache.memos.removeAll()
       if let popupTemplates { self.popupTemplates = popupTemplates }
       if let options { self.options = options }
@@ -203,14 +315,11 @@ final class FlashStatusBarController {
       }
       if let terminalPopupNames { self.terminalPopupNames = terminalPopupNames }
       if let refreshIntervalSeconds, refreshIntervalSeconds != self.refreshIntervalSeconds {
+        // A new cadence starts from now: the clocks re-arm, and the job
+        // records re-plan against their new cadence when reconciled.
         self.refreshIntervalSeconds = refreshIntervalSeconds
-        self.schedule?.nextClock = nil
-        let now = self.clock()
-        for key in Array(self.shellRecords.keys) {
-          self.shellRecords[key]?.schedule.reschedule(
-            now: now,
-            interval: refreshIntervalSeconds > 0 ? max(1, refreshIntervalSeconds) : 0)
-        }
+        self.schedule?.clocks.removeAll()
+        self.requirementsChanged = true
       }
       self.publishCurrentModel()
     }
@@ -270,46 +379,116 @@ final class FlashStatusBarController {
     var values = sourceRecords.compactMapValues(\.value)
     for (name, record) in sourceRecords {
       if let cycle = record.cycle { values[name] = "#[cyc]" + cycle.visibleLine + "#[nocyc]" }
+      if !record.history.isEmpty {
+        values["flash.history.\(name)"] = record.history.joined(separator: " ")
+      }
     }
     let jobValues = shellRecords.compactMapValues(\.value)
-    var native = FlashStatusBarTemplateEngine.formatContext(
+    // The shared context is built once; each surface layers its options on it.
+    let native = FlashStatusBarTemplateEngine.formatContext(
       context, dynamicValues: values, jobValues: jobValues)
-    native.options = options.merging(template.options) { _, local in local }
-    if let last = lastEvaluation,
-      FlashStatusBarTemplateEngine.EvaluationInputs.capture(
-        dependencies: last.dependencies, native: native) == last.inputs
-    {
-      // Nothing the template or its popups read has changed since the last
-      // evaluation: only the time-driven bookkeeping below runs.
-      guard schedule != nil else { return }
-      runDueJobs(now: now)
-      armTimer()
-      return
+    if bar != nil { publishBar(native: native, context: context) }
+    for name in widgets.keys.sorted() where widgets[name]?.visible == true {
+      publishWidget(name, native: native)
     }
+    if requirementsChanged { reconcileRequirements(now: now) }
+    guard schedule != nil else { return }
+    armClocks(now: now)
+    runDueJobs(now: now)
+    armTimer()
+  }
+
+  private func publishBar(native shared: StatusFormatContext, context: FlashStatusBarContext) {
+    var native = shared
+    native.options = options.merging(template.options) { _, local in local }
+    // Nothing the template or its popups read has changed since the last
+    // evaluation: the bar keeps what it required.
+    guard bar?.isCurrent(native) == false else { return }
     let result = FlashStatusBarTemplateEngine.evaluate(
       template: template, popupTemplates: popupTemplates, context: context,
-      dynamicValues: values, jobValues: jobValues, options: options,
-      terminalPopupNames: terminalPopupNames, nativeContext: native, popupCache: popupCache)
-    lastEvaluation = (
-      result.dependencies,
-      FlashStatusBarTemplateEngine.EvaluationInputs.capture(
-        dependencies: result.dependencies, native: native)
-    )
+      options: options, terminalPopupNames: terminalPopupNames, nativeContext: native,
+      popupCache: popupCache)
+    bar?.record(result.dependencies, jobs: result.jobs, native: native)
+    surfaceEvaluations["bar", default: 0] += 1
+    requirementsChanged = true
     if result.model != lastPublishedModel {
       lastPublishedModel = result.model
       DispatchQueue.main.async { [weak overlay] in overlay?.setStatusBarModel(result.model) }
     }
-    requiredSources = result.sources
-    requiredJobs = [:]
-    for job in result.jobs { requiredJobs[job.rawCommand] = job }
+  }
+
+  private func publishWidget(_ name: String, native shared: StatusFormatContext) {
+    guard let spec = widgets[name]?.spec else { return }
+    var native = shared
+    native.values["flash.widget.name"] = name
+    native.values["flash.widget.columns"] = String(spec.columns)
+    native.options = options.merging(spec.template.options) { _, local in local }
+    guard widgets[name]?.surface.isCurrent(native) == false else { return }
+    let result = FlashStatusBarTemplateEngine.evaluateDocument(
+      spec.template, native: native, lineBreaksResetAlignment: true)
+    widgets[name]?.surface.record(result.dependencies, jobs: result.jobs, native: native)
+    surfaceEvaluations[name, default: 0] += 1
+    requirementsChanged = true
+    let lines = StatusFormatDocument(runs: result.runs).lines()
+    guard lines != lastPublishedWidgets[name] else { return }
+    lastPublishedWidgets[name] = lines
+    if let widgetSink { DispatchQueue.main.async { widgetSink(name, lines) } }
+  }
+
+  /// The surfaces that require anything right now, with the refresh interval
+  /// each one's clock and `#()` jobs run at. Occluded widgets are absent.
+  private var activeSurfaces: [(surface: SurfaceState, interval: TimeInterval)] {
+    var surfaces = bar.map { [($0, refreshIntervalSeconds)] } ?? []
+    for name in widgets.keys.sorted() {
+      guard let widget = widgets[name], widget.visible else { continue }
+      surfaces.append(
+        (
+          widget.surface,
+          widget.spec.intervalSeconds > 0 ? widget.spec.intervalSeconds : refreshIntervalSeconds
+        ))
+    }
+    return surfaces
+  }
+
+  private static func cadence(_ interval: TimeInterval) -> TimeInterval {
+    interval > 0 ? max(1, interval) : 0
+  }
+
+  /// Point the registry at the union of what the active surfaces require:
+  /// reap what none requires any more, and re-plan a job whose cadence (the
+  /// fastest of the surfaces showing it) changed.
+  private func reconcileRequirements(now: TimeInterval) {
+    requirementsChanged = false
+    var sources = Set<String>()
+    var jobs: [String: StatusFormatJobRequest] = [:]
+    var cadences: [String: TimeInterval] = [:]
+    for (surface, interval) in activeSurfaces {
+      sources.formUnion(surface.sources)
+      let cadence = Self.cadence(interval)
+      for job in surface.jobs {
+        if jobs[job.rawCommand] == nil { jobs[job.rawCommand] = job }
+        let current = cadences[job.rawCommand]
+        cadences[job.rawCommand] =
+          current.map { $0 == 0 ? cadence : (cadence == 0 ? $0 : min($0, cadence)) } ?? cadence
+      }
+    }
+    requiredSources = sources
+    requiredJobs = jobs
     let obsolete = shellRecords.keys.filter { requiredJobs[$0] == nil }
     var obsoleteJobs = obsolete.compactMap { shellRecords.removeValue(forKey: $0)?.job }
     for key in requiredJobs.keys.sorted() {
-      guard let request = requiredJobs[key], shellRecords[key]?.command != request.command else {
+      guard let request = requiredJobs[key] else { continue }
+      let cadence = cadences[key] ?? 0
+      if shellRecords[key]?.command == request.command {
+        if shellRecords[key]?.interval != cadence {
+          shellRecords[key]?.interval = cadence
+          shellRecords[key]?.schedule.reschedule(now: now, interval: cadence)
+        }
         continue
       }
       let old = shellRecords.removeValue(forKey: key)
-      shellRecords[key] = ShellRecord(command: request.command, value: old?.value)
+      shellRecords[key] = ShellRecord(
+        command: request.command, interval: cadence, value: old?.value)
       if let job = old?.job { obsoleteJobs.append(job) }
     }
     if requiredJobs.isEmpty { schedule?.pendingJobPublish = nil }
@@ -321,15 +500,21 @@ final class FlashStatusBarController {
       }
     }
     stopJobs(obsoleteJobs)
+  }
+
+  /// One clock deadline per interval an active clock-driven surface uses; a
+  /// fired deadline re-arms from now, an unused one is dropped.
+  private func armClocks(now: TimeInterval) {
     guard var schedule else { return }
-    if result.needsClock && refreshIntervalSeconds > 0 {
-      if schedule.nextClock == nil { schedule.nextClock = now + max(1, refreshIntervalSeconds) }
-    } else {
-      schedule.nextClock = nil
+    var intervals = Set<TimeInterval>()
+    for (surface, interval) in activeSurfaces where surface.needsClock && interval > 0 {
+      intervals.insert(interval)
+    }
+    schedule.clocks = schedule.clocks.filter { intervals.contains($0.key) }
+    for interval in intervals where schedule.clocks[interval] == nil {
+      schedule.clocks[interval] = now + max(1, interval)
     }
     self.schedule = schedule
-    runDueJobs(now: now)
-    armTimer()
   }
 
   private func runDueJobs(now: TimeInterval) {
@@ -350,9 +535,8 @@ final class FlashStatusBarController {
       nextJobToken &+= 1
       let token = nextJobToken
       guard
-        shellRecords[key]?.schedule.begin(
-          token: token, now: now,
-          interval: refreshIntervalSeconds > 0 ? max(1, refreshIntervalSeconds) : 0) == true
+        let interval = shellRecords[key]?.interval,
+        shellRecords[key]?.schedule.begin(token: token, now: now, interval: interval) == true
       else { continue }
       shellRecords[key]?.producedOutput = false
       startShell(request, token: token)
@@ -379,6 +563,11 @@ final class FlashStatusBarController {
           guard let self, self.sourceRecords[name]?.schedule.complete(token) == true else { return }
           self.sourceRecords[name]?.job = nil
           if status == 0, !output.trimmed.isEmpty {
+            if let limit = definition.historyLength, Double(output.trimmed)?.isFinite == true {
+              var history = self.sourceRecords[name]?.history ?? []
+              history.append(output.trimmed)
+              self.sourceRecords[name]?.history = Array(history.suffix(limit))
+            }
             if let period = definition.cycleIntervalSeconds {
               let lines = output.split(separator: "\n").map { String($0).trimmed }.filter {
                 !$0.isEmpty
@@ -451,9 +640,10 @@ final class FlashStatusBarController {
   static let pollClientID = "core:status_bar"
 
   /// These wake-ups are not a fixed cadence but the earliest of the user's
-  /// declared per-source intervals, cycle rotations, clock expansion and
-  /// pending output — so the bar re-registers its next deadline on the shared
-  /// clock each time one lands, rather than owning a timer.
+  /// declared per-source intervals, cycle rotations, each surface's clock and
+  /// pending output — so the controller re-registers its next deadline on the
+  /// shared clock each time one lands, rather than owning a timer. It is armed
+  /// only while a visible surface requires something.
   private func armTimer() {
     scheduler.unregister(Self.pollClientID)
     timerGeneration &+= 1
@@ -469,12 +659,13 @@ final class FlashStatusBarController {
     dates += requiredSources.compactMap { sourceRecords[$0]?.cycle }
       .filter(\.needsRotationTimer).map(\.nextRotationAt)
     dates += pluginCycles.values.filter(\.needsRotationTimer).map(\.nextRotationAt)
-    if let nextClock = schedule.nextClock { dates.append(nextClock) }
+    dates += schedule.clocks.values
     if let pendingJobPublish = schedule.pendingJobPublish { dates.append(pendingJobPublish) }
     guard let next = dates.filter(\.isFinite).min() else { return }
     schedule.nextWakeup = next
-    // The bar is a surface the user is looking at, so its slack is tight; the
-    // generation check still discards a fire that a newer plan superseded.
+    // The bar and unoccluded widgets are surfaces the user is looking at, so
+    // the slack is tight; the generation check still discards a fire that a
+    // newer plan superseded.
     scheduler.scheduleOnce(
       Self.pollClientID, afterMs: Int((max(0.001, next - clock()) * 1000).rounded()),
       priority: .high, on: queue
@@ -493,7 +684,7 @@ final class FlashStatusBarController {
         shellRecords[key]?.value = "<'\(key)' not ready>"
       }
     }
-    if let nextClock = schedule?.nextClock, nextClock <= now { schedule?.nextClock = nil }
+    if let clocks = schedule?.clocks { schedule?.clocks = clocks.filter { $0.value > now } }
     if let pendingJobPublish = schedule?.pendingJobPublish, pendingJobPublish <= now {
       schedule?.pendingJobPublish = nil
       lastJobPublish = now

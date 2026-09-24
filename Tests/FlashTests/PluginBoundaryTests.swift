@@ -56,6 +56,39 @@ final class PluginBoundaryTests: XCTestCase {
     }
   }
 
+  /// The `status_observed` group pins what a `core:status.observed` payload
+  /// may be; every payload the host builds must be one the SDK accepts.
+  func testStatusObservedPayloadsTheHostBuildsSatisfyTheSharedCorpus() throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let data = try Data(
+      contentsOf: root.appendingPathComponent(
+        "Plugins/_flash_plugin_rust/fixtures/wire-values.fixture"))
+    let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    func accepted(_ payload: [String: Any]) -> Bool {
+      guard let segments = payload["segments"] as? [Any] else { return false }
+      let names = segments.compactMap { $0 as? String }
+      return names.count == segments.count && !names.contains("")
+        && Set(names).count == names.count
+    }
+    for item in try XCTUnwrap(corpus["status_observed"] as? [[String: Any]]) {
+      let value = try XCTUnwrap(item["value"] as? [String: Any])
+      let valid = try XCTUnwrap(item["valid"] as? Bool)
+      XCTAssertEqual(accepted(value), valid, "status_observed: \(item["name"] ?? "")")
+      guard valid, let names = value["segments"] as? [String] else { continue }
+      let built = PluginProcess.statusObservedSegments(
+        Set(names).union(["undeclared"]), declared: names.reversed() + ["other"])
+      XCTAssertEqual(built, names.sorted(), "\(item["name"] ?? "")")
+    }
+    for (observed, declared) in [
+      (Set(["", "b", "a", "x"]), ["", "a", "b"]), ([], ["a"]), (["a"], []),
+    ] {
+      let segments = PluginProcess.statusObservedSegments(observed, declared: declared)
+      XCTAssertTrue(accepted(["segments": segments]), "\(segments)")
+      XCTAssertEqual(segments, segments.sorted())
+    }
+  }
+
   func testLifecycleRejectsOldAttemptEventsAndExpiresFailuresByClock() {
     var lifecycle = PluginLifecycle()
     func send(_ event: PluginLifecycle.Event, at now: TimeInterval = 0) -> [PluginLifecycle.Effect]

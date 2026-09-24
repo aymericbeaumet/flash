@@ -92,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Pushes the system appearance to the overlay for `[overlay.dark]`.
   var appearanceObserver: AppearanceObserver?
   var statusBarController: FlashStatusBarController?
+  /// Desktop widget windows; the status controller evaluates their lines.
+  var widgetController: WidgetController?
   var statusTerminalEnvironmentReady = false
   var terminalReturnApplicationPID: pid_t?
   let mainRunLoopStallObserver = MainRunLoopStallObserver()
@@ -405,6 +407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
     overlay.warmPool(count: 256)
+    widgetController = WidgetController(setVisible: { [weak self] name, visible in
+      self?.statusBarController?.setWidgetVisible(name: name, visible)
+    })
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
@@ -415,7 +420,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
-      })
+      },
+      widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
     // Once at launch; afterwards the tap and hint activations refresh it.
     noteSecureInput(IsSecureEventInputEnabled())
@@ -1142,6 +1148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     powerSourceMonitor = nil
     statusBarController?.stopAndWait()
     statusBarController = nil
+    widgetController?.stop()
+    widgetController = nil
     terminalInputMappings?.flush()
     overlay.statusPopupController.dismiss()
     overlay.statusTerminals.shutdown()

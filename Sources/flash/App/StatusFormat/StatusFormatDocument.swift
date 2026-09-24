@@ -37,9 +37,13 @@ struct StatusFormatWidth: Equatable {
 struct StatusFormatDocument: Equatable {
   var runs: [FlashStatusTextSegment]
 
+  /// `lineBreaksResetAlignment` parses stacked status lines (a desktop
+  /// widget): each `\n` returns alignment to the default, so every line
+  /// starts in its own left section, while colours and attributes carry on.
   static func parse(
     _ evaluation: StatusFormatEvaluation,
-    defaultForeground: FlashStatusTextColor = .defaultForeground
+    defaultForeground: FlashStatusTextColor = .defaultForeground,
+    lineBreaksResetAlignment: Bool = false
   ) -> Self {
     let raw = evaluation.text
     var locations: [(range: Range<Int>, fragment: StatusFormatFragment)] = []
@@ -96,6 +100,7 @@ struct StatusFormatDocument: Equatable {
       run.origin = origin
       run.isModeLabel = fragment?.isModeLabel ?? false
       if run.alternateCharacterSet { run.text = alternateCharacters(run.text) }
+      if lineBreaksResetAlignment, text == "\n" { state.current.alignment = .default }
       if var last = runs.last {
         last.text = run.text
         if last == run {
@@ -121,6 +126,54 @@ struct StatusFormatDocument: Equatable {
 
   func aligned(_ alignment: StatusFormatAlignment) -> [FlashStatusTextSegment] {
     runs.filter { $0.alignment == alignment || (alignment == .left && $0.alignment == .default) }
+  }
+
+  /// One document per `\n`-separated line, each laid out as its own tmux
+  /// status line. A line after the first opens with a style boundary carrying
+  /// the style in effect at the break, so colours, attributes and `fill`
+  /// continue while alignment starts again in the left section (parse with
+  /// `lineBreaksResetAlignment` so markers later on the line agree). `\r` is
+  /// dropped, and blank lines at either edge are trimmed as popups trim them.
+  func lines() -> [StatusFormatDocument] {
+    var lines: [[FlashStatusTextSegment]] = [[]]
+    for run in runs {
+      guard !run.isStyleBoundary else {
+        lines[lines.count - 1].append(run)
+        continue
+      }
+      let parts = run.text.unicodeScalars.split(
+        separator: "\n", omittingEmptySubsequences: false)
+      for (index, part) in parts.enumerated() {
+        var piece = run
+        if index > 0 {
+          piece.alignment = .default
+          piece.isModeLabel = false
+          var boundary = piece
+          boundary.text = ""
+          boundary.isStyleBoundary = true
+          lines.append([boundary])
+        }
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: part.lazy.filter { $0 != "\r" })
+        piece.text = String(scalars)
+        guard !piece.text.isEmpty || (parts.count == 1 && run.isModeLabel) else { continue }
+        lines[lines.count - 1].append(piece)
+      }
+    }
+    func isBlank(_ line: [FlashStatusTextSegment]) -> Bool {
+      !line.contains { !$0.isStyleBoundary && (!$0.text.isEmpty || $0.isModeLabel) }
+    }
+    while let first = lines.first, isBlank(first) { lines.removeFirst() }
+    while let last = lines.last, isBlank(last) { lines.removeLast() }
+    return lines.map(StatusFormatDocument.init(runs:))
+  }
+
+  /// Cells the line's text occupies before alignment or clipping: the width a
+  /// widget sized to its content needs for this line.
+  var naturalColumns: Int {
+    runs.reduce(0) { total, run in
+      run.isStyleBoundary ? total : total + StatusFormatCells.width(run.text, styles: false)
+    }
   }
 
   static func serialize(_ runs: [FlashStatusTextSegment]) -> String {
@@ -156,17 +209,23 @@ struct StatusFormatDocument: Equatable {
   /// popups carry their own content and have no name).
   static func popupNames(in format: String) -> Set<String> {
     var names = Set<String>()
+    for token in styleTokens(in: format) where token.lowercased().hasPrefix("popup=") {
+      let name = String(token.dropFirst(6))
+      if !name.isEmpty, !name.lowercased().hasPrefix("inline:") { names.insert(name) }
+    }
+    return names
+  }
+
+  /// Every token of a format's literal `#[…]` style markers, in order.
+  static func styleTokens(in format: String) -> [String] {
+    var tokens: [String] = []
     var rest = format[...]
     while let open = rest.range(of: "#[") {
       guard let close = rest[open.upperBound...].firstIndex(of: "]") else { break }
-      for token in StatusFormatStyleState.tokens(String(rest[open.upperBound..<close]))
-      where token.lowercased().hasPrefix("popup=") {
-        let name = String(token.dropFirst(6))
-        if !name.isEmpty, !name.lowercased().hasPrefix("inline:") { names.insert(name) }
-      }
+      tokens += StatusFormatStyleState.tokens(String(rest[open.upperBound..<close]))
       rest = rest[rest.index(after: close)...]
     }
-    return names
+    return tokens
   }
 
   static func stableID(_ source: String) -> String {

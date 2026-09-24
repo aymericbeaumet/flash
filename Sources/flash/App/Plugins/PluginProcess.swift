@@ -88,9 +88,17 @@ final class PluginProcess {
   private var publishedPID: pid_t?
   private var publishedStartDate: Date?
   private var publishedRestartCount = 0
-  /// Whether the enabled status bar shows this plugin's segments; decides a
-  /// status-bound plugin's activation. Guarded by `lock`.
+  /// Whether a status surface (the enabled bar, its popups, a desktop widget)
+  /// shows this plugin's segments; decides a status-bound plugin's
+  /// activation. Guarded by `lock`.
   private var statusObserved: Bool
+  /// The manifest `status` names a live status surface shows, sorted — the
+  /// `core:status.observed` payload. Guarded by `lock`.
+  private var observedStatusSegments: [String]
+  /// The set the current child last received; queue-confined and cleared on
+  /// each initialize, so a restarted child starts from the truth and no child
+  /// ever receives an unchanged set twice.
+  private var deliveredStatusSegments: [String]?
   private var lifecycle = PluginLifecycle()
   private var restartWork: DispatchWorkItem?
   /// Set by a user-initiated reload so the lifecycle teardown keeps the
@@ -166,7 +174,8 @@ final class PluginProcess {
     baseDataDir: URL,
     watchFiles: Bool = true,
     settings: [String: PluginConfigValue] = [:],
-    statusObserved: Bool = true
+    statusObserved: Bool = true,
+    observedStatusSegments: Set<String> = []
   ) {
     self.root = root
     self.manifest = manifest
@@ -179,6 +188,8 @@ final class PluginProcess {
     self.watchFiles = watchFiles
     self.settings = settings
     self.statusObserved = statusObserved
+    self.observedStatusSegments = Self.statusObservedSegments(
+      observedStatusSegments, declared: manifest.status)
   }
 
   var identifier: String { manifest.id }
@@ -191,7 +202,7 @@ final class PluginProcess {
     return manifest.activation(statusObserved: statusObserved)
   }
 
-  /// The status bar started or stopped showing this plugin's segments. A
+  /// The status surfaces started or stopped showing this plugin's segments. A
   /// status-bound plugin that becomes observed spawns if it has not yet; one
   /// that stops being observed keeps a running process — a command may have
   /// started it, and on-demand plugins remain running once started — and is
@@ -208,6 +219,43 @@ final class PluginProcess {
         fields: ["id": self.manifest.id])
       if observed { self.applyLifecycle(.activate) }
     }
+  }
+
+  static let statusObservedEvent = "core:status.observed"
+
+  /// The complete observed set a plugin receives: only names its manifest
+  /// declares, each nonempty and listed once, sorted.
+  static func statusObservedSegments(_ observed: Set<String>, declared: [String]) -> [String] {
+    observed.intersection(declared).filter { !$0.isEmpty }.sorted()
+  }
+
+  /// The surfaces started or stopped showing some of this plugin's segments.
+  /// A running child hears the new set at once; a starting one hears it right
+  /// after initialize.
+  func setObservedStatusSegments(_ observed: Set<String>) {
+    let segments = Self.statusObservedSegments(observed, declared: manifest.status)
+    lock.lock()
+    let changed = observedStatusSegments != segments
+    observedStatusSegments = segments
+    lock.unlock()
+    guard changed else { return }
+    queue.async { [weak self] in
+      guard let self, self.runtimeStateSnapshot() == .running else { return }
+      self.deliverObservedStatusSegments()
+    }
+  }
+
+  /// `core:status.observed` to a listening child, unless it already has
+  /// this exact set. Runs on `queue`.
+  private func deliverObservedStatusSegments() {
+    guard listenPatterns.contains(where: { $0.matches(Self.statusObservedEvent) }) else { return }
+    lock.lock()
+    let segments = observedStatusSegments
+    lock.unlock()
+    guard segments != deliveredStatusSegments else { return }
+    deliveredStatusSegments = segments
+    deliverEventOnQueue(
+      PluginEvent(name: Self.statusObservedEvent, payload: ["segments": segments], bundleID: nil))
   }
 
   func reportDefinitionError(_ error: String) {
@@ -556,6 +604,10 @@ final class PluginProcess {
           ],
           bundleID: nil))
     }
+    // Every child, including a restarted one, starts from the current set —
+    // sent even when it is empty.
+    deliveredStatusSegments = nil
+    deliverObservedStatusSegments()
     armIdlePing()
     let deferred = deferredPerforms
     deferredPerforms.removeAll()

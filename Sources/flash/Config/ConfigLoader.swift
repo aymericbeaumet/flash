@@ -401,6 +401,7 @@ enum ConfigLoader {
     applyStatusBar(
       section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
     applyTerminals(section("terminal"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyWidgets(section("widgets"), locations: locations, into: &config)
     applyFlashlight(section("flashlight"), locations: locations, into: &config)
     applyMode(
       section("mode"),
@@ -482,8 +483,9 @@ enum ConfigLoader {
         "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
       ],
     ]
-    // Plugin settings and terminal declarations use user-defined table names.
-    let knownSections = Set(sectionKeys.keys).union(["plugin", "terminal"])
+    // Plugin settings, terminal declarations and widgets use user-defined
+    // table names; `applyWidgets` checks each widget's own keys.
+    let knownSections = Set(sectionKeys.keys).union(["plugin", "terminal", "widgets"])
     warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
     for (section, known) in sectionKeys {
       guard let table = root[section]?.table else { continue }
@@ -1085,13 +1087,24 @@ enum ConfigLoader {
       guard
         let parsed = parseStatusProcess(
           definition, path: path, sourceURL: sourceURL,
-          allowedKeys: ["command", "working_directory", "env", "interval", "cycle_interval"],
+          allowedKeys: [
+            "command", "working_directory", "env", "interval", "cycle_interval", "history",
+          ],
           location: location, into: &config),
         let interval = statusProcessInteger(
           definition, key: "interval",
           fallback: Int(config.statusBar.refreshIntervalSeconds), range: 0...86400,
+          path: path, location: location, into: &config),
+        let history = statusProcessInteger(
+          definition, key: "history", fallback: 0, range: 2...512,
           path: path, location: location, into: &config)
       else { continue }
+      if definition["history"] != nil, definition["cycle_interval"] != nil {
+        config.addDiagnostic(
+          "\(path) history keeps numeric samples and cannot combine with cycle_interval",
+          location: location)
+        continue
+      }
       var cycle: Double?
       if definition["cycle_interval"] != nil {
         guard
@@ -1104,7 +1117,8 @@ enum ConfigLoader {
       config.statusBar.sources[name] = FlashStatusBarSourceDefinition(
         command: parsed.command, workingDirectory: parsed.workingDirectory,
         environment: parsed.environment, intervalSeconds: Double(interval),
-        cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds)
+        cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds,
+        historyLength: history > 0 ? history : nil)
       if definition["interval"] == nil {
         config.statusBar.sourcesUsingDefaultInterval.insert(name)
       } else {
@@ -1159,6 +1173,170 @@ enum ConfigLoader {
         persistent: definition["persistent"]?.bool ?? false)
       config.invalidTerminalNames.remove(name)
       config.recordLocation(path: path, location: location)
+    }
+  }
+
+  private static let widgetKeys: Set<String> = [
+    "enabled", "template", "screen", "anchor", "gap_x", "gap_y", "columns", "max_columns",
+    "font", "font_size", "line_spacing", "fg", "bg", "border", "border_size", "corner_radius",
+    "padding", "interval", "hide_from_capture", "options",
+  ]
+
+  /// `[widgets.<name>]` tables. Like every section, a later layer overrides
+  /// only the keys it sets; templates compile once every layer is applied.
+  private static func applyWidgets(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    guard let table else { return }
+    for (name, value) in table {
+      let path = ["widgets", name]
+      let dotted = "widgets.\(name)"
+      guard !name.isEmpty,
+        name.unicodeScalars.allSatisfy({
+          $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-")
+        })
+      else {
+        config.addDiagnostic(
+          "widget name '\(name)' must use only letters, digits, '_' and '-'",
+          location: locations.location(for: path))
+        continue
+      }
+      guard let definition = value.table else {
+        config.addDiagnostic(
+          "\(dotted) must be a table of keys ([\(dotted)] on its own line)",
+          location: locations.location(for: path))
+        continue
+      }
+      warnUnknownKeys(
+        in: definition, known: widgetKeys, path: path, locations: locations, into: &config)
+      if config.widgets[name] == nil { config.widgets[name] = Config.Widget() }
+      func key(_ key: String) -> [String] { path + [key] }
+      applyBool(
+        definition["enabled"], path: key("enabled"),
+        message: "\(dotted).enabled must be true or false", locations: locations, into: &config
+      ) { value, config in config.widgets[name]?.enabled = value }
+      applyString(
+        definition["template"], path: key("template"),
+        message: "\(dotted).template must be a template string", locations: locations,
+        into: &config
+      ) { value, config in
+        config.widgets[name]?.template.template = value.replacingOccurrences(
+          of: "\r\n", with: "\n")
+      }
+      if let screen = definition["screen"] {
+        let parsed: Config.Widget.Screen?
+        switch (screen.string?.lowercased(), screen.int) {
+        case ("primary", _): parsed = .primary
+        case ("all", _): parsed = .all
+        case (nil, let index?) where (1...64).contains(index): parsed = .index(index)
+        default: parsed = nil
+        }
+        if let parsed {
+          config.widgets[name]?.screen = parsed
+          config.recordLocation(
+            path: "\(dotted).screen", location: locations.location(for: key("screen")))
+        } else {
+          config.addDiagnostic(
+            "\(dotted).screen must be \"primary\", \"all\" or a display number from 1 "
+              + "(displays count left to right)",
+            location: locations.location(for: key("screen")))
+        }
+      }
+      applyString(
+        definition["anchor"], path: key("anchor"),
+        message: "\(dotted).anchor must be one of "
+          + Config.Widget.Anchor.allCases.map(\.rawValue).joined(separator: ", "),
+        locations: locations, into: &config,
+        validate: { Config.Widget.Anchor(rawValue: $0) != nil },
+        assign: { value, config in
+          config.widgets[name]?.anchor = .init(rawValue: value) ?? .topLeft
+        })
+      for (field, keyPath) in [
+        ("gap_x", \Config.Widget.gapX), ("gap_y", \Config.Widget.gapY),
+      ] {
+        applyDouble(
+          definition[field], path: key(field),
+          message: "\(dotted).\(field) must be a number between 0 and 4096 (points)",
+          locations: locations, into: &config, validate: { (0...4_096).contains($0) },
+          assign: { value, config in config.widgets[name]?[keyPath: keyPath] = value })
+      }
+      applyInt(
+        definition["columns"], path: key("columns"),
+        message: "\(dotted).columns must be an integer between 0 and 1000 (0 fits the content)",
+        locations: locations, into: &config, validate: { (0...1_000).contains($0) },
+        assign: { value, config in config.widgets[name]?.columns = value })
+      applyInt(
+        definition["max_columns"], path: key("max_columns"),
+        message: "\(dotted).max_columns must be an integer between 1 and 1000",
+        locations: locations, into: &config, validate: { (1...1_000).contains($0) },
+        assign: { value, config in config.widgets[name]?.maxColumns = value })
+      applyString(
+        definition["font"], path: key("font"),
+        message: "\(dotted).font must be a font name string", locations: locations,
+        into: &config
+      ) { value, config in
+        config.widgets[name]?.font = value
+        if StatusWidgetFont.resolve(name: value, size: 13) == nil {
+          config.addDiagnostic(
+            "\(dotted).font '\(value)' is not an installed monospaced font; "
+              + "using the system monospaced font",
+            location: locations.location(for: key("font")))
+        }
+      }
+      for (field, keyPath, range, unit) in [
+        ("font_size", \Config.Widget.fontSize, 6.0...200.0, "points"),
+        ("line_spacing", \Config.Widget.lineSpacing, 0.0...200.0, "points"),
+        ("border_size", \Config.Widget.borderSize, 0.0...64.0, "points"),
+        ("corner_radius", \Config.Widget.cornerRadius, 0.0...200.0, "points"),
+        ("padding", \Config.Widget.padding, 0.0...200.0, "points"),
+      ] {
+        applyDouble(
+          definition[field], path: key(field),
+          message: "\(dotted).\(field) must be a number between "
+            + "\(Int(range.lowerBound)) and \(Int(range.upperBound)) (\(unit))",
+          locations: locations, into: &config, validate: { range.contains($0) },
+          assign: { value, config in config.widgets[name]?[keyPath: keyPath] = value })
+      }
+      applyString(
+        definition["fg"], path: key("fg"),
+        message: "\(dotted).fg must be a hex color like #RRGGBB", locations: locations,
+        into: &config, validate: { $0.hasPrefix("#") && $0.count == 7 && isValidHexColor($0) },
+        assign: { value, config in config.widgets[name]?.foreground = value })
+      for (field, keyPath) in [
+        ("bg", \Config.Widget.background), ("border", \Config.Widget.border),
+      ] {
+        applyString(
+          definition[field], path: key(field),
+          message: "\(dotted).\(field) must be a hex color like #RRGGBB or #RRGGBBAA",
+          locations: locations, into: &config,
+          validate: { $0.hasPrefix("#") && isValidHexColor($0) },
+          assign: { value, config in config.widgets[name]?[keyPath: keyPath] = value })
+      }
+      applyInt(
+        definition["interval"], path: key("interval"),
+        message:
+          "\(dotted).interval must be an integer between 0 and 86400 "
+          + "(seconds; 0 follows statusbar.interval)",
+        locations: locations, into: &config, validate: { (0...86_400).contains($0) },
+        assign: { value, config in config.widgets[name]?.intervalSeconds = Double(value) })
+      applyBool(
+        definition["hide_from_capture"], path: key("hide_from_capture"),
+        message: "\(dotted).hide_from_capture must be true or false", locations: locations,
+        into: &config
+      ) { value, config in config.widgets[name]?.hideFromCapture = value }
+      if let options = sectionTable(
+        definition["options"], name: "\(dotted).options", locations: locations, into: &config)
+      {
+        for (option, value) in options {
+          guard let string = value.string else {
+            config.addDiagnostic(
+              "\(dotted).options.\(option) must be a string",
+              location: locations.location(for: key("options") + [option]))
+            continue
+          }
+          config.widgets[name]?.options[option] = string
+        }
+      }
     }
   }
 
@@ -1957,22 +2135,37 @@ enum ConfigLoader {
       }
       config.statusBar.sources[name]?.timeoutSeconds = config.statusBar.commandTimeoutSeconds
     }
-    var optionDependencies = StatusFormatDependencies()
-    for name in config.statusBar.options.keys.sorted() {
-      let program = StatusFormatProgram.compile(
-        source: config.statusBar.options[name] ?? "",
-        origin: StatusFormatOrigin("statusbar.options.\(name)"))
-      recordStatusFormatDiagnostics(program, path: "options.\(name)", into: &config)
-      optionDependencies.formUnion(program.dependencies)
+    func optionDependencies(
+      _ options: [String: String], path: String, into config: inout Config
+    ) -> [String: StatusFormatDependencies] {
+      var dependencies: [String: StatusFormatDependencies] = [:]
+      for name in options.keys.sorted() {
+        let program = StatusFormatProgram.compile(
+          source: options[name] ?? "", origin: StatusFormatOrigin("\(path).\(name)"))
+        recordStatusFormatDiagnostics(program, path: "\(path).\(name)", into: &config)
+        dependencies[name] = program.dependencies
+      }
+      return dependencies
     }
-    func compiled(_ text: String, path: String, into config: inout Config) -> FlashStatusBarTemplate
-    {
-      let program = StatusFormatProgram.compile(
-        source: text, origin: StatusFormatOrigin("statusbar.\(path)"))
+    let sharedOptions = optionDependencies(
+      config.statusBar.options, path: "statusbar.options", into: &config)
+    /// `path` is the dotted config path, also the program's origin. Widget
+    /// templates may read `flash.widget.*`; elsewhere those values exist only
+    /// inside widgets, so a shared option may mention them but a bar or popup
+    /// template may not.
+    func compiled(
+      _ text: String, path: String, options: [String: String],
+      optionDependencies: [String: StatusFormatDependencies], widget: Bool = false,
+      into config: inout Config
+    ) -> FlashStatusBarTemplate {
+      let program = StatusFormatProgram.compile(source: text, origin: StatusFormatOrigin(path))
       recordStatusFormatDiagnostics(program, path: path, into: &config)
       var dependencies = program.dependencies
-      dependencies.formUnion(optionDependencies)
+      for option in optionDependencies.values { dependencies.formUnion(option) }
       var variables: [FlashStatusBarTemplateVariable] = []
+      func diagnose(_ message: String) {
+        config.addDiagnostic("\(path) \(message)", location: config.valueLocations[path])
+      }
       for token in dependencies.values.sorted() {
         let source: FlashStatusBarSource?
         if let sdk = FlashStatusBarTemplateEngine.sdkValue(for: token) {
@@ -1993,44 +2186,82 @@ enum ConfigLoader {
                   name: String(field[field.index(after: dot)...])))
             } else {
               source = nil
-              config.addDiagnostic(
-                "statusbar.\(path) has invalid plugin value \(token)",
-                location: config.valueLocations["statusbar.\(path)"])
+              diagnose("has invalid plugin value \(token)")
             }
           }
-        } else if token.hasPrefix("flash.source.") {
+        } else if token.hasPrefix("flash.source.") || token.hasPrefix("flash.history.") {
           source = nil
-          let name = String(token.dropFirst("flash.source.".count))
+          let history = token.hasPrefix("flash.history.")
+          let name = String(token.dropFirst((history ? "flash.history." : "flash.source.").count))
           if config.statusBar.sources[name] == nil {
-            config.addDiagnostic(
-              "statusbar.\(path) references undefined source \(name)",
-              location: config.valueLocations["statusbar.\(path)"])
+            diagnose("references undefined source \(name)")
+          } else if history, config.statusBar.sources[name]?.historyLength == nil {
+            diagnose("reads \(token), but statusbar.sources.\(name) sets no history")
+          }
+        } else if token.hasPrefix("flash.widget.") {
+          source = nil
+          let known = widget && ["flash.widget.name", "flash.widget.columns"].contains(token)
+          if !known, widget || program.dependencies.values.contains(token) {
+            diagnose("has unknown Flash value \(token)")
           }
         } else {
           source = nil
-          if token.hasPrefix("flash.") {
-            config.addDiagnostic(
-              "statusbar.\(path) has unknown Flash value \(token)",
-              location: config.valueLocations["statusbar.\(path)"])
-          }
+          if token.hasPrefix("flash.") { diagnose("has unknown Flash value \(token)") }
         }
         if let source {
-          variables.append(.init(id: "statusbar.\(path).\(token)", token: token, source: source))
+          variables.append(.init(id: "\(path).\(token)", token: token, source: source))
         }
       }
       return FlashStatusBarTemplate(
         template: text, variables: variables,
-        options: config.statusBar.options, sourceNames: Set(config.statusBar.sources.keys),
-        origin: StatusFormatOrigin("statusbar.\(path)"))
+        options: options, sourceNames: Set(config.statusBar.sources.keys),
+        origin: StatusFormatOrigin(path))
     }
     let normalized = FlashStatusBarTemplateEngine.normalizedTemplate(
       config.statusBar.template.template)
-    config.statusBar.template = compiled(normalized, path: "template", into: &config)
+    config.statusBar.template = compiled(
+      normalized, path: "statusbar.template", options: config.statusBar.options,
+      optionDependencies: sharedOptions, into: &config)
     for name in config.statusBar.popups.keys.sorted() {
       guard let popup = config.statusBar.popups[name] else { continue }
       let text = popup.template.replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
-      config.statusBar.popups[name] = compiled(text, path: "popup.\(name)", into: &config)
+      config.statusBar.popups[name] = compiled(
+        text, path: "statusbar.popup.\(name)", options: config.statusBar.options,
+        optionDependencies: sharedOptions, into: &config)
+    }
+    for name in config.widgets.keys.sorted() {
+      guard let widget = config.widgets[name] else { continue }
+      let path = "widgets.\(name)"
+      guard !widget.template.template.isEmpty else {
+        if widget.enabled {
+          config.addDiagnostic(
+            "\(path).template is required", location: config.valueLocations[path])
+        }
+        continue
+      }
+      var dependencies = sharedOptions
+      for (option, local) in optionDependencies(
+        widget.options, path: "\(path).options", into: &config)
+      {
+        dependencies[option] = local
+      }
+      let options = config.statusBar.options.merging(widget.options) { _, local in local }
+      let template = compiled(
+        widget.template.template, path: "\(path).template", options: options,
+        optionDependencies: dependencies, widget: true, into: &config)
+      config.widgets[name]?.template = template
+      let interactive = ([widget.template.template] + Array(widget.options.values))
+        .flatMap(StatusFormatDocument.styleTokens(in:))
+        .compactMap { token in
+          ["link=", "popup=", "range="].first { token.lowercased().hasPrefix($0) }
+        }
+      if widget.enabled, !interactive.isEmpty {
+        config.addDiagnostic(
+          "\(path) uses \(Set(interactive).sorted().joined(separator: ", ")) but widgets are "
+            + "click-through; links, popups and click ranges do nothing there",
+          location: config.valueLocations["\(path).template"])
+      }
     }
   }
 
@@ -2039,8 +2270,8 @@ enum ConfigLoader {
   ) {
     for diagnostic in program.diagnostics {
       config.addDiagnostic(
-        "statusbar.\(path): \(diagnostic.message) (format byte \(diagnostic.span.bytes.lowerBound))",
-        location: config.valueLocations["statusbar.\(path)"])
+        "\(path): \(diagnostic.message) (format byte \(diagnostic.span.bytes.lowerBound))",
+        location: config.valueLocations[path])
     }
   }
 

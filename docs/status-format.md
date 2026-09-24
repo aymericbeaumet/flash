@@ -1,7 +1,8 @@
 # Status format language
 
 Flash uses the tmux **3.7b** format and style language, with values supplied by
-Flash. `statusbar.template` and named document popups share one compiler. There
+Flash. `statusbar.template`, named document popups and
+[desktop widgets](widgets.md) share one compiler. There
 is no tmux runtime dependency, tmux configuration import, or implicit connection
 to a tmux server. Terminal popup commands have a separate lifetime; see
 [terminal popups](terminal-popups.md).
@@ -26,7 +27,9 @@ same format may be written directly in `template`. Values are strings, including
 native option names supplied explicitly in `[statusbar.options]`.
 
 Outer bar templates remove newlines for readable TOML. Named document popups
-preserve their interior newlines. Style and alignment markers are interpreted
+preserve their interior newlines. A desktop widget draws each line as its own
+status line: styles carry across a line break, alignment starts again on the
+left. Style and alignment markers are interpreted
 **after** format expansion, so a conditional or option can select an entire
 styled/aligned section. Ordinary value substitution does not recursively execute
 formats or jobs from the value; intentional re-expansion uses `E:` or `T:`.
@@ -83,9 +86,12 @@ native case to the corpus and inspect the corresponding pinned parser branch.
 Flash supplies `flash.mode`, `flash.date`, `flash.active_app_name`,
 `flash.active_bundle_identifier`, `flash.secure_input`,
 `flash.plugin.<id>.<segment>`, `flash.plugin.loaded_count`,
-`flash.plugin.ready_count`, `flash.plugin.error_count`, and
-`flash.source.<name>`. Host/user/process values and the process environment
-are available through ordinary lookup.
+`flash.plugin.ready_count`, `flash.plugin.error_count`,
+`flash.source.<name>`, and `flash.history.<name>` for a source that keeps a
+`history`. Inside a desktop widget, `flash.widget.name` and
+`flash.widget.columns` name the widget and its width; elsewhere they are
+unknown values. Host/user/process values and the process environment are
+available through ordinary lookup.
 
 `flash.secure_input` is `1` while secure input is on (a password field has
 focus, so the keyboard tap sees no keys and a hint session reads keys through
@@ -139,7 +145,13 @@ directory resolve against the defining configuration file; remaining arguments
 stay opaque. Home/environment expansion happens at execution. Use
 `working_directory = "."` for arguments relative to the configuration directory.
 Inactive sources retain last-good output without running or rotating; only
-evaluated sources and cycles contribute timer deadlines. Changed/removed jobs
+evaluated sources and cycles contribute timer deadlines. `history = N` (2–512)
+keeps the last N numeric outputs as `#{flash.history.<name>}`, space-separated
+and oldest first; a run whose output is not a number leaves it unchanged, the
+ring survives while the source is inactive, and it cannot combine with
+`cycle_interval`. Reading the history runs the source like reading its value.
+The bar and desktop widgets share one set of sources and jobs: a source or job
+several surfaces show runs once, a job at the fastest of their intervals. Changed/removed jobs
 are invalidated before their processes are stopped in one bounded batch.
 
 The additional style tokens are `pill/nopill`, `shrink/noshrink`,

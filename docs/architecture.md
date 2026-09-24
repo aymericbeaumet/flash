@@ -21,7 +21,8 @@ and dispatch in-process. Other mapping executables receive an argv array.
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
 | `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture; the one held mouse button (`mouse_button`, pointer mode's `v`) and smooth-scroll steps |
 | `PluginManager` / `PluginProcess` | Manifest reconciliation, owned child generations, transport and RPC |
-| `FlashStatusBarController` | Reconciled source/job records and the next necessary wakeup |
+| `FlashStatusBarController` | Evaluation of the bar and every desktop widget, each memoized on the inputs it read; reconciled source/job records for their union and the next necessary wakeup |
+| `WidgetController` / `WidgetWindow` | One click-through desktop-level window per enabled widget per display, placed in the Flash-usable frame; occlusion reported back so a covered widget stops refreshing |
 
 An asynchronous operation captures an ownership token before dispatch. Completion
 must validate that token before mutating shared state, and again after additional
@@ -79,9 +80,10 @@ clients sharing a period also share a tick, a client whose previous run has not
 returned is skipped rather than queued, and the timer stops entirely when
 nothing is registered. A registration is either a fixed cadence or a one-shot
 deadline, which is how a client whose wake-ups are irregular still rides the
-shared clock: the status bar re-registers its next deadline — the earliest of
-the user's per-source intervals, cycle rotations and pending output — each time
-one lands. Plugins register over the wire with `poll` and are ticked with a
+shared clock: the status controller re-registers its next deadline — the
+earliest of the user's per-source intervals, cycle rotations, each status
+surface's clock and pending output — each time one lands, for the bar and
+desktop widgets alike. Plugins register over the wire with `poll` and are ticked with a
 `core:poll:<name>` event.
 
 Each registration carries a priority, which sets how much slack its wake-up

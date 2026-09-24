@@ -319,10 +319,13 @@ final class ConfigLoaderTests: XCTestCase {
       [statusbar.popup]
       details = "#{flash.plugin.memory.details} #{flash.plugin.cpu.label}"
       """
-    XCTAssertEqual(ConfigLoader.parse(toml).statusBar.observedPluginIDs, ["cpu", "memory"])
+    let config = ConfigLoader.parse(toml)
+    XCTAssertEqual(Set(config.observedStatusSegments.keys), ["cpu", "memory"])
+    XCTAssertEqual(
+      config.observedStatusSegments, ["cpu": ["summary", "label"], "memory": ["details"]])
     XCTAssertEqual(
       ConfigLoader.parse(toml.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
-        .statusBar.observedPluginIDs, [], "a hidden bar observes nothing")
+        .observedStatusSegments, [:], "a hidden bar observes nothing")
   }
 
   func testDeclaredWindowLayoutsAreTheProportionalWindowMoveMappings() {
@@ -1697,6 +1700,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.flashlight, d.flashlight)
     XCTAssertEqual(c.debug, d.debug)
     XCTAssertEqual(c.terminals, d.terminals)
+    XCTAssertEqual(c.widgets, d.widgets)
     var loadedMode = c.mode
     var builtinMode = d.mode
     loadedMode.normal.sort { $0.key < $1.key }

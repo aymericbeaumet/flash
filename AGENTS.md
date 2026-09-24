@@ -15,14 +15,18 @@ contracts before changing a subsystem:
   [Firefox tab-bridge add-on](docs/firefox-extension.md).
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
   [status popups](docs/status-popups.md), [terminal popups](docs/terminal-popups.md),
-  [help](docs/help.md).
+  [desktop widgets](docs/widgets.md), [help](docs/help.md).
 - [Privacy and permissions](docs/privacy.md).
 - [Performance and latency benchmarks](docs/performance.md).
 
 ## Hard constraints
 
 1. UI is confined to hint/grid overlays, advanced-mode status/command surfaces,
-   help/open-app views, explicit alerts, About, and configured terminal popups.
+   help/open-app views, explicit alerts, About, configured terminal popups and
+   configured desktop widgets: a `[widgets.<name>]` status format drawn only in
+   a click-through `WidgetWindow` at desktop level (above the wallpaper, below
+   Finder icons and every app window), never key or main, with no mouse input,
+   chrome or preferences UI.
    The sole `NSStatusItem` belongs to `StatusItemController.swift`, gated by
    `app.menu_bar_icon`, with exactly About / Open Configuration / Quit. No other
    status items, Dock tile, preferences window or `NSAlert`.
@@ -94,6 +98,12 @@ Surface requests that would violate these constraints before implementing them.
   pointer, via the reveal probe. Enabling the bar auto-hides the native menu bar
   through `NativeMenuBarAutoHide`, which reverses only what Flash set; keep that
   ownership rule when touching any other global preference.
+- Desktop widgets draw only in `WidgetWindow` (one per widget per display,
+  owned by `WidgetController`) and render stacked status lines through the
+  shared `StatusRunRenderer`, not a document renderer. They evaluate inside
+  `FlashStatusBarController` beside the bar, with one source/job registry and
+  one `PollScheduler` deadline; no widget timers. An occluded widget drops out
+  of the required sources, jobs and clock.
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
 - Every status popup uses a real PTY session. Collected text uses the shared

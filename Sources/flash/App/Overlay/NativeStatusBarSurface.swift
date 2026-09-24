@@ -1,55 +1,19 @@
 import AppKit
 import QuartzCore
 
-/// A screen's native tmux cell layout, with pooled layers for its visible styled runs.
+/// A screen's native tmux cell layout: the bar's lanes, notch and pill sizing,
+/// drawn through the shared `StatusRunRenderer`.
 final class NativeStatusBarSurface {
   let backgroundLayer: CAGradientLayer
   private(set) var layout = StatusFormatLayout.Result(
     cells: [], positionedRuns: [], ranges: [], fill: nil)
   private(set) var visibleRuns: [StatusFormatLayout.PositionedRun] = []
   private(set) var cellWidth: CGFloat = 1
-  private(set) var runLayers: [RunLayer] = []
   private(set) var runFrames: [CGRect] = []
   private(set) var availableColumns = 0
-  /// What the last `render` had to touch, for the render trace.
-  struct RenderStats: Equatable {
-    var visible = 0
-    var changed = 0
-    var crossfades = 0
-    var cycles = 0
-  }
-  private(set) var lastRenderStats = RenderStats()
-
-  final class RunLayer {
-    let container = CALayer()
-    let pill = CAGradientLayer()
-    let text = CATextLayer()
-    /// Holds the previous string while a transition fades or slides it out.
-    /// Its model opacity is always 0; only explicit animations reveal it.
-    let outgoing = CATextLayer()
-    let effect = CATextLayer()
-    let overline = CALayer()
-    let curlyUnderline = CAShapeLayer()
-    var previous: FlashStatusTextSegment?
-    var previousFont: NSFont?
-    var previousForeground: CGColor?
-    var previousFrame: CGRect?
-    init() {
-      for layer in [container, pill, text, outgoing, effect, overline, curlyUnderline] {
-        layer.actions = OverlayPanel.noActions
-      }
-      container.masksToBounds = true
-      pill.cornerRadius = 4
-      text.alignmentMode = .left
-      outgoing.alignmentMode = .left
-      effect.alignmentMode = .left
-      text.truncationMode = .none
-      outgoing.truncationMode = .none
-      effect.truncationMode = .none
-      outgoing.opacity = 0
-      container.sublayers = [pill, outgoing, text, effect, overline, curlyUnderline]
-    }
-  }
+  private let renderer = StatusRunRenderer()
+  var runLayers: [StatusRunRenderer.RunLayer] { renderer.runLayers }
+  var lastRenderStats: StatusRunRenderer.RenderStats { renderer.lastRenderStats }
 
   /// Bottom-edge hairline, the centre notch, and the wash behind the hovered
   /// segment. All sit beneath the run containers, which stay transparent over
@@ -63,8 +27,11 @@ final class NativeStatusBarSurface {
   let hoverHighlight = CALayer()
   private var hoverBand = CGRect.zero
 
-  static let cycleAnimationKey = "flashCycle"
-  static let crossfadeAnimationKey = "flashCrossfade"
+  // The bar's run transitions are the shared renderer's.
+  static let cycleAnimationKey = StatusRunRenderer.cycleAnimationKey
+  static let crossfadeAnimationKey = StatusRunRenderer.crossfadeAnimationKey
+  static let cycleTransitionDuration = StatusRunRenderer.cycleTransitionDuration
+  static let crossfadeDuration = StatusRunRenderer.crossfadeDuration
 
   init(backgroundLayer: CAGradientLayer = CAGradientLayer()) {
     self.backgroundLayer = backgroundLayer
@@ -83,13 +50,7 @@ final class NativeStatusBarSurface {
 
   /// Forget what every run layer last drew, so the next `render` redraws each
   /// run's text instead of only the runs whose value changed.
-  func invalidateDrawnRuns() {
-    for layers in runLayers {
-      layers.previous = nil
-      layers.previousFont = nil
-      layers.previousForeground = nil
-    }
-  }
+  func invalidateDrawnRuns() { renderer.invalidateDrawnRuns() }
 
   /// `notchWidth` fixes the centre reservation (and the recess drawn behind
   /// it) to the real camera housing's width; zero keeps the reservation
@@ -108,7 +69,6 @@ final class NativeStatusBarSurface {
         run.text = modeText
         return run
       })
-    let previousRuns = visibleRuns
     cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
@@ -184,163 +144,13 @@ final class NativeStatusBarSurface {
     renderCentreNotch(
       reserve: reserve, barFrame: barFrame, scale: scale, fill: fillColor,
       hidden: notch != nil)
-    let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: visibleRuns)
-    let cycleStartedAt = CACurrentMediaTime()
-    var stats = RenderStats(visible: visibleRuns.count)
-    for (index, run) in visibleRuns.enumerated() {
-      if index == runLayers.count {
-        let layers = RunLayer()
-        runLayers.append(layers)
-        backgroundLayer.addSublayer(layers.container)
-      }
-      let layers = runLayers[index]
-      let rect = runFrames[index]
-      layers.container.frame = rect
-      layers.container.isHidden = false
-      layers.container.contentsScale = scale
-      let cellBackground = run.segment.reverse ? run.segment.foreground : run.segment.background
-      let paintsBackground =
-        !run.segment.pill && (run.segment.reverse || cellBackground != .defaultBackground)
-      layers.container.backgroundColor =
-        paintsBackground ? FlashStatusTextColor.nsColor(cellBackground).cgColor : nil
-      let textRect = CGRect(x: 0, y: textY, width: rect.width, height: textHeight)
-      layers.pill.frame = textRect
-      layers.pill.contentsScale = scale
-      layers.pill.isHidden = !run.segment.pill
-      layers.pill.colors = [palette.bottomCG, palette.topCG]
-      layers.pill.borderWidth = run.segment.pill && modeStyle == .normal ? 1 : 0
-      layers.pill.borderColor =
-        modeStyle == .normal ? OverlayPanel.statusModeNormalBorderCG : palette.borderCG
-      layers.text.frame = textRect
-      layers.effect.frame = textRect
-      layers.text.alignmentMode = run.segment.pill ? .center : .left
-      layers.effect.alignmentMode = layers.text.alignmentMode
-      layers.text.contentsScale = scale
-      layers.effect.contentsScale = scale
-      layers.text.fontSize = font.pointSize
-      layers.effect.fontSize = font.pointSize
-      var segment = run.segment
-      if segment.pill {
-        segment.text =
-          pillLabels.first { $0.padded == segment.text }?.label
-          ?? segment.text.trimmingCharacters(in: .whitespaces)
-        segment.bold = true
-        segment.foreground = .defaultForeground
-        segment.background = .defaultBackground
-        segment.reverse = false
-      }
-      let pillForeground = segment.pill ? palette.foregroundCG : nil
-      let foregroundColor = pillForeground.flatMap { NSColor(cgColor: $0) }
-      let allowsTransition = !segment.pill && !segment.isModeLabel
-      if !allowsTransition {
-        layers.text.removeAnimation(forKey: Self.cycleAnimationKey)
-        layers.text.removeAnimation(forKey: Self.crossfadeAnimationKey)
-        layers.effect.removeAnimation(forKey: Self.cycleAnimationKey)
-        layers.outgoing.removeAllAnimations()
-        layers.outgoing.string = nil
-      } else if !segment.cycle, layers.previous?.cycle == true {
-        layers.text.removeAnimation(forKey: Self.cycleAnimationKey)
-        layers.effect.removeAnimation(forKey: Self.cycleAnimationKey)
-        layers.outgoing.removeAllAnimations()
-      }
-      let sameFont = layers.previousFont == font
-      let cycles = allowsTransition && cycling.contains(index)
-      let changed =
-        layers.previous != segment || !sameFont
-        || layers.previousForeground != pillForeground || cycles
-      if changed {
-        stats.changed += 1
-        let outgoingString = layers.text.string
-        let previousText = layers.previous?.text
-        let samePlace = layers.previousFrame == rect && sameFont
-        let attributed = FlashStatusBarRenderer.attributedSegment(
-          segment, font: font, foregroundColor: foregroundColor)
-        layers.text.string = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
-          from: [segment], font: font, foregroundColor: foregroundColor)
-        layers.effect.string = attributed
-        layers.text.setNeedsDisplay()
-        layers.effect.setNeedsDisplay()
-        layers.previous = segment
-        layers.previousFont = font
-        layers.previousForeground = pillForeground
-        if cycles {
-          stats.cycles += 1
-          Self.runCycleTransition(
-            layers, outgoing: outgoingString, textRect: textRect, travel: rect.height,
-            startedAt: cycleStartedAt)
-        } else if allowsTransition, !segment.cycle, samePlace, let previousText,
-          previousText != segment.text
-        {
-          // A value changing in place (a metric tick, the clock) crossfades
-          // instead of snapping; a run that moved or was re-segmented does not.
-          stats.crossfades += 1
-          Self.runCrossfade(layers, outgoing: outgoingString, textRect: textRect)
-        }
-      }
-      layers.previousFrame = rect
-      let animated = segment.blink || segment.breathing
-      layers.effect.isHidden = !animated
-      if animated {
-        if changed || layers.effect.animation(forKey: "flashEffect") == nil {
-          layers.effect.add(
-            FlashStatusBarRenderer.effectOpacityAnimation(
-              blink: segment.blink, breathing: segment.breathing, anchoredTo: layers.effect),
-            forKey: "flashEffect")
-        }
-      } else {
-        layers.effect.removeAnimation(forKey: "flashEffect")
-      }
-      layers.overline.isHidden = !segment.overline || segment.hidden
-      let foreground = segment.reverse ? segment.background : segment.foreground
-      let strokeColor = (foregroundColor ?? FlashStatusTextColor.nsColor(foreground))
-        .withAlphaComponent(
-          segment.dim ? 0.6 : 1)
-      layers.overline.backgroundColor = strokeColor.cgColor
-      layers.overline.frame = CGRect(
-        x: 0, y: textY + textHeight - 1, width: rect.width, height: 1 / max(1, scale))
-      layers.curlyUnderline.isHidden =
-        !segment.underline || segment.underlineStyle != .curly || segment.hidden
-      if !layers.curlyUnderline.isHidden {
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: 2))
-        var x: CGFloat = 0
-        while x < rect.width {
-          path.addQuadCurve(to: CGPoint(x: x + 2, y: 2), control: CGPoint(x: x + 1, y: 4))
-          path.addQuadCurve(to: CGPoint(x: x + 4, y: 2), control: CGPoint(x: x + 3, y: 0))
-          x += 4
-        }
-        layers.curlyUnderline.frame.origin.y = textY
-        layers.curlyUnderline.path = path
-        layers.curlyUnderline.fillColor = nil
-        layers.curlyUnderline.lineWidth = 1 / max(1, scale)
-        layers.curlyUnderline.strokeColor =
-          segment.underlineColor == .defaultForeground
-          ? strokeColor.cgColor : FlashStatusTextColor.nsColor(segment.underlineColor).cgColor
-      }
-      for decoration in [layers.overline, layers.curlyUnderline] {
-        if animated {
-          if changed || decoration.animation(forKey: "flashEffect") == nil {
-            decoration.add(
-              FlashStatusBarRenderer.effectOpacityAnimation(
-                blink: segment.blink, breathing: segment.breathing, anchoredTo: decoration),
-              forKey: "flashEffect")
-          }
-        } else {
-          decoration.removeAnimation(forKey: "flashEffect")
-        }
-      }
-    }
-    for layers in runLayers.dropFirst(visibleRuns.count) {
-      layers.container.isHidden = true
-      layers.effect.removeAllAnimations()
-      layers.text.removeAllAnimations()
-      layers.outgoing.removeAllAnimations()
-      layers.overline.removeAllAnimations()
-      layers.curlyUnderline.removeAllAnimations()
-      layers.previous = nil
-      layers.previousFrame = nil
-    }
-    lastRenderStats = stats
+    renderer.render(
+      zip(visibleRuns, runFrames).map { run, frame in
+        StatusRunRenderer.Item(
+          run: run, frame: frame,
+          textRect: CGRect(x: 0, y: textY, width: frame.width, height: textHeight))
+      }, in: backgroundLayer, font: font, scale: scale,
+      pill: .init(palette: palette, modeStyle: modeStyle, labels: pillLabels))
   }
 
   /// Physical notch proportions scaled to the bar: the housing's bottom corners
@@ -448,24 +258,6 @@ final class NativeStatusBarSurface {
     return bounds.isNull ? nil : bounds
   }
 
-  private static func basic(_ keyPath: String, from: CGFloat, to: CGFloat) -> CABasicAnimation {
-    let animation = CABasicAnimation(keyPath: keyPath)
-    animation.fromValue = from
-    animation.toValue = to
-    return animation
-  }
-
-  private static func prepareOutgoing(_ layers: RunLayer, string: Any?, textRect: CGRect) -> Bool {
-    guard let string else { return false }
-    layers.outgoing.string = string
-    layers.outgoing.frame = textRect
-    layers.outgoing.alignmentMode = layers.text.alignmentMode
-    layers.outgoing.fontSize = layers.text.fontSize
-    layers.outgoing.contentsScale = layers.text.contentsScale
-    layers.outgoing.setNeedsDisplay()
-    return true
-  }
-
   /// Past this width a full-strength wash reads as a banner rather than a
   /// hover affordance — a feed row wraps its label, title, domain and arrow in
   /// one popup span, so it can cover most of a lane. Wide spans get a fainter
@@ -484,110 +276,8 @@ final class NativeStatusBarSurface {
     return rect.width > CGFloat(wideHoverCells) * cellWidth ? wideHoverOpacity : 1
   }
 
-  static let cycleTransitionDuration: CFTimeInterval = 0.45
-  /// A value ticking in place (a metric sample, the clock) crossfades just
-  /// long enough to avoid a hard flicker; anything longer keeps two digit
-  /// sets superimposed for a visible share of every second on a 1 Hz bar.
-  static let crossfadeDuration: CFTimeInterval = 0.1
-
-  /// Carousel article change as one vertical push: the old line travels the
-  /// full bar height up (`travel`, the clipping container's height) and fades
-  /// out while the new line rises the same distance from below and fades in,
-  /// so the strip visibly enters and leaves through the bar's edges. Both
-  /// share one duration and the standard ease-in-out curve (cubic-bezier 0.4,
-  /// 0, 0.2, 1), so they read as one strip sliding. Every run of one carousel
-  /// group shares `startedAt`.
-  private static func runCycleTransition(
-    _ layers: RunLayer, outgoing: Any?, textRect: CGRect, travel: CGFloat,
-    startedAt: CFTimeInterval
-  ) {
-    let distance = max(travel, textRect.height)
-    let beginTime = layers.text.convertTime(startedAt, from: nil)
-    let curve = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
-    let incoming = CAAnimationGroup()
-    incoming.animations = [
-      basic("opacity", from: 0, to: 1),
-      basic("transform.translation.y", from: -distance, to: 0),
-    ]
-    incoming.duration = cycleTransitionDuration
-    incoming.beginTime = beginTime
-    incoming.fillMode = .backwards
-    incoming.timingFunction = curve
-    layers.text.add(incoming, forKey: cycleAnimationKey)
-    layers.effect.add(incoming, forKey: cycleAnimationKey)
-    guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
-    let leaving = CAAnimationGroup()
-    leaving.animations = [
-      basic("opacity", from: 1, to: 0),
-      basic("transform.translation.y", from: 0, to: distance),
-    ]
-    leaving.duration = cycleTransitionDuration
-    leaving.beginTime = beginTime
-    leaving.fillMode = .backwards
-    leaving.timingFunction = curve
-    layers.outgoing.add(leaving, forKey: cycleAnimationKey)
-  }
-
-  private static func runCrossfade(_ layers: RunLayer, outgoing: Any?, textRect: CGRect) {
-    let fadeIn = basic("opacity", from: 0, to: 1)
-    fadeIn.duration = crossfadeDuration
-    fadeIn.timingFunction = CAMediaTimingFunction(name: .easeOut)
-    layers.text.add(fadeIn, forKey: crossfadeAnimationKey)
-    guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
-    let fadeOut = basic("opacity", from: 1, to: 0)
-    fadeOut.duration = crossfadeDuration
-    fadeOut.timingFunction = CAMediaTimingFunction(name: .easeIn)
-    layers.outgoing.add(fadeOut, forKey: crossfadeAnimationKey)
-  }
-
-  private static func cycleTransitionIndices(
-    previous: [StatusFormatLayout.PositionedRun], next: [StatusFormatLayout.PositionedRun]
-  ) -> Set<Int> {
-    func groups(_ runs: [StatusFormatLayout.PositionedRun]) -> [Range<Int>] {
-      var result: [Range<Int>] = []
-      for index in runs.indices where runs[index].segment.cycle {
-        if let last = result.last, last.upperBound == index,
-          runs[last.lowerBound].segment.alignment == runs[index].segment.alignment
-        {
-          result[result.count - 1] = last.lowerBound..<(index + 1)
-        } else {
-          result.append(index..<(index + 1))
-        }
-      }
-      return result
-    }
-    var changed = Set<Int>()
-    for (old, new) in zip(groups(previous), groups(next)) {
-      // A lane re-budget (another lane grew, the centre changed) re-truncates
-      // the elastic title and can drop the row's tail runs; that is the same
-      // article and must not push the carousel.
-      let sameArticle = zip(old, new).allSatisfy { before, after in
-        sameCarouselArticle(previous[before].segment, next[after].segment)
-      }
-      if !sameArticle { changed.formUnion(new) }
-    }
-    return changed
-  }
-
-  static func sameCarouselArticle(_ lhs: FlashStatusTextSegment, _ rhs: FlashStatusTextSegment)
-    -> Bool
-  {
-    guard lhs.link == rhs.link, lhs.popup == rhs.popup, lhs.popupContent == rhs.popupContent
-    else { return false }
-    return truncationEquivalent(lhs.text, rhs.text)
-  }
-
-  /// True when one text is the other cut short (with or without the `…`
-  /// marker), i.e. they differ only by elastic contraction or lane clamping.
   static func truncationEquivalent(_ lhs: String, _ rhs: String) -> Bool {
-    func core(_ text: String) -> Substring {
-      var value = Substring(text)
-      while let last = value.last, last == "…" || last == " " { value = value.dropLast() }
-      return value
-    }
-    let left = core(lhs)
-    let right = core(rhs)
-    return left.hasPrefix(right) || right.hasPrefix(left)
+    StatusRunRenderer.truncationEquivalent(lhs, rhs)
   }
 
   /// Native cells reserve enough room for Flash's pill, but the pill keeps its

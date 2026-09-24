@@ -184,6 +184,8 @@ extension AppDelegate {
         cfg.invalidTerminalNames.intersection(
           overlay.statusTerminals.definitions.keys)),
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
+    statusBarController?.setBar(enabled: cfg.statusBar.enabled)
+    statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
     pluginManager.emit(
@@ -210,11 +212,15 @@ extension AppDelegate {
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
       forceRecovery: false)
-    if statusBarVisible {
+    // The status controller runs for the bar and for desktop widgets alike.
+    if statusBarVisible || !cfg.enabledWidgets.isEmpty {
       statusBarController?.start()
     } else {
       statusBarController?.stop()
     }
+    widgetController?.apply(
+      widgets: cfg.enabledWidgets, statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: cfg.statusBar.monitor, screenCapture: cfg.overlay.screenCapture)
     // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
     // off disables capture; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
@@ -343,6 +349,7 @@ extension AppDelegate {
       "terminals": statusTerminalDebugState(),
       "overlay": String(describing: overlay?.inputMode),
       "statusbar": overlay?.statusBarDiagnostics() ?? [:],
+      "widgets": widgetController?.diagnostics() ?? [:],
       "windows": NSApp.windows.map { window -> [String: Any] in
         [
           "class": String(describing: type(of: window)),

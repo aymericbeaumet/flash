@@ -507,22 +507,86 @@ struct Config {
       }
     }
 
-    /// Plugins whose segments the enabled bar or one of its popups shows —
-    /// the observers that keep a status-bound plugin resident
-    /// (`PluginManifest.isStatusBound`). Options are compiled into every
-    /// template's variables, so they are covered.
-    var observedPluginIDs: Set<String> {
-      guard enabled else { return [] }
-      var ids = Set<String>()
-      for compiled in [template] + popups.values {
-        for variable in compiled.variables {
-          if case .plugin(.statusSegment(let pluginID, _)) = variable.source {
-            ids.insert(pluginID)
-          }
+    /// Plugin id → the segments the enabled bar or one of its popups shows.
+    /// Options are compiled into every template's variables, so they are
+    /// covered.
+    var observedSegments: [String: Set<String>] {
+      guard enabled else { return [:] }
+      return Config.statusSegments(in: [template] + popups.values)
+    }
+  }
+
+  /// A `[widgets.<name>]` table: one status format drawn as stacked lines in
+  /// a click-through window on the desktop, below every app window.
+  struct Widget: Equatable {
+    enum Screen: Equatable {
+      case primary
+      case all
+      /// 1-based, counting displays left to right.
+      case index(Int)
+    }
+
+    enum Anchor: String, CaseIterable {
+      case topLeft = "top_left"
+      case topCentre = "top_centre"
+      case topRight = "top_right"
+      case centreLeft = "centre_left"
+      case centre
+      case centreRight = "centre_right"
+      case bottomLeft = "bottom_left"
+      case bottomCentre = "bottom_centre"
+      case bottomRight = "bottom_right"
+    }
+
+    var enabled = true
+    /// Compiled with `options` over `[statusbar.options]`.
+    var template = FlashStatusBarTemplate(template: "")
+    var screen = Screen.primary
+    var anchor = Anchor.topLeft
+    /// Points from the anchored edges of the usable frame (the screen minus
+    /// the Dock and the Flash bar band); ignored along a centred axis.
+    var gapX: Double = 24
+    var gapY: Double = 24
+    /// Cell columns; 0 sizes the widget to its widest line, up to
+    /// `maxColumns`.
+    var columns = 0
+    var maxColumns = 120
+    /// A monospaced font name; empty uses the system monospaced font.
+    var font = ""
+    var fontSize: Double = 13
+    var lineSpacing: Double = 0
+    var foreground = "#D8DEE9"
+    var background = "#2E344000"
+    var border = "#00000000"
+    var borderSize: Double = 0
+    var cornerRadius: Double = 8
+    var padding: Double = 8
+    /// Clock and `#()` refresh cadence in seconds; 0 follows
+    /// `[statusbar] interval`.
+    var intervalSeconds: Double = 0
+    /// Ask the window server to leave the widget out of screen captures.
+    var hideFromCapture = false
+    /// `[widgets.<name>.options]`, local over `[statusbar.options]`.
+    var options: [String: String] = [:]
+
+    var spec: StatusWidgetSpec {
+      StatusWidgetSpec(
+        template: template, intervalSeconds: intervalSeconds,
+        columns: columns > 0 ? columns : maxColumns)
+    }
+  }
+
+  /// Plugin id → the manifest status names the given templates read.
+  static func statusSegments(in templates: [FlashStatusBarTemplate]) -> [String: Set<String>] {
+    var segments: [String: Set<String>] = [:]
+    for compiled in templates {
+      for variable in compiled.variables {
+        if case .plugin(.statusSegment(let pluginID, let name)) = variable.source {
+          segments[pluginID, default: []].insert(name)
         }
       }
-      return ids
     }
+    return segments
   }
   struct Mode: Equatable {
     struct Labels: Equatable {
@@ -778,6 +842,7 @@ struct Config {
   var open = Open()
   var plugins = Plugins()
   var statusBar = StatusBar()
+  var widgets: [String: Widget] = [:]
   var terminals: [String: Terminal] = [:]
   /// Invalid replacements preserve existing sessions during configuration reload.
   var invalidTerminalNames: Set<String> = []
@@ -798,6 +863,24 @@ struct Config {
   /// the resolved `hints.keys` layout. Derived after overrides so a user's
   /// layout wins over the default layer's empty value.
   private(set) var resolvedMouseGridKeys: [[Character]] = Alphabet.gridKeys(layoutName: nil)
+
+  /// The widgets to show: enabled, with a template (a missing one is
+  /// diagnosed at load).
+  var enabledWidgets: [String: Widget] {
+    widgets.filter { $0.value.enabled && !$0.value.template.template.isEmpty }
+  }
+
+  /// Plugin id → the status segments a live surface shows: the enabled bar
+  /// (template, options, named popups) and every enabled widget. The ids
+  /// keep status-bound plugins resident; the segments are what
+  /// `core:status.observed` reports to each plugin.
+  var observedStatusSegments: [String: Set<String>] {
+    var segments = statusBar.observedSegments
+    for (id, names) in Self.statusSegments(in: enabledWidgets.values.map(\.template)) {
+      segments[id, default: []].formUnion(names)
+    }
+    return segments
+  }
 
   static let `default`: Config = {
     var config = Config()
@@ -957,6 +1040,13 @@ struct Config {
         "options": statusBar.options.keys.sorted(),
         "sources": statusBar.sources.keys.sorted(),
       ],
+      "widgets": widgets.mapValues { widget in
+        [
+          "enabled": widget.enabled, "template": widget.template.template,
+          "anchor": widget.anchor.rawValue, "columns": widget.columns,
+          "interval": widget.intervalSeconds, "options": widget.options.keys.sorted(),
+        ] as [String: Any]
+      },
       "warnings": warnings,
     ])
   }

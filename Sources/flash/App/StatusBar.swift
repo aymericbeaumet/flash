@@ -357,11 +357,15 @@ struct FlashStatusBarSourceDefinition: Equatable {
   var intervalSeconds: Double
   var cycleIntervalSeconds: Double?
   var timeoutSeconds: Double
+  /// `history = N`: the last N numeric outputs, read as
+  /// `#{flash.history.<name>}` (space-separated, oldest first).
+  var historyLength: Int?
 
   init(
     command: [String], workingDirectory: String? = nil,
     environment: [String: String] = [:], intervalSeconds: Double = 5,
-    cycleIntervalSeconds: Double? = nil, timeoutSeconds: Double = 6
+    cycleIntervalSeconds: Double? = nil, timeoutSeconds: Double = 6,
+    historyLength: Int? = nil
   ) {
     self.command = command
     self.workingDirectory = workingDirectory
@@ -369,7 +373,19 @@ struct FlashStatusBarSourceDefinition: Equatable {
     self.intervalSeconds = intervalSeconds
     self.cycleIntervalSeconds = cycleIntervalSeconds
     self.timeoutSeconds = timeoutSeconds
+    self.historyLength = historyLength
   }
+}
+
+/// What the status controller evaluates for one desktop widget. Style and
+/// placement stay with the window side; this is only the text's inputs.
+struct StatusWidgetSpec: Equatable {
+  /// Compiled with the widget's local options over `[statusbar.options]`.
+  var template: FlashStatusBarTemplate
+  /// Clock and `#()` refresh cadence; 0 follows `[statusbar] interval`.
+  var intervalSeconds: TimeInterval = 0
+  /// `#{flash.widget.columns}`: the configured width, else `max_columns`.
+  var columns: Int
 }
 
 enum FlashStatusBarTemplateEngine {
@@ -468,22 +484,10 @@ enum FlashStatusBarTemplateEngine {
         popups[name] = memo.runs
         continue
       }
-      let expanded = popup.program.evaluate(popupContext, expandTime: true)
+      let expanded = evaluateDocument(popup, native: popupContext)
       jobs.append(contentsOf: expanded.jobs)
       dependencies.formUnion(expanded.dependencies)
-      var runs = StatusFormatDocument.parse(expanded).runs
-      while let first = runs.first, first.text.trimmingCharacters(in: .newlines).isEmpty {
-        runs.removeFirst()
-      }
-      while let last = runs.last, last.text.trimmingCharacters(in: .newlines).isEmpty {
-        runs.removeLast()
-      }
-      if !runs.isEmpty {
-        while runs[0].text.first?.isNewline == true { runs[0].text.removeFirst() }
-        while runs[runs.count - 1].text.last?.isNewline == true {
-          runs[runs.count - 1].text.removeLast()
-        }
-      }
+      let runs = trimmedPopupRuns(expanded.runs)
       popups[name] = runs
       if let popupCache, !expanded.dependencies.containsTime,
         !expanded.dependencies.containsJobs
@@ -496,6 +500,7 @@ enum FlashStatusBarTemplateEngine {
       }
     }
     for name in terminalPopupNames { popups[name] = [] }
+    let needs = Self.requirements(of: dependencies)
     return (
       FlashStatusBarModel(
         appText: StatusFormatDocument.serialize(centre),
@@ -508,15 +513,62 @@ enum FlashStatusBarTemplateEngine {
             var run = $0
             run.text = normalizedTemplate(run.text)
             return run
-          })), jobs,
-      Set(
-        dependencies.values.filter { $0.hasPrefix("flash.source.") }.map {
-          String($0.dropFirst(13))
-        }),
-      dependencies.containsTime
-        || !dependencies.values.isDisjoint(with: ["flash.date", "flash.calendar"]),
-      dependencies
+          })), jobs, needs.sources, needs.needsClock, dependencies
     )
+  }
+
+  /// One template evaluated as a free-standing document — a named popup or a
+  /// desktop widget — rather than the bar's three lanes. `native` already
+  /// carries the surface's options (its local options over the shared ones),
+  /// so the caller's memo captures exactly what this evaluation read.
+  static func evaluateDocument(
+    _ template: FlashStatusBarTemplate, native: StatusFormatContext,
+    lineBreaksResetAlignment: Bool = false
+  ) -> (
+    runs: [FlashStatusTextSegment], jobs: [StatusFormatJobRequest],
+    dependencies: StatusFormatDependencies
+  ) {
+    let expanded = template.program.evaluate(native, expandTime: true)
+    return (
+      StatusFormatDocument.parse(expanded, lineBreaksResetAlignment: lineBreaksResetAlignment)
+        .runs, expanded.jobs, expanded.dependencies
+    )
+  }
+
+  /// What a surface's evaluation asks of the controller: the named sources
+  /// it reads (a value or its history) and whether it needs the clock.
+  static func requirements(of dependencies: StatusFormatDependencies) -> (
+    sources: Set<String>, needsClock: Bool
+  ) {
+    var sources = Set<String>()
+    for value in dependencies.values {
+      for prefix in ["flash.source.", "flash.history."] where value.hasPrefix(prefix) {
+        sources.insert(String(value.dropFirst(prefix.count)))
+      }
+    }
+    return (
+      sources,
+      dependencies.containsTime
+        || !dependencies.values.isDisjoint(with: ["flash.date", "flash.calendar"])
+    )
+  }
+
+  /// A popup body without the blank lines at its edges.
+  static func trimmedPopupRuns(_ runs: [FlashStatusTextSegment]) -> [FlashStatusTextSegment] {
+    var runs = runs
+    while let first = runs.first, first.text.trimmingCharacters(in: .newlines).isEmpty {
+      runs.removeFirst()
+    }
+    while let last = runs.last, last.text.trimmingCharacters(in: .newlines).isEmpty {
+      runs.removeLast()
+    }
+    if !runs.isEmpty {
+      while runs[0].text.first?.isNewline == true { runs[0].text.removeFirst() }
+      while runs[runs.count - 1].text.last?.isNewline == true {
+        runs[runs.count - 1].text.removeLast()
+      }
+    }
+    return runs
   }
 
   static func normalizedTemplate(_ raw: String) -> String {

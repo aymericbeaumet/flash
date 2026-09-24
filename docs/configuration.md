@@ -20,6 +20,9 @@ explicit matrix needs at least 2×2 keys, rows of equal length, and unique
 characters (compared lowercased) without whitespace or the reserved `` ` ``;
 a malformed one is reported and keeps the previous value.
 Resolving configuration again is idempotent and does not accumulate warnings.
+Tables named by the user — `[plugin.<id>]`, `[terminal.<name>]`,
+`[statusbar.sources.<name>]` and `[widgets.<name>]` (see
+[desktop widgets](widgets.md)) — are validated key by key.
 
 ## Keyboard layout
 

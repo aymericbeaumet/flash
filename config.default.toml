@@ -234,6 +234,12 @@ startup_timeout = 5
 # [plugin.network]
 # summary_mode = "full" # "compact" | "full"
 
+# The processes plugin publishes top_cpu and top_mem: aligned tables of the
+# busiest processes by CPU and by resident memory (conky's ${top}), sampled
+# every 2 seconds only while a status surface shows one of them.
+# [plugin.processes]
+# top_count = 5 # rows per table, 1-20
+
 # RSS headlines from the last 24 hours. No requests run until a URL is set.
 # Add #{flash.plugin.feed.summary} to a status format for the rotating title,
 # segment label, original domain/link, and whole-row article preview popup.
@@ -285,7 +291,8 @@ popup_offset = 8
 # use tmux semantics. Missing tmux session/window/pane context is empty.
 # Flash supplies flash.mode, flash.date, flash.active_app_name,
 # flash.active_bundle_identifier, flash.plugin.<id>.<segment>,
-# flash.plugin.loaded_count/ready_count/error_count, and flash.source.<name>.
+# flash.plugin.loaded_count/ready_count/error_count, flash.source.<name>, and
+# flash.history.<name> for a source that keeps a history.
 # Colours use the standard xterm palette, ANSI names, or explicit #RRGGBB.
 #
 # Flash styles: link=URL/nolink, popup=name/nopopup,
@@ -337,6 +344,14 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # command = ["./news.sh"]
 # interval = 300
 # cycle_interval = 60
+#
+# history = N (2-512) keeps the last N numeric outputs as
+# #{flash.history.<name>}, space-separated and oldest first; other output
+# never enters it. It cannot combine with cycle_interval.
+# [statusbar.sources.load]
+# command = ["/bin/sh", "-c", "sysctl -n vm.loadavg | awk '{print $2}'"]
+# interval = 10
+# history = 30
 
 # tmux status-line mouse model: a `#[range=user|<name>]…#[norange]` span in
 # the template (or in plugin/script output) names an action; this table
@@ -347,6 +362,47 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # The bundled power plugin wraps its battery chip in
 # #[range=user|bat-prefs], so a click opens the Battery pane.
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
+
+# Desktop widgets: a status format drawn as stacked lines on the desktop,
+# above the wallpaper and below Finder icons and every app window. Widgets are
+# click-through and never take focus, so link=, popup= and range= do nothing.
+# Each [widgets.<name>] (letters, digits, _ and -) is evaluated beside the bar
+# with the same values, sources and #(...) jobs, even while the bar is off; a
+# widget whose windows are all covered stops refreshing until it shows again.
+# Each line of the template is its own status line: colours carry over, and
+# alignment starts again on the left. A trailing backslash joins two lines.
+# #{flash.widget.name} is the widget's name and #{flash.widget.columns} its
+# width (columns, or max_columns when sized to fit). See docs/widgets.md.
+[widgets]
+# [widgets.system]
+# enabled = true
+# template = """
+# #[fg=#EBCB8B,bold]#{host_short}#[default]#[align=right]%a %d %b %H:%M
+# CPU #{flash.plugin.cpu.percent}%%#{@sep}MEM #{flash.plugin.memory.percent}%%\
+# #{@sep}DISK #{flash.plugin.disks.percent}%%
+# #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
+# #{flash.plugin.processes.top_cpu}
+# """
+# screen = "primary"        # "primary", "all", or a display number (1 = leftmost)
+# anchor = "top_right"      # top_left, top_centre, top_right, centre_left, centre,
+#                           # centre_right, bottom_left, bottom_centre, bottom_right
+# gap_x = 24                # points from the anchored edges of the usable frame
+# gap_y = 24
+# columns = 44              # 0 fits the widest line, up to max_columns
+# max_columns = 120
+# font = ""                 # an installed monospaced font; "" = system monospaced
+# font_size = 13
+# line_spacing = 0          # extra points between lines
+# fg = "#D8DEE9"            # default text colour, #RRGGBB
+# bg = "#2E3440CC"          # #RRGGBB or #RRGGBBAA; the default is transparent
+# border = "#00000000"
+# border_size = 0
+# corner_radius = 8
+# padding = 8
+# interval = 0              # clock and #(...) refresh seconds; 0 = statusbar.interval
+# hide_from_capture = false # best effort: leave it out of screenshots and sharing
+# [widgets.system.options]  # local @options over [statusbar.options]
+# "@sep" = " · "
 
 [flashlight]
 # Frecency (recency-weighted frequency) ranking boost. half_life_days is

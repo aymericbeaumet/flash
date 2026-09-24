@@ -130,6 +130,34 @@ read per CPU sample through the `nix` crate, which `network` already uses for
 `getifaddrs`; Darwin derives that clock from `kern.boottime`, so it counts
 sleep, as `uptime(1)` does.
 
+## Top processes
+
+The `processes` plugin publishes conky's `${top}` tables as two status
+segments, one row per process, busiest first:
+
+| Segment | Rows ranked by | Value column |
+| --- | --- | --- |
+| `#{flash.plugin.processes.top_cpu}` | CPU, as a share of one core averaged over the last sample period | `12.5%` |
+| `#{flash.plugin.processes.top_mem}` | Resident memory | `1.2 GiB` |
+
+Each row is a name column 15 cells wide (longer names end in `…`) and a
+right-aligned value; ties rank by name, then pid, so equal figures never
+shuffle rows. The value is a multi-line table, so it reads best in a desktop
+widget or a named popup; the bar joins its lines.
+
+```toml
+[plugin.processes]
+top_count = 5 # rows per table, an integer from 1 to 20
+```
+
+An invalid `top_count` logs a warning and uses 5. Sampling is scoped to
+observation: the host reports which of the plugin's segments a surface shows
+(`core:status.observed`, see the [protocol](plugin-protocol.md#status-observation)),
+and the plugin registers its two-second sample with the host clock only while
+`top_cpu` or `top_mem` is among them. A table that stops being shown is
+cleared, so showing it again never reads stale figures. Rows come from
+`host.process_table`, the plugin's one process model, so no subprocess runs.
+
 ## Refresh and failure invariants
 
 Each monitor performs an initial refresh and keeps its last-good state across

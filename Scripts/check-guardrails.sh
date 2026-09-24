@@ -101,6 +101,33 @@ check_absent_except \
   '^Sources/flash/App/StatusItemController\.swift:|NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
 
+# Hard rule 1 names every UI surface; each draws in one of these windows. A new
+# NSWindow/NSPanel subclass is a new surface and needs the rule amended first.
+check_absent_except \
+  "NSWindow/NSPanel subclasses are limited to the sanctioned surfaces" \
+  "class [A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*(NSPanel|NSWindow)([^[:alnum:]_]|$)" \
+  'class (OverlayPanel|StatusBarWindow|StatusBarClickPanel|StatusPopupPanel|AboutWindow|WidgetWindow)[[:space:]]*:' \
+  "${PROD_SWIFT[@]}"
+
+# Desktop widgets alone sit at desktop level (above the wallpaper, below the
+# Finder's icons and every app window), and only in their own window.
+check_absent_except \
+  "desktop window levels belong to WidgetWindow" \
+  "CGWindowLevelForKey\\(\\.desktop|kCGDesktop" \
+  '/WidgetWindow\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+# Widgets are click-through and never take focus.
+widget_window=Sources/flash/App/Overlay/WidgetWindow.swift
+if [[ ! -f "$widget_window" ]] || ! search_paths -q 'ignoresMouseEvents = true' "$widget_window"; then
+  echo "GUARDRAIL FAILED: $widget_window must set ignoresMouseEvents = true" >&2
+  fail=1
+fi
+check_absent \
+  "widget windows never take mouse input or key/main focus" \
+  "ignoresMouseEvents = false|canBecomeKey: Bool \\{ true|canBecomeMain: Bool \\{ true" \
+  "$widget_window"
+
 check_absent \
   "the help_show verb is routed to the alert toast instead of the help overlay" \
   "case \\.showUsage:.*alertPanel\\.show" \
