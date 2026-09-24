@@ -55,9 +55,12 @@ final class ConfigurationBoundaryTests: XCTestCase {
     for variant in ["secondary", "double", "middle", "triple"] {
       XCTAssertNil(URLEventHandler.parse(verb: "mouse_target", args: ["move": "1", variant: "1"]))
     }
-    for verb in ["mouse_grid", "mouse_snipe"] {
-      XCTAssertNil(URLEventHandler.parse(verb: verb, args: ["adjust": "1"]))
-      XCTAssertNil(URLEventHandler.parse(verb: verb, args: ["search": "1"]))
+    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["adjust": "1"]))
+    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["search": "1"]))
+    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["zoom_to_depth": "0"]))
+    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["bisect": "perhaps"]))
+    for retired in ["mouse_snipe", "mouse_click"] {
+      XCTAssertNil(URLEventHandler.parse(verb: retired, args: [:]), retired)
     }
   }
 

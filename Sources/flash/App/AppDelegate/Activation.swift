@@ -17,59 +17,38 @@ extension AppDelegate {
     activate(command: command, contextOverride: focusedAboutContext() ?? contextOverride)
   }
 
-  func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {
-    guard prepareHintActivation(.grid(command, contextOverride)) else { return }
+  func activateMouseGrid(_ request: MouseGridRequest, contextOverride: AppContext?) {
+    guard prepareHintActivation(.grid(request, contextOverride)) else { return }
     let context = contextOverride ?? currentNonFlashContext() ?? normalModeContext()
-    let steps = config.hints.mouseGridSteps
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.initialRegion(
-        context: context,
-        screens: NSScreen.screens,
-        fallback: OverlayPanel.unionScreenFrame()),
-      alphabet: config.resolvedAlphabet.chars,
-      steps: steps)
-    hintSession.mouseGridRegion = region
-    hintSession.mouseGridInitialRegion = region
-    hintSession.mouseGridDepth = 0
-    hintSession.sourceAppPID = context?.processID
-    hintSession.command = command
-    hintSession.surface = .grid
-    hintSession.prefix = ""
-    overlay.debugConfig = config.debug
-    overlay.mouseGridOpacity = Float(config.hints.mouseGridOpacity)
-    displayMouseGridRegion(region, depth: 0)
-  }
-
-  func displayMouseGridRegion(_ region: MouseGrid.Region, depth: Int) {
-    let steps = config.hints.mouseGridSteps
-    let region = MouseGrid.preparedRegion(
-      region, alphabet: config.resolvedAlphabet.chars, steps: steps)
-    hintSession.mouseGridRegion = region
-    // At the final visible step the renderer swaps to a compact chip
-    // cluster centered on the past rectangle — give MouseGrid the exact
-    // rendered chip dimensions so the cluster's geometry can never
-    // disagree with the chip the user sees.
-    let fontSize = CGFloat(config.overlay.fontSize)
-    let finalChipSize = CGSize(
-      width: OverlayPanel.chipWidth(forLabelLength: 1, fontSize: fontSize),
-      height: OverlayPanel.chipHeight(forFontSize: fontSize))
-    let hints = MouseGrid.hints(
-      in: region,
-      depth: depth,
-      alphabet: config.resolvedAlphabet.chars,
-      steps: steps,
-      finalChipSize: finalChipSize)
-    guard !hints.isEmpty else {
+    let layouts = WindowMover.screenLayouts(
+      statusBarReservesSpace: statusBarVisible, statusBarMonitor: config.statusBar.monitor)
+    let pointer = NSEvent.mouseLocation
+    let shape: MouseGrid.Shape =
+      request.bisect ? .bisect : .keyboard(config.resolvedMouseGridKeys)
+    // `--zoom-to-depth` starts under the pointer, so on the pointer's display.
+    guard
+      let start = MouseGrid.initialRegion(
+        context: request.zoomToDepth == nil ? context : nil, layouts: layouts, pointer: pointer)
+    else {
       applyModeOverlay()
       return
     }
-    activationLifecycle.invalidate()
-    hintSession.hints = hints
-    hintSession.prefix = ""
-    // Single projection-driven writer (yields `.hints` with the grid hints up),
-    // not a direct `overlay.inputMode` poke.
-    applyModeOverlay()
-    overlay.display(hints: hints)
+    var navigation = MouseGrid.Navigation(root: start.root, screenIndex: start.screenIndex)
+    if let depth = request.zoomToDepth {
+      navigation.zoom(
+        toward: pointer, depth: depth, shape: shape, steps: config.hints.mouseGridSteps)
+    }
+    var session = hintSession
+    session.sourceAppPID = context?.processID
+    session.command = request.mouse
+    session.surface = .grid
+    session.gridShape = shape
+    session.gridCursorFollows = config.hints.mouseGridCursorFollow
+    session.prefix = ""
+    hintSession = session
+    overlay.debugConfig = config.debug
+    overlay.mouseGridOpacity = Float(config.hints.mouseGridOpacity)
+    displayMouseGrid(navigation)
   }
 
   private func activate(command: MouseCommand, contextOverride: AppContext?) {

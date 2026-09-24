@@ -531,11 +531,11 @@ private func commitResidentGrid(
   var hints = try waitForResidentHints(behavior: "mouseGridClick", args: args)
   // Configuration allows at most six steps. Read each new layout before the
   // next key, and only let the final click land inside this fixture's window.
+  // The grid marks the cells whose selection clicks by role.
   for _ in 0..<6 {
     let candidates = hints.filter { hint in
       let commits =
-        hint.role == "FlashMouseGridFinalChip"
-        || min(hint.frame.width, hint.frame.height) <= 18
+        hint.role == "FlashMouseGridFinalChip" || hint.role == "FlashMouseGridFinalCell"
       return !commits || safeClick(hint)
     }
     guard let selected = candidates.min(by: { distance($0) < distance($1) }) else {

@@ -135,11 +135,11 @@ extension OverlayPanel {
     for (idx, hint) in hints.enumerated() {
       let targetFrame = hint.target.frame
       let isMouseGridHint = hint.target.providerID == "mouse_grid"
-      // At the final mouse-grid step the chip IS the click point — no
-      // gap-free cell tile is meaningful at that scale. Render those
-      // hints with the regular f-hint look so the cluster reads
-      // cleanly and individual chips never get a redundant translucent
-      // backdrop.
+      // When the clicking mouse-grid step has cells smaller than a chip, the
+      // chip IS the click point — no gap-free cell tile is meaningful at
+      // that scale. Render those hints with the regular f-hint look so the
+      // cluster reads cleanly and individual chips never get a redundant
+      // translucent backdrop. Larger clicking cells stay tiles.
       let isMouseGridFinalChip =
         isMouseGridHint && hint.target.role == MouseGrid.finalChipRole
       let local = CGRect(
@@ -286,7 +286,7 @@ extension OverlayPanel {
         chip.cornerRadius = 3
         chip.borderWidth = 1
         if isMouseGridFinalChip {
-          // Final mouse-grid step only: make the chip background
+          // Mouse-grid cluster only: make the chip background
           // slightly translucent so the user can see what's behind the
           // cluster while picking the precise click target. The label
           // is a sub-layer that keeps its own (fully opaque) colour so

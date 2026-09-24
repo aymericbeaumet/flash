@@ -226,23 +226,6 @@ extension AppDelegate {
     }
   }
 
-  /// `<space>` in mouse-grid mode commits the grid's centre cell — the
-  /// exact middle of the current region, reachable with one fixed key
-  /// regardless of which letter the layout assigned there. It recurses
-  /// like any cell commit (centre-of-centre stays centred), so repeated
-  /// `<space>` homes in on the dead centre and then clicks. Returns
-  /// `false` when not in mouse-grid mode so the caller falls back to the
-  /// universal "space cancels the overlay" gesture.
-  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
-    guard hintSession.surface == .grid, let grid = hintSession.mouseGridRegion?.grid else {
-      return false
-    }
-    let centerIndex = grid.centerCellIndex
-    guard hintSession.hints.indices.contains(centerIndex) else { return false }
-    commit(hint: hintSession.hints[centerIndex], clickModifiers: clickModifiers)
-    return true
-  }
-
   func overlayDidUpdatePrefix(_ prefix: String) {
     if prefix == "__BACKSPACE__" {
       if !hintSession.prefix.isEmpty {
@@ -257,10 +240,6 @@ extension AppDelegate {
 
   private func commit(hint: AssignedHint, clickModifiers held: ClickModifiers) {
     guard !activationLifecycle.inFlight else { return }
-    if hintSession.surface == .grid {
-      commitMouseGridCell(hint: hint, clickModifiers: held)
-      return
-    }
     if hint.target.providerID == "statusbar", let raw = hint.target.url,
       let url = URL(string: raw)
     {
@@ -397,7 +376,7 @@ extension AppDelegate {
     /// `--multi` on targets: keep the hint set up for the next selection.
     case rearmHints
     /// `--multi` on the grid: restart it at its full extent.
-    case rearmGrid(MouseGrid.Region?, NormalModePointerPolicy.ClickTarget)
+    case rearmGrid(MouseGrid.Navigation?, NormalModePointerPolicy.ClickTarget)
     /// Drags and selections have no typing intent: recapture NORMAL.
     case recapture
   }
@@ -495,17 +474,15 @@ extension AppDelegate {
       // non-advanced mode capture rides on panel key status, and the app
       // activation above may have taken it.
       overlay.display(hints: hintSession.hints)
-    case .rearmGrid(let initial, let target):
+    case .rearmGrid(let fresh, let target):
       if flashMode == .normal,
         NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
       {
         completeHintClick(target: target, action: action, at: gesture.point, pid: nil)
         return
       }
-      if let initial {
-        hintSession.mouseGridDepth = 0
-        hintSession.prefix = ""
-        displayMouseGridRegion(initial, depth: 0)
+      if let fresh {
+        displayMouseGrid(fresh)
       } else {
         cancelOverlay()
       }
@@ -652,33 +629,145 @@ extension AppDelegate {
     return false
   }
 
-  private func commitMouseGridCell(hint: AssignedHint, clickModifiers held: ClickModifiers) {
-    let nextRegion = MouseGrid.Region(
-      frame: hint.target.frame, grid: hintSession.mouseGridRegion?.grid)
-    let nextDepth = hintSession.mouseGridDepth + 1
-    if !MouseGrid.shouldCommit(
-      region: nextRegion, depth: nextDepth, steps: config.hints.mouseGridSteps)
-    {
-      hintSession.mouseGridRegion = nextRegion
-      hintSession.mouseGridDepth = nextDepth
-      hintSession.prefix = ""
-      displayMouseGridRegion(nextRegion, depth: nextDepth)
+  // MARK: Mouse grid
+
+  /// One keystroke of the mouse grid, forwarded by the panel while the
+  /// session routes keys to the grid. Every step is a pure `Navigation`
+  /// transition, redrawn by `displayMouseGrid`.
+  func overlayDidGrid(_ command: MouseGridKeyCommand) {
+    guard hintSession.surface == .grid, var navigation = hintSession.grid else {
+      cancelOverlay()
       return
     }
+    if case .cancel = command {
+      let origin = navigation.pointerOrigin
+      cancelOverlay()
+      // Cursor-follow moved the pointer; a cancelled grid puts it back.
+      if let origin { _ = ActionDispatcher.moveCursor(to: origin) }
+      return
+    }
+    // A click is being resolved or posted: later keys wait for its outcome.
+    guard !activationLifecycle.inFlight else { return }
+    let shape = hintSession.gridShape
+    let steps = config.hints.mouseGridSteps
+    let current = navigation.current
+    let commits = MouseGrid.selectionCommits(
+      region: current.region, depth: current.depth, steps: steps, shape: shape)
+    switch command {
+    case .cancel:
+      break  // handled above
+    case .cell(let key, let held):
+      guard let index = hintSession.gridCellIndex[key], hintSession.hints.indices.contains(index)
+      else {
+        cancelOverlay()
+        return
+      }
+      let cell = hintSession.hints[index].target.frame
+      if commits {
+        commitMouseGrid(at: CGPoint(x: cell.midX, y: cell.midY), clickModifiers: held)
+      } else {
+        navigation.drill(into: cell)
+        displayMouseGrid(navigation)
+      }
+    case .half(let direction, let held):
+      let kept = MouseGrid.half(of: current.region, direction)
+      if MouseGrid.keepCommits(kept) {
+        commitMouseGrid(at: CGPoint(x: kept.midX, y: kept.midY), clickModifiers: held)
+      } else {
+        navigation.drill(into: kept)
+        displayMouseGrid(navigation)
+      }
+    case .centre(let held):
+      if commits {
+        commitMouseGrid(
+          at: CGPoint(x: current.region.midX, y: current.region.midY), clickModifiers: held)
+      } else {
+        navigation.centre(shape: shape)
+        displayMouseGrid(navigation)
+      }
+    case .commitHere(let held):
+      commitMouseGrid(
+        at: CGPoint(x: current.region.midX, y: current.region.midY), clickModifiers: held)
+    case .back:
+      if hintSession.gridBack(), let restored = hintSession.grid {
+        displayMouseGrid(restored)
+      }
+    case .reset:
+      navigation.reset()
+      displayMouseGrid(navigation)
+    case .move(let direction):
+      if navigation.move(direction) { displayMouseGrid(navigation) }
+    case .screen(let delta):
+      let roots = WindowMover.screenLayouts(
+        statusBarReservesSpace: statusBarVisible,
+        statusBarMonitor: config.statusBar.monitor
+      ).map(\.usableFrame)
+      if navigation.switchScreen(delta, roots: roots) { displayMouseGrid(navigation) }
+    case .toggleFollow:
+      hintSession.gridCursorFollows.toggle()
+      followMouseGridIfNeeded()
+    }
+  }
 
-    let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
+  /// Draw the grid step `navigation` is on and make it the session's.
+  func displayMouseGrid(_ navigation: MouseGrid.Navigation) {
+    let fontSize = CGFloat(config.overlay.fontSize)
+    // The cluster step lays chips out itself, so it needs the exact rendered
+    // chip size; the geometry then cannot disagree with what the user sees.
+    let chipSize = CGSize(
+      width: OverlayPanel.chipWidth(forLabelLength: 1, fontSize: fontSize),
+      height: OverlayPanel.chipHeight(forFontSize: fontSize))
+    let hints = MouseGrid.hints(
+      region: navigation.current.region,
+      depth: navigation.current.depth,
+      shape: hintSession.gridShape,
+      steps: config.hints.mouseGridSteps,
+      chipSize: chipSize)
+    guard !hints.isEmpty else {
+      applyModeOverlay()
+      return
+    }
+    activationLifecycle.invalidate()
+    var session = hintSession
+    session.grid = navigation
+    session.hints = hints
+    session.gridCellIndex.removeAll(keepingCapacity: true)
+    for (index, hint) in hints.enumerated() {
+      if let key = hint.label.first { session.gridCellIndex[key] = index }
+    }
+    session.prefix = ""
+    hintSession = session
+    // Single projection-driven writer (yields `.hints` with the grid hints up),
+    // not a direct `overlay.inputMode` poke.
+    applyModeOverlay()
+    overlay.display(hints: hints)
+    followMouseGridIfNeeded()
+  }
+
+  /// Cursor-follow: put the pointer on the region's centre, remembering where
+  /// it was the first time so a cancel can restore it.
+  private func followMouseGridIfNeeded() {
+    guard hintSession.gridCursorFollows, var navigation = hintSession.grid else { return }
+    if navigation.pointerOrigin == nil {
+      navigation.pointerOrigin = NSEvent.mouseLocation
+      hintSession.grid = navigation
+    }
+    let region = navigation.current.region
+    _ = ActionDispatcher.moveCursor(to: CGPoint(x: region.midX, y: region.midY))
+  }
+
+  /// The grid chose `point`: act on it with the session's command.
+  private func commitMouseGrid(at point: CGPoint, clickModifiers held: ClickModifiers) {
     switch hintSession.command {
     case .drag, .select:
       if let anchor = hintSession.anchor {
         performTwoPhaseGesture(from: anchor.point, to: point, clickModifiers: held)
-      } else if let initial = hintSession.mouseGridInitialRegion {
-        // Phase 1: remember the anchor point and restart the grid from its full
-        // extent so the second point can land anywhere, not only inside the
-        // drilled-down source cell.
-        hintSession.phase = .labels(anchor: .init(point: point, hint: nil))
-        hintSession.mouseGridDepth = 0
-        hintSession.prefix = ""
-        displayMouseGridRegion(initial, depth: 0)
+      } else if hintSession.grid != nil {
+        // Phase 1: keep the anchor and restart the grid from its full extent
+        // so the second point can land anywhere, not only inside the
+        // drilled-down source cell. Backspace can still return to it.
+        hintSession.anchorGrid(at: point)
+        if let restarted = hintSession.grid { displayMouseGrid(restarted) }
         FlashLog.trace(
           "[commit] grid_two_phase_anchor=(\(Int(point.x)),\(Int(point.y))) "
             + "command=\(hintSession.command) awaiting_second_point")
@@ -689,14 +778,18 @@ extension AppDelegate {
       movePointerAndFinish(to: point)
     case .click, .multi, .adjust, .search:
       let command = hintSession.command
-      let initialRegion = hintSession.mouseGridInitialRegion
+      // `--multi` restarts on the same display; its clicks moved the pointer,
+      // so there is no origin left to restore.
+      let fresh = hintSession.grid.map {
+        MouseGrid.Navigation(root: $0.root, screenIndex: $0.screenIndex)
+      }
       let pid = hintSession.sourceAppPID
       resolveGridClickTarget(at: point) { owner, target in
         owner.performPointerGesture(
           PointerGesture(
             kind: .click(command.action), point: point,
             modifiers: command.modifiers.union(held), target: nil, pid: pid),
-          followUp: command.isMulti ? .rearmGrid(initialRegion, target) : .finish(target))
+          followUp: command.isMulti ? .rearmGrid(fresh, target) : .finish(target))
       }
     }
   }

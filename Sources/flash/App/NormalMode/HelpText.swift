@@ -53,10 +53,26 @@ extension NormalModeDispatcher {
         ## Mouse Targets
 
         - `f` clicks a discovered target (plain click; terminal links add Shift).
-        - `F` starts mouse grid mode and clicks a precise screen position.
+        - `F` starts the mouse grid and clicks a precise screen position.
         - `sf` / `sF` right-click a target or a grid position.
         - `df` / `dF` double-click a target or a grid position.
         - `mf` / `mF` move the cursor to a target or a grid position.
+
+        ## Mouse Grid
+
+        The screen splits like the left half of your keyboard: 4 rows × 5
+        keys of the `hints.keys` layout (`12345` / `qwert` / `asdfg` / `zxcvb`
+        on QWERTY). Press the key where you want to go, then again inside that
+        cell; the last step clicks.
+
+        - `space` zooms into the centre; `return` clicks the centre now.
+        - `backspace` undoes the last grid key; `cmd-backspace` or
+          `alt-backspace` starts over.
+        - Arrows slide the region by its own size.
+        - `tab` / `shift-tab` move to the next / previous display.
+        - `` ` `` toggles cursor-follow; `escape` cancels.
+        - `mouse_grid --bisect` keeps a half with `h`/`j`/`k`/`l` or a
+          quadrant with `y`/`u`/`b`/`n`.
         - Modifiers held on the final hint key ride the click, so `f` then
           Command-Shift-`<hint>` is a Command-Shift click with no binding of its own.
         - Triple click ships unbound: `tf` would stall the bare `t`. Bind it yourself.

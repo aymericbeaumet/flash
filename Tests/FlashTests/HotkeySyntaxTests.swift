@@ -145,13 +145,13 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.click(.tripleClick, modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--middle"])?.command,
-      .mouseGrid(.click(.middleClick, modifiers: [])))
+      .mouseGrid(.init(.click(.middleClick, modifiers: []))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--drag"])?.command,
       .mouseTarget(.drag(modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--drag"])?.command,
-      .mouseGrid(.drag(modifiers: [])))
+      .mouseGrid(.init(.drag(modifiers: []))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--drag", "--modifiers=alt"])?.command,
       .mouseTarget(.drag(modifiers: .option)))
@@ -160,7 +160,7 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.select(modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--select"])?.command,
-      .mouseGrid(.select(modifiers: [])))
+      .mouseGrid(.init(.select(modifiers: []))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--multi"])?.command,
       .mouseTarget(.multi(.leftClick, modifiers: [])))
@@ -169,19 +169,35 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.multi(.rightClick, modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--multi", "--modifiers=cmd"])?.command,
-      .mouseGrid(.multi(.leftClick, modifiers: .command)))
+      .mouseGrid(.init(.multi(.leftClick, modifiers: .command))))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--move"])?.command,
       .mouseTarget(.move))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_grid", "--move"])?.command,
-      .mouseGrid(.move))
+      .mouseGrid(.init(.move)))
+    // Retired aliases are rejected, not translated.
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_snipe", "--move"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_click"]))
+    // Bisect and zoom-to-depth combine with every click flag.
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "mouse_snipe", "--move"])?.command,
-      .mouseGrid(.move))
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--bisect", "--secondary"])?.command,
+      .mouseGrid(.init(.click(.rightClick, modifiers: []), bisect: true)))
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "mouse_click"])?.command,
-      .mouseTarget(.click(.leftClick, modifiers: [])))
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--bisect", "--drag"])?.command,
+      .mouseGrid(.init(.drag(modifiers: []), bisect: true)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=2", "--move"])?.command,
+      .mouseGrid(.init(.move, zoomToDepth: 2)))
+    XCTAssertEqual(
+      parseMappingCommand(
+        argv: ["flash", "mouse_grid", "--zoom-to-depth=1", "--bisect", "--double"])?.command,
+      .mouseGrid(.init(.click(.doubleClick, modifiers: []), zoomToDepth: 1, bisect: true)))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=0"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=-1"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--zoom-to-depth=deep"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--bisect"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--zoom-to-depth=1"]))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--modifiers=cmd"])?.command,
       .mouseTarget(.click(.leftClick, modifiers: .command)))
@@ -189,7 +205,7 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(
         argv: ["flash", "mouse_grid", "--modifiers=shift+command+ctrl"]
       )?.command,
-      .mouseGrid(.click(.leftClick, modifiers: [.command, .control, .shift])))
+      .mouseGrid(.init(.click(.leftClick, modifiers: [.command, .control, .shift]))))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--modifiers=bogus"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--modifiers="]))
     XCTAssertNil(

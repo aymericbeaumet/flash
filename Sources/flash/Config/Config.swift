@@ -138,6 +138,11 @@ struct Config {
     /// Number of selection steps for the `mouse_grid` verb. Larger values
     /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
+    /// The grid's key matrix, one string per keyboard row. Empty derives the
+    /// left-hand block of the `keys` layout (`resolvedMouseGridKeys`).
+    var mouseGridKeys: [String] = []
+    /// Move the pointer to the grid region's centre after every step.
+    var mouseGridCursorFollow = false
     /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
     /// can still see what's underneath the precision overlay. 1.0 is
     /// fully opaque, 0.0 invisible. Default 0.5 — the underlying window
@@ -547,13 +552,13 @@ struct Config {
         // click is deliberately unbound for that reason — add `"tf"` in your
         // own config if you want it, and drop your `t` mapping to match.
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        ("F", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
+        ("F", .flashCommand(.mouseGrid(.init(.click(.leftClick, modifiers: []))))),
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
-        ("sF", .flashCommand(.mouseGrid(.click(.rightClick, modifiers: [])))),
+        ("sF", .flashCommand(.mouseGrid(.init(.click(.rightClick, modifiers: []))))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
-        ("dF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
+        ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("mf", .flashCommand(.mouseTarget(.move))),
-        ("mF", .flashCommand(.mouseGrid(.move))),
+        ("mF", .flashCommand(.mouseGrid(.init(.move)))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
         ("x", sendKeyMapping("cmd+w")),
@@ -683,6 +688,10 @@ struct Config {
   /// precedence has settled. Activation should use this stored value
   /// instead of re-parsing layout selectors.
   private(set) var resolvedAlphabet: Alphabet.Resolved = Alphabet.resolve(Alphabet.defaultKeys)
+  /// The mouse grid's keys: `hints.mouse_grid_keys`, or the left-hand block of
+  /// the resolved `hints.keys` layout. Derived after overrides so a user's
+  /// layout wins over the default layer's empty value.
+  private(set) var resolvedMouseGridKeys: [[Character]] = Alphabet.gridKeys(layoutName: nil)
 
   static let `default`: Config = {
     var config = Config()
@@ -710,10 +719,17 @@ struct Config {
   mutating func prepareDerivedValues() {
     mode.refreshLeaderDerivedDefaults()
     resolvedAlphabet = Alphabet.resolve(hints.keys)
+    resolvedMouseGridKeys = MouseGridKeys.resolve(
+      hints.mouseGridKeys, layoutName: resolvedAlphabet.layoutName)
     diagnoseAmbiguousShiftMagicModifier()
     mode.recompileMappings()
   }
 
+  /// `hints.magic_modifiers` for target hints. Shift is dropped when the
+  /// resolved `hints.keys` holds a non-letter (a literal alphabet may use `;`
+  /// or `'`), because a shifted key then types a different character. The
+  /// layout presets are letters only, so they keep Shift. The mouse grid reads
+  /// the unshifted key itself, so its digits and punctuation never need this.
   var effectiveMagicModifiers: [String] {
     guard resolvedAlphabet.chars.contains(where: { !$0.isLetter }) else {
       return hints.magicModifiers
@@ -775,6 +791,8 @@ struct Config {
         "keys": hints.keys,
         "magic_modifiers": effectiveMagicModifiers,
         "min_length": hints.minLength,
+        "mouse_grid_cursor_follow": hints.mouseGridCursorFollow,
+        "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
         "mouse_grid_opacity": hints.mouseGridOpacity,
         "mouse_grid_steps": hints.mouseGridSteps,
       ],

@@ -385,7 +385,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "m").pending, "m")
     XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
     XCTAssertEqual(
-      command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
+      command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.init(.move)))
   }
 
   func testHintCommitWaitsForFocusOnlyWhenTheTargetIsNotAlreadyFrontmost() {
@@ -417,7 +417,7 @@ final class NormalModeTests: XCTestCase {
     // magic modifiers on the final hint key already provide them.
     XCTAssertEqual(
       command(chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.click(.leftClick, modifiers: [])))
+      .mouseGrid(.init(.click(.leftClick, modifiers: []))))
     XCTAssertNil(command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]))
     XCTAssertNil(
       command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]))
@@ -427,7 +427,7 @@ final class NormalModeTests: XCTestCase {
       .mouseTarget(.move))
     XCTAssertEqual(
       command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.move))
+      .mouseGrid(.init(.move)))
     // Triple click ships unbound so `t` can stay the new-tab mapping: a key
     // that is also the prefix of a longer one waits for the sequence timeout.
     XCTAssertNotNil(command(chars: "t"))
@@ -443,7 +443,7 @@ final class NormalModeTests: XCTestCase {
       .mouseTarget(.click(.rightClick, modifiers: [])))
     XCTAssertEqual(
       command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.click(.rightClick, modifiers: [])))
+      .mouseGrid(.init(.click(.rightClick, modifiers: []))))
     // `d` is the double-click prefix, so it parks rather than yielding `nil`.
     XCTAssertNil(command(chars: "d"))
     XCTAssertEqual(transition(chars: "d").pending, "d")
@@ -452,7 +452,7 @@ final class NormalModeTests: XCTestCase {
       .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
       command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.click(.doubleClick, modifiers: [])))
+      .mouseGrid(.init(.click(.doubleClick, modifiers: []))))
   }
 
   func testHelpAndModifiedKeyConsumption() {
@@ -1552,147 +1552,169 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(unknown.contains("Unknown Help Topic"))
   }
 
-  func testMouseGridIsSquareWithLargestOddNAlphabetSquare() {
-    // 16-letter alphabet → largest odd N with N² ≤ 16 is 3 → 3x3 (= 9
-    // cells). The grid stays square regardless of region aspect ratio.
-    let region = MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 400, height: 200))
-    let hints = MouseGrid.hints(
-      in: region,
-      depth: 0,
-      alphabet: Array("abcdefghijklmnop"))
+  private static let qwertyGrid = MouseGrid.Shape.keyboard(
+    Alphabet.gridKeys(layoutName: "qwerty"))
+  private static let gridChip = CGSize(width: 14, height: 16)
 
-    XCTAssertEqual(hints.count, 9)
-    XCTAssertEqual(hints.first?.label, "a")
-    XCTAssertEqual(hints.last?.label, "i")
-    // 3x3 over a 400x200 region → cell ≈ 133.33 x 66.67. Cells touch
-    // edge-to-edge (no gap).
-    let cellW = 400.0 / 3.0
-    let cellH = 200.0 / 3.0
-    XCTAssertEqual(hints[0].target.frame.width, cellW, accuracy: 0.01)
-    XCTAssertEqual(hints[0].target.frame.height, cellH, accuracy: 0.01)
+  private func gridHints(
+    _ region: CGRect, depth: Int, shape: MouseGrid.Shape = qwertyGrid, steps: Int = 3
+  ) -> [AssignedHint] {
+    MouseGrid.hints(
+      region: region, depth: depth, shape: shape, steps: steps, chipSize: Self.gridChip)
   }
 
-  func testMouseGridUses5x5For25LetterAlphabet() {
-    // qwerty homerow + toprow = 20 letters; not enough for 5x5 (= 25).
-    // A 25-letter alphabet (homerow+toprow with an extra) lands on 5x5.
-    let alphabet = Array("abcdefghijklmnopqrstuvwxy")  // 25 letters
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080)),
-      alphabet: alphabet)
-    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 5, rows: 5))
-  }
-
-  func testMouseGridCenterCellIsTheRegionMiddle() throws {
-    // `<space>` commits `grid.centerCellIndex`; for the odd-N square grids
-    // the enum produces that hint must sit dead-centre on the region so
-    // repeated `<space>` converges on the exact middle.
-    XCTAssertEqual(MouseGrid.Grid(columns: 3, rows: 3).centerCellIndex, 4)
-    XCTAssertEqual(MouseGrid.Grid(columns: 5, rows: 5).centerCellIndex, 12)
-
-    let alphabet = Array("abcdefghijklmnopqrstuvwxy")  // 25 letters → 5x5
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1000, height: 600)),
-      alphabet: alphabet)
-    let grid = try XCTUnwrap(region.grid)
-    let hints = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
-    let center = hints[grid.centerCellIndex]
-    XCTAssertEqual(center.target.frame.midX, region.frame.midX, accuracy: 0.01)
-    XCTAssertEqual(center.target.frame.midY, region.frame.midY, accuracy: 0.01)
-  }
-
-  func testMouseGridFinalStepRendersCompactClusterCenteredOnPastRect() {
-    // 9-cell alphabet → 3x3. Past rectangle is small enough that tile
-    // cells would be smaller than the chip — exactly the case the
-    // compact-cluster layout exists to fix.
-    let alphabet = Array("abcdefghi")
-    let past = CGRect(x: 100, y: 200, width: 60, height: 40)
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.Region(frame: past), alphabet: alphabet)
-    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 3, rows: 3))
-    let chip = CGSize(width: 14, height: 18)
-    let hints = MouseGrid.hints(
-      in: region,
-      depth: MouseGrid.defaultSteps - 1,
-      alphabet: alphabet,
-      finalChipSize: chip)
-    XCTAssertEqual(hints.count, 9)
+  func testMouseGridLabelsFollowTheKeyboardRowMajor() {
+    // The screen is the left half of the keyboard: `1` top-left, `b`
+    // bottom-right, rows top to bottom (NSScreen: top is maxY).
+    let area = CGRect(x: 0, y: 0, width: 1512, height: 945)
+    let hints = gridHints(area, depth: 0)
+    XCTAssertEqual(hints.map(\.label).joined(), "12345qwertasdfgzxcvb")
+    let first = hints[0].target.frame
+    let last = hints[19].target.frame
+    XCTAssertEqual(first.minX, area.minX, accuracy: 0.001)
+    XCTAssertEqual(first.maxY, area.maxY, accuracy: 0.001)
+    XCTAssertEqual(last.maxX, area.maxX, accuracy: 0.001)
+    XCTAssertEqual(last.minY, area.minY, accuracy: 0.001)
     for hint in hints {
-      XCTAssertEqual(hint.target.role, MouseGrid.finalChipRole)
-      XCTAssertEqual(hint.target.frame.width, chip.width, accuracy: 0.01)
-      XCTAssertEqual(hint.target.frame.height, chip.height, accuracy: 0.01)
+      XCTAssertEqual(hint.target.frame.width, 1512 / 5, accuracy: 0.001)
+      XCTAssertEqual(hint.target.frame.height, 945 / 4, accuracy: 0.001)
+      XCTAssertEqual(hint.target.role, MouseGrid.cellRole)
     }
-    // Adjacent chips never overlap: each chip's left edge is at least at
-    // its row neighbour's right edge.
-    let inRowOrder = hints.prefix(3).map(\.target.frame)
-    XCTAssertGreaterThanOrEqual(inRowOrder[1].minX, inRowOrder[0].maxX)
-    XCTAssertGreaterThanOrEqual(inRowOrder[2].minX, inRowOrder[1].maxX)
-    // The cluster is centered on the past rectangle's midpoint.
+  }
+
+  func testMouseGridKeepsTheSameShapeAtEveryDepth() {
+    let area = CGRect(x: 0, y: 0, width: 1512, height: 945)
+    var region = area
+    for depth in 0..<3 {
+      let hints = gridHints(region, depth: depth)
+      XCTAssertEqual(hints.map(\.label).joined(), "12345qwertasdfgzxcvb", "depth \(depth)")
+      region = hints[7].target.frame
+    }
+    // Depth 1 cells on a laptop are about 60 × 59 points.
+    let depthOne = gridHints(gridHints(area, depth: 0)[0].target.frame, depth: 1)
+    XCTAssertEqual(depthOne[0].target.frame.width, 1512 / 25, accuracy: 0.001)
+    XCTAssertEqual(depthOne[0].target.frame.height, 945 / 16, accuracy: 0.001)
+  }
+
+  func testMouseGridCentreCellConvergesOnTheRegionCentre() {
+    let area = CGRect(x: 100, y: 50, width: 1512, height: 945)
+    let centre = MouseGrid.centreCell(of: area, shape: Self.qwertyGrid)
+    XCTAssertEqual(centre.width, area.width / 5, accuracy: 0.001)
+    XCTAssertEqual(centre.height, area.height / 4, accuracy: 0.001)
+    XCTAssertEqual(centre.midX, area.midX, accuracy: 0.001)
+    XCTAssertEqual(centre.midY, area.midY, accuracy: 0.001)
+    var region = area
+    for _ in 0..<4 {
+      region = MouseGrid.centreCell(of: region, shape: Self.qwertyGrid)
+    }
+    XCTAssertEqual(region.midX, area.midX, accuracy: 0.001)
+    XCTAssertEqual(region.midY, area.midY, accuracy: 0.001)
+    XCTAssertLessThan(region.width, 3)
+  }
+
+  func testMouseGridFinalStepCoversThePreviousRectWithAClusterOnALaptop() {
+    // 1512 × 945 → 302 × 236 → 60 × 59: the last cells are 12 × 15, smaller
+    // than a chip, so the step becomes a glued cluster that still covers the
+    // whole previous rect and never overlaps.
+    let past = CGRect(x: 604.8, y: 472.5, width: 1512 / 25, height: 945 / 16)
+    XCTAssertTrue(
+      MouseGrid.selectionCommits(region: past, depth: 2, steps: 3, shape: Self.qwertyGrid))
+    let hints = gridHints(past, depth: 2)
+    XCTAssertEqual(hints.map(\.label).joined(), "12345qwertasdfgzxcvb")
+    XCTAssertTrue(hints.allSatisfy { $0.target.role == MouseGrid.finalChipRole })
     let union = hints.reduce(CGRect.null) { $0.union($1.target.frame) }
-    XCTAssertEqual(union.midX, past.midX, accuracy: 0.01)
-    XCTAssertEqual(union.midY, past.midY, accuracy: 0.01)
-  }
-
-  func testMouseGridIntermediateStepKeepsTileLayoutEvenWithChipSize() {
-    // Sanity check: passing finalChipSize at a non-final depth does
-    // *not* swap layouts — the compact cluster is the user-facing
-    // "we've zoomed in enough" affordance, not an early replacement
-    // for the tile path.
-    let alphabet = Array("abcdefghi")
-    let past = CGRect(x: 0, y: 0, width: 600, height: 600)
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.Region(frame: past), alphabet: alphabet)
-    let hints = MouseGrid.hints(
-      in: region,
-      depth: 0,
-      alphabet: alphabet,
-      finalChipSize: CGSize(width: 14, height: 18))
-    XCTAssertTrue(hints.allSatisfy { $0.target.role == MouseGrid.cellRole })
-    XCTAssertEqual(hints[0].target.frame.width, past.width / 3, accuracy: 0.01)
-  }
-
-  func testMouseGridCommitsAfterThreeSelections() {
-    let alphabet = Array("abcdefghijklmnop")  // 16 letters → 3x3
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1440, height: 900)),
-      alphabet: alphabet)
-    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 3, rows: 3))
-    let first = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
-    XCTAssertEqual(first.count, region.grid?.cellCount)
-    let secondRegion = MouseGrid.Region(frame: first[0].target.frame, grid: region.grid)
-    XCTAssertFalse(MouseGrid.shouldCommit(region: secondRegion, depth: 1))
-
-    let second = MouseGrid.hints(in: secondRegion, depth: 1, alphabet: alphabet)
-    XCTAssertEqual(second.count, region.grid?.cellCount)
-    let finalRegion = MouseGrid.Region(frame: second[0].target.frame, grid: region.grid)
-    XCTAssertTrue(MouseGrid.isFinalDisplayDepth(2))
-
-    let final = MouseGrid.hints(in: finalRegion, depth: 2, alphabet: alphabet)
-    XCTAssertEqual(final.count, region.grid?.cellCount)
-    // After 3 steps, shouldCommit must return true so the next selection
-    // synthesizes the click.
-    for hint in final {
-      XCTAssertTrue(
-        MouseGrid.shouldCommit(
-          region: MouseGrid.Region(frame: hint.target.frame, grid: region.grid),
-          depth: 3))
+    XCTAssertTrue(union.contains(past), "\(union) must cover \(past)")
+    XCTAssertEqual(union.midX, past.midX, accuracy: 0.001)
+    XCTAssertEqual(union.midY, past.midY, accuracy: 0.001)
+    for hint in hints {
+      XCTAssertGreaterThanOrEqual(hint.target.frame.width, Self.gridChip.width)
+      XCTAssertGreaterThanOrEqual(hint.target.frame.height, Self.gridChip.height)
     }
+    for (index, hint) in hints.enumerated() where index % 5 != 4 {
+      XCTAssertGreaterThanOrEqual(
+        hints[index + 1].target.frame.minX, hint.target.frame.maxX - 0.001)
+    }
+  }
+
+  func testMouseGridFinalStepKeepsTilesOnA4KDisplay() {
+    // 3840 × 2100 → 768 × 525 → 154 × 131: the last cells are 31 × 26, larger
+    // than a chip, so they stay tiles and every point of the rect is reachable.
+    let past = CGRect(x: 0, y: 0, width: 3840 / 25, height: 2100 / 16)
+    XCTAssertTrue(
+      MouseGrid.selectionCommits(region: past, depth: 2, steps: 3, shape: Self.qwertyGrid))
+    let hints = gridHints(past, depth: 2)
+    XCTAssertTrue(hints.allSatisfy { $0.target.role == MouseGrid.finalCellRole })
+    let union = hints.reduce(CGRect.null) { $0.union($1.target.frame) }
+    XCTAssertEqual(union.minX, past.minX, accuracy: 0.001)
+    XCTAssertEqual(union.minY, past.minY, accuracy: 0.001)
+    XCTAssertEqual(union.width, past.width, accuracy: 0.001)
+    XCTAssertEqual(union.height, past.height, accuracy: 0.001)
+  }
+
+  func testMouseGridCommitsAfterTheConfiguredSteps() {
+    let area = CGRect(x: 0, y: 0, width: 3840, height: 2100)
+    let shape = Self.qwertyGrid
+    XCTAssertFalse(MouseGrid.selectionCommits(region: area, depth: 0, steps: 3, shape: shape))
+    let second = gridHints(area, depth: 0)[0].target.frame
+    XCTAssertFalse(MouseGrid.selectionCommits(region: second, depth: 1, steps: 3, shape: shape))
+    let third = gridHints(second, depth: 1)[0].target.frame
+    XCTAssertTrue(MouseGrid.selectionCommits(region: third, depth: 2, steps: 3, shape: shape))
+    XCTAssertFalse(MouseGrid.selectionCommits(region: third, depth: 2, steps: 4, shape: shape))
+  }
+
+  func testMouseGridWithFourStepsTerminatesAtTheSizeFloor() {
+    // On a laptop the third selection already lands below 18 points, so a
+    // larger step count stops there instead of stacking unreadable cells.
+    let area = CGRect(x: 0, y: 0, width: 1512, height: 945)
+    let shape = Self.qwertyGrid
+    let second = gridHints(area, depth: 0, steps: 4)[0].target.frame
+    XCTAssertFalse(MouseGrid.selectionCommits(region: second, depth: 1, steps: 4, shape: shape))
+    let third = gridHints(second, depth: 1, steps: 4)[0].target.frame
+    XCTAssertTrue(MouseGrid.selectionCommits(region: third, depth: 2, steps: 4, shape: shape))
+    XCTAssertTrue(
+      gridHints(third, depth: 2, steps: 4).allSatisfy {
+        $0.target.role == MouseGrid.finalChipRole
+      })
   }
 
   func testFinalMouseGridCellsTouchWithoutGaps() {
-    // Adjacent final cells share an edge — no gap, no overlap. The
-    // user's promise: clicking *anywhere* in a cell commits the hint.
-    let alphabet = Array("abcdefghijklmnop")
-    let region = MouseGrid.preparedRegion(
-      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1440, height: 900)),
-      alphabet: alphabet)
-    let first = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
-    XCTAssertGreaterThanOrEqual(first.count, 4)
+    // Adjacent cells share an edge — no gap, no overlap. The user's promise:
+    // clicking *anywhere* in a cell commits the hint.
+    let first = gridHints(CGRect(x: 0, y: 0, width: 1440, height: 900), depth: 0)
+    XCTAssertEqual(first.count, 20)
     // Cells laid out left-to-right within a row share a vertical edge.
     let topLeft = first[0].target.frame
-    let topMid = first[1].target.frame
-    XCTAssertEqual(topLeft.maxX, topMid.minX, accuracy: 0.001)
-    XCTAssertEqual(topLeft.minY, topMid.minY, accuracy: 0.001)
-    XCTAssertEqual(topLeft.maxY, topMid.maxY, accuracy: 0.001)
+    let topNext = first[1].target.frame
+    XCTAssertEqual(topLeft.maxX, topNext.minX, accuracy: 0.001)
+    XCTAssertEqual(topLeft.minY, topNext.minY, accuracy: 0.001)
+    XCTAssertEqual(topLeft.maxY, topNext.maxY, accuracy: 0.001)
+    // Rows stack without a gap either.
+    XCTAssertEqual(first[5].target.frame.maxY, topLeft.minY, accuracy: 0.001)
+  }
+
+  func testMouseGridBisectDrawsQuadrantsAndKeepsHalves() {
+    let area = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    let hints = gridHints(area, depth: 0, shape: .bisect)
+    XCTAssertEqual(hints.map(\.label), ["y", "u", "b", "n"])
+    XCTAssertEqual(hints[0].target.frame, CGRect(x: 0, y: 400, width: 500, height: 400))
+    XCTAssertEqual(hints[3].target.frame, CGRect(x: 500, y: 0, width: 500, height: 400))
+    XCTAssertEqual(
+      MouseGrid.half(of: area, .left), CGRect(x: 0, y: 0, width: 500, height: 800))
+    XCTAssertEqual(
+      MouseGrid.half(of: area, .right), CGRect(x: 500, y: 0, width: 500, height: 800))
+    XCTAssertEqual(
+      MouseGrid.half(of: area, .up), CGRect(x: 0, y: 400, width: 1000, height: 400))
+    XCTAssertEqual(
+      MouseGrid.half(of: area, .down), CGRect(x: 0, y: 0, width: 1000, height: 400))
+    // Bisect ignores the step count and commits once a kept region is at the
+    // size floor on both sides.
+    XCTAssertFalse(
+      MouseGrid.selectionCommits(region: area, depth: 9, steps: 2, shape: .bisect))
+    XCTAssertFalse(MouseGrid.keepCommits(CGRect(x: 0, y: 0, width: 10, height: 40)))
+    XCTAssertTrue(MouseGrid.keepCommits(CGRect(x: 0, y: 0, width: 18, height: 12)))
+    XCTAssertTrue(
+      MouseGrid.selectionCommits(
+        region: CGRect(x: 0, y: 0, width: 36, height: 30), depth: 0, steps: 3, shape: .bisect))
   }
 
   func testPluginCommandLineInvocationParser() throws {

@@ -25,7 +25,9 @@ flash mouse_statusbar                    # hint the menu-bar status items
 flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
-flash mouse_grid                         # target any screen position
+flash mouse_grid                         # target any screen position (keyboard-shaped grid)
+flash mouse_grid --bisect                # halve the screen with h/j/k/l, quarter it with y/u/b/n
+flash mouse_grid --zoom-to-depth=2       # start two steps deep under the pointer
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
 flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
@@ -38,6 +40,11 @@ flash quit                               # stop the resident app
 ```
 
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
+
+`mouse_grid` takes the click flags of `mouse_target` except `--adjust` and
+`--search`, plus `--bisect` and `--zoom-to-depth=N` (N ≥ 1), which combine with
+every click flag. The screen splits like the left half of the keyboard; see
+[normal mode](normal-mode.md#mouse-grid) for its keys.
 
 `window_move` accepts named positions (`topleft`, `topright`, `bottomleft`,
 `bottomright`, `lefthalf`, `righthalf`, `tophalf`, `bottomhalf`, `maximized`,

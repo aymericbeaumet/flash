@@ -35,12 +35,36 @@ min_length = 1
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
-# Selection steps for the `mouse_grid` verb. The grid is always a square
-# NxN with N the largest odd integer such that N*N <= alphabet length
-# (so a 25-letter alphabet lands on 5x5). Each selection zooms into a
-# cell and re-tiles it with the same grid. Larger step counts give
+# The `mouse_grid` verb splits the screen like the left half of your
+# keyboard: 4 rows x 5 columns, each cell labelled with the key at the same
+# position. On QWERTY that is
+#
+#   1 2 3 4 5
+#   q w e r t
+#   a s d f g
+#   z x c v b
+#
+# so `1` is the top-left cell and `b` the bottom-right one. Press the key
+# where you want to go, then again inside that cell to refine: every step
+# uses the same keys, so screen position and key position stay one habit.
+
+# Selection steps for the `mouse_grid` verb. Each selection zooms into a
+# cell and re-tiles it with the same keys; the last one clicks. Selection
+# also clicks early once cells reach 18 points. Larger step counts give
 # finer precision at the cost of more keystrokes. Valid range: 2–6.
 mouse_grid_steps = 3
+
+# Grid keys, one string per keyboard row, top row first. Empty derives the
+# left-hand block from the `keys` layout: qwerty 12345/qwert/asdfg/zxcvb,
+# colemak 12345/qwfpg/arstd/zxcvb, dvorak 12345/',.py/aoeui/;qjkx. A literal
+# `keys` string has no layout and gets the qwerty block. Rows need the same
+# length (at least 2x2) and unique keys; "`" is reserved. For example:
+#   mouse_grid_keys = ["qwer", "asdf", "zxcv"]
+mouse_grid_keys = []
+
+# Move the pointer to the centre of the grid region after every step, so
+# hover effects follow along. "`" toggles it while the grid is up.
+mouse_grid_cursor_follow = false
 
 # Opacity (0.0..1.0) applied to every mouse-grid chip. 1.0 = fully
 # opaque, 0.0 = invisible. The grid fills the screen during a precision

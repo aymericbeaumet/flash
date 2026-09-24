@@ -14,7 +14,7 @@ and dispatch in-process. Other mapping executables receive an argv array.
 | `AppMonitor` | Focus observation, provider selection, complete prepared models and refresh scheduling |
 | `ModeStore` / `ModeReducer` | Serialized mode transitions and ordered effects |
 | `ActivationLifecycle` | Discovery, delayed commit, active gesture and replacement ownership |
-| `HintSession` | Hint/search/grid/pointer interaction state and reset |
+| `HintSession` | Hint/search/pointer interaction state and reset; the mouse grid's pure `MouseGrid.Navigation` (display, step and undo history), key shape and drag anchor |
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
 | `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture |

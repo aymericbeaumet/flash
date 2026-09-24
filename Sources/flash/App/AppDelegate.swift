@@ -453,8 +453,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateMouseTarget(command, contextOverride: nil)
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
-    case .mouseGrid(let command):
-      activateMouseGrid(command, contextOverride: nil)
+    case .mouseGrid(let request):
+      activateMouseGrid(request, contextOverride: nil)
     case .mouseRepeat:
       performMouseRepeat()
     case .mousePointer:

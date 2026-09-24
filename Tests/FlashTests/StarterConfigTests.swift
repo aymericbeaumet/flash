@@ -37,7 +37,7 @@ final class StarterConfigTests: XCTestCase {
       XCTAssertNotNil(mapping.nativeHotkey, mapping.key)
     }
     XCTAssertEqual(
-      command(config, "cmd+shift+alt+space"), .mouseGrid(.click(.leftClick, modifiers: [])))
+      command(config, "cmd+shift+alt+space"), .mouseGrid(.init(.click(.leftClick, modifiers: []))))
     XCTAssertEqual(command(config, "cmd+ctrl+["), .normalMode)
     XCTAssertEqual(command(config, "cmd+ctrl+i"), .insertMode)
     guard

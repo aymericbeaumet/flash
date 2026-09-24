@@ -16,8 +16,8 @@ Accessibility permission, and nothing else.
 
 - **Hints.** Label every visible button, link, tab, and field, then click,
   right-click, double-click, drag, or move the pointer to it.
-- **Grid.** Reach any screen position when a control is not exposed to
-  Accessibility.
+- **Grid.** The screen is split like the left half of your keyboard (12345 /
+  qwert / asdfg / zxcvb): press the key where you want to go, again to refine.
 - **Terminal hints.** The bundled tmux plugin labels panes, URLs, and file paths
   inside your terminal.
 - **Normal mode (optional).** A persistent, Vim-like layer over all of macOS:
@@ -69,9 +69,13 @@ more; changes apply as soon as you save:
 ```toml
 [mode.all.mappings]
 "cmd+shift+space" = ["flash", "mouse_target"]                               # hints
-"cmd+shift+alt+space" = ["flash", "mouse_grid"]                             # any screen position
+"cmd+shift+alt+space" = ["flash", "mouse_grid"]                             # keyboard-shaped grid
 "cmd+ctrl+alt+space" = ["flash", "enter_command_mode", "--input=:flashlight "] # search
 ```
+
+The grid maps the screen onto the left half of your keyboard: `1` is the
+top-left cell and `b` the bottom-right one. Each key zooms into its cell with
+the same keys, and the third one clicks; see [the grid keys](docs/normal-mode.md#mouse-grid).
 
 Keep the trailing space in `--input=:flashlight `: it opens search directly.
 Try `@emojis.glyphs fire` or `1234 euros in dollars` in the search bar.

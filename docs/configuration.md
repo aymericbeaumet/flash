@@ -12,6 +12,13 @@ are reported with their source and preserve the previous valid value according
 to that field's validation contract. Derivation runs after all layers are applied.
 Authored settings remain intact: for example, `hints.magic_modifiers` retains
 Shift while `effectiveMagicModifiers` excludes it for non-letter alphabets.
+Likewise `hints.mouse_grid_keys` defaults to `[]`, and `resolvedMouseGridKeys`
+derives the grid's matrix after every layer: the left-hand 4×5 block of the
+resolved `hints.keys` layout (QWERTY for a literal alphabet). A written-out
+default would pin QWERTY in the bundled layer over a user's `<colemak>`. An
+explicit matrix needs at least 2×2 keys, rows of equal length, and unique
+characters (compared lowercased) without whitespace or the reserved `` ` ``;
+a malformed one is reported and keeps the previous value.
 Resolving configuration again is idempotent and does not accumulate warnings.
 
 ## Environment overrides
@@ -112,7 +119,8 @@ defaults live in [normal mode](normal-mode.md).
 Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured
 magic modifiers held on the final hint key. The complete set reaches every target.
 Terminal links additionally require Shift, so `f` is a plain current-context click
-(Shift-click for terminal links), while `F` sends Command-Shift everywhere.
+(Shift-click for terminal links). `F` is the keyboard-shaped mouse grid; see
+[normal mode](normal-mode.md#mouse-grid).
 
 ## Existing hotkey tools
 

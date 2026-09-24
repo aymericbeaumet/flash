@@ -212,91 +212,113 @@ final class OverlayInputTests: XCTestCase {
     }
   }
 
-  func testPlainSpaceRequestsCenterCommit() {
-    // `<space>` no longer hard-cancels at the interpreter — it becomes the
-    // fixed centre-of-grid key. The coordinator decides whether that's a
-    // center commit (mouse-grid mode) or a cancel (plain hints).
-    XCTAssertEqual(
-      OverlayInputInterpreter.action(
-        keyCode: 49,
-        modifierFlags: [],
-        charactersIgnoringModifiers: " "),
-      .commitCenter([]))
+  func testSpaceCancelsTargetHints() {
+    for flags: NSEvent.ModifierFlags in [[], [.shift]] {
+      XCTAssertEqual(
+        OverlayInputInterpreter.action(
+          keyCode: 49,
+          modifierFlags: flags,
+          charactersIgnoringModifiers: " "),
+        .cancel)
+    }
   }
 
-  func testShiftSpaceRidesShiftIntoCenterClick() {
-    // Same shift-pass-through invariant as the hint-commit path: shift
-    // always rides the synthesized click, so `shift+<space>` is a
-    // shift+click on the centre.
-    XCTAssertEqual(
-      OverlayInputInterpreter.action(
-        keyCode: 49,
-        modifierFlags: [.shift],
-        charactersIgnoringModifiers: " "),
-      .commitCenter([.shift]))
-  }
-
-  func testCommandSpaceCancelsWhenCommandNotMagic() {
-    // The magic-modifier cancel gate still guards `<space>`: an unlisted
-    // strict modifier cancels rather than slipping through as a center
-    // commit.
-    XCTAssertEqual(
-      OverlayInputInterpreter.action(
-        keyCode: 49,
-        modifierFlags: [.command],
-        charactersIgnoringModifiers: " ",
-        magicModifiers: []),
-      .cancel)
-  }
-
-  func testSpaceInHintsCommitsCenterWhenCoordinatorHandlesIt() throws {
+  func testSpaceInTargetLabelsCancelsTheOverlay() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
-    coordinator.commitCenterHandled = true  // mouse-grid mode active
     panel.coordinator = coordinator
     panel.inputMode = .hints
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: " ",
-        charactersIgnoringModifiers: " ",
-        isARepeat: false,
-        keyCode: 49))
 
-    panel.keyDown(with: event)
+    panel.keyDown(with: try keyEvent(keyCode: kVK_Space, characters: " "))
 
-    XCTAssertEqual(coordinator.commitCenterModifiers, [[]])
-    XCTAssertEqual(coordinator.cancelCount, 0)
-  }
-
-  func testSpaceInHintsCancelsWhenCoordinatorDeclinesCenter() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    coordinator.commitCenterHandled = false  // plain hints, not mouse grid
-    panel.coordinator = coordinator
-    panel.inputMode = .hints
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: " ",
-        charactersIgnoringModifiers: " ",
-        isARepeat: false,
-        keyCode: 49))
-
-    panel.keyDown(with: event)
-
-    XCTAssertEqual(coordinator.commitCenterModifiers.count, 1)
     XCTAssertEqual(coordinator.cancelCount, 1)
+    XCTAssertTrue(coordinator.gridCommands.isEmpty)
+  }
+
+  func testGridInterpreterKeymap() {
+    let qwerty = MouseGrid.Shape.keyboard(Alphabet.gridKeys(layoutName: "qwerty"))
+    func cmd(
+      _ keyCode: Int, _ typed: String? = nil, _ flags: NSEvent.ModifierFlags = [],
+      shape: MouseGrid.Shape? = nil, magic: ClickModifiers = .defaultMagic
+    ) -> MouseGridKeyCommand {
+      MouseGridInputInterpreter.command(
+        keyCode: UInt16(keyCode), modifierFlags: flags, typed: typed,
+        shape: shape ?? qwerty, magicModifiers: magic)
+    }
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q"), .cell("q", []))
+    XCTAssertEqual(cmd(kVK_ANSI_B, "b"), .cell("b", []))
+    // Shift rides the click; the cell comes from the unshifted character.
+    XCTAssertEqual(cmd(kVK_ANSI_1, "1", [.shift]), .cell("1", [.shift]))
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", [.command]), .cell("q", [.command]))
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", [.control], magic: [.command]), .cancel)
+    XCTAssertEqual(cmd(kVK_ANSI_H, "h"), .cancel, "not a key of the grid")
+    XCTAssertEqual(cmd(kVK_ANSI_Q, nil), .cancel)
+    XCTAssertEqual(cmd(kVK_Escape), .cancel)
+    XCTAssertEqual(cmd(kVK_Escape, nil, [.command]), .cancel)
+
+    XCTAssertEqual(cmd(kVK_Space, " "), .centre([]))
+    XCTAssertEqual(cmd(kVK_Space, " ", [.shift]), .centre([.shift]))
+    XCTAssertEqual(cmd(kVK_Return, "\r"), .commitHere([]))
+    XCTAssertEqual(cmd(kVK_ANSI_KeypadEnter, "\u{3}", [.option]), .commitHere([.option]))
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}"), .back)
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", [.command]), .reset)
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", [.option]), .reset)
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", [.control]), .cancel)
+    XCTAssertEqual(cmd(kVK_LeftArrow, nil, [.function, .numericPad]), .move(.left))
+    XCTAssertEqual(cmd(kVK_RightArrow), .move(.right))
+    XCTAssertEqual(cmd(kVK_UpArrow), .move(.up))
+    XCTAssertEqual(cmd(kVK_DownArrow), .move(.down))
+    XCTAssertEqual(cmd(kVK_Tab, "\t"), .screen(1))
+    XCTAssertEqual(cmd(kVK_Tab, "\t", [.shift]), .screen(-1))
+    XCTAssertEqual(cmd(kVK_ANSI_Grave, "`"), .toggleFollow)
+
+    XCTAssertEqual(cmd(kVK_ANSI_H, "h", shape: .bisect), .half(.left, []))
+    XCTAssertEqual(cmd(kVK_ANSI_J, "j", shape: .bisect), .half(.down, []))
+    XCTAssertEqual(cmd(kVK_ANSI_K, "k", shape: .bisect), .half(.up, []))
+    XCTAssertEqual(cmd(kVK_ANSI_L, "l", [.shift], shape: .bisect), .half(.right, [.shift]))
+    for key in ["y", "u", "b", "n"] {
+      XCTAssertEqual(cmd(0, key, shape: .bisect), .cell(Character(key), []))
+    }
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", shape: .bisect), .cancel)
+    XCTAssertEqual(cmd(kVK_Return, "\r", shape: .bisect), .commitHere([]))
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", shape: .bisect), .back)
+  }
+
+  func testGridTypedCharacterIsUnshiftedOnlyWhileShiftIsHeld() {
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(shiftHeld: true, unshifted: "1", ignoringModifiers: "!"),
+      "1")
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(shiftHeld: true, unshifted: "", ignoringModifiers: "!"),
+      "!")
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(shiftHeld: true, unshifted: nil, ignoringModifiers: "q"),
+      "q")
+    // Without Shift the event's own characters stand, so the native oracle's
+    // key-code-0 unicode events keep their text.
+    XCTAssertEqual(
+      OverlayPanel.gridTypedCharacters(
+        shiftHeld: false, unshifted: "a", ignoringModifiers: "1"),
+      "1")
+  }
+
+  func testGridRouteSendsEveryKeyToTheGridAfterMappings() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .hints
+    panel.hintKeyRoute = .grid(
+      .keyboard(Alphabet.gridKeys(layoutName: "qwerty")), cursorFollows: false)
+    defer { panel.inputMode = .passive }
+
+    panel.keyDown(with: try keyEvent(keyCode: 0, characters: "1"))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_Space, characters: " "))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_H, characters: "h"))
+    coordinator.mappingEventsToHandle = 1
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_Q, characters: "q"))
+
+    XCTAssertEqual(coordinator.gridCommands, [.cell("1", []), .centre([]), .cancel])
+    XCTAssertEqual(coordinator.cancelCount, 0, "the grid owns its cancel")
   }
 
   func testCommandLineUsesNativeTextFieldResponder() {
@@ -789,13 +811,19 @@ final class OverlayInputTests: XCTestCase {
       XCTAssertFalse(panel.hintCursorShouldHide, "\(mode)")
     }
     panel.inputMode = .hints
-    for route in [HintKeyRoute.labels, .search, .adjustment] {
+    let keys = MouseGrid.Shape.keyboard(Alphabet.gridKeys(layoutName: "qwerty"))
+    for route in [
+      HintKeyRoute.labels, .search, .adjustment, .grid(keys, cursorFollows: false),
+    ] {
       panel.hintKeyRoute = route
       XCTAssertTrue(panel.hintCursorShouldHide, "\(route)")
     }
-    // Pointer mode steers the cursor; it must stay visible.
-    panel.hintKeyRoute = .pointer
-    XCTAssertFalse(panel.hintCursorShouldHide)
+    // Pointer mode and a cursor-following grid steer the cursor; it must stay
+    // visible.
+    for route in [HintKeyRoute.pointer, .grid(keys, cursorFollows: true)] {
+      panel.hintKeyRoute = route
+      XCTAssertFalse(panel.hintCursorShouldHide, "\(route)")
+    }
     panel.inputMode = .passive
     panel.hintKeyRoute = .labels
   }
@@ -912,11 +940,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var mappingEventsToHandle = 0
   var normalModeActions: [(MappingCommand?, Int)] = []
   var cancelCount = 0
-  var commitCenterModifiers: [ClickModifiers] = []
-  /// What `overlayDidCommitCenter` reports back — `true` mimics being in
-  /// mouse-grid mode (center handled), `false` mimics plain hints (the
-  /// panel then cancels).
-  var commitCenterHandled = false
+  var gridCommands: [MouseGridKeyCommand] = []
 
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
@@ -924,10 +948,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {}
   func overlayDidPointer(_ command: PointerModeCommand) {}
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {}
-  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
-    commitCenterModifiers.append(clickModifiers)
-    return commitCenterHandled
-  }
+  func overlayDidGrid(_ command: MouseGridKeyCommand) { gridCommands.append(command) }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
     if action != nil {

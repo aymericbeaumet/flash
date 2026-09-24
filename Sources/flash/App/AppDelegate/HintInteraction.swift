@@ -4,7 +4,7 @@ import FlashCore
 enum HintActivationRequest {
   case target(MouseCommand, AppContext?)
   case screen(MouseCommand)
-  case grid(MouseCommand, AppContext?)
+  case grid(MouseGridRequest, AppContext?)
   case pointer
   case scroll
   case dock
@@ -90,9 +90,9 @@ extension AppDelegate {
       activateMouseTarget(
         command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
     case .screen(let command): activateScreenScopeHints(command)
-    case .grid(let command, let context):
+    case .grid(let request, let context):
       activateMouseGrid(
-        command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
+        request, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
     case .pointer: enterPointerMode()
     case .scroll: activateScrollTargetHints()
     case .dock: activateDockHints()

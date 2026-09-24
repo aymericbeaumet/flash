@@ -18,7 +18,9 @@ enum StarterConfig {
 
     # More shortcuts: delete the leading "# " to enable one.
     #
-    # Reach any screen position with a grid:
+    # Reach any screen position with a grid laid out like the left half of
+    # your keyboard (12345 / qwert / asdfg / zxcvb): press the key where you
+    # want to go, then again to refine.
     # "cmd+shift+alt+space" = ["flash", "mouse_grid"]
     #
     # Search apps, browser tabs, emoji and more (keep the space after flashlight):

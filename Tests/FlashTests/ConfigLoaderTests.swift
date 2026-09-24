@@ -167,13 +167,13 @@ final class ConfigLoaderTests: XCTestCase {
     // `F` is the grid twin of `f`, and every click prefix works on both.
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
-      .mouseGrid(.click(.leftClick, modifiers: [])))
+      .mouseGrid(.init(.click(.leftClick, modifiers: []))))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("sF") })?.action.command,
-      .mouseGrid(.click(.rightClick, modifiers: [])))
+      .mouseGrid(.init(.click(.rightClick, modifiers: []))))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("dF") })?.action.command,
-      .mouseGrid(.click(.doubleClick, modifiers: [])))
+      .mouseGrid(.init(.click(.doubleClick, modifiers: []))))
     // Triple click ships unbound: `t` is the new-tab mapping, and a key that
     // is both a mapping and the prefix of a longer one waits for the sequence
     // timeout before it fires.
@@ -186,7 +186,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
-      .mouseGrid(.move))
+      .mouseGrid(.init(.move)))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "y" })?.action.command,
       .yankSelection(register: nil))
@@ -1178,6 +1178,53 @@ final class ConfigLoaderTests: XCTestCase {
       unknownOption.warnings.contains {
         $0.contains("unknown option 'repeats'") && $0.contains("command and repeat")
       })
+  }
+
+  func testMouseGridMappingsRejectAZeroZoomAdjustSearchAndRetiredAliases() {
+    for argv in [
+      "[\"flash\", \"mouse_grid\", \"--zoom-to-depth=0\"]",
+      "[\"flash\", \"mouse_grid\", \"--adjust\"]",
+      "[\"flash\", \"mouse_grid\", \"--search\"]",
+      "[\"flash\", \"mouse_snipe\"]",
+      "[\"flash\", \"mouse_click\"]",
+    ] {
+      let config = ConfigLoader.parse("[mode.normal.mappings]\n\"zz\" = \(argv)")
+      XCTAssertNil(config.mode.normal.first { $0.key == key("zz") }, argv)
+      XCTAssertEqual(config.warnings.count, 1, argv)
+    }
+    let zoom = ConfigLoader.parse(
+      "[mode.normal.mappings]\n\"zz\" = [\"flash\", \"mouse_grid\", \"--zoom-to-depth=2\", \"--bisect\"]"
+    )
+    XCTAssertEqual(zoom.warnings, [])
+    XCTAssertEqual(
+      zoom.mode.normal.first { $0.key == key("zz") }?.action.command,
+      .mouseGrid(.init(.click(.leftClick, modifiers: []), zoomToDepth: 2, bisect: true)))
+  }
+
+  func testMouseGridKeysAndCursorFollowParseAndResolve() throws {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      keys = "<dvorak>"
+      mouse_grid_keys = ["ABC", "def"]
+      mouse_grid_cursor_follow = true
+      """)
+    XCTAssertEqual(c.warnings, [])
+    XCTAssertEqual(c.hints.mouseGridKeys, ["ABC", "def"], "the authored value is preserved")
+    XCTAssertTrue(c.hints.mouseGridCursorFollow)
+    XCTAssertEqual(c.resolvedMouseGridKeys.map { String($0) }, ["abc", "def"])
+    let hints = try XCTUnwrap(
+      try Self.parseJSONObject(c.resolvedConfigJSON)?["hints"] as? [String: Any])
+    XCTAssertEqual(hints["mouse_grid_keys"] as? [String], ["abc", "def"])
+    XCTAssertEqual(hints["mouse_grid_cursor_follow"] as? Bool, true)
+
+    let derived = ConfigLoader.parse("[hints]\nkeys = \"<dvorak_homerow>\"")
+    XCTAssertEqual(
+      derived.resolvedMouseGridKeys.map { String($0) }, ["12345", "',.py", "aoeui", ";qjkx"])
+
+    let typo = ConfigLoader.parse("[hints]\nmouse_grid_key = []")
+    XCTAssertTrue(
+      typo.warnings.contains { $0.contains("did you mean 'mouse_grid_keys'") }, "\(typo.warnings)")
   }
 
   func testRejectsOldOrMalformedVerboseMappingCommands() {

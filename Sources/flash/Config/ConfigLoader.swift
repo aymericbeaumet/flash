@@ -436,7 +436,10 @@ enum ConfigLoader {
   ) {
     let sectionKeys: [String: Set<String>] = [
       "app": ["menu_bar_icon", "autostart"],
-      "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
+      "hints": [
+        "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
+        "mouse_grid_keys", "mouse_grid_cursor_follow",
+      ],
       "open": ["ignored_apps", "app_directories"],
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
@@ -578,6 +581,26 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { (0.0...1.0).contains($0) },
       assign: { value, config in
         config.hints.mouseGridOpacity = value
+      })
+    applyStringArray(
+      table["mouse_grid_keys"], path: ["hints", "mouse_grid_keys"],
+      message: "hints.mouse_grid_keys must be an array of strings, one per keyboard row",
+      locations: locations, into: &config
+    ) { value, config in
+      // A malformed matrix keeps the previous layer's value.
+      if let problem = MouseGridKeys.problem(in: value) {
+        config.addDiagnostic(
+          problem.message, location: locations.location(for: ["hints", "mouse_grid_keys"]))
+        return
+      }
+      config.hints.mouseGridKeys = value
+    }
+    applyBool(
+      table["mouse_grid_cursor_follow"], path: ["hints", "mouse_grid_cursor_follow"],
+      message: "hints.mouse_grid_cursor_follow must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.mouseGridCursorFollow = value
       })
   }
 

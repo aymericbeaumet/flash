@@ -21,19 +21,25 @@ struct HintSession {
   var hints: [AssignedHint] = []
   var prefix: String = ""
   var sourceAppPID: pid_t?
-  var mouseGridRegion: MouseGrid.Region?
-  var mouseGridDepth: Int = 0
   var statusBarPopupSnapshots: [String: StatusBarPopupRegion] = [:]
-  /// The full-extent grid region captured at activation, so a grid drag can
-  /// restart the destination phase from the top instead of the drilled-down
-  /// cell the source phase ended on.
-  var mouseGridInitialRegion: MouseGrid.Region?
+  /// Where the mouse grid is and how it got there; nil outside the grid.
+  var grid: MouseGrid.Navigation?
+  /// The grid's key layout, fixed for the session.
+  var gridShape = MouseGrid.Shape.keyboard([])
+  /// Whether the pointer follows the grid region (`` ` `` toggles it).
+  var gridCursorFollows = false
+  /// Label → index into `hints` for the displayed grid step, so a key finds
+  /// its cell without scanning.
+  var gridCellIndex: [Character: Int] = [:]
 
   /// The first point of a two-phase gesture (`--drag`, `--select`).
   struct Anchor {
     var point: CGPoint
     /// The hint it came from; nil when a grid cell chose it.
     var hint: AssignedHint?
+    /// The grid step the point was chosen from, restored when Backspace
+    /// undoes the anchor; nil for target hints.
+    var grid: MouseGrid.Navigation? = nil
   }
 
   /// `--search` (seek & click): the typed filter, the selection index into
@@ -67,10 +73,13 @@ struct HintSession {
 
   var phase = Phase.labels(anchor: nil)
 
-  /// How the overlay routes keys; a projection of `phase`.
+  /// How the overlay routes keys; a projection of `phase`, with label typing
+  /// on the grid surface going to the grid.
   var keyRoute: HintKeyRoute {
     switch phase {
-    case .labels: return .labels
+    case .labels:
+      guard surface == .grid else { return .labels }
+      return .grid(gridShape, cursorFollows: gridCursorFollows)
     case .search: return .search
     case .adjusting: return .adjustment
     case .pointer: return .pointer
@@ -98,6 +107,30 @@ struct HintSession {
   /// on screen; typing labels needs hints.
   var isActive: Bool {
     if case .labels = phase { return !hints.isEmpty }
+    return true
+  }
+
+  /// Phase 1 of a grid drag or selection: keep the point with the step it
+  /// was chosen from, and restart the grid on the whole display so the second
+  /// point can land anywhere.
+  mutating func anchorGrid(at point: CGPoint) {
+    guard let navigation = grid else { return }
+    phase = .labels(anchor: Anchor(point: point, hint: nil, grid: navigation))
+    grid = navigation.restarted
+  }
+
+  /// Backspace in the grid: undo the last grid keystroke, or, with nothing
+  /// left to undo in a gesture's second phase, drop the anchor and return to
+  /// the step it was chosen from. False when there is nothing to undo.
+  mutating func gridBack() -> Bool {
+    guard var navigation = grid else { return false }
+    if navigation.back() {
+      grid = navigation
+      return true
+    }
+    guard case .labels(let anchor?) = phase, let source = anchor.grid else { return false }
+    phase = .labels(anchor: nil)
+    grid = source
     return true
   }
 

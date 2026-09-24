@@ -253,8 +253,9 @@ final class OverlayPanel: NSPanel {
 
   /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
   /// a chip or distract from picking one. Pointer mode is the exception — the
-  /// cursor is its interface. A projection of `inputMode` and `hintKeyRoute`.
-  var hintCursorShouldHide: Bool { inputMode == .hints && hintKeyRoute != .pointer }
+  /// cursor is its interface, and so is a cursor-following grid. A projection
+  /// of `inputMode` and `hintKeyRoute`.
+  var hintCursorShouldHide: Bool { inputMode == .hints && !hintKeyRoute.showsCursor }
 
   /// Apply `hintCursorShouldHide` once, at the end of the current turn: routing
   /// can pass through intermediate values while a walk hands the keys to its
@@ -824,10 +825,9 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the `--search` sub-state. Only called while
   /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
-  /// `<space>` in the hints surface. Commits the mouse grid's centre cell
-  /// and returns `true` when mouse-grid mode is active; returns `false`
-  /// otherwise so the panel falls back to cancelling the overlay.
-  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool
+  /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
+  /// `.grid`.
+  func overlayDidGrid(_ command: MouseGridKeyCommand)
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool

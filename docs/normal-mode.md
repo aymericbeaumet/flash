@@ -50,10 +50,69 @@ document-URL and mark commands remain available for explicit mappings.
   and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
   the grid alike. Link text repeated in a terminal pane resolves to the copy
   under the hint.
-- `sF` / `dF` use mouse grid mode for secondary/double clicks.
-- `mF` moves the cursor with mouse grid mode.
+- `sF` / `dF` use the [mouse grid](#mouse-grid) for secondary/double clicks.
+- `mF` moves the cursor with the mouse grid.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.
+
+## Mouse grid
+
+`mouse_grid` (`F`) splits the screen like the left half of your keyboard: 4
+rows × 5 columns, each cell labelled with the key at the same position in the
+`hints.keys` layout's number, top, home and bottom rows. On QWERTY:
+
+```text
++---+---+---+---+---+
+| 1 | 2 | 3 | 4 | 5 |
++---+---+---+---+---+
+| q | w | e | r | t |
++---+---+---+---+---+
+| a | s | d | f | g |
++---+---+---+---+---+
+| z | x | c | v | b |
++---+---+---+---+---+
+```
+
+Colemak uses `12345` / `qwfpg` / `arstd` / `zxcvb` and Dvorak `12345` /
+`',.py` / `aoeui` / `;qjkx`; a literal `hints.keys` gets the QWERTY block, and
+`hints.mouse_grid_keys` sets any other matrix. Press the key where you want to
+go: the grid zooms into that cell and tiles it with the same keys, so every
+step uses the same muscle memory. The last of `hints.mouse_grid_steps` (default
+3) clicks, as does any step whose cells reach 18 points. When the clicking
+step's cells are smaller than a label, they are drawn as one glued cluster
+centred on (and covering) the chosen cell; each click lands on its label.
+
+The grid starts on the display of the focused window, below Flash's status
+bar, or on the pointer's display when no window is focused.
+
+| Key | Action |
+| --- | --- |
+| a grid key | Zoom into that cell; on the last step, click its centre |
+| `space` | Zoom into the centre; on the last step, click the centre |
+| `return` | Click the centre of the current region now |
+| `backspace` | Undo the last grid key (zoom, move, display switch) |
+| `cmd-backspace` / `alt-backspace` | Start over on the whole display |
+| arrows | Slide the region by its own size, stopping at the display edge |
+| `tab` / `shift-tab` | Move to the next / previous display |
+| `` ` `` | Toggle cursor-follow (`hints.mouse_grid_cursor_follow`) |
+| `escape` | Cancel; a pointer moved by cursor-follow goes back |
+| any other key | Cancel |
+
+Modifiers held on the key that clicks ride the click (`hints.magic_modifiers`,
+and Shift always), so Shift-`1` Shift-clicks the `1` cell. Command, Control or
+Option chords outside the magic modifiers cancel. Every click flag works with
+the grid: `--drag` and `--select` pick a first point, then restart on the
+whole display for the second; Backspace from there returns to the first
+point's step. `--multi` restarts on the same display after each click.
+
+`mouse_grid --bisect` halves the region instead: `h` / `j` / `k` / `l` keep
+the left, bottom, top or right half, and `y` / `u` / `b` / `n` (drawn as
+quadrants) keep the top-left, top-right, bottom-left or bottom-right quarter.
+It ignores the step count and clicks once the kept region is at most 18 points
+on both sides, or on `return`; the other grid keys work as above.
+`mouse_grid --zoom-to-depth=N` starts N steps deep on the cell under the
+pointer, on the pointer's display, stopping while one selection remains;
+Backspace walks back out.
 
 ## Movement history
 

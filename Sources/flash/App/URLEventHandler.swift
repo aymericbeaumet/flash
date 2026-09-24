@@ -23,7 +23,7 @@ enum URLCommand: Hashable {
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
   case mouseTargetScreen(MouseCommand)
-  case mouseGrid(MouseCommand)
+  case mouseGrid(MouseGridRequest)
   /// Re-click the last Flash-committed click point (sticky click). Repeats
   /// honour normal-mode counts (`3` + mapped key clicks three times).
   case mouseRepeat
@@ -147,6 +147,29 @@ struct AlertCommand: Hashable {
     if style != .standard {
       tokens.append("--style=\(style.rawValue)")
     }
+    return tokens
+  }
+}
+
+/// `mouse_grid`: the click the grid commits, plus how the grid starts.
+struct MouseGridRequest: Hashable {
+  var mouse: MouseCommand
+  /// `--zoom-to-depth=N`: start N steps deep on the cell under the pointer.
+  var zoomToDepth: Int?
+  /// `--bisect`: halves and quadrants instead of the keyboard-shaped grid.
+  var bisect: Bool
+
+  init(_ mouse: MouseCommand, zoomToDepth: Int? = nil, bisect: Bool = false) {
+    self.mouse = mouse
+    self.zoomToDepth = zoomToDepth
+    self.bisect = bisect
+  }
+
+  /// Arg tokens in diagnostic form: the mouse tokens, then the grid's own.
+  var argTokens: [String] {
+    var tokens = mouse.argTokens
+    if bisect { tokens.append("--bisect") }
+    if let zoomToDepth { tokens.append("--zoom-to-depth=\(zoomToDepth)") }
     return tokens
   }
 }
@@ -405,17 +428,17 @@ final class URLEventHandler: NSObject {
           return nil
         }
       }),
-    // The grid IS the precision surface, so `--adjust` is a config error there.
+    // The grid IS the precision surface, so `--adjust` and `--search` are
+    // config errors there.
     "mouse_grid": .init(
-      mouseParameters.filter { !["adjust", "search"].contains($0.name) },
-      parse: { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) }),
-
-    "mouse_snipe": .init(
-      mouseParameters.filter { !["adjust", "search"].contains($0.name) },
-      parse: { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) }),
-
-    "mouse_click": .init(
-      mouseParameters, parse: { a in mouseCommand(a).map(URLCommand.mouseTarget) }),
+      mouseParameters.filter { !["adjust", "search"].contains($0.name) }
+        + [.flag("bisect"), .integer("zoom_to_depth")],
+      parse: { a in
+        mouseCommand(a, allowAdjust: false).map {
+          .mouseGrid(
+            MouseGridRequest($0, zoomToDepth: a.int("zoom_to_depth"), bisect: a.bool("bisect")))
+        }
+      }),
 
     "mouse_repeat": .init(parse: { a in a.args.isEmpty ? .mouseRepeat : nil }),
 
@@ -649,8 +672,11 @@ extension URLEventHandler {
       arrays and resolves them in-process).
 
       `mouse_target` selects an app-discovered target. `mouse_grid` selects
-      a precise screen position by repeatedly narrowing a deterministic
-      grid.
+      a precise screen position: the screen splits like the left half of
+      the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
+      `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its
+      cell. `--bisect` halves the region instead (h/j/k/l, or y/u/b/n for a
+      quadrant); `--zoom-to-depth=N` starts N steps deep under the pointer.
 
       `window_move` accepts either a named `position` or a complete
       percentage frame (`x`, `y`, `width`, and `height`, each suffixed with
