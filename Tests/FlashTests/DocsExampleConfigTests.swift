@@ -36,6 +36,23 @@ final class DocsExampleConfigTests: XCTestCase {
     }
   }
 
+  /// The README's snippets are the first configuration most people paste.
+  func testEveryReadmeTOMLSnippetLoadsOverTheDefaultsWithoutDiagnostics() throws {
+    let defaults = ConfigLoader.Layer(
+      text: try String(
+        contentsOf: Self.root.appendingPathComponent("config.default.toml"), encoding: .utf8))
+    let readme = try String(
+      contentsOf: Self.root.appendingPathComponent("README.md"), encoding: .utf8)
+    let snippets = readme.components(separatedBy: "```toml\n").dropFirst().compactMap {
+      $0.components(separatedBy: "\n```").first
+    }
+    XCTAssertGreaterThanOrEqual(snippets.count, 5)
+    for (index, snippet) in snippets.enumerated() {
+      let config = ConfigLoader.parseLayers([defaults, .init(text: snippet)])
+      XCTAssertEqual(config.loadingDiagnostics.map(\.message), [], "README snippet \(index + 1)")
+    }
+  }
+
   func testEveryExampleWidgetEvaluatesWithoutAnEmptyLine() throws {
     let defaults = ConfigLoader.Layer(
       text: try String(
