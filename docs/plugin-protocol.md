@@ -53,11 +53,12 @@ never spawn at all.
 
 A *status-bound* plugin — `status` with no `sources`, `query` or `hints`, its
 `listen` subscriptions presumed to feed those segments — is resident only while
-the enabled status bar, its options or one of its popups shows one of its
-segments; otherwise it is on-demand. A config reload that starts showing it
-spawns it; one that stops keeps a running process (a command may have started
-it) and leaves it unspawned from its next start on. `:plugins` reports the
-effective activation.
+the enabled status bar, its options, one of its popups or a desktop widget
+shows one of its segments; otherwise it is on-demand. A config reload that
+starts showing it spawns it; one that stops showing it stops the process and
+returns it to on-demand, unless a command started it, since on-demand plugins
+stay running once a command needs them. `:plugins` reports the effective
+activation.
 
 **Lifecycle state machine.**
 

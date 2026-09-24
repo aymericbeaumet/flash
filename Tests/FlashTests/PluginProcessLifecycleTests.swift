@@ -889,7 +889,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
       "a passed deadline still names a positive wait")
   }
 
-  func testStatusBoundPluginSpawnsOnceTheBarObservesItAndOutlivesTheObserver() throws {
+  func testStatusBoundPluginSpawnsOnceObservedAndStopsWhenNothingShowsIt() throws {
     let fixture = try PluginFixtureKit.make(
       id: "statusbound",
       manifest: PluginFixtureKit.manifest(id: "statusbound"),
@@ -907,9 +907,33 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(process.statusSnapshot().activation, "resident")
 
     process.setStatusObserved(false)
-    settleRunLoop(0.3)
-    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "a running process is kept")
+    waitUntilTrue("stopped once unobserved") { process.runtimeStateSnapshot() == .stopped }
     XCTAssertEqual(process.statusSnapshot().activation, "on_demand")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+
+    process.setStatusObserved(true)
+    waitUntilTrue("respawned when observed again") { process.runtimeStateSnapshot() == .running }
+    XCTAssertEqual(fixture.spawnCount(), 2)
+    process.stopAndWait(reason: "test")
+  }
+
+  func testStatusBoundPluginStartedByACommandOutlivesItsObserver() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statuscommand",
+      manifest: PluginFixtureKit.manifest(id: "statuscommand"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    process.start()
+    let settled = expectation(description: "perform settles")
+    process.perform(kind: "command", params: [:]) { _ in settled.fulfill() }
+    wait(for: [settled], timeout: 8)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running)
+
+    process.setStatusObserved(true)
+    process.setStatusObserved(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "a command started it; keep it")
     XCTAssertEqual(fixture.spawnCount(), 1)
     process.stopAndWait(reason: "test")
   }

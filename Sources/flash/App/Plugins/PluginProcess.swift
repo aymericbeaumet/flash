@@ -92,6 +92,9 @@ final class PluginProcess {
   /// shows this plugin's segments; decides a status-bound plugin's
   /// activation. Guarded by `lock`.
   private var statusObserved: Bool
+  /// Whether a perform spawned the current run, which then outlives its status
+  /// observers like any on-demand plugin. Queue-confined.
+  private var performActivated = false
   /// The manifest `status` names a live status surface shows, sorted — the
   /// `core:status.observed` payload. Guarded by `lock`.
   private var observedStatusSegments: [String]
@@ -203,10 +206,10 @@ final class PluginProcess {
   }
 
   /// The status surfaces started or stopped showing this plugin's segments. A
-  /// status-bound plugin that becomes observed spawns if it has not yet; one
-  /// that stops being observed keeps a running process — a command may have
-  /// started it, and on-demand plugins remain running once started — and is
-  /// left unspawned from its next start on.
+  /// status-bound plugin that becomes observed spawns if it has not yet. One
+  /// that stops being observed returns to on-demand: its process stops unless
+  /// a perform started it, since on-demand plugins remain running once a
+  /// command needs them.
   func setStatusObserved(_ observed: Bool) {
     lock.lock()
     let changed = statusObserved != observed
@@ -217,7 +220,20 @@ final class PluginProcess {
       FlashLog.info(
         "[plugin] status \(observed ? "observed" : "unobserved")",
         fields: ["id": self.manifest.id])
-      if observed { self.applyLifecycle(.activate) }
+      if observed {
+        self.applyLifecycle(.activate)
+      } else if !self.performActivated, Self.stopsWhenUnobserved(self.lifecycle.state) {
+        self.applyLifecycle(.reload(resident: false))
+      }
+    }
+  }
+
+  /// Lifecycle states whose process (running, starting, or about to restart)
+  /// exists only to feed status surfaces once nothing shows them.
+  static func stopsWhenUnobserved(_ state: PluginLifecycle.State) -> Bool {
+    switch state {
+    case .installing, .launching, .running, .backoff: return true
+    case .initial, .idle, .stopped, .failed: return false
     }
   }
 
@@ -290,6 +306,10 @@ final class PluginProcess {
   }
 
   private func applyLifecycle(_ event: PluginLifecycle.Event) {
+    switch event {
+    case .reload, .stop: performActivated = false
+    default: break
+    }
     let effects = lifecycle.transition(
       event, now: ProcessInfo.processInfo.systemUptime,
       restartLimit: Self.restartWindowAttempts, restartWindow: Self.restartWindowSeconds,
@@ -980,6 +1000,7 @@ final class PluginProcess {
         self.enqueueDeferredPerform(
           kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
+        self.performActivated = true
         self.applyLifecycle(.activate)
       case .stopped, .installing, .launching:
         // A resident plugin still starting (or between restarts): dispatch
