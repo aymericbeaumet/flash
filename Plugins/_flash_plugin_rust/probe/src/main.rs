@@ -107,10 +107,16 @@ impl FlashPlugin for Probe {
     }
 
     async fn on_event(&self, _ctx: Context, event: Event) {
+        // The status observation also records its segment set, so the wire
+        // test can see the typed payload reached the hook.
+        let record = match event.segments {
+            Some(segments) => format!("{} [{}]", event.name, segments.join(",")),
+            None => event.name,
+        };
         *self
             .last_event
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = event.name;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = record;
     }
 
     fn evaluate(&self, request: EvaluateRequest) -> EvaluateResponse {
@@ -486,6 +492,22 @@ mod tests {
         wire.finished().await;
     }
 
+    /// Poll the probe's `state` command until the event hook has recorded
+    /// `expected`: events run on their own serialized worker.
+    async fn await_event_state(wire: &mut WireHarness, first_id: u64, expected: &str) {
+        let mut id = first_id;
+        loop {
+            wire.send(command(id, "state", &[])).await;
+            let state = wire.recv_response(id).await["message"].clone();
+            if state == expected {
+                return;
+            }
+            id += 1;
+            assert!(id < first_id + 100, "event never reached the hook: {state}");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     #[tokio::test]
     async fn events_reach_the_event_hook() {
         let mut wire = serve(json!({})).await;
@@ -493,19 +515,26 @@ mod tests {
             "name": "core:apps.changed", "payload": { "running_applications": [] }
         }}))
         .await;
-        // Events run on their own serialized worker; poll until it has run.
-        let mut id = 103;
-        let state = loop {
-            wire.send(command(id, "state", &[])).await;
-            let state = wire.recv_response(id).await["message"].clone();
-            if state == "core:apps.changed" {
-                break state;
-            }
-            id += 1;
-            assert!(id < 200, "event never reached the hook: {state}");
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        };
-        assert_eq!(state, "core:apps.changed");
+        await_event_state(&mut wire, 103, "core:apps.changed").await;
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// The status observation arrives typed: its segment set, an empty set
+    /// included, reaches the hook as `Event::segments`.
+    #[tokio::test]
+    async fn status_observation_reaches_the_event_hook_with_its_segments() {
+        let mut wire = serve(json!({})).await;
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:status.observed", "payload": { "segments": ["state"] }
+        }}))
+        .await;
+        await_event_state(&mut wire, 300, "core:status.observed [state]").await;
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:status.observed", "payload": { "segments": [] }
+        }}))
+        .await;
+        await_event_state(&mut wire, 400, "core:status.observed []").await;
         wire.close_stdin().await;
         wire.finished().await;
     }

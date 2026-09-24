@@ -1,5 +1,5 @@
 {
-  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, and encoded byte accounting",
+  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, status-observation event payloads, and encoded byte accounting",
   "protocol_version": [
     {
       "name": "current",
@@ -505,6 +505,69 @@
             }
           }
         ]
+      },
+      "valid": false
+    }
+  ],
+  "status_observed": [
+    {
+      "name": "one",
+      "value": {
+        "segments": ["top_cpu"]
+      },
+      "valid": true
+    },
+    {
+      "name": "several",
+      "value": {
+        "segments": ["focused_app_details", "top_cpu", "top_mem"]
+      },
+      "valid": true
+    },
+    {
+      "name": "authoritative-empty",
+      "value": {
+        "segments": []
+      },
+      "valid": true
+    },
+    {
+      "name": "missing",
+      "value": {},
+      "valid": false
+    },
+    {
+      "name": "null",
+      "value": {
+        "segments": null
+      },
+      "valid": false
+    },
+    {
+      "name": "scalar",
+      "value": {
+        "segments": "top_cpu"
+      },
+      "valid": false
+    },
+    {
+      "name": "non-string",
+      "value": {
+        "segments": [1]
+      },
+      "valid": false
+    },
+    {
+      "name": "empty-name",
+      "value": {
+        "segments": [""]
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate",
+      "value": {
+        "segments": ["top_cpu", "top_cpu"]
       },
       "valid": false
     }

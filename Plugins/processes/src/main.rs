@@ -1,3 +1,5 @@
+mod top;
+
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -19,6 +21,7 @@ static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default)
 static FOCUSED_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static FOCUSED_STATE: LazyLock<Mutex<FocusedState>> =
     LazyLock::new(|| Mutex::new(FocusedState::default()));
+static TOP: LazyLock<top::TopSampler> = LazyLock::new(top::TopSampler::default);
 
 struct Processes;
 
@@ -26,6 +29,7 @@ flash_plugin::plugin!(Processes);
 
 impl FlashPlugin for Processes {
     async fn on_start(&self, ctx: Context) {
+        top::warn_invalid_top_count(&ctx);
         // A failed initial listing publishes nothing — the host serves its
         // last-good catalog (which survives restarts) while a background
         // retry warms this process.
@@ -54,6 +58,16 @@ impl FlashPlugin for Processes {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
+        if let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        {
+            // The top-N cadence runs only while a surface shows a top table;
+            // the immediate sample runs detached from the event worker.
+            drop(TOP.observe(&ctx, segments));
+            return;
+        }
         if matches!(
             event.name.as_str(),
             "core:apps.launched" | "core:apps.terminated" | "core:session.opened"

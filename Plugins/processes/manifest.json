@@ -2,7 +2,7 @@
   "id": "processes",
   "name": "Processes",
   "version": "0.1.0",
-  "description": "List and terminate running processes, and publish live focused-app resource details for the status bar.",
+  "description": "List and terminate running processes, and publish live focused-app resource details and top-process tables for status surfaces.",
   "exec": [
     "./flash-plugin-processes"
   ],
@@ -18,10 +18,13 @@
     "core:apps.launched",
     "core:apps.terminated",
     "core:focus.changed",
-    "core:session.opened"
+    "core:session.opened",
+    "core:status.observed"
   ],
   "status": [
-    "focused_app_details"
+    "focused_app_details",
+    "top_cpu",
+    "top_mem"
   ],
   "sources": [
     {

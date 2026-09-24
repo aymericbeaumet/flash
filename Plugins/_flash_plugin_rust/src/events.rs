@@ -21,6 +21,7 @@ fn replacement(name: &str) -> bool {
             | "core:config.changed"
             | "core:power.changed"
             | "core:space.changed"
+            | "core:status.observed"
     )
 }
 
@@ -62,7 +63,7 @@ impl EventMailbox {
             backlog.bytes += bytes;
             backlog.queue.push_back(entry);
         } else if replacement(name) {
-            // There are exactly eight replacement kinds, each bounded by the
+            // There are exactly nine replacement kinds, each bounded by the
             // inbound frame cap. They cannot grow with arbitrary event names.
             backlog.latest.insert(name.clone(), entry);
         } else {
@@ -136,6 +137,27 @@ mod tests {
             assert_eq!(mailbox.pop().unwrap().event.name, "edge");
         }
         assert_eq!(mailbox.pop().unwrap().event.text.as_deref(), Some("empty"));
+        assert!(mailbox.pop().is_none());
+    }
+
+    /// The observed status-segment set is a full replacement: under overload
+    /// the latest set must still arrive, or a plugin could keep sampling for
+    /// a surface that is gone (or never start for one that appeared).
+    #[test]
+    fn final_status_observation_survives_full_queue() {
+        let mailbox = EventMailbox::default();
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert!(mailbox.push(event("edge", "old"), 1));
+        }
+        assert!(mailbox.push(event("core:status.observed", "armed"), 1));
+        assert!(mailbox.push(event("core:status.observed", "disarmed"), 1));
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert_eq!(mailbox.pop().unwrap().event.name, "edge");
+        }
+        assert_eq!(
+            mailbox.pop().unwrap().event.text.as_deref(),
+            Some("disarmed")
+        );
         assert!(mailbox.pop().is_none());
     }
 

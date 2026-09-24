@@ -16,7 +16,7 @@
     "host_to_plugin": {
       "initialize": "request {protocol_version} -> {ok, protocol_version}; reply immediately, once ever; ok:false or a version mismatch is terminal (flush, exit 0)",
       "ping": "request {} -> {ok:true}",
-      "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`",
+      "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`; `core:status.observed` carries {segments: [name]}, the complete set of unique nonempty manifest `status` names of this plugin that a status surface shows (empty = none), sent once after initialize and again on every change",
       "evaluate": "request {query, scope, surface} -> {ok, answers}; CPU-only over pre-warmed state",
       "search": "request {query, scope} -> {ok, rows}; live sources only, may do real work",
       "hints": "request {bundle_id, pid, front_window_frame} -> {ok, targets, context_pid?}; always live",
@@ -156,7 +156,7 @@
   },
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
   "transport_limits": {
-    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of eight known state notifications in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
+    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of nine known state notifications in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
     "plugin_requests": 16,
     "plugin_request_bytes": 33554432,
     "plugin_host_calls": 64,

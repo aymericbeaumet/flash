@@ -184,7 +184,9 @@ Notifications have no deadlines.
   globs: `core:flash.started`, `core:apps.changed|launched|terminated`,
   `core:focus.changed`, `core:window.focus.changed`, `core:ax.changed`,
   `core:clipboard.changed` (requires the `clipboard` capability),
-  `core:config.changed`, `core:power.changed`, `core:space.changed`, and
+  `core:config.changed`, `core:power.changed`, `core:space.changed`,
+  `core:status.observed` (which of the plugin's own status segments a
+  surface shows; see [Status observation](#status-observation)), and
   `core:session.opened` (the flashlight opened; advisory — eager plugins may
   refresh, nothing is required).
 - `evaluate` — `{query, scope, surface}` → `{"ok": true, "answers": [...]}`.
@@ -242,6 +244,51 @@ Notifications have no deadlines.
   subcommand. Unknown `kind` → error. The host never dispatches `perform`
   to a plugin in `failed`/unspawnable state — it settles as `unhandled`
   without burning the deadline (nothing could have started).
+
+### Status observation
+
+`core:status.observed` tells a plugin which of its own status segments a
+status surface currently shows, so work that only feeds a segment runs only
+while someone can see it. The `processes` plugin registers its top-N
+cadence only while `top_cpu` or `top_mem` is observed.
+
+```json
+{"method": "event", "params": {"name": "core:status.observed",
+  "payload": {"segments": ["focused_app_details", "top_cpu"]}}}
+```
+
+- **Payload.** `segments` is required: the complete set of this plugin's
+  observed segments as bare manifest `status` names (no
+  `flash.plugin.<id>.` prefix), each nonempty and listed once. The host
+  sends them sorted; order carries no meaning. `[]` is authoritative —
+  nothing is observed. Names the manifest does not declare never appear,
+  and no other plugin's segments do. Other payload keys are ignored.
+- **Observed.** A segment is observed while a live surface would resolve
+  `#{flash.plugin.<id>.<segment>}`: the enabled bar's template and the
+  options it expands, its named popups, and desktop widgets. These are the
+  references that keep a status-bound plugin resident, refined from plugin
+  ids to segment names. A disabled bar or a removed widget observes nothing.
+- **Delivery.** Filtered by `listen` like every other event, and not
+  capability-gated: segment names are manifest data, not user content. The
+  host sends the current set once right after the initialize reply (after
+  the `core:apps.changed` snapshot), even when it is empty, so every
+  restarted child starts from the truth. It sends it again whenever that
+  plugin's set changes — a configuration reload, the bar being enabled or
+  disabled, a widget appearing or disappearing — and never repeats an
+  unchanged set. Observation does not change activation or residency.
+- **Coalescing.** The set is a full replacement. Under event backlog
+  overload the plugin keeps only the latest one (see the SDK's replacement
+  slots), so intermediate sets may be skipped but the final set arrives.
+- **Rejection.** A payload whose `segments` is missing, null, not an array
+  of strings, or contains an empty or duplicate name is malformed. The Rust
+  SDK drops it whole with a content-free warning and does not deliver it.
+  The `status_observed` group in `fixtures/wire-values.fixture` pins these
+  cases; host tests of the payload it builds can consume the same group.
+
+A plugin keeps the segments it publishes correct regardless: observation
+schedules work, it does not filter what the host renders. A plugin that
+stops sampling for an unobserved segment should clear it (`""`), so a
+surface that shows it again never reads stale figures.
 
 ## Plugin → host
 

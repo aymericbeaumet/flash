@@ -76,7 +76,11 @@ Handed to every handler; cheap to clone. Key surface:
   can change what the plugin reads from its apps — focus into, within or out
   of one, one launching or quitting, their running instances changing, a
   flashlight session opening — so an app-scripting plugin refreshes on those
-  alone (the browsers and firefox plugins).
+  alone (the browsers and firefox plugins). `core:status.observed` carries
+  `Event::segments`: the complete set of this plugin's status segments a
+  surface shows, possibly empty (the protocol's
+  [status observation](plugin-protocol.md#status-observation)). Listen for it
+  to scope work that only feeds a segment to the time it is shown.
 - Status values: `status(segments)` takes anything `Into<StatusSegment>` —
   a plain string is ready-made markup, build `StatusValue::text(visible)`
   and attach a hover document with `.with_preview(Preview)`, or publish a
@@ -127,9 +131,14 @@ Handed to every handler; cheap to clone. Key surface:
   Flash — core watchers included — from one clock, and ticks the callback when
   the registration is due. The returned `PollHandle` can `set_period` (a retry
   backoff, an idle backend) or `cancel`; dropping it leaves the cadence
-  running. A callback that overruns its period simply misses ticks. Prefer
-  `on_event`: the host exposes an event for every source it can observe, and a
-  cadence is the answer only when nothing else can tell you the value changed.
+  running. A cancelled handle re-arms with `set_period`, so keep one handle to
+  toggle a cadence with observation instead of registering a new one each
+  time: the processes plugin arms its top-N sample when `core:status.observed`
+  first lists `top_cpu` or `top_mem`, cancels it when neither is listed, and
+  clears the table nobody shows. A callback that overruns its period simply
+  misses ticks. Prefer `on_event`: the host exposes an event for every source
+  it can observe, and a cadence is the answer only when nothing else can tell
+  you the value changed.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
   (content-free); a line logged while serving a request carries that
   request's `trace` id automatically (tasks the handler spawns itself don't); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
@@ -181,11 +190,12 @@ The runtime owns finite admission queues, pinned in `protocol.json`:
   queue is exhausted the transport closes so the host can recover.
 - Ordinary events have a 256-frame/16-MiB backlog. Under overload, each of
   `apps.changed`, `focus.changed`, `window.focus.changed`, `ax.changed`,
-  `clipboard.changed`, `config.changed`, `power.changed`, and `space.changed`
-  (all prefixed `core:`) retains one latest replacement slot, each bounded by
-  the frame cap. Intermediate replacements can coalesce; the final value,
-  including an empty app list, reaches the serialized event handler. This
-  avoids blocking the stdin reader while a handler awaits a host RPC.
+  `clipboard.changed`, `config.changed`, `power.changed`, `space.changed`,
+  and `status.observed` (all prefixed `core:`) retains one latest replacement
+  slot, each bounded by the frame cap. Intermediate replacements can
+  coalesce; the final value, including an empty app list or an empty
+  observed set, reaches the serialized event handler. This avoids blocking
+  the stdin reader while a handler awaits a host RPC.
 
 EOF cancels request/event workers and gives shutdown callbacks plus output
 draining one shared 750-ms deadline. Handlers must still avoid blocking the

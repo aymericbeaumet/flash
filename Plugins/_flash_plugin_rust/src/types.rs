@@ -508,6 +508,12 @@ pub struct Event {
     pub pid: Option<i64>,
     pub front_window_frame: Option<Frame>,
     pub text: Option<String>,
+    /// `core:status.observed`: the complete set of this plugin's status
+    /// segments (manifest names, no `flash.plugin.<id>.` prefix) that a
+    /// status surface currently shows. Always present on that event, unique
+    /// and possibly empty — empty means nothing is observed. Order carries
+    /// no meaning.
+    pub segments: Option<Vec<String>>,
 }
 
 /// A `perform {kind: "command"}` request: the matched `:`-command or verb, its

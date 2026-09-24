@@ -38,6 +38,17 @@ fn only_keys(value: &Value, allowed: &[&str]) -> bool {
         .is_some_and(|object| object.keys().all(|key| allowed.contains(&key.as_str())))
 }
 
+/// A `core:status.observed` segment set: present, every name nonempty and
+/// unique. An empty set is authoritative (nothing is observed).
+pub(crate) fn valid_segment_set(segments: Option<&[String]>) -> bool {
+    segments.is_some_and(|segments| {
+        let mut seen = std::collections::BTreeSet::new();
+        segments
+            .iter()
+            .all(|segment| !segment.is_empty() && seen.insert(segment.as_str()))
+    })
+}
+
 pub(crate) fn absolute_url(value: &str) -> bool {
     let Some((scheme, _)) = value.split_once(':') else {
         return false;
@@ -192,6 +203,20 @@ mod tests {
                     case["name"]
                 );
             }
+        }
+        // `core:status.observed` payloads: the host must send a complete set
+        // of unique, nonempty segment names; anything else is dropped whole.
+        for case in fixture["status_observed"].as_array().unwrap() {
+            let event = serde_json::json!({
+                "name": "core:status.observed",
+                "payload": case["value"],
+            });
+            assert_eq!(
+                crate::runtime::decode_event(event).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "status_observed: {}",
+                case["name"]
+            );
         }
         for case in fixture["encoded_rows"].as_array().unwrap() {
             let encoded = serde_json::to_vec(&case["value"]).unwrap();

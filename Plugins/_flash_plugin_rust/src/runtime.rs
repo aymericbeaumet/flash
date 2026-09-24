@@ -152,21 +152,34 @@ struct EventPayload {
     text: Option<String>,
     #[serde(default)]
     running_applications: Vec<RunningApplication>,
+    #[serde(default)]
+    segments: Option<Vec<String>>,
 }
 
-fn decode_event(params: Value) -> Result<InboundEvent, String> {
+/// The host's report of which of this plugin's status segments a surface
+/// currently shows. Its payload is a complete replacement set.
+pub(crate) const STATUS_OBSERVED_EVENT: &str = "core:status.observed";
+
+pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
     match serde_json::from_value::<EventWire>(params) {
-        Ok(wire) if !wire.name.trim().is_empty() => Ok(InboundEvent {
+        Ok(wire) if wire.name.trim().is_empty() => Err("event name must not be empty".to_string()),
+        Ok(wire)
+            if wire.name == STATUS_OBSERVED_EVENT
+                && !crate::wire::valid_segment_set(wire.payload.segments.as_deref()) =>
+        {
+            Err("invalid event params".to_string())
+        }
+        Ok(wire) => Ok(InboundEvent {
             event: Event {
                 name: wire.name,
                 bundle_id: wire.payload.bundle_id,
                 pid: wire.payload.pid,
                 front_window_frame: wire.payload.front_window_frame,
                 text: wire.payload.text,
+                segments: wire.payload.segments,
             },
             running_applications: wire.payload.running_applications,
         }),
-        Ok(_) => Err("event name must not be empty".to_string()),
         Err(_) => Err("invalid event params".to_string()),
     }
 }
@@ -706,6 +719,12 @@ mod tests {
             "name": "core:window.focus.changed",
             "payload": { "bundle_id": "dev.flash.test", "pid": 999,
                 "front_window_frame": { "x": -1912.5, "y": -140.25, "width": 1512.0, "height": 982.0 } }
+        }}))
+        .await;
+        // A plugin that never looks at the status observation is unaffected
+        // by it: the default hook ignores it and nothing answers.
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:status.observed", "payload": { "segments": ["state"] }
         }}))
         .await;
         wire.send(json!({ "method": "driver.mystery", "params": { "noise": true } }))
@@ -1292,6 +1311,88 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(event.running_applications.len(), 1);
+        assert_eq!(event.event.segments, None);
+
+        // The status observation requires its complete segment set.
+        assert!(decode_event(json!({ "name": "core:status.observed", "payload": {} })).is_err());
+        let observed = decode_event(json!({
+            "name": "core:status.observed",
+            "payload": { "segments": ["top_cpu", "top_mem"] }
+        }))
+        .unwrap();
+        assert_eq!(
+            observed.event.segments,
+            Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
+        );
+    }
+
+    /// Each delivered event's name and segment set.
+    type Observed = Arc<Mutex<Vec<(String, Option<Vec<String>>)>>>;
+
+    struct ObservingPlugin {
+        events: Observed,
+    }
+
+    impl Plugin for ObservingPlugin {
+        async fn on_event(&self, _: Context, event: Event) {
+            self.events
+                .lock()
+                .unwrap()
+                .push((event.name, event.segments));
+        }
+    }
+
+    /// `core:status.observed` reaches the event hook carrying the complete
+    /// observed set, an empty set included; a malformed set is dropped whole
+    /// with a content-free warning and never reaches the plugin.
+    #[tokio::test]
+    async fn status_observation_reaches_the_event_hook_with_its_segments() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut wire = serve(ObservingPlugin {
+            events: events.clone(),
+        })
+        .await;
+        let observed = |segments: Value| {
+            json!({ "method": "event", "params": {
+                "name": "core:status.observed", "payload": { "segments": segments }
+            }})
+        };
+        wire.send(observed(json!(["top_cpu", "top_mem"]))).await;
+        wire.send(observed(json!(["top_cpu", "top_cpu"]))).await;
+        wire.send(observed(json!("top_cpu"))).await;
+        wire.send(observed(json!([]))).await;
+        wire.send(json!({ "id": 2, "method": "ping", "params": {} }))
+            .await;
+        for _ in 0..2 {
+            let warning = wire.recv().await;
+            assert_eq!(
+                warning["params"]["message"],
+                "[plugin] dropped event (invalid event params)"
+            );
+        }
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 2, "result": { "ok": true } })
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.lock().unwrap().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                (
+                    "core:status.observed".to_string(),
+                    Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
+                ),
+                ("core:status.observed".to_string(), Some(Vec::new())),
+            ]
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
     }
 
     #[test]
