@@ -98,15 +98,27 @@ python3 Scripts/hints-latency-summary.py --by-bundle ~/Library/Logs/Flash/flash.
 
 ## Results
 
-Trigger to Core Animation commit, `key` trigger, 30 runs per class.
+Trigger to Core Animation commit, `key` trigger, 20 runs per class, every run
+showing hints (no empty activations).
 
 | Class | Fixture | p50 ms | p95 ms | max ms | Prepared hits |
 | --- | --- | --- | --- | --- | --- |
-| native | Flash Native Fixture (AppKit) | TBD | TBD | TBD | TBD |
-| browser | Firefox, browser fixture page | TBD | TBD | TBD | TBD |
-| electron | Electron fixture | TBD | TBD | TBD | TBD |
+| native | Flash Native Fixture (AppKit) | 20.6 | 23.9 | 26.0 | 1/20 |
+| browser | Firefox, browser fixture page | 12.9 | 15.5 | 15.9 | 1/20 |
+| electron | Electron fixture | 9.3 | 15.4 | 15.6 | 1/20 |
 
-Machine: TBD. macOS: TBD. Flash commit: TBD.
+Machine: Apple M4 Pro. macOS: 26.6.2. Flash commit: 6127ba4.
+
+Only the first run of each class was served from a prepared model; the rest
+walked the fixture on the key path, so these numbers include a full walk of a
+small page. Activations served from a prepared model cost about 0.15 ms (see
+below).
+
+In the resident after the Gecko linger (same machine, ordinary use), three
+focus changes into Firefox each found its tree ready on the first readiness
+probe and walked it in 9.8–11.9 ms, with no empty walks. That page had 25
+targets, fewer than the pages behind the numbers below, so it is not a
+like-for-like comparison.
 
 ## Walk costs already known
 
@@ -162,7 +174,9 @@ and after the change:
 ./Scripts/benchmark-hints.sh --class=native --runs=30 --large-table=5000
 ```
 
-Results: TBD.
+Results after the change (20 runs, commit 6127ba4): p50 69.5 ms, p95 81.9 ms,
+max 86.0 ms, no empty activations. No build from before the change was
+measured, so this is a reference point rather than a comparison.
 
 ## Experiment: pruning offscreen web subtrees (not adopted)
 
