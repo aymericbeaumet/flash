@@ -48,6 +48,10 @@ struct Dialect {
     new_tab: &'static str,
     /// The front window's current tab, as a `close` target.
     current_tab: &'static str,
+    /// Whether scripting can reorder tabs. Chromium's `move` recreates the
+    /// moved tab as a blank one, so its moves use the native
+    /// ctrl+shift+pageup/pagedown chords instead (`action_keystrokes`).
+    scripts_tab_moves: bool,
 }
 
 const CHROMIUM: Dialect = Dialect {
@@ -58,6 +62,7 @@ const CHROMIUM: Dialect = Dialect {
     new_window: "make new window",
     new_tab: "make new tab",
     current_tab: "active tab",
+    scripts_tab_moves: false,
 };
 
 const SAFARI: Dialect = Dialect {
@@ -68,6 +73,7 @@ const SAFARI: Dialect = Dialect {
     new_window: "make new document",
     new_tab: "set current tab to (make new tab)",
     current_tab: "current tab",
+    scripts_tab_moves: true,
 };
 
 impl Dialect {
@@ -167,6 +173,35 @@ end tell
             new_window = self.new_window,
             new_tab = self.new_tab,
         )
+    }
+
+    /// Move the front window's current tab one place toward the end
+    /// (`forward`) or the start, by moving its neighbour across it: the moved
+    /// tab keeps its page and stays current. `None` when this dialect cannot
+    /// reorder tabs by script. At either end the move is a confirmed no-op.
+    fn tab_move_script(&self, app: &str, forward: bool) -> Option<String> {
+        if !self.scripts_tab_moves {
+            return None;
+        }
+        let swap = if forward {
+            "if i < n then move tab (i + 1) of w to before tab i of w"
+        } else {
+            "if i > 1 then move tab (i - 1) of w to after tab i of w"
+        };
+        Some(format!(
+            r#"
+tell application {app}
+  if (count of windows) is 0 then return "missing"
+  set w to front window
+  set i to {active_index}
+  set n to count of tabs of w
+  {swap}
+  return "ok"
+end tell
+"#,
+            app = applescript_quote(app),
+            active_index = self.active_index,
+        ))
     }
 
     /// Closing the last tab collapses to closing the window — same as ⌘W
@@ -555,6 +590,13 @@ async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformRespons
         },
         "tab_new" => dialect.tab_new_script(app),
         "tab_close" => dialect.tab_close_script(app),
+        // Unhandled for Chromium: the host then sends the manifest's chord.
+        "tab_move_next" | "tab_move_previous" => {
+            match dialect.tab_move_script(app, action.name == "tab_move_next") {
+                Some(script) => script,
+                None => return PerformResponse::unhandled(),
+            }
+        }
         _ => return PerformResponse::unhandled(),
     };
     let result = run_osascript(ctx, &script, ACTION_TIMEOUT).await;
@@ -585,6 +627,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safari_moves_tabs_by_script_and_chromium_leaves_it_to_the_chord() {
+        let forward = SAFARI.tab_move_script("Safari", true).unwrap();
+        assert!(forward.contains("set i to index of current tab of w"));
+        assert!(forward.contains("if i < n then move tab (i + 1) of w to before tab i of w"));
+        let backward = SAFARI.tab_move_script("Safari", false).unwrap();
+        assert!(backward.contains("if i > 1 then move tab (i - 1) of w to after tab i of w"));
+        assert!(CHROMIUM.tab_move_script("Google Chrome", true).is_none());
+        assert!(CHROMIUM.tab_move_script("Google Chrome", false).is_none());
+    }
 
     #[test]
     fn engine_table_distinguishes_browser_editions() {

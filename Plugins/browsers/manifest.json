@@ -90,7 +90,9 @@
   "actions": [
     "tab_select",
     "tab_new",
-    "tab_close"
+    "tab_close",
+    "tab_move_previous",
+    "tab_move_next"
   ],
   "action_keystrokes": {
     "tab_next": {
@@ -121,6 +123,12 @@
     },
     "scroll_bottom": {
       "": "cmd+down"
+    },
+    "tab_move_previous": {
+      "": "ctrl+shift+pageup"
+    },
+    "tab_move_next": {
+      "": "ctrl+shift+pagedown"
     }
   }
 }

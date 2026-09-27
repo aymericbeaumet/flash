@@ -31,8 +31,11 @@ document-URL and mark commands remain available for explicit mappings.
   Cmd-1, and the last is the chord an app's plugin declares (Cmd-9 in
   browsers).
 - `[m` / `]m` move the current tab left/right; repeat `m` to continue moving it.
-  Tmux reorders its window; the firefox plugin declares Firefox's
-  Control-Shift-Page Up/Down.
+  Firefox and Chromium browsers use their native Control-Shift-Page Up/Down
+  (checked in Chrome; a Chromium browser that drops the chord does nothing).
+  Safari, which has no shortcut, moves
+  the neighbouring tab across the current one by AppleScript; tmux reorders
+  its window.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
 - Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
   screen position through the grid. A lowercase prefix picks the click on
