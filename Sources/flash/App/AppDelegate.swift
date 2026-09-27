@@ -284,6 +284,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// is the symptom of permission revocation mid-session.
   var cachedAccessibilityTrusted: Bool = false
   var lastPermissionPromptAt: Date?
+  /// SIGTERM (the installer's `pkill`) runs the normal quit, so owned state
+  /// such as a lingering Gecko accessibility mode is restored on the way out.
+  private var terminationSignal: DispatchSourceSignal?
   /// Launched without Accessibility and still waiting for the grant; see
   /// `checkAccessibilityAtLaunch`.
   var awaitingAccessibilityGrant = false
@@ -293,6 +296,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // screen-parameter observer reads it.
     ScreenSpace.startObserving()
     mainRunLoopStallObserver.start()
+    signal(SIGTERM, SIG_IGN)
+    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    termination.setEventHandler { NSApp.terminate(nil) }
+    termination.resume()
+    terminationSignal = termination
     // Resolve the login-shell environment once, off the main thread, so every
     // `script:`/`command:` task, mapping, and plugin inherits the same PATH
     // and tooling the user has in their terminal. A GUI launch from Finder/
@@ -1114,8 +1122,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   /// Thread-safe: `NSRunningApplication` properties read atomically.
   static func runningApplicationsSnapshot() -> [[String: Any]] {
+    // Regular apps only, as the protocol promises: background helpers and
+    // agents (Chrome's automation instances among them) share their app's
+    // bundle id and would make plugins act on the same app many times over.
     NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
-      guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
+      guard let bundleID = app.bundleIdentifier, !app.isTerminated,
+        app.activationPolicy == .regular
+      else { return nil }
       return [
         "bundle_id": bundleID,
         "localized_name": app.localizedName ?? "",
