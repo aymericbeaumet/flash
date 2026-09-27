@@ -71,7 +71,14 @@ extension AppMonitor {
     } else {
       refreshFocusedWindowObservation(for: pid)
     }
-    scheduleModelRefresh(for: pid, reason: .focus)
+    // Chromium and Flutter build their tree asynchronously after the wake,
+    // and may have dropped it while in the background: send it now, before
+    // anything walks, so the tree is building while the focus walk waits for
+    // it. Only apps whose runtime needs it get the flags (`maybeWake`).
+    maybeWakeChromiumAccessibility(for: app)
+    modelScheduler.cancelReadiness(exceptPID: pid)
+    readinessRewalkBudget.removeValue(forKey: pid)
+    scheduleFocusModelRefresh(for: pid, bundleIdentifier: app.bundleIdentifier)
     focusedElementMayHaveChanged?(pid)
   }
 
@@ -81,6 +88,8 @@ extension AppMonitor {
     dirtyTokens.removeValue(forKey: pid)
     axEventStormingPIDs.remove(pid)
     axEventStormCounts.removeValue(forKey: pid)
+    healthyTargetCounts.removeValue(forKey: pid)
+    backgroundWalkGate.forget(pid: pid)
     cancelRefreshWork(for: pid)
   }
 

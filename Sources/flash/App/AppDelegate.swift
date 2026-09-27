@@ -143,6 +143,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     }
   }
+  /// Recent hint activations per app, for `flash status` and `flash doctor`.
+  /// Main thread only; recorded where `[latency]` lines are logged.
+  var hintActivationStats = HintActivationStats()
   /// The single source of truth for the app's mode. Every UI-facing fact
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
   /// projection of `modeStore.mode`; transitions go through `dispatchMode`.

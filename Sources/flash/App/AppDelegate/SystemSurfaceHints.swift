@@ -56,7 +56,8 @@ extension AppDelegate {
       let targets = Self.dockTargets(pid: pid, screenH: screenH)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
-        self.presentSystemSurfaceHints(targets, pid: pid, surface: "mouse_dock")
+        self.presentSystemSurfaceHints(
+          targets, pid: pid, bundleIdentifier: "com.apple.dock", surface: "mouse_dock")
       }
     }
   }
@@ -88,7 +89,8 @@ extension AppDelegate {
       let targets = menus + Self.statusItemTargets(raw, ownPID: Int(ownPID), screenH: screenH)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
-        self.presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_menubar")
+        self.presentSystemSurfaceHints(
+          targets, pid: nil, bundleIdentifier: ownerBundle, surface: "mouse_menubar")
       }
     }
   }
@@ -114,7 +116,9 @@ extension AppDelegate {
       let targets = Self.notificationTargets(pid: pid, screenH: screenH)
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
-        self.presentSystemSurfaceHints(targets, pid: nil, surface: "mouse_notifications")
+        self.presentSystemSurfaceHints(
+          targets, pid: nil, bundleIdentifier: NotificationCenterSurface.bundleIdentifier,
+          surface: "mouse_notifications")
       }
     }
   }
@@ -200,10 +204,12 @@ extension AppDelegate {
   }
 
   private func presentSystemSurfaceHints(
-    _ targets: [JumpTarget], pid: pid_t?, surface: String
+    _ targets: [JumpTarget], pid: pid_t?, bundleIdentifier: String?, surface: String
   ) {
     guard !targets.isEmpty else {
       FlashLog.debug("[\(surface)] no_targets")
+      endHintActivationEmpty(
+        bundleIdentifier: bundleIdentifier, path: "no_targets", surface: surface)
       applyModeOverlay()
       return
     }
@@ -216,7 +222,9 @@ extension AppDelegate {
     activationLifecycle.invalidate()
     hintSession.hints = hints
     applyModeOverlay()
-    presentHints(hints, prepared: .miss, pid: pid, surface: surface)
+    presentHints(
+      hints, prepared: .miss, outcome: .miss, bundleIdentifier: bundleIdentifier,
+      surface: surface)
     FlashLog.debug("[\(surface)] displayed targets=\(hints.count)")
   }
 

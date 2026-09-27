@@ -46,7 +46,11 @@ an activation miss obtains a complete walk. Model refresh timers have independen
 ownership so a cancelled timer cannot consume a later request for the same PID.
 
 AX event storms and slow speculative walks suspend background warming while
-leaving explicit activation available. Maintenance refreshes run before the
+leaving explicit activation available. A degenerate background walk of an app
+that has shown a healthy tree is owed a readiness re-walk, which neither
+suspension withholds; an app whose volatile provider owns its hints and whose
+own tree keeps walking empty stops being warmed at all (see
+[prepared hint models](prepared-model.md)). Maintenance refreshes run before the
 freshness ceiling and do not inherit the longer noisy-AX throttle. The active
 window border has its own event-driven lifecycle and bounded recovery checks;
 it does not poll continuously or retain a frame when the focused window disappears.
@@ -103,8 +107,18 @@ normal-level window only while the window list lags an activation, so when that
 leaves it fully covered the regions are recomputed without those windows
 (`[discover] frontmost_window_covered`); floating layers still cover it. An
 activation result that is empty, or collapsed below a tenth of the app's last
-trusted count, is walked once more after 150 ms and the fuller result is served;
-a cached model judged the same way is a miss.
+trusted count, is degenerate, and a cached model judged the same way is a miss.
+A degenerate activation walk is walked once more and the fuller result is
+served. An app that builds its tree on demand is re-walked after 150 ms. A
+runtime that builds it asynchronously (Chromium, Flutter, Gecko) climbs a
+readiness ladder instead: after 50, 100, 200 and 400 ms a bounded probe
+(`AccessibilityReadiness`: a web area with content, or more than a
+decorated window) decides whether the tree is there, and the one extra walk
+runs as soon as it is, or after a final 750 ms. The waits are `asyncAfter`
+re-dispatches, never sleeps, and the activation going away ends the climb.
+When a volatile provider (tmux) declined and the app's own tree has never
+produced targets, the empty walk is the answer and is not repeated. Empty
+endings stay silent in the UI and are logged (`[latency] hints_empty`).
 
 The core reasons about an app's traits, read once from its bundle
 (`AppTraits`), never about its name: a web browser declares the `http` and
@@ -118,8 +132,9 @@ semantic allowlist. Inside any other app's web view, a control-sized `AXGroup`
 or `AXListItem` with a press action is a target too — the cards and rows those
 apps build from clickable divs. Chromium and Flutter build their accessibility
 tree only after an assistive client sets the enhanced-UI flags, so Flash sets
-them at launch and on each walk; every other app builds its tree on demand and
-never gets them, and Gecko's are scoped to each AX operation.
+them at launch, on each focus change (the focus walk then waits for the
+readiness probe) and on each walk; every other app builds its tree on demand
+and never gets them, and Gecko's are scoped to each AX operation.
 
 Inside UIKit content (the `iOSContentGroup` a Mac Catalyst or iPad app's
 window hosts, as in Messages and WhatsApp), each conversation row or message

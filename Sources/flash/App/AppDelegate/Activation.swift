@@ -61,6 +61,7 @@ extension AppDelegate {
       FlashLog.debug("[activation] no target app")
       FlashLog.trace(
         "[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
+      endHintActivationEmpty(bundleIdentifier: nil, path: "no_context", surface: "targets")
       applyModeOverlay()
       return
     }
@@ -80,6 +81,9 @@ extension AppDelegate {
         "[activation] accessibility_denied pid=\(context.processID) "
           + "bundle=\(context.bundleIdentifier)"
       )
+      endHintActivationEmpty(
+        bundleIdentifier: context.bundleIdentifier, path: "accessibility_denied",
+        surface: "targets", countsForApp: false)
       applyModeOverlay()
       return
     }
@@ -92,14 +96,20 @@ extension AppDelegate {
     FlashLog.trace(
       "[activation] dispatch_discover gen=\(myGen) pid=\(context.processID) "
         + "bundle=\(context.bundleIdentifier)")
-    monitor.discoverAsync(context: context) { [weak self] hints, preparedHit in
+    // A repair still waiting on the app stops once this activation is gone.
+    let isCurrent: () -> Bool = { [weak self] in
+      self?.activationLifecycle.isCurrent(myGen) ?? false
+    }
+    monitor.discoverAsync(context: context, isCurrent: isCurrent) { [weak self] hints, discovery in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       FlashLog.trace(
         "[activation] discover_complete gen=\(myGen) current_gen=\(self.activationGen) "
           + "hints=\(hints.count) mode=\(self.flashMode)")
       // The walk is done; gate is open for the next activation
-      // regardless of whether *this* walk's result is still relevant.
+      // regardless of whether *this* walk's result is still relevant. A stale
+      // activation's probe went with its session; the current session's
+      // probe belongs to the activation that replaced it.
       guard self.activationLifecycle.isCurrent(myGen) else {
         FlashLog.debug(
           "[activation] stale_generation pid=\(context.processID) "
@@ -131,6 +141,9 @@ extension AppDelegate {
             "[activation] accessibility_revoked pid=\(context.processID) "
               + "bundle=\(context.bundleIdentifier)"
           )
+          self.endHintActivationEmpty(
+            bundleIdentifier: context.bundleIdentifier, path: "accessibility_revoked",
+            surface: "targets", countsForApp: false)
           self.applyModeOverlay()
           return
         }
@@ -139,6 +152,8 @@ extension AppDelegate {
             "[activation] no_targets pid=\(context.processID) "
               + "bundle=\(context.bundleIdentifier)"
           )
+          self.endHintActivationEmpty(
+            bundleIdentifier: context.bundleIdentifier, path: discovery.path, surface: "targets")
           self.applyModeOverlay()
           return
         }
@@ -153,9 +168,13 @@ extension AppDelegate {
       self.hintSession.hints = displayHints
       self.hintSession.prefix = ""
       if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
+      // An app that yielded nothing while status-bar segments still show is
+      // logged as shown, with `outcome=empty`: the activation drew hints, but
+      // the app's discovery found none.
       self.presentHints(
-        displayHints, prepared: preparedHit ? .hit : .miss, pid: context.processID,
-        surface: "targets")
+        displayHints, prepared: discovery.prepared,
+        outcome: HintLatencyProbe.outcome(discovery, appHints: hints.count),
+        bundleIdentifier: context.bundleIdentifier, surface: "targets")
       if command.isSearch {
         // Seek & click: the panel routes subsequent keys to the search
         // interpreter instead of hint-prefix typing.
@@ -268,12 +287,16 @@ extension AppDelegate {
       guard self.activationLifecycle.isCurrent(myGen) else { return }
       guard !hints.isEmpty else {
         FlashLog.debug("[screen_scope] no_targets")
+        self.endHintActivationEmpty(
+          bundleIdentifier: context.bundleIdentifier, path: "screen_scope", surface: "screen")
         self.applyModeOverlay()
         return
       }
       self.hintSession.hints = hints
       self.hintSession.prefix = ""
-      self.presentHints(hints, prepared: .miss, pid: context.processID, surface: "screen")
+      self.presentHints(
+        hints, prepared: .miss, outcome: .miss, bundleIdentifier: context.bundleIdentifier,
+        surface: "screen")
       FlashLog.debug("[screen_scope] displayed hints=\(hints.count)")
     }
   }
@@ -300,6 +323,9 @@ extension AppDelegate {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
         guard !targets.isEmpty else {
           FlashLog.debug("[scroll_target] no_scroll_areas pid=\(pid)")
+          self.endHintActivationEmpty(
+            bundleIdentifier: context.bundleIdentifier, path: "no_scroll_areas",
+            surface: "scroll")
           self.applyModeOverlay()
           return
         }
@@ -320,7 +346,9 @@ extension AppDelegate {
         self.activationLifecycle.invalidate()
         self.hintSession.hints = hints
         self.applyModeOverlay()
-        self.presentHints(hints, prepared: .miss, pid: pid, surface: "scroll")
+        self.presentHints(
+          hints, prepared: .miss, outcome: .miss, bundleIdentifier: context.bundleIdentifier,
+          surface: "scroll")
         FlashLog.debug("[scroll_target] displayed pid=\(pid) areas=\(hints.count)")
       }
     }

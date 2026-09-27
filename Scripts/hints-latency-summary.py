@@ -5,11 +5,17 @@ Scripts/benchmark-hints.sh runs each class's oracle in bench mode and passes
 the time window it measured in. Every activation in a window is counted once
 (by trace id); the table reports p50, p95 and max milliseconds from the
 trigger (tap event, Carbon hotkey event or AppleEvent arrival) to the Core
-Animation commit that shows the hints.
+Animation commit that shows the hints, and how many activations ended with
+no hints at all (`[latency] hints_empty`), which the percentiles leave out.
+
+`--by-bundle` summarizes every target activation in the logs per app
+instead, busiest first: a day of ordinary use shows which apps are slow or
+come back empty.
 
 Usage:
   hints-latency-summary.py [--origin=key|hotkey|cli]
       --window=<class>:<start_unix_ms>:<end_unix_ms> [--window=...] LOG [LOG...]
+  hints-latency-summary.py [--origin=key|hotkey|cli] --by-bundle LOG [LOG...]
 """
 
 import argparse
@@ -21,6 +27,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 PREFIX = "[latency] hints_visible "
+EMPTY_PREFIX = "[latency] hints_empty "
 FIELD = re.compile(r"([a-z_]+)=(\S+)")
 
 
@@ -34,6 +41,12 @@ class Sample:
     targets: int
     app_class: str
     surface: str
+    bundle: str = "-"
+    outcome: str = ""
+    # An activation that ended without hints (`hints_empty`); its `ms` is how
+    # long Flash took to give up.
+    empty: bool = False
+    path: str = ""
 
 
 @dataclass(frozen=True)
@@ -52,11 +65,13 @@ class Row:
     maximum: float
     prepared_hits: int
     other_classes: int
+    empty: int = 0
 
 
 def parse_record(line: str) -> Optional[Sample]:
-    """One JSON log line, or None when it is not a hints_visible line."""
-    if PREFIX not in line:
+    """One JSON log line, or None when it is neither a hints_visible nor a
+    hints_empty line."""
+    if PREFIX not in line and EMPTY_PREFIX not in line:
         return None
     try:
         record = json.loads(line)
@@ -65,22 +80,45 @@ def parse_record(line: str) -> Optional[Sample]:
     message = record.get("message", "")
     trace = record.get("trace")
     time_ms = record.get("time_unix_ms")
-    if not message.startswith(PREFIX) or not trace or not isinstance(time_ms, int):
+    if not trace or not isinstance(time_ms, int):
         return None
-    fields = dict(FIELD.findall(message[len(PREFIX):]))
-    try:
-        return Sample(
-            trace=trace,
-            time_ms=time_ms,
-            ms=float(fields["ms"]),
-            origin=fields["origin"],
-            prepared=fields["prepared"],
-            targets=int(fields["targets"]),
-            app_class=fields["class"],
-            surface=fields.get("surface", ""),
-        )
-    except (KeyError, ValueError):
-        return None
+    if message.startswith(PREFIX):
+        fields = dict(FIELD.findall(message[len(PREFIX):]))
+        try:
+            return Sample(
+                trace=trace,
+                time_ms=time_ms,
+                ms=float(fields["ms"]),
+                origin=fields["origin"],
+                prepared=fields["prepared"],
+                targets=int(fields["targets"]),
+                app_class=fields["class"],
+                surface=fields.get("surface", ""),
+                bundle=fields.get("bundle", "-"),
+                outcome=fields.get("outcome", ""),
+            )
+        except (KeyError, ValueError):
+            return None
+    if message.startswith(EMPTY_PREFIX):
+        fields = dict(FIELD.findall(message[len(EMPTY_PREFIX):]))
+        try:
+            return Sample(
+                trace=trace,
+                time_ms=time_ms,
+                ms=float(fields["ms"]),
+                origin=fields["origin"],
+                prepared="",
+                targets=0,
+                app_class="",
+                surface=fields.get("surface", ""),
+                bundle=fields.get("bundle", "-"),
+                outcome="empty",
+                empty=True,
+                path=fields.get("path", ""),
+            )
+        except (KeyError, ValueError):
+            return None
+    return None
 
 
 def read_samples(lines: Iterable[str]) -> List[Sample]:
@@ -111,6 +149,27 @@ def parse_window(raw: str) -> Window:
     return window
 
 
+def is_target_activation(sample: Sample, origin: Optional[str]) -> bool:
+    return sample.surface in ("", "targets") and (origin is None or sample.origin == origin)
+
+
+def row(label: str, chosen: List[Sample], other_classes: int = 0) -> Row:
+    """One table row: percentiles over the activations that showed hints,
+    empties counted beside them."""
+    shown = [sample for sample in chosen if not sample.empty]
+    values = [sample.ms for sample in shown]
+    return Row(
+        label=label,
+        count=len(shown),
+        p50=nearest_rank(values, 50) if values else math.nan,
+        p95=nearest_rank(values, 95) if values else math.nan,
+        maximum=max(values) if values else math.nan,
+        prepared_hits=sum(sample.prepared == "hit" for sample in shown),
+        other_classes=other_classes,
+        empty=len(chosen) - len(shown),
+    )
+
+
 def summarize(samples: List[Sample], windows: List[Window], origin: Optional[str]) -> List[Row]:
     rows = []
     for window in windows:
@@ -118,35 +177,43 @@ def summarize(samples: List[Sample], windows: List[Window], origin: Optional[str
             sample
             for sample in samples
             if window.start_ms <= sample.time_ms <= window.end_ms
-            and sample.surface in ("", "targets")
-            and (origin is None or sample.origin == origin)
+            and is_target_activation(sample, origin)
         ]
-        values = [sample.ms for sample in chosen]
         rows.append(
-            Row(
-                label=window.label,
-                count=len(chosen),
-                p50=nearest_rank(values, 50) if values else math.nan,
-                p95=nearest_rank(values, 95) if values else math.nan,
-                maximum=max(values) if values else math.nan,
-                prepared_hits=sum(sample.prepared == "hit" for sample in chosen),
-                other_classes=sum(sample.app_class != window.label for sample in chosen),
+            row(
+                window.label,
+                chosen,
+                other_classes=sum(
+                    sample.app_class != window.label for sample in chosen if not sample.empty
+                ),
             )
         )
     return rows
 
 
-def format_table(rows: List[Row]) -> str:
+def summarize_by_bundle(samples: List[Sample], origin: Optional[str]) -> List[Row]:
+    """Every target activation, grouped by app, busiest first."""
+    by_bundle: Dict[str, List[Sample]] = {}
+    for sample in samples:
+        if is_target_activation(sample, origin):
+            by_bundle.setdefault(sample.bundle, []).append(sample)
+    rows = [row(bundle, chosen) for bundle, chosen in by_bundle.items()]
+    return sorted(rows, key=lambda r: (-(r.count + r.empty), r.label))
+
+
+def format_table(rows: List[Row], label: str = "class") -> str:
     def ms(value: float) -> str:
         return "-" if math.isnan(value) else f"{value:.1f}"
 
+    width = max([10] + [len(row.label) for row in rows])
     lines = [
-        f"{'class':<10} {'runs':>5} {'p50 ms':>8} {'p95 ms':>8} {'max ms':>8} {'prepared':>9}",
+        f"{label:<{width}} {'runs':>5} {'p50 ms':>8} {'p95 ms':>8} {'max ms':>8} "
+        f"{'prepared':>9} {'empty':>5}",
     ]
     for row in rows:
         lines.append(
-            f"{row.label:<10} {row.count:>5} {ms(row.p50):>8} {ms(row.p95):>8} "
-            f"{ms(row.maximum):>8} {row.prepared_hits:>4}/{row.count:<4}"
+            f"{row.label:<{width}} {row.count:>5} {ms(row.p50):>8} {ms(row.p95):>8} "
+            f"{ms(row.maximum):>8} {row.prepared_hits:>4}/{row.count:<4} {row.empty:>5}"
         )
     for row in rows:
         if row.other_classes:
@@ -159,10 +226,13 @@ def format_table(rows: List[Row]) -> str:
 
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--window", action="append", required=True, type=parse_window)
+    parser.add_argument("--window", action="append", default=[], type=parse_window)
+    parser.add_argument("--by-bundle", action="store_true")
     parser.add_argument("--origin", choices=["key", "hotkey", "cli"])
     parser.add_argument("logs", nargs="+")
     args = parser.parse_args(argv)
+    if args.by_bundle == bool(args.window):
+        parser.error("pass --window (one or more) or --by-bundle")
     lines: List[str] = []
     for path in args.logs:
         try:
@@ -170,7 +240,12 @@ def main(argv: List[str]) -> int:
                 lines.extend(handle)
         except OSError as error:
             print(f"warning: {error}", file=sys.stderr)
-    rows = summarize(read_samples(lines), args.window, args.origin)
+    samples = read_samples(lines)
+    if args.by_bundle:
+        rows = summarize_by_bundle(samples, args.origin)
+        print(format_table(rows, label="app"))
+        return 0 if rows else 1
+    rows = summarize(samples, args.window, args.origin)
     print(format_table(rows))
     return 0 if all(row.count for row in rows) else 1
 

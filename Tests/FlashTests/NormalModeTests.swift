@@ -711,6 +711,60 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(ModelRefreshReason.focus.isThrottled)
     XCTAssertFalse(ModelRefreshReason.userAction("normal_scroll").isSpeculative)
     XCTAssertEqual(ModelRefreshReason.axEvent("AXValueChanged").logValue, "ax:AXValueChanged")
+    // The walk a readiness ladder ends in is owed, not speculative: storms and
+    // slow walks must not suppress it, and noise must not demote it.
+    XCTAssertFalse(ModelRefreshReason.readiness.isThrottled)
+    XCTAssertFalse(ModelRefreshReason.readiness.isSpeculative)
+    XCTAssertEqual(ModelRefreshReason.readiness.priority, ModelRefreshReason.focus.priority)
+    XCTAssertEqual(ModelRefreshReason.readiness.logValue, "readiness")
+  }
+
+  func testAPendingReadinessLadderDefersSpeculativeWalksButNotExplicitOnes() {
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let monitor = AppMonitor(registry: registry, config: .default)
+    let pid = pid_t(44)
+    _ = monitor.modelScheduler.scheduleReadiness(
+      pid: pid, step: 0, then: .focus, deadline: DispatchTime.now().uptimeNanoseconds)
+    for reason: ModelRefreshReason in [.axEvent("AXLayoutChanged"), .queued, .maintenance] {
+      monitor.scheduleModelRefresh(for: pid, reason: reason)
+      XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid), reason.logValue)
+    }
+    monitor.scheduleModelRefresh(for: pid, reason: .userAction("normal_scroll"))
+    XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
+    monitor.cancelRefreshWork(for: pid)
+    XCTAssertFalse(monitor.modelScheduler.hasReadiness(pid: pid))
+  }
+
+  func testStormsAndSlowWalksDoNotSuppressTheReadinessWalk() {
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let monitor = AppMonitor(registry: registry, config: .default)
+    let pid = pid_t(45)
+    monitor.slowAutomaticModelRefreshPIDs.insert(pid)
+    monitor.axEventStormingPIDs.insert(pid)
+    monitor.scheduleModelRefresh(for: pid, reason: .readiness)
+    XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
+    monitor.cancelRefreshWork(for: pid)
+  }
+
+  func testAGatedAppGetsNoAutomaticWalksUntilConfigReopensIt() {
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let monitor = AppMonitor(registry: registry, config: .default)
+    let pid = pid_t(46)
+    for _ in 0..<EmptyBackgroundWalkGate.threshold {
+      _ = monitor.backgroundWalkGate.noteBackgroundWalk(
+        pid: pid, targets: 0, hasVolatileProvider: true)
+    }
+    for reason: ModelRefreshReason in [
+      .focus, .axEvent("AXLayoutChanged"), .maintenance, .readiness, .space, .screen,
+      .userAction("normal_scroll"),
+    ] {
+      monitor.scheduleModelRefresh(for: pid, reason: reason)
+      XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid), reason.logValue)
+    }
+    monitor.backgroundWalkGate.reset()
+    monitor.scheduleModelRefresh(for: pid, reason: .focus)
+    XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
+    monitor.cancelRefreshWork(for: pid)
   }
 
   func testAXEventStormSuppressesOnlySpeculativePreparedModelRefreshes() {

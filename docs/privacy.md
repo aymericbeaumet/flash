@@ -62,9 +62,12 @@ the others make their own requests or run the CLI tools named here.
 
 ## Data read from other apps
 
-- **Browser tabs:** Safari and Chromium browsers through Apple Events
-  (`browsers`); Firefox through an optional add-on you install yourself
-  (`firefox`, see [Firefox extension](firefox-extension.md)).
+- **Browser tabs** (`browsers`): Safari and Chromium browsers through Apple
+  Events. Firefox, which needs no add-on, through its tab strip in the
+  Accessibility tree and the session file Firefox keeps in each profile
+  (`sessionstore-backups/recovery.jsonlz4`, which lists every open window's
+  tabs with their URLs and titles). The file is read in place and decoded in
+  memory, never copied or stored.
 - **Browser history and bookmarks:** local Chrome and Firefox profiles
   (`history`).
 - **Notes, Reminders, Contacts:** through Apple Events (`apple`).
@@ -128,8 +131,10 @@ record those windows.
 local Apple Event that carries every other command, with JSON printed in your
 terminal. The reply describes Flash itself: its version, mode, permissions,
 key-capture path, input source ID, config path and diagnostic lines, plugin
-health, and, for `doctor`, the name and process ID of an app holding secure
-input and whether Screen Recording is granted. It never contains clipboard
+health, per-app hint counts and timings keyed by bundle ID (kept in memory for
+the last 50 activations of the 32 most recent apps, never on disk), and, for
+`doctor`, the name and process ID of an app holding secure input and whether
+Screen Recording is granted. It never contains clipboard
 contents, typed keys, window titles or hint targets, and nothing is sent over
 a network or written to disk. `flash config_check` runs entirely in the
 `flash` process and does not contact the resident.
@@ -138,9 +143,11 @@ a network or written to disk. `flash config_check` runs entirely in the
 
 Plugins are child processes that talk to Flash through JSON lines on stdin and
 stdout, and Flash stops them when it quits. Most bundled plugins run under a
-deny-by-default macOS sandbox profile declared in their manifest: they can read
-their own data directory and the paths and executables they declare, and they
-can never read `~/.ssh`, `~/.aws`, `~/.config/gh`, or your Keychains. Six plugins run
+deny-by-default macOS sandbox profile built from their manifest: they may read
+files broadly (that is how `browsers` reads Firefox's session file), but never
+`~/.ssh`, `~/.aws`, `~/.config/gh`, your Keychains, or another plugin's data;
+they write only to their own data directory, run only the executables they
+declare, and reach the network only when they declare it. Six plugins run
 unsandboxed because they execute helpers the sandbox forbids: `aiproviders`,
 `caffeinate`, `github`, `screenshot`, `shortcuts`, and `tmux`.
 

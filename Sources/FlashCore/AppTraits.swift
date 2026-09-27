@@ -37,6 +37,15 @@ public struct AppTraits: Equatable, Sendable {
     engine == .chromium || engine == .flutter
   }
 
+  /// The runtime builds its accessibility tree asynchronously — Chromium and
+  /// Flutter after the wake, Gecko once its tree is read — so a walk right
+  /// after a focus change or a wake can catch it empty or half-built. Such
+  /// apps are probed for readiness (`AccessibilityReadiness`) before a walk
+  /// is trusted or repeated. Every other app answers on demand.
+  public var buildsAccessibilityTreeAsynchronously: Bool {
+    engine != nil
+  }
+
   /// Traits of the app `bundleIdentifier`, cached per bundle id. The bundle is
   /// located through `pid` when the app runs, else through Launch Services.
   /// The first read of an app touches its Info.plist and bundle layout.

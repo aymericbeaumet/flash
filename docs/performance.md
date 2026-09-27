@@ -8,7 +8,7 @@ the numbers.
 Every hint activation logs one line when its hints reach the screen:
 
 ```text
-[latency] hints_visible ms=12.4 origin=key prepared=hit targets=42 class=native surface=targets
+[latency] hints_visible ms=12.4 origin=key prepared=hit targets=42 class=native surface=targets bundle=com.apple.Notes outcome=hit
 ```
 
 - **Start:** the timestamp of the input that asked for hints. For a key the
@@ -28,10 +28,36 @@ Every hint activation logs one line when its hints reach the screen:
   `other`.
 - `surface` names the activation: `targets` (`mouse_target`), `screen`,
   `scroll`, `grid`, `mouse_dock`, `mouse_menubar`, `mouse_notifications`.
+- `bundle` is the app the hints are for (`-` when unknown).
+- `outcome` says how the app's own hints were obtained: `hit` (the prepared
+  model), `miss` (a walk), `retried` (a degenerate first walk was walked
+  again, after the readiness ladder or the 150-ms settle; see
+  [prepared models](prepared-model.md)), `empty` (the app yielded nothing
+  and only status-bar segments were shown) or `none` (the grid).
+  `prepared` is kept beside it for existing parsers.
 
-The line is logged at `info`, once per activation, and carries the
+An activation that ends with nothing to draw logs instead, with no UI:
+
+```text
+[latency] hints_empty ms=1502.3 bundle=com.tinyspeck.slackmacgap path=prepared_model_refresh origin=key surface=targets
+```
+
+`ms` is how long Flash took to give up, and `path` names where: the
+`[discover] complete` path of the final walk, or `no_context`,
+`accessibility_denied`, `accessibility_revoked`, `screen_scope`,
+`no_scroll_areas` or `no_targets` (system surfaces). An activation replaced
+or cancelled before it drew logs neither line.
+
+Both lines are logged at `info`, once per activation, and carry the
 interaction's trace id. The probe runs after the hints are drawn; nothing is
 added to the keyboard tap's swallow decision.
+
+The resident also keeps the last 50 target activations of each of the 32
+most recently used apps in memory: `flash status --json` reports each app's
+count, empty count and nearest-rank p50/p95 over the activations that showed
+hints (`hints`; see [commands](commands.md)), and `flash doctor` warns
+(`hint_activations`) about an app with at least 5 recent activations of which
+a fifth or more were empty, or whose p95 exceeds 500 ms.
 
 ## Running the benchmark
 
@@ -61,8 +87,14 @@ dismiss with `flash hints_dismiss`. The script then reads the
 `[latency] hints_visible` lines logged inside each class's measurement window
 from `~/Library/Logs/Flash/flash.log*`, counts each trace once, and prints
 p50, p95 (nearest rank) and max milliseconds with the prepared-model hit
-count. `Scripts/hints-latency-summary.py` does the parsing
-(`python3 Scripts/test-hints-latency-summary.py` tests it).
+count and the empty activations (`hints_empty`, left out of the
+percentiles). `Scripts/hints-latency-summary.py` does the parsing
+(`python3 Scripts/test-hints-latency-summary.py` tests it). Outside the
+benchmark, the same script summarizes ordinary use per app, busiest first:
+
+```sh
+python3 Scripts/hints-latency-summary.py --by-bundle ~/Library/Logs/Flash/flash.log*
+```
 
 ## Results
 

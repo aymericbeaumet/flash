@@ -49,7 +49,7 @@ Three CLI queries report instead of act. They are not verbs: no mapping can run
 them, and plugins cannot register verbs with their names.
 
 ```bash
-flash status                 # mode, key capture, input source, config, plugins
+flash status                 # mode, key capture, input source, config, plugins, hint timings
 flash status --json          # the same as versioned JSON
 flash doctor                 # check permissions, capture, config, hotkeys, plugins
 flash doctor --json
@@ -58,11 +58,11 @@ flash config_check --file=~/dotfiles/flash.toml
 ```
 
 `flash status` asks the running resident. `--json` prints this object; the keys
-are fixed for `"schema": 1`:
+are fixed for `"schema": 2`:
 
 | Key | Value |
 | --- | --- |
-| `schema` | `1` |
+| `schema` | `2` |
 | `version`, `build` | The app's version and build number |
 | `mode` | `disabled`, `insert`, `normal`, `command` or `terminal` |
 | `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting` or `pointer` |
@@ -76,14 +76,20 @@ are fixed for `"schema": 1`:
 | `config_path`, `config_diagnostics` | The config file and how many problems it has |
 | `plugins` | `{ "loaded", "ready", "error" }` counts |
 | `statusbar`, `autostart` | `[statusbar] enabled` and `[app] autostart` |
+| `hints` | Recent target activations (`f` and its variants) per app, keyed by bundle identifier: `{ "count", "empty", "p50_ms", "p95_ms" }`. Each app keeps its last 50 activations, for the 32 most recently used apps; `empty` counts those whose app yielded no hints, and the nearest-rank percentiles (milliseconds from the trigger to the hints on screen) cover the others, or are `null` when none showed hints. Empty until hints are asked for; nothing is persisted |
+
+The text rendering lists the three busiest apps under `hints`.
 
 `flash doctor` runs every check `:doctor` runs and prints one line per check:
 Accessibility, the keyboard tap, secure input (and which app holds it), the
 app's code signature (an ad-hoc signature can lose the Accessibility grant on
 update), other Flash residents, config diagnostics, hotkeys another app
 registered first, plugin health, hint and grid keys the current keyboard layout
-cannot type, and Screen Recording when the `screenshot` plugin runs. It exits 1
-when a check fails; warnings do not change the exit code.
+cannot type, Screen Recording when the `screenshot` plugin runs, and, once
+hints have been asked for, how recent activations went (`hint_activations`: a
+warning names each app with at least 5 recent activations of which a fifth or
+more showed no hints, or whose p95 exceeds 500 ms). It exits 1 when a check
+fails; warnings do not change the exit code.
 
 `flash config_check` does not contact the resident. It loads the bundled
 defaults and the file (`--file`, else the path Flash would load) exactly as the

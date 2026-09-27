@@ -513,7 +513,11 @@ extension AppDelegate {
     monitor.invalidateAfterUserAction(pid: pid, reason: "multi_click")
     let token = activationLifecycle.begin()
     applyModeOverlay()
-    monitor.discoverAsync(context: context) { [weak self] hints, _ in
+    // A repair still waiting on the app stops once this activation is gone.
+    let isCurrent: () -> Bool = { [weak self] in
+      self?.activationLifecycle.isCurrent(token) ?? false
+    }
+    monitor.discoverAsync(context: context, isCurrent: isCurrent) { [weak self] hints, _ in
       guard let self, self.activationLifecycle.complete(token: token) else { return }
       guard !hints.isEmpty else {
         FlashLog.debug("[multi] no_targets pid=\(pid)")
@@ -779,7 +783,12 @@ extension AppDelegate {
     // Single projection-driven writer (yields `.hints` with the grid hints up),
     // not a direct `overlay.inputMode` poke.
     applyModeOverlay()
-    presentHints(hints, prepared: .none, pid: hintSession.sourceAppPID, surface: "grid")
+    presentHints(
+      hints, prepared: .none, outcome: .none,
+      bundleIdentifier: hintSession.sourceAppPID.flatMap {
+        NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
+      },
+      surface: "grid")
     followMouseGridIfNeeded()
   }
 

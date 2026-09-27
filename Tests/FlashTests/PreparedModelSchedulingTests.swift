@@ -117,4 +117,64 @@ final class PreparedModelSchedulingTests: XCTestCase {
     XCTAssertEqual(state.wake(focus.ticket, now: 3_000_000_000), .stale)
     XCTAssertEqual(state.wake(next.ticket, now: 3_000_000_000), .fire(.refresh(.focus)))
   }
+  func testAReadinessStepHasItsOwnTicketBesideRefreshAndMaintenance() throws {
+    var clock = Clock()
+    var state = scheduler()
+    let refresh = try XCTUnwrap(state.scheduleRefresh(pid: 42, reason: .userAction("x"), now: 0))
+    let readiness = state.scheduleReadiness(
+      pid: 42, step: 1, then: .focus, deadline: clock.now + 100_000_000)
+    XCTAssertTrue(state.hasReadiness(pid: 42))
+    XCTAssertTrue(state.hasRefresh(pid: 42), "a readiness step never replaces a refresh")
+    clock.advance(50)
+    XCTAssertEqual(state.wake(readiness.ticket, now: clock.now), .wait(readiness))
+    clock.advance(50)
+    XCTAssertEqual(
+      state.wake(readiness.ticket, now: clock.now), .fire(.readiness(step: 1, then: .focus)))
+    XCTAssertFalse(state.hasReadiness(pid: 42))
+    XCTAssertEqual(state.wake(refresh.ticket, now: clock.now), .fire(.refresh(.userAction("x"))))
+  }
+
+  func testAReadinessProbeAppliesOnlyWhileItsHoldSurvives() {
+    var state = scheduler()
+    let held = state.holdReadiness(pid: 42, step: 0, then: .readiness)
+    XCTAssertTrue(state.hasReadiness(pid: 42), "a probe in flight still defers speculation")
+    XCTAssertTrue(state.releaseReadiness(held))
+    XCTAssertFalse(state.releaseReadiness(held), "a hold is consumed once")
+    XCTAssertFalse(state.hasReadiness(pid: 42))
+
+    // A newer ladder, a cancel or a reset revokes the probe's result.
+    let replaced = state.holdReadiness(pid: 42, step: 0, then: .focus)
+    let next = state.scheduleReadiness(pid: 42, step: 0, then: .focus, deadline: 1)
+    XCTAssertFalse(state.releaseReadiness(replaced))
+    XCTAssertEqual(state.wake(next.ticket, now: 1), .fire(.readiness(step: 0, then: .focus)))
+
+    let cancelled = state.holdReadiness(pid: 42, step: 2, then: .focus)
+    state.cancelReadiness(pid: 42)
+    XCTAssertFalse(state.releaseReadiness(cancelled))
+
+    let reset = state.holdReadiness(pid: 42, step: 2, then: .focus)
+    state.reset(pid: 42)
+    XCTAssertFalse(state.releaseReadiness(reset))
+  }
+
+  func testFocusElsewhereRevokesEveryOtherAppsLadder() {
+    var state = scheduler()
+    let other = state.scheduleReadiness(pid: 7, step: 0, then: .focus, deadline: 1)
+    let otherProbe = state.holdReadiness(pid: 8, step: 1, then: .readiness)
+    let focused = state.scheduleReadiness(pid: 9, step: 0, then: .focus, deadline: 1)
+    state.cancelReadiness(exceptPID: 9)
+    XCTAssertEqual(state.wake(other.ticket, now: 2), .stale)
+    XCTAssertFalse(state.releaseReadiness(otherProbe))
+    XCTAssertEqual(state.wake(focused.ticket, now: 2), .fire(.readiness(step: 0, then: .focus)))
+  }
+
+  func testSpeculativeSuppressionKeepsTheReadinessLadder() {
+    var state = scheduler()
+    let readiness = state.scheduleReadiness(pid: 42, step: 0, then: .readiness, deadline: 1)
+    // Storms and slow walks pause speculation; a tree mid-build is exactly
+    // when an app storms, so the ladder must survive them.
+    state.suppressSpeculativeRefresh(pid: 42)
+    XCTAssertEqual(
+      state.wake(readiness.ticket, now: 1), .fire(.readiness(step: 0, then: .readiness)))
+  }
 }

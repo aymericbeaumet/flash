@@ -74,6 +74,9 @@ final class AppMonitor {
     MainThreadHopper.runOrAsync { [weak self] in
       guard let self else { return }
       self.configRevision &+= 1
+      // A configuration change may add or drop the provider that owned a
+      // gated app's hints: give every app a fresh look.
+      self.backgroundWalkGate.reset()
       guard let app = NSWorkspace.shared.frontmostApplication else { return }
       let pid = app.processIdentifier
       guard pid > 0 else { return }
@@ -169,8 +172,16 @@ final class AppMonitor {
   /// first instead of stacking.
   var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
   /// The last trusted target count per app: what a later walk of the same app
-  /// is judged against (`discoveryLooksDegenerate`).
+  /// is judged against (`discoveryLooksDegenerate`). Written by activations
+  /// and by stored background walks that do not look degenerate; forgotten
+  /// when the app quits.
   var healthyTargetCounts: [pid_t: Int] = [:]
+  /// Readiness re-walks left for the focused app's current focus
+  /// (`backgroundReadinessRewalksPerFocus` when absent); reset on focus.
+  var readinessRewalkBudget: [pid_t: Int] = [:]
+  /// Apps whose automatic walks are useless: a volatile provider owns their
+  /// hints and their own tree keeps walking empty.
+  var backgroundWalkGate = EmptyBackgroundWalkGate()
   var workspaceObservers: [NSObjectProtocol] = []
   var localObservers: [NSObjectProtocol] = []
   /// `installObserver` runs on every focus change; this gates the

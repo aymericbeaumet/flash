@@ -94,6 +94,8 @@ enum Doctor {
     var missingKeyboardLayout: String?
     /// Screen Recording, checked only while the screenshot plugin runs.
     var screenRecordingGranted: Bool?
+    /// Recent target activations per app; empty until hints are asked for.
+    var hintActivations: [HintActivationStats.Summary] = []
   }
 
   static func run(_ inputs: Inputs) -> Report {
@@ -204,6 +206,10 @@ enum Doctor {
 
     checks.append(layoutCheck(inputs))
 
+    if let hints = hintActivationCheck(inputs.hintActivations) {
+      checks.append(hints)
+    }
+
     if let granted = inputs.screenRecordingGranted {
       checks.append(
         granted
@@ -213,6 +219,45 @@ enum Doctor {
             summary: "Screen Recording is not granted; :screenshot asks for it on first use"))
     }
     return Report(checks: checks)
+  }
+
+  /// An app is judged once it has this many recent activations.
+  static let hintActivationsJudged = 5
+  /// An app whose activations came back empty at least this often (a fifth)…
+  static let hintEmptyShareWarning = 0.2
+  /// …or whose shown hints took longer than this at the 95th percentile.
+  static let hintP95WarningMs = 500.0
+
+  /// How hint activations have gone lately, per app. Absent until Flash has
+  /// recorded any; a warning, never an issue, since an app may simply have
+  /// nothing to click.
+  static func hintActivationCheck(_ apps: [HintActivationStats.Summary]) -> Check? {
+    guard !apps.isEmpty else { return nil }
+    let flagged = apps.filter { app in
+      app.count >= hintActivationsJudged
+        && (Double(app.empty) >= hintEmptyShareWarning * Double(app.count)
+          || (app.p95Ms ?? 0) > hintP95WarningMs)
+    }
+    guard !flagged.isEmpty else {
+      let total = apps.map(\.count).reduce(0, +)
+      let shown = apps.map { $0.count - $0.empty }.reduce(0, +)
+      return Check(
+        id: "hint_activations", status: .ok,
+        summary: "hints appeared in \(shown) of \(total) recent activations across "
+          + "\(apps.count) app\(apps.count == 1 ? "" : "s")")
+    }
+    return Check(
+      id: "hint_activations", status: .warn,
+      summary: "hints were often empty or slow in \(flagged.count) app"
+        + (flagged.count == 1 ? "" : "s") + ": "
+        + flagged.map(\.bundleIdentifier).joined(separator: ", "),
+      details: flagged.map { app in
+        "\(app.bundleIdentifier): \(app.empty) of \(app.count) recent activations showed no hints"
+          + (app.p95Ms.map { String(format: "; p95 %.0f ms", $0) } ?? "")
+      } + [
+        "`[latency] hints_visible` and `hints_empty` lines name each activation; "
+          + "docs/performance.md explains them."
+      ])
   }
 
   /// Keys the hint alphabet or the grid use that the layout keys are read

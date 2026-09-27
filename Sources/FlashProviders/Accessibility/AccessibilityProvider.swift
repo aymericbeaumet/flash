@@ -754,7 +754,7 @@ public final class AccessibilityProvider: FlashSource {
     }
   }
 
-  private static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
+  static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
     for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
       if let window = elementAttribute(app, attribute as String),
         isTopLevelInteractionSurface(window)

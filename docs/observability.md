@@ -33,9 +33,23 @@ no id.
 
 Every hint activation logs `[latency] hints_visible` at `info`: milliseconds
 from its trigger to the Core Animation commit that shows the hints, with the
-origin, whether the prepared model served it, the target count and the app
-class. `Scripts/benchmark-hints.sh` aggregates these lines; see
-[performance](performance.md).
+origin, whether the prepared model served it, the target count, the app
+class, the app's bundle identifier and the discovery outcome (`hit`, `miss`,
+`retried`, `empty`, `none`). An activation that ends with nothing to draw
+stays silent on screen and logs `[latency] hints_empty` at `info` instead,
+with the time Flash took to give up and the discovery path where it did.
+`Scripts/benchmark-hints.sh` aggregates these lines, and
+`Scripts/hints-latency-summary.py --by-bundle` summarizes a log per app; see
+[performance](performance.md). `flash status --json` carries the same
+per-app summary for the running resident (`hints`), and `flash doctor` warns
+about apps whose hints are often empty or slow.
+
+Repairs of a degenerate walk log `[discover] retry` and
+`[discover] retry_result` at `info` (`repair=retry|readiness`, the ladder
+`steps` taken and `waited_ms`). At `debug`, `[discover] complete` carries `retried`, and
+`[ax] readiness_ready` / `[ax] readiness_rewalk` follow background readiness
+ladders. `[ax] model_refresh_gated` is logged once, at `info`, when an app
+whose volatile provider owns its hints stops being warmed.
 
 ## HTTP inspector
 

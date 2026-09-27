@@ -12,12 +12,15 @@ extension AppMonitor {
   /// Activation hot path. Dynamically scoped uncached providers (tmux) get the
   /// first chance to claim the context. Their explicit empty-result fallback
   /// can then use the prepared AX model without merging provider results.
-  /// `completion` receives the hints and whether they came straight from
-  /// the focused app's prepared model (a hit) rather than a fresh walk.
+  /// `completion` receives the hints and how they were obtained
+  /// (`DiscoveryOutcome`). `isCurrent` tells a repair that is still waiting
+  /// on the app whether the activation it serves is still wanted; once it is
+  /// not, the repair stops and completes with what it has.
   func discoverAsync(
     context: AppContext,
     targetFilter: ((JumpTarget) -> Bool)? = nil,
-    completion: @escaping (_ hints: [AssignedHint], _ preparedHit: Bool) -> Void
+    isCurrent: @escaping () -> Bool = { true },
+    completion: @escaping (_ hints: [AssignedHint], _ outcome: DiscoveryOutcome) -> Void
   ) {
     let pid = context.processID
     let startedAt = DispatchTime.now()
@@ -25,6 +28,7 @@ extension AppMonitor {
     func complete(
       path: String,
       hints: [AssignedHint],
+      retried: Bool = false,
       extra: [String: String] = [:]
     ) {
       if FlashLog.wouldEmit(.debug) {
@@ -33,6 +37,7 @@ extension AppMonitor {
           "pid": "\(pid)",
           "bundle": context.bundleIdentifier,
           "hints": "\(hints.count)",
+          "retried": "\(retried)",
           "target_filter": "\(hasTargetFilter)",
           "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
         ]
@@ -41,7 +46,7 @@ extension AppMonitor {
         }
         FlashLog.debug("[discover] complete", fields: fields)
       }
-      completion(hints, path == "prepared_model" || path == "prepared_model_filter")
+      completion(hints, DiscoveryOutcome(path: path, retried: retried))
     }
 
     let plan = registry.hintProviderPlan(for: context)
@@ -65,7 +70,7 @@ extension AppMonitor {
       installObserver(for: pid)
     }
 
-    func discoverPreparedFallback() {
+    func discoverPreparedFallback(afterVolatileDecline: Bool) {
       guard !plan.preparedProviders.isEmpty else {
         complete(path: "activation_no_fallback", hints: [])
         return
@@ -84,6 +89,7 @@ extension AppMonitor {
           targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
       {
         noteHealthyTargets(model.targets.count, pid: pid)
+        noteActivationFoundTargets(pid: pid, bundleIdentifier: context.bundleIdentifier)
         if let targetFilter {
           let cfg = snapshotConfig()
           let targets = model.targets.filter(targetFilter)
@@ -103,15 +109,21 @@ extension AppMonitor {
         return
       }
 
-      refreshForActivation(pid: pid) { [weak self] model in
+      refreshForActivation(
+        context: context, afterVolatileDecline: afterVolatileDecline, isCurrent: isCurrent
+      ) { [weak self] model, retried in
         guard let self else { return }
         if let model {
+          if !model.targets.isEmpty {
+            self.noteActivationFoundTargets(pid: pid, bundleIdentifier: context.bundleIdentifier)
+          }
           if let targetFilter {
             let cfg = self.snapshotConfig()
             let targets = model.targets.filter(targetFilter)
             complete(
               path: "prepared_model_refresh_filter",
               hints: self.assignTargets(targets, cfg: cfg),
+              retried: retried,
               extra: [
                 "model_targets": "\(model.targets.count)",
                 "targets": "\(targets.count)",
@@ -120,22 +132,26 @@ extension AppMonitor {
             complete(
               path: "prepared_model_refresh",
               hints: model.hints,
+              retried: retried,
               extra: ["targets": "\(model.targets.count)"])
           }
         } else {
-          self.runActivationDiscovery(
-            context: context,
-            providers: plan.preparedProviders,
-            targetFilter: targetFilter
-          ) { result in
-            complete(path: "activation_refresh_miss", hints: result.hints)
+          self.walkForActivation(
+            context: context, providers: plan.preparedProviders, targetFilter: targetFilter,
+            afterVolatileDecline: afterVolatileDecline, repaired: retried, isCurrent: isCurrent
+          ) { [weak self] result, retried in
+            if result.collectedTargets > 0 {
+              self?.noteActivationFoundTargets(
+                pid: pid, bundleIdentifier: context.bundleIdentifier)
+            }
+            complete(path: "activation_refresh_miss", hints: result.hints, retried: retried)
           }
         }
       }
     }
 
     guard !plan.uncachedProviders.isEmpty else {
-      discoverPreparedFallback()
+      discoverPreparedFallback(afterVolatileDecline: false)
       return
     }
     runActivationDiscovery(
@@ -144,7 +160,8 @@ extension AppMonitor {
       targetFilter: targetFilter
     ) { result in
       if result.allowsFallback {
-        discoverPreparedFallback()
+        discoverPreparedFallback(
+          afterVolatileDecline: plan.uncachedProviders.contains { $0.resultsAreVolatile })
       } else {
         complete(path: "activation_uncached", hints: result.hints)
       }
@@ -161,44 +178,181 @@ extension AppMonitor {
     return targets * 10 < lastHealthy
   }
 
-  static let activationRetryDelayMs = 150
-
   func noteHealthyTargets(_ count: Int, pid: pid_t) {
     guard count > 0 else { return }
     healthyTargetCounts[pid] = count
   }
 
-  /// The activation refresh, with one repair: a degenerate result is walked
-  /// again after a short settle, and the fuller of the two is served. Bounded
-  /// to a single retry so an app that is genuinely empty costs one extra walk.
+  /// An activation found targets in the app's own tree: whatever gated its
+  /// background walks no longer holds.
+  private func noteActivationFoundTargets(pid: pid_t, bundleIdentifier: String) {
+    guard backgroundWalkGate.noteActivationTargets(pid: pid) else { return }
+    FlashLog.debug(
+      "[ax] model_refresh_ungated pid=\(pid) bundle=\(bundleIdentifier) reason=activation_targets")
+  }
+
+  /// The activation refresh, with one repair (`DegenerateRepair`): a
+  /// degenerate result is walked once more — after a short settle, or once a
+  /// runtime that builds its tree asynchronously reports it ready — and the
+  /// fuller of the two is served. Never more than one extra walk, so an app
+  /// that is genuinely empty ends silently. `completion` gets a nil model when
+  /// no valid one came back (the caller then walks directly), and whether a
+  /// repair walk ran.
   private func refreshForActivation(
-    pid: pid_t, completion: @escaping (PreparedModel?) -> Void
+    context: AppContext, afterVolatileDecline: Bool, isCurrent: @escaping () -> Bool,
+    completion: @escaping (_ model: PreparedModel?, _ retried: Bool) -> Void
   ) {
+    let pid = context.processID
     runModelRefresh(pid: pid, reason: .activation) { [weak self] first in
       guard let self else { return }
-      guard let first else { return completion(nil) }
+      guard let first else { return completion(nil, false) }
       let lastHealthy = self.healthyTargetCounts[pid]
       guard Self.discoveryLooksDegenerate(targets: first.targets.count, lastHealthy: lastHealthy)
       else {
         self.noteHealthyTargets(first.targets.count, pid: pid)
-        return completion(first)
+        return completion(first, false)
       }
-      FlashLog.info(
-        "[discover] retry pid=\(pid) targets=\(first.targets.count) "
-          + "last_healthy=\(lastHealthy.map(String.init) ?? "none")")
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.activationRetryDelayMs)) {
-        self.runModelRefresh(pid: pid, reason: .activationRetry) { retried in
-          let best = [first, retried].compactMap { $0 }.max { $0.targets.count < $1.targets.count }
-          FlashLog.info(
-            "[discover] retry_result pid=\(pid) first=\(first.targets.count) "
-              + "retried=\(retried.map { String($0.targets.count) } ?? "none")")
-          if let best,
-            !Self.discoveryLooksDegenerate(
-              targets: best.targets.count, lastHealthy: lastHealthy)
-          {
-            self.noteHealthyTargets(best.targets.count, pid: pid)
+      self.repairDegenerateActivationWalk(
+        context: context, targets: first.targets.count, afterVolatileDecline: afterVolatileDecline,
+        isCurrent: isCurrent, keep: { completion(first, false) }
+      ) { [weak self] detail in
+        self?.runModelRefresh(pid: pid, reason: .activationRetry) { [weak self] retried in
+          guard let self else { return }
+          Self.logRepairResult(
+            pid: pid, first: first.targets.count, retried: retried?.targets.count, detail: detail)
+          // A repair walk whose model came back invalid — the tree changed
+          // while it was read, which is what a tree being built does, or the
+          // app lost the front — hands the activation a direct walk instead
+          // of the degenerate first result.
+          guard let retried else { return completion(nil, true) }
+          let best = retried.targets.count >= first.targets.count ? retried : first
+          self.noteRepairedTargets(best.targets.count, pid: pid, lastHealthy: lastHealthy)
+          completion(best, true)
+        }
+      }
+    }
+  }
+
+  /// A walk served straight to the activation, without a prepared model:
+  /// the fallback when the refresh's model came back invalid. It gets the
+  /// same repair, unless it already follows one (`repaired`).
+  private func walkForActivation(
+    context: AppContext, providers: [FlashSource], targetFilter: ((JumpTarget) -> Bool)?,
+    afterVolatileDecline: Bool, repaired: Bool, isCurrent: @escaping () -> Bool,
+    completion: @escaping (_ result: DiscoveryResult, _ retried: Bool) -> Void
+  ) {
+    let pid = context.processID
+    runActivationDiscovery(context: context, providers: providers, targetFilter: targetFilter) {
+      [weak self] first in
+      guard let self else { return }
+      let lastHealthy = self.healthyTargetCounts[pid]
+      guard !repaired,
+        Self.discoveryLooksDegenerate(targets: first.collectedTargets, lastHealthy: lastHealthy)
+      else {
+        self.noteRepairedTargets(first.collectedTargets, pid: pid, lastHealthy: lastHealthy)
+        return completion(first, repaired)
+      }
+      self.repairDegenerateActivationWalk(
+        context: context, targets: first.collectedTargets,
+        afterVolatileDecline: afterVolatileDecline, isCurrent: isCurrent,
+        keep: { completion(first, false) }
+      ) { [weak self] detail in
+        self?.runActivationDiscovery(
+          context: context, providers: providers, targetFilter: targetFilter
+        ) { [weak self] retried in
+          Self.logRepairResult(
+            pid: pid, first: first.collectedTargets, retried: retried.collectedTargets,
+            detail: detail)
+          let best = retried.collectedTargets >= first.collectedTargets ? retried : first
+          self?.noteRepairedTargets(best.collectedTargets, pid: pid, lastHealthy: lastHealthy)
+          completion(best, true)
+        }
+      }
+    }
+  }
+
+  /// Decide how a degenerate activation walk is repaired and run the wait:
+  /// `keep` serves the first result as it is (nothing to repair, or the
+  /// activation went away), `rewalk` performs the one extra walk.
+  private func repairDegenerateActivationWalk(
+    context: AppContext, targets: Int, afterVolatileDecline: Bool,
+    isCurrent: @escaping () -> Bool, keep: @escaping () -> Void,
+    rewalk: @escaping (_ detail: String) -> Void
+  ) {
+    let pid = context.processID
+    let lastHealthy = healthyTargetCounts[pid]
+    // The first walk's `AppTraits.of` has cached the app's traits.
+    let repair = Self.degenerateRepair(
+      engine: AppTraits.cached(bundleIdentifier: context.bundleIdentifier)?.engine,
+      afterVolatileDecline: afterVolatileDecline, lastHealthy: lastHealthy)
+    let repairName: String
+    switch repair {
+    case .none: return keep()
+    case .retry: repairName = "retry"
+    case .readinessLadder: repairName = "readiness"
+    }
+    FlashLog.info(
+      "[discover] retry pid=\(pid) targets=\(targets) "
+        + "last_healthy=\(lastHealthy.map(String.init) ?? "none") repair=\(repairName)")
+    let startedAt = DispatchTime.now()
+    let walk: (Int) -> Void = { steps in
+      rewalk(
+        "repair=\(repairName) steps=\(steps) "
+          + "waited_ms=\(Self.elapsedMilliseconds(since: startedAt))")
+    }
+    switch repair {
+    case .none: break
+    case .retry(let afterMs):
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(afterMs)) {
+        guard isCurrent() else { return keep() }
+        walk(1)
+      }
+    case .readinessLadder(let delaysMs):
+      climbActivationLadder(
+        context: context, delaysMs: delaysMs, step: 0, isCurrent: isCurrent, abandon: keep,
+        walk: walk)
+    }
+  }
+
+  private static func logRepairResult(pid: pid_t, first: Int, retried: Int?, detail: String) {
+    FlashLog.info(
+      "[discover] retry_result pid=\(pid) first=\(first) "
+        + "retried=\(retried.map(String.init) ?? "none") \(detail)")
+  }
+
+  /// A served result that no longer looks degenerate becomes the app's
+  /// healthy count.
+  private func noteRepairedTargets(_ count: Int, pid: pid_t, lastHealthy: Int?) {
+    guard !Self.discoveryLooksDegenerate(targets: count, lastHealthy: lastHealthy) else { return }
+    noteHealthyTargets(count, pid: pid)
+  }
+
+  /// One step of the activation's readiness ladder: wait (never sleep), then
+  /// probe the tree on the AX queue — walk when it is ready, climb otherwise,
+  /// and walk regardless at the last step. The activation going away (a
+  /// replacement, Escape, focus leaving the app) ends the climb.
+  private func climbActivationLadder(
+    context: AppContext, delaysMs: [Int], step: Int, isCurrent: @escaping () -> Bool,
+    abandon: @escaping () -> Void, walk: @escaping (_ steps: Int) -> Void
+  ) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delaysMs[step])) {
+      [weak self] in
+      guard let self else { return }
+      guard isCurrent() else { return abandon() }
+      guard step < delaysMs.count - 1 else { return walk(step + 1) }
+      self.axQueue.async { [weak self] in
+        let ready = AccessibilityReadiness.probe(
+          pid: context.processID, bundleIdentifier: context.bundleIdentifier)
+        DispatchQueue.main.async {
+          guard let self else { return }
+          guard isCurrent() else { return abandon() }
+          if ready {
+            walk(step + 1)
+          } else {
+            self.climbActivationLadder(
+              context: context, delaysMs: delaysMs, step: step + 1, isCurrent: isCurrent,
+              abandon: abandon, walk: walk)
           }
-          completion(best)
         }
       }
     }
@@ -343,6 +497,9 @@ extension AppMonitor {
     let targets: [JumpTarget]
     let hints: [AssignedHint]
     let allowsFallback: Bool
+    /// Targets the walk found before any activation filter, which is what a
+    /// degenerate walk is judged by.
+    var collectedTargets: Int = 0
   }
 
   private struct DiscoveryFrame {
@@ -486,7 +643,8 @@ extension AppMonitor {
     return DiscoveryResult(
       targets: targets,
       hints: hints,
-      allowsFallback: collection.allowsFallback)
+      allowsFallback: collection.allowsFallback,
+      collectedTargets: finalized.targets.count)
   }
 
   private func logDiscoveryPipeline(

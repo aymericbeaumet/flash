@@ -34,6 +34,44 @@ final class DoctorTests: XCTestCase {
         "hotkeys", "plugins", "keyboard_layout",
       ])
     XCTAssertNil(check(report, "screen_recording"), "checked only with the screenshot plugin")
+    XCTAssertNil(check(report, "hint_activations"), "reported only once hints were asked for")
+  }
+
+  func testRecentHintActivationsAreReportedOnceThereAreAny() {
+    typealias Summary = HintActivationStats.Summary
+    var inputs = healthy()
+    inputs.hintActivations = [
+      Summary(bundleIdentifier: "com.apple.Notes", count: 8, empty: 1, p50Ms: 12, p95Ms: 40),
+      // Too few activations to judge.
+      Summary(bundleIdentifier: "com.example.rare", count: 4, empty: 4, p50Ms: nil, p95Ms: nil),
+    ]
+    let fine = check(Doctor.run(inputs), "hint_activations")
+    XCTAssertEqual(fine?.status, .ok)
+    XCTAssertEqual(fine?.summary, "hints appeared in 7 of 12 recent activations across 2 apps")
+    XCTAssertEqual(Doctor.run(inputs).warnings, 0)
+
+    inputs.hintActivations = [
+      // 13 of 50 empty: over a fifth.
+      Summary(
+        bundleIdentifier: "org.mozilla.firefox", count: 50, empty: 13, p50Ms: 160, p95Ms: 420),
+      // Slow at the tail.
+      Summary(
+        bundleIdentifier: "com.tinyspeck.slackmacgap", count: 20, empty: 0, p50Ms: 90, p95Ms: 684),
+      Summary(bundleIdentifier: "com.apple.Notes", count: 8, empty: 1, p50Ms: 12, p95Ms: 40),
+    ]
+    let report = Doctor.run(inputs)
+    let flagged = check(report, "hint_activations")
+    XCTAssertEqual(flagged?.status, .warn, "a warning never fails `flash doctor`")
+    XCTAssertEqual(report.issues, 0)
+    XCTAssertEqual(
+      flagged?.summary,
+      "hints were often empty or slow in 2 apps: org.mozilla.firefox, com.tinyspeck.slackmacgap")
+    XCTAssertEqual(
+      flagged?.details.prefix(2),
+      [
+        "org.mozilla.firefox: 13 of 50 recent activations showed no hints; p95 420 ms",
+        "com.tinyspeck.slackmacgap: 0 of 20 recent activations showed no hints; p95 684 ms",
+      ])
   }
 
   func testEveryFailureIsAnIssue() {

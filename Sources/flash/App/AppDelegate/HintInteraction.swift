@@ -103,28 +103,61 @@ extension AppDelegate {
 
   /// Draw an activation's hints. The first display of an activation also
   /// logs `[latency] hints_visible`, from the completion of the Core
-  /// Animation transaction that commits them.
+  /// Animation transaction that commits them, and records a target
+  /// activation in `hintActivationStats`.
   func presentHints(
-    _ hints: [AssignedHint], prepared: HintLatencyProbe.Prepared, pid: pid_t?, surface: String
+    _ hints: [AssignedHint], prepared: HintLatencyProbe.Prepared,
+    outcome: HintLatencyProbe.Outcome, bundleIdentifier: String?, surface: String
   ) {
     guard let probe = hintSession.latencyProbe else {
       overlay.display(hints: hints)
       return
     }
     hintSession.latencyProbe = nil
-    let bundleIdentifier = pid.flatMap { NSRunningApplication(processIdentifier: $0) }?
-      .bundleIdentifier
     let appClass = HintLatencyProbe.appClass(AppTraits.cached(bundleIdentifier: bundleIdentifier))
     let targets = hints.count
     CATransaction.begin()
-    CATransaction.setCompletionBlock {
+    CATransaction.setCompletionBlock { [weak self] in
+      let visibleAt = ProcessInfo.processInfo.systemUptime
       let line = probe.line(
-        visibleAt: ProcessInfo.processInfo.systemUptime, prepared: prepared, targets: targets,
-        appClass: appClass, surface: surface)
+        visibleAt: visibleAt, prepared: prepared, outcome: outcome, targets: targets,
+        appClass: appClass, bundleIdentifier: bundleIdentifier, surface: surface)
       Trace.run(in: probe.trace) { FlashLog.info(line) }
+      self?.recordHintActivation(
+        bundleIdentifier: bundleIdentifier, surface: surface, ms: probe.elapsedMs(at: visibleAt),
+        empty: outcome == .empty)
     }
     overlay.display(hints: hints)
     CATransaction.commit()
+  }
+
+  /// An activation that ends without drawing anything spends its probe here:
+  /// `[latency] hints_empty` at `info`, so a silent "pressed f, nothing
+  /// happened" is visible in the log. No UI (rule 6). `path` says where
+  /// discovery gave up. `countsForApp` is false when the app is not why
+  /// (a missing grant), so the per-app record only judges discovery.
+  func endHintActivationEmpty(
+    bundleIdentifier: String?, path: String, surface: String, countsForApp: Bool = true
+  ) {
+    guard let probe = hintSession.latencyProbe else { return }
+    hintSession.latencyProbe = nil
+    let endedAt = ProcessInfo.processInfo.systemUptime
+    let line = probe.emptyLine(
+      endedAt: endedAt, bundleIdentifier: bundleIdentifier, path: path, surface: surface)
+    Trace.run(in: probe.trace) { FlashLog.info(line) }
+    guard countsForApp else { return }
+    recordHintActivation(
+      bundleIdentifier: bundleIdentifier, surface: surface, ms: probe.elapsedMs(at: endedAt),
+      empty: true)
+  }
+
+  /// Only the focused app's target hints (`f` and its variants) are kept
+  /// per app; the grid and the system surfaces are not an app's discovery.
+  private func recordHintActivation(
+    bundleIdentifier: String?, surface: String, ms: Double, empty: Bool
+  ) {
+    guard surface == "targets", let bundleIdentifier else { return }
+    hintActivationStats.record(bundleIdentifier: bundleIdentifier, ms: ms, empty: empty)
   }
 
   /// Whether secure input was on the last time Flash looked — at a hint

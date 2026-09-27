@@ -31,7 +31,8 @@ extension AppDelegate {
       configDiagnostics: config.loadingDiagnostics.count,
       plugins: FlashStatusReport.PluginCounts(pluginManager.statusBarInfos()),
       statusBar: statusBarVisible,
-      autostart: config.app.autostart)
+      autostart: config.app.autostart,
+      hints: hintActivationStats.summaries)
   }
 
   /// Gather the doctor's inputs — the main-thread state here, the slow
@@ -55,7 +56,8 @@ extension AppDelegate {
       hintKeys: config.resolvedAlphabet.chars,
       gridKeys: Array(config.resolvedMouseGridKeys.joined()),
       readLayout: reference.table ?? InputSources.currentLayout(),
-      missingKeyboardLayout: reference.missingSourceID)
+      missingKeyboardLayout: reference.missingSourceID,
+      hintActivations: hintActivationStats.summaries)
     let statuses = pluginManager.pluginStatuses()
     let screenshotEnabled = pluginManager.statusBarInfos().contains { $0.id == "screenshot" }
     let bundleURL = Bundle.main.bundleURL

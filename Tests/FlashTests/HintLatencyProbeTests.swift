@@ -62,10 +62,31 @@ final class HintLatencyProbeTests: XCTestCase {
     var probe: HintLatencyProbe?
     Trace.begin(.key, triggeredAt: 10) { probe = HintLatencyProbe.arm(Trace.currentTrigger) }
     let line = try XCTUnwrap(probe).line(
-      visibleAt: 10.01234, prepared: .hit, targets: 42, appClass: .native, surface: "targets")
+      visibleAt: 10.01234, prepared: .hit, outcome: .hit, targets: 42, appClass: .native,
+      bundleIdentifier: "com.apple.Safari", surface: "targets")
     XCTAssertEqual(
       line,
       "[latency] hints_visible ms=12.3 origin=key prepared=hit targets=42 class=native "
-        + "surface=targets")
+        + "surface=targets bundle=com.apple.Safari outcome=hit")
+    let unknown = try XCTUnwrap(probe).line(
+      visibleAt: 10.5, prepared: .none, outcome: .none, targets: 9, appClass: .other,
+      bundleIdentifier: nil, surface: "grid")
+    XCTAssertTrue(unknown.hasSuffix("surface=grid bundle=- outcome=none"), unknown)
+  }
+
+  /// An activation that ends with no hints is logged too, and parsed by the
+  /// same script.
+  func testTheEmptyLineFormat() throws {
+    var probe: HintLatencyProbe?
+    Trace.begin(.hotkey, triggeredAt: 20) { probe = HintLatencyProbe.arm(Trace.currentTrigger) }
+    let line = try XCTUnwrap(probe).emptyLine(
+      endedAt: 21.5, bundleIdentifier: "com.tinyspeck.slackmacgap",
+      path: "prepared_model_refresh", surface: "targets")
+    XCTAssertEqual(
+      line,
+      "[latency] hints_empty ms=1500.0 bundle=com.tinyspeck.slackmacgap "
+        + "path=prepared_model_refresh origin=hotkey surface=targets")
+    XCTAssertEqual(try XCTUnwrap(probe).elapsedMs(at: 21.5), 1500, accuracy: 0.001)
+    XCTAssertEqual(try XCTUnwrap(probe).elapsedMs(at: 19), 0, "never negative")
   }
 }
