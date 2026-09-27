@@ -7,8 +7,9 @@ public struct AppTraits: Equatable, Sendable {
   /// UI runtimes that run their own accessibility lifecycle.
   public enum Engine: Equatable, Sendable {
     /// Gecko turns its accessibility on when read and, while it is on,
-    /// animates programmatic window moves, so Flash scopes it to each
-    /// operation (`GeckoAccessibility`).
+    /// animates programmatic window moves, so Flash keeps the mode it turned
+    /// on only while the app is focused and switches it off before every
+    /// window move (`GeckoAccessibility`).
     case gecko
     /// Chromium (Electron and CEF apps included, and the browsers' installed
     /// web-app shims) builds its accessibility tree only once an assistive

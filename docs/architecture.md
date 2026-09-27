@@ -134,7 +134,23 @@ apps build from clickable divs. Chromium and Flutter build their accessibility
 tree only after an assistive client sets the enhanced-UI flags, so Flash sets
 them at launch, on each focus change (the focus walk then waits for the
 readiness probe) and on each walk; every other app builds its tree on demand
-and never gets them, and Gecko's are scoped to each AX operation.
+and never gets them.
+
+Gecko turns its accessibility mode on when its tree is read; while the mode is
+on, programmatic window moves become a slow, often incomplete animation, and
+switching it off discards the tree, which the next read finds empty while it
+is rebuilt. `GeckoAccessibility` owns the mode for every Flash AX client, under
+one lock per process, and records which processes have it on because Flash
+turned it on. That mode stays on after a walk, probe or commit while the app
+is focused, so the next one reads a built tree. It is switched off, away from
+the main thread, when another app is activated, on a Space change, and when
+the monitor stops (at quit, which waits for it, bounded); it is forgotten when
+the app quits; and `withWindowManagement` switches it off immediately before
+every window geometry write, lingering or not, until the next tree operation
+turns it on again. Without focus reports nothing lingers. A mode another assistive
+client turned on (VoiceOver) is never switched off. A third-party window
+manager moving a focused Gecko window meets the same flag Flash already leaves
+on in every Chromium app, and VoiceOver in every app.
 
 Inside UIKit content (the `iOSContentGroup` a Mac Catalyst or iPad app's
 window hosts, as in Messages and WhatsApp), each conversation row or message

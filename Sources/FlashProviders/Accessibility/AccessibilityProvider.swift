@@ -643,8 +643,9 @@ public final class AccessibilityProvider: FlashSource {
     // Only runtimes that need it (`AppTraits.needsAccessibilityWake`). The
     // flag is process-sticky and tells an app an assistive client is
     // permanently watching: SwiftUI-heavy apps respond with eager
-    // accessibility bookkeeping, and Gecko is instead activated and restored
-    // by the scoped `GeckoAccessibility.withTree` call above.
+    // accessibility bookkeeping. Gecko is instead woken by the
+    // `GeckoAccessibility.withTree` call above, which keeps its mode on only
+    // while the app is focused.
     let traits = AppTraits.of(bundleIdentifier: context.bundleIdentifier, pid: context.processID)
     if traits.needsAccessibilityWake {
       let trueRef = kCFBooleanTrue as CFTypeRef
@@ -1049,29 +1050,13 @@ public final class AccessibilityProvider: FlashSource {
       }
     }
 
-    // Descent pruning (native only). An element whose frame is valid and lies
-    // wholly outside the visible clip cannot contain an on-screen target: a
-    // native container lays its children out within its own bounds, and the
-    // capture gate above already rejects anything outside `visible` — so
-    // skipping the subtree changes no hint output, it only avoids the per-node
-    // batch IPC for descendants that would all be discarded anyway.
-    //
-    // This is what makes Notes (and any long native list) usable: Notes exposes
-    // its whole note list — ~300 rows, ~2500 AX nodes — and answers AX ~0.4ms a
-    // node, so an unpruned walk pins Notes' AX main thread for 1–2s on every
-    // focus change and every keystroke-driven re-walk. That saturation is felt
-    // as system-wide input lag because Flash's key tap shares the main runloop.
-    // Pruning the scrolled-off rows cuts the walk ~2500 → ~470 nodes.
-    //
-    // Restricted to `!insideWebArea`: CSS transforms / `overflow: visible` /
-    // fixed positioning let a web node render outside its ancestor's reported
-    // frame, so geometric containment isn't guaranteed there. Never prune the
-    // root (`depth == 0`) or a frameless / zero-size container — its children
-    // may carry the real geometry.
-    if depth > 0, !insideWebArea,
-      let posV = posValue, let sizeV = sizeValue,
-      let elementFrame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
-      !elementFrame.isEmpty, !visible.intersects(elementFrame)
+    // Descent pruning (`skipsOffscreenSubtree`): a native container wholly
+    // outside the visible clip is not walked; a web container always is.
+    let elementFrame = posValue.flatMap { posV in
+      sizeValue.flatMap { sizeV in Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH) }
+    }
+    if Self.skipsOffscreenSubtree(
+      frame: elementFrame, visible: visible, depth: depth, insideWebArea: insideWebArea)
     {
       return
     }
@@ -1183,6 +1168,36 @@ public final class AccessibilityProvider: FlashSource {
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget)
     }
+  }
+
+  /// Whether the walk skips an element and its whole subtree for lying outside
+  /// the visible clip.
+  ///
+  /// A native element whose frame lies wholly outside the clip cannot contain
+  /// an on-screen target: a native container lays its children out within its
+  /// own bounds, and the capture gate already rejects anything outside
+  /// `visible` — so skipping the subtree changes no hint output, it only
+  /// avoids the per-node batch IPC for descendants that would all be discarded
+  /// anyway. This is what makes Notes (and any long native list) usable: Notes
+  /// exposes its whole note list — ~300 rows, ~2500 AX nodes — and answers AX
+  /// ~0.4ms a node, so an unpruned walk pinned Notes' AX main thread for 1–2s
+  /// on every focus change. Pruning the scrolled-off rows cuts the walk
+  /// ~2500 → ~470 nodes.
+  ///
+  /// Never inside a web area: fixed positioning, CSS transforms and
+  /// `overflow: visible` let a web node render outside its ancestor's reported
+  /// frame. Gecko reports a footer's own box far below the page while the
+  /// `position: fixed` link inside it sits on screen, and Chromium clips
+  /// offscreen nodes to the viewport, zero-height strips along its edge that
+  /// are never skippable (see "Experiment: pruning offscreen web subtrees" in
+  /// docs/performance.md). The root (`depth == 0`) and a frameless or
+  /// zero-size container are always walked: their children may carry the real
+  /// geometry.
+  static func skipsOffscreenSubtree(
+    frame: CGRect?, visible: CGRect, depth: Int, insideWebArea: Bool
+  ) -> Bool {
+    guard depth > 0, !insideWebArea, let frame, !frame.isEmpty else { return false }
+    return !visible.intersects(frame)
   }
 
   /// Parallel resolution of the one IPC each tentative target the walker

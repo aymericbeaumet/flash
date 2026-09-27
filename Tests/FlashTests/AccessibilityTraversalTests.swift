@@ -72,6 +72,37 @@ final class AccessibilityTraversalTests: XCTestCase {
   }
 }
 
+final class OffscreenPruneTests: XCTestCase {
+  private let clip = CGRect(x: 0, y: 0, width: 1000, height: 800)
+
+  private func skips(_ frame: CGRect?, depth: Int = 3, insideWebArea: Bool = false) -> Bool {
+    AccessibilityProvider.skipsOffscreenSubtree(
+      frame: frame, visible: clip, depth: depth, insideWebArea: insideWebArea)
+  }
+
+  func testANativeContainerWhollyOutsideTheClipIsSkipped() {
+    XCTAssertTrue(skips(CGRect(x: 0, y: -400, width: 1000, height: 300)))
+    XCTAssertTrue(skips(CGRect(x: 1200, y: 0, width: 200, height: 800)))
+    XCTAssertFalse(skips(CGRect(x: 0, y: -400, width: 1000, height: 401)))
+    XCTAssertFalse(skips(CGRect(x: 100, y: 100, width: 50, height: 50)))
+  }
+
+  func testTheRootAndFramelessContainersAreAlwaysWalked() {
+    let away = CGRect(x: 0, y: -4000, width: 1000, height: 300)
+    XCTAssertFalse(skips(away, depth: 0))
+    XCTAssertFalse(skips(nil))
+    XCTAssertFalse(skips(CGRect(x: 0, y: -4000, width: 0, height: 300)))
+  }
+
+  /// A web container can hold a `position: fixed` control that renders on
+  /// screen however far away the container's own box lies (a page footer's
+  /// "Back to top" link), so no web container is ever skipped.
+  func testWebContainersAreAlwaysWalkedHoweverFarOffscreen() {
+    XCTAssertFalse(skips(CGRect(x: 60, y: -9_000, width: 1000, height: 109), insideWebArea: true))
+    XCTAssertFalse(skips(CGRect(x: 5_000, y: 0, width: 300, height: 800), insideWebArea: true))
+  }
+}
+
 final class HintPointCandidateTests: XCTestCase {
   func testThePreferredPointIsAlwaysProbedFirst() {
     let frame = CGRect(x: 100, y: 200, width: 400, height: 40)

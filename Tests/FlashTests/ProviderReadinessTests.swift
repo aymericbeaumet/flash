@@ -26,7 +26,8 @@ final class ProviderReadinessTests: XCTestCase {
   }
 
   /// The enhanced-UI flags go only to runtimes that gate their tree on them:
-  /// Gecko is scoped per operation, and native apps never get them.
+  /// Gecko's mode is owned by `GeckoAccessibility`, and native apps never
+  /// get them.
   func testAccessibilityWakeFollowsTheRuntimeNotTheApp() {
     XCTAssertTrue(AppTraits(engine: .chromium).needsAccessibilityWake)
     XCTAssertTrue(AppTraits(engine: .flutter).needsAccessibilityWake)

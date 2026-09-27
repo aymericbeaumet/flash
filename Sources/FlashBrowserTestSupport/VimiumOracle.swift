@@ -133,7 +133,7 @@ public enum VimiumOracle {
 
     let flashTargets = waitForStableFlashTargets(
       provider: provider,
-      context: context,
+      context: FirefoxHarness.clippedToWalkedWindow(context),
       timeout: 10)
 
     let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)

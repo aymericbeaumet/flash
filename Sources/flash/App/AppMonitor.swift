@@ -433,6 +433,10 @@ final class AppMonitor {
     teardownAllObservers()
     preparedModels.removeAll()
     cancelAllRefreshWork()
+    // Focus is no longer reported, so no Gecko mode may linger. Stop runs at
+    // quit, when a deferred switch-off would never run: wait for it, bounded
+    // by a walk still holding the process.
+    GeckoAccessibility.releaseAll(waitingAtMost: .seconds(2))
     for token in workspaceObservers {
       NSWorkspace.shared.notificationCenter.removeObserver(token)
     }

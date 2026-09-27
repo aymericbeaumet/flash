@@ -131,6 +131,12 @@ Background prepared-model walks per app (off the key path, targets > 0):
 | Chrome | 48 | 11 | 48 | 23 |
 | WhatsApp | 37 | 46 | 88 | 44 |
 
+Each of those Firefox walks woke Gecko's accessibility and switched it off
+again, which discards its tree; the walks that came back empty caught it being
+rebuilt. The mode now stays on while Firefox is focused (see
+[prepared models](prepared-model.md)); the Firefox row is due to be measured
+again.
+
 Almost all of a walk is the Accessibility collection itself (`collect_ms`);
 visibility filtering, deduplication and label assignment add well under a
 millisecond. That is why Flash walks ahead of time: when the prepared model
@@ -161,15 +167,64 @@ Results: TBD.
 ## Experiment: pruning offscreen web subtrees (not adopted)
 
 The walk skips a native element whose frame lies wholly outside the visible
-clip, with all of its descendants. Inside an `AXWebArea` it never does, because
-a web node can render outside the frame it reports (CSS transforms,
-`overflow: visible`, fixed and sticky positioning), so a pruned container
-could hide a visible link. The candidate change lets that prune run inside web
-areas for Chromium and WebKit, where long pages (feeds, reference docs) spend
-most of a walk on offscreen containers. Gecko stays unpruned. The walk's
-behaviour is unchanged until the change passes the checks below.
+clip, with all of its descendants (`skipsOffscreenSubtree`). Inside an
+`AXWebArea` it never does: a web node can render outside the frame it reports
+(fixed positioning, CSS transforms, `overflow: visible`), so a skipped
+container could hide a visible control. The experiment let the prune run
+inside web areas, per engine, for containers more than a whole clip away (one
+clip height above or below, one clip width beside), and was rejected for both
+engines it could be measured on.
 
-Validate a build carrying the candidate:
+The adoption rule: zero new misses — no new `vimiumOnly` divergence on any
+fixture, no new allow-list entry, every expected Electron target still found
+and clicked — and measurably faster browser or Electron walks. A single new
+miss rejects it.
+
+Method. The browser oracle used to walk with an unbounded clip, which no prune
+can meet; it now walks with the clip narrowed to the Firefox window
+(`FirefoxHarness.clippedToWalkedWindow`), as the resident does, and matches
+the unclipped baseline exactly. The repository's fixtures fit within about two
+viewports, where a prune a whole clip away never fires, so each oracle also ran
+a probe page kept outside the repository: a toolbar and links on screen, then
+twelve 820-pt sections of twenty links each, with a `position: fixed` "Chat"
+button declared inside the sixth section and a fixed "Back to top" link inside
+the footer. The Electron probe had the same shape, with the fixture's
+"Electron Primary" button fixed inside its offscreen footer.
+
+Results on an Apple M4 Pro, macOS 26.6.2, Firefox 156.0.1 and the pinned
+Electron 44.4.5. Chromium walk times are the Electron oracle's
+`electron_discover`, one walk per run. The browser oracle times no walk, so
+the Gecko column counts the AX nodes a walk of the probe reads, without and
+with the prune, in a Firefox showing it in a 1280 × 976 window:
+
+| Engine | Fixture | Misses before | Misses after | Walk before → after |
+| --- | --- | --- | --- | --- |
+| Gecko | 7 repository fixtures | 0 | 0 | prune never fires |
+| Gecko | probe | 0 (29 of 29 matched) | 2 ("Chat with us", "Back to top") | 844 → 208 AX nodes |
+| Chromium | Electron fixture | 0 | 0 | 13.2 → 13.3 ms |
+| Chromium | Electron probe | 0 | 0 | 153 → 139 ms |
+
+The Electron oracle also reports the fixture's `<select>` option "First" as
+an unexpected target, before and after alike.
+
+- **Gecko** reports each container's own layout box: the probe's footer lies
+  about 10,000 pt below the window, 109 pt tall, while its fixed link is on
+  screen. The prune would skip three quarters of that page's nodes and loses
+  both fixed controls, on every retry. Rejected: two new misses. Declaring a
+  modal, a chat launcher or a back-to-top link inside an ordinary container is
+  common, and AX does not say which containers hold fixed or transformed
+  descendants.
+- **Chromium** reports offscreen nodes clipped to the web area: every
+  offscreen section, list and link is a zero-height strip along the viewport's
+  edge (the probe's footer is 900 × 0 at its bottom). A zero-size frame is
+  never skipped, so the prune never fires; the fixed button survived for that
+  reason, and the timing difference is run-to-run noise. Rejected: nothing to
+  gain.
+- **WebKit** (Safari) has no oracle and was not attempted.
+
+The prune stays native-only and the per-engine gate was removed. To rerun a
+candidate, run the oracles before and after, with the probe page added to the
+fixtures:
 
 ```sh
 ./Scripts/test-integration-browser.sh                      # every Tests/BrowserSnapshots fixture
@@ -178,17 +233,6 @@ Validate a build carrying the candidate:
 ./Scripts/benchmark-hints.sh --class=browser --runs=30     # before and after
 ./Scripts/benchmark-hints.sh --class=electron --runs=30    # before and after
 ```
-
-The browser oracle compares Flash with Vimium-FF in Firefox, so for this
-experiment build the prune for Gecko too; the same rule then meets every
-fixture in `Tests/BrowserSnapshots`. The Electron oracle is the Chromium
-check. There is no WebKit oracle: open the same fixture pages in Safari and
-compare the hints by hand.
-
-Adopt it only with zero new misses: no new `vimiumOnly` divergence on any
-fixture, no new allow-list entry, and every expected Electron target still
-found and clicked. It must also make the browser or Electron walks measurably
-faster. A single new miss rejects it.
 
 ## Widgets budget
 

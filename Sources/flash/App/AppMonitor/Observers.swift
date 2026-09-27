@@ -42,6 +42,9 @@ extension AppMonitor {
       forName: NSWorkspace.activeSpaceDidChangeNotification,
       object: nil, queue: .main
     ) { [weak self] _ in
+      // Window managers re-tile on a Space switch: switch Gecko's
+      // accessibility mode off before they move anything.
+      GeckoAccessibility.spaceChanged()
       self?.onFocusedEnvironmentChanged(reason: .space)
     }
     workspaceObservers = [activate, terminate, launch, activeSpace]
@@ -58,6 +61,8 @@ extension AppMonitor {
   func onFocusedAppChanged(to app: NSRunningApplication) {
     let pid = app.processIdentifier
     guard pid > 0 else { return }
+    // Gecko keeps the tree Flash woke only while its app is focused.
+    GeckoAccessibility.focusChanged(to: pid)
     // Bump this pid's dirty token — any prepared model from before the
     // focus came back is now suspect (the app may have repainted, the
     // window may have moved). Discarding via token bump is cheaper than
@@ -83,6 +88,7 @@ extension AppMonitor {
   }
 
   private func onAppTerminated(pid: pid_t) {
+    GeckoAccessibility.appTerminated(pid: pid)
     teardownObserver(for: pid)
     preparedModels.remove(pid: pid)
     dirtyTokens.removeValue(forKey: pid)

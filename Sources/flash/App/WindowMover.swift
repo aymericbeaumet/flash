@@ -1189,7 +1189,7 @@ enum WindowMover {
     isSettable: Bool,
     engine: AppTraits.Engine?
   ) -> Bool {
-    // Gecko's own enhanced-UI state is scoped by `GeckoAccessibility`.
+    // Gecko's own enhanced-UI state is owned by `GeckoAccessibility`.
     return currentValue == true
       && isSettable
       && engine != .gecko

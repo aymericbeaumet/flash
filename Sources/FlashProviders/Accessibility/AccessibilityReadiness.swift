@@ -10,7 +10,8 @@ import FlashCore
 ///
 /// It never replaces a walk and never decides what the hints are: it only
 /// decides when the one walk that follows is worth doing. Call it off the
-/// main thread (the AX queue); Gecko's tree is woken for its duration only.
+/// main thread (the AX queue). Gecko's tree is woken inside
+/// `GeckoAccessibility.withTree`, and a focused app keeps it once built.
 public enum AccessibilityReadiness {
   /// What the bounded breadth-first look saw under the walked window.
   public struct Sample: Equatable {

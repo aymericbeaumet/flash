@@ -55,11 +55,11 @@ batched read (role and children) per element, breadth-first under the walked
 window, at most 32 elements, descending only into containers. A web area with
 children is ready and an empty one is not; without a web area in reach, a
 window with more than five direct children, or a tree larger than the probe
-reads, is ready. The probe runs on the AX queue (Gecko inside its scoped
-wake) and never decides the hints; it only decides when the one walk that
-follows is worth doing. Waits between probes follow `ReadinessLadder`: 50,
-100, 200, 400 ms, then a final 750 ms after which the walk runs regardless,
-1.5 s at most. Every wait is an `asyncAfter` re-dispatch; nothing sleeps on
+reads, is ready. The probe runs on the AX queue (Gecko inside
+`GeckoAccessibility.withTree`) and never decides the hints; it only decides
+when the one walk that follows is worth doing. Waits between probes follow
+`ReadinessLadder`: 50, 100, 200, 400 ms, then a final 750 ms after which the
+walk runs regardless, 1.5 s at most. Every wait is an `asyncAfter` re-dispatch; nothing sleeps on
 the main thread or the AX queue.
 
 - **Focus.** A focus change wakes a Chromium or Flutter app at once, then,
@@ -79,6 +79,17 @@ the main thread or the AX queue.
   (the tree changed while it was read) hands the activation a direct walk
   rather than the degenerate first result. The activation going away ends a
   climb.
+
+Gecko discards its tree whenever its accessibility mode is switched off, so
+switching it off after every operation makes walks and probes wake a tree that
+may not be built yet — the Firefox background walks that come back empty in
+1–5 ms. The mode Flash turns on therefore stays on while the app is focused
+(`GeckoAccessibility`; see [runtime ownership](architecture.md)): one wake per
+focus builds the tree, the ladder's probes watch that same tree fill, and
+later walks read it built, the two Gecko scopes of one walk (the walked
+window's frame, then the tree) included. Focus leaving the app, a Space change
+and every window move switch it off, so the first walk after one of those can
+still find the tree unbuilt, and is repaired as above.
 
 A readiness step has its own ticket kind beside refresh and maintenance. A
 probe holds the ticket while it runs, and its verdict applies only if the hold
