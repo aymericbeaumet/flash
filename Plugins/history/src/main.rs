@@ -7,10 +7,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Source names are plugin-declared and need not echo the plugin id: these are
 /// PER-BROWSER so `@firefox.history` and `@chrome.bookmarks` mean exactly one
-/// store. They live here — not in the `firefox` plugin — because that plugin's
-/// root `only_bundle_ids` selector would deactivate the source whenever
-/// Firefox is not running, and because warm-versus-live is a per-plugin
-/// property.
+/// store. They live here — not in the `browsers` plugin — because that
+/// plugin's root `only_bundle_ids` selector would deactivate the source
+/// whenever no browser is running, and because warm-versus-live is a
+/// per-plugin property.
 const SOURCE_FIREFOX_HISTORY: &str = "firefox.history";
 const SOURCE_FIREFOX_BOOKMARKS: &str = "firefox.bookmarks";
 const SOURCE_CHROME_HISTORY: &str = "chrome.history";

@@ -100,7 +100,6 @@ cask "$TOKEN" do
   zap trash: [
     "~/.config/flash",
     "~/Library/Application Support/Flash",
-    "~/Library/Application Support/Mozilla/NativeMessagingHosts/com.flash.firefox_bridge.json",
     "~/Library/Logs/Flash",
   ]
 

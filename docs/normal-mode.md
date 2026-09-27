@@ -144,15 +144,18 @@ release it, as does a committed click, drag or selection.
 ## Movement history
 
 `ctrl+o` and `ctrl+i` move backward and forward across apps and source locations,
-including Firefox tabs and tmux windows. App focus and location-catalog changes
+including browser tabs and tmux windows. App focus and location-catalog changes
 feed the same history. Repeated observations of the same location coalesce;
 returning to a location after visiting another remains a chronological stop.
 Choosing a new destination after moving backward discards the forward branch.
 
-Locations restore through their owning source. The Firefox bridge preserves
-tab IDs across title, URL and window changes; restoration matches the current
-tab strip to one AX window and cancels if two windows are indistinguishable.
-Without the bridge, Firefox uses the URL, or title when AX has no URL.
+Locations restore through their owning source. A browser tab restores through
+its `flash-browser://tab?pid=…&url=…` route: the browser process and the tab's
+URL, or its title when the tab exposes no URL, so a title change keeps the
+destination and a restarted browser's stops fail rather than land elsewhere.
+Chromium browsers and Safari select the first tab with that URL by
+AppleScript; Firefox re-walks its tab strip and presses the match through
+Accessibility.
 Tmux keeps stable window IDs so reordering a window does not change its history
 destination. Apps without a more precise source restore application focus.
 The stack does not capture page scroll positions, editor cursor positions, or

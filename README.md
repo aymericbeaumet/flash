@@ -269,8 +269,7 @@ adding your setup to [`docs/examples`](docs/examples).
   [example](docs/examples/statusbar/README.md) · [calendar](docs/calendar.md) ·
   [usage and system popups](docs/status-popups.md) ·
   [terminal windows](docs/terminal-popups.md)
-- **Integrations and plugins:** [Firefox tabs add-on](docs/firefox-extension.md) ·
-  [writing a plugin](docs/plugin-cookbook.md) ·
+- **Integrations and plugins:** [writing a plugin](docs/plugin-cookbook.md) ·
   [plugin protocol](docs/plugin-protocol.md) · [Rust SDK](docs/plugin-rust-sdk.md)
 - **Contributing:** [development and tests](docs/development.md) ·
   [architecture](docs/architecture.md) · [observability](docs/observability.md) ·

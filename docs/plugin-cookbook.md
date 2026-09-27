@@ -21,12 +21,16 @@ plugins.
    `publish` from `on_start`, refreshed by events + a poll, backed by the
    SDK's libproc sampler — plus the golden-output test pattern. No readiness
    dance: initialize replies immediately and the catalog lands when ready.
-4. **Event-driven catalog + actions + mappings — `Plugins/browsers`
-   (~640 LOC).** Browser tabs for Chromium-family browsers and Safari: one
-   shared skeleton driven by a per-bundle AppleScript dialect table, polled
-   osascript refreshes fanned out per browser that publish on change,
-   manifest `actions` handled by `on_action` with the performed / unhandled /
-   error trichotomy, and a `mappings` entry scoped by `only_bundle_ids`.
+4. **Event-driven catalog + actions + navigation — `Plugins/browsers`
+   (~2,500 LOC).** Browser tabs behind one per-bundle engine table: a shared
+   AppleScript skeleton with per-dialect phrases for Chromium-family browsers
+   and Safari, and for Firefox the host Accessibility broker
+   (`host.ax_snapshot` / `host.ax_perform`, the `accessibility` capability)
+   completed from a file the browser keeps on disk. Refreshes fan out per
+   browser and publish on change; manifest `actions` go through `on_action`
+   with the performed / unhandled / error trichotomy, what the plugin leaves
+   unhandled falls back to its `action_keystrokes` chords, and every row's
+   `navigation_url` route restores through `on_navigate`.
 5. **Query evaluator with background refresh — `Plugins/answers`
    (~1270 LOC).** Three synchronous, CPU-only answer engines (calculator,
    colors, timezones) behind one `evaluate` via an ordered engine table;

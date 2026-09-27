@@ -707,7 +707,7 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testBrowserTabDisplayTitleIncludesSourceTitleAndURL() throws {
-    // The browser tab discovery now lives in `Plugins/{browsers,firefox}` —
+    // The browser tab discovery now lives in `Plugins/browsers` —
     // this test still exercises the host's candidate-prep
     // path (display title formatting, search-text normalisation) by
     // building the same `Candidate` shape the plugins emit.

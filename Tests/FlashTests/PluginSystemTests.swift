@@ -1057,7 +1057,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(SourceAction.byWireName.count, 21, "one entry per action")
   }
 
-  /// App shortcuts are plugin data: the browsers and firefox plugins own the
+  /// App shortcuts are plugin data: the browsers plugin owns the
   /// browser chords (Safari's own hard reload included), `defaults` Messages'
   /// conversation chord, `terminals` the emulators' split traversal.
   func testOfficialManifestsOwnEveryAppSpecificChord() throws {
@@ -1069,9 +1069,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(browsers.actionKeystrokes[.tabNext]?[""], "cmd+shift+]")
     XCTAssertEqual(browsers.actionKeystrokes[.scrollBottom]?[""], "cmd+down")
     XCTAssertEqual(browsers.actionKeystrokes[.appReloadForce]?["com.apple.Safari"], "cmd+option+r")
-    let firefox = try manifest("firefox")
-    XCTAssertTrue(firefox.onlyBundleIDs.contains("org.mozilla.nightly"))
-    XCTAssertEqual(firefox.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
+    XCTAssertTrue(browsers.onlyBundleIDs.contains("org.mozilla.nightly"))
+    XCTAssertEqual(browsers.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
     let defaults = try manifest("defaults")
     XCTAssertEqual(defaults.actionKeystrokes[.tabNext]?["com.apple.MobileSMS"], "ctrl+tab")
     XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])

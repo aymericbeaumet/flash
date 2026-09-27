@@ -1165,7 +1165,7 @@ extension AppDelegate {
 
   /// Build one `@<source>` completion row per registered candidate source.
   /// This uses the source declarations, not the currently visible candidate
-  /// pool, so `@firefox.tabs` can be offered before the Firefox plugin has
+  /// pool, so `@firefox.tabs` can be offered before the browsers plugin has
   /// produced a tab snapshot for this flashlight session.
   private func knownSourceCompletionCandidates() -> [Candidate] {
     registry.registeredCandidateSourceLabels().map(CandidateFinder.sourceCompletionCandidate)

@@ -20,9 +20,8 @@ class PluginPublicationTests(unittest.TestCase):
         plugin = self.root / "Plugins/example"
         plugin.mkdir(parents=True)
         (plugin / "manifest.json").write_text("{}")
-        # Two `[[bin]]` targets: the manifest exec plus a companion the crate
-        # owns (the shape Plugins/firefox uses for its Firefox-spawned
-        # native-messaging host). Both must be published.
+        # Two `[[bin]]` targets: the manifest exec plus a companion binary
+        # the crate owns. Both must be published.
         (plugin / "Cargo.toml").write_text(
             '[[bin]]\nname = "flash-plugin-example"\npath = "src/main.rs"\n\n'
             '[[bin]]\nname = "flash-plugin-example-bridge"\npath = "src/bridge.rs"\n'

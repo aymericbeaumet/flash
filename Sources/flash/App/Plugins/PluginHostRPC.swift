@@ -865,7 +865,7 @@ final class PluginHostRPC {
   }
 
   /// `host.post_keys`: post a short synthesized chord sequence to a pid
-  /// (plugin fast paths like the firefox tab jump: ⌘8 + n×ctrl+PgDn).
+  /// (plugin fast paths like the browsers plugin's Firefox tab jump: ⌘8 + n×ctrl+PgDn).
   /// Modifier chords dispatch through the target's key-equivalent path, so
   /// the app does NOT need to be frontmost — that's the point: the switch
   /// runs in parallel with `host.activate`. Chord-only (every step must name

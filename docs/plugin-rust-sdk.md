@@ -76,7 +76,7 @@ Handed to every handler; cheap to clone. Key surface:
   can change what the plugin reads from its apps — focus into, within or out
   of one, one launching or quitting, their running instances changing, a
   flashlight session opening — so an app-scripting plugin refreshes on those
-  alone (the browsers and firefox plugins). `core:status.observed` carries
+  alone (the browsers plugin). `core:status.observed` carries
   `Event::segments`: the complete set of this plugin's status segments a
   surface shows, possibly empty (the protocol's
   [status observation](plugin-protocol.md#status-observation)). Listen for it

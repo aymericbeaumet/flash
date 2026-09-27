@@ -262,9 +262,9 @@ assemble_app() {
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1
         fi
-        # Every binary the crate produced, not only the manifest `exec`: the
-        # firefox crate also ships the Firefox-spawned native-messaging host
-        # for its tab-bridge add-on. sign_app signs each of them.
+        # Every binary the crate produced, not only the manifest `exec`: a
+        # crate may ship companion binaries next to its plugin. sign_app
+        # signs each of them.
         for companion in "$dir"/flash-plugin-*; do
           [[ -f "$companion" ]] || continue
           cp "$companion" "$plugins_dest/$id/$(basename "$companion")"
@@ -272,7 +272,7 @@ assemble_app() {
         done
       fi
       # Plugin-owned payloads that are not Mach-Os but must ship with the
-      # plugin: the Firefox add-on source the user loads by hand.
+      # plugin: an `extension/` directory, copied as is.
       if [[ -d "$dir/extension" ]]; then
         rm -rf "$plugins_dest/$id/extension"
         cp -R "$dir/extension" "$plugins_dest/$id/extension"

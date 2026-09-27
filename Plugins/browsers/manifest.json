@@ -2,7 +2,7 @@
   "id": "browsers",
   "name": "Browsers",
   "version": "0.1.0",
-  "description": "AppleScript tab catalogs and tab actions for Chromium-family browsers and Safari",
+  "description": "Browser tab catalogs and tab actions: AppleScript for Chromium-family browsers and Safari, the Accessibility tab strip and session store for Firefox",
   "sandbox": {
     "exec": [
       "/usr/bin/osascript"
@@ -13,7 +13,11 @@
     "./flash-plugin-browsers"
   ],
   "capabilities": [
+    "accessibility",
     "app_control"
+  ],
+  "navigation": [
+    "flash-browser"
   ],
   "priority": 30,
   "only_bundle_ids": [
@@ -35,7 +39,10 @@
     "com.operasoftware.OperaNext",
     "com.operasoftware.OperaDeveloper",
     "com.apple.Safari",
-    "com.apple.SafariTechnologyPreview"
+    "com.apple.SafariTechnologyPreview",
+    "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition",
+    "org.mozilla.nightly"
   ],
   "listen": [
     "core:apps.changed",
@@ -83,6 +90,11 @@
     },
     {
       "name": "safari.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "firefox.tabs",
       "kind": "locations",
       "priority": "high"
     }

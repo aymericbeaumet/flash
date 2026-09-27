@@ -105,11 +105,9 @@ done
 # cdhash change unless their designated-requirement clause matches the same
 # stable cert the host bundle uses.
 # Every `[[bin]]` a plugin crate declares is published next to its manifest,
-# not just the one the manifest `exec`s. The firefox crate ships a second
-# binary — the Firefox-spawned native-messaging host for its tab-bridge add-on
-# — which must go through the same sign-then-atomic-rename flow as the plugin
-# itself. A crate with no explicit `[[bin]]` produces the cargo default,
-# `flash-plugin-<id>`.
+# not just the one the manifest `exec`s: a companion binary goes through the
+# same sign-then-atomic-rename flow as the plugin itself. A crate with no
+# explicit `[[bin]]` produces the cargo default, `flash-plugin-<id>`.
 crate_binaries() {
   local cargo="$1" fallback="$2" names
   names="$(awk '
