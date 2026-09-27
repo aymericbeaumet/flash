@@ -12,7 +12,7 @@ mod lz4;
 mod route;
 mod session_store;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -25,6 +25,7 @@ use flash_plugin::{
 };
 use route::{TabRoute, TabTarget};
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
 
 /// Safety-net poll; events (app/focus changes, flashlight open) drive the
 /// authoritative refreshes, so this only bounds staleness for tab changes
@@ -34,6 +35,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// window.focus.changed back to back) coalesce into one refresh.
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
 const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+/// A refresh cycle at least this long warns (at most once per
+/// `REPEAT_WARNING_INTERVAL`); its `listings` field names the slow browser.
+const SLOW_REFRESH: Duration = Duration::from_secs(1);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -44,10 +48,18 @@ static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 static BROWSER_EVENTS: AppWatch = AppWatch::new();
 static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
     LazyLock::new(|| Mutex::new(RefreshLogState::default()));
-/// Last-published rows, kept so a partial cycle (one browser's read failed)
-/// can re-publish that browser's previous tabs — `publish` is a full
-/// replacement, so dropped rows would vanish from the host store.
-static LAST_ROWS: Mutex<Option<Vec<Candidate>>> = Mutex::new(None);
+/// Each running browser's last listed rows behind the one published catalog.
+static CATALOG: LazyLock<Mutex<TabCatalog>> = LazyLock::new(|| Mutex::new(TabCatalog::default()));
+/// Consecutive listing failures per browser process: a failing browser warns
+/// once per streak, not on every cycle.
+static LISTING_STREAKS: LazyLock<Mutex<ListingStreaks>> =
+    LazyLock::new(|| Mutex::new(ListingStreaks::default()));
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// How one browser family's tabs are read and driven.
 #[derive(Clone, Copy)]
@@ -135,7 +147,13 @@ struct RunningBrowser {
     pid: i64,
 }
 
+/// The running browsers to list, in host order. AppleScript addresses an app
+/// by name, not pid, so every same-named instance of a scripted browser (the
+/// automation or headless Chrome instances tooling launches beside the
+/// user's) answers with the same tabs: only the first in host order is kept,
+/// or each would publish a duplicate of every row. Firefox is read per pid.
 fn running_browsers(running: &[RunningApplication]) -> Vec<RunningBrowser> {
+    let mut scripted_labels = HashSet::new();
     running
         .iter()
         .filter(|app| app.pid > 0)
@@ -151,6 +169,10 @@ fn running_browsers(running: &[RunningApplication]) -> Vec<RunningBrowser> {
                 label,
                 pid: app.pid,
             })
+        })
+        .filter(|app| match app.browser.engine {
+            Engine::AppleScript(_) => scripted_labels.insert(app.label.clone()),
+            Engine::Gecko => true,
         })
         .collect()
 }
@@ -210,11 +232,154 @@ fn performed(pid: i64, route: Option<TabRoute>) -> PerformResponse {
     }
 }
 
+/// Per-browser rows behind the plugin's one catalog. `publish` is a full
+/// replacement, so each listing is published as soon as it lands, merged
+/// with every other running browser's last known rows: a slow or failing
+/// browser never holds back the others' tabs, and a failed read keeps that
+/// browser's previous rows instead of dropping them from the host store.
+#[derive(Default)]
+struct TabCatalog {
+    /// Each browser process's last successful listing, by pid.
+    rows: HashMap<i64, Vec<Candidate>>,
+    /// The last published catalog; `None` until the first publish.
+    published: Option<Vec<Candidate>>,
+}
+
+impl TabCatalog {
+    /// Forget browsers that are no longer running (`running` is the cycle's
+    /// complete host snapshot).
+    fn retain_running(&mut self, running: &[i64]) {
+        self.rows.retain(|pid, _| running.contains(pid));
+    }
+
+    /// Record one listing task's results. `Some(rows)` replaces that
+    /// browser's rows (an empty list is an authoritative zero-tab result);
+    /// `None` is a transient failure that keeps its previous rows. Returns
+    /// the catalog to publish — every running browser's rows, in `running`
+    /// order so completion timing cannot reorder it — when at least one read
+    /// succeeded and the result differs from the last publish.
+    fn record(
+        &mut self,
+        running: &[i64],
+        listings: Vec<(i64, Option<Vec<Candidate>>)>,
+    ) -> Option<Vec<Candidate>> {
+        let mut succeeded = false;
+        for (pid, rows) in listings {
+            if let Some(rows) = rows {
+                self.rows.insert(pid, rows);
+                succeeded = true;
+            }
+        }
+        if !succeeded {
+            // Publish nothing: the host keeps its last-good catalog.
+            return None;
+        }
+        let merged = self.merged(running);
+        self.publish(merged)
+    }
+
+    /// No browser running: an authoritative empty catalog.
+    fn clear(&mut self) -> Option<Vec<Candidate>> {
+        self.rows.clear();
+        self.publish(Vec::new())
+    }
+
+    fn merged(&self, running: &[i64]) -> Vec<Candidate> {
+        running
+            .iter()
+            .filter_map(|pid| self.rows.get(pid))
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    fn kept_rows(&self, pid: i64) -> usize {
+        self.rows.get(&pid).map_or(0, Vec::len)
+    }
+
+    /// `rows` when they differ from the last publish, which they become.
+    fn publish(&mut self, rows: Vec<Candidate>) -> Option<Vec<Candidate>> {
+        if self.published.as_ref() == Some(&rows) {
+            return None;
+        }
+        self.published = Some(rows.clone());
+        Some(rows)
+    }
+}
+
+/// Where a browser's listing stands relative to its failure streak.
+#[derive(Debug, PartialEq, Eq)]
+enum ListingHealth {
+    Healthy,
+    FailureStarted,
+    StillFailing { failures: u32 },
+    Recovered { failures: u32 },
+}
+
+#[derive(Default)]
+struct ListingStreaks {
+    failures: HashMap<i64, u32>,
+}
+
+impl ListingStreaks {
+    fn retain_running(&mut self, running: &[i64]) {
+        self.failures.retain(|pid, _| running.contains(pid));
+    }
+
+    fn observe(&mut self, pid: i64, ok: bool) -> ListingHealth {
+        if ok {
+            return match self.failures.remove(&pid) {
+                Some(failures) => ListingHealth::Recovered { failures },
+                None => ListingHealth::Healthy,
+            };
+        }
+        let failures = self.failures.entry(pid).or_insert(0);
+        *failures += 1;
+        if *failures == 1 {
+            ListingHealth::FailureStarted
+        } else {
+            ListingHealth::StillFailing {
+                failures: *failures,
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct RefreshLogState {
     outcome: String,
-    warning: bool,
-    last_warning: Option<Instant>,
+    slow: bool,
+    last_slow_warning: Option<Instant>,
+}
+
+impl RefreshLogState {
+    /// The level to log a refresh cycle at, `None` to stay quiet. Failures
+    /// are logged per browser, once per streak (`log_listing`), so a cycle
+    /// warns only when slow, at most once per `REPEAT_WARNING_INTERVAL`; an
+    /// outcome change is info and a changed catalog debug.
+    fn level(
+        &mut self,
+        outcome: &str,
+        slow: bool,
+        changed: bool,
+        now: Instant,
+    ) -> Option<&'static str> {
+        let transition = self.outcome != outcome || (self.slow && !slow);
+        let slow_warning = slow
+            && self
+                .last_slow_warning
+                .is_none_or(|last| now.duration_since(last) >= REPEAT_WARNING_INTERVAL);
+        self.outcome = outcome.to_string();
+        self.slow = slow;
+        if slow_warning {
+            self.last_slow_warning = Some(now);
+            Some("warn")
+        } else if transition {
+            Some("info")
+        } else {
+            changed.then_some("debug")
+        }
+    }
 }
 
 struct Browsers;
@@ -284,101 +449,132 @@ async fn refresh_locations(ctx: &Context) -> bool {
         .await
 }
 
+/// One listing task's results — each pid it read, `None` for a failed read —
+/// and how long the task took.
+struct Listing {
+    results: Vec<(i64, Option<Vec<Candidate>>)>,
+    elapsed: Duration,
+}
+
+async fn timed<F>(listing: F) -> Listing
+where
+    F: std::future::Future<Output = Vec<(i64, Option<Vec<Candidate>>)>>,
+{
+    let started_at = Instant::now();
+    let results = listing.await;
+    Listing {
+        results,
+        elapsed: started_at.elapsed(),
+    }
+}
+
 async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<RunningBrowser>) -> bool {
     let started_at = Instant::now();
     // A complete running-app snapshot with no matching browser is authoritative:
     // clear dead tab rows.
     if apps.is_empty() {
-        let changed = publish_rows(ctx, Vec::new());
+        let changed = publish_catalog(ctx, TabCatalog::clear);
         log_refresh(
             ctx,
             "empty",
             &RefreshSummary::default(),
+            "",
             started_at,
             changed,
         );
         return true;
     }
+    let running: Vec<i64> = apps.iter().map(|app| app.pid).collect();
+    lock(&CATALOG).retain_running(&running);
+    lock(&LISTING_STREAKS).retain_running(&running);
     // Browsers are independent and each read costs hundreds of ms, so they
     // run concurrently: one osascript per scripted edition, one task walking
-    // every running Firefox (they share the session-store read).
+    // every running Firefox (they share the session-store read). The cycle
+    // holds the refresh gate until every listing lands, so concurrency stays
+    // bounded to one read per running browser.
+    let mut listings = JoinSet::new();
     let firefoxes: Vec<(&'static Browser, i64)> = apps
         .iter()
         .filter(|app| matches!(app.browser.engine, Engine::Gecko))
         .map(|app| (app.browser, app.pid))
         .collect();
-    let firefox_task =
-        (!firefoxes.is_empty()).then(|| tokio::spawn(firefox::list_tabs(ctx.clone(), firefoxes)));
-    let mut scripts = Vec::new();
+    if !firefoxes.is_empty() {
+        listings.spawn(timed(firefox::list_tabs(ctx.clone(), firefoxes)));
+    }
     for app in &apps {
         if let Engine::AppleScript(dialect) = app.browser.engine {
             let ctx = ctx.clone();
             let (browser, label, pid) = (app.browser, app.label.clone(), app.pid);
-            scripts.push((
-                pid,
-                tokio::spawn(
-                    async move { list_scripted(&ctx, browser, dialect, &label, pid).await },
-                ),
-            ));
+            listings.spawn(timed(async move {
+                vec![(
+                    pid,
+                    list_scripted(&ctx, browser, dialect, &label, pid).await,
+                )]
+            }));
         }
     }
-    // `Some([])` is an authoritative zero-tab result; `None` (or a missing
-    // pid) is the only transient-failure signal.
-    let mut results: HashMap<i64, Option<Vec<Candidate>>> = HashMap::new();
-    for (pid, handle) in scripts {
-        results.insert(pid, handle.await.ok().flatten());
-    }
-    if let Some(task) = firefox_task {
-        if let Ok(rows) = task.await {
-            results.extend(rows);
-        }
-    }
-    let mut candidates = Vec::new();
-    let mut failed_pids = std::collections::HashSet::new();
-    let mut successful_apps = 0;
-    // Merge in app order so completion timing cannot reorder the catalog.
-    for app in &apps {
-        match results.remove(&app.pid).flatten() {
-            Some(rows) => {
-                successful_apps += 1;
-                candidates.extend(rows);
-            }
-            None => {
-                failed_pids.insert(app.pid);
+    // Publish each listing as it lands. `Some([])` is an authoritative
+    // zero-tab result; `None` (or a pid whose task never reported) is the
+    // only transient-failure signal.
+    let mut outcomes: HashMap<i64, (Option<usize>, Duration)> = HashMap::new();
+    let mut changed = false;
+    while let Some(joined) = listings.join_next().await {
+        let Ok(listing) = joined else {
+            continue;
+        };
+        let counts: Vec<(i64, Option<usize>)> = listing
+            .results
+            .iter()
+            .map(|(pid, rows)| (*pid, rows.as_ref().map(Vec::len)))
+            .collect();
+        let published = publish_catalog(ctx, |catalog| catalog.record(&running, listing.results));
+        changed |= published;
+        for (pid, count) in counts {
+            outcomes.insert(pid, (count, listing.elapsed));
+            if let Some(app) = apps.iter().find(|app| app.pid == pid) {
+                log_listing(ctx, app, count, listing.elapsed, published);
             }
         }
     }
-    // Preserve only the failed running editions. Successful empty results clear
-    // that edition, and rows for browsers no longer in the host snapshot drop.
-    if !failed_pids.is_empty() {
-        candidates.extend(last_rows().into_iter().filter(|candidate| {
-            candidate
-                .pid_value()
-                .is_some_and(|pid| failed_pids.contains(&pid))
-        }));
-    }
-    if successful_apps == 0 {
-        // Publish nothing: the host keeps its last-good catalog.
-        log_refresh(
-            ctx,
-            "failed",
-            &RefreshSummary::of(&candidates),
-            started_at,
-            false,
-        );
-        return false;
-    }
-    let outcome = if !failed_pids.is_empty() {
+    let listed: Vec<String> = apps
+        .iter()
+        .map(|app| match outcomes.get(&app.pid) {
+            Some((Some(count), elapsed)) => {
+                format!(
+                    "{}:ok:{count}:{}ms",
+                    app.browser.source,
+                    elapsed.as_millis()
+                )
+            }
+            Some((None, elapsed)) => {
+                format!("{}:failed:{}ms", app.browser.source, elapsed.as_millis())
+            }
+            None => format!("{}:failed", app.browser.source),
+        })
+        .collect();
+    let successful_apps = outcomes
+        .values()
+        .filter(|(count, _)| count.is_some())
+        .count();
+    let summary = RefreshSummary::of(&lock(&CATALOG).merged(&running));
+    let outcome = if successful_apps == 0 {
+        "failed"
+    } else if successful_apps < apps.len() {
         "partial"
-    } else if candidates.is_empty() {
+    } else if summary.count == 0 {
         "empty"
     } else {
         "ok"
     };
-    let summary = RefreshSummary::of(&candidates);
-    let changed = publish_rows(ctx, candidates);
-    log_refresh(ctx, outcome, &summary, started_at, changed);
-    true
+    log_refresh(
+        ctx,
+        outcome,
+        &summary,
+        &listed.join(" "),
+        started_at,
+        changed,
+    );
+    successful_apps > 0
 }
 
 async fn list_scripted(
@@ -407,23 +603,64 @@ async fn list_scripted(
     Some(rows)
 }
 
-fn publish_rows(ctx: &Context, rows: Vec<Candidate>) -> bool {
-    if let Ok(mut last) = LAST_ROWS.lock() {
-        if last.as_ref() == Some(&rows) {
-            return false;
+/// Apply one catalog update and publish its result, if any, under the
+/// catalog lock so publishes leave in the order they were decided.
+fn publish_catalog(
+    ctx: &Context,
+    update: impl FnOnce(&mut TabCatalog) -> Option<Vec<Candidate>>,
+) -> bool {
+    let mut catalog = lock(&CATALOG);
+    match update(&mut catalog) {
+        Some(rows) => {
+            ctx.publish(rows);
+            true
         }
-        *last = Some(rows.clone());
+        None => false,
     }
-    ctx.publish(rows);
-    true
 }
 
-fn last_rows() -> Vec<Candidate> {
-    LAST_ROWS
-        .lock()
-        .ok()
-        .and_then(|rows| rows.clone())
-        .unwrap_or_default()
+/// One browser's listing outcome: a failure warns once per streak (the SDK
+/// separately rate-limits the osascript error itself), a recovery is info,
+/// and everything else is debug.
+fn log_listing(
+    ctx: &Context,
+    app: &RunningBrowser,
+    count: Option<usize>,
+    elapsed: Duration,
+    published: bool,
+) {
+    let health = lock(&LISTING_STREAKS).observe(app.pid, count.is_some());
+    let (level, outcome) = match (health, count) {
+        (ListingHealth::FailureStarted, _) => (
+            "warn",
+            format!(
+                "outcome=failed kept_rows={}",
+                lock(&CATALOG).kept_rows(app.pid)
+            ),
+        ),
+        (ListingHealth::StillFailing { failures }, _) => (
+            "debug",
+            format!(
+                "outcome=failed failures={failures} kept_rows={}",
+                lock(&CATALOG).kept_rows(app.pid)
+            ),
+        ),
+        (ListingHealth::Recovered { failures }, Some(count)) => (
+            "info",
+            format!("outcome=ok count={count} recovered_after_failures={failures}"),
+        ),
+        (_, Some(count)) if published => ("debug", format!("outcome=ok count={count}")),
+        _ => return,
+    };
+    ctx.log(
+        level,
+        &format!(
+            "[browsers] listing source={} pid={} {outcome} elapsed_ms={} published={published}",
+            app.browser.source,
+            app.pid,
+            elapsed.as_millis()
+        ),
+    );
 }
 
 /// Content-free shape of a published catalog: its row count and the rows
@@ -454,48 +691,31 @@ impl RefreshSummary {
     }
 }
 
+/// One line per refresh cycle: the merged catalog's shape and each running
+/// browser's listing outcome and latency (`chrome.tabs:ok:12:310ms`).
 fn log_refresh(
     ctx: &Context,
     outcome: &str,
     summary: &RefreshSummary,
+    listings: &str,
     started_at: Instant,
     changed: bool,
 ) {
-    let elapsed_ms = started_at.elapsed().as_millis();
-    let warning = elapsed_ms >= 1_000 || matches!(outcome, "failed" | "partial");
-    let now = Instant::now();
-    let (should_log, recovery) = REFRESH_LOG_STATE
-        .lock()
-        .map(|mut state| {
-            let transition = state.outcome != outcome || state.warning != warning;
-            let recovery = state.warning && !warning;
-            let repeat_warning = warning
-                && state
-                    .last_warning
-                    .is_none_or(|last| now.duration_since(last) >= REPEAT_WARNING_INTERVAL);
-            let should_log = changed || transition || repeat_warning;
-            state.outcome = outcome.to_string();
-            state.warning = warning;
-            if warning && should_log {
-                state.last_warning = Some(now);
-            }
-            (should_log, recovery)
-        })
-        .unwrap_or((true, false));
-    if !should_log {
+    let elapsed = started_at.elapsed();
+    let Some(level) =
+        lock(&REFRESH_LOG_STATE).level(outcome, elapsed >= SLOW_REFRESH, changed, Instant::now())
+    else {
         return;
-    }
+    };
     ctx.log(
-        if warning {
-            "warn"
-        } else if recovery {
-            "info"
-        } else {
-            "debug"
-        },
+        level,
         &format!(
-            "[browsers] refresh outcome={} count={} elapsed_ms={} sources=[{}]",
-            outcome, summary.count, elapsed_ms, summary.sources
+            "[browsers] refresh outcome={} count={} elapsed_ms={} sources=[{}] listings=[{}]",
+            outcome,
+            summary.count,
+            elapsed.as_millis(),
+            summary.sources,
+            listings
         ),
     );
 }
@@ -671,6 +891,10 @@ mod tests {
             app("com.apple.Finder", 12, "Finder"),
             app("com.google.Chrome", 13, "Chrome FR"),
             app("org.mozilla.firefox", 0, "Firefox"),
+            // Another instance AppleScript would address by the same name.
+            app("com.google.Chrome", 14, "Chrome FR"),
+            // Firefox instances are read per pid.
+            app("org.mozilla.firefoxdeveloperedition", 15, ""),
         ]);
         assert_eq!(
             running
@@ -684,6 +908,11 @@ mod tests {
                     11
                 ),
                 ("com.google.Chrome", "Chrome FR", 13),
+                (
+                    "org.mozilla.firefoxdeveloperedition",
+                    "Firefox Developer Edition",
+                    15
+                ),
             ]
         );
     }
@@ -730,6 +959,174 @@ mod tests {
                 .unwrap()
                 .target,
             TabTarget::Title("Docs".into())
+        );
+    }
+
+    fn row(source: &str, pid: i64, title: &str) -> Candidate {
+        Candidate::new(source, title).pid(pid)
+    }
+
+    fn titles(rows: &[Candidate]) -> Vec<&str> {
+        rows.iter().map(|row| row.title.as_str()).collect()
+    }
+
+    #[test]
+    fn each_listing_publishes_merged_with_the_other_browsers_last_rows() {
+        let (chrome, firefox) = (1, 2);
+        let running = [chrome, firefox];
+        let mut catalog = TabCatalog::default();
+        // Firefox lands first: it publishes alone rather than waiting on
+        // Chrome's read.
+        let published = catalog
+            .record(
+                &running,
+                vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F1")]))],
+            )
+            .unwrap();
+        assert_eq!(titles(&published), ["F1"]);
+        // Chrome lands: merged in running order, not completion order.
+        let published = catalog
+            .record(
+                &running,
+                vec![(chrome, Some(vec![row("chrome.tabs", chrome, "C1")]))],
+            )
+            .unwrap();
+        assert_eq!(titles(&published), ["C1", "F1"]);
+        // Next cycle: a Firefox change republishes with Chrome's last rows
+        // while Chrome's read is still in flight.
+        let published = catalog
+            .record(
+                &running,
+                vec![(
+                    firefox,
+                    Some(vec![
+                        row("firefox.tabs", firefox, "F1"),
+                        row("firefox.tabs", firefox, "F2"),
+                    ]),
+                )],
+            )
+            .unwrap();
+        assert_eq!(titles(&published), ["C1", "F1", "F2"]);
+    }
+
+    #[test]
+    fn a_failed_listing_keeps_its_previous_rows_and_publishes_nothing() {
+        let (chrome, firefox) = (1, 2);
+        let running = [chrome, firefox];
+        let mut catalog = TabCatalog::default();
+        catalog.record(
+            &running,
+            vec![
+                (chrome, Some(vec![row("chrome.tabs", chrome, "C1")])),
+                (firefox, Some(vec![row("firefox.tabs", firefox, "F1")])),
+            ],
+        );
+        // A failure alone publishes nothing: the host keeps last-good.
+        assert_eq!(catalog.record(&running, vec![(chrome, None)]), None);
+        assert_eq!(catalog.kept_rows(chrome), 1);
+        // The next success still carries the failed browser's rows.
+        let published = catalog
+            .record(
+                &running,
+                vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F2")]))],
+            )
+            .unwrap();
+        assert_eq!(titles(&published), ["C1", "F2"]);
+        // An empty listing is authoritative, unlike a failure.
+        let published = catalog
+            .record(&running, vec![(chrome, Some(Vec::new()))])
+            .unwrap();
+        assert_eq!(titles(&published), ["F2"]);
+        // A first cycle whose every read fails publishes nothing.
+        let mut fresh = TabCatalog::default();
+        assert_eq!(
+            fresh.record(&running, vec![(chrome, None), (firefox, None)]),
+            None
+        );
+    }
+
+    #[test]
+    fn identical_row_sets_are_not_republished() {
+        let (chrome, firefox) = (1, 2);
+        let running = [chrome, firefox];
+        let mut catalog = TabCatalog::default();
+        let chrome_rows = vec![row("chrome.tabs", chrome, "C1")];
+        assert!(catalog
+            .record(&running, vec![(chrome, Some(chrome_rows.clone()))])
+            .is_some());
+        assert_eq!(
+            catalog.record(&running, vec![(chrome, Some(chrome_rows))]),
+            None
+        );
+        // A newly listed browser with no tabs leaves the merged set as is.
+        assert_eq!(
+            catalog.record(&running, vec![(firefox, Some(Vec::new()))]),
+            None
+        );
+        assert!(catalog.clear().is_some());
+        assert_eq!(catalog.clear(), None, "an empty catalog publishes once");
+    }
+
+    #[test]
+    fn browsers_that_quit_drop_out_of_the_next_publish() {
+        let (chrome, firefox) = (1, 2);
+        let mut catalog = TabCatalog::default();
+        catalog.record(
+            &[chrome, firefox],
+            vec![
+                (chrome, Some(vec![row("chrome.tabs", chrome, "C1")])),
+                (firefox, Some(vec![row("firefox.tabs", firefox, "F1")])),
+            ],
+        );
+        // Chrome quit: the new cycle's snapshot no longer names it.
+        catalog.retain_running(&[firefox]);
+        assert_eq!(catalog.kept_rows(chrome), 0);
+        let published = catalog
+            .record(
+                &[firefox],
+                vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F1")]))],
+            )
+            .unwrap();
+        assert_eq!(titles(&published), ["F1"]);
+    }
+
+    #[test]
+    fn a_failing_browser_warns_once_per_streak() {
+        let mut streaks = ListingStreaks::default();
+        assert_eq!(streaks.observe(1, true), ListingHealth::Healthy);
+        assert_eq!(streaks.observe(1, false), ListingHealth::FailureStarted);
+        assert_eq!(
+            streaks.observe(1, false),
+            ListingHealth::StillFailing { failures: 2 }
+        );
+        assert_eq!(streaks.observe(2, false), ListingHealth::FailureStarted);
+        assert_eq!(
+            streaks.observe(1, true),
+            ListingHealth::Recovered { failures: 2 }
+        );
+        assert_eq!(streaks.observe(1, false), ListingHealth::FailureStarted);
+        // A quit browser's streak does not outlive it.
+        streaks.retain_running(&[1]);
+        assert_eq!(streaks.observe(2, false), ListingHealth::FailureStarted);
+    }
+
+    #[test]
+    fn refresh_cycles_warn_only_when_slow_and_then_once_per_interval() {
+        let mut state = RefreshLogState::default();
+        let start = Instant::now();
+        assert_eq!(state.level("ok", false, true, start), Some("info"));
+        assert_eq!(state.level("ok", false, false, start), None);
+        assert_eq!(state.level("ok", false, true, start), Some("debug"));
+        // A partial streak is an outcome change, not a per-cycle warning.
+        assert_eq!(state.level("partial", false, true, start), Some("info"));
+        assert_eq!(state.level("partial", false, true, start), Some("debug"));
+        assert_eq!(state.level("partial", true, false, start), Some("warn"));
+        let later = start + Duration::from_secs(10);
+        assert_eq!(state.level("partial", true, true, later), Some("debug"));
+        assert_eq!(state.level("partial", false, false, later), Some("info"));
+        assert_eq!(
+            state.level("partial", true, false, start + REPEAT_WARNING_INTERVAL),
+            Some("warn")
         );
     }
 
@@ -787,8 +1184,12 @@ mod tests {
         // scheme is declared so movement history dispatches it here.
         assert_eq!(
             strings(&manifest["capabilities"]),
-            ["accessibility", "app_control"]
+            ["accessibility", "app_control", "subprocess"]
         );
+        // Chromium browsers refuse Apple Events from any sandboxed sender
+        // (-10004), and `subprocess` without a `sandbox` spec is what spawns
+        // the plugin unsandboxed.
+        assert!(manifest.get("sandbox").is_none());
         assert_eq!(strings(&manifest["navigation"]), ["flash-browser"]);
     }
 }

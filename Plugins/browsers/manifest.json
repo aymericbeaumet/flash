@@ -3,18 +3,13 @@
   "name": "Browsers",
   "version": "0.1.0",
   "description": "Browser tab catalogs and tab actions: AppleScript for Chromium-family browsers and Safari, the Accessibility tab strip and session store for Firefox",
-  "sandbox": {
-    "exec": [
-      "/usr/bin/osascript"
-    ],
-    "appleevents": true
-  },
   "exec": [
     "./flash-plugin-browsers"
   ],
   "capabilities": [
     "accessibility",
-    "app_control"
+    "app_control",
+    "subprocess"
   ],
   "navigation": [
     "flash-browser"

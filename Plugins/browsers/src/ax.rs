@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use flash_plugin::Context;
 use serde_json::{json, Value};
@@ -74,15 +75,13 @@ pub async fn snapshot(
         }))
         .await;
     if !result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let error = result
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         ctx.log(
-            "warn",
-            &format!(
-                "[browsers] host.ax_snapshot failed pid={pid} error={}",
-                result
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-            ),
+            failure_level(pid, error, Instant::now()),
+            &format!("[browsers] host.ax_snapshot failed pid={pid} error={error}"),
         );
         return None;
     }
@@ -93,6 +92,26 @@ pub async fn snapshot(
             .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
             .unwrap_or_default(),
     )
+}
+
+/// One warning per pid and error per window: a Firefox whose walks keep
+/// failing would otherwise warn on every refresh (the listing's own failure
+/// streak is logged once by the caller).
+const FAILURE_WARNING_WINDOW: Duration = Duration::from_secs(60);
+static FAILURE_WARNINGS: LazyLock<Mutex<HashMap<(i64, String), Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn failure_level(pid: i64, error: &str, now: Instant) -> &'static str {
+    let mut warnings = FAILURE_WARNINGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    warnings.retain(|_, last| now.duration_since(*last) < FAILURE_WARNING_WINDOW);
+    let key = (pid, error.to_string());
+    if warnings.contains_key(&key) {
+        return "debug";
+    }
+    warnings.insert(key, now);
+    "warn"
 }
 
 /// Per-pid AX session lock. The broker purges a pid's handles at the start of
@@ -113,4 +132,24 @@ pub fn session(pid: i64) -> Arc<tokio::sync::Mutex<()>> {
     let session = Arc::new(tokio::sync::Mutex::new(()));
     sessions.insert(pid, Arc::downgrade(&session));
     session
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_walk_failures_warn_once_per_window() {
+        // A pid no other test uses: the gate is process-wide.
+        let pid = -4242;
+        let start = Instant::now();
+        assert_eq!(failure_level(pid, "timeout", start), "warn");
+        let later = start + Duration::from_secs(10);
+        assert_eq!(failure_level(pid, "timeout", later), "debug");
+        assert_eq!(failure_level(pid, "app gone", later), "warn", "per error");
+        assert_eq!(
+            failure_level(pid, "timeout", start + FAILURE_WARNING_WINDOW),
+            "warn"
+        );
+    }
 }

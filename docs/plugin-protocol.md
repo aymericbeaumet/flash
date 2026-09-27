@@ -490,8 +490,10 @@ Section semantics:
   through `mise which`/login-PATH at spawn), `appleevents`, `signal`, `mach`.
   The `network` capability composes `network-outbound`.
   `[plugin.<id>] sandbox = false` is the per-plugin fail-open kill switch;
-  `[plugin.<id>] exec_paths` appends machine-specific tool paths. Spec-less
-  plugins keep the legacy network-deny-only profile.
+  `[plugin.<id>] exec_paths` appends machine-specific tool paths. A spec-less
+  plugin runs under a network-deny-only profile, or unsandboxed when it
+  declares the `network` or `subprocess` capability (browsers, for example:
+  Chromium browsers refuse Apple Events from any sandboxed sender).
 - **`listen`** — event-name patterns; `*` wildcard. Declaring `listen` makes
   the plugin resident.
 - **`sources`** — source descriptors for `@<source>` completion and ranking.
