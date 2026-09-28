@@ -37,10 +37,19 @@ use select::{
 };
 use strip::{walk, Tab};
 
-/// How long a pick may take to confirm its tab before replying an error. A
-/// key jump confirms in ~0.3 s; the slowest AX path (a walk, a store read,
-/// the one activation retry, then three verified presses) in ~2 s.
-const SELECT_DEADLINE: Duration = Duration::from_secs(3);
+/// The SDK's `call_host` timeout: the longest one host call on the selection
+/// path (the raise, a walk, a press, the key post) waits for its reply. The
+/// SDK does not export it, so a test measures it against this value.
+const HOST_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a pick may take to confirm its tab before replying an error:
+/// strictly longer than one host call, so a switch that one slow call
+/// delays (a raise from another Space) still confirms and is recorded, and
+/// shorter than the host's perform deadline (`protocol.json`, 10 s), so the
+/// error still reaches it. A pick normally confirms in ~0.3 s (key jump) to
+/// ~2 s (the slowest AX path: a walk, a store read, the one activation
+/// retry, then three verified presses).
+const SELECT_DEADLINE: Duration = HOST_CALL_TIMEOUT.saturating_add(Duration::from_secs(1));
 
 /// Where a row's tab sits, carried in its payload for the key fast path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +119,7 @@ fn candidate(browser: &Browser, pid: i64, tab: &CatalogTab) -> Candidate {
         bundle_id: browser.bundle_id.to_string(),
         app_name: String::new(),
         url: tab.url.clone(),
+        title: String::new(),
         strip: Some(tab.position),
         slot: None,
     };
@@ -276,6 +286,7 @@ mod tests {
             bundle_id: "org.mozilla.firefox".into(),
             app_name: String::new(),
             url: "https://b.example/".into(),
+            title: String::new(),
             strip: strip.then_some(StripPosition {
                 index: 2,
                 tab_count: 3,
@@ -360,6 +371,34 @@ mod tests {
         assert!(!response.is_ok() && !response.is_unhandled());
         assert_eq!(response.error_message(), Some("tab selection timed out"));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_selection_deadline_outlasts_a_host_call_within_the_perform_timeout() {
+        // Nobody answers: the call returns at the SDK's host-call timeout,
+        // which paused time reaches at once.
+        let harness = Harness::new("browsers");
+        let ctx = harness.context();
+        let started = tokio::time::Instant::now();
+        assert!(!ctx.activate(62_006).await);
+        let host_call = started.elapsed();
+        assert!(
+            host_call >= HOST_CALL_TIMEOUT
+                && host_call < HOST_CALL_TIMEOUT + Duration::from_millis(10),
+            "the SDK's host-call timeout is {host_call:?}, not {HOST_CALL_TIMEOUT:?}"
+        );
+        let protocol: Value =
+            serde_json::from_str(include_str!("../../../_flash_plugin_rust/protocol.json"))
+                .unwrap();
+        let perform = Duration::from_millis(protocol["deadlines_ms"]["perform"].as_u64().unwrap());
+        assert!(
+            host_call < SELECT_DEADLINE,
+            "{host_call:?} vs {SELECT_DEADLINE:?}"
+        );
+        assert!(
+            SELECT_DEADLINE < perform,
+            "{SELECT_DEADLINE:?} vs {perform:?}"
+        );
     }
 
     #[tokio::test]

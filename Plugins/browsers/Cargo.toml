@@ -23,6 +23,10 @@ tokio = { version = "1", default-features = false, features = [
   "sync",
 ] }
 
+[dev-dependencies]
+# Paused time: tests measure the SDK's host-call timeout without waiting it out.
+tokio = { version = "1", default-features = false, features = ["test-util"] }
+
 # Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
 # (fully-unoptimized tokio is visibly slow under the plugin latency contracts),
 # line-tables-only debuginfo keeps the shared target dir small.

@@ -12,7 +12,8 @@ pub struct Dialect {
     active_index: &'static str,
     /// Tab property carrying the page title.
     title: &'static str,
-    /// Make tab `t` the current tab of window `w`.
+    /// Make tab `t`, the `i`th of window `w`, its current tab. Chromium's
+    /// tab has no `index` property, so its phrase takes the position `i`.
     select_tab: &'static str,
     /// Make tab number `tabIndex` the current tab of window `w`.
     select_nth: &'static str,
@@ -31,7 +32,7 @@ pub struct Dialect {
 pub const CHROMIUM: Dialect = Dialect {
     active_index: "active tab index of w",
     title: "title",
-    select_tab: "set active tab index of w to (index of t)",
+    select_tab: "set active tab index of w to i",
     select_nth: "set active tab index of w to tabIndex",
     new_window: "make new window",
     new_tab: "make new tab",
@@ -57,6 +58,39 @@ pub const SAFARI: Dialect = Dialect {
 pub struct TabSlot {
     pub window: usize,
     pub tab: usize,
+}
+
+/// What a select script requires of a tab: every field given, equal and
+/// case-sensitive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabIdentity<'a> {
+    url: Option<&'a str>,
+    title: Option<&'a str>,
+}
+
+impl<'a> TabIdentity<'a> {
+    /// A listed tab: its URL and title together (an empty title included),
+    /// or its title alone when it exposes no URL.
+    pub fn listed(url: &'a str, title: &'a str) -> Self {
+        Self {
+            url: (!url.is_empty()).then_some(url),
+            title: Some(title),
+        }
+    }
+
+    /// A route's target alone: a URL route outlives title changes.
+    pub fn route(target: &'a TabTarget) -> Self {
+        match target {
+            TabTarget::Url(url) => Self {
+                url: Some(url),
+                title: None,
+            },
+            TabTarget::Title(title) => Self {
+                url: None,
+                title: Some(title),
+            },
+        }
+    }
 }
 
 /// One row of [`Dialect::list_script`]'s output.
@@ -140,31 +174,56 @@ return out
         )
     }
 
-    /// Activate the browser and select the tab whose URL (or title) equals
-    /// `target`, raising its window: the tab at `slot` when it still matches
-    /// (so a pick lands on the listed one of several identical tabs), else
-    /// the first match. Prints `ok` or `missing`.
-    pub fn select_script(&self, app: &str, target: &TabTarget, slot: Option<TabSlot>) -> String {
-        let (property, value) = match target {
-            TabTarget::Url(url) => ("URL", url),
-            TabTarget::Title(title) => (self.title, title),
-        };
+    /// Activate the browser and select the tab carrying `identity`, raising
+    /// its window: the tab at `slot` first, then the rest of that window,
+    /// then every other window front to back. Windows and tabs move after a
+    /// listing, so a slot is only where to look first: every step requires
+    /// the whole identity, and a tab that carries it nowhere is `missing`
+    /// rather than a lookalike. Among truly identical tabs (the same URL and
+    /// title) any one is the picked tab. Tabs are addressed by position
+    /// (`tab i of w`), never read back through `index of`. Prints `ok` or
+    /// `missing`.
+    pub fn select_script(&self, app: &str, identity: TabIdentity, slot: Option<TabSlot>) -> String {
+        let mut targets = String::new();
+        let mut clauses = Vec::new();
+        if let Some(url) = identity.url {
+            targets.push_str(&format!("\n  set targetURL to {}", applescript_quote(url)));
+            clauses.push("((URL of t as text) is targetURL)".to_string());
+        }
+        if let Some(title) = identity.title {
+            targets.push_str(&format!(
+                "\n  set targetTitle to {}",
+                applescript_quote(title)
+            ));
+            clauses.push(format!("(({} of t as text) is targetTitle)", self.title));
+        }
         let select = format!(
-            r#"if ({property} of t as text) is targetValue then
+            r#"if {condition} then
           {select_tab}
           set index of w to 1
           return "ok"
         end if"#,
+            condition = clauses.join(" and "),
             select_tab = self.select_tab,
         );
         let listed = slot.map_or_else(String::new, |slot| {
             format!(
                 r#"
-  try
-    set w to window {window}
-    set t to tab {tab} of w
-    {select}
-  end try"#,
+    try
+      set w to window {window}
+      set i to {tab}
+      set t to tab i of w
+      {select}
+    end try
+    try
+      set w to window {window}
+      repeat with i from 1 to (count of tabs of w)
+        set t to tab i of w
+        try
+          {select}
+        end try
+      end repeat
+    end try"#,
                 window = slot.window,
                 tab = slot.tab,
             )
@@ -172,20 +231,26 @@ return out
         format!(
             r#"
 tell application {app}
-  activate
-  set targetValue to {value}{listed}
-  repeat with w in windows
-    repeat with t in tabs of w
-      try
-        {select}
-      end try
+  activate{targets}
+  considering case{listed}
+    repeat with wi from 1 to (count of windows)
+      if wi is not {searched} then
+        set w to window wi
+        repeat with i from 1 to (count of tabs of w)
+          set t to tab i of w
+          try
+            {select}
+          end try
+        end repeat
+      end if
     end repeat
-  end repeat
+  end considering
 end tell
 return "missing"
 "#,
             app = applescript_quote(app),
-            value = applescript_quote(value),
+            // No window index is 0: without a slot, every window is searched.
+            searched = slot.map_or(0, |slot| slot.window),
         )
     }
 
@@ -294,19 +359,52 @@ mod tests {
     }
 
     #[test]
-    fn select_scripts_match_by_url_or_by_the_dialect_title_property() {
-        let by_url = CHROMIUM.select_script(
+    fn a_listed_tab_is_matched_by_its_url_and_title_together() {
+        let script = CHROMIUM.select_script(
             "Google Chrome",
-            &TabTarget::Url("https://example.com/\"q\"".into()),
+            TabIdentity::listed("https://example.com/\"q\"", "Inbox"),
             None,
         );
-        assert!(by_url.contains(r#"set targetValue to "https://example.com/\"q\"""#));
-        assert!(by_url.contains("if (URL of t as text) is targetValue then"));
-        let by_title = SAFARI.select_script("Safari", &TabTarget::Title("Inbox".into()), None);
-        assert!(by_title.contains("if (name of t as text) is targetValue then"));
-        assert!(by_title.contains("set current tab of w to t"));
-        let chromium_title = CHROMIUM.select_script("Arc", &TabTarget::Title("Inbox".into()), None);
-        assert!(chromium_title.contains("if (title of t as text) is targetValue then"));
+        assert!(script.contains(r#"set targetURL to "https://example.com/\"q\"""#));
+        assert!(script.contains(r#"set targetTitle to "Inbox""#));
+        assert!(script.contains(
+            "if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then"
+        ));
+        // Case is identity too (paths and query strings are case-sensitive).
+        assert!(script.contains("considering case"));
+        // A tab without a URL: its title alone, in the dialect's property.
+        let untitled = SAFARI.select_script("Safari", TabIdentity::listed("", "Inbox"), None);
+        assert!(untitled.contains("if ((name of t as text) is targetTitle) then"));
+        assert!(!untitled.contains("targetURL"));
+    }
+
+    #[test]
+    fn a_route_is_matched_by_its_target_alone() {
+        let url = TabTarget::Url("https://example.com/".into());
+        let by_url = CHROMIUM.select_script("Arc", TabIdentity::route(&url), None);
+        assert!(by_url.contains("if ((URL of t as text) is targetURL) then"));
+        assert!(!by_url.contains("targetTitle"));
+        let title = TabTarget::Title("Inbox".into());
+        let by_title = CHROMIUM.select_script("Arc", TabIdentity::route(&title), None);
+        assert!(by_title.contains("if ((title of t as text) is targetTitle) then"));
+        assert!(!by_title.contains("targetURL"));
+    }
+
+    #[test]
+    fn tabs_are_selected_by_their_loop_position() {
+        // Chrome's tab has no `index` property: `index of t` always errors.
+        let identity = TabIdentity::listed("https://mail.example/", "Inbox");
+        let slot = Some(TabSlot { window: 2, tab: 3 });
+        let chromium = CHROMIUM.select_script("Google Chrome", identity, slot);
+        assert!(!chromium.contains("index of t"), "{chromium}");
+        assert_eq!(
+            chromium.matches("set active tab index of w to i").count(),
+            3
+        );
+        assert_eq!(chromium.matches("set t to tab i of w").count(), 3);
+        let safari = SAFARI.select_script("Safari", identity, slot);
+        assert_eq!(safari.matches("set current tab of w to t").count(), 3);
+        assert!(!safari.contains("index of t"), "{safari}");
     }
 
     #[test]
@@ -354,19 +452,94 @@ mod tests {
     }
 
     #[test]
-    fn a_select_script_tries_the_listed_slot_before_the_first_match() {
-        let target = TabTarget::Url("https://mail.example/".into());
+    fn a_select_script_tries_the_listed_slot_then_its_window_then_the_others() {
+        let identity = TabIdentity::listed("https://mail.example/", "Inbox");
         let slotted = CHROMIUM.select_script(
             "Google Chrome",
-            &target,
+            identity,
             Some(TabSlot { window: 2, tab: 3 }),
         );
-        let slot = slotted.find("set w to window 2").unwrap();
-        let scan = slotted.find("repeat with w in windows").unwrap();
-        assert!(slot < scan);
-        assert!(slotted.contains("set t to tab 3 of w"));
-        let unslotted = CHROMIUM.select_script("Google Chrome", &target, None);
-        assert!(!unslotted.contains("set w to window"));
-        assert!(unslotted.contains("repeat with w in windows"));
+        let slot = slotted.find("set i to 3").unwrap();
+        let listed_window = slotted
+            .find("repeat with i from 1 to (count of tabs of w)")
+            .unwrap();
+        let others = slotted.find("if wi is not 2 then").unwrap();
+        assert!(slot < listed_window && listed_window < others, "{slotted}");
+        assert_eq!(slotted.matches("set w to window 2").count(), 2);
+        // Every step requires the whole identity; nothing matching: missing.
+        assert_eq!(
+            slotted
+                .matches(
+                    "if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then"
+                )
+                .count(),
+            3
+        );
+        assert!(slotted.trim_end().ends_with(r#"return "missing""#));
+        let unslotted = CHROMIUM.select_script("Google Chrome", identity, None);
+        assert!(!unslotted.contains("set w to window 2"));
+        assert!(!unslotted.contains("set i to"));
+        assert!(unslotted.contains("repeat with wi from 1 to (count of windows)"));
     }
+
+    #[test]
+    fn the_chromium_select_script_is_the_one_verified_live() {
+        // Run against a scratch Chrome window [A, B, A]: "ok" and tab 3
+        // selected; the same script for title "a" or tab "C": "missing".
+        let script = CHROMIUM.select_script(
+            "Google Chrome",
+            TabIdentity::listed("data:text/html,<title>A</title>a", "A"),
+            Some(TabSlot { window: 1, tab: 3 }),
+        );
+        assert_eq!(script, VERIFIED_LIVE);
+    }
+
+    const VERIFIED_LIVE: &str = r#"
+tell application "Google Chrome"
+  activate
+  set targetURL to "data:text/html,<title>A</title>a"
+  set targetTitle to "A"
+  considering case
+    try
+      set w to window 1
+      set i to 3
+      set t to tab i of w
+      if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then
+          set active tab index of w to i
+          set index of w to 1
+          return "ok"
+        end if
+    end try
+    try
+      set w to window 1
+      repeat with i from 1 to (count of tabs of w)
+        set t to tab i of w
+        try
+          if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then
+          set active tab index of w to i
+          set index of w to 1
+          return "ok"
+        end if
+        end try
+      end repeat
+    end try
+    repeat with wi from 1 to (count of windows)
+      if wi is not 1 then
+        set w to window wi
+        repeat with i from 1 to (count of tabs of w)
+          set t to tab i of w
+          try
+            if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then
+          set active tab index of w to i
+          set index of w to 1
+          return "ok"
+        end if
+          end try
+        end repeat
+      end if
+    end repeat
+  end considering
+end tell
+return "missing"
+"#;
 }

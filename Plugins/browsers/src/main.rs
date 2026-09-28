@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use applescript::{Dialect, ListedTab, TabSlot, CHROMIUM, SAFARI};
+use applescript::{Dialect, ListedTab, TabIdentity, TabSlot, CHROMIUM, SAFARI};
 use firefox::StripPosition;
 use flash_plugin::{
     run, run_osascript, ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event,
@@ -188,6 +188,10 @@ struct TabPayload {
     /// The raw URL as listed (the host's copy of the row URL is re-encoded).
     #[serde(default)]
     url: String,
+    /// A scripted tab's title as listed, empty included (the row shows the
+    /// URL in its place): with the URL, the identity a pick selects by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    title: String,
     /// Firefox strip position, for the key fast path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     strip: Option<StripPosition>,
@@ -606,6 +610,7 @@ fn scripted_row(browser: &Browser, label: &str, pid: i64, tab: &ListedTab) -> Ca
         bundle_id: browser.bundle_id.to_string(),
         app_name: label.to_string(),
         url: tab.url.clone(),
+        title: tab.title.clone(),
         strip: None,
         slot: Some(tab.slot),
     };
@@ -749,7 +754,7 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
     } else {
         tab.app_name.as_str()
     };
-    let Some((route, script)) = scripted_pick(dialect, label, pid, &tab, &row.title) else {
+    let Some((route, script)) = scripted_pick(dialect, label, pid, &tab) else {
         return PerformResponse::fail("tab has neither a URL nor a title");
     };
     ctx.activate(pid).await;
@@ -759,17 +764,18 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
 }
 
 /// The route a scripted pick lands on and the script selecting it: the tab
-/// by URL, or by title when it exposes no URL (the row's title is then the
-/// page's own), trying the listed slot first. `None` without either.
+/// whose URL and title are both the listed ones (its title alone when it
+/// exposes no URL), looked for at its listed slot first. `None` without
+/// either.
 fn scripted_pick(
     dialect: &Dialect,
     label: &str,
     pid: i64,
     tab: &TabPayload,
-    title: &str,
 ) -> Option<(TabRoute, String)> {
-    let route = TabRoute::new(pid, &tab.url, title)?;
-    let script = dialect.select_script(label, &route.target, tab.slot);
+    let route = TabRoute::new(pid, &tab.url, &tab.title)?;
+    let identity = TabIdentity::listed(&tab.url, &tab.title);
+    let script = dialect.select_script(label, identity, tab.slot);
     Some((route, script))
 }
 
@@ -813,7 +819,7 @@ async fn restore_navigation(ctx: &Context, request: &NavigateRequest) -> Perform
         Engine::Gecko => return firefox::restore(ctx, &route).await,
         Engine::AppleScript(dialect) => dialect,
     };
-    let script = dialect.select_script(&app.label, &route.target, None);
+    let script = dialect.select_script(&app.label, TabIdentity::route(&route.target), None);
     let result = run_osascript(ctx, &script, ACTION_TIMEOUT).await;
     log_unconfirmed(ctx, "restore", route.pid, &result);
     scripted_outcome(route, result.ok, &result.stdout)
@@ -961,6 +967,7 @@ mod tests {
             bundle_id: chrome.bundle_id.into(),
             app_name: "Google Chrome".into(),
             url: "https://example.com/page".into(),
+            title: "Page".into(),
             strip: None,
             slot: None,
         };
@@ -992,29 +999,40 @@ mod tests {
     }
 
     #[test]
-    fn a_scripted_pick_selects_a_tab_without_a_url_by_its_title() {
+    fn a_scripted_pick_requires_the_listed_url_and_title() {
         let payload = TabPayload {
             bundle_id: "com.apple.Safari".into(),
             app_name: "Safari".into(),
-            url: String::new(),
+            url: "https://docs.example/".into(),
+            title: "Docs".into(),
             strip: None,
             slot: Some(TabSlot { window: 1, tab: 2 }),
         };
-        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &payload, "Docs").unwrap();
-        assert_eq!(route, TabRoute::new(7, "", "Docs").unwrap());
-        assert!(script.contains(r#"set targetValue to "Docs""#));
-        assert!(script.contains("if (name of t as text) is targetValue then"));
-        assert!(script.contains("set t to tab 2 of w"));
-        // A URL, when the tab has one, is the identity.
-        let with_url = TabPayload {
-            url: "https://docs.example/".into(),
+        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &payload).unwrap();
+        // The route stays the URL alone, so history survives title changes.
+        assert_eq!(route.target, TabTarget::Url("https://docs.example/".into()));
+        assert!(script.contains(
+            "if ((URL of t as text) is targetURL) and ((name of t as text) is targetTitle) then"
+        ));
+        assert!(script.contains("set w to window 1\n      set i to 2\n"));
+        // A tab without a URL: selected by its title.
+        let untitled = TabPayload {
+            url: String::new(),
             ..payload.clone()
         };
-        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &with_url, "Docs").unwrap();
-        assert_eq!(route.target, TabTarget::Url("https://docs.example/".into()));
-        assert!(script.contains("if (URL of t as text) is targetValue then"));
+        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &untitled).unwrap();
+        assert_eq!(route, TabRoute::new(7, "", "Docs").unwrap());
+        assert!(script.contains("if ((name of t as text) is targetTitle) then"));
+        // A tab whose title is empty is matched as such, not by the URL the
+        // row shows in its place.
+        let blank = TabPayload {
+            title: String::new(),
+            ..payload.clone()
+        };
+        let (_, script) = scripted_pick(&SAFARI, "Safari", 7, &blank).unwrap();
+        assert!(script.contains(r#"set targetTitle to """#));
         // Nothing to select by.
-        assert!(scripted_pick(&SAFARI, "Safari", 7, &TabPayload::default(), "").is_none());
+        assert!(scripted_pick(&SAFARI, "Safari", 7, &TabPayload::default()).is_none());
     }
 
     #[test]
@@ -1065,6 +1083,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             [None, Some("1")]
         );
+        assert!(rows
+            .iter()
+            .all(|row| row.payload_as::<TabPayload>().unwrap().title == "Inbox"));
     }
 
     fn row(source: &str, pid: i64, title: &str) -> Candidate {
