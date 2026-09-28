@@ -54,12 +54,14 @@ extension AppMonitor {
 
   /// A degenerate activation walk is repaired by how the app builds its
   /// tree. A volatile provider (tmux) that declined, in an app whose own tree
-  /// never produced targets, leaves nothing to repair: the terminal's AX tree
-  /// is empty, and retrying it only delays the silent end.
+  /// has only ever walked empty (`knownEmpty`, never healthy), leaves nothing
+  /// to repair: retrying it only delays the silent end. Without that
+  /// evidence the tree may still be building, so the first activation is
+  /// repaired as usual.
   static func degenerateRepair(
-    engine: AppTraits.Engine?, afterVolatileDecline: Bool, lastHealthy: Int?
+    engine: AppTraits.Engine?, afterVolatileDecline: Bool, lastHealthy: Int?, knownEmpty: Bool
   ) -> DegenerateRepair {
-    if afterVolatileDecline, lastHealthy == nil { return .none }
+    if afterVolatileDecline, lastHealthy == nil, knownEmpty { return .none }
     if AppTraits(engine: engine).buildsAccessibilityTreeAsynchronously {
       return .readinessLadder(ReadinessLadder.delaysMs)
     }
@@ -93,6 +95,12 @@ struct EmptyBackgroundWalkGate: Equatable {
   private var gated: Set<pid_t> = []
 
   func isGated(_ pid: pid_t) -> Bool { gated.contains(pid) }
+
+  /// Whether the app's latest automatic walks came back empty while a
+  /// volatile provider owns its hints.
+  func hasEmptyEvidence(_ pid: pid_t) -> Bool {
+    gated.contains(pid) || streaks[pid, default: 0] > 0
+  }
 
   /// Record one automatic walk; true exactly when it closes the gate.
   mutating func noteBackgroundWalk(pid: pid_t, targets: Int, hasVolatileProvider: Bool) -> Bool {

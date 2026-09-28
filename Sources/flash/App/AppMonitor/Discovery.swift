@@ -284,7 +284,8 @@ extension AppMonitor {
     // The first walk's `AppTraits.of` has cached the app's traits.
     let repair = Self.degenerateRepair(
       engine: AppTraits.cached(bundleIdentifier: context.bundleIdentifier)?.engine,
-      afterVolatileDecline: afterVolatileDecline, lastHealthy: lastHealthy)
+      afterVolatileDecline: afterVolatileDecline, lastHealthy: lastHealthy,
+      knownEmpty: backgroundWalkGate.hasEmptyEvidence(pid))
     let repairName: String
     switch repair {
     case .none: return keep()

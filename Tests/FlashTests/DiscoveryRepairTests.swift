@@ -44,34 +44,63 @@ final class DiscoveryRepairTests: XCTestCase {
     for engine: AppTraits.Engine in [.chromium, .gecko, .flutter] {
       XCTAssertTrue(AppTraits(engine: engine).buildsAccessibilityTreeAsynchronously)
       XCTAssertEqual(
-        AppMonitor.degenerateRepair(engine: engine, afterVolatileDecline: false, lastHealthy: 90),
+        AppMonitor.degenerateRepair(
+          engine: engine, afterVolatileDecline: false, lastHealthy: 90, knownEmpty: false),
         .readinessLadder(ReadinessLadder.delaysMs), "\(engine)")
       XCTAssertEqual(
-        AppMonitor.degenerateRepair(engine: engine, afterVolatileDecline: false, lastHealthy: nil),
+        AppMonitor.degenerateRepair(
+          engine: engine, afterVolatileDecline: false, lastHealthy: nil, knownEmpty: false),
         .readinessLadder(ReadinessLadder.delaysMs), "a freshly launched app has no history yet")
     }
     XCTAssertFalse(AppTraits().buildsAccessibilityTreeAsynchronously)
     XCTAssertEqual(
-      AppMonitor.degenerateRepair(engine: nil, afterVolatileDecline: false, lastHealthy: 90),
+      AppMonitor.degenerateRepair(
+        engine: nil, afterVolatileDecline: false, lastHealthy: 90, knownEmpty: false),
       .retry(afterMs: AppMonitor.activationRetryDelayMs))
     XCTAssertEqual(
-      AppMonitor.degenerateRepair(engine: nil, afterVolatileDecline: false, lastHealthy: nil),
+      AppMonitor.degenerateRepair(
+        engine: nil, afterVolatileDecline: false, lastHealthy: nil, knownEmpty: false),
       .retry(afterMs: AppMonitor.activationRetryDelayMs))
   }
 
-  func testATerminalWhoseVolatileProviderDeclinedIsWalkedOnce() {
-    // tmux declined and the app's own tree never produced targets: the empty
-    // walk is the answer, so no retry and no ladder.
+  func testATerminalKnownToWalkEmptyIsWalkedOnce() {
+    // tmux declined and the app's own tree has only ever walked empty: the
+    // empty walk is the answer, so no retry and no ladder.
     XCTAssertEqual(
-      AppMonitor.degenerateRepair(engine: nil, afterVolatileDecline: true, lastHealthy: nil),
+      AppMonitor.degenerateRepair(
+        engine: nil, afterVolatileDecline: true, lastHealthy: nil, knownEmpty: true),
       .none)
     XCTAssertEqual(
-      AppMonitor.degenerateRepair(engine: .chromium, afterVolatileDecline: true, lastHealthy: nil),
+      AppMonitor.degenerateRepair(
+        engine: .chromium, afterVolatileDecline: true, lastHealthy: nil, knownEmpty: true),
       .none)
     // A terminal whose AX tree has yielded targets before (iTerm2) is repaired.
     XCTAssertEqual(
-      AppMonitor.degenerateRepair(engine: nil, afterVolatileDecline: true, lastHealthy: 30),
+      AppMonitor.degenerateRepair(
+        engine: nil, afterVolatileDecline: true, lastHealthy: 30, knownEmpty: true),
       .retry(afterMs: AppMonitor.activationRetryDelayMs))
+  }
+
+  func testAFirstEmptyWalkAfterAVolatileDeclineIsStillRepaired() {
+    // No history either way: the tree may still be building, so the first
+    // activation gets the usual repair instead of ending on a transient empty.
+    XCTAssertEqual(
+      AppMonitor.degenerateRepair(
+        engine: nil, afterVolatileDecline: true, lastHealthy: nil, knownEmpty: false),
+      .retry(afterMs: AppMonitor.activationRetryDelayMs))
+    XCTAssertEqual(
+      AppMonitor.degenerateRepair(
+        engine: .chromium, afterVolatileDecline: true, lastHealthy: nil, knownEmpty: false),
+      .readinessLadder(ReadinessLadder.delaysMs))
+  }
+
+  func testTheGateRecordsEvidenceOfEmptyWalks() {
+    var gate = EmptyBackgroundWalkGate()
+    XCTAssertFalse(gate.hasEmptyEvidence(7))
+    _ = gate.noteBackgroundWalk(pid: 7, targets: 0, hasVolatileProvider: true)
+    XCTAssertTrue(gate.hasEmptyEvidence(7))
+    _ = gate.noteBackgroundWalk(pid: 7, targets: 3, hasVolatileProvider: true)
+    XCTAssertFalse(gate.hasEmptyEvidence(7), "a walk with targets clears the evidence")
   }
 
   func testTheLadderIsBoundedAndWalksAtItsLastStep() {
