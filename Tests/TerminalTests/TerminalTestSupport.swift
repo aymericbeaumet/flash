@@ -3,10 +3,12 @@ import Foundation
 import XCTest
 
 extension XCTestCase {
-  func frameFromPTY(_ output: String, columns: Int, rows: Int) throws -> TerminalFrame {
+  func frameFromPTY(
+    _ output: String, columns: Int, rows: Int, command: [String]? = nil
+  ) throws -> TerminalFrame {
     let session = TerminalSession(
       configuration: TerminalConfiguration(
-        command: ["/usr/bin/printf", "%s", output], columns: columns, rows: rows))
+        command: command ?? ["/usr/bin/printf", "%s", output], columns: columns, rows: rows))
     defer { session.shutdown() }
     let finished = expectation(
       for: NSPredicate { _, _ in

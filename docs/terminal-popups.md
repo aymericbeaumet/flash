@@ -204,16 +204,20 @@ through coordinate conversion, preserving literal text and styles.
 
 ## Ownership and resource bounds
 
-`FlashTerminal` owns a serial worker queue per terminal. The queue performs PTY I/O, VT parsing, input encoding, resize, and immutable frame extraction. A C-only `forkpty`/`execve` boundary prepares the controlling terminal; Swift never runs in the post-fork child. The child resets signal dispositions and closes unrelated inherited descriptors. Flash reports executable or working-directory failures through the session state.
+`FlashTerminal` owns a serial worker queue per terminal. The queue performs PTY I/O, VT parsing, input encoding, resize, and immutable frame extraction. A C-only `forkpty`/`execve` boundary prepares the controlling terminal; Swift never runs in the post-fork child. The child resets signal dispositions and closes unrelated inherited descriptors: the parent enumerates its open descriptors before `fork`, and the child closes every number up to the highest plus 64 of slack for descriptors other threads open meanwhile, using only `close`. It never sweeps the whole descriptor table, which a raised `RLIMIT_NOFILE` (184,320 descriptors under a login shell's unlimited `ulimit -n`) made cost about 165 ms per spawn. Flash reports executable or working-directory failures through the session state.
 
-Persistent children keep running and their output is parsed while hidden, but no frame is built for it: a session only snapshots its grid and hops to the main thread while a visible view wants frames (`TerminalSession.setWantsFrames`), and re-showing publishes one frame immediately. Frames publish on the leading edge: output after a quiet period is snapshotted at once, and only a burst inside the 16 ms interval waits for its end, so a keystroke echo never pays a coalescing window and continuous output settles at about 60 Hz. A snapshot reads libghostty's per-row dirty flags and reuses the previous frame's cells for clean rows, so steady-state output costs one row, not the grid; the frame carries the changed row set and a generation counter, and a snapshot with nothing visible moved is not published at all. Viewport scrolls, resizes, resets, and palette changes rebuild every row. Hidden views do not draw. Automatic restarts stop after ten consecutive failed starts (a session that ran for at least a second resets the count); the session then stays exited until an explicit restart or a definition change. There is no PTY polling loop. A visible blinking cursor or blinking text uses a local half-second redraw timer, which stops when hidden. Scrollback is capped at approximately 2,000 lines and 4 MiB; libghostty applies limits at its internal page boundaries. The input queue is bounded at 4 MiB; an input batch exceeding available capacity reports rejection without recording its contents.
+Persistent children keep running and their output is parsed while hidden, but no frame is built for it: a session only snapshots its grid and hops to the main thread while a visible view wants frames (`TerminalSession.setWantsFrames`), and re-showing publishes one frame immediately. Frames publish on the leading edge: output after a quiet period is snapshotted at once, and only a burst inside the 16 ms interval waits for its end, so a keystroke echo never pays a coalescing window and continuous output settles at about 60 Hz. Viewport scrolls share the same coalescing, so a trackpad burst publishes its first frame at once and the rest in one trailing frame. A snapshot visits only the rows libghostty reports dirty and reads each with one bulk getter per cell (`ghostty_cell_get_multi` over the row's raw cells) plus style, grapheme, and hyperlink lookups only where the row's flags call for them. Rows are shared copy-on-write values of 20-byte cells with per-row grapheme and hyperlink tables (one string per link run) and their own wrap and blink flags; a reread row equal to its predecessor keeps the previous storage, so cursor motion and redundant dirty flags change no rows. The frame carries the rows whose contents changed and a generation counter, and a snapshot with nothing visible moved is not published at all. Only a resize or the first frame has no comparable predecessor. Reapplying the colours already in effect, which every view bind and configuration apply does, is free. Hidden views do not draw. Automatic restarts stop after ten consecutive failed starts (a session that ran for at least a second resets the count); the session then stays exited until an explicit restart or a definition change. There is no PTY polling loop and no redraw timer. Scrollback is capped at approximately 2,000 lines and 4 MiB; libghostty applies limits at its internal page boundaries. The input queue is bounded at 4 MiB; an input batch exceeding available capacity reports rejection without recording its contents. Key and mouse encoding reuse one libghostty event each and reread terminal modes only after output or a reset changed them.
 
 Generated pager snapshots are written on a utility queue only when their bytes
 change. Their private files and temporary directories belong to the registry
 alongside the child; dismissal, startup failure, and shutdown remove them.
 
 Flash owns the child and its terminal process groups. Stop sends hangup and termination, allows a bounded grace period, escalates to kill, then closes the
-PTY before a bounded nonblocking reap. Exceptional kernel
+PTY before a bounded nonblocking reap. Both 200 ms waits block on the kernel's
+exit event (`kqueue`) rather than sleeping between polls, so a stop returns as
+soon as the child is gone. `TerminalSession.shutdown(_:)` stops a set of
+sessions on their own queues at once, so it takes as long as the slowest child
+rather than the sum. Exceptional kernel
 exit delays are tracked by an in-process reaper and logged; they never block
 the main thread indefinitely. The registry retains retiring sessions until
 asynchronous stop completes, and application shutdown stops active and retiring
@@ -221,7 +225,7 @@ children. Commands should remain in the foreground; popup declarations are not a
 
 ## Build and verification
 
-The backend pins libghostty-vt to `622b4eecd7d2ce1a10930537c17f0d61abdba817` and Zig 0.16.0. `Scripts/build-ghostty.sh --dev` downloads the pinned source with a SHA-256 check and caches a native macOS static XCFramework under `build/ghostty`. `--release` combines arm64 and x86_64 into the macOS slice. It does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
+The backend pins libghostty-vt to `b40acce58dcf77df52231c3798ea58e924647c89` and Zig 0.16.0, built ReleaseFast. `Scripts/build-ghostty.sh --dev` downloads the pinned source with a SHA-256 check, removes retired revisions, and caches a native macOS static XCFramework under `build/ghostty`. `--release` builds the arm64 and x86_64 slices in parallel and combines them into the macOS slice. Finished slices are stamped per architecture and reused without invoking Zig, and a universal framework for the pinned revision already satisfies `--dev`, so alternating release and development builds does not rewrite the framework or relink SwiftPM products. The x86_64 slice uses Zig's macOS baseline (core2): Ghostty's build replaces a macOS target with its generic macOS target on macOS hosts, so a `-Dcpu` model has no effect (an `x86_64_v3` build is byte-identical). CI caches only the stamped XCFramework. The script does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
 
 Run the bootstrap before direct SwiftPM commands on a fresh checkout:
 
@@ -233,14 +237,19 @@ swift test --filter TerminalTests
 
 The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap this dependency automatically. Development deployment remains `./Scripts/install.sh --dev`.
 
-`TerminalTests`, `TerminalLinkTests`, and `TerminalSnapshotTests` exercise real
+`TerminalTests`, `TerminalLinkTests`, `TerminalSnapshotTests`, and
+`TerminalRenderingTests` exercise real
 PTY startup, styled and Unicode output, link interaction, redraws, hidden-frame
 suppression, and session rebinding. They also cover controlling-terminal
 dimensions, retained exit screens, input, resize, explicit restart, failed spawn,
 and bounded shutdown/reaping. Unicode grapheme clustering remains enabled after
 reset. Direct VT tests cover incremental snapshots, terminal queries, application
 cursor input, Ctrl-C, Kitty modifiers and releases, bracketed paste, alternate
-screens, and scrollback. Pure text tests cover control sanitization and cell widths.
+screens, and scrollback. Rendering tests pin glyph origins to `column ×
+cellWidth`, per-row repaints, colour emoji, and layer-animated blinking.
+`TerminalBenchmarkTests` prints `[terminal-bench]` throughput lines for VT
+parsing, snapshots, drawing, and PTY spawns (`FLASH_TERMINAL_BENCH_MB` scales
+the parsed workload). Pure text tests cover control sanitization and cell widths.
 App tests cover pager ownership and cleanup, placement, preview dismissal, pinned
 focus, and mapping precedence.
 
@@ -253,21 +262,27 @@ and cancellation of pending retries on removal.
 
 The status bar consumes the ordered typed format document through `StatusFormatLayout`. Its cells determine painted positions and native closed-range hit areas, including list focus/markers, fill colors, alignment clipping, and absolute-centre overlays. Flash shortens explicitly elastic `#[shrink]` spans before native drawing; unmarked formats retain native trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the original point-based padding and centered label, reserving the longest configured base-mode label. The transient TERMINAL label uses that same width, so entering terminal mode does not shift adjacent segments. Pill backgrounds and interaction areas share the same geometry; native cell rounding must not change their visible shape or spacing.
 
-The terminal view draws from the frame with damage tracking: a frame that
-directly follows the previous one invalidates only the rows the terminal
-reported as changed plus the old and new cursor rows, and a blink toggle
-repaints the cursor row alone unless the frame carries blinking cells. The view
-is layer-backed with asynchronous drawing, so a repaint is recorded on the main
-thread and rasterised by the render server. Backgrounds paint as merged runs of
-one colour and cells on the terminal's own background need no fill at all.
-Consecutive single-width ASCII cells with the same font and colour draw as one
-Core Text line; wide, non-ASCII, or differently styled cells still draw alone in
-their own clipped cell so shaping never shifts a neighbour. Laid-out lines are
-cached by text, font variant, and colour, and colours are cached as `CGColor`
-values. Font variants and the cell size are cached per font change. The
-`FlashTerminal` and `CFlashTerminal` modules compile optimized in the
-incremental dev build too, so the daily-driver bundle runs the same per-cell
-code as a release build.
+The terminal view draws each row in its own Core Animation layer and repaints
+exactly the rows whose contents, selection, or configuration changed; a
+layer-backed view would merge several dirty rects into their bounding box, so a
+status-line update below a cursor near the top used to repaint the whole grid.
+Row layers are opaque and draw asynchronously, so a repaint is recorded on the
+main thread and rasterised off it. Backgrounds paint as merged runs of one
+colour and cells on the terminal's own background need no fill at all. Every
+glyph is placed at `column × cellWidth` with `CTFontDrawGlyphs`, one call per
+run of a font variant and colour, from a per-variant scalar-to-glyph cache; a
+scalar the monospaced font lacks resolves once to a fallback font's glyph
+(including colour emoji), clipped to its cells. Only grapheme clusters and
+scalars no font covers use a cached Core Text line in their own clipped cell.
+Text therefore never drifts from the integral cell grid that backgrounds,
+selection, the cursor, and hit testing share. Glyph, line, and colour caches
+are bounded and retire their older half instead of wiping when full. The cursor
+is its own layer drawn as an inverted cell, and blinking text draws in a
+transparent layer over its row; both blink through an opacity animation that
+Core Animation runs in the render server, without a timer or a redraw, and the
+cursor restarts visible whenever it moves. The `FlashTerminal` and
+`CFlashTerminal` modules compile optimized in the incremental dev build too, so
+the daily-driver bundle runs the same per-cell code as a release build.
 
 Each display uses the same pooled layer renderer. Non-ASCII cells have independent origins so font shaping cannot shift subsequent text or interaction rectangles away from native columns. Notched displays suppress centre content and clip other cells and hit areas around the notch margin. Visible blink/breathing effects, carousel transitions, and in-place value crossfades run on Core Animation without a redraw timer. The hover wash updates immediately, follows the visible text rather than outer separator spaces, and refreshes when the layout changes under a stationary pointer.
 

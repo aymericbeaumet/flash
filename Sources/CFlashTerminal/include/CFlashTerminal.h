@@ -9,29 +9,42 @@ typedef void (*FlashVTWrite)(void *, const uint8_t *, size_t);
 typedef struct {
   uint8_t r, g, b;
 } FlashRGB;
-/// One viewport cell. `text` and `hyperlink` point into an arena owned by
-/// the terminal that stays valid until the next `flash_vt_row_cells` call.
+/// `FlashVTCell.content` bit marking a multi-codepoint grapheme cluster; the
+/// low bits index the row's cluster spans.
+#define FLASH_VT_CLUSTER 0x80000000u
+/// One viewport cell, stored unchanged as Swift row storage: 20 bytes with no
+/// padding, so rows compare with `memcmp`. `content` is 0 for an empty cell,
+/// a Unicode scalar, or `FLASH_VT_CLUSTER | index`. `link` is 0 or a 1-based
+/// index into the row's link spans; consecutive cells share one entry.
 typedef struct {
-  const uint8_t *text;
-  size_t length;
-  const uint8_t *hyperlink;
-  size_t hyperlink_length;
-  FlashRGB foreground, background, underline_color;
+  uint32_t content;
   uint16_t flags;
-  uint8_t width, underline;
+  uint16_t link;
+  FlashRGB foreground, background, underline_color;
+  uint8_t width, underline, reserved;
 } FlashVTCell;
+/// UTF-8 bytes in the row arena.
+typedef struct {
+  uint32_t offset, length;
+} FlashVTSpan;
 typedef struct {
   uint16_t columns, rows, cursor_x, cursor_y;
   bool cursor_visible, cursor_blinking, mouse_tracking;
   uint8_t cursor_style;
-  /// 0: no row changed since the last `flash_vt_clean`; 1: the per-row
-  /// `dirty` flags identify the changed rows; 2: every row changed.
+  /// 0: no row changed since the last `flash_vt_clean`; 1: only the rows
+  /// `flash_vt_next_row` visits changed; 2: every row changed.
   uint8_t dirty;
   FlashRGB foreground, background;
 } FlashVTFrame;
+/// Row metadata and text tables filled by `flash_vt_row_cells`. The arena and
+/// span arrays stay valid until the next `flash_vt_row_cells` call.
 typedef struct {
-  bool dirty;
   bool wrapped;
+  /// Union of every cell's flags.
+  uint16_t flags;
+  uint16_t cluster_count, link_count;
+  const uint8_t *arena;
+  const FlashVTSpan *clusters, *links;
 } FlashVTRow;
 FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, bool scrollback,
                       FlashVTWrite write, void *context);
@@ -45,10 +58,12 @@ void flash_vt_colors(FlashVT *vt, FlashRGB foreground, FlashRGB background);
 /// Refresh the render state and describe the viewport. Rows are then read in
 /// ascending order with `flash_vt_next_row`; finish with `flash_vt_clean`.
 bool flash_vt_frame(FlashVT *vt, FlashVTFrame *frame);
-/// Advance to the next viewport row. Returns false past the last row.
-bool flash_vt_next_row(FlashVT *vt, FlashVTRow *row);
-/// Fill `columns` cells for the current row.
-bool flash_vt_row_cells(FlashVT *vt, FlashVTCell *cells);
+/// Advance to the next row to rebuild and report its viewport index: every
+/// row when `all`, otherwise only rows libghostty reports dirty. Returns false
+/// past the last such row.
+bool flash_vt_next_row(FlashVT *vt, bool all, uint16_t *y);
+/// Fill `columns` cells of the current row and describe its text tables.
+bool flash_vt_row_cells(FlashVT *vt, FlashVTCell *cells, FlashVTRow *row);
 /// Mark every dirty flag consumed after a complete frame was read.
 void flash_vt_clean(FlashVT *vt);
 void flash_vt_scroll(FlashVT *vt, int lines);
@@ -66,6 +81,10 @@ int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
                             uint32_t cell_width, uint32_t cell_height);
 void flash_pty_signal(int fd, pid_t pid, int signal, bool include_leader);
 int flash_pty_wait(pid_t pid, int *status);
+/// Wait up to `timeout_ms` for `pid` to exit without polling. Returns 1 once
+/// the kernel reports the exit, 0 on timeout, -1 when no exit event can be
+/// registered (the process already exited, or kqueue failed).
+int flash_pty_await_exit(pid_t pid, int timeout_ms);
 int flash_spawn_file_actions_addchdir(posix_spawn_file_actions_t *actions,
                                       const char *path);
 

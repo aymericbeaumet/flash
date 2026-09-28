@@ -22,6 +22,11 @@ public struct TerminalConfiguration: Equatable, Sendable {
   }
 }
 
+struct TerminalColors: Equatable {
+  let foreground: TerminalColor
+  let background: TerminalColor
+}
+
 public enum TerminalSessionState: Equatable, Sendable {
   case idle
   case running(pid: Int32)
@@ -44,14 +49,25 @@ enum TerminalChildReaping {
     return result > 0 || (result < 0 && errno == ECHILD)
   }
 
+  /// Waits for the child's exit event from the kernel instead of sleeping
+  /// between polls, so a stop returns as soon as the child is gone. An exit
+  /// that cannot be registered (already exited, or no kqueue) falls back to
+  /// short sleeps until the deadline.
   static func wait(
-    pid: pid_t, timeoutMilliseconds: UInt64, poll: (pid_t) -> Bool = Self.poll
+    pid: pid_t, timeoutMilliseconds: UInt64, poll: (pid_t) -> Bool = Self.poll,
+    awaitExit: (pid_t, Int32) -> Int32 = flash_pty_await_exit
   ) -> Bool {
     let deadline = DispatchTime.now().uptimeNanoseconds + timeoutMilliseconds * 1_000_000
     repeat {
       if poll(pid) { return true }
-      if DispatchTime.now().uptimeNanoseconds >= deadline { return false }
-      usleep(5_000)
+      let now = DispatchTime.now().uptimeNanoseconds
+      if now >= deadline { return false }
+      let remaining = Int32(clamping: (deadline - now + 999_999) / 1_000_000)
+      switch awaitExit(pid, remaining) {
+      case 0: return poll(pid)
+      case 1: continue
+      default: usleep(1_000)
+      }
     } while true
   }
 
@@ -94,6 +110,8 @@ public final class TerminalSession {
   private var cellHeight: UInt32 = 1
   private var started = false
   private var scheduledFrame = false
+  /// Queue-confined; see `setColors`.
+  private var appliedColors: TerminalColors?
 
   public init(configuration: TerminalConfiguration) {
     self.configuration = configuration
@@ -130,6 +148,20 @@ public final class TerminalSession {
       queue.sync { stopOnQueue() }
     }
   }
+  /// Stops every session at once: each child gets its hangup, termination
+  /// and reaping deadlines on its own queue, so the whole set takes as long
+  /// as its slowest child rather than the sum of them.
+  public static func shutdown(_ sessions: [TerminalSession]) {
+    let group = DispatchGroup()
+    for session in sessions {
+      if DispatchQueue.getSpecific(key: session.queueKey) == true {
+        session.stopOnQueue()
+      } else {
+        session.queue.async(group: group) { session.stopOnQueue() }
+      }
+    }
+    group.wait()
+  }
   public func resize(columns: Int, rows: Int) {
     let columns = max(1, min(1000, columns))
     let rows = max(1, min(1000, rows))
@@ -159,10 +191,16 @@ public final class TerminalSession {
       }
     }
   }
+  /// Applying the colors already in effect is free: views rebind on every
+  /// hover and configuration applies repeat unchanged styles, and neither
+  /// should rebuild or republish the grid.
   public func setColors(foreground: NSColor, background: NSColor) {
     let fg = foreground.terminalRGB
     let bg = background.terminalRGB
+    let colors = TerminalColors(foreground: TerminalColor(fg), background: TerminalColor(bg))
     queue.async { [self] in
+      guard appliedColors != colors else { return }
+      appliedColors = colors
       buffer.invalidate()
       flash_vt_colors(buffer.handle, fg, bg)
       publishFrame()
@@ -179,11 +217,13 @@ public final class TerminalSession {
   public func setFocused(_ focused: Bool) {
     queue.async { [self] in flash_vt_focus(buffer.handle, focused) }
   }
+  /// Wheel and trackpad scrolls share the output frame coalescing: the first
+  /// scroll after a quiet interval publishes at once, a burst settles at the
+  /// frame interval, and only rows whose content moved are rebuilt.
   public func scroll(lines: Int) {
     queue.async { [self] in
-      buffer.invalidate()
       flash_vt_scroll(buffer.handle, Int32(clamping: lines))
-      publishFrame()
+      scheduleFrame()
     }
   }
   public func key(code: UInt16, modifiers: UInt16, action: Int32, text: String, unshifted: UInt32) {
@@ -387,8 +427,8 @@ public final class TerminalSession {
     }
   }
   /// Whether anything consumes frames. A hidden persistent popup keeps
-  /// parsing output but skips the per-frame grid snapshot (one `String` per
-  /// cell) and the main-thread hop; re-enabling publishes one frame at once.
+  /// parsing output but skips the per-frame grid snapshot and the main-thread
+  /// hop; re-enabling publishes one frame at once.
   public func setWantsFrames(_ wants: Bool) {
     queue.async { [weak self] in
       guard let self, self.wantsFrames != wants else { return }

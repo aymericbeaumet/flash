@@ -1,12 +1,49 @@
 #include "CFlashTerminal.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/event.h>
 #include <sys/ioctl.h>
+#include <sys/proc_info.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <util.h>
+
+// Descriptors another thread may open between the enumeration and fork take
+// the lowest free numbers: a hole below the highest open descriptor, or just
+// above it. Closing this many past the highest covers them.
+enum { DESCRIPTOR_SLACK = 64 };
+
+// One past the highest descriptor the child must close. Enumerating the open
+// descriptors before fork keeps the child to plain close(2) calls while
+// avoiding a sweep of the whole descriptor table: a raised RLIMIT_NOFILE (a
+// login shell's unlimited `ulimit -n` allows kern.maxfilesperproc, 184,320 on
+// a current Mac) made that sweep cost ~165 ms per spawn.
+static int descriptor_bound(void) {
+  int limit = getdtablesize();
+  int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+  if (bytes <= 0)
+    return limit;
+  // Headroom for descriptors opened between the two calls.
+  bytes += 64 * (int)sizeof(struct proc_fdinfo);
+  struct proc_fdinfo *descriptors = malloc((size_t)bytes);
+  if (!descriptors)
+    return limit;
+  bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, descriptors, bytes);
+  int highest = -1;
+  for (int i = 0; i < bytes / (int)sizeof(struct proc_fdinfo); i++) {
+    if (descriptors[i].proc_fd > highest)
+      highest = descriptors[i].proc_fd;
+  }
+  free(descriptors);
+  if (bytes <= 0)
+    return limit;
+  int bound = highest + 1 + DESCRIPTOR_SLACK;
+  return bound < limit ? bound : limit;
+}
 
 int flash_spawn_file_actions_addchdir(posix_spawn_file_actions_t *actions,
                                       const char *path) {
@@ -25,7 +62,7 @@ int flash_pty_spawn(const char *executable, char *const argv[],
     return -1;
   fcntl(errors[0], F_SETFD, FD_CLOEXEC);
   fcntl(errors[1], F_SETFD, FD_CLOEXEC);
-  int descriptor_limit = getdtablesize();
+  int descriptor_limit = descriptor_bound();
   struct winsize size = {.ws_col = columns, .ws_row = rows};
   int master;
   pid_t child = forkpty(&master, NULL, NULL, &size);
@@ -109,4 +146,22 @@ int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
           (unsigned short)(rows * cell_height > 65535 ? 65535
                                                       : rows * cell_height)};
   return ioctl(fd, TIOCSWINSZ, &size);
+}
+
+int flash_pty_await_exit(pid_t pid, int timeout_ms) {
+  int queue = kqueue();
+  if (queue < 0)
+    return -1;
+  struct kevent change, event;
+  EV_SET(&change, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+  struct timespec timeout = {.tv_sec = timeout_ms / 1000,
+                             .tv_nsec = (long)(timeout_ms % 1000) * 1000000L};
+  int count;
+  do {
+    count = kevent(queue, &change, 1, &event, 1, &timeout);
+  } while (count < 0 && errno == EINTR);
+  close(queue);
+  if (count < 0 || (count > 0 && (event.flags & EV_ERROR)))
+    return -1;
+  return count > 0 ? 1 : 0;
 }

@@ -1,6 +1,14 @@
 import AppKit
+import CFlashTerminal
 import CoreText
+import QuartzCore
 
+/// Draws a terminal frame with one Core Animation layer per row, so a frame
+/// repaints exactly the rows whose contents changed; AppKit would merge
+/// several `setNeedsDisplay(_:)` rects of a layer-backed view into their
+/// bounding box. The cursor and blinking text are separate layers whose
+/// opacity Core Animation blinks in the render server: no timer and no
+/// redraw while they blink.
 public final class TerminalView: NSView, NSTextInputClient {
   public var inputInterceptor: ((NSEvent) -> Bool)?
   public var onFocusRequested: (() -> Void)?
@@ -11,61 +19,11 @@ public final class TerminalView: NSView, NSTextInputClient {
   }
   public var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular) {
     didSet {
-      cachedCellSize = nil
-      cachedFontVariants = nil
-      lineCache.removeAll(keepingCapacity: true)
-      needsDisplay = true
+      guard font != oldValue else { return }
+      renderer.font = font
+      invalidateAllRows()
       updateCellGeometry()
     }
-  }
-  /// Laid-out glyph runs keyed by text, font variant and colour. Rows that
-  /// scroll or repaint reuse their lines instead of re-shaping them.
-  private struct RunKey: Hashable {
-    let text: String
-    let font: Int
-    let color: UInt32
-  }
-  private var lineCache: [RunKey: CTLine] = [:]
-  private var colorCache: [UInt32: CGColor] = [:]
-  private static let selectionKey: UInt32 = 1 << 25
-  private static func colorKey(_ color: TerminalColor, faint: Bool = false) -> UInt32 {
-    UInt32(color.red) << 16 | UInt32(color.green) << 8 | UInt32(color.blue) | (faint ? 1 << 24 : 0)
-  }
-  private func cgColor(_ color: TerminalColor, faint: Bool = false) -> CGColor {
-    let key = Self.colorKey(color, faint: faint)
-    if let cached = colorCache[key] { return cached }
-    if colorCache.count >= 1024 { colorCache.removeAll(keepingCapacity: true) }
-    let value = CGColor(
-      srgbRed: CGFloat(color.red) / 255, green: CGFloat(color.green) / 255,
-      blue: CGFloat(color.blue) / 255, alpha: faint ? 0.6 : 1)
-    colorCache[key] = value
-    return value
-  }
-  private func line(_ key: RunKey, font: NSFont, color: CGColor) -> CTLine {
-    if let cached = lineCache[key] { return cached }
-    if lineCache.count >= 4096 { lineCache.removeAll(keepingCapacity: true) }
-    let line = CTLineCreateWithAttributedString(
-      NSAttributedString(
-        string: key.text,
-        attributes: [.font: font, kCTForegroundColorAttributeName as NSAttributedString.Key: color])
-    )
-    lineCache[key] = line
-    return line
-  }
-  /// Regular / bold / italic / bold-italic, derived once per font change
-  /// (`NSFontManager.convert` per frame was a measurable share of a redraw).
-  private var cachedFontVariants: [NSFont]?
-  private var cachedCellSize: NSSize?
-  private func fontVariants() -> [NSFont] {
-    if let cachedFontVariants { return cachedFontVariants }
-    let variants = [
-      font,
-      NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
-      NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask),
-      NSFontManager.shared.convert(font, toHaveTrait: [.boldFontMask, .italicFontMask]),
-    ]
-    cachedFontVariants = variants
-    return variants
   }
   public var foreground: NSColor = .white { didSet { updateColors() } }
   public var background: NSColor = .black { didSet { updateColors() } }
@@ -77,28 +35,25 @@ public final class TerminalView: NSView, NSTextInputClient {
   public var drawsCursor = true {
     didSet {
       guard drawsCursor != oldValue else { return }
-      updateBlinkTimer()
-      if let frame = terminalFrame { setNeedsDisplay(rowRect(frame.cursorY, size: cellSize)) }
+      refresh()
     }
   }
   public var isRenderingEnabled = false {
     didSet {
       session?.setWantsFrames(isRenderingEnabled)
-      if isRenderingEnabled { needsDisplay = true }
-      updateBlinkTimer()
+      if isRenderingEnabled != oldValue { invalidateAllRows() }
     }
   }
-  public var cellSize: NSSize {
-    if let cachedCellSize { return cachedCellSize }
-    let size = NSSize(
-      width: ceil(("M" as NSString).size(withAttributes: [.font: font]).width),
-      height: ceil(font.ascender - font.descender + font.leading))
-    cachedCellSize = size
-    return size
-  }
+  public var cellSize: NSSize { renderer.cellSize }
   public private(set) var terminalFrame: TerminalFrame?
   private weak var session: TerminalSession?
-  private var selection: ClosedRange<Int>?
+  private var selection: ClosedRange<Int>? {
+    didSet {
+      guard selection != oldValue else { return }
+      for range in [oldValue, selection].compactMap({ $0 }) { invalidateRows(covering: range) }
+      refresh()
+    }
+  }
   private enum MouseGesture {
     case reporting
     case selecting(start: Int, link: URL?, origin: NSPoint, dragged: Bool)
@@ -109,46 +64,88 @@ public final class TerminalView: NSView, NSTextInputClient {
   private var interpretingEvent: NSEvent?
   private var interpreted = false
   private var localCommandKeys: Set<UInt16> = []
-  private var blinkTimer: Timer?
-  private var blinkVisible = true
 
-  deinit { blinkTimer?.invalidate() }
+  private let renderer = TerminalRenderer(
+    font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+  private lazy var painter = TerminalLayerPainter(view: self)
+  private let gridLayer = CALayer()
+  private var rowLayers: [TerminalRowLayer] = []
+  private let cursorLayer = CALayer()
+  private let markedLayer = CALayer()
+  /// Bumped by changes every row depends on: font, colours, scale.
+  private var renderEpoch = 0
+  private var palette: TerminalRenderer.Palette?
+  private var cursorState: CursorState?
+  /// What the cursor layer last drew: its cell's row and the render epoch.
+  private var cursorDrawn: (row: TerminalRow, column: Int, epoch: Int)?
+  /// Blinking text shares one phase, anchored when the view was created.
+  private let blinkEpoch = CACurrentMediaTime()
+
+  private struct CursorState: Equatable {
+    var column: Int
+    var row: Int
+    var style: Int
+    var blinking: Bool
+  }
 
   public override var acceptsFirstResponder: Bool { true }
   public override var isFlipped: Bool { true }
+  public override var wantsUpdateLayer: Bool { true }
   public override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
-    wantsLayer = true
+    setUp()
   }
   public required init?(coder: NSCoder) {
     super.init(coder: coder)
-    wantsLayer = true
+    setUp()
   }
-  /// The backing layer records drawing commands and rasterises them off the
-  /// main thread, so a repaint never blocks input handling.
-  public override func makeBackingLayer() -> CALayer {
-    let layer = super.makeBackingLayer()
-    layer.drawsAsynchronously = true
-    return layer
+  private func setUp() {
+    wantsLayer = true
+    // Row layers extend to the frame's full height; a clipped prompt row stays hidden.
+    clipsToBounds = true
+    renderer.font = font
+    for layer in [gridLayer, cursorLayer, markedLayer] { layer.delegate = painter }
+    gridLayer.anchorPoint = .zero
+    cursorLayer.isHidden = true
+    markedLayer.isHidden = true
+    attachLayers()
+  }
+  private func attachLayers() {
+    guard let layer, gridLayer.superlayer !== layer else { return }
+    layer.addSublayer(gridLayer)
+    layer.addSublayer(cursorLayer)
+    layer.addSublayer(markedLayer)
+  }
+  public override func updateLayer() {
+    layer?.backgroundColor = background.cgColor
   }
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    attachLayers()
+    updateScale()
     updateCellGeometry()
   }
   public override func viewDidChangeBackingProperties() {
     super.viewDidChangeBackingProperties()
+    updateScale()
     updateCellGeometry()
   }
   public override func setFrameSize(_ newSize: NSSize) {
     super.setFrameSize(newSize)
-    needsDisplay = true
+    refresh()
     updateCellGeometry()
   }
   private func updateCellGeometry() {
     let scale = window?.backingScaleFactor ?? 1
     session?.setCellSize(
       width: Int(ceil(cellSize.width * scale)), height: Int(ceil(cellSize.height * scale)))
+  }
+  private func updateScale() {
+    let scale = window?.backingScaleFactor ?? 2
+    guard scale != cursorLayer.contentsScale else { return }
+    for layer in [cursorLayer, markedLayer] { layer.contentsScale = scale }
+    invalidateAllRows()
   }
 
   public func bind(session: TerminalSession?) {
@@ -160,84 +157,252 @@ public final class TerminalView: NSView, NSTextInputClient {
     terminalFrame = session?.frame
     selection = nil
     mouseGesture = nil
+    cursorState = nil
     session?.onFrame = { [weak self] in self?.receive($0) }
     session?.setWantsFrames(isRenderingEnabled)
     if window?.firstResponder === self { session?.setFocused(true) }
     updateCellGeometry()
-    updateColors()
+    session?.setColors(foreground: foreground, background: background)
+    refresh()
   }
-  private func receive(_ frame: TerminalFrame) {
-    let previous = terminalFrame
+  func receive(_ frame: TerminalFrame) {
     terminalFrame = frame
-    updateBlinkTimer()
-    guard isRenderingEnabled else { return }
-    invalidateChangedRows(from: previous, to: frame)
-  }
-
-  /// Damage tracking: a frame that directly follows the previous one and
-  /// keeps its geometry invalidates only the rows the terminal reported as
-  /// changed plus the old and new cursor rows, so a cursor move or one new
-  /// line of output does not repaint the whole grid.
-  private func invalidateChangedRows(from previous: TerminalFrame?, to frame: TerminalFrame) {
-    guard let previous, previous.rows == frame.rows, previous.columns == frame.columns,
-      frame.generation == previous.generation + 1, var dirtyRows = frame.changedRows
-    else {
-      needsDisplay = true
-      return
-    }
-    if previous.cursorY != frame.cursorY || previous.cursorX != frame.cursorX
-      || previous.cursorVisible != frame.cursorVisible
-      || previous.cursorStyle != frame.cursorStyle
-    {
-      dirtyRows.insert(previous.cursorY)
-      dirtyRows.insert(frame.cursorY)
-    }
-    let size = cellSize
-    for row in dirtyRows where row >= 0 && row < frame.rows {
-      setNeedsDisplay(rowRect(row, size: size))
-    }
-  }
-
-  private func rowRect(_ row: Int, size: NSSize) -> NSRect {
-    NSRect(x: 0, y: CGFloat(row) * size.height, width: bounds.width, height: size.height)
-  }
-
-  /// Blink toggles repaint only what blinks: the cursor cell, and every row
-  /// only when the frame carries blinking cells.
-  private func invalidateForBlink() {
-    guard let frame = terminalFrame else { return }
-    if frame.hasBlinkingCells {
-      needsDisplay = true
-      return
-    }
-    let size = cellSize
-    setNeedsDisplay(rowRect(frame.cursorY, size: size))
-  }
-  private func updateBlinkTimer() {
-    let blinking =
-      terminalFrame.map {
-        drawsCursor && $0.cursorBlinking && $0.cursorVisible && session != nil
-          || $0.hasBlinkingCells
-      } ?? false
-    guard isRenderingEnabled && blinking else {
-      blinkTimer?.invalidate()
-      blinkTimer = nil
-      blinkVisible = true
-      return
-    }
-    guard blinkTimer == nil else { return }
-    let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-      guard let self else { return }
-      self.blinkVisible.toggle()
-      self.invalidateForBlink()
-    }
-    blinkTimer = timer
-    RunLoop.main.add(timer, forMode: .common)
+    refresh()
   }
   private func updateColors() {
     session?.setColors(foreground: foreground, background: background)
-    if isRenderingEnabled { needsDisplay = true }
+    needsDisplay = true
+    invalidateAllRows()
   }
+  private func invalidateAllRows() {
+    renderEpoch += 1
+    palette = nil
+    cursorState = nil
+    refresh()
+  }
+  private func invalidateRows(covering range: ClosedRange<Int>) {
+    guard let columns = terminalFrame?.columns, columns > 0 else { return }
+    for row in (range.lowerBound / columns)...(range.upperBound / columns)
+    where row < rowLayers.count {
+      rowLayers[row].drawnEpoch = -1
+    }
+  }
+  private func currentPalette() -> TerminalRenderer.Palette {
+    if let palette { return palette }
+    let value = TerminalRenderer.Palette(
+      background: background.cgColor,
+      selectedForeground: NSColor.selectedTextColor.cgColor,
+      selectedBackground: NSColor.selectedTextBackgroundColor.cgColor)
+    palette = value
+    return value
+  }
+
+  /// Brings the layers in line with the current frame: rows whose contents,
+  /// selection or configuration changed are marked for display, every other
+  /// row keeps its rasterised contents.
+  private func refresh() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+    guard isRenderingEnabled, let frame = terminalFrame else {
+      gridLayer.isHidden = true
+      cursorLayer.isHidden = true
+      markedLayer.isHidden = true
+      return
+    }
+    gridLayer.isHidden = false
+    let size = cellSize
+    let scale = window?.backingScaleFactor ?? 2
+    while rowLayers.count > frame.rows { rowLayers.removeLast().removeFromSuperlayer() }
+    while rowLayers.count < frame.rows {
+      let layer = TerminalRowLayer()
+      layer.delegate = painter
+      layer.index = rowLayers.count
+      gridLayer.addSublayer(layer)
+      rowLayers.append(layer)
+    }
+    gridLayer.frame = CGRect(
+      x: 0, y: 0, width: bounds.width, height: size.height * CGFloat(frame.rows))
+    for (index, layer) in rowLayers.enumerated() {
+      let rect = CGRect(
+        x: 0, y: CGFloat(index) * size.height, width: bounds.width, height: size.height)
+      if layer.frame != rect { layer.frame = rect }
+      if layer.contentsScale != scale {
+        layer.contentsScale = scale
+        layer.drawnEpoch = -1
+      }
+      let row = frame.grid[index]
+      if layer.drawnEpoch != renderEpoch || layer.drawn != row {
+        layer.drawn = row
+        layer.drawnEpoch = renderEpoch
+        layer.setNeedsDisplay()
+        layer.updateBlinking(row.hasBlinkingCells, painter: painter, epoch: blinkEpoch)
+      }
+    }
+    updateCursor(frame)
+    updateMarkedText(frame)
+  }
+
+  private func updateCursor(_ frame: TerminalFrame) {
+    guard drawsCursor, frame.cursorVisible, session != nil, frame.cursorY < frame.rows,
+      frame.cursorX < frame.columns
+    else {
+      cursorLayer.isHidden = true
+      cursorLayer.removeAnimation(forKey: "blink")
+      cursorState = nil
+      cursorDrawn = nil
+      return
+    }
+    let size = cellSize
+    let cell = frame.grid[frame.cursorY].cells[frame.cursorX]
+    cursorLayer.frame = CGRect(
+      x: CGFloat(frame.cursorX) * size.width, y: CGFloat(frame.cursorY) * size.height,
+      width: size.width * CGFloat(max(1, cell.width)), height: size.height)
+    cursorLayer.isHidden = false
+    let row = frame.grid[frame.cursorY]
+    if cursorDrawn.map({ $0.row != row || $0.column != frame.cursorX || $0.epoch != renderEpoch })
+      ?? true
+    {
+      cursorDrawn = (row, frame.cursorX, renderEpoch)
+      cursorLayer.setNeedsDisplay()
+    }
+    let state = CursorState(
+      column: frame.cursorX, row: frame.cursorY, style: frame.cursorStyle,
+      blinking: frame.cursorBlinking)
+    guard state != cursorState else { return }
+    cursorState = state
+    cursorDrawn = (row, frame.cursorX, renderEpoch)
+    cursorLayer.setNeedsDisplay()
+    // Moving restarts the blink visible, so the cursor stays solid while typing.
+    cursorLayer.removeAnimation(forKey: "blink")
+    if frame.cursorBlinking {
+      cursorLayer.add(
+        Self.blinkAnimation(beginTime: CACurrentMediaTime()), forKey: "blink")
+    }
+  }
+
+  static func blinkAnimation(beginTime: CFTimeInterval) -> CAAnimation {
+    let animation = CAKeyframeAnimation(keyPath: "opacity")
+    animation.values = [1, 0]
+    animation.keyTimes = [0, 0.5]
+    animation.calculationMode = .discrete
+    animation.duration = 1
+    animation.repeatCount = .infinity
+    animation.beginTime = beginTime
+    animation.isRemovedOnCompletion = false
+    return animation
+  }
+
+  private func updateMarkedText(_ frame: TerminalFrame) {
+    guard marked.length > 0 else {
+      markedLayer.isHidden = true
+      return
+    }
+    let size = cellSize
+    markedLayer.frame = CGRect(
+      origin: CGPoint(
+        x: CGFloat(frame.cursorX) * size.width, y: CGFloat(frame.cursorY) * size.height),
+      size: marked.size())
+    markedLayer.isHidden = false
+    markedLayer.setNeedsDisplay()
+  }
+
+  fileprivate func paint(_ layer: CALayer, in context: CGContext) {
+    guard let frame = terminalFrame else { return }
+    let palette = currentPalette()
+    if let row = layer as? TerminalRowLayer {
+      guard row.index < frame.rows else { return }
+      renderer.draw(
+        frame.grid[row.index], frameBackground: frame.background,
+        selection: selectedColumns(inRow: row.index, frame: frame), part: .base, palette: palette,
+        width: layer.bounds.width, in: context)
+    } else if let row = (layer.superlayer as? TerminalRowLayer), layer === row.blinkLayer {
+      guard row.index < frame.rows else { return }
+      renderer.draw(
+        frame.grid[row.index], frameBackground: frame.background,
+        selection: selectedColumns(inRow: row.index, frame: frame), part: .blinking,
+        palette: palette, width: layer.bounds.width, in: context)
+    } else if layer === cursorLayer {
+      paintCursor(frame, in: context)
+    } else if layer === markedLayer {
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+      marked.draw(at: .zero)
+      NSGraphicsContext.restoreGraphicsState()
+    }
+  }
+
+  private func paintCursor(_ frame: TerminalFrame, in context: CGContext) {
+    guard frame.cursorY < frame.rows, frame.cursorX < frame.columns else { return }
+    let bounds = cursorLayer.bounds
+    let row = frame.grid[frame.cursorY]
+    let cell = row.cells[frame.cursorX]
+    let inverse = cell.flags & 16 != 0
+    let cellBackground = TerminalColor(inverse ? cell.foreground : cell.background)
+    let under = cellBackground == frame.background ? background : cellBackground.nsColor
+    let fill = (under.usingColorSpace(.sRGB) ?? under).blended(withFraction: 0.65, of: foreground)
+    switch frame.cursorStyle {
+    case 0:
+      context.setFillColor(foreground.withAlphaComponent(0.65).cgColor)
+      context.fill(CGRect(x: 0, y: 0, width: 2, height: bounds.height))
+    case 2:
+      context.setFillColor(foreground.withAlphaComponent(0.65).cgColor)
+      context.fill(CGRect(x: 0, y: bounds.height - 2, width: bounds.width, height: 2))
+    case 3:
+      context.setStrokeColor(foreground.cgColor)
+      context.setLineWidth(1)
+      context.stroke(bounds.insetBy(dx: 0.5, dy: 0.5))
+    default:
+      // A block inverts the cell: the text takes the colour under the cursor.
+      context.setFillColor((fill ?? foreground).cgColor)
+      context.fill(bounds)
+      renderer.drawGlyph(of: row, column: frame.cursorX, color: under.cgColor, in: context)
+    }
+  }
+
+  private func selectedColumns(inRow row: Int, frame: TerminalFrame) -> Range<Int>? {
+    guard let selection else { return nil }
+    let start = row * frame.columns
+    let lower = max(selection.lowerBound, start)
+    let upper = min(selection.upperBound + 1, start + frame.columns)
+    return lower < upper ? (lower - start)..<(upper - start) : nil
+  }
+
+  /// Draws the rows intersecting `rect` of the current frame into a flipped
+  /// context, blinking text visible — the same drawing the row layers record.
+  func render(in context: CGContext, rect: NSRect) {
+    guard let frame = terminalFrame else { return }
+    let size = cellSize
+    let palette = currentPalette()
+    let first = max(0, Int((rect.minY / size.height).rounded(.down)))
+    let last = min(frame.rows - 1, Int((rect.maxY / size.height).rounded(.up)) - 1)
+    guard first <= last else { return }
+    for index in first...last {
+      context.saveGState()
+      context.translateBy(x: 0, y: CGFloat(index) * size.height)
+      let selection = selectedColumns(inRow: index, frame: frame)
+      for part in [TerminalRenderer.Part.base, .blinking] {
+        renderer.draw(
+          frame.grid[index], frameBackground: frame.background, selection: selection, part: part,
+          palette: palette, width: bounds.width, in: context)
+      }
+      context.restoreGState()
+    }
+  }
+
+  /// Rows marked for display and not yet drawn, for tests and benchmarks.
+  var rowsNeedingDisplay: [Int] {
+    rowLayers.indices.filter { rowLayers[$0].needsDisplay() }
+  }
+  /// Draws every pending row layer now, as a Core Animation commit would.
+  func displayPendingRows() {
+    for layer in rowLayers { layer.displayIfNeeded() }
+  }
+  var cursorBlinkAnimation: CAAnimation? { cursorLayer.animation(forKey: "blink") }
+  func blinkAnimation(inRow row: Int) -> CAAnimation? {
+    row < rowLayers.count ? rowLayers[row].blinkLayer?.animation(forKey: "blink") : nil
+  }
+
   public override func becomeFirstResponder() -> Bool {
     session?.setFocused(true)
     return true
@@ -246,182 +411,6 @@ public final class TerminalView: NSView, NSTextInputClient {
     unmarkText()
     session?.setFocused(false)
     return true
-  }
-  public override func draw(_ dirtyRect: NSRect) {
-    guard isRenderingEnabled, let frame = terminalFrame,
-      let context = NSGraphicsContext.current?.cgContext
-    else { return }
-    context.setFillColor(background.cgColor)
-    context.fill(dirtyRect)
-    let size = cellSize
-    let fonts = fontVariants()
-    let firstRow = max(0, Int((dirtyRect.minY / size.height).rounded(.down)))
-    let lastRow = min(frame.rows - 1, Int((dirtyRect.maxY / size.height).rounded(.up)) - 1)
-    if firstRow <= lastRow {
-      let selectedForeground = NSColor.selectedTextColor.cgColor
-      let selectedBackground = NSColor.selectedTextBackgroundColor.cgColor
-      // Text batching: consecutive single-width ASCII cells with the same font
-      // and colour share one CTLine, positioned at the run's first cell. The
-      // monospaced font advances ASCII by exactly one cell, so the grid holds;
-      // any other cell (wide, non-ASCII, styled differently) still draws alone
-      // in its own clipped cell so shaping can never shift its neighbours.
-      var pendingRun: (start: Int, key: RunKey, color: CGColor, rect: NSRect)?
-      func flushRun() {
-        guard let run = pendingRun else { return }
-        pendingRun = nil
-        let line = line(run.key, font: fonts[run.key.font], color: run.color)
-        context.saveGState()
-        context.clip(to: run.rect)
-        context.translateBy(x: run.rect.minX, y: run.rect.minY + font.ascender)
-        context.scaleBy(x: 1, y: -1)
-        context.textPosition = .zero
-        CTLineDraw(line, context)
-        context.restoreGState()
-      }
-      for row in firstRow...lastRow {
-        let y = CGFloat(row) * size.height
-        let base = row * frame.columns
-        // Backgrounds first, merged into runs of one colour. Cells on the
-        // terminal's own background are already painted by the fill above,
-        // so an ordinary row costs no fills at all.
-        var pendingFill: (rect: NSRect, key: UInt32, color: CGColor)?
-        for column in 0..<frame.columns {
-          let cell = frame.cells[base + column]
-          guard cell.width > 0 else { continue }
-          let selected = selection?.contains(base + column) == true
-          let inverse = cell.flags & 16 != 0
-          let cellBackground = inverse ? cell.foreground : cell.background
-          guard selected || cellBackground != frame.background else { continue }
-          let key = selected ? Self.selectionKey : Self.colorKey(cellBackground)
-          let rect = NSRect(
-            x: CGFloat(column) * size.width, y: y, width: size.width * CGFloat(cell.width),
-            height: size.height)
-          if var fill = pendingFill, fill.key == key, fill.rect.maxX == rect.minX {
-            fill.rect.size.width += rect.width
-            pendingFill = fill
-          } else {
-            if let fill = pendingFill {
-              context.setFillColor(fill.color)
-              context.fill(fill.rect)
-            }
-            pendingFill = (rect, key, selected ? selectedBackground : cgColor(cellBackground))
-          }
-        }
-        if let fill = pendingFill {
-          context.setFillColor(fill.color)
-          context.fill(fill.rect)
-        }
-        for column in 0..<frame.columns {
-          let index = base + column
-          let cell = frame.cells[index]
-          guard cell.width > 0 else { continue }
-          let rect = NSRect(
-            x: CGFloat(column) * size.width, y: y, width: size.width * CGFloat(cell.width),
-            height: size.height)
-          guard cell.flags & 32 == 0, blinkVisible || cell.flags & 8 == 0 else {
-            flushRun()
-            continue
-          }
-          let selected = selection?.contains(index) == true
-          let inverse = cell.flags & 16 != 0
-          let faint = cell.flags & 4 != 0
-          let cellForeground = inverse ? cell.background : cell.foreground
-          let colorKey = selected ? Self.selectionKey : Self.colorKey(cellForeground, faint: faint)
-          let fontIndex = Int(cell.flags & 3)
-          let isBlank = cell.text == " " || cell.text.allSatisfy(\.isWhitespace)
-          let batchable =
-            cell.width == 1 && cell.text.utf8.count == 1
-            && cell.text.utf8.first.map { $0 < 128 } == true
-          if batchable {
-            if var run = pendingRun, run.key.font == fontIndex, run.key.color == colorKey,
-              run.start + run.key.text.utf8.count == column
-            {
-              run.key = RunKey(text: run.key.text + cell.text, font: fontIndex, color: colorKey)
-              run.rect.size.width += rect.width
-              pendingRun = run
-            } else {
-              flushRun()
-              if !isBlank {
-                pendingRun = (
-                  column, RunKey(text: cell.text, font: fontIndex, color: colorKey),
-                  selected ? selectedForeground : cgColor(cellForeground, faint: faint), rect
-                )
-              }
-            }
-          } else {
-            flushRun()
-            if !isBlank {
-              let key = RunKey(text: cell.text, font: fontIndex, color: colorKey)
-              let line = line(
-                key, font: fonts[fontIndex],
-                color: selected ? selectedForeground : cgColor(cellForeground, faint: faint))
-              context.saveGState()
-              context.clip(to: rect)
-              context.translateBy(x: rect.minX, y: rect.minY + font.ascender)
-              context.scaleBy(x: 1, y: -1)
-              context.textPosition = .zero
-              CTLineDraw(line, context)
-              context.restoreGState()
-            }
-          }
-          guard cell.underline > 0 || cell.flags & (64 | 128) != 0 else { continue }
-          context.setStrokeColor(cgColor(cell.underlineColor))
-          if cell.underline > 0 {
-            context.saveGState()
-            if cell.underline == 4 { context.setLineDash(phase: 0, lengths: [1, 2]) }
-            if cell.underline == 5 { context.setLineDash(phase: 0, lengths: [4, 2]) }
-            if cell.underline == 3 {
-              context.move(to: NSPoint(x: rect.minX, y: rect.maxY - 2))
-              var x = rect.minX
-              while x < rect.maxX {
-                context.addLine(to: NSPoint(x: x + 1, y: rect.maxY - 3))
-                context.addLine(to: NSPoint(x: x + 3, y: rect.maxY - 1))
-                x += 4
-              }
-              context.strokePath()
-            } else {
-              stroke(y: rect.maxY - 2, rect: rect, context: context)
-            }
-            context.restoreGState()
-          }
-          if cell.underline == 2 { stroke(y: rect.maxY - 4, rect: rect, context: context) }
-          if cell.flags & 64 != 0 { stroke(y: rect.midY, rect: rect, context: context) }
-          if cell.flags & 128 != 0 { stroke(y: rect.minY + 1, rect: rect, context: context) }
-        }
-        flushRun()
-      }
-    }
-    if drawsCursor && frame.cursorVisible && session != nil
-      && (blinkVisible || !frame.cursorBlinking)
-    {
-      var cursor = NSRect(
-        x: CGFloat(frame.cursorX) * size.width, y: CGFloat(frame.cursorY) * size.height,
-        width: size.width, height: size.height)
-      foreground.withAlphaComponent(0.65).setFill()
-      if frame.cursorStyle == 0 {
-        cursor.size.width = 2
-      } else if frame.cursorStyle == 2 {
-        cursor.origin.y = cursor.maxY - 2
-        cursor.size.height = 2
-      }
-      if frame.cursorStyle == 3 {
-        foreground.setStroke()
-        NSBezierPath(rect: cursor.insetBy(dx: 0.5, dy: 0.5)).stroke()
-      } else {
-        cursor.fill(using: .difference)
-      }
-    }
-    if marked.length > 0 {
-      marked.draw(
-        at: NSPoint(x: CGFloat(frame.cursorX) * size.width, y: CGFloat(frame.cursorY) * size.height)
-      )
-    }
-  }
-  private func stroke(y: CGFloat, rect: NSRect, context: CGContext) {
-    context.setLineWidth(1)
-    context.move(to: NSPoint(x: rect.minX, y: y))
-    context.addLine(to: NSPoint(x: rect.maxX, y: y))
-    context.strokePath()
   }
   public override func keyDown(with event: NSEvent) {
     guard inputInterceptor?(event) != true else { return }
@@ -574,7 +563,6 @@ public final class TerminalView: NSView, NSTextInputClient {
         start: start, link: event.modifierFlags.contains(.shift) ? link(at: event) : nil,
         origin: event.locationInWindow, dragged: false)
       selection = start...start
-      needsDisplay = true
     }
   }
   public override func mouseDragged(with event: NSEvent) {
@@ -587,7 +575,6 @@ public final class TerminalView: NSView, NSTextInputClient {
         dragged: dragged
           || hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 4)
       selection = min(start, index)...max(start, index)
-      needsDisplay = true
     case .reporting:
       forwardTerminalMouse(event, action: 2, button: 1)
     case nil:
@@ -604,7 +591,6 @@ public final class TerminalView: NSView, NSTextInputClient {
         link(at: event) == destination
       else { return }
       selection = nil
-      needsDisplay = true
       openURL(destination)
     default:
       break
@@ -673,11 +659,11 @@ public final class TerminalView: NSView, NSTextInputClient {
         attributes: [.font: font, .foregroundColor: foreground, .backgroundColor: background])
     markedSelection = selectedRange
     interpreted = true
-    needsDisplay = true
+    if let frame = terminalFrame, isRenderingEnabled { updateMarkedText(frame) }
   }
   public func unmarkText() {
     marked = NSAttributedString(string: "")
-    needsDisplay = true
+    if let frame = terminalFrame, isRenderingEnabled { updateMarkedText(frame) }
   }
   public func selectedRange() -> NSRange { markedSelection }
   public func markedRange() -> NSRange {
@@ -710,4 +696,66 @@ public final class TerminalView: NSView, NSTextInputClient {
       encode(event)
     }
   }
+}
+
+/// One terminal row. `drawn` and `drawnEpoch` record what the layer was last
+/// asked to display, so an unchanged row is never redrawn.
+final class TerminalRowLayer: CALayer {
+  var index = 0
+  var drawn: TerminalRow?
+  var drawnEpoch = -1
+  private(set) var blinkLayer: CALayer?
+
+  override init() {
+    super.init()
+    isOpaque = true
+    drawsAsynchronously = true
+    needsDisplayOnBoundsChange = true
+    anchorPoint = .zero
+  }
+  override init(layer: Any) {
+    super.init(layer: layer)
+  }
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+  override func layoutSublayers() {
+    super.layoutSublayers()
+    blinkLayer?.frame = bounds
+  }
+
+  /// Blinking cells draw in a transparent sublayer whose opacity blinks on a
+  /// shared phase; the row itself never redraws for a blink.
+  func updateBlinking(_ blinking: Bool, painter: TerminalLayerPainter, epoch: CFTimeInterval) {
+    guard blinking else {
+      blinkLayer?.removeFromSuperlayer()
+      blinkLayer = nil
+      return
+    }
+    let layer =
+      blinkLayer
+      ?? {
+        let layer = CALayer()
+        layer.delegate = painter
+        layer.anchorPoint = .zero
+        layer.drawsAsynchronously = true
+        layer.needsDisplayOnBoundsChange = true
+        layer.add(TerminalView.blinkAnimation(beginTime: epoch), forKey: "blink")
+        addSublayer(layer)
+        blinkLayer = layer
+        return layer
+      }()
+    layer.frame = bounds
+    layer.contentsScale = contentsScale
+    layer.setNeedsDisplay()
+  }
+}
+
+/// Layer delegate for the view's sublayers: draws through the view and
+/// disables every implicit animation.
+final class TerminalLayerPainter: NSObject, CALayerDelegate {
+  weak var view: TerminalView?
+  init(view: TerminalView) { self.view = view }
+  func draw(_ layer: CALayer, in context: CGContext) { view?.paint(layer, in: context) }
+  func action(for layer: CALayer, forKey event: String) -> (any CAAction)? { NSNull() }
 }

@@ -80,8 +80,11 @@ jobs:
       - name: Cache libghostty-vt
         uses: actions/cache@v6
         with:
-          path: build/ghostty
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+          # Only the stamped XCFramework is read on a hit; the source tree and
+          # per-architecture Zig outputs (~400 MB) are rebuilt on a miss. The
+          # script pins the Ghostty revision and the Zig version it accepts.
+          path: build/ghostty/ghostty-vt.xcframework
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh') }}
       - name: Build libghostty-vt
         run: ./Scripts/build-ghostty.sh --dev
       - name: Show Swift version
@@ -122,8 +125,11 @@ jobs:
       - name: Cache libghostty-vt
         uses: actions/cache@v6
         with:
-          path: build/ghostty
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'mise.toml') }}
+          # Only the stamped XCFramework is read on a hit; the source tree and
+          # per-architecture Zig outputs (~400 MB) are rebuilt on a miss. The
+          # script pins the Ghostty revision and the Zig version it accepts.
+          path: build/ghostty/ghostty-vt.xcframework
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh') }}
       - name: Build libghostty-vt
         run: ./Scripts/build-ghostty.sh --dev
       - name: Show Swift version

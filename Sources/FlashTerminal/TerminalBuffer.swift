@@ -18,6 +18,9 @@ public struct TerminalColor: Equatable, Hashable, Sendable {
   }
 }
 
+/// One cell as consumers read it, materialized on access from the compact
+/// row storage (`FlashVTCell`: 20 bytes, byte-sized width and underline, a
+/// per-row link index instead of a string).
 public struct TerminalCell: Equatable, Sendable {
   public let text: String
   public let foreground: TerminalColor
@@ -29,10 +32,76 @@ public struct TerminalCell: Equatable, Sendable {
   public let hyperlink: String?
 }
 
+/// One viewport row: plain 20-byte cells plus the few strings they refer to
+/// (grapheme clusters, one entry per hyperlink run). Rows are copy-on-write
+/// values, so a snapshot shares every unchanged row with its predecessor and
+/// equal storage compares by identity before contents.
+struct TerminalRow: Equatable, Sendable {
+  var cells: [FlashVTCell]
+  var clusters: [String]
+  var links: [String]
+  var wrapped: Bool
+  /// Union of the cells' flags; a row without the blink bit has no blinking cell.
+  var flags: UInt16
+
+  static let blinkFlag: UInt16 = 8
+  var hasBlinkingCells: Bool { flags & Self.blinkFlag != 0 }
+
+  static func == (lhs: TerminalRow, rhs: TerminalRow) -> Bool {
+    guard lhs.wrapped == rhs.wrapped, lhs.flags == rhs.flags, lhs.cells.count == rhs.cells.count,
+      lhs.clusters == rhs.clusters, lhs.links == rhs.links
+    else { return false }
+    return lhs.cells.withUnsafeBytes { left in
+      rhs.cells.withUnsafeBytes { right in
+        left.baseAddress == right.baseAddress || left.count == 0
+          || memcmp(left.baseAddress!, right.baseAddress!, left.count) == 0
+      }
+    }
+  }
+
+  /// Single-byte cells share these immutable strings instead of decoding.
+  private static let asciiText: [String] = (0..<128).map { String(UnicodeScalar(UInt8($0))) }
+
+  func text(at column: Int) -> String {
+    let cell = cells[column]
+    let content = cell.content
+    if content == 0 { return cell.width > 0 ? " " : "" }
+    if content < 128 { return Self.asciiText[Int(content)] }
+    if content & FLASH_VT_CLUSTER != 0 { return clusters[Int(content & ~FLASH_VT_CLUSTER)] }
+    return Unicode.Scalar(content).map { String($0) } ?? "\u{FFFD}"
+  }
+
+  func hyperlink(at column: Int) -> String? {
+    let link = Int(cells[column].link)
+    return link > 0 && link <= links.count ? links[link - 1] : nil
+  }
+
+  func cell(at column: Int) -> TerminalCell {
+    let cell = cells[column]
+    return TerminalCell(
+      text: text(at: column), foreground: TerminalColor(cell.foreground),
+      background: TerminalColor(cell.background),
+      underlineColor: TerminalColor(cell.underline_color),
+      flags: cell.flags, width: Int(cell.width), underline: Int(cell.underline),
+      hyperlink: hyperlink(at: column))
+  }
+}
+
+/// Row-major cells of a frame, materialized one at a time from its rows.
+public struct TerminalCells: RandomAccessCollection, Sendable {
+  let grid: [TerminalRow]
+  let columns: Int
+  public var startIndex: Int { 0 }
+  public var endIndex: Int { grid.count * columns }
+  public subscript(position: Int) -> TerminalCell {
+    grid[position / columns].cell(at: position % columns)
+  }
+}
+
 public struct TerminalFrame: Equatable, Sendable {
   public let columns: Int
   public let rows: Int
-  public let cells: [TerminalCell]
+  let grid: [TerminalRow]
   public let foreground: TerminalColor
   public let background: TerminalColor
   public let cursorX: Int
@@ -41,27 +110,30 @@ public struct TerminalFrame: Equatable, Sendable {
   public let cursorBlinking: Bool
   public let cursorStyle: Int
   public let mouseTracking: Bool
-  public let wrappedRows: Set<Int>
-  /// Whether any cell carries the blink attribute; computed while the grid is
-  /// built so a view never rescans the cells per frame to decide on a timer.
+  /// Whether any cell carries the blink attribute, from the per-row flag
+  /// unions, so a view never rescans the cells per frame.
   public let hasBlinkingCells: Bool
   /// Position in the owning buffer's snapshot sequence; consecutive values
   /// mean `changedRows` describes the difference from the previous frame.
   public let generation: UInt64
-  /// Rows whose cells differ from the previous snapshot, or nil when every
-  /// row may have changed (first frame, resize, scroll, reset, palette).
+  /// Rows whose contents differ from the previous snapshot, or nil when there
+  /// is no comparable predecessor (first frame or a resize).
   public let changedRows: Set<Int>?
+
+  public var cells: TerminalCells { TerminalCells(grid: grid, columns: columns) }
+  public var wrappedRows: Set<Int> { Set(grid.indices.filter { grid[$0].wrapped }) }
 
   func link(atColumn column: Int, row: Int) -> URL? {
     guard (0..<columns).contains(column), (0..<rows).contains(row) else { return nil }
+    let cells = self.cells
     var index = row * columns + column
     while index > row * columns && cells[index].width == 0 { index -= 1 }
     guard cells[index].flags & 32 == 0 else { return nil }
     if let hyperlink = cells[index].hyperlink { return Self.webURL(hyperlink) }
     var firstRow = row
     var lastRow = row
-    while firstRow > 0 && wrappedRows.contains(firstRow - 1) { firstRow -= 1 }
-    while lastRow + 1 < rows && wrappedRows.contains(lastRow) { lastRow += 1 }
+    while firstRow > 0 && grid[firstRow - 1].wrapped { firstRow -= 1 }
+    while lastRow + 1 < rows && grid[lastRow].wrapped { lastRow += 1 }
     let logicalStart = firstRow * columns
     let logicalEnd = (lastRow + 1) * columns
     guard !Self.linkBoundary(cells[index]) else { return nil }
@@ -138,8 +210,8 @@ public struct TerminalFrame: Equatable, Sendable {
   }
 
   public var text: String {
-    (0..<rows).map { row in
-      cells[(row * columns)..<((row + 1) * columns)].map(\.text).joined()
+    grid.map { row in
+      (0..<row.cells.count).map { row.text(at: $0) }.joined()
         .replacingOccurrences(of: " +$", with: "", options: .regularExpression)
     }.joined(separator: "\n")
   }
@@ -180,94 +252,72 @@ final class TerminalBuffer {
   func write(_ bytes: UnsafePointer<UInt8>, count: Int) {
     flash_vt_write(handle, bytes, count)
   }
-  /// Forces the next snapshot to rebuild every row regardless of dirty flags.
+  /// Forces the next snapshot to reread every row regardless of dirty flags.
   func invalidate() { forceFullSnapshot = true }
   private var forceFullSnapshot = true
   private var previous: TerminalFrame?
   private var generation: UInt64 = 0
-  private var scratch: [FlashVTCell] = []
-  /// Single-byte cells share these immutable strings instead of decoding.
-  private static let asciiText: [String] = (0..<128).map {
-    String(UnicodeScalar(UInt8($0)))
-  }
 
-  /// Extracts the viewport, reusing the previous snapshot's cells for rows
-  /// libghostty reports clean so steady-state output costs one row, not the
-  /// whole grid. Returns the previous frame unchanged when nothing visible
-  /// moved.
+  /// Extracts the viewport. Only rows libghostty reports dirty are reread,
+  /// and a reread row equal to its predecessor keeps the previous storage, so
+  /// cursor motion and redundant dirty flags publish no changed rows. Returns
+  /// the previous frame unchanged when nothing visible moved.
   func snapshot() -> TerminalFrame? {
     var header = FlashVTFrame()
     guard flash_vt_frame(handle, &header) else { return nil }
     let columns = Int(header.columns)
     let rows = Int(header.rows)
-    let reusable =
-      !forceFullSnapshot && header.dirty != 2
-      && previous.map { $0.columns == columns && $0.rows == rows } == true
-    var cells: [TerminalCell] = []
-    cells.reserveCapacity(columns * rows)
-    var wrappedRows = Set<Int>()
+    let base = previous.flatMap { $0.columns == columns && $0.rows == rows ? $0 : nil }
+    var grid = base?.grid ?? Array(repeating: Self.blankRow, count: rows)
     var changedRows = Set<Int>()
-    var hasBlinkingCells = false
-    if scratch.count < columns { scratch = Array(repeating: FlashVTCell(), count: columns) }
-    for row in 0..<rows {
-      var info = FlashVTRow()
-      guard flash_vt_next_row(handle, &info) else { return nil }
-      if info.wrapped { wrappedRows.insert(row) }
-      if reusable, !info.dirty, let previous {
-        let range = (row * columns)..<((row + 1) * columns)
-        for cell in previous.cells[range] where cell.flags & 8 != 0 {
-          hasBlinkingCells = true
-          break
-        }
-        cells.append(contentsOf: previous.cells[range])
-        continue
-      }
+    var y: UInt16 = 0
+    while flash_vt_next_row(handle, forceFullSnapshot || base == nil, &y) {
+      let row = Int(y)
+      guard row < rows, let built = readRow(columns: columns) else { return nil }
+      if base != nil, grid[row] == built { continue }
+      grid[row] = built
       changedRows.insert(row)
-      guard scratch.withUnsafeMutableBufferPointer({ flash_vt_row_cells(handle, $0.baseAddress) })
-      else { return nil }
-      for column in 0..<columns {
-        let cell = scratch[column]
-        let text: String
-        if cell.length == 0 {
-          text = cell.width > 0 ? " " : ""
-        } else if cell.length == 1, let byte = cell.text?.pointee, byte < 128 {
-          text = Self.asciiText[Int(byte)]
-        } else {
-          text = String(
-            decoding: UnsafeBufferPointer(start: cell.text, count: cell.length), as: UTF8.self)
-        }
-        if cell.flags & 8 != 0 { hasBlinkingCells = true }
-        let hyperlink = cell.hyperlink.flatMap { bytes -> String? in
-          guard cell.hyperlink_length > 0 else { return nil }
-          return String(
-            decoding: UnsafeBufferPointer(start: bytes, count: cell.hyperlink_length), as: UTF8.self
-          )
-        }
-        cells.append(
-          TerminalCell(
-            text: text,
-            foreground: TerminalColor(cell.foreground), background: TerminalColor(cell.background),
-            underlineColor: TerminalColor(cell.underline_color), flags: cell.flags,
-            width: Int(cell.width), underline: Int(cell.underline), hyperlink: hyperlink))
-      }
     }
     flash_vt_clean(handle)
     forceFullSnapshot = false
     let frame = TerminalFrame(
-      columns: columns, rows: rows, cells: cells,
+      columns: columns, rows: rows, grid: grid,
       foreground: TerminalColor(header.foreground), background: TerminalColor(header.background),
       cursorX: Int(header.cursor_x), cursorY: Int(header.cursor_y),
       cursorVisible: header.cursor_visible,
       cursorBlinking: header.cursor_blinking, cursorStyle: Int(header.cursor_style),
-      mouseTracking: header.mouse_tracking, wrappedRows: wrappedRows,
-      hasBlinkingCells: hasBlinkingCells, generation: generation + 1,
-      changedRows: reusable ? changedRows : nil)
-    if let previous, reusable, changedRows.isEmpty, frame.sameViewport(as: previous) {
-      return previous
-    }
+      mouseTracking: header.mouse_tracking,
+      hasBlinkingCells: grid.contains(where: \.hasBlinkingCells), generation: generation + 1,
+      changedRows: base == nil ? nil : changedRows)
+    if let base, changedRows.isEmpty, frame.sameViewport(as: base) { return base }
     generation += 1
     previous = frame
     return frame
+  }
+
+  private static let blankRow = TerminalRow(
+    cells: [], clusters: [], links: [], wrapped: false, flags: 0)
+
+  private func readRow(columns: Int) -> TerminalRow? {
+    var info = FlashVTRow()
+    var filled = false
+    let cells = [FlashVTCell](unsafeUninitializedCapacity: columns) { buffer, count in
+      filled = flash_vt_row_cells(handle, buffer.baseAddress, &info)
+      count = filled ? columns : 0
+    }
+    guard filled else { return nil }
+    func strings(_ spans: UnsafePointer<FlashVTSpan>?, _ count: UInt16) -> [String] {
+      guard let spans, let arena = info.arena, count > 0 else { return [] }
+      return (0..<Int(count)).map {
+        String(
+          decoding: UnsafeBufferPointer(
+            start: arena + Int(spans[$0].offset), count: Int(spans[$0].length)),
+          as: UTF8.self)
+      }
+    }
+    return TerminalRow(
+      cells: cells, clusters: strings(info.clusters, info.cluster_count),
+      links: strings(info.links, info.link_count), wrapped: info.wrapped, flags: info.flags)
   }
 }
 
@@ -278,7 +328,6 @@ extension TerminalFrame {
       && cursorX == other.cursorX && cursorY == other.cursorY
       && cursorVisible == other.cursorVisible && cursorBlinking == other.cursorBlinking
       && cursorStyle == other.cursorStyle && mouseTracking == other.mouseTracking
-      && wrappedRows == other.wrappedRows
   }
 }
 

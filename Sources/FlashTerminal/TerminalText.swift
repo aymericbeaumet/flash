@@ -2,7 +2,10 @@ import CFlashTerminal
 import Foundation
 
 public enum TerminalText {
+  /// Printable ASCII is one cell per byte without a trip through libghostty's
+  /// grapheme segmentation; the pager measures every character of its text.
   public static func cellWidth(of text: String) -> Int {
+    if text.utf8.allSatisfy({ (0x20..<0x7F).contains($0) }) { return text.utf8.count }
     let codepoints = text.unicodeScalars.map(\.value)
     return codepoints.withUnsafeBufferPointer { Int(flash_unicode_width($0.baseAddress, $0.count)) }
   }
