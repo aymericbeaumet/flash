@@ -488,6 +488,42 @@ final class TerminalTests: XCTestCase {
     session.start()
     wait(for: [failed], timeout: 5)
   }
+
+  /// A popup whose process ends by itself keeps its screen unless the user
+  /// typed into it, so only input written to the child counts.
+  func testOnlyInputWrittenToTheChildCountsAsReceived() {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(
+        // Focus reports on, then a cursor-position query the terminal answers.
+        command: ["/bin/sh", "-c", "printf '\\033[?1004h\\033[6nREADY'; exec /bin/sleep 30"],
+        columns: 20, rows: 3))
+    defer { session.shutdown() }
+    func waitUntil(_ description: String, _ condition: @escaping () -> Bool) {
+      let met = expectation(for: NSPredicate { _, _ in condition() }, evaluatedWith: nil)
+      met.expectationDescription = description
+      wait(for: [met], timeout: 5)
+    }
+    session.start()
+    waitUntil("ready") { session.frame?.text.contains("READY") == true }
+    guard case .running(let firstPID) = session.state else { return XCTFail("No running PTY") }
+    // A terminal reply, a focus report, scrolling and a legacy key release
+    // write nothing the user typed.
+    session.setFocused(true)
+    session.scroll(lines: -3)
+    session.key(code: 0, modifiers: 0, action: 0, text: "a", unshifted: 97)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    XCTAssertFalse(session.receivedInput)
+    session.key(code: 0, modifiers: 0, action: 1, text: "a", unshifted: 97)
+    waitUntil("a key press is input") { session.receivedInput }
+
+    session.restart()
+    waitUntil("a restart starts over") {
+      guard case .running(let pid) = session.state else { return false }
+      return pid != firstPID && !session.receivedInput
+    }
+    session.paste("pasted")
+    waitUntil("a paste is input") { session.receivedInput }
+  }
 }
 
 final class TerminalSnapshotTests: XCTestCase {

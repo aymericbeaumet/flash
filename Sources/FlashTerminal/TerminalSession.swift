@@ -96,6 +96,11 @@ public final class TerminalSession {
   public let configuration: TerminalConfiguration
   public private(set) var state: TerminalSessionState = .idle
   public private(set) var frame: TerminalFrame?
+  /// Whether the running process has been sent input: keys, text, pastes or
+  /// mouse reports written to its PTY. Terminal replies and focus reports do
+  /// not count, and neither does scrolling the view's own history. Set before
+  /// the process's exit state publishes; a restart clears it.
+  public private(set) var receivedInput = false
   public var onFrame: ((TerminalFrame) -> Void)?
   /// Queue-confined; see `setWantsFrames`.
   private var wantsFrames = true
@@ -116,6 +121,10 @@ public final class TerminalSession {
   private var cellWidth: UInt32 = 1
   private var cellHeight: UInt32 = 1
   private var started = false
+  /// Queue-confined: an input encoder is running, so what it writes is input.
+  private var encodingInput = false
+  /// Queue-confined mirror of `receivedInput`.
+  private var inputWritten = false
   private var scheduledFrame = false
   /// Queue-confined; see `setColors`.
   private var appliedColors: TerminalColors?
@@ -214,12 +223,16 @@ public final class TerminalSession {
       publishFrame()
     }
   }
-  public func send(_ data: Data) { queue.async { [self] in enqueue(data) } }
+  public func send(_ data: Data) { queue.async { [self] in encodeInput { enqueue(data) } } }
   public func paste(_ text: String) {
     queue.async { [self] in
       var bytes = Array(text.utf8CString)
       let count = bytes.count - 1
-      bytes.withUnsafeMutableBufferPointer { flash_vt_paste(buffer.handle, $0.baseAddress, count) }
+      encodeInput {
+        bytes.withUnsafeMutableBufferPointer {
+          flash_vt_paste(buffer.handle, $0.baseAddress, count)
+        }
+      }
     }
   }
   public func setFocused(_ focused: Bool) {
@@ -236,18 +249,34 @@ public final class TerminalSession {
   }
   public func key(code: UInt16, modifiers: UInt16, action: Int32, text: String, unshifted: UInt32) {
     queue.async { [self] in
-      text.withCString {
-        flash_vt_key(buffer.handle, code, modifiers, action, $0, text.utf8.count, unshifted)
+      encodeInput {
+        text.withCString {
+          flash_vt_key(buffer.handle, code, modifiers, action, $0, text.utf8.count, unshifted)
+        }
       }
     }
   }
   public func mousePosition(action: Int32, button: Int32, modifiers: UInt16, x: Double, y: Double) {
-    queue.async { [self] in flash_vt_mouse(buffer.handle, action, button, modifiers, x, y) }
+    queue.async { [self] in
+      encodeInput { flash_vt_mouse(buffer.handle, action, button, modifiers, x, y) }
+    }
+  }
+
+  /// Runs an input encoder: whatever it writes to the PTY is input. The VT
+  /// writes synchronously, so replies to the child's own queries never count.
+  private func encodeInput(_ encode: () -> Void) {
+    encodingInput = true
+    encode()
+    encodingInput = false
   }
 
   private func startOnQueue() {
     guard !started else { return }
     started = true
+    if inputWritten {
+      inputWritten = false
+      DispatchQueue.main.async { [weak self] in self?.receivedInput = false }
+    }
     guard let command = configuration.command.first, !command.isEmpty,
       !configuration.command.contains(where: { $0.contains("\0") }),
       !configuration.environment.contains(where: {
@@ -344,6 +373,10 @@ public final class TerminalSession {
       return
     }
     pending.append(data)
+    if encodingInput, !inputWritten {
+      inputWritten = true
+      DispatchQueue.main.async { [weak self] in self?.receivedInput = true }
+    }
     flushWrites()
   }
   private func flushWrites() {

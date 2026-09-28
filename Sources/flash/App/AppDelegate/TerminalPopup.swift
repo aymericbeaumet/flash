@@ -26,6 +26,16 @@ extension AppDelegate {
         {
           return
         }
+        // A finished report has no process left to read keys: a key press
+        // closes it instead, as leave_mode does.
+        if self.modeStore.mode.isTerminal,
+          self.overlay.statusPopupController.focusedName == origin.name,
+          self.overlay.statusTerminals.hasEnded(origin.name),
+          StatusPopupController.closesEndedPopup(event)
+        {
+          self.leaveMode()
+          return
+        }
         self.overlay.statusPopupController.terminalView.replay(event: event, to: origin.session)
       },
       dispatch: { [weak self] mapping, _ in

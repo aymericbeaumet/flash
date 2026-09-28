@@ -80,8 +80,7 @@ final class StatusTerminalRegistry {
     let session: TerminalSession
   }
 
-  /// The one restart mechanism: a persistent popup's process after it exits,
-  /// and a prewarmed fresh popup's next process after one ended by itself.
+  /// The one restart mechanism: a persistent popup's process after it exits.
   private struct Restart {
     var backoff = TerminalRestartBackoff()
     var pending: DispatchWorkItem?
@@ -99,6 +98,10 @@ final class StatusTerminalRegistry {
   private(set) var prewarmNames: Set<String> = []
   /// Prewarmed sessions nothing has shown yet.
   private(set) var prewarmedNames: Set<String> = []
+  /// Fresh popups whose prewarmed process ended before any showing: one-shot
+  /// reports, which start their process when shown until their definition
+  /// changes.
+  private(set) var startsOnShowNames: Set<String> = []
   private(set) var inputGenerations: [String: UInt64] = [:]
   private var nextInputGeneration: UInt64 = 0
   private var retiringSessions: [ObjectIdentifier: TerminalSession] = [:]
@@ -145,6 +148,7 @@ final class StatusTerminalRegistry {
       case .remove(let name):
         willChange?([.remove(name)])
         definitions.removeValue(forKey: name)
+        startsOnShowNames.remove(name)
         restarts.removeValue(forKey: name)?.pending?.cancel()
         retire(detach(name), of: name)
       case .start(let name), .replace(let name):
@@ -159,6 +163,7 @@ final class StatusTerminalRegistry {
           willChange?([keepsPresentation ? .replace(name) : .remove(name)])
         }
         definitions[name] = definition
+        startsOnShowNames.remove(name)
         restarts.removeValue(forKey: name)?.pending?.cancel()
         let replaced = detach(name)
         if definition.lifecycle == .persistent {
@@ -178,10 +183,8 @@ final class StatusTerminalRegistry {
     }
     let previousPrewarm = prewarmNames
     prewarmNames = prewarm.filter { definitions[$0]?.lifecycle == .fresh }
-    for name in previousPrewarm.subtracting(prewarmNames) {
-      restarts[name]?.pending?.cancel()
-      restarts[name]?.pending = nil
-      if prewarmedNames.contains(name) { retire(detach(name), of: name) }
+    for name in previousPrewarm.subtracting(prewarmNames) where prewarmedNames.contains(name) {
+      retire(detach(name), of: name)
     }
     for name in prewarmNames.sorted() { self.prewarm(name) }
     if !changes.isEmpty || previousPrewarm != prewarmNames { didChange?() }
@@ -198,8 +201,6 @@ final class StatusTerminalRegistry {
       prewarmedNames.remove(name)
       return entry.session
     }
-    restarts[name]?.pending?.cancel()
-    restarts[name]?.pending = nil
     start(name, definition)
     didChange?()
     return entries[name]?.session
@@ -211,7 +212,19 @@ final class StatusTerminalRegistry {
   func hide(_ name: String) {
     guard let entry = entries[name] else { return }
     if case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent { return }
-    release(name, processEnded: false)
+    release(name)
+  }
+
+  /// A fresh popup whose process ended while it showed: its last screen stays
+  /// until the showing ends, and nothing reads input any more.
+  func hasEnded(_ name: String) -> Bool {
+    guard let entry = entries[name], case .terminal(let definition) = entry.kind,
+      definition.lifecycle == .fresh
+    else { return false }
+    switch entry.session.state {
+    case .exited, .failed: return true
+    case .idle, .running, .stopped: return false
+    }
   }
 
   /// Screen geometry changed: hidden sessions whose size follows the screen
@@ -228,7 +241,7 @@ final class StatusTerminalRegistry {
 
   private func prewarm(_ name: String) {
     guard let definition = definitions[name], definition.lifecycle == .fresh,
-      prewarmNames.contains(name), entries[name] == nil, restarts[name]?.pending == nil,
+      prewarmNames.contains(name), !startsOnShowNames.contains(name), entries[name] == nil,
       retiringNames[name] == nil
     else { return }
     start(name, definition)
@@ -251,21 +264,12 @@ final class StatusTerminalRegistry {
   }
 
   /// End `name`'s session and close whatever shows it. A prewarmed fresh
-  /// popup starts its next process once this one is gone: at once after a
-  /// dismissal, and with the restart backoff after the process ended by
-  /// itself, so a command that exits at once cannot spin.
-  private func release(_ name: String, processEnded: Bool) {
+  /// popup starts its next process once this one is gone, so a program
+  /// holding a lock (newsboat's cache) can start again.
+  private func release(_ name: String) {
     guard let entry = detach(name) else { return }
     willChange?([.remove(name)])
-    retire(entry, of: name) { [weak self] in
-      guard let self, self.prewarmNames.contains(name), self.entries[name] == nil else { return }
-      if processEnded {
-        self.scheduleRestart(name)
-      } else {
-        self.restarts[name]?.backoff = TerminalRestartBackoff()
-        self.prewarm(name)
-      }
-    }
+    retire(entry, of: name) { [weak self] in self?.prewarm(name) }
     didChange?()
   }
 
@@ -329,7 +333,7 @@ final class StatusTerminalRegistry {
         }
       case .failure(let error):
         FlashLog.warn("Status popup snapshot failed: \(error.localizedDescription)")
-        self.release(name, processEnded: false)
+        self.release(name)
       }
     }
   }
@@ -396,24 +400,45 @@ final class StatusTerminalRegistry {
     guard let entry = entries[name] else { return }
     switch state {
     case .running:
-      guard case .terminal = entry.kind else { return }
+      guard case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent
+      else { return }
       restarts[name, default: Restart()].backoff.running(
         at: ProcessInfo.processInfo.systemUptime)
       restarts[name]?.pending?.cancel()
       restarts[name]?.pending = nil
     case .exited, .failed:
-      if case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent {
+      guard case .terminal(let definition) = entry.kind else {
+        release(name)
+        return
+      }
+      // A shown fresh process closes its popup when the user ended it (a
+      // typed `exit`, `q` in a TUI); one that ended by itself keeps its last
+      // screen until the showing ends.
+      if definition.lifecycle == .persistent {
         scheduleRestart(name)
-      } else {
-        release(name, processEnded: true)
+      } else if prewarmedNames.contains(name) {
+        startOnShow(name)
+      } else if entry.session.receivedInput {
+        release(name)
       }
     case .idle, .stopped:
       break
     }
   }
 
-  /// Revive `name` after the backoff delay: a persistent session restarts
-  /// its process, a prewarmed fresh popup starts its next one.
+  /// `name`'s prewarmed process ended before any showing: a one-shot report.
+  /// Started ahead it would be stale when shown, and replaced as it ends it
+  /// would respawn forever, so it starts when shown until its definition
+  /// changes.
+  private func startOnShow(_ name: String) {
+    startsOnShowNames.insert(name)
+    FlashLog.info(
+      "Status popup starts on show", fields: ["popup_id": StatusFormatDocument.stableID(name)],
+      source: "core:StatusTerminalRegistry.prewarm")
+    release(name)
+  }
+
+  /// Restart `name`'s persistent process after the backoff delay.
   private func scheduleRestart(_ name: String) {
     var restart = restarts[name] ?? Restart()
     guard restart.pending == nil else { return }
@@ -432,17 +457,10 @@ final class StatusTerminalRegistry {
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
       self.restarts[name]?.pending = nil
-      switch self.definitions[name]?.lifecycle {
-      case .persistent?:
-        guard let session, self.entries[name]?.session === session,
-          self.inputGenerations[name] == generation
-        else { return }
-        self.restartSession(name: name, resetBackoff: false)
-      case .fresh?:
-        self.prewarm(name)
-      case nil:
-        break
-      }
+      guard let session, self.entries[name]?.session === session,
+        self.inputGenerations[name] == generation
+      else { return }
+      self.restartSession(name: name, resetBackoff: false)
     }
     restart.pending = work
     restarts[name] = restart
@@ -500,7 +518,7 @@ final class StatusTerminalRegistry {
   func quit(name: String) {
     guard let entry = entries[name] else { return }
     guard case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent else {
-      release(name, processEnded: false)
+      release(name)
       return
     }
     guard case .running = entry.session.state else { return }
@@ -570,6 +588,7 @@ final class StatusTerminalRegistry {
     restarts.removeAll()
     prewarmNames.removeAll()
     prewarmedNames.removeAll()
+    startsOnShowNames.removeAll()
     let names = entries.keys.sorted()
     if !names.isEmpty { willChange?(names.map(StatusTerminalChange.remove)) }
     for entry in entries.values {

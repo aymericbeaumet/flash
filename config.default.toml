@@ -344,9 +344,14 @@ offset = 8
 #     persistent  true keeps one process from Flash startup, parsed while
 #                 hidden and restarted when it exits (after 100 ms, backing off
 #                 to 30 s on repeated immediate exits). The default runs a fresh
-#                 process for each showing and stops it on dismissal; a popup a
-#                 status label, click action or enter_terminal_mode mapping
-#                 opens keeps its next process started ahead.
+#                 process for each showing and stops it on dismissal. One you
+#                 end by typing (`exit`, `q`) closes the popup; one that ends by
+#                 itself keeps its last screen until dismissed, with an
+#                 "Exited (N)" footer when N is not 0. A popup a status label,
+#                 click action or enter_terminal_mode mapping opens keeps its
+#                 next process started ahead, unless that process ends before
+#                 it is shown: such a one-shot report (ccusage) then starts on
+#                 each showing instead.
 # A later file's [popup.<name>] replaces the whole definition.
 #
 # The built-in terminal, a login shell: `enter_terminal_mode` without a name
@@ -368,6 +373,12 @@ cwd = "~"
 # cwd = "~"
 # size = "120x36"
 # persistent = true
+#
+# A one-shot report: ccusage (https://ccusage.com) is yours to install, e.g.
+# `npm i -g ccusage`; wrap the AI quota labels in #[popup=ai-usage].
+# [popup.ai-usage]
+# command = ["ccusage", "daily", "--last", "3"]
+# size = "140x34"
 
 # Desktop widgets: a status format drawn as stacked lines on the desktop,
 # above the wallpaper and below Finder icons and every app window. Widgets are

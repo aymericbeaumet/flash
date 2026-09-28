@@ -440,7 +440,9 @@ register prefixes, or `<leader>`. Only known sequence prefixes wait for
 `mode.sequence_timeout_ms`. An exact mapping that also starts a longer sequence
 waits for that timeout; a mismatch resolves the longest completed mapping and
 reprocesses the remaining keys. Unmatched events retain their original modifiers
-and are replayed exactly once to the terminal that received them. Focus and
+and are replayed exactly once to the terminal that received them; a key press
+replayed to a fresh popup whose process has ended closes the popup instead
+([lifecycles](popups.md#lifecycles)). Focus and
 configuration changes flush unresolved events without dispatching a pending
 command. `repeat = true` retains the explicit final-key repetition behavior.
 

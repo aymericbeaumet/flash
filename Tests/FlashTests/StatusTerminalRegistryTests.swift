@@ -183,23 +183,77 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertEqual(running(prewarmed), pid, "the command is not run again")
   }
 
-  func testPrewarmedPopupThatExitsAtOnceBacksOffInsteadOfSpinning() {
+  func testPrewarmedPopupThatExitsBeforeItsShowingStartsOnEachShowingInstead() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var starts = 0
+    var prewarms = 0
+    var restartsScheduled = 0
     let sink = FlashLog.addSink { record in
-      if record.message == "Status popup prewarmed" { starts += 1 }
+      if record.message == "Status popup prewarmed" { prewarms += 1 }
+      if record.message == "Status terminal restart scheduled" { restartsScheduled += 1 }
     }
     defer { FlashLog.removeSink(sink) }
-    apply(registry, ["broken": terminal(["/usr/bin/true"])], prewarm: ["broken"])
-    // The first retry waits 100 ms and the next one second.
-    let deadline = Date().addingTimeInterval(5)
-    while starts < 2, Date() < deadline {
-      RunLoop.current.run(until: Date().addingTimeInterval(0.01))
-    }
-    XCTAssertEqual(starts, 2)
+    let report = terminal(["/bin/sh", "-c", "printf 'report-%s' \"$$\""])
+    apply(registry, ["report": report], prewarm: ["report"])
+    XCTAssertEqual(registry.prewarmedNames, ["report"])
+    waitUntil { registry.startsOnShowNames.contains("report") }
+    XCTAssertNil(registry.session(named: "report"), "the unshown report is not kept")
     RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-    XCTAssertEqual(starts, 2, "no retry storm")
+    XCTAssertEqual(prewarms, 1, "no respawn spin")
+    XCTAssertEqual(restartsScheduled, 0)
+    XCTAssertNil(registry.session(named: "report"))
+
+    // Each showing runs a new report and keeps it until the showing ends.
+    var reports: [String] = []
+    for _ in 0..<2 {
+      let session = try XCTUnwrap(registry.open("report"))
+      session.setWantsFrames(true)
+      XCTAssertTrue(registry.prewarmedNames.isEmpty)
+      waitUntil { session.state == .exited(code: 0) }
+      waitUntil { session.frame?.text.contains("report-") == true }
+      XCTAssertTrue(registry.session(named: "report") === session)
+      XCTAssertTrue(registry.hasEnded("report"))
+      reports.append(String(session.frame?.text.split(separator: "\n").first ?? ""))
+      registry.hide("report")
+      XCTAssertNil(registry.session(named: "report"))
+      RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+      XCTAssertNil(registry.session(named: "report"), "the next report waits for its showing")
+    }
+    XCTAssertEqual(Set(reports).count, 2, "each showing ran its own process: \(reports)")
+    XCTAssertEqual(prewarms, 1)
+
+    // An unrelated reload keeps it on show; a changed definition prewarms again.
+    apply(registry, ["report": report], prewarm: ["report"])
+    XCTAssertNil(registry.session(named: "report"))
+    XCTAssertEqual(registry.startsOnShowNames, ["report"])
+    apply(registry, ["report": terminal(["/bin/sleep", "30"])], prewarm: ["report"])
+    XCTAssertTrue(registry.startsOnShowNames.isEmpty)
+    XCTAssertEqual(registry.prewarmedNames, ["report"])
+    XCTAssertNotNil(registry.session(named: "report"))
+  }
+
+  func testTypedExitClosesAShownPopupAndPrewarmsTheNextAtOnce() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var restartsScheduled = 0
+    let sink = FlashLog.addSink { record in
+      if record.message == "Status terminal restart scheduled" { restartsScheduled += 1 }
+    }
+    defer { FlashLog.removeSink(sink) }
+    apply(registry, ["shell": terminal(["/bin/sh"])], prewarm: ["shell"])
+    let shell = try XCTUnwrap(registry.session(named: "shell"))
+    waitUntil { self.running(shell) != nil }
+    XCTAssertTrue(registry.open("shell") === shell)
+    var removed: [TerminalSessionState] = []
+    registry.willChange = { changes in
+      if changes.contains(.remove("shell")) { removed.append(shell.state) }
+    }
+    shell.send(Data("exit 3\r".utf8))
+    waitUntil { registry.prewarmedNames.contains("shell") }
+    XCTAssertEqual(removed, [.exited(code: 3)], "a typed exit closes the showing")
+    XCTAssertFalse(registry.session(named: "shell") === shell)
+    XCTAssertTrue(registry.startsOnShowNames.isEmpty, "an interactive popup stays prewarmed")
+    XCTAssertEqual(restartsScheduled, 0, "no backoff: the next starts once the last is gone")
   }
 
   func testPopupPagerPromptDrawsNothingInsteadOfAStandoutBlock() throws {
@@ -256,7 +310,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNotNil(registry.session(named: "details"))
   }
 
-  func testCleanExitRestartsPersistentSessionsAndReleasesFreshOnes() {
+  func testCleanExitRestartsPersistentSessionsAndKeepsAShownFreshOne() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
     apply(
@@ -266,16 +320,18 @@ final class StatusTerminalRegistryTests: XCTestCase {
         "fresh": terminal(["/bin/sh", "-c", "exit 0"]),
       ])
     let generation = registry.inputGenerations["persistent"]
-    registry.open("fresh")
+    let fresh = try XCTUnwrap(registry.open("fresh"))
     var removed: [String] = []
     registry.willChange = { changes in
       for case .remove(let name) in changes { removed.append(name) }
     }
     waitUntil {
-      registry.inputGenerations["persistent"] != generation
-        && registry.session(named: "fresh") == nil
+      registry.inputGenerations["persistent"] != generation && fresh.state == .exited(code: 0)
     }
-    XCTAssertEqual(removed, ["fresh"])
+    XCTAssertEqual(removed, [])
+    XCTAssertTrue(registry.session(named: "fresh") === fresh)
+    XCTAssertTrue(registry.hasEnded("fresh"))
+    XCTAssertFalse(registry.hasEnded("persistent"), "a persistent popup restarts instead")
     XCTAssertNotNil(registry.session(named: "persistent"))
   }
 
@@ -316,11 +372,12 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertEqual(kill(pid, 0), -1)
   }
 
-  func testFreshExitReleasesTheSessionWithoutRetry() throws {
+  func testShownFreshExitKeepsItsScreenUntilHiddenWithoutRetry() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    apply(registry, ["fresh": terminal(["/bin/sh", "-c", "sleep 0.2; exit 0"])])
+    apply(registry, ["fresh": terminal(["/bin/sh", "-c", "sleep 0.2; printf kept-output"])])
     let session = try XCTUnwrap(registry.open("fresh"))
+    session.setWantsFrames(true)
     var pids: Set<Int32> = []
     var removed: [String] = []
     registry.willChange = { changes in
@@ -329,13 +386,18 @@ final class StatusTerminalRegistryTests: XCTestCase {
     registry.didChange = {
       if let pid = self.running(registry.session(named: "fresh")) { pids.insert(pid) }
     }
-    waitUntil { registry.session(named: "fresh") == nil }
-    XCTAssertTrue(pids.count <= 1)
-    XCTAssertEqual(removed, ["fresh"])
-    XCTAssertNil(registry.inputGenerations["fresh"])
+    waitUntil { session.state == .exited(code: 0) }
     RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    XCTAssertTrue(registry.session(named: "fresh") === session, "the screen stays")
+    XCTAssertTrue(session.frame?.text.contains("kept-output") == true)
+    XCTAssertTrue(pids.count <= 1)
+    XCTAssertEqual(removed, [])
+    registry.hide("fresh")
     XCTAssertNil(registry.session(named: "fresh"))
-    XCTAssertNotEqual(session.state, .idle)
+    XCTAssertNil(registry.inputGenerations["fresh"])
+    XCTAssertFalse(registry.hasEnded("fresh"))
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    XCTAssertNil(registry.session(named: "fresh"), "an unreferenced popup is not prewarmed")
   }
 
   func testKilledPersistentChildRestartsAndRemovalCancelsPendingRestart() throws {

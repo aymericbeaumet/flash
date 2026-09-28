@@ -319,13 +319,7 @@ final class StatusPopupController {
         dismiss(reason: "terminal_missing")
         return
       }
-      switch session.state {
-      case .exited(let code):
-        exitText = "Exited (\(code))"
-        if definition.lifecycle == .persistent { exitText += " · restarting automatically" }
-      case .failed(let message): exitText = message
-      default: break
-      }
+      exitText = Self.exitFooter(session.state, lifecycle: definition.lifecycle)
       footerHeight =
         exitText.isEmpty
         ? 0 : min(cell.height, max(0, visibleFrame.height - inset * 2 - cell.height))
@@ -464,6 +458,33 @@ final class StatusPopupController {
     }
     result += "\u{1B}[0m"
     return Data(result.utf8)
+  }
+
+  /// The footer under a terminal whose process is gone: a persistent one
+  /// restarts, and a fresh one keeps its last screen, footed only when its
+  /// status says it failed.
+  static func exitFooter(
+    _ state: TerminalSessionState, lifecycle: Config.PopupLifecycle
+  ) -> String {
+    switch state {
+    case .exited(let code) where lifecycle == .persistent:
+      return "Exited (\(code)) · restarting automatically"
+    case .exited(let code): return code == 0 ? "" : "Exited (\(code))"
+    case .failed(let message): return message
+    case .idle, .running, .stopped: return ""
+    }
+  }
+
+  /// A key press on a fresh popup whose process has ended closes it: nothing
+  /// is left to read it. Releases and modifier changes do nothing, and
+  /// Command-C and Command-V keep their local copy and paste.
+  static func closesEndedPopup(_ event: NSEvent) -> Bool {
+    guard event.type == .keyDown else { return false }
+    guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) else {
+      return true
+    }
+    let key = event.charactersIgnoringModifiers?.lowercased()
+    return key != "c" && key != "v"
   }
 
   /// `less` keeps the last row for its prompt. A preview is a rendered

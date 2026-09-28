@@ -441,7 +441,7 @@ final class StatusPopupControllerTests: XCTestCase {
     original.onStateChange = stateChanged
   }
 
-  func testCrashedPersistentTerminalsRestartInEveryPresentationAndNonpersistentOnesClose() {
+  func testCrashedPersistentTerminalsRestartAndFreshOnesKeepTheirScreenInEveryPresentation() {
     for persistent in [false, true] {
       for presentation in ["preview", "pinned", "standalone"] {
         let registry = StatusTerminalRegistry()
@@ -475,11 +475,21 @@ final class StatusPopupControllerTests: XCTestCase {
         controller.didDismissFocus = { _ in dismissals += 1 }
         XCTAssertEqual(kill(originalPID, SIGKILL), 0)
         if !persistent {
-          waitUntil("crashed nonpersistent terminal closed after \(presentation)") {
-            registry.sessions[name] == nil && !controller.isVisible
+          // Nothing was typed into it: the popup keeps its last screen.
+          waitUntil("crashed fresh terminal kept after \(presentation)") {
+            session.state == .exited(code: 128 + SIGKILL)
+              && controller.exitStatusText == "Exited (\(128 + SIGKILL))"
           }
-          XCTAssertEqual(dismissals, presentation == "preview" ? 0 : 1)
+          XCTAssertTrue(controller.isVisible)
+          XCTAssertEqual(controller.presentation, originalPresentation)
+          XCTAssertTrue(
+            controller.terminalView.terminalFrame?.text.contains("ready-\(originalPID)") == true)
+          XCTAssertTrue(registry.sessions[name] === session)
+          XCTAssertTrue(registry.hasEnded(name))
+          XCTAssertEqual(dismissals, 0)
+          controller.dismiss()
           XCTAssertNil(registry.session(named: name))
+          XCTAssertEqual(dismissals, presentation == "preview" ? 0 : 1)
           continue
         }
         waitUntil("crashed terminal replaced and rendered") {
@@ -597,15 +607,15 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
   }
 
-  func testNonpersistentWindowClosesWhenItsProcessExits() throws {
+  func testFreshWindowClosesWhenTypedInputEndsItsProcess() throws {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
     registry.apply(style: .init(), terminals: ["shell": terminal(["/bin/cat"])])
     let name = "shell"
     let session = try XCTUnwrap(registry.open(name))
     defer { registry.shutdown() }
-    var dismissed: [String] = []
-    controller.didDismiss = { dismissed.append($0) }
+    var dismissed: [TerminalSessionState] = []
+    controller.didDismiss = { _ in dismissed.append(session.state) }
     var focusDismissalReasons: [String] = []
     controller.didDismissFocus = { focusDismissalReasons.append($0) }
     show(controller, name, screen: CGRect(x: 0, y: 0, width: 1200, height: 800))
@@ -614,15 +624,99 @@ final class StatusPopupControllerTests: XCTestCase {
       return false
     }
     guard case .running(let pid) = session.state else { return XCTFail("Missing child") }
-    XCTAssertEqual(kill(pid, SIGTERM), 0)
+    // Control-D: end of input, so cat exits 0 because of what was typed.
+    session.send(Data([4]))
     waitUntil("window closed with its process") {
       registry.sessions[name] == nil && controller.presentation == .hidden
     }
-    XCTAssertEqual(dismissed, [name])
+    XCTAssertEqual(dismissed, [.exited(code: 0)])
     XCTAssertEqual(focusDismissalReasons, ["terminal_removed"])
     XCTAssertNil(controller.focusedName)
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
     XCTAssertEqual(kill(pid, 0), -1)
+  }
+
+  func testOneShotReportKeepsItsOutputAndFootsOnlyAFailedExit() throws {
+    for code in [0, 3] {
+      for presentation in ["preview", "pinned", "standalone"] {
+        let registry = StatusTerminalRegistry()
+        defer { registry.shutdown() }
+        let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+        let name = "report"
+        registry.apply(
+          style: .init(),
+          terminals: [name: terminal(["/bin/sh", "-c", "printf report-body; exit \(code)"])])
+        let session = try XCTUnwrap(registry.open(name))
+        var dismissals: [String] = []
+        controller.didDismiss = { dismissals.append($0) }
+        if presentation == "standalone" {
+          show(controller, name)
+        } else {
+          preview(controller, region: region(name, text: ""))
+          if presentation == "pinned" { controller.focus() }
+        }
+        let shown = controller.presentation
+        waitUntil("report finished in \(presentation)") {
+          session.state == .exited(code: Int32(code))
+            && controller.terminalView.terminalFrame?.text.contains("report-body") == true
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(controller.presentation, shown, "\(presentation) exit \(code)")
+        XCTAssertTrue(controller.terminalView.isRenderingEnabled)
+        XCTAssertEqual(controller.exitStatusText, code == 0 ? "" : "Exited (\(code))")
+        XCTAssertTrue(registry.session(named: name) === session)
+        XCTAssertEqual(dismissals, [])
+        controller.dismiss()
+        XCTAssertEqual(dismissals, [name])
+        XCTAssertNil(registry.session(named: name))
+      }
+    }
+  }
+
+  func testExitFooterNamesAFailedFreshExitAndEveryPersistentOne() {
+    XCTAssertEqual(StatusPopupController.exitFooter(.exited(code: 0), lifecycle: .fresh), "")
+    XCTAssertEqual(
+      StatusPopupController.exitFooter(.exited(code: 3), lifecycle: .fresh), "Exited (3)")
+    XCTAssertEqual(
+      StatusPopupController.exitFooter(.exited(code: 0), lifecycle: .persistent),
+      "Exited (0) · restarting automatically")
+    XCTAssertEqual(
+      StatusPopupController.exitFooter(.failed("No such file or directory"), lifecycle: .fresh),
+      "No such file or directory")
+    for state: TerminalSessionState in [.idle, .running(pid: 1), .stopped] {
+      XCTAssertEqual(StatusPopupController.exitFooter(state, lifecycle: .fresh), "")
+    }
+  }
+
+  func testAKeyPressClosesAnEndedPopupButReleasesModifiersAndCopyDoNot() throws {
+    func key(
+      _ type: NSEvent.EventType, _ characters: String, code: UInt16,
+      modifiers: NSEvent.ModifierFlags = []
+    ) throws -> NSEvent {
+      try XCTUnwrap(
+        NSEvent.keyEvent(
+          with: type, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
+          context: nil, characters: characters, charactersIgnoringModifiers: characters,
+          isARepeat: false, keyCode: code))
+    }
+    for event in [
+      try key(.keyDown, "q", code: 12), try key(.keyDown, "\u{1B}", code: 53),
+      try key(.keyDown, "\r", code: 36), try key(.keyDown, "k", code: 40, modifiers: .command),
+    ] {
+      XCTAssertTrue(StatusPopupController.closesEndedPopup(event), "\(event)")
+    }
+    for event in [
+      try key(.keyUp, "q", code: 12), try key(.keyDown, "c", code: 8, modifiers: .command),
+      try key(.keyDown, "v", code: 9, modifiers: .command),
+    ] {
+      XCTAssertFalse(StatusPopupController.closesEndedPopup(event), "\(event)")
+    }
+    let shift = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .flagsChanged, location: .zero, modifierFlags: .shift, timestamp: 0,
+        windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+        isARepeat: false, keyCode: 56))
+    XCTAssertFalse(StatusPopupController.closesEndedPopup(shift))
   }
 
   func testTerminalEnvironmentExpandsOverridesAgainstBaseThenArguments() {

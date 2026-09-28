@@ -126,20 +126,42 @@ resets the delay; ten consecutive failed starts park it until an explicit
 restart or a definition change. The last screen stays visible, with an
 `Exited (N) · restarting automatically` footer, while it waits.
 
-**Fresh** popups (the default) run one process per showing. Dismissing the
-popup stops the process, and a process that ends by itself closes the popup.
+**Fresh** popups (the default) run one process per showing, and dismissing
+the popup stops it. A process you end by typing into it (`exit` in a shell,
+`q` in btop) closes the popup. One that ends by itself before any key, paste
+or mouse report reached it leaves the popup open on its last screen until you
+dismiss it as usual, with an `Exited (N)` footer when the status is not 0;
+scrolling its history does not count. No process is left to read keys, so a
+focused one closes on a key press (Command-C still copies, and Command-V does
+nothing); `popup_restart` (Command-R) runs it again in place.
+
 A fresh popup a user can open is **prewarmed**: Flash keeps its next process
 running hidden, so showing it attaches to a live screen instead of waiting for
 the program to start. The next process starts once the previous one is gone,
-so a program holding a lock (newsboat's cache) can start again; after a
-process that ended by itself it starts with the restart backoff above, so a
-command that exits at once cannot spin. A popup counts as openable when it
-appears in a `#[popup=<name>]` marker of the enabled bar's template or text
-popups, in a `[statusbar.click]` `enter_terminal_mode` action, or in an
-`enter_terminal_mode` mapping of any scope (`enter_terminal_mode` without a
-name counts for `terminal`). Any other fresh popup starts when it is opened: on
-`enter_terminal_mode`, or on hover after a 150 ms dwell with the pointer still
-on its label, so sweeping across the bar never forks one child per label.
+so a program holding a lock (newsboat's cache) can start again. A popup counts
+as openable when it appears in a `#[popup=<name>]` marker of the enabled bar's
+template or text popups, in a `[statusbar.click]` `enter_terminal_mode`
+action, or in an `enter_terminal_mode` mapping of any scope
+(`enter_terminal_mode` without a name counts for `terminal`). Any other fresh
+popup starts when it is opened: on `enter_terminal_mode`, or on hover after a
+150 ms dwell with the pointer still on its label, so sweeping across the bar
+never forks one child per label.
+
+A prewarmed process that ends before it is ever shown is a one-shot report:
+started ahead, it would be stale by the time it shows. Flash does not replace
+it; until the popup's `command`, `cwd`, `env` or `persistent` changes, that
+popup starts when opened, like one nothing refers to, so each showing runs a
+current report.
+
+[ccusage](https://ccusage.com) prints a table of Claude Code and Codex usage
+and exits, so it makes a one-shot report popup. It is yours to install, for
+example with `npm i -g ccusage`, mise or bun; Flash does not install it.
+
+```toml
+[popup.ai-usage]             # a one-shot report
+command = ["ccusage", "daily", "--last", "3"]
+size = "140x34"
+```
 
 A text popup's pager is fresh too: it starts when the popup shows and stops,
 removing its snapshot file, when it closes.
@@ -220,9 +242,9 @@ Set `[debug] log_level = "debug"` (or `"trace"`) to record popup diagnostics in
 - `Status terminal state changed`: PID, exit status, and spawn failure
   category and reason, under `core:StatusTerminalRegistry.lifecycle`.
 - `Status terminal restart scheduled`: attempt and delay of a persistent
-  restart or a prewarmed popup's next process, under
-  `core:StatusTerminalRegistry.restart`; `Status popup prewarmed` marks each
-  prewarmed start.
+  restart, under `core:StatusTerminalRegistry.restart`; `Status popup
+  prewarmed` marks each prewarmed start, and `Status popup starts on show` a
+  prewarmed process that ended before any showing.
 - `Status menu reveal changed` and `Status inline popup rejected`.
 
 Records carry a hashed popup ID; they exclude popup names, text, URLs, terminal
@@ -242,10 +264,12 @@ presentation — hidden, preview, focused, or standalone — and tells the regis
 when a showing starts (`open`, `preparePager`) and, exactly once, when it ends
 (`hide`); the registry decides from the kind and lifecycle whether that stops
 the process. One restart mechanism, a per-name backoff with one pending work
-item, revives both a persistent process and a prewarmed popup's next process.
-Removing, replacing or reloading a declaration, and quitting Flash, cancel
-pending restarts; replies carry the session and restart generation, so a late
-callback never mutates a replacement.
+item, revives a persistent process. A fresh process that ends by itself while
+showing stays registered, exited, until `hide`; `TerminalSession.receivedInput`
+tells a typed exit, which releases it at once, from a report. Removing,
+replacing or reloading a declaration, and quitting Flash, cancel pending
+restarts; replies carry the session and restart generation, so a late callback
+never mutates a replacement.
 
 The configuration reload computes one set of terminal popup names
 (`Config.terminalPopupNames`) for the status bar's hover regions and the
@@ -330,16 +354,17 @@ The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap
 `TerminalTests`, `TerminalLinkTests`, `TerminalSnapshotTests`, and
 `TerminalRenderingTests` exercise real PTY startup, styled and Unicode output,
 link interaction, redraws, hidden-frame suppression, session rebinding,
-controlling-terminal dimensions, retained exit screens, input, resize,
-explicit restart, failed spawn, and bounded shutdown and reaping. Direct VT
-tests cover incremental snapshots, terminal queries, application cursor input,
-Ctrl-C, Kitty modifiers and releases, bracketed paste, alternate screens, and
-scrollback. `TerminalBenchmarkTests` prints `[terminal-bench]` throughput lines
+controlling-terminal dimensions, retained exit screens, input and what counts
+as received input, resize, explicit restart, failed spawn, and bounded
+shutdown and reaping. Direct VT tests cover incremental snapshots, terminal
+queries, application cursor input, Ctrl-C, Kitty modifiers and releases,
+bracketed paste, alternate screens, and scrollback. `TerminalBenchmarkTests` prints `[terminal-bench]` throughput lines
 for VT parsing, snapshots, drawing, and PTY spawns (`FLASH_TERMINAL_BENCH_MB`
 scales the parsed workload). `StatusTerminalRegistryTests` cover both
-lifecycles, prewarming, the shared backoff, kinds changing on reload, screen
-refits, the exported terminal environment and parallel shutdown;
-`StatusPopupControllerTests` and `OneShotTerminalTests` cover pager ownership
-and cleanup, placement, percentage sizes across screens, standalone text
-popups, preview dismissal, pinned focus, and crash recovery in every
-presentation.
+lifecycles, prewarming and one-shot reports started on show, the persistent
+backoff, typed exits, kinds changing on reload, screen refits, the exported
+terminal environment and parallel shutdown; `StatusPopupControllerTests` and
+`OneShotTerminalTests` cover pager ownership and cleanup, placement,
+percentage sizes across screens, standalone text popups, preview dismissal,
+pinned focus, kept report screens and their exit footers, and crash recovery
+in every presentation.

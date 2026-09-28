@@ -122,17 +122,37 @@ final class OneShotTerminalTests: XCTestCase {
     XCTAssertFalse(controller.isVisible)
   }
 
-  func testFailedShellDisappearsWithoutRetry() throws {
+  func testFailedShellShowsItsFailureWithoutRetry() throws {
     let name = Config.defaultPopupName
     let registry = registry(shell: "/missing/flash-test-shell", prewarm: false)
     defer { registry.shutdown() }
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    XCTAssertNotNil(registry.open(name))
+    let session = try XCTUnwrap(registry.open(name))
     show(controller)
-    waitUntil("failed shell removed") {
-      registry.session(named: name) == nil && !controller.isVisible
+    waitUntil("failure shown") {
+      if case .failed = session.state { return !controller.exitStatusText.isEmpty }
+      return false
     }
     RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    XCTAssertTrue(registry.session(named: name) === session, "no retry")
+    XCTAssertEqual(controller.focusedName, name)
+    controller.dismiss()
     XCTAssertNil(registry.session(named: name))
+  }
+
+  func testPrewarmedShellThatFailsStartsOnShowAndShowsItsFailure() throws {
+    let name = Config.defaultPopupName
+    let registry = registry(shell: "/missing/flash-test-shell")
+    defer { registry.shutdown() }
+    waitUntil("failed prewarm dropped") { registry.startsOnShowNames.contains(name) }
+    XCTAssertNil(registry.session(named: name))
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let session = try XCTUnwrap(registry.open(name))
+    show(controller)
+    waitUntil("failure shown") {
+      if case .failed = session.state { return !controller.exitStatusText.isEmpty }
+      return false
+    }
+    XCTAssertTrue(controller.isVisible)
   }
 }
