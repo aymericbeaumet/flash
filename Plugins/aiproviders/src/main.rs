@@ -124,7 +124,38 @@ impl AnthropicUsage {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 struct OpenAIUsage {
     updated_at: u64,
+    #[serde(rename = "openai", with = "openai_weekly", default)]
     codex_week: Option<WindowUsage>,
+}
+
+/// The cache has always kept the Codex weekly window at `openai.weekly`, so a
+/// cache written before the plugin dropped the other windows still loads.
+mod openai_weekly {
+    use super::WindowUsage;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Deserialize)]
+    struct Windows {
+        weekly: Option<WindowUsage>,
+    }
+
+    #[derive(Serialize)]
+    struct WindowsRef<'a> {
+        weekly: &'a Option<WindowUsage>,
+    }
+
+    pub fn serialize<S: Serializer>(
+        weekly: &Option<WindowUsage>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        WindowsRef { weekly }.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<WindowUsage>, D::Error> {
+        Ok(Windows::deserialize(deserializer)?.weekly)
+    }
 }
 
 impl OpenAIUsage {
@@ -1134,6 +1165,31 @@ mod tests {
         )
         .expect("single rate limit");
         assert_eq!(fallback.codex_week.unwrap().used_percent, 10.0);
+    }
+
+    #[test]
+    fn a_cache_with_every_codex_window_keeps_its_weekly_quota() {
+        let cached = concat!(
+            "{\"updated_at\":100,",
+            "\"openai\":{",
+            "\"session\":{\"used_percent\":35.9,\"resets_at\":18000,\"window_minutes\":300},",
+            "\"weekly\":{\"used_percent\":46.1,\"resets_at\":432000,\"window_minutes\":10080}},",
+            "\"astra\":{\"session\":null,\"weekly\":null}}"
+        );
+        let usage: OpenAIUsage = serde_json::from_str(cached).expect("an earlier cache loads");
+        assert_eq!(
+            usage.clone().sanitize(),
+            Some(OpenAIUsage {
+                updated_at: 100,
+                codex_week: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
+            })
+        );
+        let written = serde_json::to_value(&usage).expect("serializes");
+        assert_eq!(written["openai"]["weekly"]["used_percent"], 46.1);
+        assert_eq!(
+            serde_json::from_value::<OpenAIUsage>(written).expect("round-trips"),
+            usage
+        );
     }
 
     #[test]
