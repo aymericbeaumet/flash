@@ -118,7 +118,7 @@ pub fn cpu_ticks() -> Result<CpuTicks, SysError> {
     Ok(ticks)
 }
 
-extern "C" {
+unsafe extern "C" {
     fn getloadavg(loadavg: *mut f64, nelem: libc::c_int) -> libc::c_int;
 }
 

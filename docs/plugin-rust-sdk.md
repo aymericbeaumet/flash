@@ -20,7 +20,7 @@ working `:<id> ping` command, requiring zero manual edits to reach green.
 ## Authoring shape
 
 ```rust
-use flash_plugin::{run, CommandRequest, Context, PerformResponse};
+use flash_plugin::{CommandRequest, Context, PerformResponse, run};
 
 struct MyPlugin;
 

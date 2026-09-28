@@ -225,10 +225,12 @@ fn read_cube(
             _ => {}
         }
     }
-    if let (Some(currency), Some(rate)) = (currency, rate) {
-        if currency.len() == 3 && rate.is_finite() && rate > 0.0 {
-            rates.insert(currency.to_ascii_uppercase(), rate);
-        }
+    if let (Some(currency), Some(rate)) = (currency, rate)
+        && currency.len() == 3
+        && rate.is_finite()
+        && rate > 0.0
+    {
+        rates.insert(currency.to_ascii_uppercase(), rate);
     }
     Ok(())
 }

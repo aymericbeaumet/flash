@@ -27,18 +27,18 @@ pub use flash_plugin_macros::plugin;
 
 pub use context::PollHandle;
 pub use context::{
-    applescript_quote, run_command, run_command_with_slow_threshold, run_osascript, shorten,
-    spawn_managed, AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate,
+    AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate, applescript_quote,
+    run_command, run_command_with_slow_threshold, run_osascript, shorten, spawn_managed,
 };
 pub use process::{ManagedChild, ManagedChildError};
-pub use runtime::{run, Plugin};
+pub use runtime::{Plugin, run};
 pub use status::{
-    Align, Color, Column, History, Markup, Preview, PreviewTooLarge, Published, StatusCarousel,
-    StatusSegment, StatusValue, Style, Table, MAX_INLINE_PREVIEW_ENCODED_BYTES,
+    Align, Color, Column, History, MAX_INLINE_PREVIEW_ENCODED_BYTES, Markup, Preview,
+    PreviewTooLarge, Published, StatusCarousel, StatusSegment, StatusValue, Style, Table,
 };
 pub use types::{
-    candidate_metadata, ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest,
-    EvaluateRequest, EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget,
-    NavigateRequest, Perform, PerformResponse, Priority, QueryAnswer, RunningApplication,
-    SearchRequest, SearchResponse, TERMINAL_LINK_ROLE,
+    ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest, EvaluateRequest,
+    EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest,
+    Perform, PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest,
+    SearchResponse, TERMINAL_LINK_ROLE, candidate_metadata,
 };

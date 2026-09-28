@@ -13,7 +13,7 @@
 // OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 //
 
-// tmux 3.7b UTF-8 width overrides.
+// tmux 3.7c UTF-8 width overrides.
 enum StatusFormatUnicodeWidths {
   static let overrides: [UInt32: Int] = [
     0x0261D: 2,

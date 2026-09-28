@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use flash_plugin::{Context, QueryAnswer};
 
-use crate::rates::{self, ExchangeRates, RatesStore, SnapshotRateHandler};
 use crate::Engine;
+use crate::rates::{self, ExchangeRates, RatesStore, SnapshotRateHandler};
 
 const MAX_QUERY_CHARS: usize = 256;
 // One absolute budget covers the primary expression and every configured
@@ -84,10 +84,9 @@ fn evaluate(raw_query: &str, rates: &RatesStore, target_currencies: &[String]) -
     // still error out of fend and stay out of the answer lane.
     if primary.is_empty()
         && (is_plain_number(query) || looks_like_currency_result(query, &snapshot))
+        && let Ok(result) = fend_core::evaluate_with_interrupt(query, &mut context, &deadline)
     {
-        if let Ok(result) = fend_core::evaluate_with_interrupt(query, &mut context, &deadline) {
-            primary = result.get_main_result().trim().to_string();
-        }
+        primary = result.get_main_result().trim().to_string();
     }
     let primary = primary.trim();
     if primary.is_empty() {
@@ -206,7 +205,7 @@ fn format_answer(answer: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{evaluate, normalize_targets};
-    use crate::rates::{parse_ecb_xml, RatesStore};
+    use crate::rates::{RatesStore, parse_ecb_xml};
 
     #[test]
     fn targets_default_to_usd() {

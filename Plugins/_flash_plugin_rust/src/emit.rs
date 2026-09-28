@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use serde_json::{Value, json};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 /// Wire frame cap, both directions (`quotas.frame_bytes` in
 /// `Plugins/_flash_plugin_rust/protocol.json`).

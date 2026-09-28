@@ -27,12 +27,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use flash_plugin::process;
 use flash_plugin::status::{duration_compact, duration_uptime, progress_bar};
 use flash_plugin::{
-    run, run_osascript, Color, CommandRequest, Context, Markup, PerformResponse, Preview,
-    Published, RefreshGate,
+    Color, CommandRequest, Context, Markup, PerformResponse, Preview, Published, RefreshGate, run,
+    run_osascript,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{OnceCell, RwLock};
@@ -932,16 +932,16 @@ async fn load_claude_credentials() -> Option<ClaudeCredentials> {
         Duration::from_secs(3),
     )
     .await;
-    if let Some(output) = output {
-        if let Ok(value) = serde_json::from_str(output.stdout.trim()) {
-            return Some(ClaudeCredentials {
-                value,
-                store: CredentialStore::Keychain {
-                    account: user,
-                    service,
-                },
-            });
-        }
+    if let Some(output) = output
+        && let Ok(value) = serde_json::from_str(output.stdout.trim())
+    {
+        return Some(ClaudeCredentials {
+            value,
+            store: CredentialStore::Keychain {
+                account: user,
+                service,
+            },
+        });
     }
 
     let home = user_home()?;
@@ -1178,10 +1178,10 @@ async fn capture_codex_rate_limits(codex: &Path, input: &str) -> Option<String> 
     let mut lines = BufReader::new(stdout).lines();
     let response = tokio::time::timeout(COMMAND_TIMEOUT, async {
         while let Some(line) = lines.next_line().await.ok()? {
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if value.get("id").and_then(Value::as_u64) == Some(2) {
-                    return Some(line);
-                }
+            if let Ok(value) = serde_json::from_str::<Value>(&line)
+                && value.get("id").and_then(Value::as_u64) == Some(2)
+            {
+                return Some(line);
             }
         }
         None
@@ -1641,10 +1641,12 @@ mod tests {
         let details = stale.claude_details.plain();
         assert!(details.contains("Cached"), "{details}");
         assert!(details.contains(CLAUDE_TOKEN_EXPIRED_HINT), "{details}");
-        assert!(!stale
-            .codex_details
-            .plain()
-            .contains(CLAUDE_TOKEN_EXPIRED_HINT));
+        assert!(
+            !stale
+                .codex_details
+                .plain()
+                .contains(CLAUDE_TOKEN_EXPIRED_HINT)
+        );
 
         let missing = UsageState {
             claude_token_expired: true,
@@ -1683,10 +1685,12 @@ mod tests {
         assert!(old.claude_details.as_str().contains("75%"));
         assert!(old.claude_details.as_str().contains("Cached"));
         assert!(!current.claude_details.as_str().contains("Cached"));
-        assert!(render_status_segments(&UsageState::default(), 0)
-            .claude_details
-            .as_str()
-            .contains("Unavailable"));
+        assert!(
+            render_status_segments(&UsageState::default(), 0)
+                .claude_details
+                .as_str()
+                .contains("Unavailable")
+        );
         assert!(old.codex_details.as_str().contains("60%"));
     }
 

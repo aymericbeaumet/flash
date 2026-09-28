@@ -6,8 +6,8 @@ use flash_plugin::status::{
     bytes_iec, bytes_iec_compact, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled,
 };
 use flash_plugin::{
-    run, run_command, sys, Candidate, Color, CommandRequest, Context, History, Markup,
-    PerformResponse, Preview, Published, RefreshGate, StatusValue,
+    Candidate, Color, CommandRequest, Context, History, Markup, PerformResponse, Preview,
+    Published, RefreshGate, StatusValue, run, run_command, sys,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
@@ -476,10 +476,10 @@ async fn collect_default_interface(ctx: &Context) -> Option<String> {
         "inet".to_string(),
     ];
     let ipv4 = run_command(ctx, &ipv4_argv, COMMAND_TIMEOUT).await;
-    if ipv4.ok {
-        if let Some(interface) = parse_default_interface(&ipv4.stdout) {
-            return Some(interface);
-        }
+    if ipv4.ok
+        && let Some(interface) = parse_default_interface(&ipv4.stdout)
+    {
+        return Some(interface);
     }
 
     let ipv6_argv = [
@@ -765,8 +765,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    use flash_plugin::testing::Harness;
     use flash_plugin::CandidateEffect;
+    use flash_plugin::testing::Harness;
     use serde_json::json;
 
     use super::*;
@@ -946,7 +946,9 @@ default fe80::%utun6 UGcIg utun6\n";
         };
 
         assert!(!state.expire_stale_rates(sampled_at + MAX_RATE_INTERVAL));
-        assert!(state.expire_stale_rates(sampled_at + MAX_RATE_INTERVAL + Duration::from_millis(1)));
+        assert!(
+            state.expire_stale_rates(sampled_at + MAX_RATE_INTERVAL + Duration::from_millis(1))
+        );
         assert_eq!(state.rates, None);
         assert!(state.received_history.is_empty());
         assert!(state.sent_history.is_empty());
@@ -1054,17 +1056,21 @@ default fe80::%utun6 UGcIg utun6\n";
             visible_summary(&state, SummaryMode::Compact).as_str(),
             "#[fg=#EBCB8B]NET#[default]"
         );
-        assert!(!visible_summary(&state, SummaryMode::Full)
-            .as_str()
-            .contains("Studio"));
+        assert!(
+            !visible_summary(&state, SummaryMode::Full)
+                .as_str()
+                .contains("Studio")
+        );
         assert_eq!(
             visible_summary(&state, SummaryMode::Full).as_str(),
             "#[fg=#EBCB8B]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
-        assert!(rendered
-            .details
-            .render_plain()
-            .contains("Hostname      moria #[fg=colour196]"));
+        assert!(
+            rendered
+                .details
+                .render_plain()
+                .contains("Hostname      moria #[fg=colour196]")
+        );
         assert_eq!(
             wire["details"],
             "#[fg=#EBCB8B]Network#[default]\n\

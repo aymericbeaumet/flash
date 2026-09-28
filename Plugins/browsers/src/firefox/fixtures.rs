@@ -1,7 +1,7 @@
 //! Builders shared by the Firefox engine's unit tests.
 
 use flash_plugin::testing::Harness;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 use super::strip::{AxWindow, Strip, Tab};

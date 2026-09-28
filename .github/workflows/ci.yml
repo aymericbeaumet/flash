@@ -11,7 +11,7 @@ on:
 jobs:
   format:
     name: Format
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Show swift-format version
@@ -26,7 +26,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Show swift-format version
@@ -36,7 +36,7 @@ jobs:
 
   guardrails:
     name: Guardrails
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Check hard-rule guardrails
@@ -44,7 +44,7 @@ jobs:
 
   plugin-gate:
     name: Plugins (gate)
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
@@ -73,7 +73,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -98,7 +98,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       TMUX_ORACLE: ${{ github.workspace }}/build/tmux-oracle/bin/tmux
       FLASH_REQUIRE_TMUX_ORACLE: '1'
@@ -159,12 +159,14 @@ jobs:
 
   inspector:
     name: Inspector
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          # pnpm's version comes from Inspector/package.json's packageManager
+          # pin, the same one a local pnpm install honors.
+          package_json_file: Inspector/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -185,7 +187,7 @@ jobs:
 
   homebrew:
     name: Homebrew
-    runs-on: macos-15
+    runs-on: macos-26
     # plugin-gate is REQUIRED: a failed plugin gate must never ship a release.
     needs: [format, lint, guardrails, build, test, inspector, plugin-gate]
     if: github.event_name == 'push'

@@ -263,7 +263,12 @@ mod tests {
 
     #[test]
     fn preformatted_code_retains_indentation_and_line_breaks() {
-        assert_eq!(visible(&render("<p>Example <code>x &lt; y</code>:</p><pre><code>fn main() {\n    run();\n}</code></pre>")), "Example x < y:\n\nfn main() {\n    run();\n}");
+        assert_eq!(
+            visible(&render(
+                "<p>Example <code>x &lt; y</code>:</p><pre><code>fn main() {\n    run();\n}</code></pre>"
+            )),
+            "Example x < y:\n\nfn main() {\n    run();\n}"
+        );
     }
 
     #[test]

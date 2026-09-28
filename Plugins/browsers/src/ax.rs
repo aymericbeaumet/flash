@@ -7,7 +7,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use flash_plugin::Context;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Clone, Debug)]
 pub struct AxNode {

@@ -25,7 +25,6 @@ dependencies = [
  "flash_plugin",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

@@ -200,11 +200,13 @@ return out
             ));
             format!("(({} of t as text) is targetTitle)", self.title)
         });
-        let mut passes = vec![[url_clause.clone(), title_clause.clone()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" and ")];
+        let mut passes = vec![
+            [url_clause.clone(), title_clause.clone()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" and "),
+        ];
         if let (Some(url_clause), Some(_)) = (url_clause, title_clause) {
             passes.push(url_clause);
         }

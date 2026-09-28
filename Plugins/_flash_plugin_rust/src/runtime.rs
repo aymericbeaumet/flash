@@ -9,15 +9,15 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
-use crate::context::{assemble_context, Context, PluginEnv};
-use crate::emit::{Emitter, OutboundFrame, MAX_FRAME_BYTES, OUTBOUND_QUEUE_CAPACITY};
+use crate::context::{Context, PluginEnv, assemble_context};
+use crate::emit::{Emitter, MAX_FRAME_BYTES, OUTBOUND_QUEUE_CAPACITY, OutboundFrame};
 use crate::events::EventMailbox;
 use crate::framing::{FrameReader, Record};
 use crate::types::{
@@ -560,11 +560,11 @@ mod tests {
     use super::*;
     use crate::context::test_context;
     use crate::emit::MAX_FRAME_BYTES;
-    use crate::testing::{test_env, WireHarness};
+    use crate::testing::{WireHarness, test_env};
     use crate::types::{Candidate, JumpTarget, QueryAnswer};
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Instant;
 
     const INITIALIZE: &str = r#"{"id":1,"method":"initialize","params":{"protocol_version":1}}"#;
@@ -630,13 +630,12 @@ mod tests {
                     Frame::new(0.0, 0.0, 0.0, 10.0),
                 )]);
             }
-            HintsResponse::targets(vec![JumpTarget::new(
-                "t1",
-                Frame::new(-10.5, 20.0, 30.0, 40.0),
-            )
-            .role("AXLink")
-            .context_id("surface-1")
-            .label("one")])
+            HintsResponse::targets(vec![
+                JumpTarget::new("t1", Frame::new(-10.5, 20.0, 30.0, 40.0))
+                    .role("AXLink")
+                    .context_id("surface-1")
+                    .label("one"),
+            ])
             .context_pid(77)
         }
 
@@ -737,11 +736,12 @@ mod tests {
             json!({ "id": 8, "result": { "ok": true } })
         );
         wire.close_stdin().await;
-        assert!(wire
-            .finished()
-            .await
-            .iter()
-            .all(|frame| frame["method"] == "log"));
+        assert!(
+            wire.finished()
+                .await
+                .iter()
+                .all(|frame| frame["method"] == "log")
+        );
     }
 
     #[tokio::test]
@@ -1299,11 +1299,13 @@ mod tests {
     fn malformed_events_are_rejected_instead_of_becoming_default_events() {
         assert!(decode_event(json!({ "payload": {} })).is_err());
         assert!(decode_event(json!({ "name": "", "payload": {} })).is_err());
-        assert!(decode_event(json!({
-            "name": "core:apps.changed",
-            "payload": { "running_applications": "not-an-array" }
-        }))
-        .is_err());
+        assert!(
+            decode_event(json!({
+                "name": "core:apps.changed",
+                "payload": { "running_applications": "not-an-array" }
+            }))
+            .is_err()
+        );
 
         let event = decode_event(json!({
             "name": "core:apps.changed",

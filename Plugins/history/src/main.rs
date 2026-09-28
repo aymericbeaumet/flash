@@ -1,4 +1,4 @@
-use flash_plugin::{run, Candidate, CommandRequest, Context, PerformResponse, RefreshGate};
+use flash_plugin::{Candidate, CommandRequest, Context, PerformResponse, RefreshGate, run};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

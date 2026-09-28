@@ -7,8 +7,8 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    applescript_quote, run, run_osascript, Candidate, CommandRequest, Context, Event,
-    PerformResponse, RefreshGate, RunningApplication,
+    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, RunningApplication,
+    applescript_quote, run, run_osascript,
 };
 use serde::{Deserialize, Serialize};
 

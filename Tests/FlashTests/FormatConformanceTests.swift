@@ -12,7 +12,7 @@ final class FormatConformanceTests: XCTestCase {
 
   func testPinnedTmuxFormatCorpus() throws {
     let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-      .deletingLastPathComponent().appendingPathComponent("StatusFormatFixtures/tmux-3.7b.json")
+      .deletingLastPathComponent().appendingPathComponent("StatusFormatFixtures/tmux-3.7c.json")
     let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: file))
     for item in cases {
       var context = StatusFormatContext()

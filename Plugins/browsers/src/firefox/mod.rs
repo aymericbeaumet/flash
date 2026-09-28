@@ -29,13 +29,13 @@ use serde::{Deserialize, Serialize};
 use crate::ax;
 use crate::route::{TabRoute, TabTarget};
 use crate::session_store;
-use crate::{performed, tab_candidate, Browser, TabPayload};
-use catalog::{assign_stores, catalog, collect, CatalogTab};
+use crate::{Browser, TabPayload, performed, tab_candidate};
+use catalog::{CatalogTab, assign_stores, catalog, collect};
 use select::{
     activate_and_find_tab, confirm_fast_jump, nth_tab_in_front_window, post_keys, select_tab,
     tab_key_plan,
 };
-use strip::{walk, Tab};
+use strip::{Tab, walk};
 
 /// The SDK's `call_host` timeout: the longest one host call on the selection
 /// path (the raise, a walk, a press, the key post) waits for its reply. The
@@ -187,21 +187,21 @@ async fn select_pick(
     name: &str,
     strip: Option<StripPosition>,
 ) -> Result<(), &'static str> {
-    if let Some(position) = strip.filter(|position| position.window_focused) {
-        if let Some(plan) = tab_key_plan(position.index, position.tab_count) {
-            let (keys_ok, _) = tokio::join!(post_keys(ctx, pid, &plan), ctx.activate(pid));
-            if keys_ok {
-                return if confirm_fast_jump(ctx, pid, url, name, plan.len()).await {
-                    Ok(())
-                } else {
-                    Err("tab jump did not stick")
-                };
-            }
-            ctx.log(
-                "debug",
-                "[browsers] firefox key plan rejected by host; using AX path",
-            );
+    if let Some(position) = strip.filter(|position| position.window_focused)
+        && let Some(plan) = tab_key_plan(position.index, position.tab_count)
+    {
+        let (keys_ok, _) = tokio::join!(post_keys(ctx, pid, &plan), ctx.activate(pid));
+        if keys_ok {
+            return if confirm_fast_jump(ctx, pid, url, name, plan.len()).await {
+                Ok(())
+            } else {
+                Err("tab jump did not stick")
+            };
         }
+        ctx.log(
+            "debug",
+            "[browsers] firefox key plan rejected by host; using AX path",
+        );
     }
     let session = ax::session(pid);
     let _ax = session.lock().await;
@@ -277,7 +277,7 @@ mod tests {
     use super::*;
     use fixtures::{ax_reply, serve_host};
     use flash_plugin::testing::Harness;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// A pick of tab "B" (2 of 3) in the focused window, with or without its
     /// strip position.
@@ -332,10 +332,12 @@ mod tests {
         let pid = 62_001;
         let (response, methods) = resolve_against(pid, true, || landed(true)).await;
         assert!(response.is_ok());
-        assert!(methods
-            .iter()
-            .take(2)
-            .any(|method| method == "host.post_keys"));
+        assert!(
+            methods
+                .iter()
+                .take(2)
+                .any(|method| method == "host.post_keys")
+        );
         assert!(
             methods.iter().any(|method| method == "host.ax_snapshot"),
             "replied before verifying: {methods:?}"

@@ -1,5 +1,5 @@
 use flash_plugin::{
-    run, Candidate, CommandRequest, Context, PerformResponse, SearchRequest, SearchResponse,
+    Candidate, CommandRequest, Context, PerformResponse, SearchRequest, SearchResponse, run,
 };
 use std::collections::BTreeMap;
 use std::path::Path;

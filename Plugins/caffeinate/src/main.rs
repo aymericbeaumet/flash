@@ -1,11 +1,11 @@
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, spawn_managed, CommandRequest, Context, ManagedChild, ManagedChildError, PerformResponse,
-    StatusValue,
+    CommandRequest, Context, ManagedChild, ManagedChildError, PerformResponse, StatusValue, run,
+    spawn_managed,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;

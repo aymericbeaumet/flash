@@ -30,9 +30,9 @@
 //! (bottom-left origin), the exact space `JumpTarget.frame` expects, so no
 //! conversion happens here.
 
-use flash_plugin::{run, Context, Frame, HintsRequest, HintsResponse, JumpTarget};
+use flash_plugin::{Context, Frame, HintsRequest, HintsResponse, JumpTarget, run};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -360,9 +360,11 @@ mod tests {
             .unwrap();
         assert_eq!(link.role.as_deref(), Some("AXLink"));
         assert!(targets.iter().all(|target| target.pid == Some(55)));
-        assert!(targets
-            .iter()
-            .all(|target| target.id.starts_with("vscode-55-")));
+        assert!(
+            targets
+                .iter()
+                .all(|target| target.id.starts_with("vscode-55-"))
+        );
     }
 
     #[test]
@@ -404,9 +406,11 @@ mod tests {
     #[test]
     fn missing_window_frame_admits_all_size_gated_targets() {
         let targets = targets_from_nodes(&fixture_nodes(), 55, None);
-        assert!(targets
-            .iter()
-            .any(|target| target.label.as_deref() == Some("Other display")));
+        assert!(
+            targets
+                .iter()
+                .any(|target| target.label.as_deref() == Some("Other display"))
+        );
     }
 
     #[test]

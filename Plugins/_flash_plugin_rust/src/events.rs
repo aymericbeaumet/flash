@@ -81,14 +81,13 @@ impl EventMailbox {
             .iter()
             .min_by_key(|(_, value)| value.sequence)
             .map(|(key, value)| (key.clone(), value.sequence));
-        if let Some((key, sequence)) = latest {
-            if backlog
+        if let Some((key, sequence)) = latest
+            && backlog
                 .queue
                 .front()
                 .is_none_or(|entry| sequence < entry.sequence)
-            {
-                return backlog.latest.remove(&key).map(|entry| entry.event);
-            }
+        {
+            return backlog.latest.remove(&key).map(|entry| entry.event);
         }
         let entry = backlog.queue.pop_front()?;
         backlog.bytes -= entry.bytes;

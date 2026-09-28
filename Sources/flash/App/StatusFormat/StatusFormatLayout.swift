@@ -1,4 +1,4 @@
-// Layout algorithms adapted from tmux 3.7b format-draw.c.
+// Layout algorithms adapted from tmux 3.7c format-draw.c.
 // Copyright (c) 2019, 2023 Nicholas Marriott <nicholas.marriott@gmail.com>
 //
 // Permission to use, copy, modify, and distribute this software for any

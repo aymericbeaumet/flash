@@ -1091,11 +1091,13 @@ free form"
         ]
         .join("\n");
         assert_eq!(Preview::new().table(table).render().as_str(), expected);
-        assert!(Table::new([Column::new("", 4)])
-            .row(["x"])
-            .render_lines()
-            .first()
-            .is_some_and(|line| line == "x"));
+        assert!(
+            Table::new([Column::new("", 4)])
+                .row(["x"])
+                .render_lines()
+                .first()
+                .is_some_and(|line| line == "x")
+        );
     }
 
     #[test]

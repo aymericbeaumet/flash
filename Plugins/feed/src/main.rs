@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use flash_plugin::{run, Context, StatusValue};
+use flash_plugin::{Context, StatusValue, run};
 use reqwest::{Client, Url};
 use serde_json::Value;
 

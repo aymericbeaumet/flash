@@ -8,12 +8,12 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use flash_plugin::{
-    run, ActionRequest, Candidate, CommandRequest, Context, EvaluateRequest, EvaluateResponse,
-    Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse,
-    QueryAnswer, SearchRequest, SearchResponse, TERMINAL_LINK_ROLE,
+    ActionRequest, Candidate, CommandRequest, Context, EvaluateRequest, EvaluateResponse, Event,
+    Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, QueryAnswer,
+    SearchRequest, SearchResponse, TERMINAL_LINK_ROLE, run,
 };
 
 const SOURCE: &str = "probe.items";

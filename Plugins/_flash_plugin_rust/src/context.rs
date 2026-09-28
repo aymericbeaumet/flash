@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::emit::Emitter;
@@ -374,10 +374,10 @@ impl Context {
             rx.await.map_err(|_| crate::emit::EmitError::Closed)
         })
         .await;
-        if !matches!(outcome, Ok(Ok(_))) {
-            if let Ok(mut pending) = self.host_pending.lock() {
-                pending.remove(&id);
-            }
+        if !matches!(outcome, Ok(Ok(_)))
+            && let Ok(mut pending) = self.host_pending.lock()
+        {
+            pending.remove(&id);
         }
         match outcome {
             Ok(Ok(value)) => value,
@@ -904,17 +904,16 @@ pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> Co
     if let Some(code) = (!output.ok)
         .then(|| osascript_error_code(&output.stderr))
         .flatten()
+        && let Some(suppressed) = admit_subprocess_warning(&format!("osascript:{code}"))
     {
-        if let Some(suppressed) = admit_subprocess_warning(&format!("osascript:{code}")) {
-            let mut fields = BTreeMap::from([
-                ("error_code".to_string(), code.to_string()),
-                ("status".to_string(), output.status.to_string()),
-            ]);
-            if suppressed > 0 {
-                fields.insert("suppressed".to_string(), suppressed.to_string());
-            }
-            ctx.log_fields("warn", "[plugin] osascript failed", fields);
+        let mut fields = BTreeMap::from([
+            ("error_code".to_string(), code.to_string()),
+            ("status".to_string(), output.status.to_string()),
+        ]);
+        if suppressed > 0 {
+            fields.insert("suppressed".to_string(), suppressed.to_string());
         }
+        ctx.log_fields("warn", "[plugin] osascript failed", fields);
     }
     output
 }
@@ -1682,7 +1681,7 @@ mod tests {
 
     #[test]
     fn oversized_status_preview_publishes_the_visible_text_with_a_content_free_warning() {
-        use crate::status::{Preview, StatusValue, MAX_INLINE_PREVIEW_ENCODED_BYTES};
+        use crate::status::{MAX_INLINE_PREVIEW_ENCODED_BYTES, Preview, StatusValue};
 
         let (ctx, mut rx) = test_context_with_rx();
         let body = "secret ".repeat(MAX_INLINE_PREVIEW_ENCODED_BYTES);

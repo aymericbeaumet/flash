@@ -14,8 +14,8 @@
 // OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 //
 
-// X11 colour-name data used by the tmux 3.7b colour language.
-// https://github.com/tmux/tmux/blob/3.7b/colour.c
+// X11 colour-name data used by the tmux 3.7c colour language.
+// https://github.com/tmux/tmux/blob/3.7c/colour.c
 
 enum StatusFormatNamedColours {
   static let values: [String: UInt32] = [

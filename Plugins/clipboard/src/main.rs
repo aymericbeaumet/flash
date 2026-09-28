@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 
-use flash_plugin::{run, CommandRequest, Context, Event, PerformResponse};
+use flash_plugin::{CommandRequest, Context, Event, PerformResponse, run};
 use tokio::io::AsyncWriteExt;
 
 const HISTORY_FILE: &str = "history.json";

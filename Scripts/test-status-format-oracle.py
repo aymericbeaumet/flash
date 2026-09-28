@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record tmux 3.7b format results using a disposable, explicitly named server."""
+"""Record tmux 3.7c format results using a disposable, explicitly named server."""
 
 import argparse
 import json
@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--record", action="store_true", help="update the checked-in expected results")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    corpus_path = root / "Tests/StatusFormatFixtures/tmux-3.7b.json"
+    corpus_path = root / "Tests/StatusFormatFixtures/tmux-3.7c.json"
     corpus = json.loads(corpus_path.read_text())
     env = dict(os.environ, LC_ALL="en_US.UTF-8", TZ="UTC")
     env.pop("TMUX", None)
@@ -24,12 +24,12 @@ def main():
     executable = os.environ.get("TMUX_ORACLE", str(pinned) if pinned.exists() else "tmux")
     if os.environ.get("FLASH_REQUIRE_TMUX_ORACLE") == "1":
         stamp = Path(executable).resolve().parent.parent / ".flash-build"
-        expected = f"3.7b-2.11.3-{platform.machine()}"
+        expected = f"3.7c-2.12.0-{platform.machine()}"
         if not stamp.exists() or stamp.read_text().strip() != expected:
             raise SystemExit(f"Expected pinned tmux/Unicode oracle {expected}; run Scripts/build-tmux-oracle.sh")
     version = subprocess.check_output([executable, "-V"], env=env, text=True).strip()
-    if version != "tmux 3.7b":
-        raise SystemExit(f"Expected tmux 3.7b, found {version}")
+    if version != "tmux 3.7c":
+        raise SystemExit(f"Expected tmux 3.7c, found {version}")
     socket = "flash-format-oracle-" + uuid.uuid4().hex
     command = [executable, "-L", socket, "-f", "/dev/null"]
 

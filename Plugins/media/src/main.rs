@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, run_osascript, CommandOutput, CommandRequest, Context, PerformResponse,
+    CommandOutput, CommandRequest, Context, PerformResponse, run, run_command, run_osascript,
 };
 
 // NSSystemDefined media key codes (IOKit IOHIDUsageTables.h, NX_KEYTYPE_*).
@@ -120,11 +120,7 @@ async fn app_state(ctx: &Context, app: &str) -> Option<String> {
         return None;
     }
     let state = result.stdout.trim().to_lowercase();
-    if state.is_empty() {
-        None
-    } else {
-        Some(state)
-    }
+    if state.is_empty() { None } else { Some(state) }
 }
 
 async fn pick_player(ctx: &Context, prefer_playing: bool) -> Option<&'static Player> {

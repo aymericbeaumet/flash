@@ -1,6 +1,6 @@
 # Status format language
 
-Flash uses the tmux **3.7b** format and style language, with values supplied by
+Flash uses the tmux **3.7c** format and style language, with values supplied by
 Flash. `statusbar.template`, named document popups and
 [desktop widgets](widgets.md) share one compiler. There
 is no tmux runtime dependency, tmux configuration import, or implicit connection
@@ -45,7 +45,7 @@ bodies directly in a template. Plugin-supplied inline bodies arrive as values.
 ## Native language coverage
 
 The compatibility baseline follows the `format.c`, `style.c`, `format-draw.c`,
-`colour.c`, and `utf8.c` implementations at the upstream `3.7b` tag. The matrix
+`colour.c`, and `utf8.c` implementations at the upstream `3.7c` tag. The matrix
 covers the parser branches and their evaluation/drawing paths:
 
 | Family | Native syntax and behavior | Verification |
@@ -64,7 +64,7 @@ covers the parser branches and their evaluation/drawing paths:
 | Appearance | Native foreground/background/underline colors, ANSI/X11/RGB palette; all native attributes and compound attribute sets | Live drawing oracle and typed-run tests |
 | Style state | `default`, one saved `push-default`/`pop-default`/`set-default`, attribute negation, transactional invalid-marker rollback, `ignore` | Live drawing oracle |
 | Drawing | Left/centre/right/absolute-centre, fills, lists/focus/markers, native ranges, wide-cell clipping and combined grid characters | Live grid oracle at several widths and production surface tests |
-| Width/pad styles | Native `width=` and `pad=` parse and retain their state; tmux 3.7b status drawing does not consume these fields | Explicit inert-style oracle cases |
+| Width/pad styles | Native `width=` and `pad=` parse and retain their state; tmux 3.7c status drawing does not consume these fields | Explicit inert-style oracle cases |
 
 A positive `p5` pads the value on its **right**; a negative `p-5` pads on its
 left. `n:` measures UTF-8 bytes and `w:` measures native format cells, excluding
@@ -268,7 +268,7 @@ argument's value changes. Recursion is bounded by the evaluator's 100-level
 limit.
 
 This diverges from tmux on purpose. tmux looks up an option literally named
-`@name,arg1,…`: in tmux 3.7b `#{E:@v,x}` is empty even when `@v` is set.
+`@name,arg1,…`: in tmux 3.7c `#{E:@v,x}` is empty even when `@v` is set.
 Flash calls `@name` whenever it exists, and otherwise keeps tmux's reading
 exactly — `#{E:@missing,#{@v},b}` expands to `@missing,<value of @v>,b` in
 both — which the pinned corpus verifies. Only `E:`/`T:` call: `#{@name,a}` is
@@ -301,15 +301,15 @@ drains at most 256 KiB before yielding its utility queue. Reload and quit
 terminate owned process groups with one bounded batch deadline and reap their
 leaders. Successful shell completion also terminates residual group children.
 
-Unicode is pinned to **utf8proc 2.11.3 / Unicode 17.0**, with tmux 3.7b's width
-overrides. Flash's data is modified into 472 compact non-unit width intervals,
+Unicode is pinned to **utf8proc 2.12.0 / Unicode 18.0**, with tmux 3.7c's width
+overrides. Flash's data is modified into 482 compact non-unit width intervals,
 uses tmux's one-cell private-use rule, and applies the 162 tmux overrides first.
 This removes macOS-version-dependent `wcwidth` results. The source-data licenses
 are retained in [utf8proc-LICENSE](../Resources/utf8proc-LICENSE) and
 [tmux-LICENSE](../Resources/tmux-LICENSE), and accompany app builds.
 
-The test-only oracle bootstrap pins tmux 3.7b and statically links utf8proc
-2.11.3. Each oracle uses a disposable named socket with an empty tmux config;
+The test-only oracle bootstrap pins tmux 3.7c and statically links utf8proc
+2.12.0. Each oracle uses a disposable named socket with an empty tmux config;
 it does not inspect a user's live server or panes:
 
 ```sh
@@ -319,7 +319,7 @@ python3 Scripts/test-status-format-oracle.py
 swift test --filter 'FormatConformanceTests|FormatCommandJobTests|StatusFormatLayoutTests|NativeStatusBarSurfaceTests'
 ```
 
-`Tests/StatusFormatFixtures/tmux-3.7b.json` stores portable native expansion
+`Tests/StatusFormatFixtures/tmux-3.7c.json` stores portable native expansion
 results. `Scripts/test-status-format-oracle.py --record` updates that corpus
 against the pinned binary. The drawing suite independently compares final text,
 cell positions, colors, and attributes against an isolated attached tmux client.

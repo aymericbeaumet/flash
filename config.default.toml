@@ -285,7 +285,7 @@ popup_padding = 8
 popup_max_width = 480
 # Gap in points between the pointer and the popup's top edge.
 popup_offset = 8
-# One tmux 3.7b format string. Alignment and style markers can appear inside
+# One tmux 3.7c format string. Alignment and style markers can appear inside
 # conditional/option expansions. Newlines in this outer template are ignored.
 # Native formats, modifiers, #H/#h aliases, #(...) jobs, styles, and strftime
 # use tmux semantics. Missing tmux session/window/pane context is empty.

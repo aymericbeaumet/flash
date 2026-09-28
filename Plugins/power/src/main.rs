@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use flash_plugin::status::{duration_hours_minutes, percent, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    run, run_command, Color, CommandRequest, Context, Event, History, Markup, PerformResponse,
-    Preview, Published, RefreshGate, StatusValue, Style,
+    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
+    RefreshGate, StatusValue, Style, run, run_command,
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -822,9 +822,11 @@ mod tests {
             visible_summary(&snapshot, SummaryMode::Compact).as_str(),
             "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
         );
-        assert!(visible_summary(&snapshot, SummaryMode::Full)
-            .as_str()
-            .contains("73% · 1h 24m"));
+        assert!(
+            visible_summary(&snapshot, SummaryMode::Full)
+                .as_str()
+                .contains("73% · 1h 24m")
+        );
         assert!(status.label.as_str().contains("73%"));
         let details = status.preview.render();
         assert_eq!(
@@ -914,10 +916,12 @@ History       ····················"
                             assert!(visible.contains(source.label()));
                         }
                     }
-                    assert!(status
-                        .preview
-                        .render_plain()
-                        .contains(&format!("Charge        {percent:>3} %")));
+                    assert!(
+                        status
+                            .preview
+                            .render_plain()
+                            .contains(&format!("Charge        {percent:>3} %"))
+                    );
                 }
             }
         }
@@ -987,9 +991,11 @@ History       ····················"
         let details = render_status(&snapshot, None, SummaryMode::Compact, &history)
             .preview
             .render();
-        assert!(details
-            .as_str()
-            .ends_with("#[fg=colour245]History       #[default]··················▁█"));
+        assert!(
+            details
+                .as_str()
+                .ends_with("#[fg=colour245]History       #[default]··················▁█")
+        );
     }
 
     #[test]
@@ -1053,16 +1059,22 @@ History       ····················"
         assert_eq!(raw(CHARGING), ("73".to_string(), "charging"));
         assert_eq!(raw(DISCHARGING), ("26".to_string(), "discharging"));
         assert_eq!(
-            raw("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; charged; 0:00 remaining present: true"),
+            raw(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 100%; charged; 0:00 remaining present: true"
+            ),
             ("100".to_string(), "charged")
         );
         assert_eq!(
-            raw("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 80%; AC attached; not charging present: true"),
+            raw(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 80%; AC attached; not charging present: true"
+            ),
             ("80".to_string(), "ac"),
             "a battery held on the adapter is neither charging nor discharging"
         );
         assert_eq!(
-            raw("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 0%; (no estimate) present: true"),
+            raw(
+                "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 0%; (no estimate) present: true"
+            ),
             ("0".to_string(), "discharging")
         );
     }

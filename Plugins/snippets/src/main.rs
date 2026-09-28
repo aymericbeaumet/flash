@@ -1,4 +1,4 @@
-use flash_plugin::{run, Candidate, Context, Event};
+use flash_plugin::{Candidate, Context, Event, run};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -265,8 +265,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flash_plugin::testing::Harness;
     use flash_plugin::CandidateEffect;
+    use flash_plugin::testing::Harness;
     use serde_json::json;
 
     fn map(entries: &[(&str, &str)]) -> BTreeMap<String, String> {

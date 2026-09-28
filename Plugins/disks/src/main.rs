@@ -6,8 +6,8 @@ use flash_plugin::status::{
     bytes_iec, bytes_iec_compact, percent2, rate_iec, sparkline_padded, sparkline_scaled,
 };
 use flash_plugin::{
-    run, run_command, Color, CommandRequest, Context, History, Markup, PerformResponse, Preview,
-    Published, RefreshGate, StatusValue,
+    Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    RefreshGate, StatusValue, run, run_command,
 };
 
 const ACTIVITY_POLL: Duration = Duration::from_secs(3);
@@ -926,18 +926,24 @@ mod tests {
         };
 
         assert!(!state.expire_stale_rates(sampled_at + MAX_RATE_INTERVAL));
-        assert!(state.expire_stale_rates(sampled_at + MAX_RATE_INTERVAL + Duration::from_millis(1)));
+        assert!(
+            state.expire_stale_rates(sampled_at + MAX_RATE_INTERVAL + Duration::from_millis(1))
+        );
         assert_eq!(state.rates, None);
         assert!(state.read_history.is_empty());
         assert!(state.write_history.is_empty());
         assert_eq!(state.capacity, Some(capacity));
         let preview = render_preview(&state).unwrap().render();
-        assert!(preview
-            .as_str()
-            .contains("#[fg=colour245]Read          #[default]           —"));
-        assert!(preview
-            .as_str()
-            .contains("#[fg=colour245]Volume        #[default]Startup"));
+        assert!(
+            preview
+                .as_str()
+                .contains("#[fg=colour245]Read          #[default]           —")
+        );
+        assert!(
+            preview
+                .as_str()
+                .contains("#[fg=colour245]Volume        #[default]Startup")
+        );
     }
 
     #[test]
@@ -1013,7 +1019,10 @@ Free          100 KiB"
             summary.ends_with("]#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]")
         );
         assert_eq!(
-            render_status(&state, SummaryMode::Full).unwrap().visible.as_str(),
+            render_status(&state, SummaryMode::Full)
+                .unwrap()
+                .visible
+                .as_str(),
             "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
         assert_eq!(ACTIVITY_POLL, Duration::from_secs(3));
@@ -1057,8 +1066,10 @@ Free          100 KiB"
             "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]"
         );
         assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
-        assert!(frames[0]["summary"]
-            .ends_with("]#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]"));
+        assert!(
+            frames[0]["summary"]
+                .ends_with("]#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]")
+        );
         assert_eq!(
             frames[0]["details"],
             render_preview(&state).unwrap().render().as_str()
@@ -1094,9 +1105,11 @@ Free          100 KiB"
         };
 
         let preview = render_preview(&state).unwrap();
-        assert!(preview
-            .render_plain()
-            .contains("Volume        Backup #[fg=colour196]\nMount         /Volumes/#1"));
+        assert!(
+            preview
+                .render_plain()
+                .contains("Volume        Backup #[fg=colour196]\nMount         /Volumes/#1")
+        );
         assert!(preview.render().as_str().contains(
             "#[fg=colour245]Volume        #[default]Backup ##[fg=colour196]\n#[fg=colour245]Mount         #[default]/Volumes/##1"
         ));

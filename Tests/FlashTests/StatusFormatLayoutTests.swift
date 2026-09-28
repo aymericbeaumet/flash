@@ -229,10 +229,10 @@ final class StatusFormatLayoutTests: XCTestCase {
     let pinned = root.appendingPathComponent("build/tmux-oracle/bin/tmux").path
     let executable = environment["TMUX_ORACLE"] ?? pinned
     guard FileManager.default.isExecutableFile(atPath: executable)
-    else { throw oracleUnavailable("tmux 3.7b is required for the native status drawing oracle") }
+    else { throw oracleUnavailable("tmux 3.7c is required for the native status drawing oracle") }
     let version = try DrawingOracle.run(executable, ["-V"])
-    guard version.trimmingCharacters(in: .whitespacesAndNewlines) == "tmux 3.7b" else {
-      throw oracleUnavailable("native status drawing oracle requires tmux 3.7b, found \(version)")
+    guard version.trimmingCharacters(in: .whitespacesAndNewlines) == "tmux 3.7c" else {
+      throw oracleUnavailable("native status drawing oracle requires tmux 3.7c, found \(version)")
     }
     let stampURL = URL(fileURLWithPath: executable).deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent(".flash-build")
@@ -243,7 +243,7 @@ final class StatusFormatLayoutTests: XCTestCase {
     #endif
     guard
       (try? String(contentsOf: stampURL, encoding: .utf8))?
-        .trimmingCharacters(in: .whitespacesAndNewlines) == "3.7b-2.11.3-\(architecture)"
+        .trimmingCharacters(in: .whitespacesAndNewlines) == "3.7c-2.12.0-\(architecture)"
     else { throw oracleUnavailable("Run Scripts/build-tmux-oracle.sh to pin tmux and utf8proc") }
     return executable
   }

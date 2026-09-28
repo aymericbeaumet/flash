@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use flash_plugin::status::{bytes_iec, duration_uptime};
 use flash_plugin::{
-    run, Candidate, CommandRequest, Context, Event, Markup, PerformResponse, Preview, RefreshGate,
+    Candidate, CommandRequest, Context, Event, Markup, PerformResponse, Preview, RefreshGate, run,
 };
 use serde_json::Value;
 
@@ -648,11 +648,13 @@ Disk I/O      512 MiB read · 64 MiB written"
                 bundle_id: "com.example.App".into()
             })
         );
-        assert!(FocusedApp::from_event(&Event {
-            pid: Some(0),
-            ..Event::default()
-        })
-        .is_none());
+        assert!(
+            FocusedApp::from_event(&Event {
+                pid: Some(0),
+                ..Event::default()
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -669,12 +671,14 @@ Disk I/O      512 MiB read · 64 MiB written"
 
         assert!(!state.is_current(&old));
         assert!(state.is_current(&current));
-        assert!(state
-            .install_if_empty(FocusedApp {
-                pid: 3,
-                bundle_id: "com.example.StaleInitialization".into(),
-            })
-            .is_none());
+        assert!(
+            state
+                .install_if_empty(FocusedApp {
+                    pid: 3,
+                    bundle_id: "com.example.StaleInitialization".into(),
+                })
+                .is_none()
+        );
         assert!(state.is_current(&current));
     }
 

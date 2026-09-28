@@ -21,14 +21,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::context::{assemble_context, Context, PluginEnv};
+use crate::context::{Context, PluginEnv, assemble_context};
 use crate::emit::{Emitter, OutboundFrame};
-use crate::runtime::{serve_streams, Plugin};
+use crate::runtime::{Plugin, serve_streams};
 use crate::types::{Candidate, RunningApplication};
 
 /// Deliberately far above the production queue bound so a test that emits

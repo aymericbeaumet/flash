@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use flash_plugin::status::{bytes_iec, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    run, sys, Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
-    StatusValue,
+    Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    StatusValue, run, sys,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);

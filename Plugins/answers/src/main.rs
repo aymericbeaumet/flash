@@ -6,7 +6,7 @@ mod colors;
 mod rates;
 mod timezones;
 
-use flash_plugin::{run, Context, EvaluateRequest, EvaluateResponse, QueryAnswer};
+use flash_plugin::{Context, EvaluateRequest, EvaluateResponse, QueryAnswer, run};
 
 use calculator::Calculator;
 use colors::Colors;

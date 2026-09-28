@@ -2,10 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-version=3.7b
-checksum=87f2e99e3b685973f2ca002ffd6ed7e51a5744f7009daae5a15670b6d532db96
-unicode_version=2.11.3
-unicode_checksum=abfed50b6d4da51345713661370290f4f4747263ee73dc90356299dfc7990c78
+version=3.7c
+checksum=7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+unicode_version=2.12.0
+unicode_checksum=f564011d38b2888d583d510b08e69ffa15aa117155db1b9b49ef1dfe1fa25111
 cache="$PWD/build/tmux-oracle"
 binary="$cache/bin/tmux"
 stamp="$version-$unicode_version-$(uname -m)"
@@ -57,9 +57,11 @@ source_dir="$cache/tmux-$version"
 tar -xzf "$archive" -C "$cache"
 # Never install through a stale symlink to a system executable.
 [[ ! -L "$binary" ]] || rm "$binary"
+# tmux >= 3.7c links jemalloc on darwin whenever pkg-config finds it; keep
+# the oracle's allocator independent of what the host has installed.
 (
   cd "$source_dir"
-  ./configure --prefix="$cache" --enable-utf8proc > "$cache/configure.log" 2>&1 &&
+  ./configure --prefix="$cache" --enable-utf8proc --disable-jemalloc > "$cache/configure.log" 2>&1 &&
   make clean > "$cache/clean.log" 2>&1 &&
   make -j "$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN)" > "$cache/build.log" 2>&1 &&
   make install > "$cache/install.log" 2>&1

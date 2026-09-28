@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, shorten, CommandOutput, CommandRequest, Context, PerformResponse,
+    CommandOutput, CommandRequest, Context, PerformResponse, run, run_command, shorten,
 };
 
 /// Apple's own capture tool writes straight to the clipboard, so no image
@@ -107,11 +107,13 @@ mod tests {
 
     #[test]
     fn capture_failures_surface_the_tools_own_reason() {
-        assert!(finish(CommandOutput {
-            ok: true,
-            ..CommandOutput::default()
-        })
-        .is_ok());
+        assert!(
+            finish(CommandOutput {
+                ok: true,
+                ..CommandOutput::default()
+            })
+            .is_ok()
+        );
 
         // The grant is the only thing the user can act on, and macOS never
         // prompts for it here, so say so rather than repeating the tool.

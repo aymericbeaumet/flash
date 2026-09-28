@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use flash_plugin::Context;
 
-use super::strip::{walk, Strip, Tab};
 use super::StripPosition;
+use super::strip::{Strip, Tab, walk};
 use crate::session_store::{self, SessionStore, SessionWindow, StoreFile};
 
 /// One tab of a catalog cycle, before it becomes a row.
@@ -169,10 +169,10 @@ pub(super) fn assign_stores(strips: &[(i64, &[Tab])], stores: &[StoreFile]) -> H
         .filter(|(_, tabs)| tabs.is_empty())
         .map(|(pid, _)| *pid)
         .collect();
-    if let [pid] = blank[..] {
-        if let Some(index) = (0..stores.len()).find(|index| !claimed.contains(index)) {
-            assigned.insert(pid, index);
-        }
+    if let [pid] = blank[..]
+        && let Some(index) = (0..stores.len()).find(|index| !claimed.contains(index))
+    {
+        assigned.insert(pid, index);
     }
     assigned
 }
@@ -529,9 +529,10 @@ mod tests {
             vec![selected(tab(0, "Front", "")), selected(tab(1, "Back", ""))],
         );
         let rows = catalog(&two, None);
-        assert!(rows
-            .iter()
-            .all(|row| row.current && !row.position.window_focused));
+        assert!(
+            rows.iter()
+                .all(|row| row.current && !row.position.window_focused)
+        );
     }
 
     #[test]

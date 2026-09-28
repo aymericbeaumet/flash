@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flash_plugin::{run, run_command, CommandRequest, Context, PerformResponse};
+use flash_plugin::{CommandRequest, Context, PerformResponse, run, run_command};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);

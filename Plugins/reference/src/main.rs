@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use flash_plugin::{run, Candidate, CommandRequest, Context, PerformResponse};
+use flash_plugin::{Candidate, CommandRequest, Context, PerformResponse, run};
 
 const EMOJIS: &str = "emojis.glyphs";
 const HTTPSTATUS: &str = "httpstatus.codes";

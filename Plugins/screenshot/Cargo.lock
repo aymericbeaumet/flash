@@ -23,8 +23,6 @@ name = "flash-plugin-screenshot"
 version = "0.1.0"
 dependencies = [
  "flash_plugin",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

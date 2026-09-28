@@ -33,7 +33,7 @@
 //! use; failure clears it.
 
 use flash_plugin::{
-    run, run_command, Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate,
+    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, run, run_command,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -360,10 +360,10 @@ async fn find_kitten() -> Option<String> {
             .join("Contents")
             .join("MacOS")
             .join("kitten");
-        if let Some(path) = user_app.to_str() {
-            if is_file(path).await {
-                return Some(path.to_string());
-            }
+        if let Some(path) = user_app.to_str()
+            && is_file(path).await
+        {
+            return Some(path.to_string());
         }
     }
     for prefix in KITTEN_PREFIXES {
@@ -386,10 +386,10 @@ async fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(program);
-        if let Ok(meta) = tokio::fs::metadata(&candidate).await {
-            if meta.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
+        if let Ok(meta) = tokio::fs::metadata(&candidate).await
+            && meta.is_file()
+        {
+            return Some(candidate.to_string_lossy().into_owned());
         }
     }
     None
@@ -504,8 +504,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flash_plugin::testing::Harness;
     use flash_plugin::RunningApplication;
+    use flash_plugin::testing::Harness;
 
     /// Canned `kitten @ ls` output following kitty's documented schema:
     /// os_windows[].tabs[].windows[] with id/title/is_focused, plus fields
@@ -621,9 +621,11 @@ mod tests {
 
         // Only the focused window of the focused tab of the focused OS window
         // is current.
-        assert!(candidates[1..]
-            .iter()
-            .all(|candidate| candidate.meta("current_location").is_none()));
+        assert!(
+            candidates[1..]
+                .iter()
+                .all(|candidate| candidate.meta("current_location").is_none())
+        );
 
         // Untitled windows fall back to the tab title; the second OS window's
         // rows resolve through their own ids.

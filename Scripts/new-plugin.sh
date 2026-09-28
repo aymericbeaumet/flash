@@ -60,7 +60,7 @@ cat >"$DIR/Cargo.toml" <<TOML
 [package]
 name = "flash-plugin-$ID"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
 [[bin]]
@@ -93,7 +93,7 @@ TOML
 cp "$PROJECT_DIR/Plugins/_flash_plugin_rust/clippy.toml" "$DIR/clippy.toml"
 
 cat >"$DIR/src/main.rs" <<'RUST'
-use flash_plugin::{run, CommandRequest, Context, PerformResponse};
+use flash_plugin::{CommandRequest, Context, PerformResponse, run};
 
 struct PluginImpl;
 

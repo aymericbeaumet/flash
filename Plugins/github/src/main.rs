@@ -34,7 +34,7 @@
 //! `[plugin.github] token`, forwarded to gh as `GH_TOKEN`.
 
 use flash_plugin::process as bounded_process;
-use flash_plugin::{run, Candidate, Context, RefreshGate};
+use flash_plugin::{Candidate, Context, RefreshGate, run};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -383,10 +383,10 @@ async fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(program);
-        if let Ok(meta) = tokio::fs::metadata(&candidate).await {
-            if meta.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
+        if let Ok(meta) = tokio::fs::metadata(&candidate).await
+            && meta.is_file()
+        {
+            return Some(candidate.to_string_lossy().into_owned());
         }
     }
     None

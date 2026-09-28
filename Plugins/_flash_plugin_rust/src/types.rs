@@ -832,10 +832,12 @@ mod tests {
     #[test]
     fn hint_context_is_omitted_when_unknown_and_preserved_when_set() {
         let target = JumpTarget::new("target", Frame::new(1.0, 2.0, 3.0, 4.0));
-        assert!(serde_json::to_value(&target)
-            .unwrap()
-            .get("context_id")
-            .is_none());
+        assert!(
+            serde_json::to_value(&target)
+                .unwrap()
+                .get("context_id")
+                .is_none()
+        );
         let target = target.context_id("server/session/window/pane");
         let value = serde_json::to_value(&target).unwrap();
         assert_eq!(value["context_id"], "server/session/window/pane");

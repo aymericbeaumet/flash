@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use flash_plugin::Context;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::catalog::{collect, fill_from_store, focused_root};
-use super::strip::{walk, Strip, Tab};
+use super::strip::{Strip, Tab, walk};
 use crate::ax;
 
 /// One synthesized chord of the tab-jump plan (exactly one modifier — the
@@ -408,16 +408,20 @@ mod tests {
         let plan = tab_key_plan(10, 26).unwrap();
         assert_eq!((plan[0].key_code, plan[0].modifier), (28, "command"));
         assert_eq!(plan.len(), 3);
-        assert!(plan[1..]
-            .iter()
-            .all(|chord| chord.key_code == KEY_PAGE_DOWN && chord.modifier == "control"));
+        assert!(
+            plan[1..]
+                .iter()
+                .all(|chord| chord.key_code == KEY_PAGE_DOWN && chord.modifier == "control")
+        );
         // 24 of 26: ⌘9 then 2 × ctrl+PgUp.
         let plan = tab_key_plan(24, 26).unwrap();
         assert_eq!(plan[0].key_code, 25);
         assert_eq!(plan.len(), 3);
-        assert!(plan[1..]
-            .iter()
-            .all(|chord| chord.key_code == KEY_PAGE_UP && chord.modifier == "control"));
+        assert!(
+            plan[1..]
+                .iter()
+                .all(|chord| chord.key_code == KEY_PAGE_UP && chord.modifier == "control")
+        );
     }
 
     #[test]

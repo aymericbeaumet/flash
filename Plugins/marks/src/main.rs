@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use flash_plugin::{run, CommandRequest, Context, Event, PerformResponse};
+use flash_plugin::{CommandRequest, Context, Event, PerformResponse, run};
 use serde::{Deserialize, Serialize};
 
 const STATE_FILE: &str = "marks.json";
@@ -33,10 +33,10 @@ flash_plugin::plugin!(Marks);
 
 impl FlashPlugin for Marks {
     async fn on_start(&self, ctx: Context) {
-        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE).await {
-            if let Ok(mut state) = self.state.lock() {
-                *state = loaded;
-            }
+        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE).await
+            && let Ok(mut state) = self.state.lock()
+        {
+            *state = loaded;
         }
         replace_running_apps(self, &ctx);
     }
@@ -155,20 +155,20 @@ async fn jump_to_mark_command(
         .lock()
         .ok()
         .and_then(|apps| apps.get(&mark.bundle_id).copied());
-    if let Some(pid) = fallback_pid {
-        if ctx.activate(pid).await {
-            let snapshot = {
-                let Ok(mut state) = plugin.state.lock() else {
-                    return PerformResponse::ok().target_pid(pid);
-                };
-                if let Some(entry) = state.entries.get_mut(&letter) {
-                    entry.pid = pid;
-                }
-                state.clone()
+    if let Some(pid) = fallback_pid
+        && ctx.activate(pid).await
+    {
+        let snapshot = {
+            let Ok(mut state) = plugin.state.lock() else {
+                return PerformResponse::ok().target_pid(pid);
             };
-            write_state(ctx, STATE_FILE, &snapshot).await;
-            return PerformResponse::ok().target_pid(pid);
-        }
+            if let Some(entry) = state.entries.get_mut(&letter) {
+                entry.pid = pid;
+            }
+            state.clone()
+        };
+        write_state(ctx, STATE_FILE, &snapshot).await;
+        return PerformResponse::ok().target_pid(pid);
     }
     PerformResponse::fail(format!(
         "mark letter={letter} bundle={} unreachable",

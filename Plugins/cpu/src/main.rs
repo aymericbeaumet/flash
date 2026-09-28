@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    run, run_command, sys, Color, CommandRequest, Context, History, Markup, PerformResponse,
-    Preview, Published, StatusValue,
+    Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    StatusValue, run, run_command, sys,
 };
-use nix::time::{clock_gettime, ClockId};
+use nix::time::{ClockId, clock_gettime};
 
 // CPU load comes from `host_processor_info` tick counters sampled once per
 // period in-process; only the GPU metadata still shells out (`ioreg`).
@@ -523,10 +523,11 @@ fn max_ioreg_number(raw: &str, key: &str) -> Option<f64> {
             .chars()
             .take_while(|character| character.is_ascii_digit() || *character == '.')
             .collect::<String>();
-        if let Ok(value) = number.parse::<f64>() {
-            if value.is_finite() && (0.0..=100.0).contains(&value) {
-                maximum = Some(maximum.map_or(value, |current| current.max(value)));
-            }
+        if let Ok(value) = number.parse::<f64>()
+            && value.is_finite()
+            && (0.0..=100.0).contains(&value)
+        {
+            maximum = Some(maximum.map_or(value, |current| current.max(value)));
         }
         remaining = after_equals;
     }
@@ -967,13 +968,17 @@ Model         Apple M4 Pro"
 
         let report = render_report(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Compact);
         let details = report.preview.render();
-        assert!(details
-            .as_str()
-            .contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1"));
-        assert!(report
-            .preview
-            .render_plain()
-            .ends_with("Model         GPU #[fg=colour196] #1"));
+        assert!(
+            details
+                .as_str()
+                .contains("#[fg=colour245]Model         #[default]GPU ##[fg=colour196] ##1")
+        );
+        assert!(
+            report
+                .preview
+                .render_plain()
+                .ends_with("Model         GPU #[fg=colour196] #1")
+        );
     }
 
     #[test]

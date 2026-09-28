@@ -3,8 +3,8 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    applescript_quote, run, run_osascript, Candidate, CommandRequest, Context, Event,
-    PerformResponse, RefreshGate,
+    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, applescript_quote,
+    run, run_osascript,
 };
 
 const SOURCE_ENTRIES: &str = "shortcuts.entries";

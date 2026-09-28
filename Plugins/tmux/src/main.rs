@@ -55,13 +55,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame,
-    HintsRequest, HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle,
-    Priority, TERMINAL_LINK_ROLE,
+    ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame, HintsRequest,
+    HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle, Priority,
+    TERMINAL_LINK_ROLE, run,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use flash_plugin::process as bounded_process;
 
@@ -240,10 +240,10 @@ async fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(program);
-        if let Ok(meta) = tokio::fs::metadata(&candidate).await {
-            if meta.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
+        if let Ok(meta) = tokio::fs::metadata(&candidate).await
+            && meta.is_file()
+        {
+            return Some(candidate.to_string_lossy().into_owned());
         }
     }
     None
@@ -1489,10 +1489,10 @@ async fn parent_pid_map() -> HashMap<i64, i64> {
     };
     for line in out.lines() {
         let mut parts = line.split_whitespace();
-        if let (Some(pid), Some(ppid)) = (parts.next(), parts.next()) {
-            if let (Ok(pid), Ok(ppid)) = (pid.parse::<i64>(), ppid.parse::<i64>()) {
-                map.insert(pid, ppid);
-            }
+        if let (Some(pid), Some(ppid)) = (parts.next(), parts.next())
+            && let (Ok(pid), Ok(ppid)) = (pid.parse::<i64>(), ppid.parse::<i64>())
+        {
+            map.insert(pid, ppid);
         }
     }
     map
@@ -1953,13 +1953,13 @@ async fn raise_terminal_window(
     if pid <= 0 {
         return false;
     }
-    if let Some(handle) = cached_handle {
-        if raise_terminal_window_handle(ctx, pid, handle).await {
-            return true;
-        }
-        // AX handles expire when a terminal window is recreated. Fall through
-        // to the title lookup once so stale discovery heals transparently.
+    if let Some(handle) = cached_handle
+        && raise_terminal_window_handle(ctx, pid, handle).await
+    {
+        return true;
     }
+    // AX handles expire when a terminal window is recreated. Fall through
+    // to the title lookup once so stale discovery heals transparently.
     if title.is_empty() {
         return ctx.activate(pid).await;
     }
@@ -2154,11 +2154,7 @@ fn parse_status_top_offset(line: &str) -> i64 {
         .parse::<i64>()
         .unwrap_or(if raw == "on" { 1 } else { 0 });
     let at_top = parts.next() == Some("top");
-    if at_top {
-        lines
-    } else {
-        0
-    }
+    if at_top { lines } else { 0 }
 }
 
 // ---- Alacritty font + cell geometry -----------------------------------------
@@ -2177,10 +2173,10 @@ fn read_toml_raw(text: &str, section: &str, key: &str) -> Option<String> {
         if !in_section {
             continue;
         }
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == key {
-                return Some(v.trim().to_string());
-            }
+        if let Some((k, v)) = line.split_once('=')
+            && k.trim() == key
+        {
+            return Some(v.trim().to_string());
         }
     }
     None
@@ -2191,11 +2187,7 @@ fn read_toml_string(text: &str, section: &str, key: &str) -> Option<String> {
     if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
         raw = raw[1..raw.len() - 1].to_string();
     }
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw)
-    }
+    if raw.is_empty() { None } else { Some(raw) }
 }
 
 fn read_toml_number(text: &str, section: &str, key: &str) -> Option<f64> {
@@ -2223,10 +2215,10 @@ async fn alacritty_font() -> Option<(String, f64)> {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
+            && *cached_path == path
+            && *cached_modified == modified
         {
-            if *cached_path == path && *cached_modified == modified {
-                return Some(font.clone());
-            }
+            return Some(font.clone());
         }
         let Ok(text) = tokio::fs::read_to_string(&path).await else {
             continue;
@@ -2273,16 +2265,15 @@ async fn resolve_geometry(
     cols: f64,
     rows: f64,
 ) -> (f64, f64, f64, f64) {
-    if ALACRITTY_BUNDLES.contains(&bundle_id) {
-        if let Some((family, size)) = alacritty_font().await {
-            if let Some((cell_w, cell_h)) = cell_metrics_appkit(&family, size) {
-                let content_w = cols * cell_w;
-                let content_h = rows * cell_h;
-                let pad_x = ((win_w - content_w) / 2.0).max(0.0);
-                let pad_y = ((win_h - content_h) / 2.0).max(0.0);
-                return (cell_w, cell_h, pad_x, pad_y);
-            }
-        }
+    if ALACRITTY_BUNDLES.contains(&bundle_id)
+        && let Some((family, size)) = alacritty_font().await
+        && let Some((cell_w, cell_h)) = cell_metrics_appkit(&family, size)
+    {
+        let content_w = cols * cell_w;
+        let content_h = rows * cell_h;
+        let pad_x = ((win_w - content_w) / 2.0).max(0.0);
+        let pad_y = ((win_h - content_h) / 2.0).max(0.0);
+        return (cell_w, cell_h, pad_x, pad_y);
     }
     (win_w / cols, win_h / rows, 0.0, 0.0)
 }
@@ -4424,10 +4415,10 @@ async fn source_action_client(
     pid: i64,
     action: &str,
 ) -> Option<(TmuxClient, &'static str)> {
-    if source_action_prefers_warm_client(action) {
-        if let Some(client) = warm_source_action_client(plugin, ctx, pid).await {
-            return Some(client);
-        }
+    if source_action_prefers_warm_client(action)
+        && let Some(client) = warm_source_action_client(plugin, ctx, pid).await
+    {
+        return Some(client);
     }
     focused_tmux_client(plugin, ctx, pid, true)
         .await
@@ -4653,16 +4644,14 @@ async fn resolve(plugin: &Tmux, ctx: &Context, row: &Candidate) -> PerformRespon
             terminal_pid = find_top_level_ancestor(client.client_pid, &parent_map);
         }
     }
-    if !focus_started {
-        if let Some(pid) = terminal_pid {
-            let _ = raise_terminal_window(
-                ctx,
-                pid,
-                payload.terminal_window_handle,
-                &payload.terminal_window_title,
-            )
-            .await;
-        }
+    if !focus_started && let Some(pid) = terminal_pid {
+        let _ = raise_terminal_window(
+            ctx,
+            pid,
+            payload.terminal_window_handle,
+            &payload.terminal_window_title,
+        )
+        .await;
     }
     ctx.log_fields(
         "debug",
@@ -4905,17 +4894,15 @@ async fn restore_navigation(
         return PerformResponse::fail("navigation restore failed");
     }
 
-    if terminal_pid.is_none() {
-        if let Some(client) = route_client.as_ref().filter(|client| !client.remote) {
-            let pmap = parent_pid_map().await;
-            terminal_pid = find_top_level_ancestor(client.client_pid, &pmap);
-        }
+    if terminal_pid.is_none()
+        && let Some(client) = route_client.as_ref().filter(|client| !client.remote)
+    {
+        let pmap = parent_pid_map().await;
+        terminal_pid = find_top_level_ancestor(client.client_pid, &pmap);
     }
-    if !focus_started {
-        if let Some(pid) = terminal_pid {
-            let _ = raise_terminal_window(ctx, pid, terminal_window_handle, &terminal_window_title)
-                .await;
-        }
+    if !focus_started && let Some(pid) = terminal_pid {
+        let _ =
+            raise_terminal_window(ctx, pid, terminal_window_handle, &terminal_window_title).await;
     }
     ctx.log_fields(
         "debug",
@@ -5604,9 +5591,11 @@ mod tests {
         assert_eq!(transport.home, "/home/ab");
         assert!(transport.ssh_options.contains(&"-p".to_string()));
         assert!(transport.ssh_options.contains(&"2222".to_string()));
-        assert!(transport
-            .ssh_options
-            .contains(&"IdentitiesOnly=yes".to_string()));
+        assert!(
+            transport
+                .ssh_options
+                .contains(&"IdentitiesOnly=yes".to_string())
+        );
         assert!(!transport.ssh_options.contains(&"BatchMode=yes".to_string()));
     }
 
@@ -5683,9 +5672,11 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
 
         assert!(ssh_hosts.is_empty());
         // Every remote ssh argv is built from a discovered backend; none exist.
-        assert!(discover_remote_tmux_configs(&ctx, &ssh_hosts)
-            .await
-            .is_empty());
+        assert!(
+            discover_remote_tmux_configs(&ctx, &ssh_hosts)
+                .await
+                .is_empty()
+        );
 
         let harness = flash_plugin::testing::Harness::with_config(
             "tmux",

@@ -17,11 +17,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use applescript::{Dialect, ListedTab, TabIdentity, TabSlot, CHROMIUM, SAFARI};
+use applescript::{CHROMIUM, Dialect, ListedTab, SAFARI, TabIdentity, TabSlot};
 use firefox::StripPosition;
 use flash_plugin::{
-    run, run_osascript, ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event,
-    NavigateRequest, PerformResponse, RefreshGate, RunningApplication,
+    ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event, NavigateRequest,
+    PerformResponse, RefreshGate, RunningApplication, run, run_osascript,
 };
 use route::TabRoute;
 use serde::{Deserialize, Serialize};
@@ -888,8 +888,8 @@ fn main() {
 mod tests {
     use super::*;
     use crate::route::TabTarget;
-    use flash_plugin::candidate_metadata::{CURRENT_LOCATION, NAVIGATION_URL};
     use flash_plugin::ActionContext;
+    use flash_plugin::candidate_metadata::{CURRENT_LOCATION, NAVIGATION_URL};
 
     #[test]
     fn engine_table_distinguishes_browser_editions() {
@@ -1089,9 +1089,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             [None, Some("1")]
         );
-        assert!(rows
-            .iter()
-            .all(|row| row.payload_as::<TabPayload>().unwrap().title == "Inbox"));
+        assert!(
+            rows.iter()
+                .all(|row| row.payload_as::<TabPayload>().unwrap().title == "Inbox")
+        );
     }
 
     fn row(source: &str, pid: i64, title: &str) -> Candidate {
@@ -1183,9 +1184,11 @@ mod tests {
         let running = [chrome, firefox];
         let mut catalog = TabCatalog::default();
         let chrome_rows = vec![row("chrome.tabs", chrome, "C1")];
-        assert!(catalog
-            .record(&running, vec![(chrome, Some(chrome_rows.clone()))])
-            .is_some());
+        assert!(
+            catalog
+                .record(&running, vec![(chrome, Some(chrome_rows.clone()))])
+                .is_some()
+        );
         assert_eq!(
             catalog.record(&running, vec![(chrome, Some(chrome_rows))]),
             None

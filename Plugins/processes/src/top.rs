@@ -679,9 +679,11 @@ mod tests {
         // No table observed: the cadence is cancelled, the table cleared, and
         // a tick that raced the change does not sample.
         let ctx = harness.context();
-        assert!(sampler
-            .observe(&ctx, &segments(&["focused_app_details"]))
-            .is_none());
+        assert!(
+            sampler
+                .observe(&ctx, &segments(&["focused_app_details"]))
+                .is_none()
+        );
         let frames = harness.drain();
         assert_eq!(polls(&frames), [json!({})]);
         assert_eq!(statuses(&frames), [json!({ "top_cpu": "" })]);

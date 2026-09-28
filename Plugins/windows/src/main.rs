@@ -27,9 +27,9 @@
 //! so movement history records the jump. A vanished window degrades to plain
 //! app activation.
 
-use flash_plugin::{run, Candidate, Context, Event, PerformResponse, RefreshGate};
+use flash_plugin::{Candidate, Context, Event, PerformResponse, RefreshGate, run};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
