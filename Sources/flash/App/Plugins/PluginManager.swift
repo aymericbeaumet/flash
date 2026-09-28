@@ -124,12 +124,12 @@ final class PluginManager {
     let selector: PluginSelectorStack
     let priority: Int
     /// Bundle id, or `""` for every app the selector matches, → chord.
-    let chords: [String: ParsedHotkey]
+    let chords: [String: ActionKeystroke]
 
     /// The chord for `context` and how specific its claim is: a bundle's own
     /// entry beats the plugin-wide one, then the more specific selector and
     /// the higher priority win.
-    func resolve(in context: PluginSelectorContext) -> (chord: ParsedHotkey, rank: [Int])? {
+    func resolve(in context: PluginSelectorContext) -> (chord: ActionKeystroke, rank: [Int])? {
       guard let specificity = selector.specificity(in: context) else { return nil }
       if let bundleID = context.bundleID, let exact = chords[bundleID] {
         return (exact, [1, specificity, priority])
@@ -337,7 +337,7 @@ final class PluginManager {
           ActionKeystrokeTarget(
             selector: rootSelector,
             priority: manifest.priority,
-            chords: chords.compactMapValues { HotkeySyntax.parse(hotkey: $0) }))
+            chords: chords.compactMapValues(ActionKeystroke.init(manifestValue:))))
       }
 
       for registration in manifest.mappings {
@@ -805,11 +805,12 @@ final class PluginManager {
   }
 
   /// The chord a plugin declares for `action` in the focused app, sent when
-  /// no source performs the action there.
+  /// no source performs the action there; `.unbound` when a plugin declares
+  /// that the app has no shortcut for it.
   func actionKeystroke(
     _ action: SourceActionName, in context: PluginSelectorContext
-  ) -> ParsedHotkey? {
-    var best: (chord: ParsedHotkey, rank: [Int])?
+  ) -> ActionKeystroke? {
+    var best: (chord: ActionKeystroke, rank: [Int])?
     for target in readHotSnapshot().actionKeystrokeIndex[action] ?? [] {
       guard let candidate = target.resolve(in: context) else { continue }
       // Highest rank wins; an exact tie keeps the first plugin by id.
@@ -827,7 +828,7 @@ final class PluginManager {
   ) -> Bool {
     readHotSnapshot().actionKeystrokeIndex.values.contains { targets in
       targets.contains { target in
-        guard let chord = target.resolve(in: context)?.chord else { return false }
+        guard case .chord(let chord)? = target.resolve(in: context)?.chord else { return false }
         return chord.keyCode == key && chord.eventFlags == flags
       }
     }

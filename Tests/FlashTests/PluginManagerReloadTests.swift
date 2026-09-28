@@ -152,17 +152,26 @@ final class PluginManagerReloadTests: XCTestCase {
     config.plugins.disabled.subtract(["defaults", "terminals"])
     manager.start(config: config)
 
-    func chord(_ action: SourceActionName, _ bundle: String) -> ParsedHotkey? {
+    func chord(_ action: SourceActionName, _ bundle: String) -> ActionKeystroke? {
       manager.actionKeystroke(action, in: PluginSelectorContext(bundleID: bundle))
     }
+    func parsed(_ hotkey: String) throws -> ActionKeystroke {
+      .chord(try XCTUnwrap(HotkeySyntax.parse(hotkey: hotkey)))
+    }
     waitUntilTrue("manifests published") { chord(.tabNext, "com.example.app") != nil }
+    XCTAssertEqual(chord(.tabNext, "com.example.app"), try parsed("cmd+option+right"))
     XCTAssertEqual(
-      chord(.tabNext, "com.example.app"), HotkeySyntax.parse(hotkey: "cmd+option+right"))
-    XCTAssertEqual(
-      chord(.tabNext, "com.apple.MobileSMS"), HotkeySyntax.parse(hotkey: "ctrl+tab"),
+      chord(.tabNext, "com.apple.MobileSMS"), try parsed("ctrl+tab"),
       "Messages' own entry in defaults beats the other plugin's plugin-wide chord")
     XCTAssertNil(chord(.tabNext, "com.example.elsewhere"))
     XCTAssertNil(chord(.tabLast, "com.example.app"))
+    XCTAssertEqual(
+      chord(.historyBack, "com.todesktop.230313mzl4w4u92"), try parsed("ctrl+-"),
+      "editors go back with their own chord, not the outdenting Cmd-[")
+    XCTAssertEqual(chord(.historyForward, "com.apple.dt.Xcode"), try parsed("ctrl+cmd+right"))
+    XCTAssertEqual(
+      chord(.historyBack, "com.apple.Notes"), .unbound, "apps without history send nothing")
+    XCTAssertNil(chord(.historyBack, "com.apple.Safari"), "the host's Cmd-[ applies")
 
     let bracket = try XCTUnwrap(HotkeySyntax.parse(hotkey: "cmd+]"))
     XCTAssertTrue(

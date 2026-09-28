@@ -37,6 +37,11 @@ document-URL and mark commands remain available for explicit mappings.
   the neighbouring tab across the current one by AppleScript; tmux reorders
   its window.
 - `ctrl+o` / `ctrl+i` traverse Flash's movement history.
+- `H` / `L` go back/forward in the focused app's own history, as in Vimium:
+  Cmd-[ / Cmd-] in browsers, Finder and most apps. Editors where Cmd-[
+  outdents use their own chord (Control-Minus in VS Code, Cursor, Zed and
+  Sublime Text; Control-Command-Arrow in Xcode). Terminals and apps without
+  history (Notes, TextEdit, Pages, Mail) do nothing.
 - Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
   screen position through the grid. A lowercase prefix picks the click on
   either surface: none for primary, `s` secondary, `d` double, `m` move.
@@ -164,14 +169,15 @@ each direction.
 
 ## Source actions
 
-Tab, pane, reload, archive and `gg` / `G` verbs are source actions. Each runs
-one policy that knows no app by name: a source that performs the action in the
-focused app (tmux, a browser plugin, the accessibility tab strip); else the
-chord a plugin manifest declares for the action in that app
-(`action_keystrokes`, see [plugin protocol](plugin-protocol.md)); else the
-platform convention the core owns for a few actions (Cmd-W closes a tab or
-window, Cmd-1 selects the first tab, `resource_next` / `resource_previous`
-scroll, `gg` / `G` use the focused-window scroller); else nothing. A terminal
+Tab, pane, reload, archive, back/forward and `gg` / `G` verbs are source
+actions. Each runs one policy that knows no app by name: a source that performs
+the action in the focused app (tmux, a browser plugin, the accessibility tab
+strip); else the chord a plugin manifest declares for the action in that app
+(`action_keystrokes`, see [plugin protocol](plugin-protocol.md)), or nothing
+when it declares the app has none; else the platform convention the core owns
+for a few actions (Cmd-W closes a tab or window, Cmd-1 selects the first tab,
+Cmd-[ / Cmd-] go back/forward, `resource_next` / `resource_previous` scroll,
+`gg` / `G` use the focused-window scroller); else nothing. A terminal
 treats a Command chord a plugin declares for it as bound, like the chords
 every emulator binds.
 

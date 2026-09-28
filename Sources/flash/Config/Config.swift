@@ -797,6 +797,8 @@ struct Config {
         ("]m", .flashCommand(.tabMoveNext)),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
+        ("H", .flashCommand(.historyBack)),
+        ("L", .flashCommand(.historyForward)),
         // Lowercase `f` targets discovered elements, uppercase `F` targets a
         // screen position through the grid. A lowercase prefix picks the click
         // on either: none, `s`econdary, `d`ouble, `m`ove. Modifiers ride the

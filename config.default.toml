@@ -553,7 +553,9 @@ leader = "\\"
 # Defaults use Flash-owned actions and standard macOS editing/scrolling.
 # Tabs use [t / ]t to switch, t to open, g1–g9 to send Cmd-1…Cmd-9,
 # and [m / ]m to reorder through the source or supported native shortcut.
-# Other tab, split, browser-history, reload, archive, URL and mark commands remain
+# H / L go back/forward: Cmd-[ / Cmd-], or the app's own chord (editors use
+# Control-Minus), and nothing in apps without history such as Notes.
+# Other tab, split, reload, archive, URL and mark commands remain
 # available for explicit mappings. Bare d, j and k are unbound.
 # Entries extend the defaults; reusing a key overrides that mapping, and
 # "<key>" = false removes it (a later layer may map it again). A removed key
@@ -591,6 +593,8 @@ leader = "\\"
 "]m" = { command = ["flash", "tab_move_next"], repeat = true }
 "ctrl+o" = ["flash", "movement_back"]
 "ctrl+i" = ["flash", "movement_forward"]
+"H" = ["flash", "history_back"]
+"L" = ["flash", "history_forward"]
 # f clicks normally; F applies the same Command-Shift gesture in every app.
 # Terminal links additionally require Shift so the terminal opens the link.
 # Lowercase f targets discovered elements, uppercase F targets a screen

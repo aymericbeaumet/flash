@@ -356,6 +356,23 @@ struct PluginVerbRegistration: Decodable, Equatable {
 /// mapping at the same declared priority. `command` is an argv array
 /// matching the mapping syntax: `["flash", "<verb>", "k=v" ...]` for
 /// in-process verbs, anything else for argv exec.
+/// One `action_keystrokes` value: the chord an app binds for a built-in
+/// action, or `unbound` (`""`) when the app has none, so the host sends
+/// nothing there instead of its own convention.
+enum ActionKeystroke: Hashable {
+  case chord(ParsedHotkey)
+  case unbound
+
+  init?(manifestValue value: String) {
+    if value.isEmpty {
+      self = .unbound
+      return
+    }
+    guard let chord = HotkeySyntax.parse(hotkey: value) else { return nil }
+    self = .chord(chord)
+  }
+}
+
 struct PluginMappingRegistration: Decodable, Hashable {
   var key: String
   var mode: String
@@ -587,9 +604,10 @@ struct PluginManifest: Decodable, Equatable {
   var navigation: [String]
   var verbs: [PluginVerbRegistration]
   /// Chords for built-in actions, per app: action name → bundle id (`""` for
-  /// every app the plugin's selector matches) → chord. The host sends the
-  /// chord when no source performs the action in that app, so an app's own
-  /// shortcuts live in the plugin that knows the app, never in the host.
+  /// every app the plugin's selector matches) → chord, or `""` for an app
+  /// that has no shortcut for the action. The host sends the chord when no
+  /// source performs the action in that app, so an app's own shortcuts live
+  /// in the plugin that knows the app, never in the host.
   var actionKeystrokes: [SourceActionName: [String: String]]
   /// Bundle ids of apps this plugin declares as terminal emulators; the
   /// union across plugins is `TerminalEmulators`.
@@ -980,7 +998,7 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure("manifest.json actions names an unknown action: \(action)")
     }
     for (name, chords) in actionKeystrokes {
-      for (bundle, chord) in chords where HotkeySyntax.parse(hotkey: chord) == nil {
+      for (bundle, chord) in chords where ActionKeystroke(manifestValue: chord) == nil {
         throw PluginError.failure(
           "manifest.json action_keystrokes \(name.rawValue) for \"\(bundle)\" is not a chord: "
             + chord)

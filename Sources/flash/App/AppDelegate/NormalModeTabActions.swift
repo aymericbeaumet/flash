@@ -8,7 +8,8 @@ import FlashCore
 //   1. a source that performs the action in the focused app (tmux, a browser
 //      plugin, the accessibility tab strip);
 //   2. else the chord a plugin manifest declares for the action in that app
-//      (`action_keystrokes`: a browser's Cmd-Shift-], Firefox's tab move);
+//      (`action_keystrokes`: a browser's Cmd-Shift-], Firefox's tab move),
+//      or nothing when it declares the app has none (`""`);
 //   3. else the platform convention the core owns for a few actions (Cmd-W
 //      closes, Cmd-1 is the first tab), or nothing.
 
@@ -125,11 +126,19 @@ extension AppDelegate {
     repeatCount: Int,
     fallback: ((AppContext, Int) -> Void)?
   ) {
-    if let chord = pluginManager.actionKeystroke(
+    switch pluginManager.actionKeystroke(
       name, in: PluginSelectorContext(bundleID: context.bundleIdentifier))
     {
+    case .chord(let chord)?:
       sendNormalModeKey(chord.keyCode, flags: chord.eventFlags, repeatCount: repeatCount)
       return
+    case .unbound?:
+      FlashLog.debug(
+        "[normal_mode] \(name.rawValue) unbound bundle=\(context.bundleIdentifier)")
+      applyModeOverlay()
+      return
+    case nil:
+      break
     }
     guard let fallback else {
       FlashLog.debug(

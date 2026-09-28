@@ -520,16 +520,19 @@ Section semantics:
 - **`verbs`** — CLI/mapping verbs; `keystrokes` lets the host handle fixed
   keystroke verbs without any plugin RPC.
 - **`action_keystrokes`** — the chords an app binds for Flash's built-in
-  source actions: action name → bundle id → chord, where `""` covers every
-  app the root selector matches. The host sends the chord when no source
+  source actions: action name → bundle id → chord, where the bundle id `""`
+  covers every app the root selector matches and the chord `""` declares
+  that the app has no shortcut for the action, so the host sends nothing
+  rather than its own convention. The host sends the chord when no source
   performs the action in the focused app; an app's own entry beats a
   plugin-wide one, then selector specificity and `priority` decide. Names are
   `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_new`,
   `tab_close`, `tab_reopen`, `tab_move_next`, `tab_move_previous`,
   `window_close`, `pane_next`, `pane_previous`, `pane_split_vertical`,
   `pane_split_horizontal`, `pane_close`, `app_reload`, `app_reload_force`,
-  `resource_archive`, `resource_next`, `resource_previous`, `scroll_top` and
-  `scroll_bottom`; an unknown name or unparseable chord rejects the manifest.
+  `resource_archive`, `resource_next`, `resource_previous`, `scroll_top`,
+  `scroll_bottom`, `history_back` and `history_forward`; an unknown name or
+  unparseable chord rejects the manifest.
   Manifest-only plugins may declare it. App knowledge lives here, never in
   the host.
 - **`terminal_emulators`** — bundle ids of apps this plugin declares as

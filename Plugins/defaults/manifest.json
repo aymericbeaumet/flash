@@ -2,7 +2,7 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path; the shortcuts apps without a plugin of their own bind for Flash's built-in actions; and the apps whose accessibility tree is walked only on demand.",
+  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path; the shortcuts apps without a plugin of their own bind for Flash's built-in actions, such as editors' back/forward; and the apps whose accessibility tree is walked only on demand.",
   "verbs": [
     {
       "name": "app_save",
@@ -39,6 +39,34 @@
     },
     "tab_previous": {
       "com.apple.MobileSMS": "ctrl+shift+tab"
+    },
+    "history_back": {
+      "com.todesktop.230313mzl4w4u92": "ctrl+-",
+      "com.microsoft.VSCodeInsiders": "ctrl+-",
+      "com.vscodium": "ctrl+-",
+      "com.exafunction.windsurf": "ctrl+-",
+      "dev.zed.Zed": "ctrl+-",
+      "dev.zed.Zed-Preview": "ctrl+-",
+      "com.sublimetext.4": "ctrl+-",
+      "com.apple.dt.Xcode": "ctrl+cmd+left",
+      "com.apple.Notes": "",
+      "com.apple.TextEdit": "",
+      "com.apple.iWork.Pages": "",
+      "com.apple.mail": ""
+    },
+    "history_forward": {
+      "com.todesktop.230313mzl4w4u92": "ctrl+shift+-",
+      "com.microsoft.VSCodeInsiders": "ctrl+shift+-",
+      "com.vscodium": "ctrl+shift+-",
+      "com.exafunction.windsurf": "ctrl+shift+-",
+      "dev.zed.Zed": "ctrl+shift+-",
+      "dev.zed.Zed-Preview": "ctrl+shift+-",
+      "com.sublimetext.4": "ctrl+shift+-",
+      "com.apple.dt.Xcode": "ctrl+cmd+right",
+      "com.apple.Notes": "",
+      "com.apple.TextEdit": "",
+      "com.apple.iWork.Pages": "",
+      "com.apple.mail": ""
     }
   },
   "on_demand_hints": [

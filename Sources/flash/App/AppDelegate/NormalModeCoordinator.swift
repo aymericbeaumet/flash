@@ -1016,9 +1016,9 @@ extension AppDelegate {
     case .tabReopen:
       performSourceAction(.tabReopen, repeatCount: repeatCount)
     case .historyBack:
-      navigateTargetHistory(direction: .back, repeatCount: repeatCount)
+      navigateTargetHistory(.historyBack, key: kVK_ANSI_LeftBracket, repeatCount: repeatCount)
     case .historyForward:
-      navigateTargetHistory(direction: .forward, repeatCount: repeatCount)
+      navigateTargetHistory(.historyForward, key: kVK_ANSI_RightBracket, repeatCount: repeatCount)
     case .movementBack:
       navigateMovementHistory(direction: .back)
     case .movementForward:
@@ -1332,15 +1332,13 @@ extension AppDelegate {
     }
   }
 
-  private func navigateTargetHistory(direction: NavigationDirection, repeatCount: Int) {
-    let key: CGKeyCode
-    switch direction {
-    case .back:
-      key = CGKeyCode(kVK_ANSI_LeftBracket)
-    case .forward:
-      key = CGKeyCode(kVK_ANSI_RightBracket)
+  /// Back/forward is a source action: an app's own chord where a plugin
+  /// declares one (editors use Control-Minus), else the platform's
+  /// Cmd-[ / Cmd-].
+  private func navigateTargetHistory(_ name: SourceActionName, key: Int, repeatCount: Int) {
+    performSourceAction(name, repeatCount: repeatCount) { [weak self] _, count in
+      self?.sendNormalModeKey(CGKeyCode(key), flags: .maskCommand, repeatCount: count)
     }
-    sendNormalModeKey(key, flags: .maskCommand, repeatCount: repeatCount)
   }
 
   private func sendNormalModeKeySequence(

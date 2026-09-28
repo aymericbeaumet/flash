@@ -1002,7 +1002,8 @@ final class PluginSystemTests: XCTestCase {
           "only_bundle_ids": ["com.example.browser", "com.example.other"],
           "action_keystrokes": {
             "tab_next": { "": "cmd+shift+]" },
-            "app_reload_force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" }
+            "app_reload_force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" },
+            "history_back": { "com.example.other": "" }
           }
         }
         """)
@@ -1011,6 +1012,9 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.activation, .manifestOnly, "action keystrokes need no process")
     XCTAssertEqual(manifest.actionKeystrokes[.tabNext], ["": "cmd+shift+]"])
     XCTAssertEqual(manifest.actionKeystrokes[.appReloadForce]?["com.example.other"], "cmd+option+r")
+    XCTAssertEqual(
+      manifest.actionKeystrokes[.historyBack], ["com.example.other": ""],
+      "an empty chord declares that the app has no shortcut")
 
     for (fragment, message) in [
       (#""tab_sideways": { "": "cmd+k" }"#, "unknown action: tab_sideways"),
@@ -1054,7 +1058,7 @@ final class PluginSystemTests: XCTestCase {
       }
     }
     XCTAssertEqual(SourceAction.byWireName["tab_previous"], .tabPrev)
-    XCTAssertEqual(SourceAction.byWireName.count, 21, "one entry per action")
+    XCTAssertEqual(SourceAction.byWireName.count, 23, "one entry per action")
   }
 
   /// App shortcuts are plugin data: the browsers plugin owns the
@@ -1073,6 +1077,15 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(browsers.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
     let defaults = try manifest("defaults")
     XCTAssertEqual(defaults.actionKeystrokes[.tabNext]?["com.apple.MobileSMS"], "ctrl+tab")
+    let cursor = "com.todesktop.230313mzl4w4u92"
+    XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?[cursor], "ctrl+-")
+    XCTAssertEqual(defaults.actionKeystrokes[.historyForward]?[cursor], "ctrl+shift+-")
+    XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?["com.apple.dt.Xcode"], "ctrl+cmd+left")
+    XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?["com.apple.Notes"], "")
+    XCTAssertNil(defaults.actionKeystrokes[.historyBack]?[""], "Cmd-[ is the host's convention")
+    let vscode = try manifest("vscode")
+    XCTAssertEqual(vscode.actionKeystrokes[.historyBack]?[""], "ctrl+-")
+    XCTAssertEqual(vscode.actionKeystrokes[.historyForward]?[""], "ctrl+shift+-")
     XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])
     XCTAssertEqual(
       defaults.mappings.filter(\.repeatsOnFinalKey).map(\.key).sorted(), ["[t", "]t"])
@@ -1081,6 +1094,12 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(
       Set(terminals.terminalEmulators).isSuperset(of: ["org.alacritty", "com.mitchellh.ghostty"]))
     XCTAssertEqual(terminals.actionKeystrokes[.paneNext]?["com.mitchellh.ghostty"], "cmd+]")
+    for emulator in terminals.terminalEmulators {
+      XCTAssertEqual(
+        terminals.actionKeystrokes[.historyBack]?[emulator], "",
+        "\(emulator)'s Cmd-[ is a split chord, not back")
+      XCTAssertEqual(terminals.actionKeystrokes[.historyForward]?[emulator], "")
+    }
   }
 
   func testManifestRejectsInvalidMappingMode() throws {

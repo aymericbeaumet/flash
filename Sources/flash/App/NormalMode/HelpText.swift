@@ -48,8 +48,10 @@ extension NormalModeDispatcher {
           keep pressing `t` to repeat while staying in NORMAL.
         - `t` sends Cmd-T to open a new tab and stays in NORMAL.
         - `ctrl-o` / `ctrl-i` traverse Flash's movement history.
-        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, history,
-          reload, archive, find-match, URL-copy and mark shortcuts are opt-in.
+        - `H` / `L` go back/forward in the app (Cmd-[ / Cmd-], or the app's
+          own chord; nothing in terminals and apps without history).
+        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, reload,
+          archive, find-match, URL-copy and mark shortcuts are opt-in.
 
         ## Mouse Targets
 

@@ -77,6 +77,10 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// window. Tmux is the canonical case; browsers/native apps keep using
   /// `tab_close` / their own native close semantics.
   public static let paneClosing = FlashSourceCapabilities(rawValue: 1 << 17)
+  /// Source handles `H` / `L` (`history_back` / `history_forward`): the
+  /// focused app's own back/forward navigation. No bundled source claims it;
+  /// apps bind it through `action_keystrokes`, and the host owns Cmd-[ / Cmd-].
+  public static let historyNavigation = FlashSourceCapabilities(rawValue: 1 << 18)
 
   /// Human-readable list of the flags this set carries, for trace logs.
   /// Order is stable so log lines diff cleanly between runs.
@@ -100,6 +104,7 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
     if contains(.paneNavigation) { names.append("paneNavigation") }
     if contains(.paneSplitting) { names.append("paneSplitting") }
     if contains(.paneClosing) { names.append("paneClosing") }
+    if contains(.historyNavigation) { names.append("historyNavigation") }
     return names.isEmpty ? "none" : names.joined(separator: "|")
   }
 }
@@ -350,6 +355,8 @@ public enum SourceAction: Sendable, Equatable {
   case resourcePrevious
   case scrollTop
   case scrollBottom
+  case historyBack
+  case historyForward
 
   /// Capability flag a source must advertise to be considered for this action.
   public var requiredCapability: FlashSourceCapabilities {
@@ -367,6 +374,7 @@ public enum SourceAction: Sendable, Equatable {
     case .archive: return .resourceArchiving
     case .resourceNext, .resourcePrevious: return .resourceNavigation
     case .scrollTop, .scrollBottom: return .scrollExtremes
+    case .historyBack, .historyForward: return .historyNavigation
     }
   }
 
@@ -394,6 +402,8 @@ public enum SourceAction: Sendable, Equatable {
     case .resourcePrevious: return "resource_previous"
     case .scrollTop: return "scroll_top"
     case .scrollBottom: return "scroll_bottom"
+    case .historyBack: return "history_back"
+    case .historyForward: return "history_forward"
     }
   }
 
@@ -405,7 +415,7 @@ public enum SourceAction: Sendable, Equatable {
       SourceAction.tabSelect(index: 1), .tabNext, .tabPrev, .tabFirst, .tabLast, .tabNew,
       .tabClose, .tabMovePrev, .tabMoveNext, .tabReopen, .paneNext, .panePrev,
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
-      .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom,
+      .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom, .historyBack, .historyForward,
     ].map { ($0.wireName, $0) })
 
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
@@ -445,6 +455,8 @@ public enum SourceActionName: String, CaseIterable, Sendable {
   case resourcePrevious = "resource_previous"
   case scrollTop = "scroll_top"
   case scrollBottom = "scroll_bottom"
+  case historyBack = "history_back"
+  case historyForward = "history_forward"
 
   public var action: SourceAction {
     switch self {
@@ -469,6 +481,8 @@ public enum SourceActionName: String, CaseIterable, Sendable {
     case .resourcePrevious: return .resourcePrevious
     case .scrollTop: return .scrollTop
     case .scrollBottom: return .scrollBottom
+    case .historyBack: return .historyBack
+    case .historyForward: return .historyForward
     }
   }
 }

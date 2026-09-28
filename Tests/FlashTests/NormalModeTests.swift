@@ -58,7 +58,7 @@ final class NormalModeTests: XCTestCase {
   func testApplicationSpecificActionsHaveNoDefaultMappings() {
     let mappingKeys = Set(Config.Mode.defaultNormalMappings.map(\.key))
     let removedKeys = [
-      "d", "j", "k", "H", "L", "[h", "]h", "]b", "[B", "]B",
+      "d", "j", "k", "[h", "]h", "]b", "[B", "]B",
       "[e", "]e", "[s", "]s", "[w", "]w", "ctrl+tab", "ctrl+shift+tab",
       "gt", "gT", "J", "K", "e", "n", "N", "yy",
     ]

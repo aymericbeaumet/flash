@@ -23,6 +23,30 @@
     "pane_previous": {
       "com.mitchellh.ghostty": "cmd+[",
       "com.googlecode.iterm2": "cmd+["
+    },
+    "history_back": {
+      "org.alacritty": "",
+      "io.alacritty": "",
+      "com.apple.Terminal": "",
+      "com.mitchellh.ghostty": "",
+      "com.googlecode.iterm2": "",
+      "net.kovidgoyal.kitty": "",
+      "com.github.wez.wezterm": "",
+      "dev.warp.Warp-Stable": "",
+      "co.zeit.hyperterm": "",
+      "co.zeit.hyper": ""
+    },
+    "history_forward": {
+      "org.alacritty": "",
+      "io.alacritty": "",
+      "com.apple.Terminal": "",
+      "com.mitchellh.ghostty": "",
+      "com.googlecode.iterm2": "",
+      "net.kovidgoyal.kitty": "",
+      "com.github.wez.wezterm": "",
+      "dev.warp.Warp-Stable": "",
+      "co.zeit.hyperterm": "",
+      "co.zeit.hyper": ""
     }
   },
   "help": {

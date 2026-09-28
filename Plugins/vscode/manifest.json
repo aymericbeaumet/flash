@@ -11,6 +11,14 @@
     "com.microsoft.VSCode"
   ],
   "priority": 20,
+  "action_keystrokes": {
+    "history_back": {
+      "": "ctrl+-"
+    },
+    "history_forward": {
+      "": "ctrl+shift+-"
+    }
+  },
   "capabilities": [
     "accessibility"
   ],

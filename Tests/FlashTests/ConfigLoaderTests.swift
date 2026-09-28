@@ -213,6 +213,8 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
       .movementForward)
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("H") }?.action.command, .historyBack)
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("L") }?.action.command, .historyForward)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("[a") })?.action.command,
       .appPrev)
@@ -240,7 +242,7 @@ final class ConfigLoaderTests: XCTestCase {
     }
     for rawKey in [
       "[[", "]]", "[b", "T", "[p", "]p", "[h", "]h", "]b", "[B", "]B",
-      "[e", "]e", "[w", "]w", "[s", "]s", "H", "L",
+      "[e", "]e", "[w", "]w", "[s", "]s",
     ] {
       XCTAssertNil(
         c.mode.normal.first(where: { $0.key == key(rawKey) }),
