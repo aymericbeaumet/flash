@@ -1,7 +1,9 @@
 # Status strip with popups
 
 The companion [Flash configuration](flash.toml) uses bundled plugin data for
-all quota and system popups. No external monitoring application is required.
+the quota labels and every system popup. The AI usage popup runs
+[ccusage](https://ccusage.com), which you install yourself, for example with
+`npm i -g ccusage`; every other popup needs no external application.
 
 ```text
 Cld 53%↻5d Cdx 54%↻5d · CPU  9% MEM 42% DSK 68% NET 1.2M BAT 99%
@@ -14,12 +16,14 @@ for download + upload on the default-route interface, in decimal bytes/second.
 
 AI percentages also cap at 99, with no padding because they change slowly.
 
-Cld/Cdx show the remaining weekly quota and the weekly reset delay. Each has its own popup showing that provider’s session,
-weekly, and available model quotas, remaining bars, reset times, and cache age.
-Left-click opens that provider’s usage page; right-click pins its popup.
-A stale badge becomes a dash (Claude: 20 minutes; Codex: 4 minutes), while
-the dashboard explicitly marks retained data as cached. An empty Claude Code
-credential requires `/login` in Claude Code before live quotas can return.
+Cld/Cdx show the remaining weekly quota and the weekly reset delay. They share
+one popup, `ccusage daily --last 3`: the last three days of tokens and cost,
+per agent. It is a one-shot report, so each showing runs it afresh and keeps
+its table on screen until the popup closes; see
+[lifecycles](../../popups.md#lifecycles). Left-click a label to open that
+provider’s usage page; right-click pins the popup. A stale badge becomes a
+dash (Claude: 20 minutes; Codex: 4 minutes). An empty Claude Code credential
+requires `/login` in Claude Code before live quotas can return.
 
 CPU/MEM/DSK/NET/BAT hover displays the corresponding bundled plugin’s full
 `details` segment: aggregate CPU/GPU and history, memory composition/swap,
@@ -62,7 +66,8 @@ prior mode and app.
 Command-W dismisses a text popup and removes its private snapshot file;
 Command-Q also ends it. Terminal popups retain their usual behavior:
 Command-R restarts, Command-Q quits, and Command-W hides. Persistent processes
-keep running while hidden and restart after exit; fresh ones end on quit or hide.
+keep running while hidden and restart after exit; fresh ones end on quit or hide,
+and a finished report such as the AI usage table closes on a key press.
 Hidden persistent processes skip frame extraction, drawing, and cursor blinking.
 
 Feed headlines rotate newest first through the last 24 hours, sliding upward

@@ -7,7 +7,7 @@ template = """
 #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
 #[align=absolute-centre]#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
 #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
-#[popup=claude]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink]#[nopopup] #[popup=codex]#[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
+#[popup=ai-usage]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
 #[fg=colour245] · #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup] #[popup=memory]#{flash.plugin.memory.label}#[nopopup] #[popup=disks]#{flash.plugin.disks.label}#[nopopup] #[popup=network]#{flash.plugin.network.label}#[nopopup] #[popup=battery]#{flash.plugin.power.label}#[nopopup]
 #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
@@ -21,11 +21,11 @@ text = """
 #{flash.plugin.processes.focused_app_details}
 """
 
-[popup.claude]
-text = "#{flash.plugin.aiproviders.claude_details}"
-
-[popup.codex]
-text = "#{flash.plugin.aiproviders.codex_details}"
+# A one-shot report: install ccusage (https://ccusage.com) yourself, for
+# example with `npm i -g ccusage`. Each showing runs a current report.
+[popup.ai-usage]
+command = ["ccusage", "daily", "--last", "3"]
+size = "140x34"
 
 [popup.cpu]
 text = "#{flash.plugin.cpu.details}"

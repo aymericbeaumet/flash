@@ -77,9 +77,9 @@ collection:
 Standard detail layouts target 50 terminal columns. Long external names, paths
 and addresses wrap in the pager.
 Use `[popup] max_width = 480` for the standard 13-point font: it fits
-50 content columns with 10-point padding and a one-point border. The longest
-cached Codex report has 27 content rows; the pager reserves one additional
-footer row. Taller content scrolls in the pager. Smaller widths wrap more lines.
+50 content columns with 10-point padding and a one-point border. The pager
+reserves one footer row. Taller content scrolls in the pager. Smaller widths
+wrap more lines.
 See [popups](popups.md) for the presentation boundary.
 
 Keep the ownership boundaries intact:
@@ -208,39 +208,34 @@ explicit `:network refresh` action may request Location authorization.
 ## Adjacent AI usage status
 
 `aiproviders` is adjacent to, not part of, the local system-monitor suite. It
-publishes `claude_label`/`claude_details` and `codex_label`/`codex_details`.
-Cld/Cdx labels show the remaining weekly quota with an unpadded percentage capped at 99, followed by `↻`
-and the time until the weekly window resets (for example `53%↻5d`). Model-specific quotas stay in
-details: Fable under Claude, and the separate `codex_bengalfox` rate-limit
-bucket as Astra under Codex. “Astra” is a local presentation alias, not app-server schema
-terminology. Grok remains a launcher only; do not add quota polling that reads
-or mutates unsupported credential stores.
+publishes `claude_label` and `codex_label`. Cld/Cdx labels show the remaining
+weekly quota with an unpadded percentage capped at 99, followed by `↻` and the
+time until the weekly window resets (for example `53%↻5d`). It reads only
+those weekly windows from the provider responses and leaves session and
+model-specific quotas out. Grok remains a launcher only; do not add quota polling that reads or mutates
+unsupported credential stores.
 
-Claude and Codex use the same stacked quota sections: remaining percentage and
-bar, used percentage, reset delay and usage pace. Reset details retain two units
-(`1h 30m`) while the status label stays compact. Pace compares the used share
-with the elapsed share of that window, in percentage points; missing reset data
-is unavailable, and an elapsed reset says `Awaiting refresh` until new data
-arrives. Missing provider/model windows remain explicit instead of implying
-unused quota. The largest Codex report is 26 lines when fresh or 27 when cached.
+For a detailed report, run [ccusage](https://ccusage.com) in a
+[one-shot report popup](popups.md#lifecycles) under the labels, as the
+[example status strip](examples/statusbar/flash.toml) does. It reads Claude
+Code's and Codex's local logs; install it yourself, for example with
+`npm i -g ccusage`.
 
 The plugin republishes a sanitized last-good cache at startup. One timer runs
 each minute to rerender relative labels and check the independent fetch TTLs: ten minutes
 for Anthropic and two minutes for OpenAI. Only changed rendered segments publish.
 Quota labels show an unpadded dash once the cache is older than twice the provider
-TTL; cached details remain available for inspection. Popup hover and status
-layout are pure reads of that state and perform no authentication or API calls.
-The plugin is status-bound, so it is resident only while the bar or a popup
-shows one of its segments. A chat-launcher bang such as `!claude` still starts
+TTL. Status layout is a pure read of that state and performs no authentication
+or API calls. The plugin is status-bound, so it is resident only while the bar
+or a popup shows one of its segments. A chat-launcher bang such as `!claude` still starts
 it on demand, and a started process keeps the quota timer, including its
 credential reads, until it exits.
 
 Claude Code's credentials are read-only by default. The plugin reads the
 `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and
-uses the stored access token until it expires. It then marks the Claude quota
-cached or unavailable with a `Token expired · run Claude Code to renew it`
-hint, and rereads the store every five minutes until Claude Code has renewed
-the token. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
+uses the stored access token until it expires. It then leaves the Claude label
+to age out to a dash, and rereads the store every five minutes until Claude
+Code has renewed the token. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
 into renewing the token with Claude Code's OAuth client two minutes before
 expiry and writing the rotation back to Claude Code's store. Rotating another
 app's refresh token can sign that app out.

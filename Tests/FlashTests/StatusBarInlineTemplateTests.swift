@@ -20,7 +20,7 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     """,
     "@right": """
     #{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
-    #[popup=claude]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink]#[nopopup] #[popup=codex]#[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
+    #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
     #[fg=colour245] · #[popup=btop]#{flash.plugin.cpu.label} #{flash.plugin.memory.label} #{flash.plugin.disks.label} #{flash.plugin.network.label} #{flash.plugin.power.label}#[nopopup]
     #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 
@@ -35,7 +35,7 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.example]#{flash.plugin.feed.label}#[nolink]#[nopopup]
     #[align=absolute-centre]#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
     #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
-    #[popup=claude]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink]#[nopopup] #[popup=codex]#[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
+    #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
     #[fg=colour245] · #[popup=btop]#{flash.plugin.cpu.label} #{flash.plugin.memory.label} #{flash.plugin.disks.label} #{flash.plugin.network.label} #{flash.plugin.power.label}#[nopopup]
     #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
     """
@@ -64,7 +64,7 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     XCTAssertEqual(config.loadingDiagnostics.map(\.message), [])
     XCTAssertEqual(
       config.statusBar.shownPopupNames,
-      ["feed", "active-app", "claude", "codex", "btop", "date"])
+      ["feed", "active-app", "ai-usage", "btop", "date"])
     let inline = config.statusBar.template
     let optionsTemplate = FlashStatusBarTemplate(template: Self.optionsTemplate)
     let apps = ["Firefox", "Microsoft Visual Studio Code Insiders", ""]

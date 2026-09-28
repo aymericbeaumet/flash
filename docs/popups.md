@@ -155,7 +155,9 @@ current report.
 
 [ccusage](https://ccusage.com) prints a table of Claude Code and Codex usage
 and exits, so it makes a one-shot report popup. It is yours to install, for
-example with `npm i -g ccusage`, mise or bun; Flash does not install it.
+example with `npm i -g ccusage`, mise or bun; Flash does not install it. Wrap
+the AI quota labels in `#[popup=ai-usage]…#[nopopup]`, as the
+[example status strip](examples/statusbar/flash.toml) does.
 
 ```toml
 [popup.ai-usage]             # a one-shot report
