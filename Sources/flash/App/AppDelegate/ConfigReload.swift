@@ -168,7 +168,7 @@ extension AppDelegate {
     }
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
-    overlay.statusBarPopupStyle = cfg.statusBar.popupStyle
+    overlay.popupStyle = cfg.popupStyle
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
@@ -177,12 +177,10 @@ extension AppDelegate {
     keyboardLayoutMonitor.apply(setting: KeyboardLayout.Setting(cfg.app.keyboardLayout) ?? .auto)
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
-      popupTemplates: cfg.statusBar.popups,
+      popupTemplates: cfg.textPopups,
       options: cfg.statusBar.options,
       sources: cfg.statusBar.sources,
-      terminalPopupNames: Set(cfg.terminals.keys).union(
-        cfg.invalidTerminalNames.intersection(
-          overlay.statusTerminals.definitions.keys)),
+      terminalPopupNames: cfg.terminalPopupNames,
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     statusBarController?.setBar(enabled: cfg.statusBar.enabled)
     statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))

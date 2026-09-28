@@ -74,21 +74,21 @@ extension NormalModeDispatcher {
     }
   }
 
-  static func commandLineTerminalCommand(_ raw: String) -> URLCommand? {
+  static func commandLinePopupCommand(_ raw: String) -> URLCommand? {
     var body = raw.trimmed
     if body.hasPrefix(":") { body.removeFirst() }
     let parts = body.split(whereSeparator: { $0.isWhitespace }).map(String.init)
     guard let verb = parts.first,
-      terminalCommandSyntax[verb] != nil,
+      popupCommandSyntax[verb] != nil,
       parts.count <= 2
     else { return nil }
     guard let arguments = try? CommandArguments.parse(parts.dropFirst()) else { return nil }
     return URLEventHandler.parse(verb: verb, args: arguments)
   }
 
-  static let terminalCommandSyntax = Dictionary(
+  static let popupCommandSyntax = Dictionary(
     uniqueKeysWithValues: [
-      "terminal_show", "terminal_dismiss", "terminal_restart", "terminal_quit",
+      "popup_show", "popup_dismiss", "popup_restart", "popup_quit",
     ].compactMap {
       name in
       URLEventHandler.syntax(for: name, prefix: ":").map { (name, $0) }
@@ -398,10 +398,10 @@ extension NormalModeDispatcher {
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
-    "terminal_show": "Open a fresh shell or a configured terminal",
-    "terminal_dismiss": "Close the terminal window; persistent sessions keep running",
-    "terminal_restart": "Restart the focused or named terminal session",
-    "terminal_quit": "Quit the focused or named terminal process; automatic restart still applies",
+    "popup_show": "Show a popup; without --name, the shell popup",
+    "popup_dismiss": "Close the focused popup; persistent processes keep running",
+    "popup_restart": "Restart the focused or named popup's process",
+    "popup_quit": "Quit the focused or named popup's process; persistent popups restart",
   ]
 
   /// Flat catalog of every built-in command-line command, tagged
@@ -431,10 +431,10 @@ extension NormalModeDispatcher {
         "source_kind": "core",
       ])
     }
-    for name in terminalCommandSyntax.keys.sorted() {
+    for name in popupCommandSyntax.keys.sorted() {
       result.append([
         "name": ":\(name)",
-        "syntax": terminalCommandSyntax[name]!,
+        "syntax": popupCommandSyntax[name]!,
         "aliases": [":\(name)"],
         "description": argumentCommandDescriptions[name]!,
         "source": "core",
@@ -600,8 +600,8 @@ extension NormalModeDispatcher {
       items.append(
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
     }
-    for name in terminalCommandSyntax.keys.sorted() where seen.insert(name).inserted {
-      let kind: CommandLineCompletion.Kind = name == "terminal_dismiss" ? .terminal : .acceptsArgs
+    for name in popupCommandSyntax.keys.sorted() where seen.insert(name).inserted {
+      let kind: CommandLineCompletion.Kind = name == "popup_dismiss" ? .terminal : .acceptsArgs
       items.append(
         CommandLineCompletion(
           label: name, insertion: kind == .acceptsArgs ? "\(name) " : name, kind: kind))

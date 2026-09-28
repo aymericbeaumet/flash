@@ -221,7 +221,8 @@ public struct TerminalFrame: Equatable, Sendable {
 final class TerminalBuffer {
   let handle: OpaquePointer
   var output: ((Data) -> Void)?
-  init(columns: Int, rows: Int, scrollback: Bool) {
+  /// `scrollbackLines` caps the history above the screen; 0 keeps none.
+  init(columns: Int, rows: Int, scrollbackLines: Int) {
     let callback: FlashVTWrite = { context, bytes, length in
       guard let context, let bytes else { return }
       Unmanaged<TerminalBuffer>.fromOpaque(context).takeUnretainedValue().output?(
@@ -231,7 +232,7 @@ final class TerminalBuffer {
     guard
       let created = flash_vt_new(
         UInt16(clamping: max(1, columns)),
-        UInt16(clamping: max(1, rows)), scrollback, nil, nil)
+        UInt16(clamping: max(1, rows)), UInt32(clamping: max(0, scrollbackLines)), nil, nil)
     else {
       preconditionFailure("Could not allocate terminal")
     }

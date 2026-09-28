@@ -139,16 +139,6 @@ enum ConfigLoader {
       }
     }
 
-    let terminalNames = Set(config.terminals.keys).union(config.invalidTerminalNames)
-    for name in config.statusBar.popups.keys.sorted() where terminalNames.contains(name) {
-      let path = "statusbar.popup.\(name)"
-      config.addDiagnostic(
-        "\(path) is already a terminal name; rename the popup document",
-        location: config.valueLocations[path])
-      config.statusBar.popups.removeValue(forKey: name)
-      config.statusBar.popupSourceURLs.removeValue(forKey: name)
-      config.clearLocation(path: path)
-    }
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
@@ -184,6 +174,10 @@ enum ConfigLoader {
           let body = String(line[line.index(after: line.startIndex)..<close])
             .trimmingCharacters(in: .whitespaces)
           tablePath = Self.splitDottedKey(body)
+          // A table header locates diagnostics about the table itself.
+          if locations[tablePath] == nil {
+            locations[tablePath] = ConfigLocation(line: lineNumber, column: 1)
+          }
           continue
         }
 
@@ -400,7 +394,7 @@ enum ConfigLoader {
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
     applyStatusBar(
       section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
-    applyTerminals(section("terminal"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyPopups(section("popup"), locations: locations, sourceURL: sourceURL, into: &config)
     applyWidgets(section("widgets"), locations: locations, into: &config)
     applyFlashlight(section("flashlight"), locations: locations, into: &config)
     applyMode(
@@ -457,9 +451,7 @@ enum ConfigLoader {
       ],
       "statusbar": [
         "enabled", "template", "monitor", "interval", "click", "font_size",
-        "command_timeout", "notch_margin", "popup", "options", "sources", "popup_fg", "popup_bg",
-        "popup_border", "popup_border_size", "popup_corner_radius", "popup_padding",
-        "popup_max_width", "popup_offset",
+        "command_timeout", "notch_margin", "options", "sources",
       ],
       "flashlight": [
         "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
@@ -483,9 +475,9 @@ enum ConfigLoader {
         "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
       ],
     ]
-    // Plugin settings, terminal declarations and widgets use user-defined
-    // table names; `applyWidgets` checks each widget's own keys.
-    let knownSections = Set(sectionKeys.keys).union(["plugin", "terminal", "widgets"])
+    // Plugin settings, popups and widgets use user-defined table names;
+    // `applyPopups` and `applyWidgets` check their own keys.
+    let knownSections = Set(sectionKeys.keys).union(["plugin", "popup", "widgets"])
     warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
     for (section, known) in sectionKeys {
       guard let table = root[section]?.table else { continue }
@@ -502,13 +494,57 @@ enum ConfigLoader {
     locations: ConfigSourceLocationIndex,
     into config: inout Config
   ) {
-    for (key, _) in table where !known.contains(key) {
+    for (key, value) in table where !known.contains(key) {
       let fullPath = path + [key]
+      if let moved = movedPopupKeys(fullPath, value: value) {
+        for (message, location) in moved {
+          config.addDiagnostic(message, location: location(locations))
+        }
+        continue
+      }
       let dotted = fullPath.joined(separator: ".")
       let suggestion = closestKnownKey(to: key, in: known).map { " — did you mean '\($0)'?" } ?? ""
       config.addDiagnostic(
         "unknown config key '\(dotted)'\(suggestion)",
         location: locations.location(for: fullPath))
+    }
+  }
+
+  /// The popup keys `[popup]` replaced, each rejected with where it lives
+  /// now: `[terminal.<name>]`, `[statusbar.popup]` and the `popup_*` style
+  /// keys of `[statusbar]`.
+  private static func movedPopupKeys(
+    _ path: [String], value: any TOMLValueConvertible
+  ) -> [(String, (ConfigSourceLocationIndex) -> ConfigLocation?)]? {
+    func named(_ table: TOMLTable, _ message: @escaping (String) -> String) -> [(
+      String, (ConfigSourceLocationIndex) -> ConfigLocation?
+    )] {
+      table.keys.sorted().map { name in
+        (message(name), { $0.location(for: path + [name]) })
+      }
+    }
+    switch path {
+    case ["terminal"]:
+      guard let table = value.table else { return nil }
+      return named(table) { name in
+        "[terminal.\(name)] is not read; declare it as [popup.\(name)] with command = [...] "
+          + "(cwd, env, size = \"COLUMNSxROWS\" and persistent are its other keys)"
+      }
+    case ["statusbar", "popup"]:
+      guard let table = value.table else { return nil }
+      return named(table) { name in
+        "statusbar.popup.\(name) is not read; declare it as [popup.\(name)] with text = \"…\""
+      }
+    default:
+      guard path.count == 2, path[0] == "statusbar", path[1].hasPrefix("popup_"),
+        popupStyleKeys.contains(String(path[1].dropFirst("popup_".count)))
+      else { return nil }
+      return [
+        (
+          "statusbar.\(path[1]) is not read; set \(path[1].dropFirst("popup_".count)) in [popup]",
+          { $0.location(for: path) }
+        )
+      ]
     }
   }
 
@@ -893,66 +929,6 @@ enum ConfigLoader {
       assign: { value, config in
         config.statusBar.notchMargin = value
       })
-    applyString(
-      table["popup_fg"], path: ["statusbar", "popup_fg"],
-      message: "statusbar.popup_fg must be a hex color like #RRGGBB",
-      locations: locations, into: &config,
-      validate: { $0.count == 7 && isValidHexColor($0) },
-      assign: { value, config in config.statusBar.popupStyle.foreground = value })
-    applyString(
-      table["popup_bg"], path: ["statusbar", "popup_bg"],
-      message: "statusbar.popup_bg must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in config.statusBar.popupStyle.background = value })
-    applyString(
-      table["popup_border"], path: ["statusbar", "popup_border"],
-      message: "statusbar.popup_border must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in config.statusBar.popupStyle.borderColor = value })
-    applyDouble(
-      table["popup_border_size"], path: ["statusbar", "popup_border_size"],
-      message: "statusbar.popup_border_size must be a number between 0 and 12 (points)",
-      locations: locations, into: &config, validate: { (0...12).contains($0) },
-      assign: { value, config in config.statusBar.popupStyle.borderWidth = value })
-    applyDouble(
-      table["popup_corner_radius"], path: ["statusbar", "popup_corner_radius"],
-      message: "statusbar.popup_corner_radius must be a number between 0 and 64 (points)",
-      locations: locations, into: &config, validate: { (0...64).contains($0) },
-      assign: { value, config in config.statusBar.popupStyle.cornerRadius = value })
-    applyDouble(
-      table["popup_padding"], path: ["statusbar", "popup_padding"],
-      message: "statusbar.popup_padding must be a number between 0 and 64 (points)",
-      locations: locations, into: &config, validate: { (0...64).contains($0) },
-      assign: { value, config in config.statusBar.popupStyle.padding = value })
-    applyDouble(
-      table["popup_max_width"], path: ["statusbar", "popup_max_width"],
-      message: "statusbar.popup_max_width must be a number between 80 and 2000 (points)",
-      locations: locations, into: &config, validate: { (80...2_000).contains($0) },
-      assign: { value, config in config.statusBar.popupStyle.maxWidth = value })
-    applyDouble(
-      table["popup_offset"], path: ["statusbar", "popup_offset"],
-      message: "statusbar.popup_offset must be a number between 0 and 64 (points)",
-      locations: locations, into: &config, validate: { (0...64).contains($0) },
-      assign: { value, config in config.statusBar.popupStyle.offset = value })
-    if let popups = sectionTable(
-      table["popup"], name: "statusbar.popup", locations: locations, into: &config)
-    {
-      for (name, value) in popups {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        let location = locations.location(for: ["statusbar", "popup", name])
-        guard !trimmedName.isEmpty else { continue }
-        guard let template = value.string else {
-          config.addDiagnostic(
-            "statusbar.popup.\(name) must be a template string; declare commands in [terminal.\(name)]",
-            location: location)
-          continue
-        }
-        config.statusBar.popups[trimmedName] = FlashStatusBarTemplate(
-          template: template, variables: [])
-        if let sourceURL { config.statusBar.popupSourceURLs[trimmedName] = sourceURL }
-        config.recordLocation(path: "statusbar.popup.\(trimmedName)", location: location)
-      }
-    }
     applyStatusBarOptionsAndSources(
       table, locations: locations, sourceURL: sourceURL, into: &config)
     if let click = sectionTable(
@@ -999,8 +975,11 @@ enum ConfigLoader {
     return integer
   }
 
+  /// `directoryKey` names the working-directory key: `working_directory` for
+  /// sources, `cwd` for popups.
   private static func parseStatusProcess(
     _ table: TOMLTable, path: String, sourceURL: URL?, allowedKeys: Set<String>,
+    directoryKey: String = "working_directory",
     location: ConfigLocation?, into config: inout Config
   ) -> (command: [String], workingDirectory: String?, environment: [String: String])? {
     func invalid(_ message: String) {
@@ -1025,9 +1004,9 @@ enum ConfigLoader {
       return nil
     }
     var directory: String?
-    if let value = table["working_directory"] {
+    if let value = table[directoryKey] {
       guard let raw = value.string, !raw.isEmpty, !raw.utf8.contains(0) else {
-        invalid("working_directory must be a nonempty path string")
+        invalid("\(directoryKey) must be a nonempty path string")
         return nil
       }
       directory =
@@ -1127,53 +1106,156 @@ enum ConfigLoader {
     }
   }
 
-  private static func applyTerminals(
+  /// The `[popup]` style keys; every other `[popup]` key is a named popup.
+  private static let popupStyleKeys: Set<String> = [
+    "fg", "bg", "border", "border_size", "corner_radius", "padding", "max_width", "offset",
+  ]
+  private static let textPopupKeys: Set<String> = ["text"]
+  private static let terminalPopupKeys: Set<String> = [
+    "command", "cwd", "env", "size", "persistent",
+  ]
+  /// Keys of the retired `[terminal.<name>]` tables, pointed at their
+  /// replacement.
+  private static let renamedTerminalPopupKeys = [
+    "working_directory": "cwd", "columns": "size", "rows": "size",
+  ]
+
+  /// `[popup]`: TOML types tell the keys apart. A table is a named popup
+  /// (`[popup.<name>]`); a scalar is a style key shared by every popup. A
+  /// later layer's `[popup.<name>]` replaces that popup's whole definition;
+  /// an invalid one keeps the earlier definition and marks the name invalid.
+  private static func applyPopups(
     _ table: TOMLTable?, locations: ConfigSourceLocationIndex, sourceURL: URL?,
     into config: inout Config
   ) {
     guard let table else { return }
-    for (name, value) in table {
-      let path = "terminal.\(name)"
-      let location = locations.location(for: ["terminal", name])
-      guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-        !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-      else {
+    for (key, value) in table {
+      if let definition = value.table {
+        applyPopup(
+          named: key, definition, locations: locations, sourceURL: sourceURL, into: &config)
+      } else if value.array != nil {
         config.addDiagnostic(
-          "terminal names must be nonempty and contain no control characters", location: location)
-        continue
+          "popup.\(key) must be a style value or a [popup.\(key)] table",
+          location: locations.location(for: ["popup", key]))
+      } else if !popupStyleKeys.contains(key) {
+        let suggestion =
+          closestKnownKey(to: key, in: popupStyleKeys).map { " — did you mean '\($0)'?" }
+          ?? "; a named popup is a table: [popup.\(key)] with text = \"…\" or command = [...]"
+        config.addDiagnostic(
+          "unknown config key 'popup.\(key)'\(suggestion)",
+          location: locations.location(for: ["popup", key]))
       }
-      guard let definition = value.table else {
-        config.addDiagnostic("\(path) must be a table with command argv", location: location)
-        config.invalidTerminalNames.insert(name)
-        continue
-      }
-      guard definition["persistent"] == nil || definition["persistent"]?.bool != nil else {
-        config.addDiagnostic("\(path).persistent must be a boolean", location: location)
-        config.invalidTerminalNames.insert(name)
-        continue
-      }
-      guard
-        let parsed = parseStatusProcess(
-          definition, path: path, sourceURL: sourceURL,
-          allowedKeys: ["command", "working_directory", "env", "columns", "rows", "persistent"],
-          location: location, into: &config),
-        let columns = statusProcessInteger(
-          definition, key: "columns", fallback: 100, range: 1...1000,
-          path: path, location: location, into: &config),
-        let rows = statusProcessInteger(
-          definition, key: "rows", fallback: 28, range: 1...1000,
-          path: path, location: location, into: &config)
-      else {
-        config.invalidTerminalNames.insert(name)
-        continue
-      }
-      config.terminals[name] = .init(
-        command: parsed.command, workingDirectory: parsed.workingDirectory,
-        environment: parsed.environment, columns: columns, rows: rows,
-        persistent: definition["persistent"]?.bool ?? false)
-      config.invalidTerminalNames.remove(name)
-      config.recordLocation(path: path, location: location)
     }
+    func path(_ key: String) -> [String] { ["popup", key] }
+    for (key, keyPath) in [
+      ("fg", \Config.PopupStyle.foreground), ("bg", \Config.PopupStyle.background),
+      ("border", \Config.PopupStyle.borderColor),
+    ] {
+      applyString(
+        table[key], path: path(key),
+        message: "popup.\(key) must be a hex color like #RRGGBB or #RRGGBBAA",
+        locations: locations, into: &config,
+        validate: { $0.hasPrefix("#") && isValidHexColor($0) },
+        assign: { value, config in config.popupStyle[keyPath: keyPath] = value })
+    }
+    for (key, keyPath, range) in [
+      ("border_size", \Config.PopupStyle.borderWidth, 0.0...12.0),
+      ("corner_radius", \Config.PopupStyle.cornerRadius, 0.0...64.0),
+      ("padding", \Config.PopupStyle.padding, 0.0...64.0),
+      ("max_width", \Config.PopupStyle.maxWidth, 80.0...2_000.0),
+      ("offset", \Config.PopupStyle.offset, 0.0...64.0),
+    ] {
+      applyDouble(
+        table[key], path: path(key),
+        message: "popup.\(key) must be a number between \(Int(range.lowerBound)) and "
+          + "\(Int(range.upperBound)) (points)",
+        locations: locations, into: &config, validate: { range.contains($0) },
+        assign: { value, config in config.popupStyle[keyPath: keyPath] = value })
+    }
+  }
+
+  private static func applyPopup(
+    named name: String, _ definition: TOMLTable, locations: ConfigSourceLocationIndex,
+    sourceURL: URL?, into config: inout Config
+  ) {
+    let dotted = "popup.\(name)"
+    let location = locations.location(for: ["popup", name])
+    guard !name.isEmpty,
+      name.unicodeScalars.allSatisfy({
+        $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-")
+      })
+    else {
+      config.addDiagnostic(
+        "popup name '\(name)' must use only letters, digits, '_' and '-'", location: location)
+      return
+    }
+    func invalid(_ message: String, at key: String? = nil) {
+      config.addDiagnostic(
+        "\(dotted)\(message)",
+        location: key.flatMap { locations.location(for: ["popup", name, $0]) } ?? location)
+      config.invalidPopupNames.insert(name)
+    }
+    let isText = definition["text"] != nil
+    guard isText != (definition["command"] != nil) else {
+      invalid(
+        " must set exactly one of text (a status format) or command (an argv array)")
+      return
+    }
+    let allowed = isText ? textPopupKeys : terminalPopupKeys
+    if let key = definition.keys.sorted().first(where: { !allowed.contains($0) }) {
+      let suggestion =
+        isText
+        ? terminalPopupKeys.contains(key) || renamedTerminalPopupKeys[key] != nil
+          ? " (\(key) belongs to command popups; a text popup takes only text)" : ""
+        : (renamedTerminalPopupKeys[key] ?? closestKnownKey(to: key, in: allowed)).map {
+          " — did you mean '\($0)'?"
+        } ?? ""
+      invalid(": unknown key '\(key)'\(suggestion)", at: key)
+      return
+    }
+    if isText {
+      guard let text = definition["text"]?.string else {
+        invalid(".text must be a status format string", at: "text")
+        return
+      }
+      config.popups[name] = .text(FlashStatusBarTemplate(template: text, variables: []))
+      config.popupSourceURLs[name] = sourceURL
+      config.recordLocation(
+        path: dotted, location: locations.location(for: ["popup", name, "text"]))
+      config.invalidPopupNames.remove(name)
+      return
+    }
+    var size = Config.PopupSize.default
+    if let value = definition["size"] {
+      guard let raw = value.string, let parsed = Config.PopupSize(raw) else {
+        invalid(
+          ".size must be \"COLUMNSxROWS\", each side a cell count from 1 to 1000 or a "
+            + "percentage of the screen from 1% to 100%, like \"100x28\" or \"90%x85%\"",
+          at: "size")
+        return
+      }
+      size = parsed
+    }
+    guard definition["persistent"] == nil || definition["persistent"]?.bool != nil else {
+      invalid(".persistent must be true or false", at: "persistent")
+      return
+    }
+    guard
+      let parsed = parseStatusProcess(
+        definition, path: dotted, sourceURL: sourceURL, allowedKeys: terminalPopupKeys,
+        directoryKey: "cwd", location: location, into: &config)
+    else {
+      config.invalidPopupNames.insert(name)
+      return
+    }
+    config.popups[name] = .terminal(
+      Config.Terminal(
+        command: parsed.command, workingDirectory: parsed.workingDirectory,
+        environment: parsed.environment, size: size,
+        lifecycle: definition["persistent"]?.bool == true ? .persistent : .fresh))
+    config.popupSourceURLs.removeValue(forKey: name)
+    config.invalidPopupNames.remove(name)
+    config.recordLocation(path: dotted, location: location)
   }
 
   private static let widgetKeys: Set<String> = [
@@ -2222,13 +2304,13 @@ enum ConfigLoader {
     config.statusBar.template = compiled(
       normalized, path: "statusbar.template", options: config.statusBar.options,
       optionDependencies: sharedOptions, into: &config)
-    for name in config.statusBar.popups.keys.sorted() {
-      guard let popup = config.statusBar.popups[name] else { continue }
+    for (name, popup) in config.textPopups.sorted(by: { $0.key < $1.key }) {
       let text = popup.template.replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
-      config.statusBar.popups[name] = compiled(
-        text, path: "statusbar.popup.\(name)", options: config.statusBar.options,
-        optionDependencies: sharedOptions, into: &config)
+      config.popups[name] = .text(
+        compiled(
+          text, path: "popup.\(name)", options: config.statusBar.options,
+          optionDependencies: sharedOptions, into: &config))
     }
     for name in config.widgets.keys.sorted() {
       guard let widget = config.widgets[name] else { continue }

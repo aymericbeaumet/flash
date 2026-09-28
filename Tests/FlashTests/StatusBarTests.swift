@@ -440,18 +440,18 @@ final class StatusBarTests: XCTestCase {
   func testParsesNamedPopupTemplatesAndPopupStyle() {
     let c = ConfigLoader.parse(
       """
-      [statusbar]
-      popup_fg = "#ECEFF4"
-      popup_bg = "#2E3440"
-      popup_border = "#4C566A"
-      popup_border_size = 2
-      popup_corner_radius = 9
-      popup_padding = 10
-      popup_max_width = 420
-      popup_offset = 7
+      [popup]
+      fg = "#ECEFF4"
+      bg = "#2E3440"
+      border = "#4C566A"
+      border_size = 2
+      corner_radius = 9
+      padding = 10
+      max_width = 420
+      offset = 7
 
-      [statusbar.popup]
-      quota = '''#[fg=#EBCB8B,bold]Claude#[default]
+      [popup.quota]
+      text = '''#[fg=#EBCB8B,bold]Claude#[default]
       #{flash.source.quota}'''
 
       [statusbar.sources.quota]
@@ -459,15 +459,15 @@ final class StatusBarTests: XCTestCase {
       """)
 
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
-    XCTAssertEqual(c.statusBar.popupStyle.foreground, "#ECEFF4")
-    XCTAssertEqual(c.statusBar.popupStyle.background, "#2E3440")
-    XCTAssertEqual(c.statusBar.popupStyle.borderColor, "#4C566A")
-    XCTAssertEqual(c.statusBar.popupStyle.borderWidth, 2)
-    XCTAssertEqual(c.statusBar.popupStyle.cornerRadius, 9)
-    XCTAssertEqual(c.statusBar.popupStyle.padding, 10)
-    XCTAssertEqual(c.statusBar.popupStyle.maxWidth, 420)
-    XCTAssertEqual(c.statusBar.popupStyle.offset, 7)
-    let popup = c.statusBar.popups["quota"]
+    XCTAssertEqual(c.popupStyle.foreground, "#ECEFF4")
+    XCTAssertEqual(c.popupStyle.background, "#2E3440")
+    XCTAssertEqual(c.popupStyle.borderColor, "#4C566A")
+    XCTAssertEqual(c.popupStyle.borderWidth, 2)
+    XCTAssertEqual(c.popupStyle.cornerRadius, 9)
+    XCTAssertEqual(c.popupStyle.padding, 10)
+    XCTAssertEqual(c.popupStyle.maxWidth, 420)
+    XCTAssertEqual(c.popupStyle.offset, 7)
+    let popup = c.textPopups["quota"]
     XCTAssertEqual(
       popup?.template,
       "#[fg=#EBCB8B,bold]Claude#[default]\n#{flash.source.quota}")
@@ -477,15 +477,15 @@ final class StatusBarTests: XCTestCase {
   func testInvalidPopupStyleIsDiagnosedAndKeepsDefaults() {
     let c = ConfigLoader.parse(
       """
-      [statusbar]
-      popup_fg = "colour178"
-      popup_border_size = -1
-      popup_max_width = 20
+      [popup]
+      fg = "colour178"
+      border_size = -1
+      max_width = 20
       """)
 
-    XCTAssertEqual(c.statusBar.popupStyle, Config.StatusBar.PopupStyle())
+    XCTAssertEqual(c.popupStyle, Config.PopupStyle())
     XCTAssertEqual(c.loadingDiagnostics.count, 3)
-    XCTAssertTrue(c.loadingDiagnostics.allSatisfy { $0.message.contains("statusbar.popup_") })
+    XCTAssertTrue(c.loadingDiagnostics.allSatisfy { $0.message.hasPrefix("popup.") })
   }
 
   func testPopupTemplateRenderingPreservesNewlinesAndDynamicValues() {
@@ -586,8 +586,8 @@ final class StatusBarTests: XCTestCase {
       secondPointer.y - firstPointer.y,
       accuracy: 0.001)
 
-    let padding = CGFloat(panel.statusBarPopupStyle.padding)
-    let border = CGFloat(panel.statusBarPopupStyle.borderWidth)
+    let padding = CGFloat(panel.popupStyle.padding)
+    let border = CGFloat(panel.popupStyle.borderWidth)
     let label = popup.terminalView.frame
     XCTAssertEqual(label.minX - border, padding, accuracy: 0.001)
     XCTAssertEqual(label.minY - border, padding, accuracy: 0.001)

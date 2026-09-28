@@ -26,7 +26,9 @@ private final class StatusPopupPanel: NSPanel {
   }
 }
 
-/// Owns only presentation. The registry continues parsing PTYs after this panel hides.
+/// Owns only presentation: which popup shows, where, and in which state. The
+/// registry owns every session and keeps parsing PTYs after this panel hides;
+/// each showing tells it once, on dismissal, that the showing ended.
 final class StatusPopupController {
   let terminals: StatusTerminalRegistry
   private(set) var presentation: StatusPopupPresentation = .hidden
@@ -43,11 +45,12 @@ final class StatusPopupController {
   private let exitLabel = NSTextField(labelWithString: "")
   private var region: StatusBarPopupRegion?
   private var visibleFrame = CGRect.zero
-  private var style = Config.StatusBar.PopupStyle()
+  private var style = Config.PopupStyle()
   private var font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
   var didDismissFocus: ((String) -> Void)?
+  /// Observation only: the registry has already been told the showing ended.
   var didDismiss: ((String) -> Void)?
   var inputInterceptor: ((NSEvent) -> Bool)?
 
@@ -95,14 +98,14 @@ final class StatusPopupController {
 
   func preview(
     _ region: StatusBarPopupRegion, pointer: CGPoint,
-    visibleFrame: CGRect, style: Config.StatusBar.PopupStyle, font: NSFont,
+    visibleFrame: CGRect, style: Config.PopupStyle, font: NSFont,
     preservingContent: Bool = false
   ) {
     guard !presentation.isStandalone else { return }
     guard !isContentSnapshot || preservingContent else { return }
     if presentation.isFocused {
       if presentation.identity?.name == region.name {
-        if terminals.isPopupPager(name: region.name) { return }
+        if terminals.isPager(region.name) { return }
         self.region = region
         self.style = style
         self.font = font
@@ -113,7 +116,7 @@ final class StatusPopupController {
       return
     }
     if let previous = presentation.identity?.name, previous != region.name,
-      terminals.isPopupPager(name: previous)
+      terminals.isPager(previous)
     {
       dismiss(reason: "popup_changed")
     }
@@ -124,31 +127,47 @@ final class StatusPopupController {
     self.font = font
     transition(.anchor(name: region.name, point: pointer))
     layout(region: region)
+    // A terminal popup whose session is gone dismissed itself in layout.
+    guard isVisible else { return }
     terminalView.isRenderingEnabled = true
     if windowActionsEnabled { panel.orderFrontRegardless() }
     logLifecycle(reason: "preview")
   }
 
-  func showTerminal(
-    name: String, visibleFrame: CGRect, style: Config.StatusBar.PopupStyle, font: NSFont
+  /// Show `name` standalone, centred on `visibleFrame` and focused. A
+  /// terminal popup needs its registry session; a text popup brings the
+  /// document it opens with and keeps it until an explicit restart.
+  func show(
+    name: String, document: [FlashStatusTextSegment]? = nil, visibleFrame: CGRect,
+    style: Config.PopupStyle, font: NSFont
   ) {
-    guard terminals.sessions[name] != nil, terminals.definitions[name] != nil else { return }
-    let alreadyFocused = presentation == .terminal(name: name)
+    let isTerminal = terminals.definitions[name] != nil
+    guard isTerminal ? terminals.session(named: name) != nil : document != nil else { return }
+    let alreadyFocused = presentation == .standalone(name: name)
     if isVisible && !alreadyFocused { dismiss(reason: "terminal_replaced") }
-    let terminalRegion = StatusBarPopupRegion(rect: .zero, name: name, content: "")
-    region = terminalRegion
+    let standaloneRegion =
+      alreadyFocused
+      ? region ?? StatusBarPopupRegion(rect: .zero, name: name, content: "")
+      : StatusBarPopupRegion(
+        rect: .zero, name: name,
+        content: document.map { $0.filter { !$0.ignore }.map(\.text).joined() } ?? "",
+        document: document)
+    region = standaloneRegion
     self.visibleFrame = visibleFrame
     self.style = style
     self.font = font
-    transition(.terminal(name: name))
-    layout(region: terminalRegion)
+    transition(.standalone(name: name))
+    layout(region: standaloneRegion)
+    guard isVisible else { return }
     terminalView.isRenderingEnabled = true
     if !alreadyFocused { willFocus?() }
     activateTerminalInput()
     logLifecycle(reason: "terminal_opened")
   }
 
-  func repositionTerminal(visibleFrame: CGRect) {
+  /// A standalone popup follows its screen's visible frame: recentred, and a
+  /// size given in percentages resizes its PTY.
+  func repositionStandalone(visibleFrame: CGRect) {
     guard presentation.isStandalone, let region else { return }
     self.visibleFrame = visibleFrame
     layout(region: region)
@@ -162,7 +181,7 @@ final class StatusPopupController {
       dismiss(reason: "region_removed")
       return
     }
-    if terminals.isPopupPager(name: name), presentation.isFocused || isContentSnapshot {
+    if terminals.isPager(name), presentation.isFocused || isContentSnapshot {
       let segments = updated.document ?? FlashStatusBarRenderer.segments(from: updated.content)
       terminals.stagePopup(name: name, data: Self.documentVT(segments))
       return
@@ -172,7 +191,16 @@ final class StatusPopupController {
     layout(region: updated)
   }
 
-  func updateStyle(_ style: Config.StatusBar.PopupStyle) {
+  /// A standalone text popup keeps the document it opened with; the latest
+  /// collected one waits for an explicit restart, as in a focused pager.
+  func stageStandalone(_ documents: [String: [FlashStatusTextSegment]]) {
+    guard presentation.isStandalone, let name = presentation.identity?.name,
+      terminals.isPager(name), let document = documents[name]
+    else { return }
+    terminals.stagePopup(name: name, data: Self.documentVT(document))
+  }
+
+  func updateStyle(_ style: Config.PopupStyle) {
     self.style = style
     if isVisible, let region { layout(region: region) }
   }
@@ -194,10 +222,9 @@ final class StatusPopupController {
     region = nil
     isContentSnapshot = false
     if wasFocused { didDismissFocus?(reason) }
-    if let previousName { didDismiss?(previousName) }
-    if let previousName, terminals.isPopupPager(name: previousName) {
-      terminals.releaseTerminal(name: previousName)
-    }
+    guard let previousName else { return }
+    terminals.hide(previousName)
+    didDismiss?(previousName)
   }
 
   func focus() {
@@ -225,7 +252,7 @@ final class StatusPopupController {
       "state":
         !isVisible
         ? "hidden"
-        : presentation.isStandalone ? "terminal" : presentation.isFocused ? "focused" : "preview",
+        : presentation.isStandalone ? "standalone" : presentation.isFocused ? "focused" : "preview",
       "rendering_enabled": String(terminalView.isRenderingEnabled),
       "frame_ready": String(terminalView.terminalFrame != nil),
       "panel_visible": String(panel.isVisible),
@@ -287,30 +314,30 @@ final class StatusPopupController {
     var exitText = ""
     var footerHeight: CGFloat = 0
     var sourceKind = "terminal"
-    if let session = terminals.sessions[region.name],
-      let definition = terminals.definitions[region.name],
-      !terminals.isPopupPager(name: region.name)
-    {
+    if let definition = terminals.definitions[region.name] {
+      guard let session = terminals.session(named: region.name) else {
+        dismiss(reason: "terminal_missing")
+        return
+      }
       switch session.state {
       case .exited(let code):
         exitText = "Exited (\(code))"
-        if terminals.automaticallyRestarts(name: region.name) {
-          exitText += " · restarting automatically"
-        }
+        if definition.lifecycle == .persistent { exitText += " · restarting automatically" }
       case .failed(let message): exitText = message
       default: break
       }
       footerHeight =
         exitText.isEmpty
         ? 0 : min(cell.height, max(0, visibleFrame.height - inset * 2 - cell.height))
-      columns = min(maximumColumns, definition.columns)
-      rows = min(
-        max(1, Int((visibleFrame.height - inset * 2 - footerHeight) / cell.height)), definition.rows
-      )
+      let grid = definition.size.grid(
+        visible: visibleFrame.size, cell: cell, inset: inset, reservedHeight: footerHeight)
+      columns = grid.columns
+      rows = grid.rows
       clipsTrailingRow = Self.hidesBlankTerminalRow(
         lastRow: Self.lastRowText(of: session.frame), rows: rows,
         interactive: presentation.isFocused || presentation.isStandalone)
       terminalView.bind(session: session)
+      session.setColors(foreground: foreground, background: background)
       session.resize(columns: columns, rows: rows)
     } else {
       sourceKind = "pager"
@@ -326,15 +353,16 @@ final class StatusPopupController {
       clipsTrailingRow = Self.hidesPagerPromptRow(
         rows: rows, interactive: presentation.isFocused || presentation.isStandalone)
       let session: TerminalSession
-      if let existing = terminals.sessions[region.name], presentation.isFocused || isContentSnapshot
+      if let existing = terminals.session(named: region.name),
+        presentation.isFocused || isContentSnapshot
       {
         session = existing
       } else {
-        session = terminals.preparePopup(
-          name: region.name, data: Self.documentVT(segments), columns: columns, rows: rows,
-          colors: colors)
+        session = terminals.preparePager(
+          name: region.name, data: Self.documentVT(segments), columns: columns, rows: rows)
       }
       terminalView.bind(session: session)
+      session.setColors(foreground: foreground, background: background)
       session.resize(columns: columns, rows: rows)
     }
     content = region.content
@@ -469,6 +497,33 @@ final class StatusPopupController {
   static func documentGrid(text: String, availableColumns: Int, maximumRows: Int) -> (
     columns: Int, rows: Int
   ) {
+    // Printable ASCII and newlines: one cell per byte, no sanitizing, and a
+    // line wraps every `columns` cells. Calendars and plugin details are
+    // almost always this.
+    if text.utf8.allSatisfy({ $0 == 0x0A || (0x20..<0x7F).contains($0) }) {
+      var widths: [Int] = []
+      var width = 0
+      for byte in text.utf8 {
+        if byte == 0x0A {
+          widths.append(width)
+          width = 0
+        } else {
+          width += 1
+        }
+      }
+      widths.append(width)
+      let columns = max(1, min(availableColumns, widths.max() ?? 1))
+      let rows = widths.reduce(0) { $0 + 1 + max(0, $1 - 1) / columns }
+      return (columns, max(1, min(maximumRows, rows)))
+    }
+    return measuredDocumentGrid(
+      text: text, availableColumns: availableColumns, maximumRows: maximumRows)
+  }
+
+  /// Every character measured through the terminal's width tables.
+  static func measuredDocumentGrid(text: String, availableColumns: Int, maximumRows: Int) -> (
+    columns: Int, rows: Int
+  ) {
     let lines = TerminalText.sanitize(text: text).split(
       separator: "\n", omittingEmptySubsequences: false)
     let widths = lines.map { line -> Int in
@@ -526,10 +581,19 @@ struct StatusPopupColors {
   let background: NSColor
   let border: NSColor
 
-  init(_ style: Config.StatusBar.PopupStyle) {
-    foreground = Self.color(style.foreground) ?? .textColor
+  init(_ style: Config.PopupStyle) {
     background = Self.color(style.background) ?? .windowBackgroundColor
     border = Self.color(style.borderColor) ?? .clear
+    // Terminal text is opaque: a translucent foreground is mixed over the
+    // background it is drawn on.
+    let foreground = Self.color(style.foreground) ?? .textColor
+    let opaqueBackground = background.withAlphaComponent(1)
+    self.foreground =
+      foreground.alphaComponent < 1
+      ? opaqueBackground.blended(
+        withFraction: foreground.alphaComponent, of: foreground.withAlphaComponent(1))
+        ?? foreground
+      : foreground
   }
 
   private static func color(_ hex: String) -> NSColor? {

@@ -37,11 +37,11 @@ extension AppDelegate {
   func leaveMode() {
     releaseHeldMouseButton(reason: "leave_mode")
     if modeStore.mode.isTerminal {
-      suppressDismissedTerminalHover()
-      dismissTerminal()
+      suppressDismissedPopupHover()
+      dismissPopup()
       return
     }
-    if overlay.statusPopupController.isVisible { dismissTerminal() }
+    if overlay.statusPopupController.isVisible { dismissPopup() }
     returnActivationIfClosingCommandBar(reason: "leave_mode")
     overlay.resignCommandTextFieldFocus()
     dispatchMode(
@@ -907,14 +907,14 @@ extension AppDelegate {
       enterNormalMode()
     case .leaveMode:
       leaveMode()
-    case .terminalShow(let name):
-      showTerminal(named: name)
-    case .terminalDismiss:
-      dismissTerminal()
-    case .terminalRestart(let name):
-      restartStatusTerminal(named: name)
-    case .terminalQuit(let name):
-      quitStatusTerminal(named: name)
+    case .popupShow(let name):
+      showPopup(named: name)
+    case .popupDismiss:
+      dismissPopup()
+    case .popupRestart(let name):
+      restartPopup(named: name)
+    case .popupQuit(let name):
+      quitPopup(named: name)
     case .commandMode:
       enterCommandLineMode()
     case .scroll(let kind):

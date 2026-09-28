@@ -7,7 +7,7 @@ import XCTest
 
 final class StatusFormatLayoutTests: XCTestCase {
   func testOracleDecoderPreservesCombinedGlyphAtRightEdge() throws {
-    let buffer = TerminalBuffer(columns: 20, rows: 1, scrollback: false)
+    let buffer = TerminalBuffer(columns: 20, rows: 1, scrollbackLines: 0)
     buffer.write(Data("\u{1b}[1;19H🇫🇷".utf8))
     let frame = try XCTUnwrap(buffer.snapshot())
     XCTAssertEqual(frame.cells[18].text, "🇫🇷")

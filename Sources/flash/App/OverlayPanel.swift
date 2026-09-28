@@ -135,9 +135,10 @@ final class OverlayPanel: NSPanel {
     controller.sharingType = overlayConfig.screenCapture.sharingType
     return controller
   }()
-  var statusBarPopupStyle = Config.StatusBar.PopupStyle() {
+  /// `[popup]`: the chrome of every popup this panel presents.
+  var popupStyle = Config.PopupStyle() {
     didSet {
-      if oldValue != statusBarPopupStyle { statusPopupController.updateStyle(statusBarPopupStyle) }
+      if oldValue != popupStyle { statusPopupController.updateStyle(popupStyle) }
     }
   }
   var statusBarPopupTexts: [String: String] = [:]

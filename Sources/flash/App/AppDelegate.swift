@@ -407,7 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.overlay.darkAppearance = dark
     }
     overlay.debugConfig = config.debug
-    overlay.statusBarPopupStyle = config.statusBar.popupStyle
+    overlay.popupStyle = config.popupStyle
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
@@ -425,10 +425,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
-      popupTemplates: config.statusBar.popups,
+      popupTemplates: config.textPopups,
       options: config.statusBar.options,
       sources: config.statusBar.sources,
-      terminalPopupNames: Set(config.terminals.keys),
+      terminalPopupNames: config.terminalPopupNames,
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
@@ -515,14 +515,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterNormalMode()
     case .leaveMode:
       leaveMode()
-    case .terminalShow(let name):
-      showTerminal(named: name)
-    case .terminalDismiss:
-      dismissTerminal()
-    case .terminalRestart(let name):
-      restartStatusTerminal(named: name)
-    case .terminalQuit(let name):
-      quitStatusTerminal(named: name)
+    case .popupShow(let name):
+      showPopup(named: name)
+    case .popupDismiss:
+      dismissPopup()
+    case .popupRestart(let name):
+      restartPopup(named: name)
+    case .popupQuit(let name):
+      quitPopup(named: name)
     case .insertMode:
       enterInsertMode()
     case .commandMode:

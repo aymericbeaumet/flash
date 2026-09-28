@@ -25,7 +25,7 @@ final class StatusPopupDismissalTests: XCTestCase {
     XCTAssertEqual(
       StatusPopupPresentation.preview(name: "article", anchor: .zero).ephemeralName, "article")
     XCTAssertNil(StatusPopupPresentation.focused(name: "article", anchor: .zero).ephemeralName)
-    XCTAssertNil(StatusPopupPresentation.terminal(name: "terminal:shell").ephemeralName)
+    XCTAssertNil(StatusPopupPresentation.standalone(name: "shell").ephemeralName)
     XCTAssertNil(StatusPopupPresentation.hidden.ephemeralName)
   }
 
@@ -57,12 +57,12 @@ final class StatusPopupDismissalTests: XCTestCase {
   func testAPendingHoverDwellIsCancelled() {
     let panel = OverlayPanel()
     let work = DispatchWorkItem {}
-    panel.statusBarHoverDwellName = "terminal:shell"
+    panel.statusBarHoverDwellName = "shell"
     panel.statusBarHoverDwellWork = work
 
     panel.dismissEphemeralStatusBarPopup(reason: "pointer_click")
     XCTAssertTrue(work.isCancelled)
     XCTAssertNil(panel.statusBarHoverDwellName)
-    XCTAssertEqual(panel.statusBarHoverGate, .dismissed("terminal:shell"))
+    XCTAssertEqual(panel.statusBarHoverGate, .dismissed("shell"))
   }
 }

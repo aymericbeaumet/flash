@@ -24,6 +24,21 @@ final class StatusPopupControllerTests: XCTestCase {
       content: text, document: [FlashStatusTextSegment(text: text, foreground: .defaultForeground)])
   }
 
+  private func terminal(
+    _ command: [String], persistent: Bool = false, size: Config.PopupSize = .default
+  ) -> Config.Terminal {
+    Config.Terminal(command: command, size: size, lifecycle: persistent ? .persistent : .fresh)
+  }
+
+  private func show(
+    _ controller: StatusPopupController, _ name: String, document: [FlashStatusTextSegment]? = nil,
+    screen: CGRect = CGRect(x: 0, y: 0, width: 600, height: 400)
+  ) {
+    controller.show(
+      name: name, document: document, visibleFrame: screen, style: .init(),
+      font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+  }
+
   private func preview(
     _ controller: StatusPopupController, region: StatusBarPopupRegion,
     screen: CGRect = CGRect(x: 0, y: 0, width: 600, height: 400)
@@ -135,7 +150,7 @@ final class StatusPopupControllerTests: XCTestCase {
     waitUntil("popup terminal painted") {
       controller.terminalView.terminalFrame?.text.contains("Total 42 %") == true
     }
-    let snapshotPath = try XCTUnwrap(registry.definitions["details"]?.command.last)
+    let snapshotPath = try XCTUnwrap(session.configuration.command.last)
     XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath))
     controller.dismiss()
     waitUntil("popup resources released") {
@@ -181,11 +196,8 @@ final class StatusPopupControllerTests: XCTestCase {
   func testLeavingAnchorHidesPreviewAndPreservesFocusedTerminal() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    var status = Config()
-    status.terminals["system"] = .init(command: ["/bin/sleep", "30"], persistent: true)
     registry.apply(
-      status.statusBar, terminals: status.terminals,
-      invalidTerminalNames: status.invalidTerminalNames)
+      style: .init(), terminals: ["system": terminal(["/bin/sleep", "30"], persistent: true)])
     defer { registry.shutdown() }
     waitUntil("terminal running") {
       if case .running = registry.sessions["system"]?.state { return true }
@@ -367,11 +379,8 @@ final class StatusPopupControllerTests: XCTestCase {
   func testTerminalRemovalFlushesFocusedInputBeforeStoppingAndHiding() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    var status = Config()
-    status.terminals["system"] = .init(command: ["/bin/sleep", "30"], persistent: true)
     registry.apply(
-      status.statusBar, terminals: status.terminals,
-      invalidTerminalNames: status.invalidTerminalNames)
+      style: .init(), terminals: ["system": terminal(["/bin/sleep", "30"], persistent: true)])
     defer { registry.shutdown() }
     waitUntil("terminal running") {
       if case .running = registry.sessions["system"]?.state { return true }
@@ -391,10 +400,7 @@ final class StatusPopupControllerTests: XCTestCase {
       XCTAssertFalse(controller.terminalView.isRenderingEnabled)
       callbacks.append("restore")
     }
-    status.terminals.removeAll()
-    registry.apply(
-      status.statusBar, terminals: status.terminals,
-      invalidTerminalNames: status.invalidTerminalNames)
+    registry.apply(style: .init(), terminals: [:])
     XCTAssertEqual(callbacks, ["flush", "restore"])
     XCTAssertFalse(controller.isVisible)
     XCTAssertNil(registry.sessions["system"])
@@ -403,12 +409,13 @@ final class StatusPopupControllerTests: XCTestCase {
   func testExitedTerminalFooterFitsScreenAndInvalidReloadPreservesSession() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    var status = Config()
-    status.terminals["system"] = .init(
-      command: ["/bin/sh", "-c", "printf retained; exit 9"], rows: 100, persistent: true)
     registry.apply(
-      status.statusBar, terminals: status.terminals,
-      invalidTerminalNames: status.invalidTerminalNames)
+      style: .init(),
+      terminals: [
+        "system": terminal(
+          ["/bin/sh", "-c", "printf retained; exit 9"], persistent: true,
+          size: Config.PopupSize(columns: .cells(100), rows: .cells(100)))
+      ])
     defer { registry.shutdown() }
     let original = registry.sessions["system"]!
     let stateChanged = original.onStateChange
@@ -425,11 +432,7 @@ final class StatusPopupControllerTests: XCTestCase {
       XCTAssertGreaterThanOrEqual(controller.terminalView.frame.minY, 0)
       XCTAssertLessThanOrEqual(controller.frame.height, screen.height)
       XCTAssertLessThanOrEqual(controller.terminalView.frame.maxY, controller.frame.height)
-      status.terminals.removeAll()
-      status.invalidTerminalNames = ["system"]
-      registry.apply(
-        status.statusBar, terminals: status.terminals,
-        invalidTerminalNames: status.invalidTerminalNames)
+      registry.apply(style: .init(), terminals: [:], invalid: ["system"])
       XCTAssertTrue(registry.sessions["system"] === original)
       XCTAssertTrue(controller.isVisible)
       exited.fulfill()
@@ -444,18 +447,17 @@ final class StatusPopupControllerTests: XCTestCase {
         let registry = StatusTerminalRegistry()
         let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
         defer { registry.shutdown() }
-        var config = Config()
-        config.terminals["crash"] = .init(
-          command: ["/bin/sh", "-c", "printf 'ready-%s' \"$$\"; exec /bin/sleep 30"],
-          persistent: persistent)
-        registry.apply(config.statusBar, terminals: config.terminals)
-        let name = registry.prepareTerminal(name: "crash", configuration: config)!
-        let session = registry.sessions[name]!
-        controller.didDismiss = { registry.releaseTerminal(name: $0) }
+        registry.apply(
+          style: .init(),
+          terminals: [
+            "crash": terminal(
+              ["/bin/sh", "-c", "printf 'ready-%s' \"$$\"; exec /bin/sleep 30"],
+              persistent: persistent)
+          ])
+        let name = "crash"
+        let session = registry.open(name)!
         if presentation == "standalone" {
-          controller.showTerminal(
-            name: name, visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400),
-            style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+          show(controller, name)
         } else {
           preview(controller, region: region(name, text: ""))
           if presentation == "pinned" { controller.focus() }
@@ -477,7 +479,7 @@ final class StatusPopupControllerTests: XCTestCase {
             registry.sessions[name] == nil && !controller.isVisible
           }
           XCTAssertEqual(dismissals, presentation == "preview" ? 0 : 1)
-          XCTAssertNil(registry.definitions[name])
+          XCTAssertNil(registry.session(named: name))
           continue
         }
         waitUntil("crashed terminal replaced and rendered") {
@@ -501,12 +503,13 @@ final class StatusPopupControllerTests: XCTestCase {
   func testStandaloneTerminalCentersClampsAndSurvivesStatusBarChanges() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    var status = Config()
-    status.terminals["shell"] = .init(
-      command: ["/bin/sleep", "30"], columns: 100, rows: 40, persistent: true)
     registry.apply(
-      status.statusBar, terminals: status.terminals,
-      invalidTerminalNames: status.invalidTerminalNames)
+      style: .init(),
+      terminals: [
+        "shell": terminal(
+          ["/bin/sleep", "30"], persistent: true,
+          size: Config.PopupSize(columns: .cells(100), rows: .cells(40)))
+      ])
     defer { registry.shutdown() }
     let screen = CGRect(x: -750, y: -300, width: 600, height: 350)
     var callbacks: [String] = []
@@ -519,10 +522,8 @@ final class StatusPopupControllerTests: XCTestCase {
       XCTAssertEqual(controller.presentation, .hidden)
       callbacks.append("release")
     }
-    controller.showTerminal(
-      name: "shell", visibleFrame: screen, style: .init(),
-      font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
-    XCTAssertEqual(controller.presentation, .terminal(name: "shell"))
+    show(controller, "shell", screen: screen)
+    XCTAssertEqual(controller.presentation, .standalone(name: "shell"))
     XCTAssertEqual(controller.focusedName, "shell")
     XCTAssertEqual(controller.frame.midX, screen.midX, accuracy: 0.5)
     XCTAssertEqual(controller.frame.midY, screen.midY, accuracy: 0.5)
@@ -530,15 +531,13 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertTrue(controller.terminalView.isRenderingEnabled)
     XCTAssertEqual(callbacks, ["focus"])
     let originalFrame = controller.frame
-    controller.showTerminal(
-      name: "shell", visibleFrame: screen, style: .init(),
-      font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    show(controller, "shell", screen: screen)
     XCTAssertEqual(callbacks, ["focus"])
     controller.refresh([])
     preview(controller, region: region("shell", text: "Anchor replacement"))
     preview(controller, region: region("other", text: "Other hover"))
     controller.leaveAnchor()
-    XCTAssertEqual(controller.presentation, .terminal(name: "shell"))
+    XCTAssertEqual(controller.presentation, .standalone(name: "shell"))
     XCTAssertEqual(controller.frame, originalFrame)
     XCTAssertEqual(controller.content, "")
     controller.dismiss(reason: "terminal_closed")
@@ -553,12 +552,13 @@ final class StatusPopupControllerTests: XCTestCase {
   func testStandaloneRepositionPreservesSessionAndFocusOnSmallerScreen() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    var status = Config()
-    status.terminals["shell"] = .init(
-      command: ["/bin/sleep", "30"], columns: 100, rows: 40, persistent: true)
     registry.apply(
-      status.statusBar, terminals: status.terminals,
-      invalidTerminalNames: status.invalidTerminalNames)
+      style: .init(),
+      terminals: [
+        "shell": terminal(
+          ["/bin/sleep", "30"], persistent: true,
+          size: Config.PopupSize(columns: .cells(100), rows: .cells(40)))
+      ])
     defer { registry.shutdown() }
     let session = registry.sessions["shell"]
     let generation = registry.inputGenerations["shell"]
@@ -566,13 +566,11 @@ final class StatusPopupControllerTests: XCTestCase {
     var dismissalCount = 0
     controller.willFocus = { focusCount += 1 }
     controller.didDismiss = { _ in dismissalCount += 1 }
-    controller.showTerminal(
-      name: "shell", visibleFrame: CGRect(x: 0, y: 0, width: 1400, height: 1000),
-      style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    show(controller, "shell", screen: CGRect(x: 0, y: 0, width: 1400, height: 1000))
     let originalFrame = controller.frame
     let smallerScreen = CGRect(x: -600, y: -350, width: 500, height: 300)
-    controller.repositionTerminal(visibleFrame: smallerScreen)
-    XCTAssertEqual(controller.presentation, .terminal(name: "shell"))
+    controller.repositionStandalone(visibleFrame: smallerScreen)
+    XCTAssertEqual(controller.presentation, .standalone(name: "shell"))
     XCTAssertEqual(controller.focusedName, "shell")
     XCTAssertEqual(controller.frame.midX, smallerScreen.midX, accuracy: 0.5)
     XCTAssertEqual(controller.frame.midY, smallerScreen.midY, accuracy: 0.5)
@@ -586,7 +584,7 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(dismissalCount, 0)
     controller.dismiss()
     let dismissedFrame = controller.frame
-    controller.repositionTerminal(visibleFrame: CGRect(x: 0, y: 0, width: 1400, height: 1000))
+    controller.repositionStandalone(visibleFrame: CGRect(x: 0, y: 0, width: 1400, height: 1000))
     XCTAssertEqual(controller.presentation, .hidden)
     XCTAssertEqual(controller.frame, dismissedFrame)
   }
@@ -594,9 +592,7 @@ final class StatusPopupControllerTests: XCTestCase {
   func testStandaloneTerminalRequiresAnExistingRegistrySession() {
     let controller = StatusPopupController(
       terminals: StatusTerminalRegistry(), windowActionsEnabled: false)
-    controller.showTerminal(
-      name: "missing", visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400),
-      style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    show(controller, "missing")
     XCTAssertEqual(controller.presentation, .hidden)
     XCTAssertFalse(controller.terminalView.isRenderingEnabled)
   }
@@ -604,21 +600,15 @@ final class StatusPopupControllerTests: XCTestCase {
   func testNonpersistentWindowClosesWhenItsProcessExits() throws {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
-    var config = Config()
-    config.terminals["shell"] = .init(command: ["/bin/cat"])
-    let name = try XCTUnwrap(registry.openTerminal(name: "shell", configuration: config))
-    let session = try XCTUnwrap(registry.sessions[name])
+    registry.apply(style: .init(), terminals: ["shell": terminal(["/bin/cat"])])
+    let name = "shell"
+    let session = try XCTUnwrap(registry.open(name))
     defer { registry.shutdown() }
     var dismissed: [String] = []
-    controller.didDismiss = {
-      dismissed.append($0)
-      registry.releaseTerminal(name: $0)
-    }
+    controller.didDismiss = { dismissed.append($0) }
     var focusDismissalReasons: [String] = []
     controller.didDismissFocus = { focusDismissalReasons.append($0) }
-    controller.showTerminal(
-      name: name, visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 800),
-      style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    show(controller, name, screen: CGRect(x: 0, y: 0, width: 1200, height: 800))
     waitUntil("first child running") {
       if case .running = session.state { return true }
       return false
@@ -640,6 +630,9 @@ final class StatusPopupControllerTests: XCTestCase {
       command: ["$BIN/tool", "${TOKEN}"],
       workingDirectory: "$PROJECT",
       environment: ["BIN": "$HOME/bin", "TOKEN": "value", "PATH": "$HOME/bin:$PATH"])
+    XCTAssertEqual(
+      StatusTerminalRegistry.configuration(for: definition, environment: [:]).scrollbackLines,
+      StatusTerminalRegistry.freshScrollbackLines)
     let config = StatusTerminalRegistry.configuration(
       for: definition,
       environment: [
@@ -654,5 +647,84 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(explicitlyPlain.environment["NO_COLOR"], "1")
     XCTAssertEqual(
       CommandLaunchConfiguration.expand("$MISSING/${BAD", environment: [:]), "$MISSING/${BAD")
+  }
+
+  func testDocumentGridASCIIFastPathMatchesMeasuredGrid() {
+    let samples = [
+      "", "a", "abc\ndefghij\n\nk", String(repeating: "x", count: 25), "ab cd ef gh\n12345678901",
+    ]
+    for text in samples {
+      for columns in [1, 3, 7, 10, 80] {
+        let fast = StatusPopupController.documentGrid(
+          text: text, availableColumns: columns, maximumRows: 100)
+        let measured = StatusPopupController.measuredDocumentGrid(
+          text: text, availableColumns: columns, maximumRows: 100)
+        XCTAssertEqual(fast.columns, measured.columns, "\(text) at \(columns)")
+        XCTAssertEqual(fast.rows, measured.rows, "\(text) at \(columns)")
+      }
+    }
+    XCTAssertEqual(
+      StatusPopupController.documentGrid(
+        text: "abcdefghij\nxy", availableColumns: 4, maximumRows: 100
+      ).rows, 4)
+  }
+
+  func testStandaloneTextPopupKeepsItsDocumentUntilAnExplicitRestart() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    var focused = 0
+    controller.willFocus = { focused += 1 }
+    show(
+      controller, "date",
+      document: [FlashStatusTextSegment(text: "Monday", foreground: .defaultForeground)])
+    XCTAssertEqual(controller.presentation, .standalone(name: "date"))
+    XCTAssertEqual(focused, 1)
+    XCTAssertTrue(registry.isPager("date"))
+    waitUntil("standalone pager drawn") {
+      controller.terminalView.terminalFrame?.text.contains("Monday") == true
+    }
+    controller.stageStandalone([
+      "date": [FlashStatusTextSegment(text: "Tuesday", foreground: .defaultForeground)]
+    ])
+    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    XCTAssertFalse(controller.terminalView.terminalFrame?.text.contains("Tuesday") == true)
+    registry.restart(name: "date")
+    waitUntil("explicit restart shows the latest document") {
+      controller.terminalView.terminalFrame?.text.contains("Tuesday") == true
+    }
+    let session = try XCTUnwrap(registry.session(named: "date"))
+    controller.dismiss()
+    XCTAssertNil(registry.session(named: "date"), "dismissal ends the pager")
+    XCTAssertNotEqual(session.state, .idle)
+  }
+
+  func testPercentSizedPopupFollowsTheScreenItShowsOn() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let size = try XCTUnwrap(Config.PopupSize("50%x50%"))
+    registry.apply(
+      style: .init(),
+      terminals: ["top": terminal(["/bin/sleep", "30"], persistent: true, size: size)])
+    let session = try XCTUnwrap(registry.open("top"))
+    let small = CGRect(x: 0, y: 0, width: 800, height: 600)
+    show(controller, "top", screen: small)
+    let cell = controller.terminalView.cellSize
+    let inset = CGFloat(Config.PopupStyle().padding + Config.PopupStyle().borderWidth)
+    let expected = size.grid(visible: small.size, cell: cell, inset: inset)
+    waitUntil("grid follows the first screen") {
+      session.frame?.columns == expected.columns && session.frame?.rows == expected.rows
+    }
+    XCTAssertEqual(controller.frame.width, small.width / 2, accuracy: cell.width + 1)
+    let large = CGRect(x: 800, y: 0, width: 1600, height: 1000)
+    controller.repositionStandalone(visibleFrame: large)
+    let grown = size.grid(visible: large.size, cell: cell, inset: inset)
+    XCTAssertGreaterThan(grown.columns, expected.columns)
+    waitUntil("grid follows the new screen") {
+      session.frame?.columns == grown.columns && session.frame?.rows == grown.rows
+    }
+    XCTAssertEqual(controller.frame.midX, large.midX, accuracy: 0.5)
+    XCTAssertTrue(registry.session(named: "top") === session, "resizing keeps the process")
   }
 }

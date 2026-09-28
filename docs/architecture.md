@@ -270,7 +270,7 @@ are unchanged. Replacements invalidate tokens before stopping children in one
 bounded batch. The scheduler arms only evaluated jobs, active cycles, clock
 expansion and pending output publication. Inactive shell jobs and their output
 are discarded; inactive named sources retain last-good values without wakeups.
-See [status formats](status-format.md) and [terminal ownership](terminal-popups.md).
+See [status formats](status-format.md) and [popup ownership](popups.md#internals).
 
 Plugin manifests are immutable runtime definitions. A changed manifest replaces
 its process/adapter registration; a settings-only update reconciles the existing

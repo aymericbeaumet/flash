@@ -1,4 +1,4 @@
-# Status strip with terminal popups
+# Status strip with popups
 
 The companion [Flash configuration](flash.toml) uses bundled plugin data for
 all quota and system popups. No external monitoring application is required.
@@ -29,21 +29,27 @@ The system `less` pager displays cached plugin details with selection, copying,
 search, and scrolling, without another collector or monitoring CLI.
 
 Merge the example sections into the existing configuration, preserving personal
-mappings and plugin settings. Remove any `[terminal.claude]`, `[terminal.codex]`,
-`[terminal.cpu]`, `[terminal.memory]`, `[terminal.disks]`, `[terminal.network]`, and
-`[terminal.battery]` definitions from the earlier external-monitor setup; named
-terminal definitions take precedence over text popups.
+mappings and plugin settings. Popups share one namespace: each `[popup.<name>]`
+is either a text popup (`text`) or a terminal popup (`command`), so a later
+file's `[popup.cpu]` replaces this one outright. To show a monitor such as
+`btop` instead of the bundled details, declare it once and wrap every system
+label in the same marker:
+
+```toml
+[popup.btop]
+command = ["btop"]
+size = "90%x85%"
+persistent = true
+```
 
 The date popup shows the built-in [calendar](../../calendar.md): current and adjacent
 months, ISO weeks, date, quarter, and day-of-year information. It has no
-appointments or tasks. It uses the same pager as the metric popups. Remove a
-`[terminal.date]` definition when using the built-in calendar, because named
-terminals take precedence.
+appointments or tasks. It uses the same pager as the metric popups.
 
 The 480-point popup width fits 50 content columns at the standard font and
 padding. The pager reserves one footer row. Longer external values wrap, and
-taller content scrolls in the pager. Configured commands use their terminal's
-`columns` and `rows`; `popup_max_width` limits generated text popups.
+taller content scrolls in the pager. Terminal popups use their `size`;
+`[popup] max_width` limits text popups.
 
 Hover previews a popup. Either unbound mouse button pins it open; repeated clicks
 keep it pinned. Existing left-click actions and links win, with right-click or
@@ -53,13 +59,13 @@ hold content and search stable; reopening or Command-R shows the latest collecte
 data. The shared terminal-mode mappings apply, and `leave_mode` restores the
 prior mode and app.
 
-Command-W dismisses a generated pager and removes its private snapshot file;
-Command-Q also ends it. Configured commands retain their usual behavior:
-Command-R restarts, Command-Q quits, and Command-W hides. Persistent jobs keep
-running while hidden and restart after exit; temporary jobs end on quit or hide.
-Hidden persistent jobs skip frame extraction, drawing, and cursor blinking.
+Command-W dismisses a text popup and removes its private snapshot file;
+Command-Q also ends it. Terminal popups retain their usual behavior:
+Command-R restarts, Command-Q quits, and Command-W hides. Persistent processes
+keep running while hidden and restart after exit; fresh ones end on quit or hide.
+Hidden persistent processes skip frame extraction, drawing, and cursor blinking.
 
 Feed headlines rotate newest first through the last 24 hours, sliding upward
 every 30 seconds while the label stays still. Hover shows the cached excerpt.
 
-See [status popups](../../status-popups.md) and [terminal lifecycle](../../terminal-popups.md).
+See [popups](../../popups.md) for kinds, lifecycles and verbs.

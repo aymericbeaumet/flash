@@ -96,12 +96,12 @@ final class ConfigurationBoundaryTests: XCTestCase {
       """
       [statusbar.sources.news]
       command = ["sh", "-c", "cat /tmp/news"]
-      [terminal.docs]
+      [popup.docs]
       command = ["open", "https://example.com/docs"]
       """, sourceURL: URL(fileURLWithPath: "/tmp/flash-config/flash.toml"))
     XCTAssertTrue(config.warnings.isEmpty, "\(config.warnings)")
     XCTAssertEqual(config.statusBar.sources["news"]?.command, ["sh", "-c", "cat /tmp/news"])
-    XCTAssertEqual(config.terminals["docs"]?.command, ["open", "https://example.com/docs"])
+    XCTAssertEqual(config.terminalPopups["docs"]?.command, ["open", "https://example.com/docs"])
   }
 
   func testWorkingDirectoriesResolveDotPathsAgainstTheirConfigurationFile() {
@@ -114,14 +114,14 @@ final class ConfigurationBoundaryTests: XCTestCase {
         [statusbar.sources.example]
         command = ["/bin/pwd"]
         working_directory = "\(path)"
-        [terminal.example]
+        [popup.example]
         command = ["/bin/pwd"]
-        working_directory = "\(path)"
+        cwd = "\(path)"
         """, sourceURL: source)
       let expected = directory.appendingPathComponent(path).standardizedFileURL.path
       XCTAssertTrue(config.warnings.isEmpty, "\(config.warnings)")
       XCTAssertEqual(config.statusBar.sources["example"]?.workingDirectory, expected, path)
-      XCTAssertEqual(config.terminals["example"]?.workingDirectory, expected, path)
+      XCTAssertEqual(config.terminalPopups["example"]?.workingDirectory, expected, path)
     }
   }
 
@@ -134,11 +134,11 @@ final class ConfigurationBoundaryTests: XCTestCase {
     try Data("config-relative-resource".utf8).write(to: resources.appendingPathComponent("value"))
     let config = ConfigLoader.parse(
       """
-      [terminal.example]
+      [popup.example]
       command = ["/bin/cat", "status/value"]
-      working_directory = "."
+      cwd = "."
       """, sourceURL: directory.appendingPathComponent("flash.toml"))
-    let definition = try XCTUnwrap(config.terminals["example"])
+    let definition = try XCTUnwrap(config.terminalPopups["example"])
     XCTAssertEqual(definition.command, ["/bin/cat", "status/value"])
     let session = TerminalSession(
       configuration: StatusTerminalRegistry.configuration(for: definition, environment: [:]))

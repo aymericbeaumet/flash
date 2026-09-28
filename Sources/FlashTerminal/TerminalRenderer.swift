@@ -132,12 +132,17 @@ final class TerminalRenderer {
     self.font = font
   }
 
+  /// One integral cell of `font`: the advance of "M" by the line height.
+  static func cellSize(for font: NSFont) -> NSSize {
+    NSSize(
+      width: ceil(("M" as NSString).size(withAttributes: [.font: font]).width),
+      height: ceil(font.ascender - font.descender + font.leading))
+  }
+
   private func configure() -> Metrics {
     let manager = NSFontManager.shared
     return Metrics(
-      cellSize: NSSize(
-        width: ceil(("M" as NSString).size(withAttributes: [.font: font]).width),
-        height: ceil(font.ascender - font.descender + font.leading)),
+      cellSize: Self.cellSize(for: font),
       baseline: font.ascender,
       // Regular / bold / italic / bold-italic, indexed by the low two cell flags.
       variants: [

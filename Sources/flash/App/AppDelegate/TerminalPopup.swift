@@ -50,22 +50,25 @@ extension AppDelegate {
       self.terminalReturnApplicationPID = nil
     }
     overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
-      self?.dismissTerminal(restoreApplication: restoreApplication)
+      self?.dismissPopup(restoreApplication: restoreApplication)
     }
     overlay.statusBarTerminalNeedsSpawnHandler = { [weak self] name in
       guard let self else { return false }
-      return self.config.terminals[name] != nil
-        && self.overlay.statusTerminals.sessions[name] == nil
+      return self.config.terminalPopupNames.contains(name)
+        && self.overlay.statusTerminals.session(named: name) == nil
     }
     overlay.statusBarTerminalPrepareHandler = { [weak self] name in
       guard let self else { return false }
-      guard self.config.terminals[name] != nil || self.config.invalidTerminalNames.contains(name)
-      else { return true }
-      return self.overlay.statusTerminals.prepareTerminal(name: name, configuration: self.config)
-        != nil
+      guard self.config.terminalPopupNames.contains(name) else { return true }
+      return self.overlay.statusTerminals.open(name) != nil
     }
-    popup.didDismiss = { [weak self] name in
-      self?.overlay.statusTerminals.releaseTerminal(name: name)
+    overlay.statusTerminals.gridResolver = { [weak self] size in
+      guard let self else { return size.unplacedGrid }
+      let style = self.config.popupStyle
+      return size.grid(
+        visible: OverlayPanel.currentScreenSnapshot().mainVisibleFrame.size,
+        cell: TerminalView.cellSize(for: self.popupFont),
+        inset: CGFloat(style.padding + style.borderWidth))
     }
     popup.inputInterceptor = { [weak self] event in
       guard let self, case .terminal = self.modeStore.mode,
@@ -74,10 +77,17 @@ extension AppDelegate {
       self.terminalInputMappings?.handle(
         event: event,
         origin: StatusTerminalInputOrigin(
-          name: name, session: self.overlay.statusTerminals.sessions[name],
+          name: name, session: self.overlay.statusTerminals.session(named: name),
           generation: self.overlay.statusTerminals.inputGenerations[name]))
       return true
     }
+  }
+
+  /// The monospaced font every popup draws with.
+  var popupFont: NSFont {
+    NSFont.monospacedSystemFont(
+      ofSize: OverlayPanel.statusBarFontSize(overlayFontSize: CGFloat(config.overlay.fontSize)),
+      weight: .medium)
   }
 
   func reloadTerminalPopupConfiguration() {
@@ -85,27 +95,19 @@ extension AppDelegate {
     terminalInputMappings?.replaceMappings(
       (lastAppliedMappingMode ?? config.mode).compiledTerminal,
       timeoutMs: config.mode.sequenceTimeoutMs)
-    if statusTerminalEnvironmentReady {
-      overlay.statusTerminals.apply(
-        config.statusBar, terminals: config.terminals,
-        invalidTerminalNames: config.invalidTerminalNames)
-      overlay.statusTerminals.preloadPopups(
-        named: config.statusBar.shownPopupNames, configuration: config)
-      if Self.bindsFreshShell(config.mode) {
-        overlay.statusTerminals.warmFreshShell(configuration: config)
-      }
-    }
+    // Sessions start with the login environment, so their commands see the
+    // user's PATH and tooling.
+    guard statusTerminalEnvironmentReady else { return }
+    overlay.statusTerminals.apply(
+      style: config.popupStyle, terminals: config.terminalPopups,
+      invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
   }
 
-  /// Whether any mapping opens the unnamed shell, which is the only terminal
-  /// worth keeping warm before its first use.
-  static func bindsFreshShell(_ mode: Config.Mode) -> Bool {
-    (mode.all + mode.normal + mode.insert + mode.terminal).contains {
-      $0.action == .flashCommand(.terminalShow(name: nil))
-    }
-  }
-
-  func showTerminal(named name: String?) {
+  /// `popup_show`: the named popup standalone, centred on the focused app's
+  /// screen and focused; no name opens `shell`. A text popup shows the
+  /// document the status bar last evaluated, so it needs the bar enabled.
+  func showPopup(named requested: String?) {
+    let name = requested ?? Config.defaultPopupName
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let context = currentNonFlashContext()
     let screen =
@@ -115,56 +117,69 @@ extension AppDelegate {
         } ?? false
       } ?? snapshot.screens.first { $0.frame == snapshot.mainFrame } ?? snapshot.screens.first
     guard let screen else { return }
-    if let name, config.terminals[name] == nil {
-      FlashLog.warn("Terminal declaration not found", source: "core:TerminalPopup.show")
+    let fields = ["popup_id": StatusFormatDocument.stableID(name)]
+    let terminals = overlay.statusTerminals
+    let document: [FlashStatusTextSegment]?
+    if terminals.definitions[name] != nil {
+      document = nil
+    } else if case .text? = config.popups[name] {
+      guard config.statusBar.enabled, let evaluated = overlay.statusBarPopupDocuments[name] else {
+        FlashLog.warn(
+          "Text popup needs the status bar: [statusbar] enabled = true evaluates its text",
+          fields: fields, source: "core:TerminalPopup.show")
+        return
+      }
+      document = evaluated
+    } else {
+      FlashLog.warn(
+        config.terminalPopups[name] == nil
+          ? "Popup not found" : "Popup starts once the login environment resolves",
+        fields: fields, source: "core:TerminalPopup.show")
       return
     }
-    dismissTerminal(restoreApplication: false)
-    guard let key = overlay.statusTerminals.openTerminal(name: name, configuration: config) else {
-      return
-    }
-    overlay.statusPopupController.showTerminal(
-      name: key, visibleFrame: screen.visibleFrame, style: config.statusBar.popupStyle,
-      font: NSFont.monospacedSystemFont(
-        ofSize: OverlayPanel.statusBarFontSize(overlayFontSize: CGFloat(config.overlay.fontSize)),
-        weight: .medium))
+    dismissPopup(restoreApplication: false)
+    if document == nil, terminals.open(name) == nil { return }
+    overlay.statusPopupController.show(
+      name: name, document: document, visibleFrame: screen.visibleFrame,
+      style: config.popupStyle, font: popupFont)
   }
 
-  func suppressDismissedTerminalHover() {
+  func suppressDismissedPopupHover() {
     let popup = overlay.statusPopupController
     if let name = popup.presentation.identity?.name, !popup.presentation.isStandalone {
       overlay.statusBarHoverGate = .dismissed(name)
     }
   }
 
-  func dismissTerminal(restoreApplication: Bool = true) {
-    suppressDismissedTerminalHover()
+  func dismissPopup(restoreApplication: Bool = true) {
+    suppressDismissedPopupHover()
     let returnPID = terminalReturnApplicationPID
     if case .terminal = modeStore.mode {
       dispatchMode(.closeTerminal(targetPID: restoreApplication ? returnPID : nil))
     } else {
-      overlay.hideStatusBarPopup(reason: "terminal_dismiss")
+      overlay.hideStatusBarPopup(reason: "popup_dismiss")
     }
     if !restoreApplication { terminalReturnApplicationPID = returnPID }
   }
 
-  func restartStatusTerminal(named name: String?) {
-    guard let key = statusTerminalKey(named: name) else { return }
+  func restartPopup(named name: String?) {
+    guard let key = popupSessionName(name) else { return }
     terminalInputMappings?.flush()
     overlay.statusTerminals.restart(name: key)
   }
 
-  func quitStatusTerminal(named name: String?) {
-    guard let key = statusTerminalKey(named: name) else { return }
+  func quitPopup(named name: String?) {
+    guard let key = popupSessionName(name) else { return }
     terminalInputMappings?.flush()
     overlay.statusTerminals.quit(name: key)
   }
 
-  private func statusTerminalKey(named name: String?) -> String? {
-    let focused = overlay.statusPopupController.focusedName
-    return
-      name.flatMap { overlay.statusTerminals.terminalKey(named: $0, focusedName: focused) }
-      ?? (name == nil ? focused : nil)
+  /// The named popup's session, or the focused popup's without a name.
+  private func popupSessionName(_ name: String?) -> String? {
+    guard let key = name ?? overlay.statusPopupController.focusedName,
+      overlay.statusTerminals.session(named: key) != nil
+    else { return nil }
+    return key
   }
 
   func statusTerminalDebugState() -> [String: Any] {
@@ -186,7 +201,7 @@ extension AppDelegate {
       },
       "sessions": overlay.statusTerminals.sessions.keys.sorted().compactMap {
         name -> [String: Any]? in
-        guard let session = overlay.statusTerminals.sessions[name] else { return nil }
+        guard let session = overlay.statusTerminals.session(named: name) else { return nil }
         var value: [String: Any] = ["name": name]
         switch session.state {
         case .idle: value["state"] = "idle"

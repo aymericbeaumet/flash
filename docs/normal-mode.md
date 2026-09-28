@@ -361,8 +361,8 @@ share the main run loop. Treat that loop as the input latency budget:
   on the same turn instead of after the 20 ms activation delay. The registry's
   read paths use the event-driven running-app set instead of re-enumerating
   the workspace per query.
-  Focusing a terminal popup suspends every Carbon registration; leaving it
-  restores the active scope.
+  Focusing a popup suspends every Carbon registration; leaving it restores the
+  active scope.
 
 `MainRunLoopStallObserver` records a `main_busy` warning, at any log level,
 for every main run-loop busy stretch over 250 ms; at `debug`, the ping-based
@@ -414,10 +414,11 @@ again at publication. Changing or leaving that query clears its rows and rejects
 both stale replies and timeout results. Initial snapshot publication never
 overwrites the current live-query result.
 
-## Terminal popup input
+## Popup input
 
-Clicking a status popup's body focuses its local terminal view and enters the
-transient `TERMINAL` mode. The overlay owns no keyboard input in this mode: the
+Every popup is a terminal. Clicking a popup's body, pinning it from the status
+bar, or showing it with `popup_show` focuses its local terminal view and enters
+the transient `TERMINAL` mode. The overlay owns no keyboard input in this mode: the
 existing global tap passes keys through, every Carbon registration is suspended,
 and only `[mode.terminal.mappings]` can intercept keys in the popup. The label is
 configured with `mode.labels.terminal` and defaults to `TERMINAL`.
@@ -438,14 +439,14 @@ and are replayed exactly once to the terminal that received them. Focus and
 configuration changes flush unresolved events without dispatching a pending
 command. `repeat = true` retains the explicit final-key repetition behavior.
 
-Local mappings run before native copy/paste and terminal key encoding. Text-only
+Local mappings run before native copy/paste and terminal key encoding. Text
 popups use the same focus mode for selection, copying, and scrolling. Leaving via
 `enter_normal_mode` dismisses the popup and activates the captured external app
 before NORMAL recapture. Losing popup focus restores the prior base mode without
-activating a different app. Popup focus and visibility do not determine the
-lifetime of a configured terminal process.
+activating a different app. A popup's lifecycle, not its focus or visibility,
+decides how long its process lives; see [popups](popups.md#lifecycles).
 
-`leave_mode` provides one configured exit across surfaces. It dismisses a terminal
+`leave_mode` provides one configured exit across surfaces. It dismisses a popup
 and restores its prior base mode/app, restores the saved mode from command or
 finder input, and leaves INSERT for NORMAL. In NORMAL or disabled mode it only
 dismisses active hints and is otherwise a no-op. An all-scope binding to either
@@ -490,7 +491,7 @@ Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 [mode.all.mappings]
 "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
 "cmd+ctrl+[" = ["flash", "enter_normal_mode"]
-"alt+space" = ["flash", "terminal_show"]
+"alt+space" = ["flash", "popup_show"]
 ```
 
-Closing a terminal or command surface may restore its saved INSERT mode.
+Closing a popup or command surface may restore its saved INSERT mode.

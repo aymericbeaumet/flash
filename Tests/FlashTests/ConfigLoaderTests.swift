@@ -316,8 +316,8 @@ final class ConfigLoaderTests: XCTestCase {
       template = "#{E:@right} #{flash.plugin.ready_count}"
       [statusbar.options]
       "@right" = "#{flash.plugin.cpu.summary}"
-      [statusbar.popup]
-      details = "#{flash.plugin.memory.details} #{flash.plugin.cpu.label}"
+      [popup.details]
+      text = "#{flash.plugin.memory.details} #{flash.plugin.cpu.label}"
       """
     let config = ConfigLoader.parse(toml)
     XCTAssertEqual(Set(config.observedStatusSegments().keys), ["cpu", "memory"])
@@ -1699,7 +1699,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.plugins, d.plugins)
     XCTAssertEqual(c.flashlight, d.flashlight)
     XCTAssertEqual(c.debug, d.debug)
-    XCTAssertEqual(c.terminals, d.terminals)
+    XCTAssertEqual(c.popupStyle, d.popupStyle)
+    XCTAssertEqual(c.popups, d.popups)
+    XCTAssertEqual(c.invalidPopupNames, d.invalidPopupNames)
     XCTAssertEqual(c.widgets, d.widgets)
     var loadedMode = c.mode
     var builtinMode = d.mode
@@ -2006,8 +2008,8 @@ final class ConfigLoaderTests: XCTestCase {
   func testLayeredPopupSourcesResolveCommandsAgainstTheirDefiningFiles() {
     let base = ConfigLoader.Layer(
       text: """
-        [statusbar.popup]
-        base = "#{flash.source.base}"
+        [popup.base]
+        text = "#{flash.source.base}"
         [statusbar.sources.base]
         command = ["/bin/sh", "./details.sh"]
         working_directory = "./work"
@@ -2015,8 +2017,8 @@ final class ConfigLoaderTests: XCTestCase {
       sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
     let user = ConfigLoader.Layer(
       text: """
-        [statusbar.popup]
-        user = "#{flash.source.user}"
+        [popup.user]
+        text = "#{flash.source.user}"
         [statusbar.sources.user]
         command = ["/bin/sh", "./details.sh"]
         working_directory = "./work"
@@ -2033,7 +2035,7 @@ final class ConfigLoaderTests: XCTestCase {
       ["/bin/sh", "./details.sh"])
     XCTAssertEqual(c.statusBar.sources["base"]?.workingDirectory, "/tmp/flash-defaults/work")
     XCTAssertEqual(c.statusBar.sources["user"]?.workingDirectory, "/tmp/user/work")
-    XCTAssertEqual(c.statusBar.popupSourceURLs["base"], base.sourceURL)
-    XCTAssertEqual(c.statusBar.popupSourceURLs["user"], user.sourceURL)
+    XCTAssertEqual(c.popupSourceURLs["base"], base.sourceURL)
+    XCTAssertEqual(c.popupSourceURLs["user"], user.sourceURL)
   }
 }

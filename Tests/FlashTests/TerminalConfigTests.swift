@@ -2,8 +2,9 @@ import XCTest
 
 @testable import flash
 
+/// `[popup.<name>]` with `command`: terminal popups.
 final class TerminalConfigTests: XCTestCase {
-  func testTerminalDefaultsRestartQuitAndDismissTheFocusedProcess() throws {
+  func testPopupDefaultsRestartQuitAndDismissTheFocusedPopup() throws {
     let referenceURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
@@ -11,9 +12,9 @@ final class TerminalConfigTests: XCTestCase {
       .appendingPathComponent("config.default.toml")
     let reference = ConfigLoader.parse(try String(contentsOf: referenceURL, encoding: .utf8))
     let expected: [(String, URLCommand)] = [
-      ("cmd+r", .terminalRestart(name: nil)),
-      ("cmd+q", .terminalQuit(name: nil)),
-      ("cmd+w", .terminalDismiss),
+      ("cmd+r", .popupRestart(name: nil)),
+      ("cmd+q", .popupQuit(name: nil)),
+      ("cmd+w", .popupDismiss),
     ]
     for config in [Config.default, ConfigLoader.parse(""), reference] {
       for (chord, command) in expected {
@@ -24,64 +25,114 @@ final class TerminalConfigTests: XCTestCase {
     }
   }
 
-  func testTerminalsHaveExplicitPersistenceAndIndependentDefaults() {
+  func testTerminalPopupsHaveExplicitPersistenceSizeAndDefaults() {
     let config = ConfigLoader.parse(
       """
-      [statusbar]
-      enabled = false
-      [terminal.shell]
+      [popup.editor]
       command = ["/bin/zsh", "-l"]
-      [terminal.monitor]
-      command = ["btm"]
+      [popup.btop]
+      command = ["btop"]
+      size = "90%x85%"
       persistent = true
+      [popup.bonsai]
+      command = ["bonsai", "hq"]
+      size = "120x36"
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
-    XCTAssertEqual(config.terminals["shell"]?.command, ["/bin/zsh", "-l"])
-    XCTAssertEqual(config.terminals["shell"]?.columns, 100)
-    XCTAssertEqual(config.terminals["shell"]?.rows, 28)
-    XCTAssertEqual(config.terminals["shell"]?.persistent, false)
-    XCTAssertEqual(config.terminals["monitor"]?.persistent, true)
+    let terminals = config.terminalPopups
+    XCTAssertEqual(terminals["editor"]?.command, ["/bin/zsh", "-l"])
+    XCTAssertEqual(terminals["editor"]?.size, .default)
+    XCTAssertEqual(terminals["editor"]?.lifecycle, .fresh)
+    XCTAssertEqual(
+      terminals["btop"]?.size, Config.PopupSize(columns: .percent(90), rows: .percent(85)))
+    XCTAssertEqual(terminals["btop"]?.lifecycle, .persistent)
+    XCTAssertEqual(
+      terminals["bonsai"]?.size, Config.PopupSize(columns: .cells(120), rows: .cells(36)))
+    XCTAssertEqual(
+      terminals["shell"],
+      Config.defaultPopups["shell"].flatMap {
+        if case .terminal(let shell) = $0 { return shell }
+        return nil
+      })
+  }
+
+  func testPopupSizeParsesCellsAndPercentagesPerSide() {
+    XCTAssertEqual(Config.PopupSize.default.description, "100x28")
+    for raw in ["100x28", "90%x85%", "120x50%", "1x1", "1000x1000", "100%x1%"] {
+      XCTAssertEqual(Config.PopupSize(raw)?.description, raw, raw)
+    }
+    for raw in [
+      "", "100", "100X28", "0x28", "1001x28", "0%x10%", "101%x10%", "100 x 28", "-1x28",
+      "10.5x28", "x28", "100x", "100x28x3", "%x28",
+    ] {
+      XCTAssertNil(Config.PopupSize(raw), raw)
+    }
+  }
+
+  func testPopupSizeGridsFitTheScreen() {
+    let cell = CGSize(width: 8, height: 16)
+    let screen = CGSize(width: 1000, height: 820)
+    // Cells are exact until the screen is too small.
+    let cells = Config.PopupSize(columns: .cells(100), rows: .cells(28))
+    XCTAssertTrue(cells.grid(visible: screen, cell: cell, inset: 10) == (100, 28))
+    XCTAssertTrue(
+      cells.grid(visible: CGSize(width: 420, height: 200), cell: cell, inset: 10) == (50, 11))
+    // A percentage sizes the popup's outer frame, inset included.
+    let percent = Config.PopupSize(columns: .percent(50), rows: .percent(100))
+    XCTAssertTrue(percent.grid(visible: screen, cell: cell, inset: 10) == (60, 50))
+    XCTAssertTrue(
+      percent.grid(visible: screen, cell: cell, inset: 10, reservedHeight: 16) == (60, 49))
+    XCTAssertTrue(
+      Config.PopupSize(columns: .percent(1), rows: .percent(1)).grid(
+        visible: screen, cell: cell, inset: 10) == (1, 1))
+    XCTAssertTrue(percent.followsScreen)
+    XCTAssertFalse(cells.followsScreen)
+    XCTAssertTrue(percent.unplacedGrid == (100, 28))
+    XCTAssertTrue(
+      Config.PopupSize(columns: .cells(120), rows: .percent(80)).unplacedGrid == (120, 28))
   }
 
   func testInvalidReplacementIsMarkedWithoutDiscardingPreviousLayer() {
     for body in [
-      "command = []", "command = [\"btm\"]\nrows = 0",
+      "command = []", "command = [\"btm\"]\nsize = \"0x28\"",
       "command = [\"btm\"]\npersistent = \"true\"",
       "command = [\"btm\"]\nenv = { PATH = 1 }",
       "command = [\"btm\"]\nunknown = true",
+      "command = [\"btm\"]\ntext = \"both\"",
+      "cwd = \"~\"",
     ] {
       let config = ConfigLoader.parseLayers([
-        .init(text: "[terminal.monitor]\ncommand = [\"btm\"]\npersistent = true"),
-        .init(text: "[terminal.monitor]\n" + body),
+        .init(text: "[popup.monitor]\ncommand = [\"btm\"]\npersistent = true"),
+        .init(text: "[popup.monitor]\n" + body),
       ])
       XCTAssertFalse(config.diagnostics.isEmpty, body)
-      XCTAssertTrue(config.invalidTerminalNames.contains("monitor"), body)
-      XCTAssertEqual(config.terminals["monitor"]?.command, ["btm"], body)
-      XCTAssertEqual(config.terminals["monitor"]?.persistent, true, body)
+      XCTAssertTrue(config.invalidPopupNames.contains("monitor"), body)
+      XCTAssertEqual(config.terminalPopups["monitor"]?.command, ["btm"], body)
+      XCTAssertEqual(config.terminalPopups["monitor"]?.lifecycle, .persistent, body)
+      XCTAssertTrue(config.terminalPopupNames.contains("monitor"), body)
     }
   }
+
   func testTerminalPathsAndEnvironmentFollowDefiningLayer() {
     let config = ConfigLoader.parseLayers([
       .init(
         text: """
-          [terminal.editor]
+          [popup.editor]
           command = ["./editor", "--empty"]
-          working_directory = "./work"
+          cwd = "./work"
           env = { LANG = "en_US.UTF-8" }
-          columns = 120
-          rows = 32
+          size = "120x32"
           """, sourceURL: URL(fileURLWithPath: "/tmp/base/flash.toml")),
       .init(
         text: "[statusbar]\nenabled = true", sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml")
       ),
     ])
-    let terminal = config.terminals["editor"]
+    let terminal = config.terminalPopups["editor"]
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
     XCTAssertEqual(terminal?.command, ["/tmp/base/editor", "--empty"])
     XCTAssertEqual(terminal?.workingDirectory, "/tmp/base/work")
     XCTAssertEqual(terminal?.environment, ["LANG": "en_US.UTF-8"])
-    XCTAssertEqual(terminal?.columns, 120)
-    XCTAssertEqual(terminal?.rows, 32)
+    XCTAssertEqual(terminal?.size.description, "120x32")
   }
 
   func testWorkingDirectoryExpandsHomeAndPreservesRelativePaths() throws {
@@ -94,12 +145,12 @@ final class TerminalConfigTests: XCTestCase {
     ] {
       let config = ConfigLoader.parse(
         """
-        [terminal.shell]
+        [popup.editor]
         command = ["/bin/zsh"]
-        working_directory = "\(directory)"
+        cwd = "\(directory)"
         """, sourceURL: URL(fileURLWithPath: "/tmp/config/flash.toml"))
       XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
-      let terminal = try XCTUnwrap(config.terminals["shell"])
+      let terminal = try XCTUnwrap(config.terminalPopups["editor"])
       let launch = StatusTerminalRegistry.configuration(for: terminal, environment: [:])
       XCTAssertEqual(launch.workingDirectory, expected, directory)
     }
@@ -107,33 +158,54 @@ final class TerminalConfigTests: XCTestCase {
 
   func testValidReplacementClearsInvalidMarkerAndUpdatesPersistence() {
     let config = ConfigLoader.parseLayers([
-      .init(text: "[terminal.shell]\ncommand = []"),
-      .init(text: "[terminal.shell]\ncommand = [\"/bin/zsh\"]\npersistent = true"),
+      .init(text: "[popup.editor]\ncommand = []"),
+      .init(text: "[popup.editor]\ncommand = [\"/bin/zsh\"]\npersistent = true"),
     ])
-    XCTAssertTrue(config.invalidTerminalNames.isEmpty)
-    XCTAssertEqual(config.terminals["shell"]?.persistent, true)
+    XCTAssertTrue(config.invalidPopupNames.isEmpty)
+    XCTAssertEqual(config.terminalPopups["editor"]?.lifecycle, .persistent)
   }
 
-  func testMalformedTablesAreDiagnosedAndPersistentRequiresBoolean() {
+  func testMalformedTablesAndNamesAreDiagnosed() {
     for text in [
-      "terminal = 42", "[terminal]\nshell = true", "[terminal.\"\"]\ncommand = [\"/bin/zsh\"]",
+      "popup = 42", "[popup]\nshell = true", "[popup.\"a b\"]\ncommand = [\"/bin/zsh\"]",
+      "[popup.\"\"]\ncommand = [\"/bin/zsh\"]", "[[popup.list]]\ncommand = [\"/bin/zsh\"]",
     ] {
       let config = ConfigLoader.parse(text)
       XCTAssertFalse(config.diagnostics.isEmpty, text)
-      XCTAssertTrue(config.terminals.isEmpty, text)
+      XCTAssertEqual(Set(config.popups.keys), ["shell"], text)
     }
-    let config = ConfigLoader.parse("[terminal.shell]\ncommand = [\"/bin/zsh\"]\npersistent = 1")
+    let config = ConfigLoader.parse("[popup.editor]\ncommand = [\"/bin/zsh\"]\npersistent = 1")
     XCTAssertTrue(
       config.diagnostics.contains {
-        $0.message.contains("terminal.shell.persistent must be a boolean")
+        $0.message.contains("popup.editor.persistent must be true or false")
       })
-    XCTAssertTrue(config.invalidTerminalNames.contains("shell"))
+    XCTAssertTrue(config.invalidPopupNames.contains("editor"))
+  }
+
+  func testRetiredTerminalKeysPointAtTheirReplacements() {
+    let config = ConfigLoader.parse(
+      """
+      [popup.feed]
+      command = ["newsboat"]
+      working_directory = "."
+      """)
+    XCTAssertTrue(
+      config.diagnostics.contains {
+        $0.message == "popup.feed: unknown key 'working_directory' — did you mean 'cwd'?"
+      }, "\(config.diagnostics)")
+    for key in ["columns", "rows"] {
+      let sized = ConfigLoader.parse("[popup.feed]\ncommand = [\"newsboat\"]\n\(key) = 30")
+      XCTAssertTrue(
+        sized.diagnostics.contains {
+          $0.message == "popup.feed: unknown key '\(key)' — did you mean 'size'?"
+        }, "\(sized.diagnostics)")
+    }
   }
 
   func testResolvedDiagnosticsDoNotExposeTerminalCommandsOrEnvironment() {
     let config = ConfigLoader.parse(
       """
-      [terminal.shell]
+      [popup.editor]
       command = ["/bin/zsh", "private-argument"]
       env = { TOKEN = "private-secret" }
       persistent = true
@@ -142,5 +214,4 @@ final class TerminalConfigTests: XCTestCase {
     XCTAssertFalse(config.resolvedConfigJSON.contains("private-secret"))
     XCTAssertTrue(config.resolvedConfigJSON.contains("persistent"))
   }
-
 }

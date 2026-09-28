@@ -274,17 +274,6 @@ command_timeout = 6.0
 # out identically on a notched Mac and an external display. The centre region
 # hides entirely on notched screens, where the hardware supplies the gap.
 notch_margin = 6
-# Hover-popup chrome. Popup bodies use the same inline text styles as the bar;
-# these values control their default foreground and surrounding surface.
-popup_fg = "#D8DEE9"
-popup_bg = "#2E3440F2"
-popup_border = "#4C566A"
-popup_border_size = 1
-popup_corner_radius = 8
-popup_padding = 8
-popup_max_width = 480
-# Gap in points between the pointer and the popup's top edge.
-popup_offset = 8
 # One tmux 3.7c format string. Alignment and style markers can appear inside
 # conditional/option expansions. Newlines in this outer template are ignored.
 # Native formats, modifiers, #H/#h aliases, #(...) jobs, styles, and strftime
@@ -295,7 +284,7 @@ popup_offset = 8
 # flash.history.<name> for a source that keeps a history.
 # Colours use the standard xterm palette, ANSI names, or explicit #RRGGBB.
 #
-# Flash styles: link=URL/nolink, popup=name/nopopup,
+# Flash styles: link=URL/nolink, popup=name/nopopup (a [popup.<name>]),
 # popup=inline:<percent-encoded-rich-text>, breathing/nobreathing,
 # pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first
 # number inside) and spark[=MIN/MAX]/nospark (a sparkline of every number
@@ -307,8 +296,8 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # format, T additionally expands its strftime codes. Fragments are optional:
 # the same text can be written directly in template. Flash extension:
 # #{E:@name,a,b} expands @name with a and b bound as #{@1} and #{@2}.
-# Named terminal popups can wrap popup-free plugin labels, for example:
-# #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup]
+# A popup marker can wrap several labels at once, for example:
+# #[popup=btop]#{flash.plugin.cpu.label} #{flash.plugin.memory.label}#[nopopup]
 # CPU/MEM/DISK labels carry padded percentages; BAT is unpadded; NET carries a padded byte rate.
 # AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
 [statusbar.options]
@@ -316,28 +305,6 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 "@right" = "#[fg=#EBCB8B]#{flash.date}"
 # Example combined metrics:
 # "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
-
-# Named text preserves newlines and opens in a real terminal pager. Source/plugin
-# collectors stay shared; focused pagers keep their snapshot until explicit refresh.
-[statusbar.popup]
-# quota = "#[fg=#EBCB8B,bold]Quota#[default]\n5-hour: 53% remaining"
-
-# A persistent command popup owns a PTY from Flash startup until removal/shutdown,
-# even with the status bar hidden. Hover previews hide on leaving the segment;
-# right-click any popup segment to pin/focus, including links. Left-click focuses
-# unlinked labels; Option-click focuses linked segments.
-# Terminal bindings live in [mode.terminal.mappings].
-# Exited processes restart after 100ms; repeated immediate exits back off to 30s.
-# terminal_restart restarts immediately; hiding preserves the process.
-# Shell syntax requires explicit argv, e.g. ["/bin/sh", "-lc", "exec btm"].
-# [terminal.system]
-# persistent = true
-# command = ["btm", "--read_only", "--rate", "2s"]
-# columns = 80
-# rows = 24
-# working_directory = "~"
-# env = { LANG = "en_US.UTF-8" }
-# Add #[popup=system]System#[nopopup] to any format fragment.
 
 # Use native #(shell command) for asynchronous tmux shell jobs. For explicit
 # argv, a poll cadence, or rotating output lines, declare a named Flash source
@@ -365,6 +332,62 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 # The bundled power plugin wraps its battery chip in
 # #[range=user|bat-prefs], so a click opens the Battery pane.
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
+
+# Popups: every popup runs in a real PTY and shares this chrome, whether it
+# previews under a #[popup=<name>] status label, is pinned by a click, or shows
+# standalone through `popup_show --name=<name>`. Colours are #RRGGBB or
+# #RRGGBBAA; sizes are points.
+[popup]
+fg = "#D8DEE9"
+bg = "#2E3440F2"
+border = "#4C566A"
+border_size = 1
+corner_radius = 8
+padding = 8
+# Widest a text popup grows; its pager wraps longer lines.
+max_width = 480
+# Gap between the pointer and a hover popup's top edge.
+offset = 8
+
+# Each [popup.<name>] (letters, digits, _ and -) sets exactly one of:
+#   text     a status format shown in the `less` pager: newlines, colours and
+#            styles as in the bar, collected by the same sources and plugins.
+#            Hovering shows the latest values; a focused pager keeps its
+#            snapshot until popup_restart.
+#   command  an argv array run in the popup's own PTY, with `$VAR` and a
+#            leading `~` expanded on every element. Shell syntax needs an
+#            explicit shell, e.g. ["/bin/sh", "-c", "exec btm"]. Its other keys:
+#     cwd         working directory; relative paths follow the defining file.
+#     env         a table of extra environment variables.
+#     size        "COLUMNSxROWS": each side a cell count (1-1000) or a
+#                 percentage (1%-100%) of the screen the popup shows on, e.g.
+#                 "120x36" or "90%x85%". Defaults to 100x28.
+#     persistent  true keeps one process from Flash startup, parsed while
+#                 hidden and restarted when it exits (after 100 ms, backing off
+#                 to 30 s on repeated immediate exits). The default runs a fresh
+#                 process for each showing and stops it on dismissal; a popup a
+#                 status label, click action or popup_show mapping opens keeps
+#                 its next process started ahead.
+# A later file's [popup.<name>] replaces the whole definition.
+#
+# The built-in shell: `popup_show` without a name opens it.
+[popup.shell]
+command = ["$SHELL", "-l"]
+cwd = "~"
+
+# [popup.date]
+# text = "#{flash.calendar}"
+#
+# [popup.btop]
+# command = ["btop"]
+# size = "90%x85%"
+# persistent = true
+#
+# [popup.bonsai]
+# command = ["bonsai", "hq", "--no-open", "--port", "0"]
+# cwd = "~"
+# size = "120x36"
+# persistent = true
 
 # Desktop widgets: a status format drawn as stacked lines on the desktop,
 # above the wallpaper and below Finder icons and every app window. Widgets are
@@ -479,8 +502,8 @@ send_key_interval_ms = 35
 # as argv (no shell wrap) with `~` and env expansion on each element. Bare
 # strings and URLs are rejected.
 # A relative executable containing "/" resolves from this config file.
-# Remaining arguments stay opaque; set working_directory on sources/terminals
-# when their arguments refer to files relative to the configuration directory.
+# Remaining arguments stay opaque; set a source's working_directory or a
+# popup's cwd when their arguments refer to files relative to this directory.
 #
 # Single modified-key mappings use Carbon. Non-modified keys and sequences
 # are read only by the overlay while Flash is capturing normal-mode input.
@@ -599,20 +622,9 @@ leader = "\\"
 "/" = ["flash", "app_find"]
 "?" = ["flash", "help_show"]
 
-# Named terminal command templates. persistent defaults to false: a new process
-# each time the window opens, and the window closes when that process exits.
-# Persistent sessions start with Flash, keep running after the window closes,
-# and restart after process exit.
-# [terminal.bonsai]
-# command = ["bonsai", "hq", "--no-open", "--port", "0"]
-# persistent = true
-# working_directory = "~"
-# columns = 120 # standalone default: 100
-# rows = 36 # standalone default: 28
-# env = { LANG = "en_US.UTF-8" }
-# In [mode.normal.mappings]:
-# "'b" = ["flash", "terminal_show", "--name=bonsai"]
-# "'t" = ["flash", "terminal_show"] # fresh login shell in the home directory
+# Popups open standalone, centred on the focused app's screen (see [popup]):
+# "'b" = ["flash", "popup_show", "--name=bonsai"]
+# "'t" = ["flash", "popup_show"] # the shell popup
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
@@ -623,12 +635,13 @@ leader = "\\"
 # surfaces own the keyboard. All-mode shortcuts remain available by default.
 
 [mode.terminal.mappings]
-# Terminal input stays local to the focused window. Plain Escape goes to the TUI.
+# TERMINAL is the mode of a focused popup: its terminal gets every key these
+# mappings leave alone, and plain Escape goes to the program.
 # Winning INSERT leave_mode / enter_normal_mode bindings are inherited;
 # optional terminal mappings override them.
-"cmd+q" = ["flash", "terminal_quit"] # stop the child; automatic restart applies
-"cmd+r" = ["flash", "terminal_restart"] # restart immediately
-"cmd+w" = ["flash", "terminal_dismiss"] # hide; persistent sessions keep running
+"cmd+q" = ["flash", "popup_quit"] # stop the process; a persistent popup restarts it
+"cmd+r" = ["flash", "popup_restart"] # restart now; a text popup rereads its values
+"cmd+w" = ["flash", "popup_dismiss"] # close; a persistent process keeps running
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

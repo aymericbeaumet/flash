@@ -158,15 +158,18 @@ final class StatusBarHoverTests: XCTestCase {
     let panel = OverlayPanel()
     panel.statusPopupController = StatusPopupController(
       terminals: panel.statusTerminals, windowActionsEnabled: false)
-    var config = Config()
-    config.terminals["shell"] = .init(
-      command: ["/bin/cat"], columns: 40, rows: 10, persistent: true)
-    panel.statusTerminals.apply(config.statusBar, terminals: config.terminals)
+    panel.statusTerminals.apply(
+      style: .init(),
+      terminals: [
+        "shell": Config.Terminal(
+          command: ["/bin/cat"], size: Config.PopupSize(columns: .cells(40), rows: .cells(10)),
+          lifecycle: .persistent)
+      ])
     defer {
       panel.statusPopupController.dismiss()
       panel.statusTerminals.shutdown()
     }
-    panel.statusPopupController.showTerminal(
+    panel.statusPopupController.show(
       name: "shell", visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800),
       style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     panel.hideStatusBarClickWindows()

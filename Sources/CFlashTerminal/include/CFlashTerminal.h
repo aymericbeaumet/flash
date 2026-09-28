@@ -46,7 +46,7 @@ typedef struct {
   const uint8_t *arena;
   const FlashVTSpan *clusters, *links;
 } FlashVTRow;
-FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, bool scrollback,
+FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, uint32_t scrollback_lines,
                       FlashVTWrite write, void *context);
 void flash_vt_output(FlashVT *vt, FlashVTWrite write, void *context);
 void flash_vt_free(FlashVT *vt);

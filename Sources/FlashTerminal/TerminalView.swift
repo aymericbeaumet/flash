@@ -45,6 +45,9 @@ public final class TerminalView: NSView, NSTextInputClient {
     }
   }
   public var cellSize: NSSize { renderer.cellSize }
+  /// The cell a view drawing with `font` uses, without creating one: sizes a
+  /// hidden session's grid before any view binds it.
+  public static func cellSize(for font: NSFont) -> NSSize { TerminalRenderer.cellSize(for: font) }
   public private(set) var terminalFrame: TerminalFrame?
   private weak var session: TerminalSession?
   private var selection: ClosedRange<Int>? {

@@ -402,30 +402,144 @@ struct Config {
     /// plugin id, then by setting name.
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
+  /// `[popup]`: the chrome every popup shares — hover previews, pinned
+  /// popups and standalone popup windows alike.
+  struct PopupStyle: Equatable {
+    /// Default text colour. Inline `#[fg=…]` markers override it exactly as
+    /// they do in the status bar.
+    var foreground: String = "#D8DEE9"
+    var background: String = "#2E3440F2"
+    var borderColor: String = "#4C566A"
+    var borderWidth: Double = 1
+    var cornerRadius: Double = 8
+    var padding: Double = 8
+    /// Widest a text popup's pager grows, in points.
+    var maxWidth: Double = 480
+    /// Gap between the pointer and a hover popup's top edge.
+    var offset: Double = 8
+  }
+
+  /// A terminal popup's `size = "COLUMNSxROWS"`. Each side is a cell count or
+  /// a percentage of the visible frame of the screen the popup shows on.
+  struct PopupSize: Equatable, CustomStringConvertible {
+    enum Side: Equatable {
+      case cells(Int)
+      case percent(Int)
+    }
+
+    var columns: Side
+    var rows: Side
+
+    /// The only place the default grid is written: `size = "100x28"`.
+    static let `default` = PopupSize(columns: .cells(100), rows: .cells(28))
+
+    init(columns: Side, rows: Side) {
+      self.columns = columns
+      self.rows = rows
+    }
+
+    /// `"120x36"`, `"90%x85%"` or a mix; cells run 1–1000, percentages 1–100.
+    init?(_ raw: String) {
+      let parts = raw.split(separator: "x", omittingEmptySubsequences: false)
+      guard parts.count == 2, let columns = Self.side(parts[0]), let rows = Self.side(parts[1])
+      else { return nil }
+      self.init(columns: columns, rows: rows)
+    }
+
+    private static func side(_ raw: Substring) -> Side? {
+      let percent = raw.hasSuffix("%")
+      let digits = percent ? raw.dropLast() : raw
+      guard !digits.isEmpty, digits.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
+        digits.count <= 4, let value = Int(digits)
+      else { return nil }
+      if percent { return (1...100).contains(value) ? .percent(value) : nil }
+      return (1...1_000).contains(value) ? .cells(value) : nil
+    }
+
+    var description: String {
+      func text(_ side: Side) -> String {
+        switch side {
+        case .cells(let value): return String(value)
+        case .percent(let value): return "\(value)%"
+        }
+      }
+      return text(columns) + "x" + text(rows)
+    }
+
+    /// The grid before the popup has a screen: cells as written, and a
+    /// percentage side at the default grid's.
+    var unplacedGrid: (columns: Int, rows: Int) {
+      func cells(_ side: Side, fallback: Side) -> Int {
+        if case .cells(let value) = side { return value }
+        if case .cells(let value) = fallback { return value }
+        return 1
+      }
+      return (
+        cells(columns, fallback: Self.default.columns), cells(rows, fallback: Self.default.rows)
+      )
+    }
+
+    /// Whether the grid follows the screen: a percentage on either side.
+    var followsScreen: Bool {
+      if case .percent = columns { return true }
+      if case .percent = rows { return true }
+      return false
+    }
+
+    /// The grid on a screen whose visible frame is `visible`. A percentage
+    /// sizes the popup's outer frame, `inset` (padding plus border) on each
+    /// edge included; `reservedHeight` is kept below the grid (an exit
+    /// footer). Every side is clamped to what fits on the screen.
+    func grid(
+      visible: CGSize, cell: CGSize, inset: CGFloat, reservedHeight: CGFloat = 0
+    ) -> (columns: Int, rows: Int) {
+      func cells(_ side: Side, extent: CGFloat, cell: CGFloat, reserved: CGFloat) -> Int {
+        let cell = max(1, cell)
+        let fits = max(1, Int((extent - inset * 2 - reserved) / cell))
+        switch side {
+        case .cells(let value):
+          return min(fits, value)
+        case .percent(let value):
+          let outer = extent * CGFloat(value) / 100
+          return min(fits, max(1, Int((outer - inset * 2 - reserved) / cell)))
+        }
+      }
+      return (
+        cells(columns, extent: visible.width, cell: cell.width, reserved: 0),
+        cells(rows, extent: visible.height, cell: cell.height, reserved: reservedHeight)
+      )
+    }
+  }
+
+  /// How a terminal popup's process lives. `persistent = true` selects
+  /// `persistent`; the default is `fresh`.
+  enum PopupLifecycle: Equatable {
+    /// One long-lived process, started once the login environment resolves,
+    /// kept while hidden and restarted with backoff when it exits.
+    case persistent
+    /// One process per showing: dismissal stops it, and a referenced popup
+    /// keeps the next one started ahead.
+    case fresh
+  }
+
+  /// A `[popup.<name>]` with `command`.
   struct Terminal: Equatable {
     var command: [String]
     var workingDirectory: String?
     var environment: [String: String] = [:]
-    var columns: Int = 100
-    var rows: Int = 28
-    var persistent: Bool = false
+    var size: PopupSize = .default
+    var lifecycle: PopupLifecycle = .fresh
+  }
+
+  /// A `[popup.<name>]` table: exactly one of `text` or `command`.
+  enum Popup: Equatable {
+    /// `text`: a status format, shown through the terminal pager.
+    case text(FlashStatusBarTemplate)
+    /// `command`: a program in its own PTY.
+    case terminal(Terminal)
   }
 
   struct StatusBar: Equatable {
-    struct PopupStyle: Equatable {
-      /// Default text colour for popup content. Inline `#[fg=…]` markers
-      /// override it exactly as they do in the status bar.
-      var foreground: String = "#D8DEE9"
-      var background: String = "#2E3440F2"
-      var borderColor: String = "#4C566A"
-      var borderWidth: Double = 1
-      var cornerRadius: Double = 8
-      var padding: Double = 8
-      var maxWidth: Double = 480
-      /// Gap between the pointer and the popup's top edge.
-      var offset: Double = 8
-    }
-
     /// Which displays show the bar. `all` (default) puts it on every screen's
     /// top band; `primary` shows it only on the main (menu-bar) display.
     enum Monitor: String {
@@ -459,16 +573,9 @@ struct Config {
     var template: FlashStatusBarTemplate = Self.defaultTemplate
     /// The defining layer, retained for diagnostics and source identity.
     var templateSourceURL: URL?
-    /// Rich-text bodies referenced by `#[popup=<name>]…#[nopopup]` spans.
-    /// Each body is compiled as a status template and refreshed by the same
-    /// source scheduler, so hovering never starts a subprocess.
-    var popups: [String: FlashStatusBarTemplate] = [:]
     var options: [String: String] = Self.defaultOptions
     var sources: [String: FlashStatusBarSourceDefinition] = [:]
     var sourcesUsingDefaultInterval: Set<String> = []
-    /// Defining layer for each named document.
-    var popupSourceURLs: [String: URL] = [:]
-    var popupStyle = PopupStyle()
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
     /// tmux's status-line mouse model: the span names an action, the
     /// binding lives outside the string. `[statusbar.click]` values are a
@@ -498,21 +605,12 @@ struct Config {
       ], options: Self.defaultOptions)
 
     /// The popups the enabled bar's `#[popup=<name>]` markers open, in its
-    /// template or the options it expands. Configured terminals among them
-    /// are loaded ahead, so hovering only has to show them.
+    /// template or the options it expands.
     var shownPopupNames: Set<String> {
       guard enabled else { return [] }
       return ([template.template] + options.values).reduce(into: []) { names, format in
         names.formUnion(StatusFormatDocument.popupNames(in: format))
       }
-    }
-
-    /// Plugin id → the segments the enabled bar or one of its popups shows.
-    /// Options are compiled into every template's variables, so they are
-    /// covered.
-    var observedSegments: [String: Set<String>] {
-      guard enabled else { return [:] }
-      return Config.statusSegments(in: [template] + popups.values)
     }
   }
 
@@ -665,9 +763,9 @@ struct Config {
 
     static let defaultTerminalMappings: [ModeMapping] = {
       let bindings: [(String, URLCommand)] = [
-        ("cmd+q", .terminalQuit(name: nil)),
-        ("cmd+r", .terminalRestart(name: nil)),
-        ("cmd+w", .terminalDismiss),
+        ("cmd+q", .popupQuit(name: nil)),
+        ("cmd+r", .popupRestart(name: nil)),
+        ("cmd+w", .popupDismiss),
       ]
       return bindings.map { key, command in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
@@ -843,9 +941,14 @@ struct Config {
   var plugins = Plugins()
   var statusBar = StatusBar()
   var widgets: [String: Widget] = [:]
-  var terminals: [String: Terminal] = [:]
-  /// Invalid replacements preserve existing sessions during configuration reload.
-  var invalidTerminalNames: Set<String> = []
+  var popupStyle = PopupStyle()
+  /// `[popup.<name>]`: one namespace for text and terminal popups.
+  var popups: [String: Popup] = Self.defaultPopups
+  /// Names whose latest declaration was invalid. A reload keeps such a
+  /// terminal popup's running session on its last good definition.
+  var invalidPopupNames: Set<String> = []
+  /// The defining layer of each text popup.
+  var popupSourceURLs: [String: URL] = [:]
   var mode = Mode()
   var debug = Debug()
   var flashlight = Flashlight()
@@ -870,13 +973,78 @@ struct Config {
     widgets.filter { $0.value.enabled && !$0.value.template.template.isEmpty }
   }
 
+  /// `popup_show` without `--name` opens this popup.
+  static let defaultPopupName = "shell"
+  /// The built-in popups, mirrored by `config.default.toml`: a fresh login
+  /// shell in the home directory. `$SHELL` and `~` expand at launch.
+  static let defaultPopups: [String: Popup] = [
+    defaultPopupName: .terminal(Terminal(command: ["$SHELL", "-l"], workingDirectory: "~"))
+  ]
+
+  /// The text popups' compiled status formats.
+  var textPopups: [String: FlashStatusBarTemplate] {
+    popups.compactMapValues { popup in
+      if case .text(let template) = popup { return template }
+      return nil
+    }
+  }
+
+  /// The terminal popups' definitions.
+  var terminalPopups: [String: Terminal] {
+    popups.compactMapValues { popup in
+      if case .terminal(let terminal) = popup { return terminal }
+      return nil
+    }
+  }
+
+  /// The popup names the bar gives a hover region with no text body: every
+  /// terminal popup, and every invalid name that is not a text popup (a
+  /// reload keeps such a terminal's session on its last good definition).
+  var terminalPopupNames: Set<String> {
+    let text = textPopups
+    return Set(terminalPopups.keys).union(invalidPopupNames.filter { text[$0] == nil })
+  }
+
+  /// Every popup name a user can open: the enabled bar's markers (template,
+  /// options and text popup bodies) and `[statusbar.click]` commands, and
+  /// `popup_show` in every mapping scope, where no name means `shell`.
+  var referencedPopupNames: Set<String> {
+    var names: Set<String> = []
+    func collect(_ command: MappingCommand) {
+      if case .flashCommand(.popupShow(let name)) = command {
+        names.insert(name ?? Self.defaultPopupName)
+      }
+    }
+    if statusBar.enabled {
+      names.formUnion(statusBar.shownPopupNames)
+      for template in textPopups.values {
+        names.formUnion(StatusFormatDocument.popupNames(in: template.template))
+      }
+      for case .command(let command) in statusBar.clickActions.values { collect(command) }
+    }
+    for mapping in mode.all + mode.normal + mode.insert + mode.terminal + mode.command {
+      collect(mapping.action)
+    }
+    return names
+  }
+
+  /// The fresh terminal popups kept started ahead of their opening, so
+  /// showing one attaches to a live process: the referenced ones.
+  var prewarmedPopupNames: Set<String> {
+    let terminals = terminalPopups
+    return referencedPopupNames.filter { terminals[$0]?.lifecycle == .fresh }
+  }
+
   /// Plugin id → the status segments a live surface shows: the enabled bar
-  /// (template, options, named popups) and every enabled widget not in
+  /// (template, options, text popups) and every enabled widget not in
   /// `hiddenWidgets` (fully covered). The ids keep status-bound plugins
   /// resident; the segments are what `core:status.observed` reports to each
-  /// plugin.
+  /// plugin. Options are compiled into every template's variables, so they
+  /// are covered.
   func observedStatusSegments(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
-    var segments = statusBar.observedSegments
+    var segments =
+      statusBar.enabled
+      ? Self.statusSegments(in: [statusBar.template] + Array(textPopups.values)) : [:]
     let shown = enabledWidgets.filter { !hiddenWidgets.contains($0.key) }
     for (id, names) in Self.statusSegments(in: shown.values.map(\.template)) {
       segments[id, default: []].formUnion(names)
@@ -1030,12 +1198,24 @@ struct Config {
         // plugin through FLASH_PLUGIN_CONFIG.
         "configured": plugins.settings.keys.sorted(),
       ],
-      "terminal": terminals.mapValues { terminal in
-        [
-          "persistent": terminal.persistent, "columns": terminal.columns,
-          "rows": terminal.rows,
-        ] as [String: Any]
-      },
+      // Kinds, lifecycles and sizes only: commands and environments can
+      // carry credentials.
+      "popup": [
+        "bg": popupStyle.background, "border": popupStyle.borderColor,
+        "border_size": popupStyle.borderWidth, "corner_radius": popupStyle.cornerRadius,
+        "fg": popupStyle.foreground, "max_width": popupStyle.maxWidth,
+        "offset": popupStyle.offset, "padding": popupStyle.padding,
+        "popups": popups.mapValues { popup -> [String: Any] in
+          switch popup {
+          case .text: return ["kind": "text"]
+          case .terminal(let terminal):
+            return [
+              "kind": "terminal", "persistent": terminal.lifecycle == .persistent,
+              "size": terminal.size.description,
+            ]
+          }
+        },
+      ] as [String: Any],
       "statusbar": [
         "enabled": statusBar.enabled,
         "template": statusBar.template.template,
@@ -1150,14 +1330,14 @@ extension URLCommand {
     case .mouseNotifications: return verb("mouse_notifications")
     case .normalMode: return verb("enter_normal_mode")
     case .leaveMode: return verb("leave_mode")
-    case .terminalShow(let name):
-      return verb("terminal_show", name.map { ["--name=\($0)"] } ?? [])
-    case .terminalDismiss:
-      return verb("terminal_dismiss")
-    case .terminalRestart(let name):
-      return verb("terminal_restart", name.map { ["--name=\($0)"] } ?? [])
-    case .terminalQuit(let name):
-      return verb("terminal_quit", name.map { ["--name=\($0)"] } ?? [])
+    case .popupShow(let name):
+      return verb("popup_show", name.map { ["--name=\($0)"] } ?? [])
+    case .popupDismiss:
+      return verb("popup_dismiss")
+    case .popupRestart(let name):
+      return verb("popup_restart", name.map { ["--name=\($0)"] } ?? [])
+    case .popupQuit(let name):
+      return verb("popup_quit", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")
     case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):
@@ -1339,6 +1519,7 @@ extension Config {
       - `[hints]`
       - `[open]`
       - `[plugins]`
+      - `[popup]` and `[popup.<name>]`
       - `[mode]`
       - `[mode.all.mappings]`
       - `[mode.normal]`

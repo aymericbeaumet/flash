@@ -540,7 +540,7 @@ extension OverlayPanel {
     }
     statusPopupController.preview(
       popup, pointer: pointer,
-      visibleFrame: screen.visibleFrame, style: statusBarPopupStyle,
+      visibleFrame: screen.visibleFrame, style: popupStyle,
       font: NSFont.monospacedSystemFont(
         ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
         weight: .medium), preservingContent: preservingContent)

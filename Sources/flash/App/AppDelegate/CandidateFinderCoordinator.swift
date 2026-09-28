@@ -1298,7 +1298,7 @@ extension AppDelegate {
       showHelp(topic: helpTopic)
       return
     }
-    if let command = NormalModeDispatcher.commandLineTerminalCommand(raw) {
+    if let command = NormalModeDispatcher.commandLinePopupCommand(raw) {
       finishCommandLineInteraction(reason: "terminal_submit")
       handleURLCommand(command)
       return

@@ -76,11 +76,11 @@ collection:
 
 Standard detail layouts target 50 terminal columns. Long external names, paths
 and addresses wrap in the pager.
-Use `[statusbar] popup_max_width = 480` for the standard 13-point font: it fits
+Use `[popup] max_width = 480` for the standard 13-point font: it fits
 50 content columns with 10-point padding and a one-point border. The longest
 cached Codex report has 27 content rows; the pager reserves one additional
 footer row. Taller content scrolls in the pager. Smaller widths wrap more lines.
-See [status popups](status-popups.md) for the presentation boundary.
+See [popups](popups.md) for the presentation boundary.
 
 Keep the ownership boundaries intact:
 
@@ -286,7 +286,7 @@ cadence, but no outbound arrow and no inline preview, and its title and domain
 form one link to the feed item rather than three separate targets. Binding
 `label` instead of `summary` hands hover to the surrounding template, so a
 configuration can wrap it in its own `#[popup=…]` and point that popup at any
-terminal command it likes — a feed reader, a script, anything. The plugin does
+command it likes — a feed reader, a script, anything. The plugin does
 not decide what hovering a headline shows; the configuration does. The still
 prefix stays outside the item link, so a template link wrapping the segment
 addresses the feed itself: clicking the prefix opens the feed, clicking the
@@ -296,10 +296,10 @@ headline or its domain opens that item.
 # A popup the configuration owns end to end.
 "@left" = "#[popup=feed]#[link=https://example.com]#{flash.plugin.feed.label}#[nolink]#[nopopup]"
 
-[terminal.feed]
+[popup.feed]
 command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]
 persistent = true
-working_directory = "."
+cwd = "."
 ```
 
 Hovering the article title, domain, or arrow opens a terminal-rendered preview of its opening

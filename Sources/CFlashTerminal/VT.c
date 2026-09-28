@@ -38,7 +38,7 @@ static void write_pty(GhosttyTerminal terminal, void *context,
   if (vt->write)
     vt->write(vt->context, bytes, length);
 }
-FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, bool scrollback,
+FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, uint32_t scrollback_lines,
                       FlashVTWrite write, void *context) {
   FlashVT *vt = calloc(1, sizeof(*vt));
   if (!vt)
@@ -65,8 +65,10 @@ FlashVT *flash_vt_new(uint16_t columns, uint16_t rows, bool scrollback,
   vt->context = context;
   ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, vt);
   ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, write_pty);
-  size_t bytes = scrollback ? 4 * 1024 * 1024 : 0,
-         lines = scrollback ? 2000 : 0;
+  // The byte cap scales with the line cap: 2,000 lines keep the historical
+  // 4 MiB ceiling, and a pager on the alternate screen keeps none.
+  size_t lines = scrollback_lines,
+         bytes = lines * (size_t)(4 * 1024 * 1024) / 2000;
   ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
                        &bytes);
   ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,

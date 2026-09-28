@@ -8,6 +8,8 @@ enum StatusTerminalChange: Equatable {
   case replace(String)
   case remove(String)
 
+  /// How the terminal popups `current` become `desired`. An invalid name
+  /// keeps its current definition, and so its running session.
   static func reconcile(
     current: [String: Config.Terminal],
     desired: [String: Config.Terminal],
@@ -24,10 +26,10 @@ enum StatusTerminalChange: Equatable {
         continue
       }
       if previous.command != next.command || previous.workingDirectory != next.workingDirectory
-        || previous.environment != next.environment || previous.persistent != next.persistent
+        || previous.environment != next.environment || previous.lifecycle != next.lifecycle
       {
         changes.append(.replace(name))
-      } else if previous.columns != next.columns || previous.rows != next.rows {
+      } else if previous.size != next.size {
         changes.append(.resize(name))
       }
     }
@@ -57,264 +59,228 @@ struct TerminalRestartBackoff {
   }
 }
 
-/// Main-thread ownership of persistent declarations and explicitly opened terminals.
+/// Main-thread owner of every popup's PTY session, one per popup name. A
+/// text popup's session runs the pager over a private snapshot of its
+/// document; a terminal popup's session runs its command under the popup's
+/// lifecycle. Presentation belongs to `StatusPopupController`, which tells
+/// the registry when a showing starts (`open`, `preparePager`) and when it
+/// ends (`hide`, exactly once per showing).
 final class StatusTerminalRegistry {
-  private(set) var sessions: [String: TerminalSession] = [:]
-  private(set) var definitions: [String: Config.Terminal] = [:]
-  private(set) var inputGenerations: [String: UInt64] = [:]
-  private var nextInputGeneration: UInt64 = 0
-  private var retiringSessions: [ObjectIdentifier: TerminalSession] = [:]
-  private var popupSnapshots: [String: StatusPopupSnapshot] = [:]
-  private enum Ownership {
-    case persistent
-    case ephemeral(template: String?)
+  /// What a session runs.
+  enum Kind {
+    /// A text or inline popup's document in `less`, over a private snapshot
+    /// file the registry owns.
+    case pager(StatusPopupSnapshot)
+    /// A terminal popup's command.
+    case terminal(Config.Terminal)
   }
-  private var ownership: [String: Ownership] = [:]
+
+  private struct Entry {
+    let kind: Kind
+    let session: TerminalSession
+  }
+
+  /// The one restart mechanism: a persistent popup's process after it exits,
+  /// and a prewarmed fresh popup's next process after one ended by itself.
   private struct Restart {
     var backoff = TerminalRestartBackoff()
     var pending: DispatchWorkItem?
   }
+
+  /// A fresh popup lives for one showing; `less` pages on the alternate
+  /// screen and keeps no history. Persistent popups keep the default.
+  static let freshScrollbackLines = 1_000
+
+  private var entries: [String: Entry] = [:]
+  /// The terminal popups applied, each keeping its last good definition
+  /// while a reload marks it invalid.
+  private(set) var definitions: [String: Config.Terminal] = [:]
+  /// The fresh terminal popups kept started ahead of their opening.
+  private(set) var prewarmNames: Set<String> = []
+  /// Prewarmed sessions nothing has shown yet.
+  private(set) var prewarmedNames: Set<String> = []
+  private(set) var inputGenerations: [String: UInt64] = [:]
+  private var nextInputGeneration: UInt64 = 0
+  private var retiringSessions: [ObjectIdentifier: TerminalSession] = [:]
+  /// Names whose previous process is still stopping: a prewarm waits for it.
+  private var retiringNames: [String: Int] = [:]
   private var restarts: [String: Restart] = [:]
+  private var colors = StatusPopupColors(Config.PopupStyle())
   var willChange: (([StatusTerminalChange]) -> Void)?
   var didChange: (() -> Void)?
+  /// The grid a session starts at, and a hidden one refits to, before a view
+  /// shows it on a particular screen.
+  var gridResolver: (Config.PopupSize) -> (columns: Int, rows: Int) = { $0.unplacedGrid }
   private let processEnvironment: FlashProcessEnvironment
-  /// A fresh login shell already running so the next unnamed `terminal_show`
-  /// attaches to a live prompt instead of paying the shell's startup. Opening
-  /// consumes it and warms the next one; it is otherwise an ordinary one-shot
-  /// session (released when its process ends, stopped at shutdown).
-  private(set) var spareShellKey: String?
-  /// Configured nonpersistent terminals the status bar shows. Each keeps a
-  /// fresh process started ahead of its opening, so hovering shows a live
-  /// screen instead of forking and waiting for the program to draw; dismissal
-  /// stops the shown process and starts the next once it is gone.
-  private var preloads: [String: Config.Terminal] = [:]
-  private var preloadColors = StatusPopupColors(Config.StatusBar.PopupStyle())
-  /// Preloaded sessions nothing has shown yet.
-  private(set) var preloadedNames: Set<String> = []
-  private var preloadBackoff: [String: TerminalRestartBackoff] = [:]
-  private var pendingPreloads: [String: DispatchWorkItem] = [:]
 
   init(environment: FlashProcessEnvironment = .shared) {
     processEnvironment = environment
   }
 
-  func apply(
-    _ statusBar: Config.StatusBar, terminals: [String: Config.Terminal] = [:],
-    invalidTerminalNames: Set<String> = []
-  ) {
-    dispatchPrecondition(condition: .onQueue(.main))
-    let colors = StatusPopupColors(statusBar.popupStyle)
-    for session in sessions.values {
-      session.setColors(foreground: colors.foreground, background: colors.background)
-    }
-    var desired = terminals.filter { $0.value.persistent }
-    for (key, owner) in ownership {
-      guard case .ephemeral(let template) = owner, let definition = definitions[key] else {
-        continue
-      }
-      if popupSnapshots[key] != nil, terminals[key]?.persistent == true { continue }
-      if let template {
-        if invalidTerminalNames.contains(template) {
-          desired[key] = definition
-        } else if let terminal = terminals[template], !terminal.persistent,
-          terminal == definition
-        {
-          desired[key] = definition
-        }
-      } else {
-        desired[key] = definition
-      }
-    }
-    let changes = StatusTerminalChange.reconcile(
-      current: definitions, desired: desired, invalid: invalidTerminalNames)
-    if !changes.isEmpty { willChange?(changes) }
-    for change in changes {
-      switch change {
-      case .remove(let name):
-        remove(name: name)
-      case .start(let name), .replace(let name):
-        guard let definition = desired[name] else { continue }
-        start(name: name, definition: definition, ownership: .persistent, colors: colors)
-      case .resize(let name):
-        guard let definition = desired[name] else { continue }
-        definitions[name] = definition
-        sessions[name]?.resize(columns: definition.columns, rows: definition.rows)
-      }
-    }
-    if !changes.isEmpty { didChange?() }
-  }
+  var sessions: [String: TerminalSession] { entries.mapValues(\.session) }
 
-  /// Only persistent declarations restart on their own. Every other terminal
-  /// ends with its process: the popup or window closes and the session is
-  /// released.
-  func automaticallyRestarts(name: String) -> Bool {
-    if case .persistent = ownership[name] { return true }
+  func session(named name: String) -> TerminalSession? { entries[name]?.session }
+
+  func isPager(_ name: String) -> Bool {
+    if case .pager = entries[name]?.kind { return true }
     return false
   }
 
-  func openTerminal(name: String?, configuration config: Config) -> String? {
+  /// A terminal popup with no session yet: showing it forks its process.
+  func needsSpawn(_ name: String) -> Bool { definitions[name] != nil && entries[name] == nil }
+
+  func apply(
+    style: Config.PopupStyle, terminals: [String: Config.Terminal],
+    invalid: Set<String> = [], prewarm: Set<String> = []
+  ) {
     dispatchPrecondition(condition: .onQueue(.main))
-    let definition: Config.Terminal
-    if let name {
-      guard let terminal = config.terminals[name] else { return nil }
-      if !terminal.persistent, preloadedNames.remove(name) != nil, sessions[name] != nil {
-        return name
-      }
-      if terminal.persistent {
-        let key = name
-        if sessions[key] == nil {
-          start(
-            name: key, definition: terminal, ownership: .persistent,
-            colors: StatusPopupColors(config.statusBar.popupStyle))
-          didChange?()
+    colors = StatusPopupColors(style)
+    for entry in entries.values {
+      entry.session.setColors(foreground: colors.foreground, background: colors.background)
+    }
+    let changes = StatusTerminalChange.reconcile(
+      current: definitions, desired: terminals, invalid: invalid)
+    for change in changes {
+      switch change {
+      case .remove(let name):
+        willChange?([.remove(name)])
+        definitions.removeValue(forKey: name)
+        restarts.removeValue(forKey: name)?.pending?.cancel()
+        retire(detach(name), of: name)
+      case .start(let name), .replace(let name):
+        guard let definition = terminals[name] else { continue }
+        // A persistent popup shown during its replacement keeps showing the
+        // new process; anything else closes with the session it showed.
+        if let previous = entries[name] {
+          var keepsPresentation = false
+          if case .terminal(let old) = previous.kind {
+            keepsPresentation = old.lifecycle == .persistent && definition.lifecycle == .persistent
+          }
+          willChange?([keepsPresentation ? .replace(name) : .remove(name)])
         }
-        return key
+        definitions[name] = definition
+        restarts.removeValue(forKey: name)?.pending?.cancel()
+        let replaced = detach(name)
+        if definition.lifecycle == .persistent {
+          retire(replaced, of: name)
+          start(name, definition)
+        } else if let replaced {
+          // The next process starts once the replaced one is gone: a program
+          // holding a lock (newsboat's cache) would refuse to start.
+          retire(replaced, of: name) { [weak self] in self?.prewarm(name) }
+        }
+      case .resize(let name):
+        guard let definition = terminals[name] else { continue }
+        definitions[name] = definition
+        let grid = gridResolver(definition.size)
+        entries[name]?.session.resize(columns: grid.columns, rows: grid.rows)
       }
-      definition = terminal
-    } else {
-      if let spare = takeSpareShell() {
-        warmFreshShell(configuration: config)
-        return spare
+    }
+    let previousPrewarm = prewarmNames
+    prewarmNames = prewarm.filter { definitions[$0]?.lifecycle == .fresh }
+    for name in previousPrewarm.subtracting(prewarmNames) {
+      restarts[name]?.pending?.cancel()
+      restarts[name]?.pending = nil
+      if prewarmedNames.contains(name) { retire(detach(name), of: name) }
+    }
+    for name in prewarmNames.sorted() { self.prewarm(name) }
+    if !changes.isEmpty || previousPrewarm != prewarmNames { didChange?() }
+  }
+
+  /// Attach a showing to `name`'s terminal: its running process — a
+  /// persistent one, or a fresh one started ahead — or a new one. nil when
+  /// `name` is not a terminal popup.
+  @discardableResult
+  func open(_ name: String) -> TerminalSession? {
+    dispatchPrecondition(condition: .onQueue(.main))
+    guard let definition = definitions[name] else { return nil }
+    if let entry = entries[name] {
+      prewarmedNames.remove(name)
+      return entry.session
+    }
+    restarts[name]?.pending?.cancel()
+    restarts[name]?.pending = nil
+    start(name, definition)
+    didChange?()
+    return entries[name]?.session
+  }
+
+  /// A showing of `name` ended. A persistent process keeps running; a fresh
+  /// one stops and, when prewarmed, the next starts once it is gone; a pager
+  /// stops and its snapshot file goes.
+  func hide(_ name: String) {
+    guard let entry = entries[name] else { return }
+    if case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent { return }
+    release(name, processEnded: false)
+  }
+
+  /// Screen geometry changed: hidden sessions whose size follows the screen
+  /// refit, so the next showing starts at the right grid.
+  func refitHidden(except shown: String?) {
+    for (name, entry) in entries where name != shown {
+      guard case .terminal(let definition) = entry.kind, definition.size.followsScreen else {
+        continue
       }
-      definition = freshShellDefinition()
-    }
-    let key = name ?? Self.freshShellKey()
-    start(
-      name: key, definition: definition, ownership: .ephemeral(template: name),
-      colors: StatusPopupColors(config.statusBar.popupStyle))
-    didChange?()
-    if name == nil { warmFreshShell(configuration: config) }
-    return key
-  }
-
-  /// Starts the spare login shell when none is waiting. Frames stay off until
-  /// a view binds it, so the idle shell costs a parsed screen and nothing more.
-  func warmFreshShell(configuration config: Config) {
-    dispatchPrecondition(condition: .onQueue(.main))
-    guard spareShellKey == nil else { return }
-    let key = Self.freshShellKey()
-    start(
-      name: key, definition: freshShellDefinition(), ownership: .ephemeral(template: nil),
-      colors: StatusPopupColors(config.statusBar.popupStyle))
-    spareShellKey = key
-    didChange?()
-  }
-
-  private func takeSpareShell() -> String? {
-    guard let key = spareShellKey, let session = sessions[key] else { return nil }
-    spareShellKey = nil
-    switch session.state {
-    case .idle, .running: return key
-    case .exited, .failed, .stopped:
-      remove(name: key)
-      return nil
+      let grid = gridResolver(definition.size)
+      entry.session.resize(columns: grid.columns, rows: grid.rows)
     }
   }
 
-  private func freshShellDefinition() -> Config.Terminal {
-    let shell = processEnvironment.environment["SHELL"] ?? "/bin/zsh"
-    return .init(
-      command: [shell, "-l"], workingDirectory: NSHomeDirectory(), columns: 100, rows: 28)
-  }
-
-  private static func freshShellKey() -> String { "terminal:ephemeral:\(UUID().uuidString)" }
-
-  func prepareTerminal(name: String, configuration config: Config) -> String? {
-    guard config.terminals[name] != nil || config.invalidTerminalNames.contains(name) else {
-      return nil
-    }
-    if config.terminals[name] != nil, popupSnapshots[name] != nil { releaseTerminal(name: name) }
-    if sessions[name] != nil {
-      preloadedNames.remove(name)
-      return name
-    }
-    return openTerminal(name: name, configuration: config)
-  }
-
-  /// Keep a process running for each configured nonpersistent terminal in
-  /// `names` (persistent ones already run from startup), and stop the
-  /// unshown ones for terminals the bar no longer shows.
-  func preloadPopups(named names: Set<String>, configuration config: Config) {
-    dispatchPrecondition(condition: .onQueue(.main))
-    preloadColors = StatusPopupColors(config.statusBar.popupStyle)
-    var next: [String: Config.Terminal] = [:]
-    for name in names {
-      if let terminal = config.terminals[name], !terminal.persistent { next[name] = terminal }
-    }
-    let previous = preloads
-    preloads = next
-    for (name, definition) in previous where next[name] != definition {
-      // A changed definition earns a clean slate after a parked failure.
-      pendingPreloads.removeValue(forKey: name)?.cancel()
-      preloadBackoff.removeValue(forKey: name)
-      if next[name] == nil, preloadedNames.contains(name) { releaseTerminal(name: name) }
-    }
-    for name in next.keys.sorted() { preload(name) }
-  }
-
-  private func preload(_ name: String) {
-    guard let definition = preloads[name], pendingPreloads[name] == nil else { return }
-    if sessions[name] != nil {
-      guard preloadedNames.contains(name), definitions[name] != definition else { return }
-    }
-    start(
-      name: name, definition: definition, ownership: .ephemeral(template: name),
-      colors: preloadColors)
-    preloadedNames.insert(name)
+  private func prewarm(_ name: String) {
+    guard let definition = definitions[name], definition.lifecycle == .fresh,
+      prewarmNames.contains(name), entries[name] == nil, restarts[name]?.pending == nil,
+      retiringNames[name] == nil
+    else { return }
+    start(name, definition)
+    prewarmedNames.insert(name)
     FlashLog.debug(
-      "Status popup preloaded", fields: ["popup_id": StatusFormatDocument.stableID(name)],
-      source: "core:StatusTerminalRegistry.preload")
+      "Status popup prewarmed", fields: ["popup_id": StatusFormatDocument.stableID(name)],
+      source: "core:StatusTerminalRegistry.prewarm")
     didChange?()
   }
 
-  /// Start the next process for a preloaded terminal whose previous one is
-  /// gone: at once after a dismissal, and with the restart backoff after the
-  /// process ended by itself, so a command that exits at once cannot spin.
-  private func schedulePreload(_ name: String, processEnded: Bool) {
-    guard preloads[name] != nil, sessions[name] == nil, pendingPreloads[name] == nil else {
-      return
-    }
-    guard processEnded else {
-      preloadBackoff[name] = TerminalRestartBackoff()
-      preload(name)
-      return
-    }
-    var backoff = preloadBackoff[name] ?? TerminalRestartBackoff()
-    let delay = backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime)
-    preloadBackoff[name] = backoff
-    guard let delay else {
-      FlashLog.warn(
-        "Status popup preload parked after repeated failures",
-        fields: [
-          "popup_id": StatusFormatDocument.stableID(name), "attempts": String(backoff.attempt),
-        ], source: "core:StatusTerminalRegistry.preload")
-      return
-    }
-    let work = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      self.pendingPreloads[name] = nil
-      self.preload(name)
-    }
-    pendingPreloads[name] = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+  /// Take `name`'s session out of the registry without stopping it.
+  private func detach(_ name: String) -> Entry? {
+    guard let entry = entries.removeValue(forKey: name) else { return nil }
+    prewarmedNames.remove(name)
+    inputGenerations.removeValue(forKey: name)
+    restarts[name]?.pending?.cancel()
+    restarts[name]?.pending = nil
+    if case .pager(let snapshot) = entry.kind { snapshot.close() }
+    return entry
   }
 
-  func isPopupPager(name: String) -> Bool { popupSnapshots[name] != nil }
-
-  func preparePopup(
-    name: String, data: Data, columns: Int, rows: Int, colors: StatusPopupColors
-  ) -> TerminalSession {
-    if let snapshot = popupSnapshots[name], let session = sessions[name] {
-      definitions[name]?.columns = columns
-      definitions[name]?.rows = rows
-      guard snapshot.data != data else { return session }
-      snapshot.data = data
-      snapshot.allowsRefresh = true
-      publishPopup(name: name, snapshot: snapshot, session: session)
-      return session
+  /// End `name`'s session and close whatever shows it. A prewarmed fresh
+  /// popup starts its next process once this one is gone: at once after a
+  /// dismissal, and with the restart backoff after the process ended by
+  /// itself, so a command that exits at once cannot spin.
+  private func release(_ name: String, processEnded: Bool) {
+    guard let entry = detach(name) else { return }
+    willChange?([.remove(name)])
+    retire(entry, of: name) { [weak self] in
+      guard let self, self.prewarmNames.contains(name), self.entries[name] == nil else { return }
+      if processEnded {
+        self.scheduleRestart(name)
+      } else {
+        self.restarts[name]?.backoff = TerminalRestartBackoff()
+        self.prewarm(name)
+      }
     }
+    didChange?()
+  }
+
+  func preparePager(name: String, data: Data, columns: Int, rows: Int) -> TerminalSession {
+    if let entry = entries[name], case .pager(let snapshot) = entry.kind {
+      if snapshot.data != data {
+        snapshot.data = data
+        snapshot.allowsRefresh = true
+        publish(name: name, snapshot: snapshot, session: entry.session)
+      }
+      return entry.session
+    }
+    retire(detach(name), of: name)
     let snapshot = StatusPopupSnapshot(data: data)
-    let definition = Config.Terminal(
+    let pager = Config.Terminal(
       command: [
         // `-Ps` is drawn in reverse video, which turns an otherwise blank
         // prompt into a light block at the foot of every preview. `-R` passes
@@ -323,38 +289,37 @@ final class StatusTerminalRegistry {
         "/usr/bin/less", "-R", "--mouse", "--wheel-lines=3", "-~", "-Ps\u{1B}[27m",
         snapshot.fileURL.path,
       ],
-      environment: ["LESS": "", "LESSOPEN": "", "LESSHISTFILE": "-", "LESSSECURE": "1"],
-      columns: columns, rows: rows)
-    start(
-      name: name, definition: definition, ownership: .ephemeral(template: nil),
-      colors: colors, startImmediately: false)
-    popupSnapshots[name] = snapshot
-    let session = sessions[name]!
-    publishPopup(name: name, snapshot: snapshot, session: session)
+      environment: ["LESS": "", "LESSOPEN": "", "LESSHISTFILE": "-", "LESSSECURE": "1"])
+    let session = launch(
+      name, kind: .pager(snapshot),
+      configuration: Self.configuration(
+        for: pager, environment: processEnvironment.environment, columns: columns, rows: rows,
+        scrollbackLines: 0),
+      startImmediately: false)
+    publish(name: name, snapshot: snapshot, session: session)
     return session
   }
 
   func freezePopup(name: String, completion: @escaping () -> Void) {
-    guard let snapshot = popupSnapshots[name], let session = sessions[name] else {
+    guard let entry = entries[name], case .pager(let snapshot) = entry.kind else {
       completion()
       return
     }
-    snapshot.freeze { [weak self, weak session] repaint in
-      guard let self, let session, self.sessions[name] === session,
-        self.popupSnapshots[name] === snapshot
-      else { return }
+    snapshot.freeze { [weak self, weak session = entry.session] repaint in
+      guard let self, let session, self.entries[name]?.session === session else { return }
       if repaint { session.send(Data("gR".utf8)) }
       completion()
     }
   }
 
-  func stagePopup(name: String, data: Data) { popupSnapshots[name]?.data = data }
+  func stagePopup(name: String, data: Data) {
+    guard case .pager(let snapshot)? = entries[name]?.kind else { return }
+    snapshot.data = data
+  }
 
-  private func publishPopup(
-    name: String, snapshot: StatusPopupSnapshot, session: TerminalSession
-  ) {
+  private func publish(name: String, snapshot: StatusPopupSnapshot, session: TerminalSession) {
     snapshot.publish { [weak self, weak session] result in
-      guard let self, let session, self.sessions[name] === session else { return }
+      guard let self, let session, self.entries[name]?.session === session else { return }
       switch result {
       case .success(let changed):
         if case .idle = session.state {
@@ -364,46 +329,28 @@ final class StatusTerminalRegistry {
         }
       case .failure(let error):
         FlashLog.warn("Status popup snapshot failed: \(error.localizedDescription)")
-        self.releaseTerminal(name: name)
+        self.release(name, processEnded: false)
       }
     }
   }
 
-  func terminalKey(named name: String, focusedName: String?) -> String? {
-    if sessions[name] != nil { return name }
-    if name.isEmpty, let focusedName, sessions[focusedName] != nil { return focusedName }
-    return nil
-  }
-
-  func releaseTerminal(name: String) {
-    releaseTerminal(name: name, processEnded: false)
-  }
-
-  private func releaseTerminal(name: String, processEnded: Bool) {
-    guard case .ephemeral = ownership[name] else { return }
-    // Dismissal callbacks may release this terminal again.
-    ownership.removeValue(forKey: name)
-    willChange?([.remove(name)])
-    // The next preloaded process starts once this one is gone: a program
-    // holding a lock (newsboat's cache) would otherwise refuse to start.
-    remove(name: name) { [weak self] in
-      self?.schedulePreload(name, processEnded: processEnded)
-    }
-    didChange?()
-  }
-
-  private func start(
-    name: String, definition: Config.Terminal, ownership owner: Ownership,
-    colors: StatusPopupColors, startImmediately: Bool = true
-  ) {
-    remove(name: name)
-    advanceInputGeneration(for: name)
-    ownership[name] = owner
-    let session = TerminalSession(
+  private func start(_ name: String, _ definition: Config.Terminal) {
+    let grid = gridResolver(definition.size)
+    launch(
+      name, kind: .terminal(definition),
       configuration: Self.configuration(
-        for: definition, environment: processEnvironment.environment))
-    sessions[name] = session
-    definitions[name] = definition
+        for: definition, environment: processEnvironment.environment, columns: grid.columns,
+        rows: grid.rows))
+  }
+
+  @discardableResult
+  private func launch(
+    _ name: String, kind: Kind, configuration: TerminalConfiguration,
+    startImmediately: Bool = true
+  ) -> TerminalSession {
+    advanceInputGeneration(for: name)
+    let session = TerminalSession(configuration: configuration)
+    entries[name] = Entry(kind: kind, session: session)
     var previousState: TerminalSessionState?
     var lastPID: Int32?
     session.onStateChange = { [weak self, weak session] state in
@@ -412,9 +359,9 @@ final class StatusTerminalRegistry {
         if case .running(let pid) = state { lastPID = pid }
         Self.logLifecycle(name: name, state: state, pid: lastPID)
       }
-      guard let self, let session, self.sessions[name] === session else { return }
-      self.observe(state: state, name: name, session: session)
-      if self.sessions[name] === session { self.didChange?() }
+      guard let self, let session, self.entries[name]?.session === session else { return }
+      self.observe(state: state, name: name)
+      if self.entries[name]?.session === session { self.didChange?() }
     }
     session.onInputRejected = { count in
       FlashLog.warn(
@@ -442,38 +389,32 @@ final class StatusTerminalRegistry {
     session.setWantsFrames(false)
     session.setColors(foreground: colors.foreground, background: colors.background)
     if startImmediately { session.start() }
+    return session
   }
 
-  private func observe(state: TerminalSessionState, name: String, session: TerminalSession) {
-    guard automaticallyRestarts(name: name) else {
-      switch state {
-      case .running:
-        if preloads[name] != nil {
-          preloadBackoff[name, default: TerminalRestartBackoff()].running(
-            at: ProcessInfo.processInfo.systemUptime)
-        }
-      case .exited, .failed: releaseTerminal(name: name, processEnded: true)
-      case .idle, .stopped: break
-      }
-      return
-    }
-    var restart = restarts[name] ?? Restart()
+  private func observe(state: TerminalSessionState, name: String) {
+    guard let entry = entries[name] else { return }
     switch state {
     case .running:
-      restart.pending?.cancel()
-      restart.pending = nil
-      restart.backoff.running(at: ProcessInfo.processInfo.systemUptime)
+      guard case .terminal = entry.kind else { return }
+      restarts[name, default: Restart()].backoff.running(
+        at: ProcessInfo.processInfo.systemUptime)
+      restarts[name]?.pending?.cancel()
+      restarts[name]?.pending = nil
     case .exited, .failed:
-      scheduleRestart(name: name, session: session)
-      return
+      if case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent {
+        scheduleRestart(name)
+      } else {
+        release(name, processEnded: true)
+      }
     case .idle, .stopped:
       break
     }
-    restarts[name] = restart
   }
 
-  private func scheduleRestart(name: String, session: TerminalSession) {
-    guard automaticallyRestarts(name: name) else { return }
+  /// Revive `name` after the backoff delay: a persistent session restarts
+  /// its process, a prewarmed fresh popup starts its next one.
+  private func scheduleRestart(_ name: String) {
     var restart = restarts[name] ?? Restart()
     guard restart.pending == nil else { return }
     guard let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime) else {
@@ -486,13 +427,22 @@ final class StatusTerminalRegistry {
       restarts[name] = restart
       return
     }
+    let session = entries[name]?.session
     let generation = inputGenerations[name]
-    let work = DispatchWorkItem { [weak self, weak session] in
-      guard let self, let session, self.sessions[name] === session,
-        self.inputGenerations[name] == generation, self.automaticallyRestarts(name: name)
-      else { return }
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
       self.restarts[name]?.pending = nil
-      self.restartSession(name: name, resetBackoff: false)
+      switch self.definitions[name]?.lifecycle {
+      case .persistent?:
+        guard let session, self.entries[name]?.session === session,
+          self.inputGenerations[name] == generation
+        else { return }
+        self.restartSession(name: name, resetBackoff: false)
+      case .fresh?:
+        self.prewarm(name)
+      case nil:
+        break
+      }
     }
     restart.pending = work
     restarts[name] = restart
@@ -503,17 +453,6 @@ final class StatusTerminalRegistry {
         "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
       ], source: "core:StatusTerminalRegistry.restart")
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
-  }
-
-  private func remove(name: String, onStopped: (() -> Void)? = nil) {
-    if spareShellKey == name { spareShellKey = nil }
-    preloadedNames.remove(name)
-    restarts.removeValue(forKey: name)?.pending?.cancel()
-    ownership.removeValue(forKey: name)
-    popupSnapshots.removeValue(forKey: name)?.close()
-    inputGenerations.removeValue(forKey: name)
-    retire(sessions.removeValue(forKey: name), onStopped: onStopped)
-    definitions.removeValue(forKey: name)
   }
 
   private static func logLifecycle(name: String, state: TerminalSessionState, pid: Int32?) {
@@ -550,47 +489,52 @@ final class StatusTerminalRegistry {
     }
   }
 
+  /// Restart the process explicitly: every kind, whatever its lifecycle. A
+  /// pager rereads the latest collected document.
   func restart(name: String) {
     restartSession(name: name, resetBackoff: true)
   }
 
+  /// End the process. A persistent popup restarts it after the backoff; a
+  /// fresh popup or a pager closes.
   func quit(name: String) {
-    guard let session = sessions[name] else { return }
-    guard automaticallyRestarts(name: name) else {
-      releaseTerminal(name: name)
+    guard let entry = entries[name] else { return }
+    guard case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent else {
+      release(name, processEnded: false)
       return
     }
-    guard case .running = session.state else { return }
+    guard case .running = entry.session.state else { return }
     restarts[name]?.pending?.cancel()
     restarts[name]?.pending = nil
     willChange?([.replace(name)])
     advanceInputGeneration(for: name)
     let generation = inputGenerations[name]
-    session.stop { [weak self, weak session] in
-      guard let self, let session, self.sessions[name] === session,
+    entry.session.stop { [weak self, weak session = entry.session] in
+      guard let self, let session, self.entries[name]?.session === session,
         self.inputGenerations[name] == generation
       else { return }
-      self.scheduleRestart(name: name, session: session)
+      self.scheduleRestart(name)
     }
   }
 
   private func restartSession(name: String, resetBackoff: Bool) {
-    guard let session = sessions[name] else { return }
+    guard let entry = entries[name] else { return }
     restarts[name]?.pending?.cancel()
     restarts[name]?.pending = nil
-    if resetBackoff { restarts[name] = nil }
+    if resetBackoff { restarts[name]?.backoff = TerminalRestartBackoff() }
     willChange?([.replace(name)])
     advanceInputGeneration(for: name)
-    if let snapshot = popupSnapshots[name] {
+    switch entry.kind {
+    case .pager(let snapshot):
       let generation = inputGenerations[name]
-      snapshot.write { [weak self, weak session] result in
-        guard let self, let session, self.sessions[name] === session,
+      snapshot.write { [weak self, weak session = entry.session] result in
+        guard let self, let session, self.entries[name]?.session === session,
           self.inputGenerations[name] == generation
         else { return }
         if case .success = result { session.restart() }
       }
-    } else {
-      session.restart()
+    case .terminal:
+      entry.session.restart()
     }
   }
 
@@ -599,40 +543,52 @@ final class StatusTerminalRegistry {
     inputGenerations[name] = nextInputGeneration
   }
 
-  private func retire(_ session: TerminalSession?, onStopped: (() -> Void)? = nil) {
-    guard let session else {
+  private func retire(_ entry: Entry?, of name: String, onStopped: (() -> Void)? = nil) {
+    guard let session = entry?.session else {
       onStopped?()
       return
     }
     let identity = ObjectIdentifier(session)
     retiringSessions[identity] = session
+    retiringNames[name, default: 0] += 1
     session.stop { [weak self] in
-      self?.retiringSessions.removeValue(forKey: identity)
+      guard let self else { return }
+      self.retiringSessions.removeValue(forKey: identity)
+      if let count = self.retiringNames[name], count > 1 {
+        self.retiringNames[name] = count - 1
+      } else {
+        self.retiringNames.removeValue(forKey: name)
+      }
       onStopped?()
     }
   }
 
+  /// Stops every child at once: each gets its hangup, termination and reap
+  /// deadlines on its own queue, so quitting takes as long as the slowest.
   func shutdown() {
-    for snapshot in popupSnapshots.values { snapshot.close() }
-    popupSnapshots.removeAll()
     for restart in restarts.values { restart.pending?.cancel() }
     restarts.removeAll()
-    ownership.removeAll()
-    spareShellKey = nil
-    preloads.removeAll()
-    preloadedNames.removeAll()
-    for work in pendingPreloads.values { work.cancel() }
-    pendingPreloads.removeAll()
-    willChange?(sessions.keys.sorted().map(StatusTerminalChange.remove))
-    for session in Array(sessions.values) + Array(retiringSessions.values) { session.shutdown() }
-    sessions.removeAll()
+    prewarmNames.removeAll()
+    prewarmedNames.removeAll()
+    let names = entries.keys.sorted()
+    if !names.isEmpty { willChange?(names.map(StatusTerminalChange.remove)) }
+    for entry in entries.values {
+      if case .pager(let snapshot) = entry.kind { snapshot.close() }
+    }
+    let sessions = entries.values.map(\.session) + Array(retiringSessions.values)
+    entries.removeAll()
     definitions.removeAll()
     inputGenerations.removeAll()
     retiringSessions.removeAll()
+    retiringNames.removeAll()
+    TerminalSession.shutdown(sessions)
   }
 
+  /// The launch of a popup command: arguments and the working directory
+  /// expand `$VAR` and a leading `~` against the resolved environment.
   static func configuration(
-    for definition: Config.Terminal, environment base: [String: String]
+    for definition: Config.Terminal, environment base: [String: String],
+    columns: Int? = nil, rows: Int? = nil, scrollbackLines: Int? = nil
   ) -> TerminalConfiguration {
     let resolved = CommandLaunchConfiguration(
       command: definition.command,
@@ -641,10 +597,13 @@ final class StatusTerminalRegistry {
     var environment = resolved.environment
     // The child has a color terminal; only an explicit override opts out.
     if definition.environment["NO_COLOR"] == nil { environment.removeValue(forKey: "NO_COLOR") }
+    let grid = definition.size.unplacedGrid
     return TerminalConfiguration(
       command: resolved.command,
       workingDirectory: resolved.workingDirectory, environment: environment,
-      columns: definition.columns, rows: definition.rows)
+      columns: columns ?? grid.columns, rows: rows ?? grid.rows,
+      scrollbackLines: scrollbackLines
+        ?? (definition.lifecycle == .persistent
+          ? TerminalConfiguration.defaultScrollbackLines : freshScrollbackLines))
   }
-
 }

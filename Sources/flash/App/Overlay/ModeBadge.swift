@@ -142,6 +142,7 @@ extension OverlayPanel {
     statusBarModel = model
     statusBarPopupTexts = model.popupTexts
     statusBarPopupDocuments = model.popupDocuments
+    statusPopupController.stageStandalone(model.popupDocuments)
     statusBarLayoutRevision &+= 1
     guard modeSurface.barVisible || commandPromptVisible || candidateFinderResultsVisible else {
       return
@@ -250,10 +251,14 @@ extension OverlayPanel {
       let screen =
         snapshot.screens.first { $0.frame.intersects(statusPopupController.frame) }
         ?? snapshot.screens.first { $0.frame == snapshot.mainFrame } ?? snapshot.screens.first
-      if let screen { statusPopupController.repositionTerminal(visibleFrame: screen.visibleFrame) }
+      if let screen {
+        statusPopupController.repositionStandalone(visibleFrame: screen.visibleFrame)
+      }
     } else {
       hideStatusBarPopup()
     }
+    // Hidden popups sized in percentages refit to the new geometry.
+    statusTerminals.refitHidden(except: statusPopupController.presentation.identity?.name)
     renderModeSurface()
   }
 

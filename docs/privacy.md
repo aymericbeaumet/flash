@@ -22,7 +22,7 @@ running plugins with `:plugins`.
 Plugins are child processes of Flash, so macOS attributes their requests to
 Flash. So are the commands you configure: a named source
 (`[statusbar.sources.<name>]`), a `#()` job in a status format or widget, and
-a terminal popup. A calendar CLI such as `icalBuddy` reads Calendar through
+a terminal popup's command. A calendar CLI such as `icalBuddy` reads Calendar through
 EventKit, so its first run makes macOS ask whether *Flash* may access your
 calendars, and the grant then covers Flash and every command it runs. Deny it
 to keep the command from reading Calendar; you can revoke it later in System
@@ -97,8 +97,7 @@ the others make their own requests or run the CLI tools named here.
   login-shell environment and read whatever they read. Flash keeps their
   latest output, and a source's numeric `history`, in memory to draw the bar,
   popups and widgets, and sends none of it anywhere; a popup showing it goes
-  through the private pager snapshot described in
-  [status popups](status-popups.md).
+  through the private pager snapshot described in [popups](popups.md).
 - **AI provider quotas:** Claude Code's OAuth token from its Keychain item or
   `~/.claude/.credentials.json`, and the Codex CLI's session (`aiproviders`).
   Flash only reads the Claude token; when it expires, the quota shows as stale

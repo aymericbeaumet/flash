@@ -209,14 +209,14 @@ final class TerminalModeTests: XCTestCase {
       [mode.all.mappings]
       "cmd+shift+[" = ["flash", "leave_mode"]
       [mode.terminal.mappings]
-      "cmd+shift+[" = ["flash", "terminal_restart"]
+      "cmd+shift+[" = ["flash", "popup_restart"]
       """
     )
     XCTAssertTrue(config.loadingDiagnostics.isEmpty)
     let key = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("cmd+shift+["))
     XCTAssertEqual(
       config.mode.compiledTerminal.mapping(for: key)?.action.command,
-      .terminalRestart(name: nil))
+      .popupRestart(name: nil))
   }
 
   private func mapping(_ key: String, _ command: URLCommand) -> ModeMapping {

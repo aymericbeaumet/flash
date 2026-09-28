@@ -36,13 +36,17 @@ final class TerminalBenchmarkTests: XCTestCase {
     let workload = TerminalWorkload.bytes(megabytes: Self.megabytes, columns: Self.columns)
     let megabytes = Double(workload.count) / 1_048_576
     let parse = Self.best(3) {
-      let buffer = TerminalBuffer(columns: Self.columns, rows: Self.rows, scrollback: true)
+      let buffer = TerminalBuffer(
+        columns: Self.columns, rows: Self.rows,
+        scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
       return Self.seconds { TerminalWorkload.feed(workload, chunk: Self.chunk, to: buffer) }
     }
     Self.report("vt_write", megabytes / parse, "MiB/s")
     var snapshots = 0
     let framed = Self.best(3) {
-      let buffer = TerminalBuffer(columns: Self.columns, rows: Self.rows, scrollback: true)
+      let buffer = TerminalBuffer(
+        columns: Self.columns, rows: Self.rows,
+        scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
       snapshots = 0
       return Self.seconds {
         TerminalWorkload.feed(workload, chunk: Self.chunk, to: buffer) {
@@ -57,7 +61,9 @@ final class TerminalBenchmarkTests: XCTestCase {
   }
 
   func testSnapshotCostForTypingAndFullRebuilds() throws {
-    let buffer = TerminalBuffer(columns: Self.columns, rows: Self.rows, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: Self.columns, rows: Self.rows,
+      scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.write(TerminalWorkload.screen(columns: Self.columns, rows: Self.rows))
     _ = try XCTUnwrap(buffer.snapshot())
     let typing = 2000
@@ -83,7 +89,9 @@ final class TerminalBenchmarkTests: XCTestCase {
   }
 
   func testRenderRepresentativeGridIntoBitmap() throws {
-    let buffer = TerminalBuffer(columns: Self.columns, rows: Self.rows, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: Self.columns, rows: Self.rows,
+      scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.write(TerminalWorkload.screen(columns: Self.columns, rows: Self.rows))
     let frame = try XCTUnwrap(buffer.snapshot())
     let view = TerminalView(frame: .zero)

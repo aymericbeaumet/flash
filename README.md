@@ -267,8 +267,7 @@ adding your setup to [`docs/examples`](docs/examples).
 - **Status bar and widgets:** [format](docs/status-format.md) ·
   [widgets](docs/widgets.md) ·
   [example](docs/examples/statusbar/README.md) · [calendar](docs/calendar.md) ·
-  [usage and system popups](docs/status-popups.md) ·
-  [terminal windows](docs/terminal-popups.md)
+  [popups](docs/popups.md)
 - **Integrations and plugins:** [writing a plugin](docs/plugin-cookbook.md) ·
   [plugin protocol](docs/plugin-protocol.md) · [Rust SDK](docs/plugin-rust-sdk.md)
 - **Contributing:** [development and tests](docs/development.md) ·

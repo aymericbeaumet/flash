@@ -18,7 +18,7 @@ final class TerminalRenderingTests: XCTestCase {
   }
 
   private func frame(_ text: String, columns: Int, rows: Int) throws -> TerminalFrame {
-    let buffer = TerminalBuffer(columns: columns, rows: rows, scrollback: false)
+    let buffer = TerminalBuffer(columns: columns, rows: rows, scrollbackLines: 0)
     buffer.write(Data(text.utf8))
     return try XCTUnwrap(buffer.snapshot())
   }
@@ -80,7 +80,7 @@ final class TerminalRenderingTests: XCTestCase {
   }
 
   func testLastRowChangeRedrawsOnlyThatRow() throws {
-    let buffer = TerminalBuffer(columns: 20, rows: 6, scrollback: false)
+    let buffer = TerminalBuffer(columns: 20, rows: 6, scrollbackLines: 0)
     buffer.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n\u{1B}[7mstatus 1\u{1B}[0m".utf8))
     let view = view(for: try XCTUnwrap(buffer.snapshot()))
     XCTAssertEqual(view.rowsNeedingDisplay, [0, 1, 2, 3, 4, 5])

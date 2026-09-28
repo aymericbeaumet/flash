@@ -547,11 +547,11 @@ Section semantics:
   `normal`); `command` is an argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
   when its final key is pressed again, as in config. Terminal mappings are local to a focused
-  status popup. Every global mapping registration is suspended while that view
+  popup. Every global mapping registration is suspended while that view
   owns input; only winning INSERT-active `enter_normal_mode` bindings are
   inherited as terminal defaults, and explicit terminal bindings override them.
   Terminal sequences use the shared key syntax without `<leader>`, implicit
-  counts, or register prefixes. See [terminal popup input](normal-mode.md#terminal-popup-input).
+  counts, or register prefixes. See [popup input](normal-mode.md#popup-input).
 
 `only_bundle_ids` and `only_terminals` may appear at the root and on mapping
 entries; root and entry selectors compound. `only_terminals: true` scopes to

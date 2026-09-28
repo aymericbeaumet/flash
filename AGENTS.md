@@ -1,7 +1,7 @@
 # Flash contributor guide
 
 Flash is a resident macOS app for keyboard-driven hints, normal/insert/command
-modes, a configurable status bar, terminal popups and managed stdio plugins.
+modes, a configurable status bar, popups and managed stdio plugins.
 The `flash` executable is both CLI and resident. Read the relevant maintained
 contracts before changing a subsystem:
 
@@ -13,15 +13,14 @@ contracts before changing a subsystem:
 - [Plugin protocol](docs/plugin-protocol.md), [Rust SDK](docs/plugin-rust-sdk.md),
   [cookbook](docs/plugin-cookbook.md), [performance](docs/plugin-performance.md).
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
-  [status popups](docs/status-popups.md), [terminal popups](docs/terminal-popups.md),
-  [desktop widgets](docs/widgets.md), [help](docs/help.md).
+  [popups](docs/popups.md), [desktop widgets](docs/widgets.md), [help](docs/help.md).
 - [Privacy and permissions](docs/privacy.md).
 - [Performance and latency benchmarks](docs/performance.md).
 
 ## Hard constraints
 
 1. UI is confined to hint/grid overlays, advanced-mode status/command surfaces,
-   help/open-app views, explicit alerts, About, configured terminal popups and
+   help/open-app views, explicit alerts, About, configured popups and
    configured desktop widgets: a `[widgets.<name>]` status format drawn only in
    a click-through `WidgetWindow` at desktop level (above the wallpaper, below
    Finder icons and every app window), never key or main, with no mouse input,
@@ -105,9 +104,12 @@ Surface requests that would violate these constraints before implementing them.
   of the required sources, jobs and clock.
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
-- Every status popup uses a real PTY session. Collected text uses the shared
-  terminal pager; do not add a separate native document renderer. Keep focused
-  pager input and its snapshot stable until explicit refresh. See the popup guide.
+- Every popup uses a real PTY session owned by `StatusTerminalRegistry`, one
+  per name. Text popups use the shared terminal pager; do not add a separate
+  native document renderer. Keep focused pager input and its snapshot stable
+  until explicit refresh. Popup lifecycles are exactly `persistent` and `fresh`,
+  with one restart backoff; presentation ends a showing once, through
+  `hide`. See the popup guide.
 - Prefer events to polling. A window move or resize reads its frame from the AX
   element that fired, never a WindowServer scan, and schedules no settle tick.
 - `CGWindowListCopyWindowInfo` off the main thread deadlocks against a

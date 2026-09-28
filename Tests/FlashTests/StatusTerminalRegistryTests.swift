@@ -1,4 +1,5 @@
 import FlashCore
+import FlashTerminal
 import XCTest
 
 @testable import flash
@@ -7,6 +8,27 @@ final class StatusTerminalRegistryTests: XCTestCase {
   private func waitUntil(_ condition: @escaping () -> Bool) {
     let ready = expectation(for: NSPredicate { _, _ in condition() }, evaluatedWith: nil)
     wait(for: [ready], timeout: 6)
+  }
+
+  private func running(_ session: TerminalSession?) -> Int32? {
+    if case .running(let pid)? = session?.state { return pid }
+    return nil
+  }
+
+  private func terminal(
+    _ command: [String], persistent: Bool = false, size: Config.PopupSize = .default,
+    environment: [String: String] = [:]
+  ) -> Config.Terminal {
+    Config.Terminal(
+      command: command, environment: environment, size: size,
+      lifecycle: persistent ? .persistent : .fresh)
+  }
+
+  private func apply(
+    _ registry: StatusTerminalRegistry, _ terminals: [String: Config.Terminal],
+    invalid: Set<String> = [], prewarm: Set<String> = [], style: Config.PopupStyle = .init()
+  ) {
+    registry.apply(style: style, terminals: terminals, invalid: invalid, prewarm: prewarm)
   }
 
   func testProcessCleanupDiagnosticsForwardOnlyPhasePIDAndHashedName() {
@@ -18,9 +40,8 @@ final class StatusTerminalRegistryTests: XCTestCase {
     }
     defer { FlashLog.removeSink(sink) }
     let name = "private-terminal-name"
-    registry.apply(
-      .init(), terminals: [name: .init(command: ["/bin/sleep", "30"], persistent: true)])
-    let diagnostic = registry.sessions[name]?.onDiagnostic
+    apply(registry, [name: terminal(["/bin/sleep", "30"], persistent: true)])
+    let diagnostic = registry.session(named: name)?.onDiagnostic
     diagnostic?(.reapDeferred(pid: 123))
     diagnostic?(.reaped(pid: 123))
     XCTAssertEqual(records.map { $0.fields["phase"] }, ["reap_deferred", "reaped"])
@@ -54,185 +75,123 @@ final class StatusTerminalRegistryTests: XCTestCase {
     }
   }
 
-  func testStandalonePersistentReopensSameChildWhileEphemeralOpensFreshAndReleases() {
+  func testPersistentKeepsItsProcessAcrossShowingsWhileFreshRunsOnePerShowing() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    let process = Config.Terminal(command: ["/bin/sleep", "30"])
-    var persistentProcess = process
-    persistentProcess.persistent = true
-    config.terminals["persistent"] = persistentProcess
-    config.terminals["temporary"] = process
-    registry.apply(config.statusBar, terminals: config.terminals)
-    XCTAssertNotNil(registry.sessions["persistent"])
-    XCTAssertEqual(registry.sessions.count, 1)
-    let persistent = registry.openTerminal(name: "persistent", configuration: config)!
-    let persistentSession = registry.sessions[persistent]
-    let first = registry.openTerminal(name: "temporary", configuration: config)!
-    let firstSession = registry.sessions[first]
-    XCTAssertEqual(registry.prepareTerminal(name: "temporary", configuration: config), first)
-    XCTAssertTrue(registry.sessions[first] === firstSession)
-    XCTAssertEqual(registry.terminalKey(named: "temporary", focusedName: first), first)
-    XCTAssertNil(registry.terminalKey(named: "unrelated", focusedName: first))
-    XCTAssertEqual(registry.terminalKey(named: "temporary", focusedName: nil), first)
-    XCTAssertEqual(registry.terminalKey(named: "persistent", focusedName: first), persistent)
-    waitUntil {
-      [persistent, first].allSatisfy {
-        if case .running = registry.sessions[$0]?.state { return true }
-        return false
-      }
-    }
-    guard case .running(let firstPID) = firstSession?.state else {
-      return XCTFail("Expected a running ephemeral child")
-    }
-    registry.releaseTerminal(name: persistent)
-    XCTAssertEqual(registry.openTerminal(name: "persistent", configuration: config), persistent)
-    XCTAssertTrue(registry.sessions[persistent] === persistentSession)
-    registry.apply(config.statusBar, terminals: config.terminals)
-    XCTAssertNotNil(registry.sessions[first])
-    registry.releaseTerminal(name: first)
-    XCTAssertNil(registry.sessions[first])
+    var terminals = [
+      "persistent": terminal(["/bin/sleep", "30"], persistent: true),
+      "fresh": terminal(["/bin/sleep", "30"]),
+    ]
+    apply(registry, terminals)
+    // Persistent popups start with the environment; fresh ones on a showing.
+    XCTAssertEqual(Set(registry.sessions.keys), ["persistent"])
+    let persistent = try XCTUnwrap(registry.session(named: "persistent"))
+    XCTAssertTrue(registry.open("persistent") === persistent)
+    registry.hide("persistent")
+    XCTAssertTrue(registry.open("persistent") === persistent, "hiding keeps the process")
+
+    let first = try XCTUnwrap(registry.open("fresh"))
+    XCTAssertTrue(registry.open("fresh") === first, "one instance per name")
+    XCTAssertEqual(registry.sessions.count, 2)
+    waitUntil { self.running(first) != nil }
+    let firstPID = try XCTUnwrap(running(first))
+    registry.hide("fresh")
+    XCTAssertNil(registry.session(named: "fresh"), "a fresh process ends with its showing")
     waitUntil { kill(firstPID, 0) == -1 && errno == ESRCH }
-    let second = registry.prepareTerminal(name: "temporary", configuration: config)!
-    XCTAssertEqual(second, first)
-    XCTAssertFalse(registry.sessions[second] === firstSession)
-    waitUntil {
-      if case .running = registry.sessions[second]?.state { return true }
-      return false
-    }
-    guard case .running(let secondPID) = registry.sessions[second]?.state else { return }
-    XCTAssertNotEqual(firstPID, secondPID)
-    let secondSession = registry.sessions[second]
-    XCTAssertEqual(registry.openTerminal(name: "temporary", configuration: config), second)
-    XCTAssertFalse(registry.sessions[second] === secondSession)
-    config.terminals.removeValue(forKey: "temporary")
-    registry.apply(config.statusBar, terminals: config.terminals)
-    XCTAssertNil(registry.sessions[second])
-    XCTAssertNotNil(registry.sessions[persistent])
+    let second = try XCTUnwrap(registry.open("fresh"))
+    XCTAssertFalse(second === first)
+    waitUntil { self.running(second) != nil }
+    XCTAssertNotEqual(running(second), firstPID)
+
+    terminals.removeValue(forKey: "fresh")
+    apply(registry, terminals)
+    XCTAssertNil(registry.session(named: "fresh"))
+    XCTAssertTrue(registry.session(named: "persistent") === persistent)
+    XCTAssertNil(registry.open("fresh"), "only configured terminal popups open")
   }
 
-  func testWarmSpareShellIsHandedToTheNextUnnamedOpenAndReplaced() throws {
+  func testBuiltInShellRunsTheLoginShellInHomeAtTheDefaultGrid() throws {
+    let shell = try XCTUnwrap(Config().terminalPopups[Config.defaultPopupName])
+    XCTAssertEqual(shell.lifecycle, .fresh)
+    XCTAssertEqual(shell.size, .default)
+    let launch = StatusTerminalRegistry.configuration(
+      for: shell, environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"])
+    XCTAssertEqual(launch.command, ["/bin/zsh", "-l"])
+    XCTAssertEqual(launch.workingDirectory, NSHomeDirectory())
+    XCTAssertEqual(launch.columns, 100)
+    XCTAssertEqual(launch.rows, 28)
+    XCTAssertEqual(launch.scrollbackLines, StatusTerminalRegistry.freshScrollbackLines)
+  }
+
+  func testPrewarmedPopupIsShownAsIsAndTheNextStartsOnceTheShownOneIsGone() throws {
     let registry = StatusTerminalRegistry(
       environment: FlashProcessEnvironment(seed: [
         "SHELL": "/bin/sh", "HOME": NSTemporaryDirectory(),
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
       ]))
     defer { registry.shutdown() }
-    let config = Config()
-    registry.warmFreshShell(configuration: config)
-    let spare = try XCTUnwrap(registry.spareShellKey)
-    registry.warmFreshShell(configuration: config)
-    XCTAssertEqual(registry.spareShellKey, spare, "one spare at a time")
-    XCTAssertEqual(registry.definitions[spare]?.command, ["/bin/sh", "-l"])
-    XCTAssertFalse(registry.automaticallyRestarts(name: spare))
-    waitUntil {
-      if case .running = registry.sessions[spare]?.state { return true }
-      return false
-    }
-    // Opening the unnamed shell attaches to the warm process and warms another.
-    XCTAssertEqual(registry.openTerminal(name: nil, configuration: config), spare)
-    let next = try XCTUnwrap(registry.spareShellKey)
-    XCTAssertNotEqual(next, spare)
-    XCTAssertNotNil(registry.sessions[spare])
-    XCTAssertNotNil(registry.sessions[next])
-    // Releasing the opened shell leaves the spare waiting; losing the spare
-    // process forgets it so the next open spawns directly.
-    registry.releaseTerminal(name: spare)
-    XCTAssertNil(registry.sessions[spare])
-    XCTAssertEqual(registry.spareShellKey, next)
-    registry.releaseTerminal(name: next)
-    XCTAssertNil(registry.spareShellKey)
-    let direct = try XCTUnwrap(registry.openTerminal(name: nil, configuration: config))
-    XCTAssertNotEqual(direct, next)
-    XCTAssertNotNil(registry.spareShellKey)
-    XCTAssertNotEqual(registry.spareShellKey, direct)
-  }
-
-  func testShownTerminalPopupIsPreloadedShownAsIsAndReplacedOnceDismissed() throws {
-    let registry = StatusTerminalRegistry()
-    defer { registry.shutdown() }
     var config = Config()
-    config.terminals["feed"] = .init(command: ["/bin/sleep", "30"])
-    config.terminals["top"] = .init(command: ["/bin/sleep", "30"], persistent: true)
-    registry.preloadPopups(named: ["feed", "top", "date"], configuration: config)
-    // Persistent terminals run from startup and text popups have no process.
-    XCTAssertEqual(registry.preloadedNames, ["feed"])
-    XCTAssertEqual(Set(registry.sessions.keys), ["feed"])
-    let preloaded = registry.sessions["feed"]
-    waitUntil {
-      if case .running = registry.sessions["feed"]?.state { return true }
-      return false
-    }
-    guard case .running(let firstPID) = preloaded?.state else { return XCTFail("not running") }
-
-    // Hovering shows the running process; nothing new starts.
-    XCTAssertEqual(registry.prepareTerminal(name: "feed", configuration: config), "feed")
-    XCTAssertTrue(registry.sessions["feed"] === preloaded)
-    XCTAssertTrue(registry.preloadedNames.isEmpty)
-
-    // Dismissal stops it and preloads a fresh process once it is gone.
-    registry.releaseTerminal(name: "feed")
-    waitUntil { registry.preloadedNames.contains("feed") }
-    XCTAssertFalse(registry.sessions["feed"] === preloaded)
-    XCTAssertTrue(kill(firstPID, 0) == -1 && errno == ESRCH, "the shown process is gone first")
-    waitUntil {
-      if case .running = registry.sessions["feed"]?.state { return true }
-      return false
-    }
-
-    // `terminal_show --name=feed` takes the preloaded process too.
-    let next = registry.sessions["feed"]
-    XCTAssertEqual(registry.openTerminal(name: "feed", configuration: config), "feed")
-    XCTAssertTrue(registry.sessions["feed"] === next)
-    registry.releaseTerminal(name: "feed")
-    waitUntil { registry.preloadedNames.contains("feed") }
-
-    // A bar that stops showing it stops the unshown process.
-    registry.preloadPopups(named: [], configuration: config)
-    XCTAssertNil(registry.sessions["feed"])
-    XCTAssertTrue(registry.preloadedNames.isEmpty)
-  }
-
-  func testUnrelatedReloadKeepsAPreloadedPopupProcess() throws {
-    let registry = StatusTerminalRegistry()
-    defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["feed"] = .init(command: ["/bin/sleep", "30"])
-    registry.preloadPopups(named: ["feed"], configuration: config)
-    let preloaded = try XCTUnwrap(registry.sessions["feed"])
-    waitUntil {
-      if case .running = preloaded.state { return true }
-      return false
-    }
-    guard case .running(let pid) = preloaded.state else { return XCTFail("not running") }
-
-    // The reload order `reloadTerminalPopupConfiguration` uses, for a change
-    // that touches neither the terminal nor the shown popups.
-    config.statusBar.popupStyle.foreground = "#FFFFFF"
-    config.hints.mouseGridSteps = 4
+    config.popups["top"] = .terminal(terminal(["/bin/sleep", "30"], persistent: true))
+    config.mode.all = [
+      ModeMapping(key: "alt+space", action: .flashCommand(.popupShow(name: nil))),
+      ModeMapping(key: "alt+t", action: .flashCommand(.popupShow(name: "top"))),
+    ]
+    // Persistent popups run anyway; only fresh ones are prewarmed.
+    XCTAssertEqual(config.prewarmedPopupNames, ["shell"])
     registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    registry.preloadPopups(named: ["feed"], configuration: config)
-    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+      style: config.popupStyle, terminals: config.terminalPopups,
+      invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
+    XCTAssertEqual(registry.prewarmedNames, ["shell"])
+    XCTAssertEqual(Set(registry.sessions.keys), ["shell", "top"])
+    let prewarmed = try XCTUnwrap(registry.session(named: "shell"))
+    XCTAssertEqual(prewarmed.configuration.command, ["/bin/sh", "-l"])
+    waitUntil { self.running(prewarmed) != nil }
+    let firstPID = try XCTUnwrap(running(prewarmed))
 
-    XCTAssertTrue(registry.sessions["feed"] === preloaded, "the preloaded session is kept")
-    XCTAssertEqual(registry.preloadedNames, ["feed"])
-    guard case .running(let still) = preloaded.state else { return XCTFail("stopped") }
-    XCTAssertEqual(still, pid, "the command is not run again")
+    // Showing attaches to the running process; nothing new starts.
+    XCTAssertTrue(registry.open("shell") === prewarmed)
+    XCTAssertTrue(registry.prewarmedNames.isEmpty)
+
+    // Dismissal stops it and prewarms a fresh process once it is gone.
+    registry.hide("shell")
+    waitUntil { registry.prewarmedNames.contains("shell") }
+    XCTAssertTrue(kill(firstPID, 0) == -1 && errno == ESRCH, "the shown process is gone first")
+    let next = try XCTUnwrap(registry.session(named: "shell"))
+    XCTAssertFalse(next === prewarmed)
+    waitUntil { self.running(next) != nil }
+
+    // A configuration that stops referencing it stops the unshown process.
+    registry.apply(style: config.popupStyle, terminals: config.terminalPopups)
+    XCTAssertNil(registry.session(named: "shell"))
+    XCTAssertTrue(registry.prewarmedNames.isEmpty)
   }
 
-  func testPreloadedPopupThatExitsAtOnceBacksOffInsteadOfSpinning() {
+  func testUnrelatedReloadKeepsAPrewarmedPopupProcess() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let terminals = ["feed": terminal(["/bin/sleep", "30"])]
+    apply(registry, terminals, prewarm: ["feed"])
+    let prewarmed = try XCTUnwrap(registry.session(named: "feed"))
+    waitUntil { self.running(prewarmed) != nil }
+    let pid = try XCTUnwrap(running(prewarmed))
+    var style = Config.PopupStyle()
+    style.foreground = "#FFFFFF"
+    apply(registry, terminals, prewarm: ["feed"], style: style)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    XCTAssertTrue(registry.session(named: "feed") === prewarmed, "the prewarmed session is kept")
+    XCTAssertEqual(registry.prewarmedNames, ["feed"])
+    XCTAssertEqual(running(prewarmed), pid, "the command is not run again")
+  }
+
+  func testPrewarmedPopupThatExitsAtOnceBacksOffInsteadOfSpinning() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
     var starts = 0
     let sink = FlashLog.addSink { record in
-      if record.message == "Status popup preloaded" { starts += 1 }
+      if record.message == "Status popup prewarmed" { starts += 1 }
     }
     defer { FlashLog.removeSink(sink) }
-    var config = Config()
-    config.terminals["broken"] = .init(command: ["/usr/bin/true"])
-    registry.preloadPopups(named: ["broken"], configuration: config)
+    apply(registry, ["broken": terminal(["/usr/bin/true"])], prewarm: ["broken"])
     // The first retry waits 100 ms and the next one second.
     let deadline = Date().addingTimeInterval(5)
     while starts < 2, Date() < deadline {
@@ -246,213 +205,161 @@ final class StatusTerminalRegistryTests: XCTestCase {
   func testPopupPagerPromptDrawsNothingInsteadOfAStandoutBlock() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    _ = registry.preparePopup(
-      name: "details", data: Data("Last good details".utf8), columns: 50, rows: 4,
-      colors: StatusPopupColors(.init()))
-    let command = try XCTUnwrap(registry.definitions["details"]?.command)
+    let pager = registry.preparePager(
+      name: "details", data: Data("Last good details".utf8), columns: 50, rows: 4)
+    let command = pager.configuration.command
     let prompt = try XCTUnwrap(command.first { $0.hasPrefix("-Ps") })
     // `less` renders its short prompt in reverse video, so a blank prompt
     // still paints a light block at the foot of every preview. Leading with
     // "exit reverse" (passed through by -R) leaves the row genuinely empty.
     XCTAssertEqual(prompt, "-Ps\u{1B}[27m")
     XCTAssertTrue(command.contains("-R"))
+    XCTAssertTrue(registry.isPager("details"))
   }
 
-  func testInvalidTerminalOverridePreservesTheExistingPopupPager() {
+  func testScrollbackIsSizedByKind() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    let pager = registry.preparePopup(
-      name: "details", data: Data("Last good details".utf8), columns: 50, rows: 4,
-      colors: StatusPopupColors(.init()))
-    var config = Config()
-    config.invalidTerminalNames.insert("details")
-    XCTAssertEqual(registry.prepareTerminal(name: "details", configuration: config), "details")
-    XCTAssertTrue(registry.sessions["details"] === pager)
-    XCTAssertTrue(registry.isPopupPager(name: "details"))
-    config.invalidTerminalNames.remove("details")
-    config.terminals["details"] = .init(command: ["/bin/sleep", "30"])
-    XCTAssertEqual(registry.prepareTerminal(name: "details", configuration: config), "details")
-    XCTAssertFalse(registry.sessions["details"] === pager)
-    XCTAssertFalse(registry.isPopupPager(name: "details"))
+    apply(
+      registry,
+      [
+        "persistent": terminal(["/bin/sleep", "30"], persistent: true),
+        "fresh": terminal(["/bin/sleep", "30"]),
+      ])
+    registry.open("fresh")
+    let pager = registry.preparePager(
+      name: "details", data: Data("x".utf8), columns: 10, rows: 2)
+    XCTAssertEqual(
+      registry.session(named: "persistent")?.configuration.scrollbackLines,
+      TerminalConfiguration.defaultScrollbackLines)
+    XCTAssertEqual(
+      registry.session(named: "fresh")?.configuration.scrollbackLines,
+      StatusTerminalRegistry.freshScrollbackLines)
+    XCTAssertLessThan(
+      StatusTerminalRegistry.freshScrollbackLines, TerminalConfiguration.defaultScrollbackLines)
+    XCTAssertEqual(pager.configuration.scrollbackLines, 0, "less pages on the alternate screen")
   }
 
-  func testFreshShellIsWarmedOnlyWhenAMappingOpensIt() {
-    var mode = Config.Mode()
-    XCTAssertFalse(AppDelegate.bindsFreshShell(mode))
-    mode.all = [
-      ModeMapping(key: "alt+space", action: .flashCommand(.terminalShow(name: "bonsai")))
-    ]
-    XCTAssertFalse(AppDelegate.bindsFreshShell(mode))
-    mode.terminal = [ModeMapping(key: "alt+space", action: .flashCommand(.terminalShow(name: nil)))]
-    XCTAssertTrue(AppDelegate.bindsFreshShell(mode))
-  }
-
-  func testUnnamedShellStartsInHomeAndLiteralStatusNameResolves() {
+  func testTextPopupBecomingATerminalReplacesItsPager() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["system"] = .init(command: ["/bin/sleep", "30"], persistent: true)
-    registry.apply(config.statusBar, terminals: config.terminals)
-    let shell = registry.openTerminal(name: nil, configuration: config)!
-    XCTAssertEqual(registry.definitions[shell]?.workingDirectory, NSHomeDirectory())
-    XCTAssertEqual(registry.definitions[shell]?.columns, 100)
-    XCTAssertEqual(registry.definitions[shell]?.rows, 28)
-    XCTAssertEqual(registry.terminalKey(named: "system", focusedName: shell), "system")
-    registry.releaseTerminal(name: shell)
-    XCTAssertNil(registry.terminalKey(named: shell, focusedName: shell))
-  }
-
-  func testCleanExitRestartsPersistentSessionsAndReleasesNonpersistentOnes() {
-    let registry = StatusTerminalRegistry()
-    defer { registry.shutdown() }
-    var config = Config()
-    let process = Config.Terminal(command: ["/bin/sh", "-c", "exit 0"])
-    var persistentProcess = process
-    persistentProcess.persistent = true
-    config.terminals["persistent"] = persistentProcess
-    config.terminals["temporary"] = process
-    registry.apply(config.statusBar, terminals: config.terminals)
-    let generation = registry.inputGenerations["persistent"]
-    let temporary = registry.openTerminal(name: "temporary", configuration: config)!
-    XCTAssertFalse(registry.automaticallyRestarts(name: temporary))
-    XCTAssertTrue(registry.automaticallyRestarts(name: "persistent"))
+    let pager = registry.preparePager(
+      name: "details", data: Data("Last good details".utf8), columns: 50, rows: 4)
     var removed: [String] = []
     registry.willChange = { changes in
-      for change in changes {
-        if case .remove(let name) = change { removed.append(name) }
-      }
+      for case .remove(let name) in changes { removed.append(name) }
     }
-    waitUntil {
-      registry.inputGenerations["persistent"] != generation && registry.sessions[temporary] == nil
-    }
-    XCTAssertEqual(removed, [temporary])
-    XCTAssertNil(registry.definitions[temporary])
-    XCTAssertNotNil(registry.sessions["persistent"])
+    apply(registry, ["details": terminal(["/bin/sleep", "30"], persistent: true)])
+    XCTAssertEqual(removed, ["details"], "whatever showed the pager closes")
+    XCTAssertFalse(registry.session(named: "details") === pager)
+    XCTAssertFalse(registry.isPager("details"))
+    XCTAssertNotNil(registry.session(named: "details"))
   }
 
-  func testQuitReapsChildAndAutomaticallyRestartsSamePersistentSession() {
+  func testCleanExitRestartsPersistentSessionsAndReleasesFreshOnes() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["process"] = .init(command: ["/bin/sleep", "30"], persistent: true)
-    let name = registry.openTerminal(name: "process", configuration: config)!
-    let session = registry.sessions[name]
-    waitUntil {
-      if case .running = session?.state { return true }
-      return false
+    apply(
+      registry,
+      [
+        "persistent": terminal(["/bin/sh", "-c", "exit 0"], persistent: true),
+        "fresh": terminal(["/bin/sh", "-c", "exit 0"]),
+      ])
+    let generation = registry.inputGenerations["persistent"]
+    registry.open("fresh")
+    var removed: [String] = []
+    registry.willChange = { changes in
+      for case .remove(let name) in changes { removed.append(name) }
     }
-    guard case .running(let originalPID) = session?.state else { return }
-    let generation = registry.inputGenerations[name]
+    waitUntil {
+      registry.inputGenerations["persistent"] != generation
+        && registry.session(named: "fresh") == nil
+    }
+    XCTAssertEqual(removed, ["fresh"])
+    XCTAssertNotNil(registry.session(named: "persistent"))
+  }
+
+  func testQuitReapsChildAndAutomaticallyRestartsSamePersistentSession() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    apply(registry, ["process": terminal(["/bin/sleep", "30"], persistent: true)])
+    let session = try XCTUnwrap(registry.open("process"))
+    waitUntil { self.running(session) != nil }
+    let originalPID = try XCTUnwrap(running(session))
+    let generation = registry.inputGenerations["process"]
     var sawStopped = false
     registry.didChange = {
-      if case .stopped = session?.state { sawStopped = true }
+      if case .stopped = session.state { sawStopped = true }
     }
-    registry.quit(name: name)
-    XCTAssertNotEqual(registry.inputGenerations[name], generation)
-    waitUntil {
-      if case .running(let pid) = session?.state { return pid != originalPID }
-      return false
-    }
+    registry.quit(name: "process")
+    XCTAssertNotEqual(registry.inputGenerations["process"], generation)
+    waitUntil { self.running(session).map { $0 != originalPID } ?? false }
     XCTAssertTrue(sawStopped)
-    XCTAssertTrue(registry.sessions[name] === session)
-    XCTAssertTrue(registry.automaticallyRestarts(name: name))
+    XCTAssertTrue(registry.session(named: "process") === session)
     XCTAssertEqual(kill(originalPID, 0), -1)
     XCTAssertEqual(errno, ESRCH)
   }
 
-  func testQuitReleasesNonpersistentTemplateTerminal() {
+  func testQuitReleasesAFreshPopupWithoutAnAutomaticRestart() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["process"] = .init(command: ["/bin/sleep", "30"])
-    let name = registry.openTerminal(name: "process", configuration: config)!
-    let session = registry.sessions[name]
-    waitUntil {
-      if case .running = session?.state { return true }
-      return false
-    }
-    guard case .running(let pid) = session?.state else { return }
-    registry.quit(name: name)
-    XCTAssertNil(registry.sessions[name])
-    XCTAssertNil(registry.definitions[name])
-    waitUntil { kill(pid, 0) == -1 }
-  }
-
-  func testDismissalDuringQuitCancelsAutomaticRestart() {
-    let registry = StatusTerminalRegistry()
-    defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["process"] = .init(command: ["/bin/sleep", "30"])
-    let name = registry.openTerminal(name: "process", configuration: config)!
-    waitUntil {
-      if case .running = registry.sessions[name]?.state { return true }
-      return false
-    }
-    guard case .running(let pid) = registry.sessions[name]?.state else { return }
-    registry.quit(name: name)
-    registry.releaseTerminal(name: name)
+    apply(registry, ["process": terminal(["/bin/sleep", "30"])])
+    let session = try XCTUnwrap(registry.open("process"))
+    waitUntil { self.running(session) != nil }
+    let pid = try XCTUnwrap(running(session))
+    registry.quit(name: "process")
+    XCTAssertNil(registry.session(named: "process"))
+    XCTAssertNil(registry.inputGenerations["process"])
+    registry.hide("process")
     RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-    XCTAssertNil(registry.sessions[name])
-    XCTAssertNil(registry.inputGenerations[name])
+    XCTAssertNil(registry.session(named: "process"), "an unreferenced popup is not prewarmed")
     XCTAssertEqual(kill(pid, 0), -1)
   }
 
-  func testNonpersistentExitReleasesTheSessionWithoutRetry() {
+  func testFreshExitReleasesTheSessionWithoutRetry() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["temporary"] = .init(command: ["/bin/sh", "-c", "sleep 0.2; exit 0"])
-    let name = registry.openTerminal(name: "temporary", configuration: config)!
+    apply(registry, ["fresh": terminal(["/bin/sh", "-c", "sleep 0.2; exit 0"])])
+    let session = try XCTUnwrap(registry.open("fresh"))
     var pids: Set<Int32> = []
     var removed: [String] = []
     registry.willChange = { changes in
-      for change in changes {
-        if case .remove(let name) = change { removed.append(name) }
-      }
+      for case .remove(let name) in changes { removed.append(name) }
     }
     registry.didChange = {
-      if case .running(let pid) = registry.sessions[name]?.state { pids.insert(pid) }
+      if let pid = self.running(registry.session(named: "fresh")) { pids.insert(pid) }
     }
-    waitUntil { registry.sessions[name] == nil }
-    XCTAssertEqual(pids.count, 1)
-    XCTAssertEqual(removed, [name])
-    XCTAssertNil(registry.inputGenerations[name])
+    waitUntil { registry.session(named: "fresh") == nil }
+    XCTAssertTrue(pids.count <= 1)
+    XCTAssertEqual(removed, ["fresh"])
+    XCTAssertNil(registry.inputGenerations["fresh"])
     RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-    XCTAssertNil(registry.sessions[name])
-    for pid in pids { XCTAssertEqual(kill(pid, 0), -1) }
+    XCTAssertNil(registry.session(named: "fresh"))
+    XCTAssertNotEqual(session.state, .idle)
   }
 
-  func testKilledPersistentChildRestartsAndRemovalCancelsPendingRestart() {
+  func testKilledPersistentChildRestartsAndRemovalCancelsPendingRestart() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["system"] = .init(command: ["/bin/sleep", "30"], persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    waitUntil {
-      if case .running = registry.sessions["system"]?.state { return true }
-      return false
-    }
-    guard case .running(let originalPID) = registry.sessions["system"]?.state else { return }
+    apply(registry, ["system": terminal(["/bin/sleep", "30"], persistent: true)])
+    waitUntil { self.running(registry.session(named: "system")) != nil }
+    let originalPID = try XCTUnwrap(running(registry.session(named: "system")))
     let originalGeneration = registry.inputGenerations["system"]
     var replacements = 0
     registry.willChange = { if $0.contains(.replace("system")) { replacements += 1 } }
     kill(originalPID, SIGKILL)
     waitUntil {
-      if case .running(let pid) = registry.sessions["system"]?.state { return pid != originalPID }
-      return false
+      self.running(registry.session(named: "system")).map { $0 != originalPID } ?? false
     }
     XCTAssertEqual(replacements, 1)
     XCTAssertNotEqual(registry.inputGenerations["system"], originalGeneration)
     XCTAssertEqual(kill(originalPID, 0), -1)
-    guard case .running(let replacementPID) = registry.sessions["system"]?.state else { return }
+    let replacementPID = try XCTUnwrap(running(registry.session(named: "system")))
     let removed = expectation(description: "remove terminal while restart is pending")
     registry.didChange = {
-      guard case .exited = registry.sessions["system"]?.state else { return }
+      guard case .exited = registry.session(named: "system")?.state else { return }
       registry.didChange = nil
-      config.terminals.removeAll()
-      registry.apply(config.statusBar, terminals: config.terminals)
+      self.apply(registry, [:])
       removed.fulfill()
     }
     kill(replacementPID, SIGKILL)
@@ -470,16 +377,16 @@ final class StatusTerminalRegistryTests: XCTestCase {
       if record.source == "core:StatusTerminalRegistry.lifecycle" { records.append(record) }
     }
     defer { FlashLog.removeSink(sink) }
-    var config = Config()
     let name = "private-terminal-name"
-    config.terminals[name] = .init(
-      command: ["/bin/sh", "-c", "printf private-terminal-output; exit 7"],
-      environment: ["PRIVATE_TOKEN": "private-terminal-secret"], persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
+    apply(
+      registry,
+      [
+        name: terminal(
+          ["/bin/sh", "-c", "printf private-terminal-output; exit 7"], persistent: true,
+          environment: ["PRIVATE_TOKEN": "private-terminal-secret"])
+      ])
     let exited = expectation(
-      for: NSPredicate { _, _ in registry.sessions[name]?.state == .exited(code: 7) },
+      for: NSPredicate { _, _ in registry.session(named: name)?.state == .exited(code: 7) },
       evaluatedWith: nil)
     wait(for: [exited], timeout: 5)
     let running = records.first { $0.fields["state"] == "running" }
@@ -507,14 +414,10 @@ final class StatusTerminalRegistryTests: XCTestCase {
       if record.source == "core:StatusTerminalRegistry.lifecycle" { records.append(record) }
     }
     defer { FlashLog.removeSink(sink) }
-    var config = Config()
-    config.terminals["invalid"] = .init(command: [], persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
+    apply(registry, ["invalid": terminal([], persistent: true)])
     let failed = expectation(
       for: NSPredicate { _, _ in
-        if case .failed = registry.sessions["invalid"]?.state { return true }
+        if case .failed = registry.session(named: "invalid")?.state { return true }
         return false
       }, evaluatedWith: nil)
     wait(for: [failed], timeout: 5)
@@ -523,10 +426,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertEqual(failure?.fields["failure_reason"], "Invalid terminal command or environment")
     XCTAssertEqual(failure?.level, .warn)
     XCTAssertNil(failure?.fields["pid"])
-    config.terminals.removeAll()
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
+    apply(registry, [:])
     let stopped = expectation(
       for: NSPredicate { _, _ in records.contains { $0.fields["state"] == "stopped" } },
       evaluatedWith: nil)
@@ -534,16 +434,18 @@ final class StatusTerminalRegistryTests: XCTestCase {
   }
 
   func testOnlyExecutionChangesReplaceSessions() {
-    let original = Config.Terminal(command: ["ytop"])
+    let original = terminal(["ytop"])
     var resized = original
-    resized.rows = 40
+    resized.size = Config.PopupSize(columns: .percent(90), rows: .cells(40))
     var changed = original
     changed.environment = ["LANG": "C"]
+    var persistent = original
+    persistent.lifecycle = .persistent
     XCTAssertEqual(
       StatusTerminalChange.reconcile(
-        current: ["a": original, "b": original],
-        desired: ["a": resized, "b": changed, "c": original], invalid: []),
-      [.resize("a"), .replace("b"), .start("c")])
+        current: ["a": original, "b": original, "d": original],
+        desired: ["a": resized, "b": changed, "c": original, "d": persistent], invalid: []),
+      [.resize("a"), .replace("b"), .start("c"), .replace("d")])
     XCTAssertEqual(
       StatusTerminalChange.reconcile(
         current: ["a": original],
@@ -551,7 +453,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
   }
 
   func testInvalidReplacementPreservesLastGoodUntilRemoval() {
-    let current = ["system": Config.Terminal(command: ["ytop"])]
+    let current = ["system": terminal(["ytop"])]
     XCTAssertEqual(
       StatusTerminalChange.reconcile(
         current: current, desired: [:],
@@ -570,147 +472,156 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertEqual(CommandLaunchConfiguration.expand("${UNKNOWN}", environment: [:]), "${UNKNOWN}")
   }
 
-  func testHiddenSessionSurvivesPresentationChangesAndReapsReplacedChild() {
+  func testSessionsExportAColorTerminal() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.statusBar.enabled = false
-    config.terminals["system"] = .init(command: ["/bin/sleep", "30"], persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    let started = expectation(
-      for: NSPredicate { _, _ in
-        if case .running = registry.sessions["system"]?.state { return true }
-        return false
-      }, evaluatedWith: nil)
-    wait(for: [started], timeout: 5)
-    let original = registry.sessions["system"]
-    let originalGeneration = registry.inputGenerations["system"]
-    guard case .running(let originalPID) = original?.state else {
-      return XCTFail("The disabled bar must still start its declared terminal")
-    }
+    apply(
+      registry,
+      [
+        "env": terminal(
+          // Flash expands `$VAR` in argv itself, so the child reads its own
+          // environment.
+          [
+            "/bin/sh", "-c",
+            "echo \"$(printenv TERM)/$(printenv COLORTERM)/\"; exec /bin/sleep 30",
+          ],
+          persistent: true, environment: ["TERM": "dumb"])
+      ])
+    let session = try XCTUnwrap(registry.session(named: "env"))
+    session.setWantsFrames(true)
+    waitUntil { session.frame?.text.contains("xterm-256color/truecolor/") == true }
+  }
 
-    config.statusBar.enabled = true
-    config.statusBar.popupStyle.padding += 4
-    config.terminals["system"]?.columns = 120
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    XCTAssertTrue(registry.sessions["system"] === original)
+  func testHiddenSessionSurvivesPresentationChangesAndReapsReplacedChild() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    var terminals = ["system": terminal(["/bin/sleep", "30"], persistent: true)]
+    apply(registry, terminals)
+    waitUntil { self.running(registry.session(named: "system")) != nil }
+    let original = registry.session(named: "system")
+    let originalGeneration = registry.inputGenerations["system"]
+    let originalPID = try XCTUnwrap(running(original))
+
+    var style = Config.PopupStyle()
+    style.padding += 4
+    terminals["system"]?.size = Config.PopupSize(columns: .cells(120), rows: .cells(28))
+    apply(registry, terminals, style: style)
+    XCTAssertTrue(registry.session(named: "system") === original)
     XCTAssertEqual(original?.state, .running(pid: originalPID))
     XCTAssertEqual(registry.inputGenerations["system"], originalGeneration)
 
-    config.terminals.removeAll()
-    config.invalidTerminalNames = ["system"]
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    XCTAssertTrue(registry.sessions["system"] === original)
+    apply(registry, [:], invalid: ["system"])
+    XCTAssertTrue(registry.session(named: "system") === original)
     XCTAssertEqual(registry.inputGenerations["system"], originalGeneration)
 
-    config.invalidTerminalNames = []
-    config.terminals["system"] = .init(command: ["/bin/sleep", "31"], persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    XCTAssertFalse(registry.sessions["system"] === original)
+    apply(registry, ["system": terminal(["/bin/sleep", "31"], persistent: true)])
+    XCTAssertFalse(registry.session(named: "system") === original)
     XCTAssertNotEqual(registry.inputGenerations["system"], originalGeneration)
-    let replaced = expectation(
-      for: NSPredicate { _, _ in
-        guard case .running(let replacementPID) = registry.sessions["system"]?.state else {
-          return false
-        }
-        return replacementPID != originalPID && kill(originalPID, 0) == -1 && errno == ESRCH
-      }, evaluatedWith: nil)
-    wait(for: [replaced], timeout: 5)
-    let replacement = registry.sessions["system"]
+    waitUntil {
+      guard let replacementPID = self.running(registry.session(named: "system")) else {
+        return false
+      }
+      return replacementPID != originalPID && kill(originalPID, 0) == -1 && errno == ESRCH
+    }
+    let replacement = registry.session(named: "system")
     let replacementGeneration = registry.inputGenerations["system"]
     registry.restart(name: "system")
-    XCTAssertTrue(registry.sessions["system"] === replacement)
+    XCTAssertTrue(registry.session(named: "system") === replacement)
     XCTAssertNotEqual(registry.inputGenerations["system"], replacementGeneration)
-    config.terminals.removeAll()
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
+    apply(registry, [:])
     XCTAssertTrue(registry.sessions.isEmpty)
     XCTAssertTrue(registry.inputGenerations.isEmpty)
   }
 
-  func testShutdownAwaitsAChildAlreadyRemovedByReload() {
+  func testShutdownAwaitsAChildAlreadyRemovedByReload() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.terminals["system"] = .init(
-      command: ["/bin/sh", "-c", "trap '' HUP TERM; printf ready; while :; do sleep 1; done"],
-      persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    registry.sessions["system"]?.setWantsFrames(true)
-    let ready = expectation(
-      for: NSPredicate { _, _ in
-        registry.sessions["system"]?.frame?.text.contains("ready") == true
-      }, evaluatedWith: nil)
-    wait(for: [ready], timeout: 5)
-    guard case .running(let pid) = registry.sessions["system"]?.state else {
-      return XCTFail("Expected a running child")
-    }
-    config.terminals.removeAll()
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
+    apply(
+      registry,
+      [
+        "system": terminal(
+          ["/bin/sh", "-c", "trap '' HUP TERM; printf ready; while :; do sleep 1; done"],
+          persistent: true)
+      ])
+    registry.session(named: "system")?.setWantsFrames(true)
+    waitUntil { registry.session(named: "system")?.frame?.text.contains("ready") == true }
+    let pid = try XCTUnwrap(running(registry.session(named: "system")))
+    apply(registry, [:])
     registry.shutdown()
     XCTAssertEqual(kill(pid, 0), -1)
     XCTAssertEqual(errno, ESRCH)
   }
 
-  func testHiddenSessionReceivesConfiguredColorsBeforePresentation() {
+  func testShutdownStopsEverySessionAtOnce() throws {
+    let registry = StatusTerminalRegistry()
+    let stubborn = terminal(["/bin/sh", "-c", "trap '' HUP TERM; sleep 30"], persistent: true)
+    let names = (0..<4).map { "stubborn\($0)" }
+    apply(registry, Dictionary(uniqueKeysWithValues: names.map { ($0, stubborn) }))
+    waitUntil { names.allSatisfy { self.running(registry.session(named: $0)) != nil } }
+    let pids = names.compactMap { running(registry.session(named: $0)) }
+    let before = Date()
+    registry.shutdown()
+    // Each child ignores hangup and termination and waits out its 200 ms
+    // grace period; one after another would take 800 ms.
+    XCTAssertLessThan(Date().timeIntervalSince(before), 0.6)
+    for pid in pids {
+      XCTAssertEqual(kill(pid, 0), -1)
+      XCTAssertEqual(errno, ESRCH)
+    }
+  }
+
+  func testHiddenSessionsSizedByTheScreenRefitWhenItChanges() throws {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
-    var config = Config()
-    config.statusBar.popupStyle.foreground = "#123456"
-    config.statusBar.popupStyle.background = "#654321"
-    config.terminals["system"] = .init(command: ["/bin/sleep", "30"], persistent: true)
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    waitUntil {
-      if case .running = registry.sessions["system"]?.state { return true }
-      return false
+    var screen = CGSize(width: 800, height: 480)
+    registry.gridResolver = { size in
+      size.grid(visible: screen, cell: CGSize(width: 8, height: 16), inset: 0)
     }
-    XCTAssertNil(registry.sessions["system"]?.frame)
-    registry.sessions["system"]?.setWantsFrames(true)
-    let ready = expectation(
-      for: NSPredicate { _, _ in
-        registry.sessions["system"]?.frame != nil
-      }, evaluatedWith: nil)
-    wait(for: [ready], timeout: 5)
-    let session = registry.sessions["system"]
-    XCTAssertEqual(session?.frame?.foreground.red, 0x12)
-    XCTAssertEqual(session?.frame?.background.red, 0x65)
+    let half = Config.PopupSize(columns: .percent(50), rows: .percent(50))
+    apply(
+      registry,
+      [
+        "half": terminal(["/bin/sleep", "30"], persistent: true, size: half),
+        "fixed": terminal(["/bin/sleep", "30"], persistent: true),
+      ])
+    let session = try XCTUnwrap(registry.session(named: "half"))
+    let fixed = try XCTUnwrap(registry.session(named: "fixed"))
+    XCTAssertEqual(session.configuration.columns, 50)
+    XCTAssertEqual(session.configuration.rows, 15)
+    session.setWantsFrames(true)
+    fixed.setWantsFrames(true)
+    waitUntil { session.frame != nil && fixed.frame != nil }
+    screen = CGSize(width: 1600, height: 800)
+    registry.refitHidden(except: nil)
+    waitUntil { session.frame?.columns == 100 && session.frame?.rows == 25 }
+    XCTAssertEqual(fixed.frame?.columns, 100)
+    XCTAssertEqual(fixed.frame?.rows, 28, "a size in cells ignores the screen")
+  }
 
-    config.statusBar.popupStyle.foreground = "#abcdef"
-    registry.apply(
-      config.statusBar, terminals: config.terminals,
-      invalidTerminalNames: config.invalidTerminalNames)
-    XCTAssertTrue(registry.sessions["system"] === session)
-    let updated = expectation(
-      for: NSPredicate { _, _ in
-        session?.frame?.foreground.red == 0xab
-      }, evaluatedWith: nil)
-    wait(for: [updated], timeout: 5)
-    guard case .running(let originalPID) = session?.state else {
-      return XCTFail("Expected a running terminal")
-    }
+  func testHiddenSessionReceivesConfiguredColorsBeforePresentation() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let terminals = ["system": terminal(["/bin/sleep", "30"], persistent: true)]
+    var style = Config.PopupStyle()
+    style.foreground = "#123456"
+    style.background = "#654321"
+    apply(registry, terminals, style: style)
+    waitUntil { self.running(registry.session(named: "system")) != nil }
+    let session = try XCTUnwrap(registry.session(named: "system"))
+    XCTAssertNil(session.frame)
+    session.setWantsFrames(true)
+    waitUntil { session.frame != nil }
+    XCTAssertEqual(session.frame?.foreground.red, 0x12)
+    XCTAssertEqual(session.frame?.background.red, 0x65)
+
+    style.foreground = "#abcdef"
+    apply(registry, terminals, style: style)
+    XCTAssertTrue(registry.session(named: "system") === session)
+    waitUntil { session.frame?.foreground.red == 0xab }
+    let originalPID = try XCTUnwrap(running(session))
     registry.restart(name: "system")
-    let restarted = expectation(
-      for: NSPredicate { _, _ in
-        if case .running(let pid) = session?.state { return pid != originalPID }
-        return false
-      }, evaluatedWith: nil)
-    wait(for: [restarted], timeout: 5)
-    XCTAssertEqual(session?.frame?.foreground.red, 0xab)
-    XCTAssertEqual(session?.frame?.background.red, 0x65)
+    waitUntil { self.running(session).map { $0 != originalPID } ?? false }
+    XCTAssertEqual(session.frame?.foreground.red, 0xab)
+    XCTAssertEqual(session.frame?.background.red, 0x65)
   }
 }

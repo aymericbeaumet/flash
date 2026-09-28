@@ -21,12 +21,12 @@ final class StatusPopupPresentationTests: XCTestCase {
     XCTAssertEqual(focused.applying(.dismiss), .hidden)
   }
 
-  func testStandaloneTerminalHasFocusWithoutAnAnchorAndIgnoresHover() {
-    let terminal = StatusPopupPresentation.hidden.applying(.terminal(name: "terminal:shell"))
-    XCTAssertEqual(terminal, .terminal(name: "terminal:shell"))
+  func testStandalonePopupHasFocusWithoutAnAnchorAndIgnoresHover() {
+    let terminal = StatusPopupPresentation.hidden.applying(.standalone(name: "shell"))
+    XCTAssertEqual(terminal, .standalone(name: "shell"))
     XCTAssertTrue(terminal.isFocused)
     XCTAssertTrue(terminal.isStandalone)
-    XCTAssertEqual(terminal.identity?.name, "terminal:shell")
+    XCTAssertEqual(terminal.identity?.name, "shell")
     XCTAssertNil(terminal.identity?.anchor)
     XCTAssertEqual(terminal.applying(.leaveAnchor), terminal)
     XCTAssertEqual(terminal.applying(.focus), terminal)

@@ -78,7 +78,7 @@ extension AppDelegate {
     guard activationLifecycle.requestReplacement(request) else { return false }
     switch modeStore.mode {
     case .command: dispatchMode(.closeCommand(reason: "hint_activation"))
-    case .terminal: dismissTerminal(restoreApplication: false)
+    case .terminal: dismissPopup(restoreApplication: false)
     default: break
     }
     cancelPointerInsertHandoff(reason: "hint_replaced")

@@ -48,10 +48,14 @@ enum URLCommand: Hashable {
   case mouseNotifications
   case normalMode
   case leaveMode
-  case terminalShow(name: String?)
-  case terminalDismiss
-  case terminalRestart(name: String?)
-  case terminalQuit(name: String?)
+  /// Show a popup standalone; no name opens `shell`.
+  case popupShow(name: String?)
+  /// Close the focused popup.
+  case popupDismiss
+  /// Restart the focused or named popup's process.
+  case popupRestart(name: String?)
+  /// Quit the focused or named popup's process.
+  case popupQuit(name: String?)
   case insertMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
@@ -537,32 +541,32 @@ final class URLEventHandler: NSObject {
 
     "enter_normal_mode": .init(parse: { _ in .normalMode }),
 
-    "terminal_show": .init(
-      [.text("name", "terminal")],
+    "popup_show": .init(
+      [.text("name", "popup")],
       parse: { args in
         guard args.args.keys.allSatisfy({ $0 == "name" }),
           args.value("name").map({ !$0.trimmed.isEmpty }) ?? true
         else { return nil }
-        return .terminalShow(name: args.value("name"))
+        return .popupShow(name: args.value("name"))
       }),
 
-    "terminal_dismiss": .init(parse: { args in args.args.isEmpty ? .terminalDismiss : nil }),
+    "popup_dismiss": .init(parse: { args in args.args.isEmpty ? .popupDismiss : nil }),
 
-    "terminal_restart": .init(
-      [.text("name", "terminal-or-popup")],
+    "popup_restart": .init(
+      [.text("name", "popup")],
       parse: { args in
         guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
           return nil
         }
-        return .terminalRestart(name: args.value("name"))
+        return .popupRestart(name: args.value("name"))
       }),
-    "terminal_quit": .init(
-      [.text("name", "terminal-or-popup")],
+    "popup_quit": .init(
+      [.text("name", "popup")],
       parse: { args in
         guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
           return nil
         }
-        return .terminalQuit(name: args.value("name"))
+        return .popupQuit(name: args.value("name"))
       }),
 
     "leave_mode": .init(parse: { a in a.args.isEmpty ? .leaveMode : nil }),

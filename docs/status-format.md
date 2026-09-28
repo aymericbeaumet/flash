@@ -1,11 +1,11 @@
 # Status format language
 
 Flash uses the tmux **3.7c** format and style language, with values supplied by
-Flash. `statusbar.template`, named document popups and
+Flash. `statusbar.template`, text [popups](popups.md) and
 [desktop widgets](widgets.md) share one compiler. There
 is no tmux runtime dependency, tmux configuration import, or implicit connection
 to a tmux server. Terminal popup commands have a separate lifetime; see
-[terminal popups](terminal-popups.md).
+[popups](popups.md#lifecycles).
 
 ## Authoring
 
@@ -28,8 +28,8 @@ native option names supplied explicitly in `[statusbar.options]`. An option
 can also be called with arguments, `#{E:@row,CPU,#{flash.plugin.cpu.percent}}`;
 see [Flash extensions](#flash-extensions).
 
-Outer bar templates remove newlines for readable TOML. Named document popups
-preserve their interior newlines. A desktop widget draws each line as its own
+Outer bar templates remove newlines for readable TOML. Text popups preserve
+their interior newlines. A desktop widget draws each line as its own
 status line: styles carry across a line break, alignment starts again on the
 left. Style and alignment markers are interpreted
 **after** format expansion, so a conditional or option can select an entire
@@ -145,7 +145,8 @@ the last good value. Named sources use the configured timeout; native shell jobs
 and PTYs do not inherit that timeout. Only the executable and explicit working
 directory resolve against the defining configuration file; remaining arguments
 stay opaque. Home/environment expansion happens at execution. Use
-`working_directory = "."` for arguments relative to the configuration directory.
+`working_directory = "."` (a popup's `cwd = "."`) for arguments relative to the
+configuration directory.
 Inactive sources retain last-good output without running or rotating; only
 evaluated sources and cycles contribute timer deadlines. `history = N` (2–512)
 keeps the last N numeric outputs as `#{flash.history.<name>}`, space-separated
@@ -213,6 +214,33 @@ Inline popup identities derive from their source origin and invocation, not the
 current text or screen position. A changing source value refreshes an open
 popup in place; separate calls to the same fragment remain distinct anchors.
 The bar, hit regions, and terminal document encoder consume the same typed runs.
+
+## Native drawing
+
+The status bar consumes the ordered typed format document through
+`StatusFormatLayout`. Its cells determine painted positions and native
+closed-range hit areas, including list focus/markers, fill colors, alignment
+clipping, and absolute-centre overlays. Flash shortens explicitly elastic
+`#[shrink]` spans before native drawing; unmarked formats retain native
+trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the
+original point-based padding and centred label, reserving the longest
+configured base-mode label; the transient TERMINAL label of a focused popup
+uses that same width, so focusing a popup does not shift adjacent segments.
+Pill backgrounds and interaction areas share the same geometry.
+
+Each display uses the same pooled layer renderer. Non-ASCII cells have
+independent origins, so font shaping cannot shift subsequent text or
+interaction rectangles away from native columns. Notched displays suppress
+centre content and clip other cells and hit areas around the notch margin.
+Blink and breathing effects, carousel transitions, and in-place value
+crossfades run on Core Animation without a redraw timer.
+
+`monitor = "primary"` selects the display at desktop origin `(0, 0)`. Moving
+keyboard focus to another display does not move the bar or reserve status-bar
+space there. `monitor = "all"` draws a bar on every display. Use
+`#[align=absolute-centre]` for a label at the physical centre of the screen;
+native tmux `#[align=centre]` instead centres the space remaining between the
+left and right content, so unequal side widths shift that label.
 
 ## Flash extensions
 
@@ -288,7 +316,7 @@ A publish first captures every value, option, job value, and (for
 time-dependent formats) the current second that the previous evaluation read
 (`FlashStatusBarTemplateEngine.EvaluationInputs`); an identical capture skips
 the evaluation entirely, so a 1 Hz plugin sample that changes nothing the bar
-references costs one dictionary comparison. Each named popup is memoized the
+references costs one dictionary comparison. Each text popup is memoized the
 same way on its own dependency set, so a changed CPU sample re-evaluates the bar
 and the CPU popup, not every popup. Time- and job-dependent popups are never
 memoized.

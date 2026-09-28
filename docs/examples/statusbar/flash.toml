@@ -1,7 +1,6 @@
 # Merge these sections into flash.toml; no companion files are required.
 [statusbar]
 enabled = true
-popup_max_width = 480
 template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=right]#{T:@right}"
 
 [statusbar.options]
@@ -14,20 +13,38 @@ template = "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=r
 #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
 
-[statusbar.popup]
-active-app = """
+[popup]
+max_width = 480
+
+[popup.active-app]
+text = """
 #[fg=#EBCB8B]#{flash.active_app_name}#[default]
 #{flash.plugin.processes.focused_app_details}
 """
 
-claude = "#{flash.plugin.aiproviders.claude_details}"
-codex = "#{flash.plugin.aiproviders.codex_details}"
-cpu = "#{flash.plugin.cpu.details}"
-memory = "#{flash.plugin.memory.details}"
-disks = "#{flash.plugin.disks.details}"
-network = "#{flash.plugin.network.details}"
-battery = "#{flash.plugin.power.details}"
-date = "#{flash.calendar}"
+[popup.claude]
+text = "#{flash.plugin.aiproviders.claude_details}"
+
+[popup.codex]
+text = "#{flash.plugin.aiproviders.codex_details}"
+
+[popup.cpu]
+text = "#{flash.plugin.cpu.details}"
+
+[popup.memory]
+text = "#{flash.plugin.memory.details}"
+
+[popup.disks]
+text = "#{flash.plugin.disks.details}"
+
+[popup.network]
+text = "#{flash.plugin.network.details}"
+
+[popup.battery]
+text = "#{flash.plugin.power.details}"
+
+[popup.date]
+text = "#{flash.calendar}"
 
 [plugin.feed]
 label = "AGGR"

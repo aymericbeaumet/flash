@@ -24,7 +24,8 @@ final class TerminalTests: XCTestCase {
   }
 
   func testTerminalResponsesInputModesAndBracketedPaste() {
-    let buffer = TerminalBuffer(columns: 20, rows: 3, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: 20, rows: 3, scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.connectOutput()
     var output = Data()
     buffer.output = { output.append($0) }
@@ -49,7 +50,8 @@ final class TerminalTests: XCTestCase {
   }
 
   func testKittyModifierEventsEncodePressAndReleaseAndUseLocalInterceptor() {
-    let buffer = TerminalBuffer(columns: 20, rows: 3, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: 20, rows: 3, scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.connectOutput()
     var output = Data()
     buffer.output = { output.append($0) }
@@ -86,7 +88,8 @@ final class TerminalTests: XCTestCase {
   }
 
   func testPixelMouseEncodingUsesRenderedCellDimensions() {
-    let buffer = TerminalBuffer(columns: 20, rows: 3, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: 20, rows: 3, scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.connectOutput()
     var output = Data()
     buffer.output = { output.append($0) }
@@ -101,7 +104,8 @@ final class TerminalTests: XCTestCase {
   }
 
   func testAlternateScreenRestoresPrimaryAndScrollback() {
-    let buffer = TerminalBuffer(columns: 12, rows: 2, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: 12, rows: 2, scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.write(Data("primary\u{1B}[?1049hother".utf8))
     XCTAssertTrue(buffer.snapshot()?.text.contains("other") == true)
     buffer.write(Data("\u{1B}[?1049l".utf8))
@@ -488,7 +492,8 @@ final class TerminalTests: XCTestCase {
 
 final class TerminalSnapshotTests: XCTestCase {
   func testSnapshotsReportChangedRowsAndReuseCleanOnes() throws {
-    let buffer = TerminalBuffer(columns: 10, rows: 4, scrollback: true)
+    let buffer = TerminalBuffer(
+      columns: 10, rows: 4, scrollbackLines: TerminalConfiguration.defaultScrollbackLines)
     buffer.write(Data("one\r\ntwo\r\nthree".utf8))
     let first = try XCTUnwrap(buffer.snapshot())
     XCTAssertNil(first.changedRows, "the first frame rebuilds every row")
@@ -536,7 +541,7 @@ final class TerminalSnapshotTests: XCTestCase {
   }
 
   func testWideCellsHyperlinksAndBlinkSurviveRowReuse() throws {
-    let buffer = TerminalBuffer(columns: 12, rows: 3, scrollback: false)
+    let buffer = TerminalBuffer(columns: 12, rows: 3, scrollbackLines: 0)
     buffer.write(
       Data(
         ("界\u{1B}]8;;https://example.com/a\u{1B}\\A\u{1B}]8;;\u{1B}\\"
@@ -564,7 +569,7 @@ final class TerminalSnapshotTests: XCTestCase {
   }
 
   func testGraphemeClustersAndBackgroundOnlyCellsKeepTheirContent() throws {
-    let buffer = TerminalBuffer(columns: 10, rows: 2, scrollback: false)
+    let buffer = TerminalBuffer(columns: 10, rows: 2, scrollbackLines: 0)
     buffer.write(Data("e\u{301}👩‍💻x\r\n\u{1B}[48;2;9;8;7m\u{1B}[K\u{1B}[0m".utf8))
     let frame = try XCTUnwrap(buffer.snapshot())
     XCTAssertEqual(frame.cells[0].text, "e\u{301}")

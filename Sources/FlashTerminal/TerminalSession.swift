@@ -4,21 +4,28 @@ import Darwin
 import Foundation
 
 public struct TerminalConfiguration: Equatable, Sendable {
+  /// Lines of history kept above the screen when a configuration names none;
+  /// libghostty applies the cap (and a proportional byte cap, 4 MiB here) at
+  /// its page boundaries.
+  public static let defaultScrollbackLines = 2_000
+
   public let command: [String]
   public let workingDirectory: String?
   public let environment: [String: String]
   public let columns: Int
   public let rows: Int
+  public let scrollbackLines: Int
   public init(
     command: [String], workingDirectory: String? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment,
-    columns: Int = 80, rows: Int = 24
+    columns: Int = 80, rows: Int = 24, scrollbackLines: Int = Self.defaultScrollbackLines
   ) {
     self.command = command
     self.workingDirectory = workingDirectory
     self.environment = environment
     self.columns = max(1, min(1000, columns))
     self.rows = max(1, min(1000, rows))
+    self.scrollbackLines = max(0, min(Self.defaultScrollbackLines, scrollbackLines))
   }
 }
 
@@ -118,7 +125,8 @@ public final class TerminalSession {
     queue.setSpecific(key: queueKey, value: true)
     columns = configuration.columns
     rows = configuration.rows
-    buffer = TerminalBuffer(columns: columns, rows: rows, scrollback: true)
+    buffer = TerminalBuffer(
+      columns: columns, rows: rows, scrollbackLines: configuration.scrollbackLines)
     buffer.connectOutput()
     buffer.output = { [weak self] data in self?.enqueue(data) }
   }

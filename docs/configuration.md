@@ -20,11 +20,11 @@ explicit matrix needs at least 2×2 keys, rows of equal length, and unique
 characters (compared lowercased) without whitespace or the reserved `` ` ``;
 a malformed one is reported and keeps the previous value.
 Resolving configuration again is idempotent and does not accumulate warnings.
-Tables named by the user — `[plugin.<id>]`, `[terminal.<name>]`,
-`[statusbar.sources.<name>]` and `[widgets.<name>]` (see
+Tables named by the user — `[plugin.<id>]`, `[popup.<name>]` (see
+[popups](popups.md)), `[statusbar.sources.<name>]` and `[widgets.<name>]` (see
 [desktop widgets](widgets.md)) — are validated key by key.
 
-`statusbar.template`, `[statusbar.popup]` bodies, widget templates and every
+`statusbar.template`, text popups, widget templates and every
 `@option` share one [status format](status-format.md) language, including
 Flash's [meters, sparklines and template arguments](status-format.md#flash-extensions).
 The configurations under [`docs/examples`](examples/widgets/README.md) are
@@ -80,8 +80,8 @@ the file defining that command. Remaining arguments retain their exact strings
 during loading, including URLs, `--option=relative/path`, and shell programs.
 Runtime home/environment expansion follows the command's launch contract.
 
-Named sources and terminals can set `working_directory = "."` when their
-arguments refer to files beside the defining TOML file. A working directory is
+Named sources (`working_directory`) and terminal popups (`cwd`) can set `"."`
+when their arguments refer to files beside the defining TOML file. A working directory is
 an explicit path field and resolves against that file, including `.`, `..`, and
 hidden directories such as `.cache`. It does not depend on Flash's launch
 directory. Use an explicit shell argv for shell syntax, such as
@@ -96,7 +96,7 @@ Each `VerbDefinition` declares parameter names/types and supplies its parser.
 Unknown parameters and conflicting actions are rejected. A recognized builtin
 with invalid arguments cannot fall through to a plugin of the same name.
 
-CLI usage and terminal-command completion syntax derive from those definitions.
+CLI usage and popup-command completion syntax derive from those definitions.
 Colon-command descriptions live beside their command specifications. When adding
 a command, update its definition, canonical configuration examples and contract
 tests together rather than adding a second parser or help inventory.
@@ -149,7 +149,7 @@ explicit, lives on a layer of its own and starts after the click is queued, so
 it never delays the click or the next key. It suits demos and screencasts.
 
 `[overlay] screen_capture = "hide"` asks macOS to keep the overlay, the status
-bar, its click windows and status/terminal popups out of screenshots,
+bar, its click windows and popups out of screenshots,
 recordings and screen sharing (`NSWindow.sharingType = .none`). It is best
 effort: capture through ScreenCaptureKit on recent macOS may still include
 them. The window server keeps a window hidden once asked, so switching back to
