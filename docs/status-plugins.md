@@ -208,39 +208,34 @@ explicit `:network refresh` action may request Location authorization.
 ## Adjacent AI usage status
 
 `aiproviders` is adjacent to, not part of, the local system-monitor suite. It
-publishes `claude_label`, `codex_label` and `details`. Cld/Cdx labels show the
-remaining weekly quota with an unpadded percentage capped at 99, followed by
-`↻` and the time until the weekly window resets (for example `53%↻5d`).
-`details` sums up both subscriptions for one popup: a row per quota window
-(Claude's shared session, weekly and Fable; Codex's session and weekly, and
-the separate `codex_bengalfox` rate-limit bucket as Astra) with the share left
-as a bar and a percentage, and the time to its reset. “Astra” is a local
-presentation alias, not app-server schema terminology. A share under 20%, or a
-weekly window whose session is spent, is red; a weekly window used faster than
-its elapsed days allow is orange. Missing windows are left out rather than
-shown as unused. A note says how old the numbers are; a stale provider says
-since when it is cached and why (`Token expired · run Claude Code to renew
-it`), and a provider without data says it is unavailable. Grok remains a
-launcher only; do not add quota polling that reads or mutates unsupported
-credential stores.
+publishes `claude_label` and `codex_label`. Cld/Cdx labels show the remaining
+weekly quota with an unpadded percentage capped at 99, followed by `↻` and the
+time until the weekly window resets (for example `53%↻5d`). It reads only
+those weekly windows from the provider responses and leaves session and
+model-specific quotas out. Grok remains a launcher only; do not add quota polling that reads or mutates
+unsupported credential stores.
+
+For every quota window, show [tokscale](https://github.com/junhoyeo/tokscale)'s
+`usage` in a popup under the labels, as the
+[example status strip](examples/statusbar/flash.toml) does; install it
+yourself, for example with `npm i -g tokscale`. Flash does not rebuild that
+report.
 
 The plugin republishes a sanitized last-good cache at startup. One timer runs
 each minute to rerender relative labels and check the independent fetch TTLs: ten minutes
 for Anthropic and two minutes for OpenAI. Only changed rendered segments publish.
 Quota labels show an unpadded dash once the cache is older than twice the provider
-TTL; `details` keeps the cached numbers for inspection. Popup hover and status
-layout are pure reads of that state and perform no authentication or API calls.
-The plugin is status-bound, so it is resident only while the bar
+TTL. Status layout is a pure read of that state and performs no authentication
+or API calls. The plugin is status-bound, so it is resident only while the bar
 or a popup shows one of its segments. A chat-launcher bang such as `!claude` still starts
 it on demand, and a started process keeps the quota timer, including its
 credential reads, until it exits.
 
 Claude Code's credentials are read-only by default. The plugin reads the
 `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and
-uses the stored access token until it expires. It then marks the Claude quotas
-cached or unavailable with a `Token expired · run Claude Code to renew it`
-hint, and rereads the store every five minutes until Claude Code has renewed
-the token. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
+uses the stored access token until it expires. It then leaves the Claude label
+to age out to a dash, and rereads the store every five minutes until Claude
+Code has renewed the token. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
 into renewing the token with Claude Code's OAuth client two minutes before
 expiry and writing the rotation back to Claude Code's store. Rotating another
 app's refresh token can sign that app out.

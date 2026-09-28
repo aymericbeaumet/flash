@@ -153,15 +153,21 @@ it; until the popup's `command`, `cwd`, `env` or `persistent` changes, that
 popup starts when opened, like one nothing refers to, so each showing runs a
 current report.
 
-[ccusage](https://ccusage.com) prints a table of Claude Code and Codex usage
-and exits, so it makes a one-shot report popup. It is yours to install, for
-example with `npm i -g ccusage`, mise or bun; Flash does not install it.
+[tokscale](https://github.com/junhoyeo/tokscale)'s `usage` prints your AI
+subscriptions' quotas and exits, so it makes a one-shot report popup. It is
+yours to install, for example with `npm i -g tokscale`, mise or bun; Flash does
+not install it.
 
 ```toml
-[popup.ccusage]              # a one-shot report
-command = ["ccusage", "daily", "--last", "3"]
-size = "140x34"
+[popup.ai-usage]             # a one-shot report
+command = ["tokscale", "usage"]
+size = "68x16"
 ```
+
+To keep a report resident instead, so showing it is instant and never
+refetches, rerun it on a timer in a persistent popup, as the
+[example status strip](examples/statusbar/flash.toml) does; Command-R reruns
+it at once.
 
 A text popup's pager is fresh too: it starts when the popup shows and stops,
 removing its snapshot file, when it closes.

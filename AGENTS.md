@@ -17,6 +17,18 @@ contracts before changing a subsystem:
 - [Privacy and permissions](docs/privacy.md).
 - [Performance and latency benchmarks](docs/performance.md).
 
+## Assemble great tools
+
+Flash assembles the tools people already trust; it does not replace them.
+Before building a dashboard, report or monitor, check whether a maintained CLI
+or TUI already does the job (btop, newsboat, calcurse, tokscale). If one does,
+show it in a terminal popup and document the configuration: installing and
+configuring the tool belongs to the user's system and dotfiles, never to Flash,
+its plugins or its installer. Flash adds only what no tool can: keyboard
+access, hints, actions, compact status values for the bar, and the popups and
+glue that tie the tools together. When a homemade surface duplicates such a
+tool, remove it rather than maintain both.
+
 ## Hard constraints
 
 1. UI is confined to hint/grid overlays, advanced-mode status/command surfaces,

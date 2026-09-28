@@ -1,7 +1,10 @@
 # Status strip with popups
 
 The companion [Flash configuration](flash.toml) uses bundled plugin data for
-all quota and system popups. No external monitoring application is required.
+the quota labels and every system popup. The AI usage popup runs
+[tokscale](https://github.com/junhoyeo/tokscale), which you install yourself,
+for example with `npm i -g tokscale`; every other popup needs no external
+application.
 
 ```text
 Cld 53%↻5d Cdx 54%↻5d · CPU  9% MEM 42% DSK 68% NET 1.2M BAT 99%
@@ -15,14 +18,13 @@ for download + upload on the default-route interface, in decimal bytes/second.
 AI percentages also cap at 99, with no padding because they change slowly.
 
 Cld/Cdx show the remaining weekly quota and the weekly reset delay. They share
-one popup summing up both subscriptions: every session, weekly and model quota
-as the share left, with a bar and the time to its reset, and how old the
-numbers are. It reads the plugin's cached fetch, so hovering never refetches.
-Left-click a label to open that provider’s usage page; right-click pins the
-popup. A stale badge becomes a dash (Claude: 20 minutes; Codex: 4 minutes),
-while the popup keeps the cached numbers and says since when. An empty Claude
-Code credential requires `/login` in Claude Code before live quotas can
-return.
+one popup, `tokscale usage`: each subscription's session, weekly and model
+quotas as its vendor reports them, with the share left and the reset time. A
+persistent popup reruns it every five minutes, so hovering shows it at once
+and never refetches; Command-R reruns it now. Left-click a label to open that
+provider’s usage page; right-click pins the popup. A stale badge becomes a
+dash (Claude: 20 minutes; Codex: 4 minutes). An empty Claude Code credential
+requires `/login` in Claude Code before live quotas can return.
 
 CPU/MEM/DSK/NET/BAT hover displays the corresponding bundled plugin’s full
 `details` segment: aggregate CPU/GPU and history, memory composition/swap,

@@ -21,8 +21,14 @@ text = """
 #{flash.plugin.processes.focused_app_details}
 """
 
+# AI subscription quotas from tokscale (https://github.com/junhoyeo/tokscale),
+# which you install yourself, e.g. `npm i -g tokscale`. The report reruns every
+# five minutes in the background, so hovering shows it at once; Command-R in
+# the popup reruns it now.
 [popup.ai-usage]
-text = "#{flash.plugin.aiproviders.details}"
+command = ["sh", "-c", 'while :; do report=$(tokscale usage 2>&1); clear; printf "%s\n" "$report"; sleep 300; done']
+size = "68x16"
+persistent = true
 
 [popup.cpu]
 text = "#{flash.plugin.cpu.details}"
