@@ -308,7 +308,9 @@ final class StatusFormatLayoutTests: XCTestCase {
         }
       }
       terminal.start()
-      test.wait(for: [ready], timeout: 5)
+      // A cold CI runner can take several seconds to boot the tmux server;
+      // the wait ends at the first frame showing it, so passing runs stay fast.
+      test.wait(for: [ready], timeout: 30)
       terminal.onFrame = nil
     }
 
@@ -325,7 +327,7 @@ final class StatusFormatLayoutTests: XCTestCase {
       }
       _ = try Self.run(executable, ["-S", socket, "set-option", "-g", "status-format[0]", source])
       _ = try Self.run(executable, ["-S", socket, "set-option", "-g", "status-format[1]", marker])
-      test.wait(for: [changed], timeout: 5)
+      test.wait(for: [changed], timeout: 15)
       terminal.onFrame = nil
       return try XCTUnwrap(captured)
     }
