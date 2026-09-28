@@ -278,7 +278,8 @@ template = "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B
 # A popup marker can wrap several labels at once, for example:
 # #[popup=btop]#{flash.plugin.cpu.label} #{flash.plugin.memory.label}#[nopopup]
 # CPU/MEM/DISK labels carry padded percentages; BAT is unpadded; NET carries a padded byte rate.
-# AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
+# AI quota labels are aiproviders.claude_label / aiproviders.codex_label;
+# aiproviders.details sums up both subscriptions' quotas for a text popup.
 # Example with combined metrics and the time on the right:
 # template = """
 # #[align=left]#[pill]#{flash.mode}#[nopill]
@@ -375,8 +376,8 @@ cwd = "~"
 # persistent = true
 #
 # A one-shot report: ccusage (https://ccusage.com) is yours to install, e.g.
-# `npm i -g ccusage`; wrap the AI quota labels in #[popup=ai-usage].
-# [popup.ai-usage]
+# `npm i -g ccusage`.
+# [popup.ccusage]
 # command = ["ccusage", "daily", "--last", "3"]
 # size = "140x34"
 

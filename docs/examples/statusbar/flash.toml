@@ -21,11 +21,8 @@ text = """
 #{flash.plugin.processes.focused_app_details}
 """
 
-# A one-shot report: install ccusage (https://ccusage.com) yourself, for
-# example with `npm i -g ccusage`. Each showing runs a current report.
 [popup.ai-usage]
-command = ["ccusage", "daily", "--last", "3"]
-size = "140x34"
+text = "#{flash.plugin.aiproviders.details}"
 
 [popup.cpu]
 text = "#{flash.plugin.cpu.details}"
