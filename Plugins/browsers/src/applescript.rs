@@ -107,7 +107,9 @@ pub struct ListedTab {
 /// so a tab character inside it survives. Every open tab is its own row,
 /// identified by its slot: a browser is read once per cycle, so identical
 /// title and URL pairs are distinct tabs. Rows with neither a title nor a
-/// URL, and lines without a valid slot, are dropped.
+/// URL, and lines without a valid slot, are dropped. The title is kept as the
+/// browser reports it, surrounding whitespace included: it is the identity a
+/// select script compares verbatim, and rows trim it only for display.
 pub fn parse_tab_list(stdout: &str) -> Vec<ListedTab> {
     stdout
         .lines()
@@ -123,8 +125,8 @@ pub fn parse_tab_list(stdout: &str) -> Vec<ListedTab> {
             };
             let current = parts.next().is_some_and(|value| value.trim() == "1");
             let url = parts.next().unwrap_or("").trim();
-            let title = parts.next().unwrap_or("").trim();
-            if title.is_empty() && url.is_empty() {
+            let title = parts.next().unwrap_or("").trim_end_matches(['\r', '\n']);
+            if title.trim().is_empty() && url.is_empty() {
                 return None;
             }
             Some(ListedTab {
@@ -178,32 +180,60 @@ return out
     /// its window: the tab at `slot` first, then the rest of that window,
     /// then every other window front to back. Windows and tabs move after a
     /// listing, so a slot is only where to look first: every step requires
-    /// the whole identity, and a tab that carries it nowhere is `missing`
-    /// rather than a lookalike. Among truly identical tabs (the same URL and
-    /// title) any one is the picked tab. Tabs are addressed by position
-    /// (`tab i of w`), never read back through `index of`. Prints `ok` or
-    /// `missing`.
+    /// the whole identity, and among truly identical tabs (the same URL and
+    /// title) any one is the picked tab. A page may retitle itself after the
+    /// listing (an unread count), so when no tab carries the whole identity a
+    /// second pass accepts its URL alone, in the same order. A tab matching
+    /// neither is `missing` rather than a lookalike. Tabs are addressed by
+    /// position (`tab i of w`), never read back through `index of`. Prints
+    /// `ok` or `missing`.
     pub fn select_script(&self, app: &str, identity: TabIdentity, slot: Option<TabSlot>) -> String {
         let mut targets = String::new();
-        let mut clauses = Vec::new();
-        if let Some(url) = identity.url {
+        let url_clause = identity.url.map(|url| {
             targets.push_str(&format!("\n  set targetURL to {}", applescript_quote(url)));
-            clauses.push("((URL of t as text) is targetURL)".to_string());
-        }
-        if let Some(title) = identity.title {
+            "((URL of t as text) is targetURL)".to_string()
+        });
+        let title_clause = identity.title.map(|title| {
             targets.push_str(&format!(
                 "\n  set targetTitle to {}",
                 applescript_quote(title)
             ));
-            clauses.push(format!("(({} of t as text) is targetTitle)", self.title));
+            format!("(({} of t as text) is targetTitle)", self.title)
+        });
+        let mut passes = vec![[url_clause.clone(), title_clause.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" and ")];
+        if let (Some(url_clause), Some(_)) = (url_clause, title_clause) {
+            passes.push(url_clause);
         }
+        let searches: String = passes
+            .iter()
+            .map(|condition| self.search_passes(condition, slot))
+            .collect();
+        format!(
+            r#"
+tell application {app}
+  activate{targets}
+  considering case{searches}
+  end considering
+end tell
+return "missing"
+"#,
+            app = applescript_quote(app),
+        )
+    }
+
+    /// One search for tabs meeting `condition`: the slot, the rest of its
+    /// window, then the other windows front to back.
+    fn search_passes(&self, condition: &str, slot: Option<TabSlot>) -> String {
         let select = format!(
             r#"if {condition} then
           {select_tab}
           set index of w to 1
           return "ok"
         end if"#,
-            condition = clauses.join(" and "),
             select_tab = self.select_tab,
         );
         let listed = slot.map_or_else(String::new, |slot| {
@@ -229,10 +259,7 @@ return out
             )
         });
         format!(
-            r#"
-tell application {app}
-  activate{targets}
-  considering case{listed}
+            r#"{listed}
     repeat with wi from 1 to (count of windows)
       if wi is not {searched} then
         set w to window wi
@@ -243,12 +270,7 @@ tell application {app}
           end try
         end repeat
       end if
-    end repeat
-  end considering
-end tell
-return "missing"
-"#,
-            app = applescript_quote(app),
+    end repeat"#,
             // No window index is 0: without a slot, every window is searched.
             searched = slot.map_or(0, |slot| slot.window),
         )
@@ -397,14 +419,43 @@ mod tests {
         let slot = Some(TabSlot { window: 2, tab: 3 });
         let chromium = CHROMIUM.select_script("Google Chrome", identity, slot);
         assert!(!chromium.contains("index of t"), "{chromium}");
+        // Two passes (whole identity, then URL alone), three steps each.
         assert_eq!(
             chromium.matches("set active tab index of w to i").count(),
-            3
+            6
         );
-        assert_eq!(chromium.matches("set t to tab i of w").count(), 3);
+        assert_eq!(chromium.matches("set t to tab i of w").count(), 6);
         let safari = SAFARI.select_script("Safari", identity, slot);
-        assert_eq!(safari.matches("set current tab of w to t").count(), 3);
+        assert_eq!(safari.matches("set current tab of w to t").count(), 6);
         assert!(!safari.contains("index of t"), "{safari}");
+    }
+
+    #[test]
+    fn a_retitled_page_is_still_picked_by_its_url() {
+        let script = SAFARI.select_script(
+            "Safari",
+            TabIdentity::listed("https://mail.example/", "Inbox (3)"),
+            None,
+        );
+        assert!(script.contains(
+            "if ((URL of t as text) is targetURL) and ((name of t as text) is targetTitle) then"
+        ));
+        assert!(script.contains("if ((URL of t as text) is targetURL) then"));
+        // Without a URL the title is the whole identity: a single pass.
+        let untitled = SAFARI.select_script("Safari", TabIdentity::listed("", "Inbox"), None);
+        assert_eq!(
+            untitled
+                .matches("repeat with wi from 1 to (count of windows)")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn listed_titles_keep_the_browsers_whitespace() {
+        let tabs = parse_tab_list("1\t1\t1\thttps://mail.example/\t  Inbox \n1\t2\t0\t\t   \n");
+        assert_eq!(tabs.len(), 1, "a blank title without a URL is no row");
+        assert_eq!(tabs[0].title, "  Inbox ");
     }
 
     #[test]
@@ -465,16 +516,15 @@ mod tests {
             .unwrap();
         let others = slotted.find("if wi is not 2 then").unwrap();
         assert!(slot < listed_window && listed_window < others, "{slotted}");
-        assert_eq!(slotted.matches("set w to window 2").count(), 2);
-        // Every step requires the whole identity; nothing matching: missing.
-        assert_eq!(
-            slotted
-                .matches(
-                    "if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then"
-                )
-                .count(),
-            3
-        );
+        assert_eq!(slotted.matches("set w to window 2").count(), 4);
+        // The whole identity first, at every step; only then the URL alone
+        // (a page retitled since the listing); nothing matching: missing.
+        let exact =
+            "if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then";
+        let url_only = "if ((URL of t as text) is targetURL) then";
+        assert_eq!(slotted.matches(exact).count(), 3);
+        assert_eq!(slotted.matches(url_only).count(), 3);
+        assert!(slotted.rfind(exact).unwrap() < slotted.find(url_only).unwrap());
         assert!(slotted.trim_end().ends_with(r#"return "missing""#));
         let unslotted = CHROMIUM.select_script("Google Chrome", identity, None);
         assert!(!unslotted.contains("set w to window 2"));
@@ -485,7 +535,8 @@ mod tests {
     #[test]
     fn the_chromium_select_script_is_the_one_verified_live() {
         // Run against a scratch Chrome window [A, B, A]: "ok" and tab 3
-        // selected; the same script for title "a" or tab "C": "missing".
+        // selected; the same script for a retitled "Old A": "ok" through its
+        // URL; for tab "C": "missing".
         let script = CHROMIUM.select_script(
             "Google Chrome",
             TabIdentity::listed("data:text/html,<title>A</title>a", "A"),
@@ -530,6 +581,44 @@ tell application "Google Chrome"
           set t to tab i of w
           try
             if ((URL of t as text) is targetURL) and ((title of t as text) is targetTitle) then
+          set active tab index of w to i
+          set index of w to 1
+          return "ok"
+        end if
+          end try
+        end repeat
+      end if
+    end repeat
+    try
+      set w to window 1
+      set i to 3
+      set t to tab i of w
+      if ((URL of t as text) is targetURL) then
+          set active tab index of w to i
+          set index of w to 1
+          return "ok"
+        end if
+    end try
+    try
+      set w to window 1
+      repeat with i from 1 to (count of tabs of w)
+        set t to tab i of w
+        try
+          if ((URL of t as text) is targetURL) then
+          set active tab index of w to i
+          set index of w to 1
+          return "ok"
+        end if
+        end try
+      end repeat
+    end try
+    repeat with wi from 1 to (count of windows)
+      if wi is not 1 then
+        set w to window wi
+        repeat with i from 1 to (count of tabs of w)
+          set t to tab i of w
+          try
+            if ((URL of t as text) is targetURL) then
           set active tab index of w to i
           set index of w to 1
           return "ok"

@@ -210,7 +210,13 @@ fn tab_candidate(
     current: bool,
     payload: &TabPayload,
 ) -> Candidate {
-    let display = if title.is_empty() { url } else { title };
+    // Titles keep the browser's whitespace for the select identity; the row
+    // shows them trimmed.
+    let display = if title.trim().is_empty() {
+        url
+    } else {
+        title.trim()
+    };
     let mut candidate = Candidate::new(browser.source, display)
         .kind("browser_tab")
         .location()
