@@ -177,8 +177,9 @@ every emulator binds.
 
 ## Shared mode exit
 
-`leave_mode`, `enter_insert_mode`, `enter_command_mode`, and `focus_input` ship
-without default mappings in every scope. Bare `a`, `A`, `i`, `I`, `o`, `O`,
+`leave_mode`, `enter_insert_mode`, `enter_command_mode`, `enter_terminal_mode`,
+and `focus_input` ship without default mappings in every scope except
+TERMINAL, whose Command-W is `leave_mode`. Bare `a`, `A`, `i`, `I`, `o`, `O`,
 and `gi` do not enter INSERT. Users explicitly choose their shortcuts,
 including bindings that prefill the command line with `:flashlight`.
 
@@ -416,9 +417,13 @@ overwrites the current live-query result.
 
 ## Popup input
 
-Every popup is a terminal. Clicking a popup's body, pinning it from the status
-bar, or showing it with `popup_show` focuses its local terminal view and enters
-the transient `TERMINAL` mode. The overlay owns no keyboard input in this mode: the
+Every popup is a terminal. TERMINAL is the fourth mode, beside NORMAL, INSERT
+and COMMAND: `enter_terminal_mode [--name=<popup>]` enters it by showing the
+popup standalone (the built-in `terminal` popup without a name), and clicking a
+popup's body or pinning it from the status bar enters it too. Either way the
+popup's local terminal view gets focus. `leave_mode` leaves it, closing the
+popup. Entering the popup already focused is a no-op; entering another replaces
+it. The overlay owns no keyboard input in this mode: the
 existing global tap passes keys through, every Carbon registration is suspended,
 and only `[mode.terminal.mappings]` can intercept keys in the popup. The label is
 configured with `mode.labels.terminal` and defaults to `TERMINAL`.
@@ -446,8 +451,9 @@ before NORMAL recapture. Losing popup focus restores the prior base mode without
 activating a different app. A popup's lifecycle, not its focus or visibility,
 decides how long its process lives; see [popups](popups.md#lifecycles).
 
-`leave_mode` provides one configured exit across surfaces. It dismisses a popup
-and restores its prior base mode/app, restores the saved mode from command or
+`leave_mode` provides one configured exit across surfaces. It dismisses a popup,
+text or terminal alike, and restores its prior base mode/app (the default
+`[mode.terminal.mappings]` bind it to Command-W), restores the saved mode from command or
 finder input, and leaves INSERT for NORMAL. In NORMAL or disabled mode it only
 dismisses active hints and is otherwise a no-op. An all-scope binding to either
 `enter_normal_mode` or `leave_mode` enables advanced mode. For a shifted bracket,
@@ -491,7 +497,7 @@ Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 [mode.all.mappings]
 "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
 "cmd+ctrl+[" = ["flash", "enter_normal_mode"]
-"alt+space" = ["flash", "popup_show"]
+"alt+space" = ["flash", "enter_terminal_mode"]
 ```
 
 Closing a popup or command surface may restore its saved INSERT mode.

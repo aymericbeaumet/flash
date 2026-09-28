@@ -71,7 +71,7 @@ final class StatusPopupConfigTests: XCTestCase {
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
     XCTAssertEqual(config.textPopups["article"]?.template, "#[bold]Opening#[nobold]\nFirst lines")
-    XCTAssertEqual(Set(config.terminalPopups.keys), ["shell"])
+    XCTAssertEqual(Set(config.terminalPopups.keys), ["terminal"])
     XCTAssertFalse(config.terminalPopupNames.contains("article"))
   }
 
@@ -137,7 +137,7 @@ final class StatusPopupConfigTests: XCTestCase {
           + "(cwd, env, size = \"COLUMNSxROWS\" and persistent are its other keys)",
       ])
     XCTAssertTrue(config.diagnostics.allSatisfy { $0.location != nil }, "\(config.diagnostics)")
-    XCTAssertEqual(Set(config.popups.keys), ["shell"])
+    XCTAssertEqual(Set(config.popups.keys), ["terminal"])
   }
 
   func testLaterGlobalDefaultsApplyToInheritedSources() {
@@ -149,18 +149,15 @@ final class StatusPopupConfigTests: XCTestCase {
     XCTAssertEqual(config.statusBar.sources["clock"]?.timeoutSeconds, 12)
   }
 
-  func testNativeOptionsAndExplicitSourceCadence() {
+  func testExplicitSourceCadence() {
     let config = ConfigLoader.parse(
       """
-      [statusbar.options]
-      "@left" = "#{flash.mode}"
       [statusbar.sources.news]
       command = ["./news", "--plain"]
       interval = 300
       cycle_interval = 60
       """, sourceURL: URL(fileURLWithPath: "/tmp/config/flash.toml"))
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
-    XCTAssertEqual(config.statusBar.options["@left"], "#{flash.mode}")
     XCTAssertEqual(config.statusBar.sources["news"]?.command, ["/tmp/config/news", "--plain"])
     XCTAssertEqual(config.statusBar.sources["news"]?.intervalSeconds, 300)
     XCTAssertEqual(config.statusBar.sources["news"]?.cycleIntervalSeconds, 60)
@@ -171,11 +168,9 @@ final class StatusPopupConfigTests: XCTestCase {
       """
       [statusbar]
       enabled = true
-      template = "#[popup=feed]News#[nopopup] #{E:@date} #[range=user|chat]Chat#[norange]"
-      [statusbar.options]
-      "@date" = "#[popup=date]%H:%M#[nopopup]"
+      template = "#[popup=feed]News#[nopopup] #[popup=date]%H:%M#[nopopup] #[range=user|chat]Chat#[norange]"
       [statusbar.click]
-      chat = ["flash", "popup_show", "--name=chat"]
+      chat = ["flash", "enter_terminal_mode", "--name=chat"]
       [popup.date]
       text = "#{flash.calendar}\\n#[popup=agenda]agenda#[nopopup]"
       [popup.feed]
@@ -192,17 +187,18 @@ final class StatusPopupConfigTests: XCTestCase {
       [popup.unused]
       command = ["true"]
       [mode.command.mappings]
-      "cmd+b" = ["flash", "popup_show", "--name=bonsai"]
+      "cmd+b" = ["flash", "enter_terminal_mode", "--name=bonsai"]
       [mode.terminal.mappings]
-      "alt+space" = ["flash", "popup_show"]
-      "alt+t" = ["flash", "popup_show", "--name=top"]
+      "alt+space" = ["flash", "enter_terminal_mode"]
+      "alt+t" = ["flash", "enter_terminal_mode", "--name=top"]
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
     XCTAssertEqual(
-      config.referencedPopupNames, ["feed", "date", "agenda", "chat", "bonsai", "shell", "top"])
-    XCTAssertEqual(config.prewarmedPopupNames, ["feed", "agenda", "chat", "bonsai", "shell"])
+      config.referencedPopupNames,
+      ["feed", "date", "agenda", "chat", "bonsai", "terminal", "top"])
+    XCTAssertEqual(config.prewarmedPopupNames, ["feed", "agenda", "chat", "bonsai", "terminal"])
     XCTAssertEqual(
-      config.terminalPopupNames, ["feed", "agenda", "chat", "top", "bonsai", "unused", "shell"])
+      config.terminalPopupNames, ["feed", "agenda", "chat", "top", "bonsai", "unused", "terminal"])
 
     let hidden = ConfigLoader.parse(
       """

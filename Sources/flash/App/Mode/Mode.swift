@@ -32,7 +32,9 @@ enum Mode: Equatable {
   /// to land when it closes.
   case command(restoreTo: ReturnMode)
 
-  /// A popup's local terminal view owns keyboard input; global mappings are suspended.
+  /// A popup's local terminal view owns keyboard input; global mappings are
+  /// suspended. Entered by `enter_terminal_mode` or by focusing a popup, and
+  /// left by `leave_mode`, which closes the popup.
   case terminal(restoreTo: ReturnMode)
 }
 

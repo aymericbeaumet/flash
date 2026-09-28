@@ -52,10 +52,8 @@ CPU #{flash.plugin.cpu.percent}%% \
 ```
 
 As in the bar, write `%%` for a literal percent sign: the template is expanded
-by `strftime`. So is an `#{E:@option}` fragment the template expands, once.
-A conditional branch is expanded a second time, as in tmux, so a percent sign
-inside `#{?…}` is written `%%%%`; putting that text in an option fragment and
-writing `#{?cond,#{E:@fragment},}` avoids the doubling.
+by `strftime`, so `%H:%M` in it is the time. A conditional branch is expanded
+a second time, as in tmux, so a percent sign inside `#{?…}` is written `%%%%`.
 
 A multi-line value — a plugin table such as `processes.top_cpu`, a source that
 prints several lines, `#{flash.calendar}` — spreads over as many widget lines.
@@ -131,41 +129,11 @@ first part. Only `#[nometer]` ends a meter and only `#[nospark]` a sparkline
 A drawing never spans a line break: each line inside the markers is drawn on
 its own. A malformed marker — `meter=0`, `meter=201`, `meter=10/0`,
 `spark=5/5` — is ignored as a whole, like any invalid tmux style. Inside a
-`#{?…}` branch or a template argument, separate style tokens with spaces
-(`#[meter=10 fg=green]`), since a comma ends the branch.
+`#{?…}` branch, separate style tokens with spaces (`#[meter=10 fg=green]`),
+since a comma ends the branch.
 
 A horizontal rule needs no marker: tmux's repeat operator draws
 `#{R:─,#{flash.widget.columns}}`, a line of `─` as wide as the widget.
-
-## Template arguments
-
-`#{E:@name,arg1,arg2,…}` expands the option `@name` as a format with its
-arguments bound as `#{@1}` … `#{@9}`. It is conky's `templateN` for status
-formats: write a row once, call it for each value.
-
-```toml
-[widgets.system]
-template = """
-#{E:@row,CPU,#{flash.plugin.cpu.percent}}
-#{E:@row,MEM,#{flash.plugin.memory.percent}}
-"""
-
-[widgets.system.options]
-"@row" = "#[fg=#88C0D0]#{@1}#[default] #[meter=20]#{@2}#[nometer] #{p-3:@2}%%"
-```
-
-Each argument is expanded where the call is written, then bound as text: a
-value is never re-expanded inside the template. Arguments split at top-level
-commas; a comma inside a nested `#{…}` stays in its argument, and `#,` is a
-literal comma. Arguments past the ninth are ignored. Inside a call, `@1`…`@9`
-are only that call's arguments — one it was not given is empty — so templates
-nest without seeing their caller's. `#{T:@name,…}` also expands `strftime`
-codes, as `T:` does. Templates can live in `[statusbar.options]`, shared with
-the bar, or in `[widgets.<name>.options]`.
-
-This is a Flash extension. tmux reads `@name,arg1,…` as one option name, and
-Flash keeps that reading when `@name` is not set; see
-[status format](status-format.md#flash-extensions).
 
 ## Data
 
@@ -240,8 +208,8 @@ load #[spark]#{flash.history.load}#[nospark] #{flash.source.load}
 | `interval` | `0` | Seconds between clock refreshes and `#()` re-runs; `0` follows `[statusbar] interval`. |
 | `hide_from_capture` | `false` | Ask the window server to leave the widget out of screenshots, recordings and screen sharing. Best effort, as for `[overlay] screen_capture`, which also applies. |
 
-`[widgets.<name>.options]` holds `@options` local to the widget; they override
-`[statusbar.options]` of the same name for this widget only.
+The whole format is written inline in `template`; there is no
+`[widgets.<name>.options]` table.
 
 ## Refresh and cost
 
@@ -276,7 +244,7 @@ and how to measure it are in [performance](performance.md#widgets-budget).
 | `${color red}…${color}` | `#[fg=red]…#[default]` |
 | `${alignr}`, `${alignc}` | `#[align=right]`, `#[align=centre]` |
 | `${hr}` | `#{R:─,#{flash.widget.columns}}` |
-| `${time %H:%M}` | `%H:%M` in the template (it is `strftime`-expanded), or `#{T:@clock}` for an option fragment |
+| `${time %H:%M}` | `%H:%M` in the template (it is `strftime`-expanded) |
 | `${cpu}` | `#{flash.plugin.cpu.percent}` |
 | `${cpubar}` | `#[meter=20]#{flash.plugin.cpu.percent}#[nometer]` |
 | `${cpugraph}` | `#[spark]#{flash.plugin.cpu.history}#[nospark]` |
@@ -293,7 +261,7 @@ and how to measure it are in [performance](performance.md#widgets-budget).
 | `${execgraph …}` | A source with `history = N`, drawn with `#[spark]#{flash.history.x}#[nospark]` |
 | `${tail f 5}` | A source with `command = ["tail", "-n5", "f"]` |
 | `${if_…}…${else}…${endif}` | `#{?condition,then,else}`, with `#{==:…}`, `#{>:…}` and `#{m:…}` comparisons |
-| `template0` … `${template0 a b}` | An `@option` fragment called as `#{E:@t,a,b}`, reading `#{@1}` and `#{@2}` |
+| `template0` … `${template0 a b}` | No templates: write each row out in `template`, or print generated rows from a source script |
 
 ## Out of scope
 

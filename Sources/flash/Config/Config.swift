@@ -329,6 +329,24 @@ struct Config {
     /// same source. With the `locations` source kind this gives active
     /// locations an effective rank of 60 vs. inactive 50.
     var precedenceAliveBonus: Int = 10
+    /// Apps, by name, bundle id or path, left out of the installed-app
+    /// catalog and the `app_open` verb.
+    var ignoredApps: [String] = []
+    /// Directories scanned (recursively) and watched for `.app` bundles —
+    /// the flashlight's installed-app catalog and the `app_open` verb's
+    /// search roots. `~` expands to the user home. The defaults cover
+    /// every standard macOS install location, including the Sequoia+ app
+    /// cryptex where Safari really lives.
+    var appDirectories: [String] = Flashlight.defaultAppDirectories
+
+    static let defaultAppDirectories = [
+      "/Applications",
+      "/System/Applications",
+      "/System/Applications/Utilities",
+      "/System/Library/CoreServices",
+      "/System/Cryptexes/App/System/Applications",
+      "~/Applications",
+    ]
   }
   struct Debug: Equatable {
     /// When true, every detected target is outlined alongside its hint chip.
@@ -359,24 +377,6 @@ struct Config {
     var httpInspectorHost: String = "localhost"
     /// TCP port the inspector listens on.
     var httpInspectorPort: Int = 4242
-  }
-  struct Open: Equatable {
-    var ignoredApps: [String] = []
-    /// Directories scanned (recursively) and watched for `.app` bundles —
-    /// the flashlight's installed-app catalog and the `app_open` verb's
-    /// search roots. `~` expands to the user home. The defaults cover
-    /// every standard macOS install location, including the Sequoia+ app
-    /// cryptex where Safari really lives.
-    var appDirectories: [String] = Open.defaultAppDirectories
-
-    static let defaultAppDirectories = [
-      "/Applications",
-      "/System/Applications",
-      "/System/Applications/Utilities",
-      "/System/Library/CoreServices",
-      "/System/Cryptexes/App/System/Applications",
-      "~/Applications",
-    ]
   }
   struct Plugins: Equatable {
     /// Third-party plugins explicitly requested by the user. Official
@@ -565,15 +565,11 @@ struct Config {
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
     /// One native tmux format, with Flash presentation styles and values.
-    static let defaultTemplateString = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
-    static let defaultOptions = [
-      "@left": "#[pill]#{flash.mode}#[nopill]",
-      "@right": "#[fg=#EBCB8B]#{flash.date}",
-    ]
+    static let defaultTemplateString =
+      "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
     var template: FlashStatusBarTemplate = Self.defaultTemplate
     /// The defining layer, retained for diagnostics and source identity.
     var templateSourceURL: URL?
-    var options: [String: String] = Self.defaultOptions
     var sources: [String: FlashStatusBarSourceDefinition] = [:]
     var sourcesUsingDefaultInterval: Set<String> = []
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
@@ -602,15 +598,12 @@ struct Config {
           id: "statusbar.template.date",
           token: "flash.date",
           source: .sdk(.date)),
-      ], options: Self.defaultOptions)
+      ])
 
-    /// The popups the enabled bar's `#[popup=<name>]` markers open, in its
-    /// template or the options it expands.
+    /// The popups the enabled bar template's `#[popup=<name>]` markers open.
     var shownPopupNames: Set<String> {
       guard enabled else { return [] }
-      return ([template.template] + options.values).reduce(into: []) { names, format in
-        names.formUnion(StatusFormatDocument.popupNames(in: format))
-      }
+      return StatusFormatDocument.popupNames(in: template.template)
     }
   }
 
@@ -637,7 +630,7 @@ struct Config {
     }
 
     var enabled = true
-    /// Compiled with `options` over `[statusbar.options]`.
+    /// The compiled status format.
     var template = FlashStatusBarTemplate(template: "")
     var screen = Screen.primary
     var anchor = Anchor.topLeft
@@ -664,8 +657,6 @@ struct Config {
     var intervalSeconds: Double = 0
     /// Ask the window server to leave the widget out of screen captures.
     var hideFromCapture = false
-    /// `[widgets.<name>.options]`, local over `[statusbar.options]`.
-    var options: [String: String] = [:]
 
     var spec: StatusWidgetSpec {
       StatusWidgetSpec(
@@ -765,7 +756,7 @@ struct Config {
       let bindings: [(String, URLCommand)] = [
         ("cmd+q", .popupQuit(name: nil)),
         ("cmd+r", .popupRestart(name: nil)),
-        ("cmd+w", .popupDismiss),
+        ("cmd+w", .leaveMode),
       ]
       return bindings.map { key, command in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
@@ -937,7 +928,6 @@ struct Config {
   var hints = Hints()
   var app = App()
   var overlay = Overlay()
-  var open = Open()
   var plugins = Plugins()
   var statusBar = StatusBar()
   var widgets: [String: Widget] = [:]
@@ -973,8 +963,8 @@ struct Config {
     widgets.filter { $0.value.enabled && !$0.value.template.template.isEmpty }
   }
 
-  /// `popup_show` without `--name` opens this popup.
-  static let defaultPopupName = "shell"
+  /// `enter_terminal_mode` without `--name` opens this popup.
+  static let defaultPopupName = "terminal"
   /// The built-in popups, mirrored by `config.default.toml`: a fresh login
   /// shell in the home directory. `$SHELL` and `~` expand at launch.
   static let defaultPopups: [String: Popup] = [
@@ -1005,13 +995,14 @@ struct Config {
     return Set(terminalPopups.keys).union(invalidPopupNames.filter { text[$0] == nil })
   }
 
-  /// Every popup name a user can open: the enabled bar's markers (template,
-  /// options and text popup bodies) and `[statusbar.click]` commands, and
-  /// `popup_show` in every mapping scope, where no name means `shell`.
+  /// Every popup name a user can open: the enabled bar's markers (template
+  /// and text popup bodies) and `[statusbar.click]` commands, and
+  /// `enter_terminal_mode` in every mapping scope, where no name means
+  /// `terminal`.
   var referencedPopupNames: Set<String> {
     var names: Set<String> = []
     func collect(_ command: MappingCommand) {
-      if case .flashCommand(.popupShow(let name)) = command {
+      if case .flashCommand(.terminalMode(let name)) = command {
         names.insert(name ?? Self.defaultPopupName)
       }
     }
@@ -1036,11 +1027,10 @@ struct Config {
   }
 
   /// Plugin id → the status segments a live surface shows: the enabled bar
-  /// (template, options, text popups) and every enabled widget not in
+  /// (template and text popups) and every enabled widget not in
   /// `hiddenWidgets` (fully covered). The ids keep status-bound plugins
   /// resident; the segments are what `core:status.observed` reports to each
-  /// plugin. Options are compiled into every template's variables, so they
-  /// are covered.
+  /// plugin.
   func observedStatusSegments(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
     var segments =
       statusBar.enabled
@@ -1161,14 +1151,12 @@ struct Config {
       ],
       "flashlight": [
         "aliases": flashlight.aliases,
+        "ignored_apps": flashlight.ignoredApps,
         "precedence": flashlight.precedence,
         "precedence_alive_bonus": flashlight.precedenceAliveBonus,
         "suggestion_count": flashlight.suggestionCount,
       ],
       "mode": modeJSON,
-      "open": [
-        "ignored_apps": open.ignoredApps
-      ],
       "overlay": [
         "click_feedback": overlay.clickFeedback,
         "dark": [
@@ -1219,14 +1207,13 @@ struct Config {
       "statusbar": [
         "enabled": statusBar.enabled,
         "template": statusBar.template.template,
-        "options": statusBar.options.keys.sorted(),
         "sources": statusBar.sources.keys.sorted(),
       ],
       "widgets": widgets.mapValues { widget in
         [
           "enabled": widget.enabled, "template": widget.template.template,
           "anchor": widget.anchor.rawValue, "columns": widget.columns,
-          "interval": widget.intervalSeconds, "options": widget.options.keys.sorted(),
+          "interval": widget.intervalSeconds,
         ] as [String: Any]
       },
       "warnings": warnings,
@@ -1330,16 +1317,14 @@ extension URLCommand {
     case .mouseNotifications: return verb("mouse_notifications")
     case .normalMode: return verb("enter_normal_mode")
     case .leaveMode: return verb("leave_mode")
-    case .popupShow(let name):
-      return verb("popup_show", name.map { ["--name=\($0)"] } ?? [])
-    case .popupDismiss:
-      return verb("popup_dismiss")
     case .popupRestart(let name):
       return verb("popup_restart", name.map { ["--name=\($0)"] } ?? [])
     case .popupQuit(let name):
       return verb("popup_quit", name.map { ["--name=\($0)"] } ?? [])
     case .insertMode: return verb("enter_insert_mode")
     case .commandMode: return verb("enter_command_mode")
+    case .terminalMode(let name):
+      return verb("enter_terminal_mode", name.map { ["--name=\($0)"] } ?? [])
     case .scroll(let kind):
       switch kind {
       case .left: return verb("scroll_left")
@@ -1517,7 +1502,7 @@ extension Config {
       User-facing sections are:
 
       - `[hints]`
-      - `[open]`
+      - `[flashlight]`
       - `[plugins]`
       - `[popup]` and `[popup.<name>]`
       - `[mode]`

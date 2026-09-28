@@ -20,9 +20,8 @@ table instead. `flash config_check` reports any problem with its line.
 A conky-style panel in the top-right corner: CPU, memory and disk meters with
 0–100 sparklines of the last 20 samples, battery, disk and network rates, the
 default-route address, uptime and load, and the five busiest processes by CPU
-and by memory. It shows only bundled plugin data and runs no command. The
-panel's rows are `#{E:@gauge,…}` and `#{E:@rate,…}` calls to fragments in
-`[widgets.system.options]`: edit a fragment once to restyle every row.
+and by memory. It shows only bundled plugin data and runs no command. Every
+row is written out in the template, so each can be restyled on its own.
 
 ## `clock-agenda.toml`
 
@@ -43,7 +42,7 @@ calendar still shows and the agenda stays empty.
 A bottom-left corner for development: the tmux session, window and pane of
 the attached client (the bundled `tmux` plugin), the branch and number of
 changed files of one repository through `#()` shell jobs, and the last five
-lines of a log file through a named source. Set `@repo` in
-`[widgets.dev.options]` and the log path in `[statusbar.sources.log]` first.
+lines of a log file through a named source. Set the repository path in the
+two `git -C` jobs and the log path in `[statusbar.sources.log]` first.
 The shell jobs re-run every `interval = 10` seconds, and only while the widget
 is visible.

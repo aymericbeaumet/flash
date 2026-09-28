@@ -9,38 +9,40 @@ to a tmux server. Terminal popup commands have a separate lifetime; see
 
 ## Authoring
 
-Compose a short template with native user options when fragments improve clarity:
+Write the whole format inline in `template`. A long bar can span a multi-line
+TOML string, one lane per line:
 
 ```toml
 [statusbar]
 enabled = true
-template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
-
-[statusbar.options]
-"@left" = "#[pill]#{flash.mode}#[nopill] · #{flash.active_app_name}"
-"@right" = "#{flash.plugin.cpu.summary} · %H:%M"
+template = """
+#[align=left]#[pill]#{flash.mode}#[nopill] · #{flash.active_app_name}
+#[align=right]#{flash.plugin.cpu.summary} · %H:%M
+"""
 ```
 
-`#{@left}` inserts an option value. `#{E:@left}` additionally expands that value
-as a format; `#{T:@left}` enables time expansion too. Options are optional: the
-same format may be written directly in `template`. Values are strings, including
-native option names supplied explicitly in `[statusbar.options]`. An option
-can also be called with arguments, `#{E:@row,CPU,#{flash.plugin.cpu.percent}}`;
-see [Flash extensions](#flash-extensions).
-
-Outer bar templates remove newlines for readable TOML. Text popups preserve
-their interior newlines. A desktop widget draws each line as its own
+The bar is one line: a newline the template writes is dropped from the drawn
+text, as is one inside a value it shows, so the TOML string above draws as the
+single format `#[align=left]…#{flash.active_app_name}#[align=right]…%H:%M`.
+Write the separating space yourself where two lines meet; indentation is text.
+Inside a style marker a newline separates tokens, as a space does. Text popups
+preserve their interior newlines. A desktop widget draws each line as its own
 status line: styles carry across a line break, alignment starts again on the
-left. Style and alignment markers are interpreted
-**after** format expansion, so a conditional or option can select an entire
-styled/aligned section. Ordinary value substitution does not recursively execute
-formats or jobs from the value; intentional re-expansion uses `E:` or `T:`.
-Rich plugin/source values may still contain styles, links, and popup markers.
+left. Style and alignment markers are interpreted **after** format expansion,
+so a conditional can select an entire styled/aligned section. Ordinary value substitution does
+not recursively execute formats or jobs from the value; intentional
+re-expansion uses `E:` or `T:`. Rich plugin/source values may still contain
+styles, links, and popup markers.
 
-The outer format performs native `strftime` expansion. Write `%%` for a literal
-percent sign in authored templates; text inserted through an ordinary value is
-not time-expanded. This also matters when authoring percent-encoded inline popup
+The outer format performs native `strftime` expansion, so `%H:%M` written in
+the template is the time; no `T:` is needed. Write `%%` for a literal percent
+sign in authored templates; text inserted through an ordinary value is not
+time-expanded. This also matters when authoring percent-encoded inline popup
 bodies directly in a template. Plugin-supplied inline bodies arrive as values.
+
+Configuration supplies no tmux user options (`@name`): there is no
+`[statusbar.options]` or `[widgets.<name>.options]` table, and a format that
+reads `#{@name}` gets an empty value, as with any unset tmux option.
 
 ## Native language coverage
 
@@ -107,8 +109,9 @@ inventory. Their missing values expand to empty strings, loops over absent
 collections produce no text, and name/pane searches return `0`. The pure
 `StatusFormatContext` accepts explicit record collections and pane lines to
 exercise those language operations. Context absence is distinct from a rejected
-format operator. Native options exist when provided by Flash configuration;
-there is no hidden tmux option/default database.
+format operator. There is no tmux option database: user options (`@name`) are
+unset, and the language operations that read options only see ones supplied
+explicitly to `StatusFormatContext`, as the conformance corpus does.
 
 ## Jobs, sources, and Flash styles
 
@@ -129,8 +132,8 @@ For explicit argv, an independent cadence, environment, working directory, or
 rotating lines, declare a source:
 
 ```toml
-[statusbar.options]
-"@right" = "#{flash.source.news}"
+[statusbar]
+template = "#[align=right]#{flash.source.news}"
 
 [statusbar.sources.news]
 command = ["./news.sh"]
@@ -187,7 +190,7 @@ keeps the row in place; the carousel pushes vertically only for a different
 article. These host surfaces do not alter format evaluation.
 
 Bare `#{flash.mode}` references retain their identity through template and
-option expansion. The renderer resolves their text from the current mode in
+conditional expansion. The renderer resolves their text from the current mode in
 the same paint as the pill's foreground, gradient and border. A queued status
 update cannot restore an earlier mode label. Mode labels and pills change
 immediately and never inherit a metric's crossfade or carousel animation.
@@ -212,7 +215,7 @@ of it runs on the render server: no host timers, no per-frame CPU work.
 
 Inline popup identities derive from their source origin and invocation, not the
 current text or screen position. A changing source value refreshes an open
-popup in place; separate calls to the same fragment remain distinct anchors.
+popup in place; separate expansions of the same format remain distinct anchors.
 The bar, hit regions, and terminal document encoder consume the same typed runs.
 
 ## Native drawing
@@ -244,10 +247,10 @@ left and right content, so unequal side widths shift that label.
 
 ## Flash extensions
 
-Flash adds two things to the tmux language. Like `pill` or `popup=`, both are
-Flash-only: tmux rejects the style tokens as a malformed marker, and reads a
-template call as one option name. Every other format still evaluates as in
-tmux, which the pinned corpus verifies.
+Flash adds meters and sparklines to the tmux language. Like `pill` or
+`popup=`, they are Flash-only style tokens, which tmux rejects as a malformed
+marker. Every other format evaluates as in tmux, which the pinned corpus
+verifies: `#{E:@name,a}` reads one option literally named `@name,a`.
 
 ### Meters and sparklines
 
@@ -280,30 +283,6 @@ serialization emits no `meter`/`spark` tokens and hit testing, layout and the
 terminal document encoder see ordinary one-cell block characters. The system
 monospaced font draws every block glyph at one cell.
 
-### Template arguments
-
-`#{E:@name,arg1,…,arg9}` and `#{T:@name,…}` call the option `@name` with
-arguments. The operand is split at top-level commas, brace-aware and
-honouring `#,`; each argument is expanded in the caller's context, and the
-results are bound as the options `@1`…`@9` of a nested context in which
-`@name` is then expanded, as `E:` or `T:` would. Bound values are text and are
-not re-expanded. Inside the call, `@1`…`@9` hold only that call's arguments
-(missing ones are unset), so nested calls do not see their caller's; the
-caller's own bindings are intact after the call. Arguments past the ninth are
-ignored. Dependencies are captured statically (`@name`, and every value the
-arguments read) and at evaluation, so memoized surfaces refresh when an
-argument's value changes. Recursion is bounded by the evaluator's 100-level
-limit.
-
-This diverges from tmux on purpose. tmux looks up an option literally named
-`@name,arg1,…`: in tmux 3.7c `#{E:@v,x}` is empty even when `@v` is set.
-Flash calls `@name` whenever it exists, and otherwise keeps tmux's reading
-exactly — `#{E:@missing,#{@v},b}` expands to `@missing,<value of @v>,b` in
-both — which the pinned corpus verifies. Only `E:`/`T:` call: `#{@name,a}` is
-still one literal option name, and an operand whose modifiers choose their own
-evaluation (`l:`, `a:`, comparisons, loops, `R:`, `e:` and the rest) is never a
-call.
-
 ## Implementation and validation
 
 `StatusFormatProgram` owns the shared byte lexer, nested AST, diagnostics,
@@ -312,7 +291,7 @@ expanded style stream once and retains marker-only transitions.
 `StatusFormatLayout` computes native cells and ranges. Production drawing uses
 these typed results directly; raw string parsing is an input boundary.
 
-A publish first captures every value, option, job value, and (for
+A publish first captures every value, job value, and (for
 time-dependent formats) the current second that the previous evaluation read
 (`FlashStatusBarTemplateEngine.EvaluationInputs`); an identical capture skips
 the evaluation entirely, so a 1 Hz plugin sample that changes nothing the bar

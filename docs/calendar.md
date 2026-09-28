@@ -11,7 +11,7 @@ text = "#{flash.calendar}"
 ```
 
 Keep `#[popup=date]...#[nopopup]` around the date in the status template, or
-open it with `popup_show --name=date`. Existing calendar files and
+open it with `enter_terminal_mode --name=date`. Existing calendar files and
 appointment/task data are untouched.
 
 Dates use a Monday-first Gregorian calendar with ISO week numbers,

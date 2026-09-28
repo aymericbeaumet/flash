@@ -96,19 +96,9 @@ struct StatusFormatProgram: Equatable {
     var operand: StatusFormatProgram
     var arguments: [StatusFormatProgram]
     var raw: String
-    /// A Flash template call, `#{E:@name,arg1,…}` or `#{T:…}`: the option
-    /// and the arguments bound as `@1…@9` while it expands. tmux reads the
-    /// whole operand as one option name; Flash does too when `@name` is unset.
-    var template: Template? = nil
   }
 
-  struct Template: Equatable {
-    var name: String
-    var arguments: [StatusFormatProgram]
-  }
-
-  /// Modifiers that select their own evaluation instead of an option lookup,
-  /// so an operand beside them is never a template call.
+  /// Modifiers that select their own evaluation instead of an option lookup.
   static let lookupReplacingModifiers: Set<String> = [
     "l", "a", "c", "R", "!", "!!", "&&", "||", "e", "m", "C", "S", "W", "P", "L", "N", "==", "!=",
     "<", ">", "<=", ">=",
@@ -181,9 +171,6 @@ struct StatusFormatProgram: Equatable {
           result.diagnostics += program.diagnostics
         }
         let name = expression.raw
-        if let template = expression.template {
-          result.dependencies.options.insert(template.name)
-        }
         if !name.hasPrefix("?"), !name.contains("#{"),
           expression.modifiers.allSatisfy({ !lookupReplacingModifiers.contains($0.name) })
         {
@@ -307,19 +294,8 @@ struct StatusFormatProgram: Equatable {
         source: String(decoding: bytes[range], as: UTF8.self), origin: origin,
         offset: offset + range.lowerBound, depth: depth)
     }
-    var template: Template?
-    if names.contains("E") || names.contains("T"), raw.hasPrefix("@"),
-      names.isDisjoint(with: lookupReplacingModifiers)
-    {
-      let pieces = StatusFormatSyntax.split(bytes, from: parsed.end, delimiter: 44)
-      let name = String(decoding: bytes[pieces[0]], as: UTF8.self)
-      if pieces.count > 1, name.count > 1, !name.contains("#") {
-        template = Template(name: name, arguments: pieces.dropFirst().map(program))
-      }
-    }
     return Expression(
-      modifiers: modifiers, operand: operand, arguments: ranges.map(program), raw: raw,
-      template: template)
+      modifiers: modifiers, operand: operand, arguments: ranges.map(program), raw: raw)
   }
 
   func evaluate(_ context: StatusFormatContext = StatusFormatContext(), expandTime: Bool = false)
@@ -532,7 +508,6 @@ private struct StatusFormatEvaluator {
       [.init(text: text, span: span, isModeLabel: isModeLabel)]
     }
     var fragments: [StatusFormatFragment]
-    var call: (name: String, arguments: [String: String])?
     if names.contains("l") {
       fragments = wrap(StatusFormatSyntax.unescape(expression.raw))
     } else if names.contains("a") {
@@ -630,15 +605,6 @@ private struct StatusFormatEvaluator {
     } else if names.contains("e") {
       guard let pair = pair(expression, context: context, depth: depth) else { return nil }
       fragments = wrap(Self.arithmetic(arguments: argument("e"), lhs: pair.0, rhs: pair.1))
-    } else if let template = expression.template,
-      let body = lookup(template.name, modifiers: modifiers, context: context)
-    {
-      var bound: [String: String] = [:]
-      for (index, argument) in template.arguments.prefix(9).enumerated() {
-        bound["@\(index + 1)"] = text(argument, context: context, depth: depth)
-      }
-      call = (template.name, bound)
-      fragments = wrap(body)
     } else if expression.raw.contains("#{") {
       fragments = expand(expression.operand, context: context, depth: depth)
     } else {
@@ -649,16 +615,9 @@ private struct StatusFormatEvaluator {
     var value = fragments.map(\.text).joined()
     if names.contains("E") || names.contains("T") {
       let origin =
-        expression.raw.hasPrefix("@")
-        ? StatusFormatOrigin("option.\(call?.name ?? expression.raw)") : span.origin
+        expression.raw.hasPrefix("@") ? StatusFormatOrigin("option.\(expression.raw)") : span.origin
       var nested = context
       nested.invocation.append(span.identity)
-      if let call {
-        // A call's arguments are its only numbered options: an argument it
-        // was not given is empty rather than the caller's.
-        for index in 1...9 { nested.options.removeValue(forKey: "@\(index)") }
-        nested.options.merge(call.arguments) { _, bound in bound }
-      }
       fragments = expand(
         StatusFormatProgram.compile(source: value, origin: origin), context: nested,
         depth: depth, time: !names.contains("E") && names.contains("T"))

@@ -4,22 +4,14 @@ import XCTest
 
 final class StatusBarBlankContentTests: XCTestCase {
   private let template = FlashStatusBarTemplate(
-    template:
-      "#[align=left]#{E:@left}#[align=absolute-centre]#{E:@centre}#[align=right]#{T:@right}",
-    options: [
-      "@left": """
-      #[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
-      """,
-      "@centre": """
-      #[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
-      """,
-      "@right": """
-      #{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+    template: """
+      #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
+      #[align=absolute-centre]#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
+      #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
       #[popup=quota]#{flash.plugin.quota.label}#[nopopup]
       #[fg=colour245] · #{flash.plugin.cpu.label} #{flash.plugin.memory.label}
       #[fg=colour245] · #{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M
-      """,
-    ])
+      """)
 
   func testDynamicOverflowAndNotchReservationsKeepVisibleModeText() {
     let feeds = [

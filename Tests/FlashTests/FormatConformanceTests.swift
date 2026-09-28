@@ -44,6 +44,23 @@ final class FormatConformanceTests: XCTestCase {
     XCTAssertEqual(result.fragments.first?.span.origin.name, "option.@fragment")
   }
 
+  /// As in tmux, an `E:`/`T:` operand with a comma is one option name: there
+  /// are no template arguments.
+  func testACommaInAnExpandedOptionNameIsPartOfTheName() {
+    var context = StatusFormatContext()
+    context.options = ["@pair": "#{@1}=#{@2}", "@t,a": "literal", "@v": "hello"]
+    func text(_ source: String) -> String {
+      StatusFormatProgram.compile(source: source).evaluate(context).text
+    }
+    XCTAssertEqual(text("#{E:@pair,cpu,42}"), "")
+    XCTAssertEqual(text("#{T:@pair,cpu}"), "")
+    XCTAssertEqual(text("#{E:@t,a}"), "literal")
+    XCTAssertEqual(text("#{E:@missing,#{@v},b}"), "@missing,hello,b")
+    XCTAssertEqual(text("#{E:@pair}"), "=")
+    let program = StatusFormatProgram.compile(source: "#{E:@pair,cpu}")
+    XCTAssertEqual(program.dependencies.options, ["@pair,cpu"])
+  }
+
   func testLoopContextAndNeighbors() {
     var context = StatusFormatContext()
     context.scopes["W"] = [

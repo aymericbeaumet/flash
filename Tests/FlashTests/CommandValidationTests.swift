@@ -5,7 +5,7 @@ import XCTest
 
 final class CommandValidationTests: XCTestCase {
   func testInvalidBuiltinArgumentsCannotBecomePluginCalls() {
-    XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "popup_show", args: ["name": ""]))
+    XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "enter_terminal_mode", args: ["name": ""]))
     XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "leave_mode", args: ["unexpected": "1"]))
     XCTAssertEqual(
       URLEventHandler.parseOrPluginVerb(verb: "app_save", args: [:]),
@@ -35,7 +35,7 @@ final class CommandValidationTests: XCTestCase {
 
   func testCLIRejectsInvalidArgumentsWithoutSendingAnEvent() {
     XCTAssertEqual(FlashCLI.run(args: ["leave_mode", "typo"]), 2)
-    XCTAssertEqual(FlashCLI.run(args: ["popup_show", "--name="]), 2)
+    XCTAssertEqual(FlashCLI.run(args: ["enter_terminal_mode", "--name="]), 2)
   }
 
   func testResidentRejectsMalformedBuiltinAndReturnsAnErrorReply() {

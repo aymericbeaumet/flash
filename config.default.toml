@@ -155,24 +155,6 @@ important_hint_bg_top = ""
 important_hint_bg_bottom = ""
 important_hint_border = ""
 
-[open]
-# App candidates hidden from :open and the `app_open --name=...` verb.
-# Entries match display name, bundle identifier, bundle path, .app filename,
-# or app filename without .app, case-insensitively.
-ignored_apps = []
-# Directories scanned (recursively) and watched for .app bundles — the
-# flashlight's installed-app catalog and the app_open search roots. `~`
-# expands to your home. Changes apply live: the watcher re-points and the
-# catalog rescans on config reload.
-app_directories = [
-  "/Applications",
-  "/System/Applications",
-  "/System/Applications/Utilities",
-  "/System/Library/CoreServices",
-  "/System/Cryptexes/App/System/Applications",
-  "~/Applications",
-]
-
 [plugins]
 # Official bundled plugins are enabled unless listed in `disabled`.
 # Disable `defaults` for a raw host-only experience without built-in
@@ -274,10 +256,12 @@ command_timeout = 6.0
 # out identically on a notched Mac and an external display. The centre region
 # hides entirely on notched screens, where the hardware supplies the gap.
 notch_margin = 6
-# One tmux 3.7c format string. Alignment and style markers can appear inside
-# conditional/option expansions. Newlines in this outer template are ignored.
-# Native formats, modifiers, #H/#h aliases, #(...) jobs, styles, and strftime
-# use tmux semantics. Missing tmux session/window/pane context is empty.
+# One tmux 3.7c format string, written inline. Alignment and style markers can
+# appear inside conditionals. Newlines in the template are ignored, so a long
+# bar can span a multi-line """...""" string. Native formats, modifiers, #H/#h
+# aliases, #(...) jobs, styles, and strftime codes (%H:%M, written directly in
+# the template) use tmux semantics. Missing tmux session/window/pane context is
+# empty.
 # Flash supplies flash.mode, flash.date, flash.active_app_name,
 # flash.active_bundle_identifier, flash.plugin.<id>.<segment>,
 # flash.plugin.loaded_count/ready_count/error_count, flash.source.<name>, and
@@ -290,21 +274,16 @@ notch_margin = 6
 # number inside) and spark[=MIN/MAX]/nospark (a sparkline of every number
 # inside). Native range=user|name binds statusbar.click.
 # Values stay plain text unless a plugin intentionally publishes rich status.
-template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
-
-# Native tmux options. @names are tmux user options; E expands a value as a
-# format, T additionally expands its strftime codes. Fragments are optional:
-# the same text can be written directly in template. Flash extension:
-# #{E:@name,a,b} expands @name with a and b bound as #{@1} and #{@2}.
+template = "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
 # A popup marker can wrap several labels at once, for example:
 # #[popup=btop]#{flash.plugin.cpu.label} #{flash.plugin.memory.label}#[nopopup]
 # CPU/MEM/DISK labels carry padded percentages; BAT is unpadded; NET carries a padded byte rate.
 # AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
-[statusbar.options]
-"@left" = "#[pill]#{flash.mode}#[nopill]"
-"@right" = "#[fg=#EBCB8B]#{flash.date}"
-# Example combined metrics:
-# "@right" = "#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary}"
+# Example with combined metrics and the time on the right:
+# template = """
+# #[align=left]#[pill]#{flash.mode}#[nopill]
+# #[align=right]#{flash.plugin.cpu.summary} · #{flash.plugin.memory.summary} · %H:%M
+# """
 
 # Use native #(shell command) for asynchronous tmux shell jobs. For explicit
 # argv, a poll cadence, or rotating output lines, declare a named Flash source
@@ -335,8 +314,8 @@ template = "#[align=left]#{E:@left}#[align=right]#{T:@right}"
 
 # Popups: every popup runs in a real PTY and shares this chrome, whether it
 # previews under a #[popup=<name>] status label, is pinned by a click, or shows
-# standalone through `popup_show --name=<name>`. Colours are #RRGGBB or
-# #RRGGBBAA; sizes are points.
+# standalone through `enter_terminal_mode --name=<name>`. Colours are #RRGGBB
+# or #RRGGBBAA; sizes are points.
 [popup]
 fg = "#D8DEE9"
 bg = "#2E3440F2"
@@ -366,12 +345,13 @@ offset = 8
 #                 hidden and restarted when it exits (after 100 ms, backing off
 #                 to 30 s on repeated immediate exits). The default runs a fresh
 #                 process for each showing and stops it on dismissal; a popup a
-#                 status label, click action or popup_show mapping opens keeps
-#                 its next process started ahead.
+#                 status label, click action or enter_terminal_mode mapping
+#                 opens keeps its next process started ahead.
 # A later file's [popup.<name>] replaces the whole definition.
 #
-# The built-in shell: `popup_show` without a name opens it.
-[popup.shell]
+# The built-in terminal, a login shell: `enter_terminal_mode` without a name
+# opens it.
+[popup.terminal]
 command = ["$SHELL", "-l"]
 cwd = "~"
 
@@ -404,8 +384,8 @@ cwd = "~"
 # enabled = true
 # template = """
 # #[fg=#EBCB8B,bold]#{host_short}#[default]#[align=right]%a %d %b %H:%M
-# CPU #[meter=10]#{flash.plugin.cpu.percent}#[nometer] #{flash.plugin.cpu.percent}%%\
-# #{@sep}MEM #[spark=0/100]#{flash.plugin.memory.history}#[nospark]
+# CPU #[meter=10]#{flash.plugin.cpu.percent}#[nometer] #{flash.plugin.cpu.percent}%% · \
+# MEM #[spark=0/100]#{flash.plugin.memory.history}#[nospark]
 # #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
 # #{flash.plugin.processes.top_cpu}
 # """
@@ -427,8 +407,6 @@ cwd = "~"
 # padding = 8
 # interval = 0              # clock and #(...) refresh seconds; 0 = statusbar.interval
 # hide_from_capture = false # best effort: leave it out of screenshots and sharing
-# [widgets.system.options]  # local @options over [statusbar.options]
-# "@sep" = " · "
 
 [flashlight]
 # Frecency (recency-weighted frequency) ranking boost. half_life_days is
@@ -449,6 +427,22 @@ suggestion_count = 10
 # Bonus added to candidates backed by a running process, used as a tiebreaker
 # inside the same source.
 precedence_alive_bonus = 10
+# App candidates hidden from the flashlight and the `app_open --name=...` verb.
+# Entries match display name, bundle identifier, bundle path, .app filename,
+# or app filename without .app, case-insensitively.
+ignored_apps = []
+# Directories scanned (recursively) and watched for .app bundles — the
+# flashlight's installed-app catalog and the app_open search roots. `~`
+# expands to your home. Changes apply live: the watcher re-points and the
+# catalog rescans on config reload.
+app_directories = [
+  "/Applications",
+  "/System/Applications",
+  "/System/Applications/Utilities",
+  "/System/Library/CoreServices",
+  "/System/Cryptexes/App/System/Applications",
+  "~/Applications",
+]
 
 [flashlight.aliases]
 # Literal token substitutions applied when the token is followed by
@@ -622,9 +616,10 @@ leader = "\\"
 "/" = ["flash", "app_find"]
 "?" = ["flash", "help_show"]
 
-# Popups open standalone, centred on the focused app's screen (see [popup]):
-# "'b" = ["flash", "popup_show", "--name=bonsai"]
-# "'t" = ["flash", "popup_show"] # the shell popup
+# enter_terminal_mode opens a popup standalone, centred on the focused app's
+# screen and focused (see [popup]):
+# "'b" = ["flash", "enter_terminal_mode", "--name=bonsai"]
+# "'t" = ["flash", "enter_terminal_mode"] # the terminal popup
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
@@ -635,13 +630,14 @@ leader = "\\"
 # surfaces own the keyboard. All-mode shortcuts remain available by default.
 
 [mode.terminal.mappings]
-# TERMINAL is the mode of a focused popup: its terminal gets every key these
-# mappings leave alone, and plain Escape goes to the program.
+# TERMINAL is the mode of a focused popup, entered by enter_terminal_mode or
+# by focusing a popup and left by leave_mode: its terminal gets every key
+# these mappings leave alone, and plain Escape goes to the program.
 # Winning INSERT leave_mode / enter_normal_mode bindings are inherited;
 # optional terminal mappings override them.
 "cmd+q" = ["flash", "popup_quit"] # stop the process; a persistent popup restarts it
 "cmd+r" = ["flash", "popup_restart"] # restart now; a text popup rereads its values
-"cmd+w" = ["flash", "popup_dismiss"] # close; a persistent process keeps running
+"cmd+w" = ["flash", "leave_mode"] # close; a persistent process keeps running
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

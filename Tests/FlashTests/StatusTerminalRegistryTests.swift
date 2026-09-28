@@ -110,7 +110,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertNil(registry.open("fresh"), "only configured terminal popups open")
   }
 
-  func testBuiltInShellRunsTheLoginShellInHomeAtTheDefaultGrid() throws {
+  func testBuiltInTerminalRunsTheLoginShellInHomeAtTheDefaultGrid() throws {
     let shell = try XCTUnwrap(Config().terminalPopups[Config.defaultPopupName])
     XCTAssertEqual(shell.lifecycle, .fresh)
     XCTAssertEqual(shell.size, .default)
@@ -133,36 +133,36 @@ final class StatusTerminalRegistryTests: XCTestCase {
     var config = Config()
     config.popups["top"] = .terminal(terminal(["/bin/sleep", "30"], persistent: true))
     config.mode.all = [
-      ModeMapping(key: "alt+space", action: .flashCommand(.popupShow(name: nil))),
-      ModeMapping(key: "alt+t", action: .flashCommand(.popupShow(name: "top"))),
+      ModeMapping(key: "alt+space", action: .flashCommand(.terminalMode(name: nil))),
+      ModeMapping(key: "alt+t", action: .flashCommand(.terminalMode(name: "top"))),
     ]
     // Persistent popups run anyway; only fresh ones are prewarmed.
-    XCTAssertEqual(config.prewarmedPopupNames, ["shell"])
+    XCTAssertEqual(config.prewarmedPopupNames, ["terminal"])
     registry.apply(
       style: config.popupStyle, terminals: config.terminalPopups,
       invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
-    XCTAssertEqual(registry.prewarmedNames, ["shell"])
-    XCTAssertEqual(Set(registry.sessions.keys), ["shell", "top"])
-    let prewarmed = try XCTUnwrap(registry.session(named: "shell"))
+    XCTAssertEqual(registry.prewarmedNames, ["terminal"])
+    XCTAssertEqual(Set(registry.sessions.keys), ["terminal", "top"])
+    let prewarmed = try XCTUnwrap(registry.session(named: "terminal"))
     XCTAssertEqual(prewarmed.configuration.command, ["/bin/sh", "-l"])
     waitUntil { self.running(prewarmed) != nil }
     let firstPID = try XCTUnwrap(running(prewarmed))
 
     // Showing attaches to the running process; nothing new starts.
-    XCTAssertTrue(registry.open("shell") === prewarmed)
+    XCTAssertTrue(registry.open("terminal") === prewarmed)
     XCTAssertTrue(registry.prewarmedNames.isEmpty)
 
     // Dismissal stops it and prewarms a fresh process once it is gone.
-    registry.hide("shell")
-    waitUntil { registry.prewarmedNames.contains("shell") }
+    registry.hide("terminal")
+    waitUntil { registry.prewarmedNames.contains("terminal") }
     XCTAssertTrue(kill(firstPID, 0) == -1 && errno == ESRCH, "the shown process is gone first")
-    let next = try XCTUnwrap(registry.session(named: "shell"))
+    let next = try XCTUnwrap(registry.session(named: "terminal"))
     XCTAssertFalse(next === prewarmed)
     waitUntil { self.running(next) != nil }
 
     // A configuration that stops referencing it stops the unshown process.
     registry.apply(style: config.popupStyle, terminals: config.terminalPopups)
-    XCTAssertNil(registry.session(named: "shell"))
+    XCTAssertNil(registry.session(named: "terminal"))
     XCTAssertTrue(registry.prewarmedNames.isEmpty)
   }
 

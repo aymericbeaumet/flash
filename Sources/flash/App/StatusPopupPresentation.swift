@@ -4,7 +4,8 @@ enum StatusPopupPresentation: Equatable {
   case hidden
   case preview(name: String, anchor: CGPoint)
   case focused(name: String, anchor: CGPoint)
-  /// Shown by `popup_show`: centred on a screen, focused, tied to no label.
+  /// Shown by `enter_terminal_mode`: centred on a screen, focused, tied to no
+  /// label.
   case standalone(name: String)
 
   var identity: (name: String, anchor: CGPoint?)? {

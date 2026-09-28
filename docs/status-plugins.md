@@ -294,7 +294,8 @@ headline or its domain opens that item.
 
 ```toml
 # A popup the configuration owns end to end.
-"@left" = "#[popup=feed]#[link=https://example.com]#{flash.plugin.feed.label}#[nolink]#[nopopup]"
+[statusbar]
+template = "#[align=left]#[popup=feed]#[link=https://example.com]#{flash.plugin.feed.label}#[nolink]#[nopopup]"
 
 [popup.feed]
 command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]

@@ -62,9 +62,6 @@ final class DocsExampleConfigTests: XCTestCase {
         [defaults, .init(text: try String(contentsOf: file, encoding: .utf8), sourceURL: file)])
       for (name, widget) in config.widgets where widget.enabled {
         var native = FlashStatusBarTemplateEngine.formatContext(.init())
-        native.options = config.statusBar.options.merging(widget.template.options) { _, local in
-          local
-        }
         native.values["flash.widget.name"] = name
         native.values["flash.widget.columns"] = String(widget.spec.columns)
         let evaluation = FlashStatusBarTemplateEngine.evaluateDocument(

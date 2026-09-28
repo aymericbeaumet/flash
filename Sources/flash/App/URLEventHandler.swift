@@ -48,16 +48,15 @@ enum URLCommand: Hashable {
   case mouseNotifications
   case normalMode
   case leaveMode
-  /// Show a popup standalone; no name opens `shell`.
-  case popupShow(name: String?)
-  /// Close the focused popup.
-  case popupDismiss
   /// Restart the focused or named popup's process.
   case popupRestart(name: String?)
   /// Quit the focused or named popup's process.
   case popupQuit(name: String?)
   case insertMode
   case commandMode
+  /// TERMINAL mode on a popup: show it standalone and focus its terminal;
+  /// no name opens the built-in `terminal` popup. `leave_mode` closes it.
+  case terminalMode(name: String?)
   case scroll(NormalModeDispatcher.ScrollKind)
   case reload(force: Bool)
   case undo
@@ -541,34 +540,6 @@ final class URLEventHandler: NSObject {
 
     "enter_normal_mode": .init(parse: { _ in .normalMode }),
 
-    "popup_show": .init(
-      [.text("name", "popup")],
-      parse: { args in
-        guard args.args.keys.allSatisfy({ $0 == "name" }),
-          args.value("name").map({ !$0.trimmed.isEmpty }) ?? true
-        else { return nil }
-        return .popupShow(name: args.value("name"))
-      }),
-
-    "popup_dismiss": .init(parse: { args in args.args.isEmpty ? .popupDismiss : nil }),
-
-    "popup_restart": .init(
-      [.text("name", "popup")],
-      parse: { args in
-        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
-          return nil
-        }
-        return .popupRestart(name: args.value("name"))
-      }),
-    "popup_quit": .init(
-      [.text("name", "popup")],
-      parse: { args in
-        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
-          return nil
-        }
-        return .popupQuit(name: args.value("name"))
-      }),
-
     "leave_mode": .init(parse: { a in a.args.isEmpty ? .leaveMode : nil }),
 
     "enter_insert_mode": .init(parse: { _ in .insertMode }),
@@ -589,6 +560,32 @@ final class URLEventHandler: NSObject {
         // behaviour they want.
         let normalized = String(raw.drop(while: { $0 == ":" }))
         return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
+      }),
+
+    "enter_terminal_mode": .init(
+      [.text("name", "popup")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }),
+          args.value("name").map({ !$0.trimmed.isEmpty }) ?? true
+        else { return nil }
+        return .terminalMode(name: args.value("name"))
+      }),
+
+    "popup_restart": .init(
+      [.text("name", "popup")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+          return nil
+        }
+        return .popupRestart(name: args.value("name"))
+      }),
+    "popup_quit": .init(
+      [.text("name", "popup")],
+      parse: { args in
+        guard args.args.keys.allSatisfy({ $0 == "name" }), args.value("name") != "" else {
+          return nil
+        }
+        return .popupQuit(name: args.value("name"))
       }),
 
     "scroll_left": .init(parse: { _ in .scroll(.left) }),
@@ -774,6 +771,12 @@ extension URLEventHandler {
       banners, alerts and buttons) hint surfaces outside the focused window.
       `mouse_button --state=down|up|toggle` holds a button where the pointer
       is, so Flash's pointer moves drag until it is released.
+
+      `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode` and
+      `enter_terminal_mode` select a mode; `leave_mode` leaves the current
+      one. `enter_terminal_mode --name=<popup>` shows that popup centred and
+      focused, with its terminal owning the keyboard; without a name it
+      opens the built-in `terminal` popup. `leave_mode` closes it.
 
       `window_move` accepts either a named `position` or a complete
       percentage frame (`x`, `y`, `width`, and `height`, each suffixed with

@@ -24,9 +24,10 @@ Tables named by the user — `[plugin.<id>]`, `[popup.<name>]` (see
 [popups](popups.md)), `[statusbar.sources.<name>]` and `[widgets.<name>]` (see
 [desktop widgets](widgets.md)) — are validated key by key.
 
-`statusbar.template`, text popups, widget templates and every
-`@option` share one [status format](status-format.md) language, including
-Flash's [meters, sparklines and template arguments](status-format.md#flash-extensions).
+`statusbar.template`, text popups and widget templates share one
+[status format](status-format.md) language, including Flash's
+[meters and sparklines](status-format.md#flash-extensions). Each is written
+inline; there are no `@option` tables.
 The configurations under [`docs/examples`](examples/widgets/README.md) are
 loaded over the bundled defaults by the test suite and must produce no
 diagnostic; `flash config_check` applies the same check to your own file.
@@ -58,11 +59,10 @@ Supported names are the uppercased field path with dots replaced by underscores,
 prefixed by `FLASH_`. The inventory is `ConfigEnvironment.environmentFields`:
 
 - `hints.keys`, `hints.min_length`, `hints.magic_modifiers`.
-- `open.ignored_apps`.
 - `overlay.font_size`, `overlay.hint_fg`, `overlay.hint_bg_top`,
   `overlay.hint_bg_bottom`, `overlay.hint_border`, and their `important_hint_*`
   counterparts.
-- `flashlight.suggestion_count`.
+- `flashlight.suggestion_count`, `flashlight.ignored_apps`.
 - `debug.show_hints_bounds`, `debug.hints_bounds_bg`, `debug.hints_bounds_fg`,
   `debug.log_level`.
 

@@ -18,11 +18,9 @@ final class StatusModeLabelTests: XCTestCase {
       "NORMAL  NORMAL |  | NORMAL")
   }
 
-  func testModeInterpolationSurvivesOptionAndConditionalExpansion() {
+  func testModeInterpolationSurvivesConditionalExpansion() {
     let model = FlashStatusBarTemplateEngine.render(
-      template: .init(
-        template: "#{E:@left}",
-        options: ["@left": "#[pill]#{?flash.active_app_name,#{flash.mode},NONE}#[nopill]"]),
+      template: .init(template: "#[pill]#{?flash.active_app_name,#{flash.mode},NONE}#[nopill]"),
       context: .init(activeAppName: "App", modeLabel: "NØRMÅL"))
 
     let live = model.document.runs.filter(\.isModeLabel)

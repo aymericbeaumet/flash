@@ -12,8 +12,8 @@ private final class WeakReference<Object: AnyObject> {
   init(_ object: Object?) { self.object = object }
 }
 
-/// The built-in `shell` popup: fresh, one instance at a time, prewarmed when
-/// a mapping opens it.
+/// The built-in `terminal` popup: fresh, one instance at a time, prewarmed
+/// when a mapping opens it.
 final class OneShotTerminalTests: XCTestCase {
   override func setUp() {
     super.setUp()

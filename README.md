@@ -156,7 +156,7 @@ the [plugin cookbook](docs/plugin-cookbook.md).
 | conky | [desktop widgets](docs/widgets.md) |
 | polybar, waybar | `[statusbar]` with tmux formats |
 | rofi, dmenu | flashlight |
-| i3, sway, Hyprland modes | NORMAL / INSERT / COMMAND with `[mode.*.mappings]` |
+| i3, sway, Hyprland modes | NORMAL / INSERT / COMMAND / TERMINAL with `[mode.*.mappings]` |
 | i3 `move`, Hyprland dispatchers | `window_move` |
 | swaymsg, hyprctl | `flash <verb>`, `flash status --json` |
 | dotfiles | one `flash.toml`, live reload, `flash config_check` |

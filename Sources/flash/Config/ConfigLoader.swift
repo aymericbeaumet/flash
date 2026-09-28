@@ -389,7 +389,6 @@ enum ConfigLoader {
     }
     applyApp(section("app"), locations: locations, into: &config)
     applyHints(section("hints"), locations: locations, into: &config)
-    applyOpen(section("open"), locations: locations, into: &config)
     applyPlugins(section("plugins"), locations: locations, sourceURL: sourceURL, into: &config)
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
     applyStatusBar(
@@ -445,18 +444,17 @@ enum ConfigLoader {
         "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
         "mouse_grid_keys", "mouse_grid_cursor_follow", "restore_pointer",
       ],
-      "open": ["ignored_apps", "app_directories"],
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
       ],
       "statusbar": [
         "enabled", "template", "monitor", "interval", "click", "font_size",
-        "command_timeout", "notch_margin", "options", "sources",
+        "command_timeout", "notch_margin", "sources",
       ],
       "flashlight": [
         "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
         "frecency_half_life_days", "frecency_max_boost",
-        "live_query_timeout_ms",
+        "live_query_timeout_ms", "ignored_apps", "app_directories",
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
@@ -496,7 +494,7 @@ enum ConfigLoader {
   ) {
     for (key, value) in table where !known.contains(key) {
       let fullPath = path + [key]
-      if let moved = movedPopupKeys(fullPath, value: value) {
+      if let moved = movedKeys(fullPath, value: value) {
         for (message, location) in moved {
           config.addDiagnostic(message, location: location(locations))
         }
@@ -510,10 +508,11 @@ enum ConfigLoader {
     }
   }
 
-  /// The popup keys `[popup]` replaced, each rejected with where it lives
-  /// now: `[terminal.<name>]`, `[statusbar.popup]` and the `popup_*` style
-  /// keys of `[statusbar]`.
-  private static func movedPopupKeys(
+  /// Retired keys, each rejected with where its setting lives now: the popup
+  /// keys `[popup]` replaced (`[terminal.<name>]`, `[statusbar.popup]` and
+  /// the `popup_*` style keys of `[statusbar]`), the `options` tables a
+  /// template now writes inline, and `[open]`, now part of `[flashlight]`.
+  private static func movedKeys(
     _ path: [String], value: any TOMLValueConvertible
   ) -> [(String, (ConfigSourceLocationIndex) -> ConfigLocation?)]? {
     func named(_ table: TOMLTable, _ message: @escaping (String) -> String) -> [(
@@ -535,6 +534,28 @@ enum ConfigLoader {
       return named(table) { name in
         "statusbar.popup.\(name) is not read; declare it as [popup.\(name)] with text = \"…\""
       }
+    case ["open"]:
+      guard let table = value.table else { return nil }
+      return named(table) { name in
+        ["ignored_apps", "app_directories"].contains(name)
+          ? "open.\(name) is not read; set \(name) in [flashlight]"
+          : "[open] is not read; its ignored_apps and app_directories are in [flashlight]"
+      }
+    case ["statusbar", "options"]:
+      return [
+        (
+          "[statusbar.options] is not read; write its formats inline in [statusbar] template",
+          { $0.location(for: path) }
+        )
+      ]
+    case _ where path.count == 3 && path[0] == "widgets" && path[2] == "options":
+      return [
+        (
+          "[widgets.\(path[1]).options] is not read; write its formats inline in "
+            + "[widgets.\(path[1])] template",
+          { $0.location(for: path) }
+        )
+      ]
     default:
       guard path.count == 2, path[0] == "statusbar", path[1].hasPrefix("popup_"),
         popupStyleKeys.contains(String(path[1].dropFirst("popup_".count)))
@@ -660,29 +681,31 @@ enum ConfigLoader {
       })
   }
 
-  private static func applyOpen(
-    _ table: TOMLTable?,
+  /// `[flashlight]`'s installed-app catalog: `ignored_apps` and
+  /// `app_directories`, which also scope the `app_open` verb.
+  private static func applyFlashlightAppCatalog(
+    _ table: TOMLTable,
     locations: ConfigSourceLocationIndex,
     into config: inout Config
   ) {
-    guard let table else { return }
     applyStringArray(
-      table["ignored_apps"], path: ["open", "ignored_apps"],
-      message: "open.ignored_apps must be an array of strings", locations: locations, into: &config
+      table["ignored_apps"], path: ["flashlight", "ignored_apps"],
+      message: "flashlight.ignored_apps must be an array of strings", locations: locations,
+      into: &config
     ) { value, config in
-      config.open.ignoredApps = value
+      config.flashlight.ignoredApps = value
     }
     applyStringArray(
-      table["app_directories"], path: ["open", "app_directories"],
-      message: "open.app_directories must be an array of directory paths",
+      table["app_directories"], path: ["flashlight", "app_directories"],
+      message: "flashlight.app_directories must be an array of directory paths",
       locations: locations, into: &config
     ) { value, config in
-      let location = locations.location(for: ["open", "app_directories"])
+      let location = locations.location(for: ["flashlight", "app_directories"])
       // An empty list would silently kill the whole app catalog — keep the
       // defaults and say so.
       guard !value.isEmpty else {
         config.addDiagnostic(
-          "open.app_directories must not be empty (remove the key to use the defaults)",
+          "flashlight.app_directories must not be empty (remove the key to use the defaults)",
           location: location)
         return
       }
@@ -696,14 +719,14 @@ enum ConfigLoader {
       }
       guard roots.isEmpty else {
         config.addDiagnostic(
-          "open.app_directories must not include a filesystem root or the bare home directory: "
+          "flashlight.app_directories must not include a filesystem root or the bare home directory: "
             + roots.joined(separator: ", "),
           location: location)
         return
       }
       // Missing directories are fine — the watcher picks them up if they
       // appear later, so no existence check here.
-      config.open.appDirectories = value
+      config.flashlight.appDirectories = value
     }
   }
 
@@ -929,8 +952,7 @@ enum ConfigLoader {
       assign: { value, config in
         config.statusBar.notchMargin = value
       })
-    applyStatusBarOptionsAndSources(
-      table, locations: locations, sourceURL: sourceURL, into: &config)
+    applyStatusBarSources(table, locations: locations, sourceURL: sourceURL, into: &config)
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)
     {
@@ -1035,23 +1057,10 @@ enum ConfigLoader {
     return (command, directory, environment)
   }
 
-  private static func applyStatusBarOptionsAndSources(
+  private static func applyStatusBarSources(
     _ table: TOMLTable, locations: ConfigSourceLocationIndex, sourceURL: URL?,
     into config: inout Config
   ) {
-    if let options = sectionTable(
-      table["options"], name: "statusbar.options", locations: locations, into: &config)
-    {
-      for (key, value) in options {
-        guard let string = value.string else {
-          config.addDiagnostic(
-            "statusbar.options.\(key) must be a string",
-            location: locations.location(for: ["statusbar", "options", key]))
-          continue
-        }
-        config.statusBar.options[key] = string
-      }
-    }
     guard
       let sources = sectionTable(
         table["sources"], name: "statusbar.sources", locations: locations, into: &config)
@@ -1261,7 +1270,7 @@ enum ConfigLoader {
   private static let widgetKeys: Set<String> = [
     "enabled", "template", "screen", "anchor", "gap_x", "gap_y", "columns", "max_columns",
     "font", "font_size", "line_spacing", "fg", "bg", "border", "border_size", "corner_radius",
-    "padding", "interval", "hide_from_capture", "options",
+    "padding", "interval", "hide_from_capture",
   ]
 
   /// `[widgets.<name>]` tables. Like every section, a later layer overrides
@@ -1406,19 +1415,6 @@ enum ConfigLoader {
         message: "\(dotted).hide_from_capture must be true or false", locations: locations,
         into: &config
       ) { value, config in config.widgets[name]?.hideFromCapture = value }
-      if let options = sectionTable(
-        definition["options"], name: "\(dotted).options", locations: locations, into: &config)
-      {
-        for (option, value) in options {
-          guard let string = value.string else {
-            config.addDiagnostic(
-              "\(dotted).options.\(option) must be a string",
-              location: locations.location(for: key("options") + [option]))
-            continue
-          }
-          config.widgets[name]?.options[option] = string
-        }
-      }
     }
   }
 
@@ -1428,6 +1424,7 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
+    applyFlashlightAppCatalog(table, locations: locations, into: &config)
     applyInt(
       table["suggestion_count"], path: ["flashlight", "suggestion_count"],
       message: "flashlight.suggestion_count must be an integer between 1 and 100",
@@ -2217,33 +2214,15 @@ enum ConfigLoader {
       }
       config.statusBar.sources[name]?.timeoutSeconds = config.statusBar.commandTimeoutSeconds
     }
-    func optionDependencies(
-      _ options: [String: String], path: String, into config: inout Config
-    ) -> [String: StatusFormatDependencies] {
-      var dependencies: [String: StatusFormatDependencies] = [:]
-      for name in options.keys.sorted() {
-        let program = StatusFormatProgram.compile(
-          source: options[name] ?? "", origin: StatusFormatOrigin("\(path).\(name)"))
-        recordStatusFormatDiagnostics(program, path: "\(path).\(name)", into: &config)
-        dependencies[name] = program.dependencies
-      }
-      return dependencies
-    }
-    let sharedOptions = optionDependencies(
-      config.statusBar.options, path: "statusbar.options", into: &config)
     /// `path` is the dotted config path, also the program's origin. Widget
     /// templates may read `flash.widget.*`; elsewhere those values exist only
-    /// inside widgets, so a shared option may mention them but a bar or popup
-    /// template may not.
+    /// inside widgets.
     func compiled(
-      _ text: String, path: String, options: [String: String],
-      optionDependencies: [String: StatusFormatDependencies], widget: Bool = false,
-      into config: inout Config
+      _ text: String, path: String, widget: Bool = false, into config: inout Config
     ) -> FlashStatusBarTemplate {
       let program = StatusFormatProgram.compile(source: text, origin: StatusFormatOrigin(path))
       recordStatusFormatDiagnostics(program, path: path, into: &config)
-      var dependencies = program.dependencies
-      for option in optionDependencies.values { dependencies.formUnion(option) }
+      let dependencies = program.dependencies
       var variables: [FlashStatusBarTemplateVariable] = []
       func diagnose(_ message: String) {
         config.addDiagnostic("\(path) \(message)", location: config.valueLocations[path])
@@ -2282,8 +2261,7 @@ enum ConfigLoader {
           }
         } else if token.hasPrefix("flash.widget.") {
           source = nil
-          let known = widget && ["flash.widget.name", "flash.widget.columns"].contains(token)
-          if !known, widget || program.dependencies.values.contains(token) {
+          if !(widget && ["flash.widget.name", "flash.widget.columns"].contains(token)) {
             diagnose("has unknown Flash value \(token)")
           }
         } else {
@@ -2295,22 +2273,18 @@ enum ConfigLoader {
         }
       }
       return FlashStatusBarTemplate(
-        template: text, variables: variables,
-        options: options, sourceNames: Set(config.statusBar.sources.keys),
+        template: text, variables: variables, sourceNames: Set(config.statusBar.sources.keys),
         origin: StatusFormatOrigin(path))
     }
-    let normalized = FlashStatusBarTemplateEngine.normalizedTemplate(
-      config.statusBar.template.template)
+    // The bar is one line. Its template keeps its newlines, as any expanded
+    // value does: a newline separates style tokens inside a marker, and the
+    // evaluated runs drop it from the drawn text (`normalizedTemplate`).
     config.statusBar.template = compiled(
-      normalized, path: "statusbar.template", options: config.statusBar.options,
-      optionDependencies: sharedOptions, into: &config)
+      config.statusBar.template.template, path: "statusbar.template", into: &config)
     for (name, popup) in config.textPopups.sorted(by: { $0.key < $1.key }) {
       let text = popup.template.replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
-      config.popups[name] = .text(
-        compiled(
-          text, path: "popup.\(name)", options: config.statusBar.options,
-          optionDependencies: sharedOptions, into: &config))
+      config.popups[name] = .text(compiled(text, path: "popup.\(name)", into: &config))
     }
     for name in config.widgets.keys.sorted() {
       guard let widget = config.widgets[name] else { continue }
@@ -2322,19 +2296,10 @@ enum ConfigLoader {
         }
         continue
       }
-      var dependencies = sharedOptions
-      for (option, local) in optionDependencies(
-        widget.options, path: "\(path).options", into: &config)
-      {
-        dependencies[option] = local
-      }
-      let options = config.statusBar.options.merging(widget.options) { _, local in local }
       let template = compiled(
-        widget.template.template, path: "\(path).template", options: options,
-        optionDependencies: dependencies, widget: true, into: &config)
+        widget.template.template, path: "\(path).template", widget: true, into: &config)
       config.widgets[name]?.template = template
-      let interactive = ([widget.template.template] + Array(widget.options.values))
-        .flatMap(StatusFormatDocument.styleTokens(in:))
+      let interactive = StatusFormatDocument.styleTokens(in: widget.template.template)
         .compactMap { token in
           ["link=", "popup=", "range="].first { token.lowercased().hasPrefix($0) }
         }

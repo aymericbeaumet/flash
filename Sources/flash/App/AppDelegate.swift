@@ -327,7 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     commandLineHistory = commandHistoryStore?.load() ?? []
     let manager = pluginManager
     registry = SourceRegistry(
-      openConfig: config.open,
+      flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
     monitor.focusedElementDidChange = { [weak self] pid, notification in
@@ -426,7 +426,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       overlay: overlay,
       template: config.statusBar.template,
       popupTemplates: config.textPopups,
-      options: config.statusBar.options,
       sources: config.statusBar.sources,
       terminalPopupNames: config.terminalPopupNames,
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
@@ -515,10 +514,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterNormalMode()
     case .leaveMode:
       leaveMode()
-    case .popupShow(let name):
-      showPopup(named: name)
-    case .popupDismiss:
-      dismissPopup()
     case .popupRestart(let name):
       restartPopup(named: name)
     case .popupQuit(let name):
@@ -527,6 +522,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterInsertMode()
     case .commandMode:
       enterCommandLineMode()
+    case .terminalMode(let name):
+      enterTerminalMode(named: name)
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
       .close, .tabClose, .find, .candidateFinder,
       .enterCommand, .copyURL, .yankSelection, .paste,

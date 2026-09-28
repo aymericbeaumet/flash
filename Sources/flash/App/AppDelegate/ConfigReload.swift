@@ -178,13 +178,12 @@ extension AppDelegate {
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
       popupTemplates: cfg.textPopups,
-      options: cfg.statusBar.options,
       sources: cfg.statusBar.sources,
       terminalPopupNames: cfg.terminalPopupNames,
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     statusBarController?.setBar(enabled: cfg.statusBar.enabled)
     statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
-    registry.updateOpenConfig(cfg.open)
+    registry.updateFlashlightConfig(cfg.flashlight)
     pluginManager.updateConfig(cfg)
     pluginManager.emit(
       PluginEvent(

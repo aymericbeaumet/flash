@@ -103,11 +103,14 @@ extension AppDelegate {
       invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
   }
 
-  /// `popup_show`: the named popup standalone, centred on the focused app's
-  /// screen and focused; no name opens `shell`. A text popup shows the
-  /// document the status bar last evaluated, so it needs the bar enabled.
-  func showPopup(named requested: String?) {
+  /// `enter_terminal_mode`: the named popup standalone, centred on the
+  /// focused app's screen and focused, which enters TERMINAL mode through the
+  /// popup's focus; no name opens `terminal`. The popup already focused is a
+  /// no-op; another one replaces it. A text popup shows the document the
+  /// status bar last evaluated, so it needs the bar enabled.
+  func enterTerminalMode(named requested: String?) {
     let name = requested ?? Config.defaultPopupName
+    if modeStore.mode.isTerminal, overlay.statusPopupController.focusedName == name { return }
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let context = currentNonFlashContext()
     let screen =
@@ -126,7 +129,7 @@ extension AppDelegate {
       guard config.statusBar.enabled, let evaluated = overlay.statusBarPopupDocuments[name] else {
         FlashLog.warn(
           "Text popup needs the status bar: [statusbar] enabled = true evaluates its text",
-          fields: fields, source: "core:TerminalPopup.show")
+          fields: fields, source: "core:TerminalPopup.enterTerminalMode")
         return
       }
       document = evaluated
@@ -134,7 +137,7 @@ extension AppDelegate {
       FlashLog.warn(
         config.terminalPopups[name] == nil
           ? "Popup not found" : "Popup starts once the login environment resolves",
-        fields: fields, source: "core:TerminalPopup.show")
+        fields: fields, source: "core:TerminalPopup.enterTerminalMode")
       return
     }
     dismissPopup(restoreApplication: false)
@@ -157,7 +160,7 @@ extension AppDelegate {
     if case .terminal = modeStore.mode {
       dispatchMode(.closeTerminal(targetPID: restoreApplication ? returnPID : nil))
     } else {
-      overlay.hideStatusBarPopup(reason: "popup_dismiss")
+      overlay.hideStatusBarPopup(reason: "dismiss_popup")
     }
     if !restoreApplication { terminalReturnApplicationPID = returnPID }
   }

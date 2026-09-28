@@ -14,7 +14,6 @@ final class FlashStatusBarController {
   private let makeJob: StatusCommandFactory
   private var template: FlashStatusBarTemplate
   private var popupTemplates: [String: FlashStatusBarTemplate]
-  private var options: [String: String]
   private var sources: [String: FlashStatusBarSourceDefinition]
   private var terminalPopupNames: Set<String>
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
@@ -172,7 +171,6 @@ final class FlashStatusBarController {
   init(
     overlay: OverlayPanel? = nil, template: FlashStatusBarTemplate,
     popupTemplates: [String: FlashStatusBarTemplate] = [:],
-    options: [String: String] = [:],
     sources: [String: FlashStatusBarSourceDefinition] = [:],
     terminalPopupNames: Set<String> = [],
     refreshIntervalSeconds: TimeInterval = 5,
@@ -196,7 +194,6 @@ final class FlashStatusBarController {
     self.overlay = overlay
     self.template = template
     self.popupTemplates = popupTemplates
-    self.options = options
     self.sources = sources
     self.terminalPopupNames = terminalPopupNames
     self.refreshIntervalSeconds = refreshIntervalSeconds
@@ -318,7 +315,6 @@ final class FlashStatusBarController {
   func updateTemplate(
     _ template: FlashStatusBarTemplate,
     popupTemplates: [String: FlashStatusBarTemplate]? = nil,
-    options: [String: String]? = nil,
     sources: [String: FlashStatusBarSourceDefinition]? = nil,
     terminalPopupNames: Set<String>? = nil,
     refreshIntervalSeconds: TimeInterval? = nil
@@ -329,7 +325,6 @@ final class FlashStatusBarController {
       self.bar?.memo = nil
       self.popupCache.memos.removeAll()
       if let popupTemplates { self.popupTemplates = popupTemplates }
-      if let options { self.options = options }
       if let sources {
         let changed = self.sourceRecords.keys.filter {
           sources[$0] != self.sourceRecords[$0]?.definition
@@ -408,8 +403,8 @@ final class FlashStatusBarController {
         values["flash.history.\(name)"] = record.history.joined(separator: " ")
       }
     }
-    // The shared context is built once; each surface layers its options and
-    // its own job output on it.
+    // The shared context is built once; each surface layers its own job
+    // output on it.
     let native = FlashStatusBarTemplateEngine.formatContext(context, dynamicValues: values)
     if bar != nil { publishBar(native: native, context: context) }
     for name in widgets.keys.sorted() where widgets[name]?.visible == true {
@@ -424,14 +419,13 @@ final class FlashStatusBarController {
 
   private func publishBar(native shared: StatusFormatContext, context: FlashStatusBarContext) {
     var native = shared
-    native.options = options.merging(template.options) { _, local in local }
     native.jobs = jobValues(for: bar)
     // Nothing the template or its popups read has changed since the last
     // evaluation: the bar keeps what it required.
     guard bar?.isCurrent(native) == false else { return }
     let result = FlashStatusBarTemplateEngine.evaluate(
       template: template, popupTemplates: popupTemplates, context: context,
-      options: options, terminalPopupNames: terminalPopupNames, nativeContext: native,
+      terminalPopupNames: terminalPopupNames, nativeContext: native,
       popupCache: popupCache)
     bar?.record(result.dependencies, jobs: result.jobs, native: native)
     surfaceEvaluations["bar", default: 0] += 1
@@ -447,7 +441,6 @@ final class FlashStatusBarController {
     var native = shared
     native.values["flash.widget.name"] = name
     native.values["flash.widget.columns"] = String(spec.columns)
-    native.options = options.merging(spec.template.options) { _, local in local }
     native.jobs = jobValues(for: widgets[name]?.surface)
     guard widgets[name]?.surface.isCurrent(native) == false else { return }
     let result = FlashStatusBarTemplateEngine.evaluateDocument(

@@ -4,7 +4,7 @@ import XCTest
 
 /// `[popup.<name>]` with `command`: terminal popups.
 final class TerminalConfigTests: XCTestCase {
-  func testPopupDefaultsRestartQuitAndDismissTheFocusedPopup() throws {
+  func testPopupDefaultsRestartQuitAndLeaveTheFocusedPopup() throws {
     let referenceURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
@@ -14,7 +14,7 @@ final class TerminalConfigTests: XCTestCase {
     let expected: [(String, URLCommand)] = [
       ("cmd+r", .popupRestart(name: nil)),
       ("cmd+q", .popupQuit(name: nil)),
-      ("cmd+w", .popupDismiss),
+      ("cmd+w", .leaveMode),
     ]
     for config in [Config.default, ConfigLoader.parse(""), reference] {
       for (chord, command) in expected {
@@ -49,8 +49,8 @@ final class TerminalConfigTests: XCTestCase {
     XCTAssertEqual(
       terminals["bonsai"]?.size, Config.PopupSize(columns: .cells(120), rows: .cells(36)))
     XCTAssertEqual(
-      terminals["shell"],
-      Config.defaultPopups["shell"].flatMap {
+      terminals["terminal"],
+      Config.defaultPopups["terminal"].flatMap {
         if case .terminal(let shell) = $0 { return shell }
         return nil
       })
@@ -167,12 +167,12 @@ final class TerminalConfigTests: XCTestCase {
 
   func testMalformedTablesAndNamesAreDiagnosed() {
     for text in [
-      "popup = 42", "[popup]\nshell = true", "[popup.\"a b\"]\ncommand = [\"/bin/zsh\"]",
+      "popup = 42", "[popup]\nterminal = true", "[popup.\"a b\"]\ncommand = [\"/bin/zsh\"]",
       "[popup.\"\"]\ncommand = [\"/bin/zsh\"]", "[[popup.list]]\ncommand = [\"/bin/zsh\"]",
     ] {
       let config = ConfigLoader.parse(text)
       XCTAssertFalse(config.diagnostics.isEmpty, text)
-      XCTAssertEqual(Set(config.popups.keys), ["shell"], text)
+      XCTAssertEqual(Set(config.popups.keys), ["terminal"], text)
     }
     let config = ConfigLoader.parse("[popup.editor]\ncommand = [\"/bin/zsh\"]\npersistent = 1")
     XCTAssertTrue(

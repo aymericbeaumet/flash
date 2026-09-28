@@ -2383,9 +2383,12 @@ final class NormalModeTests: XCTestCase {
         "missing \(mapping)")
     }
     XCTAssertFalse(help.contains("flash enter_normal_mode"))
-    XCTAssertFalse(help.contains("flash leave_mode"))
     XCTAssertFalse(help.contains("flash enter_insert_mode"))
     XCTAssertFalse(help.contains("flash enter_command_mode"))
+    XCTAssertFalse(help.contains("flash enter_terminal_mode"))
+    // Only TERMINAL, a focused popup, ships an exit: Command-W, in its column.
+    let leave = help.split(separator: "\n").filter { $0.hasPrefix("flash leave_mode ") }
+    XCTAssertEqual(leave.map { $0.split(separator: " ").count }, [3], "\(leave)")
     XCTAssertFalse(help.contains("flash app_reload"))
     XCTAssertFalse(help.contains(":q[uit]"))
   }

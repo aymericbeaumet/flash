@@ -31,11 +31,12 @@ final class SourceRegistry {
   /// (a LaunchServices round trip on a cold instance) on a read path.
   private var runningBundleIDs: Set<String> = []
   private var runningApplicationsRefreshQueued = false
-  private var openConfig: Config.Open
+  /// The installed-app catalog's `ignored_apps` and `app_directories`.
+  private var flashlight: Config.Flashlight
 
   init(
     descriptors: [SourceDescriptor]? = nil,
-    openConfig: Config.Open = .init(),
+    flashlight: Config.Flashlight = .init(),
     isTerminalEmulator: @escaping (String) -> Bool = TerminalEmulators.contains,
     runningApplications: [NSRunningApplication]? = nil,
     runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
@@ -53,14 +54,14 @@ final class SourceRegistry {
     }
     self.pluginSourcesProvider = pluginSourcesProvider ?? { [] }
     self.isTerminalEmulator = isTerminalEmulator
-    self.openConfig = openConfig
+    self.flashlight = flashlight
     self.descriptors =
       descriptors
       ?? [
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
           ApplicationSource(
-            ignoredApps: openConfig.ignoredApps,
-            appDirectories: openConfig.appDirectories)
+            ignoredApps: flashlight.ignoredApps,
+            appDirectories: flashlight.appDirectories)
         },
         SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
           MenuBarSource()
@@ -72,13 +73,13 @@ final class SourceRegistry {
     refreshRunningApplications(initialRunningApplications)
   }
 
-  func updateOpenConfig(_ openConfig: Config.Open) {
+  func updateFlashlightConfig(_ flashlight: Config.Flashlight) {
     lock.lock()
-    self.openConfig = openConfig
+    self.flashlight = flashlight
     let appSource = activeSourcesByID["core.apps"] as? ApplicationSource
     lock.unlock()
-    appSource?.updateIgnoredApps(openConfig.ignoredApps)
-    appSource?.updateAppDirectories(openConfig.appDirectories)
+    appSource?.updateIgnoredApps(flashlight.ignoredApps)
+    appSource?.updateAppDirectories(flashlight.appDirectories)
   }
 
   var sources: [FlashSource] {
@@ -145,8 +146,8 @@ final class SourceRegistry {
       if activeSourcesByID[descriptor.identifier] == nil {
         let source = descriptor.make()
         if let appSource = source as? ApplicationSource {
-          appSource.updateIgnoredApps(openConfig.ignoredApps)
-          appSource.updateAppDirectories(openConfig.appDirectories)
+          appSource.updateIgnoredApps(flashlight.ignoredApps)
+          appSource.updateAppDirectories(flashlight.appDirectories)
         }
         activeSourcesByID[descriptor.identifier] = source
       }

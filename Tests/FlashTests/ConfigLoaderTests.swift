@@ -44,20 +44,26 @@ final class ConfigLoaderTests: XCTestCase {
   }
 
   func testModeTransitionsHaveNoDefaultMappings() {
+    let closePopup = NormalModeInterpreter.canonicalizeMappingKey("cmd+w")
     for config in [Config.default, ConfigLoader.parse("")] {
-      for mappings in [
-        config.mode.all, config.mode.normal, config.mode.insert,
-        config.mode.command, config.mode.terminal,
+      for (scope, mappings) in [
+        ("all", config.mode.all), ("normal", config.mode.normal), ("insert", config.mode.insert),
+        ("command", config.mode.command), ("terminal", config.mode.terminal),
       ] {
         for mapping in mappings {
           switch mapping.action.command {
-          case .leaveMode?, .insertMode?, .commandMode?, .enterCommand?:
-            XCTFail("Mode transition must be explicitly configured: \(mapping.key)")
+          case .leaveMode? where scope == "terminal" && mapping.key == closePopup:
+            // TERMINAL is a focused popup: Command-W leaves it, closing the popup.
+            break
+          case .leaveMode?, .insertMode?, .commandMode?, .enterCommand?, .terminalMode?:
+            XCTFail("Mode transition must be explicitly configured: \(scope) \(mapping.key)")
           default:
             break
           }
         }
       }
+      XCTAssertEqual(
+        config.mode.terminal.first { $0.key == closePopup }?.action.command, .leaveMode)
     }
   }
 
@@ -245,11 +251,12 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
     XCTAssertTrue(c.mode.all.isEmpty)
     XCTAssertTrue(c.mode.insert.isEmpty)
-    XCTAssertTrue(c.open.ignoredApps.isEmpty)
+    XCTAssertTrue(c.flashlight.ignoredApps.isEmpty)
+    XCTAssertEqual(c.flashlight.appDirectories, Config.Flashlight.defaultAppDirectories)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
     XCTAssertEqual(
       c.statusBar.template.template,
-      "#[align=left]#{E:@left}#[align=right]#{T:@right}")
+      "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}")
     XCTAssertEqual(c.statusBar.template.variables.count, 2)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
@@ -276,20 +283,17 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(command("ctrl+shift+tab"))
   }
 
-  func testParsesStatusBarTemplateOptionsAndExplicitSources() {
+  func testParsesStatusBarTemplateAndExplicitSources() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#[align=left]#{E:@left}#[align=right]#{flash.plugin.ready_count} | #{flash.plugin.power.summary} | #{flash.source.script} | #(date +%H:%M)"
-      [statusbar.options]
-      "@left" = "#{flash.active_bundle_identifier} #{flash.mode}"
+      template = "#[align=left]#{flash.active_bundle_identifier} #{flash.mode}#[align=right]#{flash.plugin.ready_count} | #{flash.plugin.power.summary} | #{flash.source.script} | #(date +%H:%M)"
       [statusbar.sources.script]
       command = ["/bin/sh", "~/bin/right-status.sh"]
       interval = 30
       cycle_interval = 5
       """)
 
-    XCTAssertEqual(c.statusBar.options["@left"], "#{flash.active_bundle_identifier} #{flash.mode}")
     XCTAssertEqual(
       c.statusBar.sources["script"],
       FlashStatusBarSourceDefinition(
@@ -313,9 +317,7 @@ final class ConfigLoaderTests: XCTestCase {
     let toml = """
       [statusbar]
       enabled = true
-      template = "#{E:@right} #{flash.plugin.ready_count}"
-      [statusbar.options]
-      "@right" = "#{flash.plugin.cpu.summary}"
+      template = "#{flash.plugin.cpu.summary} #{flash.plugin.ready_count}"
       [popup.details]
       text = "#{flash.plugin.memory.details} #{flash.plugin.cpu.label}"
       """
@@ -350,9 +352,10 @@ final class ConfigLoaderTests: XCTestCase {
     let toml = """
       [statusbar]
       enabled = true
-      template = "#[popup=feed]x#[nopopup] #[fg=red,popup=cpu]y #[popup=inline:%41]z #{E:@date}"
-      [statusbar.options]
-      "@date" = "#[popup=date]%H:%M#[nopopup]"
+      template = \"\"\"
+      #[popup=feed]x#[nopopup] #[fg=red,popup=cpu]y #[popup=inline:%41]z
+       #[popup=date]%H:%M#[nopopup]
+      \"\"\"
       """
     XCTAssertEqual(ConfigLoader.parse(toml).statusBar.shownPopupNames, ["feed", "cpu", "date"])
     XCTAssertEqual(
@@ -423,10 +426,11 @@ final class ConfigLoaderTests: XCTestCase {
       \"\"\"
       """)
 
-    XCTAssertEqual(
-      c.statusBar.template.template,
-      "#[align=left]#{flash.mode}#[align=centre]#{flash.active_app_name}#[align=right]#{flash.date}"
-    )
+    let model = FlashStatusBarTemplateEngine.render(
+      template: c.statusBar.template, context: .init(activeAppName: "App", modeLabel: "NORMAL"))
+    XCTAssertEqual(model.modeDocument.map(\.text).joined(), "NORMAL")
+    XCTAssertEqual(model.appDocument.map(\.text).joined(), "App")
+    XCTAssertFalse(model.document.runs.contains { $0.text.contains("\n") })
     XCTAssertEqual(
       Set(c.statusBar.template.variables.map(\.token)),
       ["flash.mode", "flash.active_app_name", "flash.date"])
@@ -603,22 +607,22 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
   }
 
-  func testParsesOpenIgnoredApps() {
+  func testParsesFlashlightIgnoredApps() {
     let c = ConfigLoader.parse(
       """
-      [open]
+      [flashlight]
       ignored_apps = ["Flash", "com.flash.app", "/Applications/Flash.app"]
       """)
 
     XCTAssertEqual(
-      c.open.ignoredApps,
+      c.flashlight.ignoredApps,
       ["Flash", "com.flash.app", "/Applications/Flash.app"])
   }
 
-  func testParsesMultilineOpenIgnoredApps() {
+  func testParsesMultilineFlashlightIgnoredApps() {
     let c = ConfigLoader.parse(
       """
-      [open]
+      [flashlight]
       ignored_apps = [
         "com.flash.app",
         "com.flash.native-fixture",
@@ -628,7 +632,7 @@ final class ConfigLoaderTests: XCTestCase {
       """)
 
     XCTAssertEqual(
-      c.open.ignoredApps,
+      c.flashlight.ignoredApps,
       [
         "com.flash.app",
         "com.flash.native-fixture",
@@ -852,18 +856,41 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
-  func testInvalidOpenIgnoredAppsReportDiagnostic() {
+  func testInvalidFlashlightIgnoredAppsReportDiagnostic() {
     let c = ConfigLoader.parse(
       """
-      [open]
+      [flashlight]
       ignored_apps = "Flash"
       """)
 
-    XCTAssertTrue(c.open.ignoredApps.isEmpty)
+    XCTAssertTrue(c.flashlight.ignoredApps.isEmpty)
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
-        $0.message == "open.ignored_apps must be an array of strings"
+        $0.message == "flashlight.ignored_apps must be an array of strings"
       })
+  }
+
+  /// `[open]` moved into `[flashlight]`: its keys are rejected with where
+  /// they live now, and read nothing.
+  func testOpenSectionIsRejectedForFlashlight() {
+    let c = ConfigLoader.parse(
+      """
+      [open]
+      ignored_apps = ["Flash"]
+      app_directories = ["/Applications"]
+      """)
+    XCTAssertEqual(
+      Set(c.loadingDiagnostics.map(\.message)),
+      [
+        "open.ignored_apps is not read; set ignored_apps in [flashlight]",
+        "open.app_directories is not read; set app_directories in [flashlight]",
+      ])
+    XCTAssertTrue(c.loadingDiagnostics.allSatisfy { $0.location != nil })
+    XCTAssertTrue(c.flashlight.ignoredApps.isEmpty)
+    XCTAssertEqual(c.flashlight.appDirectories, Config.Flashlight.defaultAppDirectories)
+    XCTAssertEqual(
+      ConfigLoader.parse("", environment: ["FLASH_OPEN_IGNORED_APPS": "[\"Flash\"]"])
+        .flashlight.ignoredApps, [], "the old environment name reads nothing")
   }
 
   func testParsesEmptyMagicModifiersArray() {
@@ -918,7 +945,6 @@ final class ConfigLoaderTests: XCTestCase {
     let debug = try XCTUnwrap(root["debug"] as? [String: Any])
     let flashlight = try XCTUnwrap(root["flashlight"] as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
-    let open = try XCTUnwrap(root["open"] as? [String: Any])
     let plugins = try XCTUnwrap(root["plugins"] as? [String: Any])
     let statusBar = try XCTUnwrap(root["statusbar"] as? [String: Any])
     let allMappings = try XCTUnwrap(mode["all"] as? [[String: Any]])
@@ -937,11 +963,13 @@ final class ConfigLoaderTests: XCTestCase {
       allMappings.first?["command"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(allMappings.first?["repeat"] as? Bool, false)
-    XCTAssertEqual(open["ignored_apps"] as? [String], [])
+    XCTAssertEqual(flashlight["ignored_apps"] as? [String], [])
+    XCTAssertNil(root["open"])
     XCTAssertEqual(plugins["disabled"] as? [String], [])
     XCTAssertEqual(plugins["third_party"] as? [String], [])
     XCTAssertEqual(
-      statusBar["template"] as? String, "#[align=left]#{E:@left}#[align=right]#{T:@right}")
+      statusBar["template"] as? String,
+      "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}")
   }
 
   func testResolvedConfigJSONNeverIncludesPluginSettingValues() throws {
@@ -1055,7 +1083,7 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_HINTS_KEYS": "qwer",
       "FLASH_HINTS_MIN_LENGTH": "2",
       "FLASH_HINTS_MAGIC_MODIFIERS": "[\"ctrl\", \"alt\"]",
-      "FLASH_OPEN_IGNORED_APPS": "[\"Flash\", \"com.flash.app\"]",
+      "FLASH_FLASHLIGHT_IGNORED_APPS": "[\"Flash\", \"com.flash.app\"]",
       "FLASH_OVERLAY_FONT_SIZE": "18",
       "FLASH_OVERLAY_HINT_FG": "#DDEEFF",
       "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
@@ -1072,7 +1100,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "qwer")
     XCTAssertEqual(c.hints.minLength, 2)
     XCTAssertEqual(c.hints.magicModifiers, ["ctrl", "alt"])
-    XCTAssertEqual(c.open.ignoredApps, ["Flash", "com.flash.app"])
+    XCTAssertEqual(c.flashlight.ignoredApps, ["Flash", "com.flash.app"])
     XCTAssertEqual(c.overlay.fontSize, 18)
     XCTAssertEqual(c.overlay.hintFG, "#DDEEFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
@@ -1695,7 +1723,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.app, d.app)
     XCTAssertEqual(c.hints, d.hints)
     XCTAssertEqual(c.overlay, d.overlay)
-    XCTAssertEqual(c.open, d.open)
     XCTAssertEqual(c.plugins, d.plugins)
     XCTAssertEqual(c.flashlight, d.flashlight)
     XCTAssertEqual(c.debug, d.debug)
@@ -1853,24 +1880,24 @@ final class ConfigLoaderTests: XCTestCase {
   func testAppDirectoriesRejectEmptyAndRoots() {
     let empty = ConfigLoader.parse(
       """
-      [open]
+      [flashlight]
       app_directories = []
       """)
-    XCTAssertEqual(empty.open.appDirectories, Config().open.appDirectories)
+    XCTAssertEqual(empty.flashlight.appDirectories, Config().flashlight.appDirectories)
     XCTAssertTrue(
       empty.loadingDiagnostics.contains {
-        $0.message.contains("open.app_directories must not be empty")
+        $0.message.contains("flashlight.app_directories must not be empty")
       })
 
     let root = ConfigLoader.parse(
       """
-      [open]
+      [flashlight]
       app_directories = ["/"]
       """)
-    XCTAssertEqual(root.open.appDirectories, Config().open.appDirectories)
+    XCTAssertEqual(root.flashlight.appDirectories, Config().flashlight.appDirectories)
     XCTAssertTrue(
       root.loadingDiagnostics.contains {
-        $0.message.contains("open.app_directories must not include a filesystem root")
+        $0.message.contains("flashlight.app_directories must not include a filesystem root")
       })
   }
 

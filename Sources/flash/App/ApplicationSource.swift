@@ -21,7 +21,8 @@ final class ApplicationSource: FlashSource {
   private var installedIndexReady = false
   private var installedIndexWaiters: [() -> Void] = []
   private var ignoredAppMatcher: IgnoredAppMatcher
-  /// Configured `[open] app_directories` entries (unexpanded; `~` allowed).
+  /// Configured `[flashlight] app_directories` entries (unexpanded; `~`
+  /// allowed).
   /// Guarded by `cacheLock` like the ignore matcher.
   private var appDirectories: [String]
   private var directoryWatcher: ApplicationDirectoryWatcher?
@@ -33,7 +34,7 @@ final class ApplicationSource: FlashSource {
 
   init(
     ignoredApps: [String] = [],
-    appDirectories: [String] = Config.Open.defaultAppDirectories,
+    appDirectories: [String] = Config.Flashlight.defaultAppDirectories,
     installedAppScanner: (() -> [Candidate])? = nil,
     watchesApplicationDirectories: Bool = true,
     automaticallyPrewarms: Bool = true
@@ -78,7 +79,7 @@ final class ApplicationSource: FlashSource {
     }
   }
 
-  /// Apply a changed `[open] app_directories`: swap the roots, re-point the
+  /// Apply a changed `[flashlight] app_directories`: swap the roots, re-point the
   /// watcher, and queue a rescan. No-op when unchanged.
   func updateAppDirectories(_ directories: [String]) {
     cacheLock.lock()

@@ -2,8 +2,8 @@
 
 A popup is a small window Flash shows over your apps: under a status-bar label
 while you hover it, pinned by a click, or standalone in the middle of the
-screen through `popup_show`. Every popup runs in a real PTY terminal. There is
-one namespace, `[popup.<name>]`, and each popup is one of two kinds:
+screen through `enter_terminal_mode`. Every popup runs in a real PTY terminal.
+There is one namespace, `[popup.<name>]`, and each popup is one of two kinds:
 
 - a **text popup** sets `text`, a [status format](status-format.md). Flash
   evaluates it with the same sources and plugins as the bar and shows the
@@ -29,8 +29,8 @@ enabled = true
 template = "#[align=right]#[popup=btop]CPU MEM#[nopopup] #[popup=date]%H:%M#[nopopup]"
 
 [mode.normal.mappings]
-"'t" = ["flash", "popup_show"]               # the built-in shell popup
-"'b" = ["flash", "popup_show", "--name=btop"]
+"'t" = ["flash", "enter_terminal_mode"]               # the built-in terminal popup
+"'b" = ["flash", "enter_terminal_mode", "--name=btop"]
 ```
 
 See the [example status strip](examples/statusbar/README.md) for a complete
@@ -105,11 +105,11 @@ hidden ones refit to the main screen. Changing `size`, colours or fonts keeps
 the process; changing `command`, `cwd`, `env` or `persistent` replaces it.
 Removing a declaration stops it.
 
-### The shell popup
+### The terminal popup
 
-`config.default.toml` declares one terminal popup, `shell`: a fresh login
-shell, `["$SHELL", "-l"]`, in the home directory. `popup_show` without a name
-opens it. Redeclare `[popup.shell]` to change it.
+`config.default.toml` declares one terminal popup, `terminal`: a fresh login
+shell, `["$SHELL", "-l"]`, in the home directory. `enter_terminal_mode` without
+a name opens it. Redeclare `[popup.terminal]` to change it.
 
 ## Lifecycles
 
@@ -134,12 +134,12 @@ the program to start. The next process starts once the previous one is gone,
 so a program holding a lock (newsboat's cache) can start again; after a
 process that ended by itself it starts with the restart backoff above, so a
 command that exits at once cannot spin. A popup counts as openable when it
-appears in a `#[popup=<name>]` marker of the enabled bar's template, options or
-text popups, in a `[statusbar.click]` `popup_show` action, or in a
-`popup_show` mapping of any scope (`popup_show` without a name counts for
-`shell`). Any other fresh popup starts when it is opened: on `popup_show`, or
-on hover after a 150 ms dwell with the pointer still on its label, so sweeping
-across the bar never forks one child per label.
+appears in a `#[popup=<name>]` marker of the enabled bar's template or text
+popups, in a `[statusbar.click]` `enter_terminal_mode` action, or in an
+`enter_terminal_mode` mapping of any scope (`enter_terminal_mode` without a
+name counts for `terminal`). Any other fresh popup starts when it is opened: on
+`enter_terminal_mode`, or on hover after a 150 ms dwell with the pointer still
+on its label, so sweeping across the bar never forks one child per label.
 
 A text popup's pager is fresh too: it starts when the popup shows and stops,
 removing its snapshot file, when it closes.
@@ -160,29 +160,32 @@ Labels with a click action or link keep their left-click action; right-click
 or Option-click pins their popup. A pinned popup stays anchored while the
 pointer moves.
 
-**`popup_show --name=<name>`** shows a popup standalone, centred on the focused
-application's screen and focused. Without a name it opens `shell`. A text popup
-shows the document the status bar last evaluated, so it needs
-`[statusbar] enabled = true`; without it Flash logs a warning and shows
-nothing. One popup shows at a time: showing another hides a persistent one and
-stops a fresh one. Hover and article rotation never replace a standalone popup.
+**`enter_terminal_mode --name=<name>`** shows a popup standalone, centred on
+the focused application's screen and focused. Without a name it opens
+`terminal`. A text popup shows the document the status bar last evaluated, so
+it needs `[statusbar] enabled = true`; without it Flash logs a warning and
+shows nothing. One popup shows at a time: entering another hides a persistent
+one and stops a fresh one, and entering the popup already focused does
+nothing. Hover and article rotation never replace a standalone popup.
 
-A focused popup puts Flash in TERMINAL mode (the mode label is
+A focused popup, whether entered with `enter_terminal_mode`, pinned from the
+bar or clicked, puts Flash in TERMINAL mode (the mode label is
 `mode.labels.terminal`): its terminal receives every key its
 `[mode.terminal.mappings]` leave alone, and plain Escape reaches the program.
-The default mappings are:
+`leave_mode` leaves TERMINAL like any other mode: it closes the popup and
+restores the previous mode and application. The default mappings are:
 
 ```toml
 [mode.terminal.mappings]
 "cmd+q" = ["flash", "popup_quit"]    # stop the process
 "cmd+r" = ["flash", "popup_restart"] # restart it now
-"cmd+w" = ["flash", "popup_dismiss"] # close the popup
+"cmd+w" = ["flash", "leave_mode"]    # close the popup
 ```
 
 | Verb | Effect |
 | --- | --- |
-| `popup_show [--name=N]` | Show `N` (default `shell`) standalone and focus it |
-| `popup_dismiss` | Close the focused popup and restore the previous app |
+| `enter_terminal_mode [--name=N]` | Show `N` (default `terminal`) standalone and focus it |
+| `leave_mode` | Close the focused popup and restore the previous mode and app |
 | `popup_restart [--name=N]` | Restart the focused or named popup's process now |
 | `popup_quit [--name=N]` | End the focused or named popup's process |
 

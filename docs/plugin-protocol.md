@@ -53,7 +53,7 @@ never spawn at all.
 
 A *status-bound* plugin — `status` with no `sources`, `query` or `hints`, its
 `listen` subscriptions presumed to feed those segments — is resident only while
-the enabled status bar, its options, one of its popups or a desktop widget
+the enabled status bar, one of its popups or a desktop widget
 shows one of its segments; otherwise it is on-demand. A config reload that
 starts showing it spawns it; one that stops showing it stops the process and
 returns it to on-demand, unless a command started it, since on-demand plugins
@@ -265,8 +265,8 @@ cadence only while `top_cpu` or `top_mem` is observed.
   nothing is observed. Names the manifest does not declare never appear,
   and no other plugin's segments do. Other payload keys are ignored.
 - **Observed.** A segment is observed while a live surface would resolve
-  `#{flash.plugin.<id>.<segment>}`: the enabled bar's template and the
-  options it expands, its named popups, and desktop widgets. These are the
+  `#{flash.plugin.<id>.<segment>}`: the enabled bar's template, its named
+  popups, and desktop widgets. These are the
   references that keep a status-bound plugin resident, refined from plugin
   ids to segment names. A disabled bar or a removed widget observes nothing.
 - **Delivery.** Filtered by `listen` like every other event, and not

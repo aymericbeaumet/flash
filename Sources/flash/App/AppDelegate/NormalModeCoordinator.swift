@@ -36,8 +36,9 @@ extension AppDelegate {
 
   func leaveMode() {
     releaseHeldMouseButton(reason: "leave_mode")
+    // TERMINAL mode is a focused popup, text or terminal alike: leaving it
+    // closes the popup and restores the prior base mode and app.
     if modeStore.mode.isTerminal {
-      suppressDismissedPopupHover()
       dismissPopup()
       return
     }
@@ -907,16 +908,14 @@ extension AppDelegate {
       enterNormalMode()
     case .leaveMode:
       leaveMode()
-    case .popupShow(let name):
-      showPopup(named: name)
-    case .popupDismiss:
-      dismissPopup()
     case .popupRestart(let name):
       restartPopup(named: name)
     case .popupQuit(let name):
       quitPopup(named: name)
     case .commandMode:
       enterCommandLineMode()
+    case .terminalMode(let name):
+      enterTerminalMode(named: name)
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
     case .reload(let force):

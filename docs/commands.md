@@ -35,10 +35,10 @@ flash mouse_grid --zoom-to-depth=2       # start two steps deep under the pointe
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
 flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
-flash popup_show                         # show the shell popup; see docs/popups.md
-flash popup_show --name=btop             # show a [popup.<name>] centred and focused
 flash enter_command_mode                 # open the command line
-flash leave_mode                         # leave insert or close the command panel
+flash enter_terminal_mode                # show and focus the terminal popup; see docs/popups.md
+flash enter_terminal_mode --name=btop    # show a [popup.<name>] centred and focused
+flash leave_mode                         # leave insert, or close the command panel or popup
 flash help_show                          # show built-in help
 flash plugins                            # inspect plugins
 flash about                              # open the About Flash window

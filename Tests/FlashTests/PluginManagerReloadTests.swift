@@ -110,7 +110,7 @@ final class PluginManagerReloadTests: XCTestCase {
           id: "statusbar.template.flash.plugin.mgrbound.state",
           token: "flash.plugin.mgrbound.state",
           source: .plugin(.statusSegment(pluginID: "mgrbound", name: "state")))
-      ], options: [:])
+      ])
     manager.start(config: config)
     waitUntilTrue("registered") { self.status(manager, "mgrbound")?.activation == "on_demand" }
     settleRunLoop(0.3)

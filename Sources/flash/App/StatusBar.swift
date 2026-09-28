@@ -223,20 +223,17 @@ struct FlashStatusBarTemplate: Equatable {
     didSet { program = StatusFormatProgram.compile(source: template, origin: program.origin) }
   }
   var variables: [FlashStatusBarTemplateVariable]
-  var options: [String: String]
   var sourceNames: Set<String>
   var program: StatusFormatProgram
 
   init(
     template: String,
     variables: [FlashStatusBarTemplateVariable] = [],
-    options: [String: String] = [:],
     sourceNames: Set<String> = [],
     origin: StatusFormatOrigin = .init()
   ) {
     self.template = template
     self.variables = variables
-    self.options = options
     self.sourceNames = sourceNames
     self.program = StatusFormatProgram.compile(source: template, origin: origin)
   }
@@ -383,7 +380,6 @@ struct FlashStatusBarSourceDefinition: Equatable {
 /// What the status controller evaluates for one desktop widget. Style and
 /// placement stay with the window side; this is only the text's inputs.
 struct StatusWidgetSpec: Equatable {
-  /// Compiled with the widget's local options over `[statusbar.options]`.
   var template: FlashStatusBarTemplate
   /// Clock and `#()` refresh cadence; 0 follows `[statusbar] interval`.
   var intervalSeconds: TimeInterval = 0
@@ -398,12 +394,11 @@ enum FlashStatusBarTemplateEngine {
     context: FlashStatusBarContext,
     dynamicValues: [String: String] = [:],
     jobValues: [String: String] = [:],
-    options: [String: String] = [:],
     terminalPopupNames: Set<String> = []
   ) -> FlashStatusBarModel {
     evaluate(
       template: template, popupTemplates: popupTemplates, context: context,
-      dynamicValues: dynamicValues, jobValues: jobValues, options: options,
+      dynamicValues: dynamicValues, jobValues: jobValues,
       terminalPopupNames: terminalPopupNames
     ).model
   }
@@ -449,7 +444,6 @@ enum FlashStatusBarTemplateEngine {
     context: FlashStatusBarContext,
     dynamicValues: [String: String] = [:],
     jobValues: [String: String] = [:],
-    options: [String: String] = [:],
     terminalPopupNames: Set<String> = [],
     nativeContext: StatusFormatContext? = nil,
     popupCache: PopupEvaluationCache? = nil
@@ -457,9 +451,8 @@ enum FlashStatusBarTemplateEngine {
     model: FlashStatusBarModel, jobs: [StatusFormatJobRequest], sources: Set<String>,
     needsClock: Bool, dependencies: StatusFormatDependencies
   ) {
-    var native =
+    let native =
       nativeContext ?? formatContext(context, dynamicValues: dynamicValues, jobValues: jobValues)
-    native.options = options.merging(template.options) { _, local in local }
     let result = template.program.evaluate(native, expandTime: true)
     let document = StatusFormatDocument.parse(result)
     func barRuns(_ alignment: StatusFormatAlignment) -> [FlashStatusTextSegment] {
@@ -477,17 +470,15 @@ enum FlashStatusBarTemplateEngine {
     var dependencies = result.dependencies
     for name in popupTemplates.keys.sorted() {
       guard let popup = popupTemplates[name] else { continue }
-      var popupContext = native
-      popupContext.options.merge(popup.options) { _, local in local }
       if let memo = popupCache?.memos[name],
-        EvaluationInputs.capture(dependencies: memo.dependencies, native: popupContext)
+        EvaluationInputs.capture(dependencies: memo.dependencies, native: native)
           == memo.inputs
       {
         dependencies.formUnion(memo.dependencies)
         popups[name] = memo.runs
         continue
       }
-      let expanded = evaluateDocument(popup, native: popupContext)
+      let expanded = evaluateDocument(popup, native: native)
       jobs.append(contentsOf: expanded.jobs)
       dependencies.formUnion(expanded.dependencies)
       let runs = trimmedPopupRuns(expanded.runs)
@@ -498,7 +489,7 @@ enum FlashStatusBarTemplateEngine {
         popupCache.memos[name] = PopupEvaluationCache.Memo(
           dependencies: expanded.dependencies,
           inputs: EvaluationInputs.capture(
-            dependencies: expanded.dependencies, native: popupContext),
+            dependencies: expanded.dependencies, native: native),
           runs: runs)
       }
     }
@@ -521,9 +512,9 @@ enum FlashStatusBarTemplateEngine {
   }
 
   /// One template evaluated as a free-standing document — a named popup or a
-  /// desktop widget — rather than the bar's three lanes. `native` already
-  /// carries the surface's options (its local options over the shared ones),
-  /// so the caller's memo captures exactly what this evaluation read.
+  /// desktop widget — rather than the bar's three lanes. `native` is the
+  /// surface's context, so the caller's memo captures exactly what this
+  /// evaluation read.
   static func evaluateDocument(
     _ template: FlashStatusBarTemplate, native: StatusFormatContext,
     lineBreaksResetAlignment: Bool = false
@@ -574,6 +565,8 @@ enum FlashStatusBarTemplateEngine {
     return runs
   }
 
+  /// The bar is one line: its drawn text drops every newline and carriage
+  /// return, whether the template or an expanded value wrote it.
   static func normalizedTemplate(_ raw: String) -> String {
     raw.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
   }

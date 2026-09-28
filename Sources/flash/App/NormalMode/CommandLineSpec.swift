@@ -88,7 +88,7 @@ extension NormalModeDispatcher {
 
   static let popupCommandSyntax = Dictionary(
     uniqueKeysWithValues: [
-      "popup_show", "popup_dismiss", "popup_restart", "popup_quit",
+      "enter_terminal_mode", "popup_restart", "popup_quit",
     ].compactMap {
       name in
       URLEventHandler.syntax(for: name, prefix: ":").map { (name, $0) }
@@ -398,8 +398,7 @@ extension NormalModeDispatcher {
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
-    "popup_show": "Show a popup; without --name, the shell popup",
-    "popup_dismiss": "Close the focused popup; persistent processes keep running",
+    "enter_terminal_mode": "Show and focus a popup; without --name, the terminal popup",
     "popup_restart": "Restart the focused or named popup's process",
     "popup_quit": "Quit the focused or named popup's process; persistent popups restart",
   ]
@@ -601,10 +600,8 @@ extension NormalModeDispatcher {
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
     }
     for name in popupCommandSyntax.keys.sorted() where seen.insert(name).inserted {
-      let kind: CommandLineCompletion.Kind = name == "popup_dismiss" ? .terminal : .acceptsArgs
       items.append(
-        CommandLineCompletion(
-          label: name, insertion: kind == .acceptsArgs ? "\(name) " : name, kind: kind))
+        CommandLineCompletion(label: name, insertion: "\(name) ", kind: .acceptsArgs))
     }
     let dedupedPlugins = Array(Set(pluginCommands.map { $0.lowercased() })).sorted()
     for command in dedupedPlugins where seen.insert(command).inserted {

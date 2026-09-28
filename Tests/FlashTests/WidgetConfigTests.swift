@@ -35,8 +35,6 @@ final class WidgetConfigTests: XCTestCase {
       padding = 6
       interval = 1
       hide_from_capture = true
-      [widgets.clock.options]
-      "@x" = "local"
       """#)
     XCTAssertEqual(messages(config), [])
     let widget = try XCTUnwrap(config.widgets["clock"])
@@ -61,7 +59,6 @@ final class WidgetConfigTests: XCTestCase {
     XCTAssertEqual(widget.padding, 6)
     XCTAssertEqual(widget.intervalSeconds, 1)
     XCTAssertTrue(widget.hideFromCapture)
-    XCTAssertEqual(widget.template.options["@x"], "local")
     XCTAssertEqual(widget.spec.columns, 30)
     XCTAssertEqual(config.enabledWidgets.count, 0)
   }
@@ -131,19 +128,15 @@ final class WidgetConfigTests: XCTestCase {
   func testWidgetTemplatesReadWidgetAndHistoryValues() {
     let config = ConfigLoader.parse(
       """
-      [statusbar]
-      template = "#{E:@rule}"
-      [statusbar.options]
-      "@rule" = "#{R:-,#{flash.widget.columns}}"
       [statusbar.sources.load]
       command = ["/bin/load"]
       history = 30
       [statusbar.sources.plain]
       command = ["/bin/plain"]
       [widgets.w]
-      template = "#{flash.widget.name} #{flash.widget.columns} #{flash.history.load} #{E:@rule}"
+      template = "#{flash.widget.name} #{flash.widget.columns} #{flash.history.load} #{R:-,#{flash.widget.columns}}"
       """)
-    XCTAssertEqual(messages(config), [], "a shared option may mention widget values")
+    XCTAssertEqual(messages(config), [])
     XCTAssertEqual(config.statusBar.sources["load"]?.historyLength, 30)
     XCTAssertNil(config.statusBar.sources["plain"]?.historyLength)
 
@@ -182,33 +175,37 @@ final class WidgetConfigTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [widgets.w]
-      template = "#[link=https://example.com]a#[nolink] #[range=user|x]b #{@p}"
-      [widgets.w.options]
-      "@p" = "#[popup=cpu]c#[nopopup]"
+      template = "#[link=https://example.com]a#[nolink] #[range=user|x]b #[popup=cpu]c#[nopopup]"
       """)
     let warnings = messages(config).filter { $0.contains("click-through") }
     XCTAssertEqual(warnings.count, 1)
     XCTAssertTrue(warnings[0].contains("link=, popup=, range="), warnings[0])
   }
 
-  func testLocalOptionsOverrideTheSharedOnes() {
+  /// A widget's format is written inline: `options` tables are rejected with
+  /// where their formats go now.
+  func testOptionsTablesAreRejectedWithTheInlineTemplate() {
     let config = ConfigLoader.parse(
       """
       [statusbar.options]
       "@a" = "shared"
-      "@b" = "shared"
       [widgets.w]
-      template = "#{@a} #{@b}"
+      template = "#{@a}"
       [widgets.w.options]
       "@a" = "local"
       """)
+    XCTAssertEqual(
+      Set(messages(config)),
+      [
+        "[statusbar.options] is not read; write its formats inline in [statusbar] template",
+        "[widgets.w.options] is not read; write its formats inline in [widgets.w] template",
+      ])
+    XCTAssertTrue(config.loadingDiagnostics.allSatisfy { $0.location != nil })
     let template = config.widgets["w"]!.template
-    XCTAssertEqual(template.options["@a"], "local")
-    XCTAssertEqual(template.options["@b"], "shared")
-    var native = FlashStatusBarTemplateEngine.formatContext(.init())
-    native.options = config.statusBar.options.merging(template.options) { _, local in local }
-    let runs = FlashStatusBarTemplateEngine.evaluateDocument(template, native: native).runs
-    XCTAssertEqual(runs.map(\.text).joined(), "local shared")
+    let runs = FlashStatusBarTemplateEngine.evaluateDocument(
+      template, native: FlashStatusBarTemplateEngine.formatContext(.init())
+    ).runs
+    XCTAssertEqual(runs.map(\.text).joined(), "", "no option is set")
   }
 
   func testObservedSegmentsUnionTheBarAndEnabledWidgets() {
@@ -217,9 +214,7 @@ final class WidgetConfigTests: XCTestCase {
       enabled = false
       template = "#{flash.plugin.cpu.summary}"
       [widgets.top]
-      template = "#{flash.plugin.processes.top_cpu} #{E:@mem}"
-      [widgets.top.options]
-      "@mem" = "#{flash.plugin.processes.top_mem}"
+      template = "#{flash.plugin.processes.top_cpu} #{flash.plugin.processes.top_mem}"
       [widgets.off]
       enabled = false
       template = "#{flash.plugin.memory.details}"
@@ -254,7 +249,7 @@ final class WidgetConfigTests: XCTestCase {
     XCTAssertEqual(config.loadingDiagnostics.map(\.logMessage), [])
     let widget = try XCTUnwrap(config.widgets["system"])
     XCTAssertEqual(widget.anchor, .topRight)
-    XCTAssertEqual(widget.template.options["@sep"], " · ")
+    XCTAssertTrue(widget.template.template.contains("%% · MEM"))
     XCTAssertEqual(config.observedStatusSegments()["processes"], ["top_cpu"])
     XCTAssertEqual(ConfigLoader.parse(try String(contentsOf: url, encoding: .utf8)).widgets, [:])
   }

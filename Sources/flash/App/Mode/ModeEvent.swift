@@ -28,7 +28,8 @@ enum ModeEvent: Equatable {
   /// Command-line submit or cancel — both close the surface to its `restoreTo`.
   case closeCommand(reason: String)
 
-  /// A popup body was clicked and its local view became the input owner.
+  /// A popup's local view became the input owner: `enter_terminal_mode`, a
+  /// click on a popup body, or a pinned status label.
   case openTerminal
 
   /// Restore the base mode; an explicit dismissal can reactivate its prior app.
