@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use applescript::{Dialect, CHROMIUM, SAFARI};
+use applescript::{Dialect, ListedTab, TabSlot, CHROMIUM, SAFARI};
 use firefox::StripPosition;
 use flash_plugin::{
-    run, run_osascript, ActionRequest, AppWatch, Candidate, Context, Event, NavigateRequest,
-    PerformResponse, RefreshGate, RunningApplication,
+    run, run_osascript, ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event,
+    NavigateRequest, PerformResponse, RefreshGate, RunningApplication,
 };
-use route::{TabRoute, TabTarget};
+use route::TabRoute;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
@@ -191,6 +191,10 @@ struct TabPayload {
     /// Firefox strip position, for the key fast path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     strip: Option<StripPosition>,
+    /// A scripted browser's window and tab indexes at listing, so a pick
+    /// selects the listed one of several identical tabs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slot: Option<TabSlot>,
 }
 
 /// One tab row. A tab without a title shows its URL.
@@ -589,18 +593,23 @@ async fn list_scripted(
         return None;
     }
     let rows = applescript::parse_tab_list(&result.stdout)
-        .into_iter()
-        .map(|tab| {
-            let payload = TabPayload {
-                bundle_id: browser.bundle_id.to_string(),
-                app_name: label.to_string(),
-                url: tab.url.clone(),
-                strip: None,
-            };
-            tab_candidate(browser, pid, &tab.title, &tab.url, tab.current, &payload)
-        })
+        .iter()
+        .map(|tab| scripted_row(browser, label, pid, tab))
         .collect();
     Some(rows)
+}
+
+/// One scripted tab's row: every listed tab is its own row, its payload
+/// naming the slot it was listed at.
+fn scripted_row(browser: &Browser, label: &str, pid: i64, tab: &ListedTab) -> Candidate {
+    let payload = TabPayload {
+        bundle_id: browser.bundle_id.to_string(),
+        app_name: label.to_string(),
+        url: tab.url.clone(),
+        strip: None,
+        slot: Some(tab.slot),
+    };
+    tab_candidate(browser, pid, &tab.title, &tab.url, tab.current, &payload)
 }
 
 /// Apply one catalog update and publish its result, if any, under the
@@ -735,30 +744,58 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
         Engine::Gecko => return firefox::resolve(ctx, pid, row, &tab).await,
         Engine::AppleScript(dialect) => dialect,
     };
-    ctx.activate(pid).await;
-    let route = TabRoute::new(pid, &tab.url, &row.title);
-    if tab.url.is_empty() {
-        return performed(pid, route);
-    }
     let label = if tab.app_name.is_empty() {
         browser.app_name
     } else {
         tab.app_name.as_str()
     };
-    let script = dialect.select_script(label, &TabTarget::Url(tab.url.clone()));
+    let Some((route, script)) = scripted_pick(dialect, label, pid, &tab, &row.title) else {
+        return PerformResponse::fail("tab has neither a URL nor a title");
+    };
+    ctx.activate(pid).await;
     let result = run_osascript(ctx, &script, LIST_TIMEOUT).await;
+    log_unconfirmed(ctx, "tab-select", pid, &result);
+    scripted_outcome(route, result.ok, &result.stdout)
+}
+
+/// The route a scripted pick lands on and the script selecting it: the tab
+/// by URL, or by title when it exposes no URL (the row's title is then the
+/// page's own), trying the listed slot first. `None` without either.
+fn scripted_pick(
+    dialect: &Dialect,
+    label: &str,
+    pid: i64,
+    tab: &TabPayload,
+    title: &str,
+) -> Option<(TabRoute, String)> {
+    let route = TabRoute::new(pid, &tab.url, title)?;
+    let script = dialect.select_script(label, &route.target, tab.slot);
+    Some((route, script))
+}
+
+/// A select script's reply: `performed` on the route only when the script
+/// confirmed the tab (`ok`). Anything else (`missing`, a failed script) is
+/// an error, so the host neither records a jump the user never made nor
+/// falls back to another effect.
+fn scripted_outcome(route: TabRoute, ok: bool, stdout: &str) -> PerformResponse {
+    if ok && stdout.trim() == "ok" {
+        performed(route.pid, Some(route))
+    } else {
+        PerformResponse::fail("tab not found")
+    }
+}
+
+fn log_unconfirmed(ctx: &Context, what: &str, pid: i64, result: &CommandOutput) {
     if !result.ok || result.stdout.trim() != "ok" {
         ctx.log(
             "warn",
             &format!(
-                "[browsers] tab-select did not confirm (ok={}, out={:?})",
+                "[browsers] {what} did not confirm pid={pid} ok={} missing={}",
                 result.ok,
-                result.stdout.trim()
+                result.stdout.trim() == "missing"
             ),
         );
     }
-    // The window was activated regardless, so still report a best-effort raise.
-    performed(pid, route)
 }
 
 /// Restore a `flash-browser` route in the browser process it names.
@@ -776,20 +813,10 @@ async fn restore_navigation(ctx: &Context, request: &NavigateRequest) -> Perform
         Engine::Gecko => return firefox::restore(ctx, &route).await,
         Engine::AppleScript(dialect) => dialect,
     };
-    let script = dialect.select_script(&app.label, &route.target);
+    let script = dialect.select_script(&app.label, &route.target, None);
     let result = run_osascript(ctx, &script, ACTION_TIMEOUT).await;
-    if result.ok && result.stdout.trim() == "ok" {
-        performed(route.pid, Some(route))
-    } else {
-        ctx.log(
-            "warn",
-            &format!(
-                "[browsers] restore target not found pid={} (ok={})",
-                route.pid, result.ok
-            ),
-        );
-        PerformResponse::fail("restore target not found")
-    }
+    log_unconfirmed(ctx, "restore", route.pid, &result);
+    scripted_outcome(route, result.ok, &result.stdout)
 }
 
 async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformResponse {
@@ -848,7 +875,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flash_plugin::candidate_metadata::NAVIGATION_URL;
+    use crate::route::TabTarget;
+    use flash_plugin::candidate_metadata::{CURRENT_LOCATION, NAVIGATION_URL};
     use flash_plugin::ActionContext;
 
     #[test]
@@ -934,6 +962,7 @@ mod tests {
             app_name: "Google Chrome".into(),
             url: "https://example.com/page".into(),
             strip: None,
+            slot: None,
         };
         let row = tab_candidate(
             chrome,
@@ -959,6 +988,82 @@ mod tests {
                 .unwrap()
                 .target,
             TabTarget::Title("Docs".into())
+        );
+    }
+
+    #[test]
+    fn a_scripted_pick_selects_a_tab_without_a_url_by_its_title() {
+        let payload = TabPayload {
+            bundle_id: "com.apple.Safari".into(),
+            app_name: "Safari".into(),
+            url: String::new(),
+            strip: None,
+            slot: Some(TabSlot { window: 1, tab: 2 }),
+        };
+        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &payload, "Docs").unwrap();
+        assert_eq!(route, TabRoute::new(7, "", "Docs").unwrap());
+        assert!(script.contains(r#"set targetValue to "Docs""#));
+        assert!(script.contains("if (name of t as text) is targetValue then"));
+        assert!(script.contains("set t to tab 2 of w"));
+        // A URL, when the tab has one, is the identity.
+        let with_url = TabPayload {
+            url: "https://docs.example/".into(),
+            ..payload.clone()
+        };
+        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &with_url, "Docs").unwrap();
+        assert_eq!(route.target, TabTarget::Url("https://docs.example/".into()));
+        assert!(script.contains("if (URL of t as text) is targetValue then"));
+        // Nothing to select by.
+        assert!(scripted_pick(&SAFARI, "Safari", 7, &TabPayload::default(), "").is_none());
+    }
+
+    #[test]
+    fn a_scripted_selection_performs_only_when_the_script_confirms_the_tab() {
+        let route = TabRoute::new(7, "", "Docs").unwrap();
+        let confirmed = scripted_outcome(route.clone(), true, "ok\n");
+        assert!(confirmed.is_ok());
+        let wire = serde_json::to_value(&confirmed).unwrap();
+        assert_eq!(wire["target_pid"], serde_json::json!(7));
+        assert_eq!(
+            wire["navigation_url"].as_str(),
+            Some(route.to_url().as_str())
+        );
+        // `missing` or a failed script: an error, so the host neither
+        // records the jump nor falls back.
+        for (ok, stdout) in [(true, "missing\n"), (false, ""), (false, "ok\n")] {
+            let response = scripted_outcome(route.clone(), ok, stdout);
+            assert!(!response.is_ok(), "{ok} {stdout:?}");
+            assert!(!response.is_unhandled(), "{ok} {stdout:?}");
+        }
+    }
+
+    #[test]
+    fn identical_scripted_tabs_stay_distinct_rows() {
+        let chrome = browser_for("com.google.Chrome").unwrap();
+        let listed = applescript::parse_tab_list(
+            "1\t1\t0\thttps://mail.example/\tInbox\n\
+             1\t2\t1\thttps://mail.example/\tInbox\n",
+        );
+        let rows: Vec<Candidate> = listed
+            .iter()
+            .map(|tab| scripted_row(chrome, "Google Chrome", 42, tab))
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_ne!(rows[0], rows[1]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.payload_as::<TabPayload>().unwrap().slot)
+                .collect::<Vec<_>>(),
+            [
+                Some(TabSlot { window: 1, tab: 1 }),
+                Some(TabSlot { window: 1, tab: 2 })
+            ]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.meta(CURRENT_LOCATION))
+                .collect::<Vec<_>>(),
+            [None, Some("1")]
         );
     }
 

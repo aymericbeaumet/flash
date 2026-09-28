@@ -88,59 +88,50 @@ pub(super) fn nth_tab_in_front_window(strip: &Strip, index: usize) -> Option<&Ta
         .nth(index.checked_sub(1)?)
 }
 
-/// Verify a keystroke jump once the chord chain has landed, and correct
+/// Confirm a keystroke jump once the chord chain has landed, correcting
 /// through the AX ladder when the strip drifted since the row was emitted.
-/// Detached: the pick was already answered.
-pub(super) fn spawn_fast_jump_verify(
+/// `true` only once the requested tab is selected.
+pub(super) async fn confirm_fast_jump(
     ctx: &Context,
     pid: i64,
     url: &str,
     name: &str,
     plan_len: usize,
-) {
-    let ctx = ctx.clone();
-    let url = url.to_string();
-    let name = name.to_string();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(120 + 40 * plan_len as u64)).await;
-        let _ax = ax::session(pid).lock_owned().await;
-        let strip = walk(&ctx, pid).await.unwrap_or_default();
-        let corrected = match find_tab(&strip.tabs, &url, &name) {
-            Some(hit) if hit.selected => {
-                ctx.log(
-                    "debug",
-                    &format!("[browsers] firefox fast tab jump verified pid={pid}"),
-                );
-                return;
-            }
-            Some(hit) => {
-                ctx.log(
-                    "debug",
-                    &format!(
-                        "[browsers] firefox fast tab jump missed; correcting via AX pid={pid}"
-                    ),
-                );
-                let target = hit.clone();
-                select_tab(&ctx, pid, &target).await
-            }
-            None => match activate_and_find_tab(&ctx, pid, &url, &name).await {
-                Some(target) => select_tab(&ctx, pid, &target).await,
-                None => false,
-            },
-        };
-        if !corrected {
+) -> bool {
+    tokio::time::sleep(Duration::from_millis(120 + 40 * plan_len as u64)).await;
+    let session = ax::session(pid);
+    let _ax = session.lock().await;
+    let strip = collect(ctx, pid).await;
+    match find_tab(&strip.tabs, url, name, UrlFallback::Exact) {
+        Some(hit) if hit.selected => {
             ctx.log(
-                "warn",
-                &format!("[browsers] firefox fast tab jump could not be corrected pid={pid}"),
+                "debug",
+                &format!("[browsers] firefox fast tab jump verified pid={pid}"),
             );
+            true
         }
-    });
+        Some(hit) => {
+            ctx.log(
+                "debug",
+                &format!("[browsers] firefox fast tab jump missed; correcting via AX pid={pid}"),
+            );
+            let target = hit.clone();
+            select_tab(ctx, pid, &target).await
+        }
+        None => match activate_and_find_tab(ctx, pid, url, name).await {
+            Some(target) => select_tab(ctx, pid, &target).await,
+            None => false,
+        },
+    }
 }
 
 /// Raise Firefox and locate the `url` / `name` tab. The walk races the raise,
-/// and a unique hit needs no store read. `AXWindows` can be empty or partial
-/// while Firefox is still activating (coming forward from another Space), so
-/// a full miss retries once after the activation settles.
+/// and an exact hit needs no store read. The strip seldom exposes URLs, so a
+/// URL request completes the walk with the store's before matching again.
+/// `AXWindows` can be empty or partial while Firefox is still activating
+/// (coming forward from another Space), so a miss retries once after the
+/// activation settles: only that last pass lets a title stand in for a URL
+/// no tab reports ([`UrlFallback::UnknownUrl`]).
 pub(super) async fn activate_and_find_tab(
     ctx: &Context,
     pid: i64,
@@ -149,40 +140,54 @@ pub(super) async fn activate_and_find_tab(
 ) -> Option<Tab> {
     let (_, strip) = tokio::join!(ctx.activate(pid), walk(ctx, pid));
     let mut strip = strip.unwrap_or_default();
-    if let Some(tab) = find_tab_unambiguous(&strip.tabs, url, name) {
+    if let Some(tab) = find_tab(&strip.tabs, url, name, UrlFallback::Exact) {
         return Some(tab.clone());
     }
-    fill_from_store(pid, &mut strip).await;
-    if let Some(tab) = find_tab(&strip.tabs, url, name) {
-        return Some(tab.clone());
+    if !url.is_empty() {
+        fill_from_store(pid, &mut strip).await;
+        if let Some(tab) = find_tab(&strip.tabs, url, name, UrlFallback::Exact) {
+            return Some(tab.clone());
+        }
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
     let strip = collect(ctx, pid).await;
-    find_tab(&strip.tabs, url, name).cloned()
+    find_tab(&strip.tabs, url, name, UrlFallback::UnknownUrl).cloned()
 }
 
-/// Match `url` (primary key), then `name`.
-fn find_tab<'a>(tabs: &'a [Tab], url: &str, name: &str) -> Option<&'a Tab> {
-    tabs.iter()
-        .find(|tab| !url.is_empty() && tab.url == url)
-        .or_else(|| {
-            tabs.iter()
-                .find(|tab| !name.is_empty() && tab.title == name)
+/// Whether a URL request may settle for a title, in [`find_tab`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UrlFallback {
+    /// The URL or nothing.
+    Exact,
+    /// Else the one tab carrying the title, when its URL is unknown.
+    UnknownUrl,
+}
+
+/// The requested tab: the URL is its identity when the request has one,
+/// else the title. Among several such tabs, a selected one (a jump that
+/// already landed), else the first. A URL request matches by title only as
+/// `fallback` allows, and never a tab whose URL is known (it is another
+/// tab) or whose title another tab shares (it may be).
+fn find_tab<'a>(tabs: &'a [Tab], url: &str, name: &str, fallback: UrlFallback) -> Option<&'a Tab> {
+    let hits: Vec<&Tab> = tabs
+        .iter()
+        .filter(|tab| {
+            if url.is_empty() {
+                !name.is_empty() && tab.title == name
+            } else {
+                tab.url == url
+            }
         })
-}
-
-/// Match against a walk without store URLs: the URL when the strip exposes
-/// one, else a title unique across every window. Ambiguity returns `None`
-/// so the caller can disambiguate with the store's URLs.
-fn find_tab_unambiguous<'a>(tabs: &'a [Tab], url: &str, name: &str) -> Option<&'a Tab> {
-    if let Some(hit) = tabs.iter().find(|tab| !url.is_empty() && tab.url == url) {
+        .collect();
+    if let Some(hit) = hits.iter().find(|tab| tab.selected).or(hits.first()) {
         return Some(hit);
     }
-    let mut hits = tabs
-        .iter()
-        .filter(|tab| !name.is_empty() && tab.title == name);
-    match (hits.next(), hits.next()) {
-        (Some(only), None) => Some(only),
+    if url.is_empty() || name.is_empty() || fallback == UrlFallback::Exact {
+        return None;
+    }
+    let mut titled = tabs.iter().filter(|tab| tab.title == name);
+    match (titled.next(), titled.next()) {
+        (Some(only), None) if only.url.is_empty() => Some(only),
         _ => None,
     }
 }
@@ -268,7 +273,7 @@ fn same_tab(tab: &Tab, target: &Tab) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::firefox::fixtures::{strip, tab};
+    use crate::firefox::fixtures::{ax_reply, serve_host, strip, tab};
 
     #[test]
     fn tab_select_index_stays_inside_the_front_window() {
@@ -293,53 +298,94 @@ mod tests {
     }
 
     #[test]
-    fn find_tab_prefers_url_then_title() {
+    fn find_tab_matches_the_url_else_the_title_of_a_url_less_request() {
         let tabs = [
             tab(0, "Inbox", "https://mail.example.com/"),
             tab(0, "Inbox", "https://other.example.com/"),
             tab(0, "Docs", ""),
         ];
+        let find = |url, name, fallback| find_tab(&tabs, url, name, fallback).map(|tab| &tab.url);
         assert_eq!(
-            find_tab(&tabs, "https://other.example.com/", "Inbox")
-                .unwrap()
-                .url,
+            find("https://other.example.com/", "Inbox", UrlFallback::Exact).unwrap(),
             "https://other.example.com/"
         );
-        assert_eq!(find_tab(&tabs, "", "Docs").unwrap().title, "Docs");
-        // A stale URL (the tab navigated away) still lands on the title.
         assert_eq!(
-            find_tab(&tabs, "https://gone.example.com/", "Docs")
+            find_tab(&tabs, "", "Docs", UrlFallback::Exact)
                 .unwrap()
                 .title,
             "Docs"
         );
-        assert!(find_tab(&tabs, "https://gone.example.com/", "Nope").is_none());
-        assert!(find_tab(&tabs, "", "").is_none());
+        assert!(find("", "", UrlFallback::UnknownUrl).is_none());
+        assert!(find("https://gone.example.com/", "Nope", UrlFallback::UnknownUrl).is_none());
     }
 
     #[test]
-    fn find_tab_unambiguous_requires_a_unique_title_hit() {
-        let unique = [tab(0, "Docs", ""), tab(0, "Inbox", "")];
+    fn a_url_request_never_settles_for_another_tabs_title() {
+        let url = "https://mail.example.com/b";
+        // The "Inbox" here is another account's: its URL is known.
+        let known = [
+            tab(0, "Inbox", "https://mail.example.com/a"),
+            tab(0, "Docs", "https://docs.example.com/"),
+        ];
+        for fallback in [UrlFallback::Exact, UrlFallback::UnknownUrl] {
+            assert!(find_tab(&known, url, "Inbox", fallback).is_none());
+        }
+        // An unknown URL lets a unique title stand in, on the last pass only.
+        let unknown = [
+            tab(0, "Inbox", ""),
+            tab(0, "Docs", "https://docs.example.com/"),
+        ];
+        assert!(find_tab(&unknown, url, "Inbox", UrlFallback::Exact).is_none());
         assert_eq!(
-            find_tab_unambiguous(&unique, "https://gone.example.com/", "Docs")
+            find_tab(&unknown, url, "Inbox", UrlFallback::UnknownUrl)
                 .unwrap()
                 .title,
-            "Docs"
+            "Inbox"
         );
-        // Same-titled tabs without URLs are ambiguous: the caller must
-        // disambiguate with the store's URLs instead of taking the first.
-        let dup = [tab(0, "Inbox", ""), tab(1, "Inbox", "")];
-        assert!(find_tab_unambiguous(&dup, "", "Inbox").is_none());
-        let with_urls = [
-            tab(0, "Inbox", "https://a.example.com/"),
-            tab(0, "Inbox", "https://b.example.com/"),
+        // Not when another tab carries the title too.
+        let shared = [tab(0, "Inbox", ""), tab(1, "Inbox", "")];
+        assert!(find_tab(&shared, url, "Inbox", UrlFallback::UnknownUrl).is_none());
+    }
+
+    #[test]
+    fn identical_tabs_resolve_to_the_selected_one() {
+        let mut tabs = [
+            tab(0, "Inbox", "https://mail.example.com/"),
+            tab(0, "Inbox", "https://mail.example.com/"),
         ];
-        assert_eq!(
-            find_tab_unambiguous(&with_urls, "https://b.example.com/", "Inbox")
-                .unwrap()
-                .url,
-            "https://b.example.com/"
+        tabs[1].selected = true;
+        tabs[1].handle = 2;
+        let hit = find_tab(
+            &tabs,
+            "https://mail.example.com/",
+            "Inbox",
+            UrlFallback::Exact,
         );
+        assert_eq!(hit.unwrap().handle, 2);
+        let hit = find_tab(&tabs, "", "Inbox", UrlFallback::Exact);
+        assert_eq!(hit.unwrap().handle, 2);
+    }
+
+    #[tokio::test]
+    async fn a_url_pick_never_presses_another_tab_that_shares_its_title() {
+        let mut harness = flash_plugin::testing::Harness::new("browsers");
+        let ctx = harness.context();
+        // The one "Inbox" on screen is another account's.
+        let snapshot = ax_reply(&[
+            ("Inbox", "https://mail.example/a", true),
+            ("Docs", "https://docs.example/", false),
+        ]);
+        let task = tokio::spawn(async move {
+            activate_and_find_tab(&ctx, 61_001, "https://mail.example/b", "Inbox")
+                .await
+                .map(|tab| tab.url)
+        });
+        let (found, _) = serve_host(&mut harness, task, |method| match method {
+            "host.ax_snapshot" => snapshot.clone(),
+            _ => json!({"ok": true}),
+        })
+        .await;
+        assert_eq!(found, None);
     }
 
     #[test]

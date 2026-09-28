@@ -3,6 +3,7 @@
 //! phrases below; every script skeleton is shared.
 
 use flash_plugin::applescript_quote;
+use serde::{Deserialize, Serialize};
 
 use crate::route::TabTarget;
 
@@ -49,55 +50,84 @@ pub const SAFARI: Dialect = Dialect {
     scripts_tab_moves: true,
 };
 
+/// Where a listed tab sat: its window's 1-based index (front to back) and
+/// its 1-based position in that window's tabs. The one identity two open
+/// tabs with the same title and URL do not share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabSlot {
+    pub window: usize,
+    pub tab: usize,
+}
+
 /// One row of [`Dialect::list_script`]'s output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedTab {
+    pub slot: TabSlot,
     pub title: String,
     pub url: String,
     /// The front window's current tab.
     pub current: bool,
 }
 
-/// Parse `title<TAB>url<TAB>current` lines. Rows with neither a title nor a
-/// URL are dropped, and identical (title, URL) rows collapse to the first.
+/// Parse `window<TAB>tab<TAB>current<TAB>url<TAB>title` lines, the title last
+/// so a tab character inside it survives. Every open tab is its own row,
+/// identified by its slot: a browser is read once per cycle, so identical
+/// title and URL pairs are distinct tabs. Rows with neither a title nor a
+/// URL, and lines without a valid slot, are dropped.
 pub fn parse_tab_list(stdout: &str) -> Vec<ListedTab> {
-    let mut seen = std::collections::HashSet::new();
-    let mut tabs = Vec::new();
-    for line in stdout.lines() {
-        let mut parts = line.splitn(3, '\t');
-        let title = parts.next().unwrap_or("").trim();
-        let url = parts.next().unwrap_or("").trim();
-        let current = parts.next().is_some_and(|value| value.trim() == "1");
-        if (title.is_empty() && url.is_empty()) || !seen.insert((title, url)) {
-            continue;
-        }
-        tabs.push(ListedTab {
-            title: title.to_string(),
-            url: url.to_string(),
-            current,
-        });
-    }
-    tabs
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(5, '\t');
+            let index = |part: Option<&str>| {
+                part.and_then(|value| value.trim().parse::<usize>().ok())
+                    .filter(|value| *value > 0)
+            };
+            let slot = TabSlot {
+                window: index(parts.next())?,
+                tab: index(parts.next())?,
+            };
+            let current = parts.next().is_some_and(|value| value.trim() == "1");
+            let url = parts.next().unwrap_or("").trim();
+            let title = parts.next().unwrap_or("").trim();
+            if title.is_empty() && url.is_empty() {
+                return None;
+            }
+            Some(ListedTab {
+                slot,
+                title: title.to_string(),
+                url: url.to_string(),
+                current,
+            })
+        })
+        .collect()
 }
 
 impl Dialect {
+    /// Every tab of every window, numbered by the loops rather than read back
+    /// through `index of`: one fewer Apple Event per window and per tab.
     pub fn list_script(&self, app: &str) -> String {
         format!(
             r#"
 set out to ""
+-- Inside the tell block `tab` names the browser's tab class, which coerces to
+-- the word "tab": take the separator from outside it.
+set sep to character id 9
 tell application {app}
+  set windowIndex to 0
   repeat with w in windows
+    set windowIndex to windowIndex + 1
     set activeIndex to 0
     try
       set activeIndex to {active_index}
     end try
+    set tabIndex to 0
     repeat with t in tabs of w
+      set tabIndex to tabIndex + 1
       try
         set isCurrent to "0"
-        try
-          if ((index of w as integer) is 1) and ((index of t as integer) is activeIndex) then set isCurrent to "1"
-        end try
-        set out to out & ({title} of t as text) & tab & (URL of t as text) & tab & isCurrent & linefeed
+        if windowIndex is 1 and tabIndex is activeIndex then set isCurrent to "1"
+        set out to out & (windowIndex as text) & sep & (tabIndex as text) & sep & isCurrent & sep & (URL of t as text) & sep & ({title} of t as text) & linefeed
       end try
     end repeat
   end repeat
@@ -110,26 +140,44 @@ return out
         )
     }
 
-    /// Activate the browser and select the first tab whose URL (or title)
-    /// equals `target`, raising its window. Prints `ok` or `missing`.
-    pub fn select_script(&self, app: &str, target: &TabTarget) -> String {
+    /// Activate the browser and select the tab whose URL (or title) equals
+    /// `target`, raising its window: the tab at `slot` when it still matches
+    /// (so a pick lands on the listed one of several identical tabs), else
+    /// the first match. Prints `ok` or `missing`.
+    pub fn select_script(&self, app: &str, target: &TabTarget, slot: Option<TabSlot>) -> String {
         let (property, value) = match target {
             TabTarget::Url(url) => ("URL", url),
             TabTarget::Title(title) => (self.title, title),
         };
+        let select = format!(
+            r#"if ({property} of t as text) is targetValue then
+          {select_tab}
+          set index of w to 1
+          return "ok"
+        end if"#,
+            select_tab = self.select_tab,
+        );
+        let listed = slot.map_or_else(String::new, |slot| {
+            format!(
+                r#"
+  try
+    set w to window {window}
+    set t to tab {tab} of w
+    {select}
+  end try"#,
+                window = slot.window,
+                tab = slot.tab,
+            )
+        });
         format!(
             r#"
 tell application {app}
   activate
-  set targetValue to {value}
+  set targetValue to {value}{listed}
   repeat with w in windows
     repeat with t in tabs of w
       try
-        if ({property} of t as text) is targetValue then
-          {select_tab}
-          set index of w to 1
-          return "ok"
-        end if
+        {select}
       end try
     end repeat
   end repeat
@@ -138,7 +186,6 @@ return "missing"
 "#,
             app = applescript_quote(app),
             value = applescript_quote(value),
-            select_tab = self.select_tab,
         )
     }
 
@@ -251,44 +298,75 @@ mod tests {
         let by_url = CHROMIUM.select_script(
             "Google Chrome",
             &TabTarget::Url("https://example.com/\"q\"".into()),
+            None,
         );
         assert!(by_url.contains(r#"set targetValue to "https://example.com/\"q\"""#));
         assert!(by_url.contains("if (URL of t as text) is targetValue then"));
-        let by_title = SAFARI.select_script("Safari", &TabTarget::Title("Inbox".into()));
+        let by_title = SAFARI.select_script("Safari", &TabTarget::Title("Inbox".into()), None);
         assert!(by_title.contains("if (name of t as text) is targetValue then"));
         assert!(by_title.contains("set current tab of w to t"));
-        let chromium_title = CHROMIUM.select_script("Arc", &TabTarget::Title("Inbox".into()));
+        let chromium_title = CHROMIUM.select_script("Arc", &TabTarget::Title("Inbox".into()), None);
         assert!(chromium_title.contains("if (title of t as text) is targetValue then"));
     }
 
     #[test]
-    fn tab_lists_drop_blank_rows_and_collapse_duplicates() {
+    fn tab_lists_keep_identical_tabs_apart_by_their_slot() {
+        let tab = |window, index, title: &str, url: &str, current| ListedTab {
+            slot: TabSlot { window, tab: index },
+            title: title.into(),
+            url: url.into(),
+            current,
+        };
         let tabs = parse_tab_list(
-            "Inbox\thttps://mail.example/\t1\n\
-             \t\t0\n\
-             Inbox\thttps://mail.example/\t0\n\
-             \thttps://blank.example/\t0\n\
-             Docs\thttps://docs.example/\n",
+            "1\t1\t0\thttps://mail.example/\tInbox\n\
+             1\t2\t0\t\t\n\
+             1\t3\t1\thttps://mail.example/\tInbox\n\
+             2\t1\t0\thttps://blank.example/\t\n\
+             2\t2\t0\thttps://docs.example/\tDocs\twith a tab\n\
+             x\t1\t0\thttps://malformed.example/\tMalformed\n",
         );
         assert_eq!(
             tabs,
             [
-                ListedTab {
-                    title: "Inbox".into(),
-                    url: "https://mail.example/".into(),
-                    current: true,
-                },
-                ListedTab {
-                    title: String::new(),
-                    url: "https://blank.example/".into(),
-                    current: false,
-                },
-                ListedTab {
-                    title: "Docs".into(),
-                    url: "https://docs.example/".into(),
-                    current: false,
-                },
+                // Two open tabs with one title and URL are two rows, and the
+                // current flag stays on the one that is current.
+                tab(1, 1, "Inbox", "https://mail.example/", false),
+                tab(1, 3, "Inbox", "https://mail.example/", true),
+                tab(2, 1, "", "https://blank.example/", false),
+                tab(2, 2, "Docs\twith a tab", "https://docs.example/", false),
             ]
         );
+    }
+
+    #[test]
+    fn the_list_script_numbers_every_tab_by_window_and_position() {
+        let script = SAFARI.list_script("Safari");
+        // The separator is bound before `tell`, where `tab` is still the
+        // tab character and not the browser's tab class.
+        let sep = script.find("set sep to character id 9").unwrap();
+        assert!(sep < script.find("tell application").unwrap());
+        assert!(script.contains("set windowIndex to windowIndex + 1"));
+        assert!(script.contains("set tabIndex to tabIndex + 1"));
+        assert!(script.contains("if windowIndex is 1 and tabIndex is activeIndex"));
+        assert!(script.contains(
+            "(windowIndex as text) & sep & (tabIndex as text) & sep & isCurrent & sep & (URL of t as text) & sep & (name of t as text) & linefeed"
+        ));
+    }
+
+    #[test]
+    fn a_select_script_tries_the_listed_slot_before_the_first_match() {
+        let target = TabTarget::Url("https://mail.example/".into());
+        let slotted = CHROMIUM.select_script(
+            "Google Chrome",
+            &target,
+            Some(TabSlot { window: 2, tab: 3 }),
+        );
+        let slot = slotted.find("set w to window 2").unwrap();
+        let scan = slotted.find("repeat with w in windows").unwrap();
+        assert!(slot < scan);
+        assert!(slotted.contains("set t to tab 3 of w"));
+        let unslotted = CHROMIUM.select_script("Google Chrome", &target, None);
+        assert!(!unslotted.contains("set w to window"));
+        assert!(unslotted.contains("repeat with w in windows"));
     }
 }

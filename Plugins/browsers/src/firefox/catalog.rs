@@ -31,7 +31,7 @@ pub(super) fn catalog(strip: &Strip, store: Option<&SessionStore>) -> Vec<Catalo
     if let Some(store) = store {
         fill_urls(&mut tabs, store, &pairs);
         apply_store_selection(&mut tabs, store, &pairs);
-        offscreen = offscreen_windows(&tabs, store, &pairs);
+        offscreen = offscreen_windows(store, &pairs);
     }
     let focused = focused_root(strip, store, &pairs, offscreen.len());
     let mut tab_counts: BTreeMap<usize, usize> = BTreeMap::new();
@@ -86,7 +86,12 @@ pub(super) async fn collect(ctx: &Context, pid: i64) -> Strip {
     strip
 }
 
+/// Give the walk's URL-less tabs their store URLs. The store supplies
+/// nothing else, so a strip exposing every tab's URL skips the read.
 pub(super) async fn fill_from_store(pid: i64, strip: &mut Strip) {
+    if strip.tabs.iter().all(|tab| !tab.url.is_empty()) {
+        return;
+    }
     let stores = session_store::load().await;
     let assigned = assign_stores(&[(pid, strip.tabs.as_slice())], &stores);
     if let Some(index) = assigned.get(&pid) {
@@ -99,6 +104,13 @@ pub(super) async fn fill_from_store(pid: i64, strip: &mut Strip) {
 fn titles_match(lhs: &str, rhs: &str) -> bool {
     let lhs = lhs.trim();
     !lhs.is_empty() && lhs == rhs.trim()
+}
+
+fn titled<'a>(titles: impl IntoIterator<Item = &'a str>) -> usize {
+    titles
+        .into_iter()
+        .filter(|title| !title.trim().is_empty())
+        .count()
 }
 
 /// How many of the `ax` titles `store` holds, each store title used once.
@@ -174,7 +186,10 @@ pub(super) fn assign_stores(strips: &[(i64, &[Tab])], stores: &[StoreFile]) -> H
 
 /// AX window root → store window index. A store write lags the strip by up
 /// to ~15 s, so windows pair by title overlap rather than equality: best
-/// pairs first, ties to the lower indexes, zero overlap never.
+/// overlap first; on a tie, the store window with fewer unmatched titles on
+/// either side (a lone on-screen "New Tab" is its own one-tab window, not
+/// another Space's window that also holds a "New Tab"); then the lower
+/// indexes. Zero overlap never pairs.
 fn pair_windows(tabs: &[Tab], store: &SessionStore) -> BTreeMap<usize, usize> {
     let mut by_root: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
     for tab in tabs {
@@ -182,13 +197,15 @@ fn pair_windows(tabs: &[Tab], store: &SessionStore) -> BTreeMap<usize, usize> {
     }
     let mut scored = Vec::new();
     for (&root, titles) in &by_root {
+        let on_screen = titled(titles.iter().copied());
         for (index, window) in store.windows.iter().enumerate() {
-            let score = title_overlap(
-                titles.iter().copied(),
-                window.tabs.iter().map(|tab| tab.title.as_str()),
-            );
+            let stored = || window.tabs.iter().map(|tab| tab.title.as_str());
+            let score = title_overlap(titles.iter().copied(), stored());
             if score > 0 {
-                scored.push((score, root, index));
+                // Overlap counts titled tabs on both sides, so this never
+                // underflows.
+                let unmatched = on_screen + titled(stored()) - 2 * score;
+                scored.push((score, unmatched, root, index));
             }
         }
     }
@@ -197,10 +214,11 @@ fn pair_windows(tabs: &[Tab], store: &SessionStore) -> BTreeMap<usize, usize> {
             .cmp(&lhs.0)
             .then(lhs.1.cmp(&rhs.1))
             .then(lhs.2.cmp(&rhs.2))
+            .then(lhs.3.cmp(&rhs.3))
     });
     let mut pairs = BTreeMap::new();
     let mut used = HashSet::new();
-    for (_, root, index) in scored {
+    for (_, _, root, index) in scored {
         if !pairs.contains_key(&root) && used.insert(index) {
             pairs.insert(root, index);
         }
@@ -296,29 +314,22 @@ fn apply_store_selection(tabs: &mut [Tab], store: &SessionStore, pairs: &BTreeMa
     }
 }
 
-/// Store windows the walk did not see — on another Space, or past the node
-/// budget — listed from the store alone. One sharing any title with the
-/// screen is an on-screen window the pairing could not place: listing it
-/// again would duplicate its tabs.
+/// Store windows no on-screen window paired with — on another Space, or
+/// past the node budget — listed from the store alone. Being paired is the
+/// only evidence a store window is on screen: pairing is greedy and
+/// one-to-one, so an unpaired store window shares no title with any unpaired
+/// AX window, and a title it shares with the screen ("New Tab") belongs to a
+/// window that already has its own store window.
 fn offscreen_windows<'a>(
-    tabs: &[Tab],
     store: &'a SessionStore,
     pairs: &BTreeMap<usize, usize>,
 ) -> Vec<&'a SessionWindow> {
     let paired: HashSet<usize> = pairs.values().copied().collect();
-    let on_screen: HashSet<&str> = tabs.iter().map(|tab| tab.title.trim()).collect();
     store
         .windows
         .iter()
         .enumerate()
-        .filter(|(index, window)| {
-            !paired.contains(index)
-                && !window.tabs.is_empty()
-                && !window
-                    .tabs
-                    .iter()
-                    .any(|tab| on_screen.contains(tab.title.trim()))
-        })
+        .filter(|(index, window)| !paired.contains(index) && !window.tabs.is_empty())
         .map(|(_, window)| window)
         .collect()
 }
@@ -544,7 +555,7 @@ mod tests {
                     ],
                     Some(0),
                 ),
-                // Shares a title with the screen: not listed twice.
+                // Another unseen window with a same-titled tab: its own row.
                 session_window(&[("Docs", "https://docs.example/other")], None),
             ],
             // Last focused: the window on another Space.
@@ -559,18 +570,95 @@ mod tests {
                 ("Docs", "https://docs.example/", true),
                 ("Mail", "https://mail.example/", false),
                 ("News", "https://news.example/", false),
+                ("Docs", "https://docs.example/other", false),
             ]
         );
         // Strip positions of the unseen window count its blank tab; the one
         // AX window is not assumed focused while the store names another.
         assert_eq!(
             positions(&rows),
-            [(1, 1, false), (1, 3, false), (3, 3, false)]
+            [(1, 1, false), (1, 3, false), (3, 3, false), (1, 1, false)]
         );
-        assert!(rows.iter().all(|row| row.position.window_count == 2));
+        assert!(rows.iter().all(|row| row.position.window_count == 3));
         // With the walk seeing nothing, the store is the whole catalog.
         let blank = catalog(&Strip::default(), Some(&store));
         assert_eq!(blank.len(), 4);
+    }
+
+    fn listed(rows: &[CatalogTab]) -> Vec<(&str, &str, bool)> {
+        rows.iter()
+            .map(|row| (row.title.as_str(), row.url.as_str(), row.current))
+            .collect()
+    }
+
+    #[test]
+    fn a_window_on_another_space_survives_sharing_a_title_with_the_screen() {
+        let on_screen = strip(1, vec![selected(tab(0, "New Tab", "")), tab(0, "Docs", "")]);
+        let store = SessionStore {
+            windows: vec![
+                // Another Space: its "New Tab" is not the on-screen one.
+                session_window(
+                    &[
+                        ("New Tab", "about:newtab"),
+                        ("Mail", "https://mail.example/"),
+                    ],
+                    Some(1),
+                ),
+                session_window(
+                    &[
+                        ("New Tab", "about:newtab"),
+                        ("Docs", "https://docs.example/"),
+                    ],
+                    Some(0),
+                ),
+            ],
+            selected_window: Some(1),
+        };
+        assert_eq!(
+            listed(&catalog(&on_screen, Some(&store))),
+            [
+                ("New Tab", "about:newtab", true),
+                ("Docs", "https://docs.example/", false),
+                ("New Tab", "about:newtab", false),
+                ("Mail", "https://mail.example/", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_title_tie_pairs_the_window_whose_tabs_match_exactly() {
+        // One on-screen "New Tab" matches both store windows by one title:
+        // its own store window has nothing else, the other Space's does.
+        let on_screen = strip(1, vec![selected(tab(0, "New Tab", ""))]);
+        let store = SessionStore {
+            windows: vec![
+                session_window(
+                    &[
+                        ("New Tab", "about:newtab"),
+                        ("Mail", "https://mail.example/"),
+                    ],
+                    Some(1),
+                ),
+                session_window(&[("New Tab", "about:newtab")], Some(0)),
+            ],
+            selected_window: Some(1),
+        };
+        assert_eq!(
+            pair_windows(&on_screen.tabs, &store),
+            BTreeMap::from([(0, 1)])
+        );
+        let rows = catalog(&on_screen, Some(&store));
+        assert_eq!(
+            listed(&rows),
+            [
+                ("New Tab", "about:newtab", true),
+                ("New Tab", "about:newtab", false),
+                ("Mail", "https://mail.example/", false),
+            ]
+        );
+        // The store's focused window is the paired one: the fast path stays on.
+        assert!(rows[0].position.window_focused);
+        assert!(rows.iter().all(|row| row.position.window_count == 2));
     }
 
     #[test]
