@@ -96,6 +96,9 @@ def parse_record(line: str) -> Optional[Sample]:
                 surface=fields.get("surface", ""),
                 bundle=fields.get("bundle", "-"),
                 outcome=fields.get("outcome", ""),
+                # Status-bar segments drawn over an app with no targets: the
+                # resident counts it as empty, not as a shown activation.
+                empty=fields.get("outcome") == "empty",
             )
         except (KeyError, ValueError):
             return None

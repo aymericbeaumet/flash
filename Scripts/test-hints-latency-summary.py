@@ -121,6 +121,17 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(native.maximum, 30.0, "an empty activation's time is not latency")
         self.assertIn("empty", summary.format_table([native]).splitlines()[0])
 
+    def test_a_visible_line_whose_app_gave_no_targets_counts_as_empty(self):
+        # Only status-bar segments were drawn: the resident counts the
+        # activation as empty, and so does the report.
+        samples = summary.read_samples([
+            line("n1", 100, 10),
+            line("s1", 200, 900.0, outcome="empty", targets=3),
+        ])
+        (native,) = summary.summarize(samples, [summary.parse_window("native:0:500")], None)
+        self.assertEqual((native.count, native.empty), (1, 1))
+        self.assertEqual(native.maximum, 10.0)
+
     def test_by_bundle_groups_every_target_activation_busiest_first(self):
         samples = summary.read_samples([
             line("f1", 100, 160, bundle="org.mozilla.firefox", prepared="miss"),
