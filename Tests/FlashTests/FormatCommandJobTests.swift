@@ -177,8 +177,11 @@ final class FormatCommandJobTests: XCTestCase {
     wait(for: [completed], timeout: 3)
     queue.sync {
       guard let active = job else { return XCTFail("Missing job") }
-      let deadline = ProcessInfo.processInfo.systemUptime + 1
-      while kill(-active.processIdentifier, 0) == 0, ProcessInfo.processInfo.systemUptime < deadline
+      // A killed child reparented to launchd lingers as a zombie until launchd
+      // reaps it; its group answers EPERM rather than ESRCH meanwhile.
+      let deadline = ProcessInfo.processInfo.systemUptime + 3
+      while kill(-active.processIdentifier, 0) == 0 || errno == EPERM,
+        ProcessInfo.processInfo.systemUptime < deadline
       { usleep(2_000) }
       XCTAssertEqual(kill(-active.processIdentifier, 0), -1)
       XCTAssertEqual(errno, ESRCH)
