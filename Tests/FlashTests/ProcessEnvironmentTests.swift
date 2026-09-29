@@ -2,78 +2,40 @@ import FlashCore
 import XCTest
 
 final class ProcessEnvironmentTests: XCTestCase {
-  // MARK: export -p parsing
+  // MARK: env -0 parsing
 
-  func testParsesZshUnquotedAndSingleQuoted() {
-    let output = """
-      export PATH=/opt/homebrew/bin:/usr/bin:/bin
-      export EDITOR='nvim'
-      export GREETING='hello world'
-      """
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
+  private func output(_ fields: [String], noise: String = "") -> Data {
+    Data((noise + "\0" + FlashProcessEnvironment.environmentMarker + "\0").utf8)
+      + Data(fields.joined(separator: "\0").utf8) + Data([0])
+  }
+
+  func testParsesEntriesAfterTheMarkerAndIgnoresLoginNoise() {
+    let env = FlashProcessEnvironment.parse(
+      environmentOutput: output(
+        ["PATH=/opt/homebrew/bin:/usr/bin:/bin", "EDITOR=nvim"],
+        noise: "Welcome back\nFAKE=from-a-login-file"))
     XCTAssertEqual(env["PATH"], "/opt/homebrew/bin:/usr/bin:/bin")
     XCTAssertEqual(env["EDITOR"], "nvim")
-    XCTAssertEqual(env["GREETING"], "hello world")
+    XCTAssertNil(env["FAKE"])
   }
 
-  func testParsesBashDeclareXWithEscapes() {
-    let output = """
-      declare -x PATH="/usr/bin:/bin"
-      declare -x QUOTE="say \\"hi\\""
-      declare -x LITERAL="a\\\\b"
-      declare -x DOLLAR="\\$HOME"
-      """
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
-    XCTAssertEqual(env["PATH"], "/usr/bin:/bin")
-    XCTAssertEqual(env["QUOTE"], "say \"hi\"")
-    XCTAssertEqual(env["LITERAL"], "a\\b")
-    XCTAssertEqual(env["DOLLAR"], "$HOME")
-  }
-
-  func testSingleQuotedEmbeddedQuote() {
-    // sh renders an embedded single quote as the `'\''` close-escape-reopen.
-    let output = "export MSG='it'\\''s fine'"
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
-    XCTAssertEqual(env["MSG"], "it's fine")
-  }
-
-  func testAnsiCQuoting() {
-    let output = "export TABBED=$'a\\tb\\nc'"
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
-    XCTAssertEqual(env["TABBED"], "a\tb\nc")
-  }
-
-  func testSkipsExportedButUnsetAndMalformed() {
-    let output = """
-      export NOVALUE
-      export VALID=1
-      not an assignment line
-      export 9BAD=nope
-      """
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
-    XCTAssertEqual(env["VALID"], "1")
-    XCTAssertNil(env["NOVALUE"])
-    XCTAssertNil(env["9BAD"])
-  }
-
-  func testMultilineValueDoesNotCorruptFollowingVars() {
-    // A value with a raw newline spans two lines; the continuation must not be
-    // mistaken for a new assignment, and later vars must still parse.
-    let output = """
-      export MULTI=line-one
-      line-two
-      export AFTER=ok
-      """
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
-    XCTAssertEqual(env["MULTI"], "line-one")
-    XCTAssertEqual(env["AFTER"], "ok")
-    XCTAssertNil(env["line-two"])
-  }
-
-  func testValueContainingEqualsSign() {
-    let output = "export FLAGS=a=b=c"
-    let env = FlashProcessEnvironment.parse(exportOutput: output)
+  func testKeepsValuesVerbatim() {
+    let env = FlashProcessEnvironment.parse(
+      environmentOutput: output(["MULTI=line-one\nline-two", "FLAGS=a=b=c", "QUOTE='it's'"]))
+    XCTAssertEqual(env["MULTI"], "line-one\nline-two")
     XCTAssertEqual(env["FLAGS"], "a=b=c")
+    XCTAssertEqual(env["QUOTE"], "'it's'")
+  }
+
+  func testSkipsMalformedEntries() {
+    let env = FlashProcessEnvironment.parse(
+      environmentOutput: output(["NOVALUE", "9BAD=nope", "VALID=1", "=empty"]))
+    XCTAssertEqual(env, ["VALID": "1"])
+  }
+
+  func testOutputWithoutTheMarkerYieldsNothing() {
+    XCTAssertEqual(
+      FlashProcessEnvironment.parse(environmentOutput: Data("PATH=/usr/bin\0".utf8)), [:])
   }
 
   // MARK: fallback PATH
@@ -122,6 +84,28 @@ final class ProcessEnvironmentTests: XCTestCase {
       shellPath: "/bin/sh", timeout: 5)
     let env = try XCTUnwrap(resolved)
     XCTAssertNotNil(env["PATH"])
+  }
+
+  /// zsh's `export -p` prints its tied `PATH` as `export -T PATH path=( … )`,
+  /// which a line parser drops; the login `PATH` must still come through.
+  func testResolveKeepsAZshLoginPathAndIgnoresLoginOutput() throws {
+    let zsh = "/bin/zsh"
+    guard FileManager.default.isExecutableFile(atPath: zsh) else { throw XCTSkip("no zsh") }
+    let home = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-login-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    try """
+    path=(/flash/login/shims $path)
+    export MULTI=$'one\\ntwo'
+    echo "a login file that talks"
+    """.write(to: home.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)
+    let resolved = FlashProcessEnvironment.resolveLoginShellEnvironment(
+      shellPath: zsh, timeout: 10,
+      environment: ["HOME": home.path, "ZDOTDIR": home.path, "PATH": "/usr/bin:/bin"])
+    let env = try XCTUnwrap(resolved)
+    XCTAssertEqual(env["PATH"]?.split(separator: ":").first, "/flash/login/shims")
+    XCTAssertEqual(env["MULTI"], "one\ntwo")
   }
 
   func testResolveMissingShellReturnsNil() {
