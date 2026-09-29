@@ -23,7 +23,8 @@ Accessibility permission, and nothing else.
   (`12345` / `qwert` / `asdfg` / `zxcvb` on QWERTY, your layout's keys
   otherwise). Press the key where you want to go, again to refine. Bisect mode
   halves the screen with `hjkl`.
-- **Terminal hints.** The bundled tmux plugin labels panes, URLs, and file paths
+- **Terminal hints.** The bundled tmux plugin labels panes, every detected URL
+  and file path, and [supported status-bar tabs](docs/architecture.md#hint-activation)
   inside your terminal.
 - **Normal mode.** A persistent, Vim-like layer over all of macOS: `f` for
   hints, `[t` / `]t` for tabs, `gg` / `G`, `ctrl+d` / `ctrl+u` to scroll, `u` to

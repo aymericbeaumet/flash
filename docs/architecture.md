@@ -38,6 +38,17 @@ on empty output only when its policy explicitly permits it; sources are not merg
 Accessibility is the universal provider; tmux is the volatile terminal provider and
 vscode is the bundle-scoped AX-enhancer provider (`hints` with `fallback_on_empty`).
 
+Tmux discovers pane anchors and every identified link in the visible pane grids;
+there is no per-pane link cap. Its executable is resolved once, including mise
+shims, so version-manager startup never consumes each hint query's deadline.
+Client metadata and pane geometry are queried concurrently and must agree on the
+server, session and window identity. Single-row, mouse-enabled status bars also
+receive window-tab hints when their expanded format exposes numeric
+`range=window|N` or `range=user|N` spans in a left-aligned row. These indices are
+bound to live window IDs before publication. Scrolling lists, other alignments,
+overflow and multi-row status layouts omit tab hints; pane and link hints remain
+available. Tab selection uses the same host mouse-click path as pane selection.
+
 Prepared models contain a complete finalized target set and assigned labels.
 Reads require matching PID, dirty token, configuration revision and freshness.
 AX notifications, focus, Space, display and configuration changes invalidate them.

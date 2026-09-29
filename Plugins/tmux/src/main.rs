@@ -65,6 +65,8 @@ use serde_json::{Value, json};
 
 use flash_plugin::process as bounded_process;
 
+mod status_hints;
+
 const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
 const SOURCE_WINDOWS: &str = "tmux.windows";
@@ -80,7 +82,6 @@ const PS_PATH: &str = "/bin/ps";
 const SSH_PATH: &str = "/usr/bin/ssh";
 const TMUX_FIELD_SEP: &str = "|||";
 
-const LINKS_PER_PANE_LIMIT: usize = 40;
 const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
 const REMOTE_POLL_INTERVAL_SECS: u64 = 5;
@@ -134,8 +135,7 @@ fn is_dotted_code_identifier(text: &str) -> bool {
         && chars.any(|character| character.is_ascii_uppercase())
 }
 
-/// A real clickable URL (vs. a path / dotted-host / error-code match). Used to
-/// prioritise URLs when a pane has more links than the per-pane hint budget.
+/// A real clickable URL, as opposed to a path, dotted host or error code.
 fn is_url(text: &str) -> bool {
     text.starts_with("http://") || text.starts_with("https://")
 }
@@ -178,11 +178,11 @@ async fn find_tmux() -> Option<String> {
     for prefix in TMUX_PREFIXES {
         let path = format!("{prefix}/bin/tmux");
         if is_file(&path).await {
-            return Some(path);
+            return resolve_tmux_executable(path).await;
         }
     }
     if let Some(path) = which("tmux").await {
-        return Some(path);
+        return resolve_tmux_executable(path).await;
     }
     // Version managers install outside the standard prefixes, and a GUI app's
     // PATH doesn't include their shims, so the scan above misses tmux entirely
@@ -194,6 +194,27 @@ async fn find_tmux() -> Option<String> {
         return Some(path);
     }
     find_tmux_via_login_shell().await
+}
+
+async fn resolve_tmux_executable(path: String) -> Option<String> {
+    let executable = tokio::fs::canonicalize(&path).await.ok()?;
+    if executable.file_name().is_none_or(|name| name != "mise") {
+        return Some(path);
+    }
+    // A GUI login PATH may contain mise shims. Starting mise for every tmux
+    // query consumes the entire hint deadline; resolve once before caching.
+    let output = run_cmd(
+        executable.to_str()?,
+        &["which", "tmux"],
+        Duration::from_secs(5),
+    )
+    .await?;
+    let resolved = output.trim();
+    if !std::path::Path::new(resolved).is_absolute() || !is_file(resolved).await {
+        return None;
+    }
+    let resolved_executable = tokio::fs::canonicalize(resolved).await.ok()?;
+    (resolved_executable != executable).then(|| resolved.to_string())
 }
 
 async fn is_file(path: &str) -> bool {
@@ -222,7 +243,7 @@ async fn find_tmux_via_mise() -> Option<String> {
     };
     let out = run_cmd(&mise, &["which", "tmux"], Duration::from_secs(5)).await?;
     let path = out.lines().map(str::trim).find(|l| l.starts_with('/'))?;
-    is_file(path).await.then(|| path.to_string())
+    resolve_tmux_executable(path.to_string()).await
 }
 
 /// Last resort: the user's login+interactive shell sources their full profile
@@ -233,7 +254,7 @@ async fn find_tmux_via_login_shell() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let out = run_cmd(&shell, &["-lic", "command -v tmux"], Duration::from_secs(6)).await?;
     let path = out.lines().map(str::trim).find(|l| l.starts_with('/'))?;
-    is_file(path).await.then(|| path.to_string())
+    resolve_tmux_executable(path.to_string()).await
 }
 
 async fn which(program: &str) -> Option<String> {
@@ -2157,6 +2178,19 @@ fn parse_status_top_offset(line: &str) -> i64 {
     if at_top { lines } else { 0 }
 }
 
+fn status_hint_row(status: &str, client_rows: i64) -> Option<i64> {
+    let mut fields = status.split_whitespace();
+    if !matches!(fields.next()?, "on" | "1") || client_rows <= 0 {
+        return None;
+    }
+    let row = match fields.next()? {
+        "top" => 0,
+        "bottom" => client_rows - 1,
+        _ => return None,
+    };
+    matches!(fields.next()?, "on" | "1").then_some(row)
+}
+
 // ---- Alacritty font + cell geometry -----------------------------------------
 
 fn read_toml_raw(text: &str, section: &str, key: &str) -> Option<String> {
@@ -2401,19 +2435,35 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     // literal text the server always emits verbatim (the same separator
     // `list-clients`/`list-windows` rely on), so the split is deterministic.
     let combined_format = format!(
-        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"
+        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}} #{{mouse}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{W:#{{window_index}} #{{window_id}};}}{TMUX_FIELD_SEP}#{{T:status-format[0]}}"
     );
-    let combined = run_tmux_for_client(
-        plugin,
-        &client,
-        &["display-message", "-c", &client.tty, "-p", &combined_format],
-    )
-    .await;
+    let pane_format = format!(
+        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"
+    );
+    let display_args = [
+        "display-message",
+        "-c",
+        &client.tty,
+        "-t",
+        &client.tty,
+        "-p",
+        &combined_format,
+    ];
+    let pane_args = ["list-panes", "-t", &client.tty, "-F", &pane_format];
+    // Both replies carry the live context, so a window switch between them
+    // still cancels the snapshot while independent subprocesses run together.
+    let (combined, pane_list) = tokio::join!(
+        run_tmux_for_client(plugin, &client, &display_args),
+        run_tmux_for_client(plugin, &client, &pane_args),
+    );
     let Some(combined) = combined else {
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
-    let combined_lines: Vec<&str> = combined.split(TMUX_FIELD_SEP).collect();
-    if combined_lines.len() != 3 {
+    let combined_lines: Vec<&str> = combined
+        .trim_end_matches(['\r', '\n'])
+        .splitn(5, TMUX_FIELD_SEP)
+        .collect();
+    if combined_lines.len() != 5 {
         return HintsResponse::targets(vec![]).context_pid(pid);
     }
     let Some(hint_context) = HintContext::parse(combined_lines[2]) else {
@@ -2435,18 +2485,6 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     )
     .await;
 
-    let pane_list = run_tmux_for_client(
-        plugin,
-        &client,
-        &[
-            "list-panes",
-            "-t",
-            &client.tty,
-            "-F",
-            &format!("#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"),
-        ],
-    )
-    .await;
     let Some(pane_list) = pane_list else {
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
@@ -2531,18 +2569,12 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         let Some(raw) = captures[i].take() else {
             continue;
         };
-        // Collect this pane's links, then keep the most useful within the
-        // per-pane budget: real URLs first (the user's primary intent), then
-        // the earliest remaining matches in reading order. Without this, a
-        // screenful of file paths / dotted hostnames (a diff, a log) exhausts
-        // the budget before a URL lower down ever gets a hint.
-        let mut pane_links: Vec<RawLink> = Vec::new();
         for (row_idx, content) in raw.split('\n').enumerate() {
             if row_idx as i64 >= pane.rows {
                 break;
             }
             for (col, text) in extract_links(content, pane.cols as usize) {
-                pane_links.push(RawLink {
+                raw_links.push(RawLink {
                     screen_row: top_offset + pane.top + row_idx as i64,
                     screen_col: pane.left + col as i64,
                     text,
@@ -2550,13 +2582,41 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
                 });
             }
         }
-        if pane_links.len() > LINKS_PER_PANE_LIMIT {
-            // Stable sort keeps reading order within each group; `false < true`
-            // floats URLs to the front before truncation.
-            pane_links.sort_by_key(|link| !is_url(&link.text));
-            pane_links.truncate(LINKS_PER_PANE_LIMIT);
+    }
+
+    if let Some(row) = status_hint_row(combined_lines[1], client_rows)
+        && let Some(spans) =
+            status_hints::parse_status_hints(combined_lines[4], client_cols as usize)
+    {
+        let windows: HashMap<u32, &str> = combined_lines[3]
+            .split(';')
+            .filter_map(|entry| {
+                let (index, id) = entry.split_once(' ')?;
+                id.strip_prefix('@')?.parse::<u64>().ok()?;
+                Some((index.parse().ok()?, id))
+            })
+            .collect();
+        for (index, span) in spans.into_iter().enumerate() {
+            let Some(window_id) = windows.get(&span.index) else {
+                continue;
+            };
+            let context_id = hint_context.target_id(&client, &format!("window:{window_id}"));
+            pane_targets.push(
+                build_target(
+                    &format!("tmux-{pid}-w{index}"),
+                    min_x + pad_x + span.column as f64 * cell_w,
+                    min_y + win_h - pad_y - (row + 1) as f64 * cell_h,
+                    span.width as f64 * cell_w,
+                    cell_h,
+                    "tmux-window",
+                    &span.label,
+                    pid,
+                    TMUX_TARGET_ENTERS_INSERT_MODE,
+                    Priority::High,
+                )
+                .context_id(context_id),
+            );
         }
-        raw_links.extend(pane_links);
     }
 
     // Pane chips emit first so the hint assigner allocates the shortest
@@ -4934,6 +4994,165 @@ async fn restore_navigation(
 mod tests {
     use super::*;
 
+    struct ExecutableFixture(PathBuf);
+
+    impl ExecutableFixture {
+        async fn new() -> Self {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "flash-tmux-test-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            tokio::fs::create_dir_all(&path).await.unwrap();
+            Self(path)
+        }
+
+        async fn script(&self, name: &str, body: &str) -> String {
+            let path = self.0.join(name);
+            tokio::fs::write(&path, format!("#!/bin/sh\n{body}\n"))
+                .await
+                .unwrap();
+            tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .await
+                .unwrap();
+            path.to_string_lossy().into_owned()
+        }
+        async fn cleanup(self) {
+            tokio::fs::remove_dir_all(self.0).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn tmux_executable_resolves_mise_shims_once() {
+        let fixture = ExecutableFixture::new().await;
+        let binary = fixture.script("real-tmux", "exit 0").await;
+        let mise = fixture
+            .script(
+                "mise",
+                &format!(
+                    "test \"$1\" = which && test \"$2\" = tmux || exit 1\nprintf '%s\\n' {}",
+                    shell_quote(&binary)
+                ),
+            )
+            .await;
+        let shim = fixture.0.join("tmux");
+        tokio::fs::symlink(&mise, &shim).await.unwrap();
+        assert_eq!(
+            resolve_tmux_executable(shim.to_string_lossy().into_owned()).await,
+            Some(binary.clone())
+        );
+        assert_eq!(resolve_tmux_executable(binary.clone()).await, Some(binary));
+        fixture.script("mise", "exit 1").await;
+        assert!(
+            resolve_tmux_executable(shim.to_string_lossy().into_owned())
+                .await
+                .is_none()
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn hints_include_every_pane_and_all_visible_links() {
+        let fixture = ExecutableFixture::new().await;
+        let binary = fixture.script(
+            "tmux",
+            r#"case "$1" in
+display-message) printf '%s\n' '120 61|||on top on|||123 $0 @1|||0 @1;1 @2;|||#[range=user|0]first#[norange] #[range=window|1]second#[norange]' ;;
+list-panes) printf '%s\n' '%1 0 0 60 60|||123 $0 @1' '%2 61 0 59 60|||123 $0 @1' ;;
+capture-pane)
+    i=0
+    while test "$i" -lt 50; do
+        printf 'https://example.com/%s/%s\n' "$3" "$i"
+        i=$((i + 1))
+    done ;;
+*) exit 1 ;;
+esac"#,
+        ).await;
+        let plugin = Tmux::default();
+        plugin.tmux_path.set(Some(binary)).unwrap();
+        plugin.client_snapshot().lock().unwrap().clients =
+            vec![client("/dev/ttys000", "work", 42, 0)];
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        let request = HintsRequest {
+            pid: Some(42),
+            front_window_frame: Some(Frame::new(100.0, 200.0, 1200.0, 610.0)),
+            ..Default::default()
+        };
+        let response = hints_for_context(&plugin, &harness.context(), &request).await;
+        assert_eq!(response.context_pid, Some(42));
+        let panes: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some(PANE_TARGET_ROLE))
+            .collect();
+        assert_eq!(panes.len(), 2);
+        let tabs: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some("tmux-window"))
+            .collect();
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0].frame, Frame::new(100.0, 800.0, 50.0, 10.0));
+        assert_eq!(tabs[1].frame, Frame::new(160.0, 800.0, 60.0, 10.0));
+        assert_ne!(tabs[0].context_id, tabs[1].context_id);
+        let links: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some(TERMINAL_LINK_ROLE))
+            .collect();
+        assert_eq!(links.len(), 100);
+        assert_eq!(links[0].frame, Frame::new(100.0, 790.0, 10.0, 10.0));
+        assert_eq!(links[1].frame, Frame::new(710.0, 790.0, 10.0, 10.0));
+        assert!(
+            links
+                .iter()
+                .any(|t| t.label.as_deref() == Some("https://example.com/%1/49"))
+        );
+        assert!(
+            links
+                .iter()
+                .any(|t| t.label.as_deref() == Some("https://example.com/%2/49"))
+        );
+
+        // An unsupported status layout must not disable pane/link discovery.
+        let path = fixture.0.join("tmux");
+        let script = tokio::fs::read_to_string(&path).await.unwrap();
+        tokio::fs::write(
+            &path,
+            script.replace("#[range=user|0]", "#[align=right,range=user|0]"),
+        )
+        .await
+        .unwrap();
+        let response = hints_for_context(&plugin, &harness.context(), &request).await;
+        assert_eq!(response.targets.len(), 102);
+        assert!(
+            response
+                .targets
+                .iter()
+                .all(|t| t.role.as_deref() != Some("tmux-window"))
+        );
+        fixture.cleanup().await;
+    }
+
+    #[test]
+    fn status_tab_hints_require_one_visible_mouse_enabled_row() {
+        assert_eq!(status_hint_row("on top on", 25), Some(0));
+        assert_eq!(status_hint_row("1 bottom 1", 25), Some(24));
+        for status in [
+            "off top on",
+            "0 bottom 1",
+            "2 top on",
+            "on top off",
+            "on bottom 0",
+            "on top",
+            "on unknown on",
+        ] {
+            assert_eq!(status_hint_row(status, 25), None, "{status}");
+        }
+        assert_eq!(status_hint_row("on top on", 0), None);
+    }
+
     fn pane(in_mode: bool, mouse_tracking: bool, sgr_mouse: bool) -> PaneScrollState {
         PaneScrollState {
             in_mode,
@@ -6609,6 +6828,7 @@ play\t3\tflash\tzsh\t/p\t1\t4\n";
 
 // ---- Plugin glue ------------------------------------------------------------
 
+#[derive(Default)]
 struct Tmux {
     tmux_path: std::sync::Arc<tokio::sync::OnceCell<Option<String>>>,
     local_config_arc: std::sync::Arc<Mutex<LocalTmuxConfig>>,
@@ -6796,18 +7016,5 @@ impl FlashPlugin for Tmux {
 }
 
 fn main() {
-    let plugin = Tmux {
-        tmux_path: std::sync::Arc::new(tokio::sync::OnceCell::new()),
-        local_config_arc: std::sync::Arc::new(Mutex::new(LocalTmuxConfig::default())),
-        remote_configs_arc: std::sync::Arc::new(Mutex::new(BTreeMap::new())),
-        client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
-        last_locations_hash_arc: std::sync::Arc::new(Mutex::new(None)),
-        candidate_partitions_arc: std::sync::Arc::new(Mutex::new(CandidatePartitions::default())),
-        last_status_segments_arc: std::sync::Arc::new(Mutex::new(None)),
-        tmux_socket_registry_arc: std::sync::Arc::new(TmuxSocketRegistry::default()),
-        candidate_refresh_coordinator_arc: std::sync::Arc::new(
-            CandidateRefreshCoordinator::default(),
-        ),
-    };
-    run(plugin);
+    run(Tmux::default());
 }

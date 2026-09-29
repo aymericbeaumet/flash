@@ -116,6 +116,9 @@ Surface requests that would violate these constraints before implementing them.
   of the required sources, jobs and clock.
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
+- Resolve version-manager shims before caching executables used repeatedly on a
+  hint hot path. Tmux status hints require exact supported format geometry; do
+  not approximate unknown status layouts (see `docs/architecture.md`).
 - Every popup uses a real PTY session owned by `StatusTerminalRegistry`, one
   per name. Text popups use the shared terminal pager; do not add a separate
   native document renderer. Keep focused pager input and its snapshot stable
@@ -248,6 +251,8 @@ rtk proxy ./Scripts/test-integration-electron.sh
 The integration scripts own their fixture processes and cleanup. Native/Electron
 oracles verify real host clicks; the browser oracle compares AX targets with
 reference DOM markers. The no-tap key-window fallback may dismiss native menus.
+Resident native probes require `debug.http_inspector_enabled = true`; restore
+the original setting after verification.
 GUI probes require an unlocked console session. Check session state before
 sending test input and after unexpected delivery failures. While locked,
 Workspace lookups may be empty and AX window references may resolve to the app;
