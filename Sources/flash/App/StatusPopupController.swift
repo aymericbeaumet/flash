@@ -470,7 +470,11 @@ final class StatusPopupController {
     case .exited(let code) where lifecycle == .persistent:
       return "Exited (\(code)) · restarting automatically"
     case .exited(let code): return code == 0 ? "" : "Exited (\(code))"
-    case .failed(let message): return message
+    case .failed(.commandNotFound(let command)):
+      return "\(command): command not found · install it, then Command-R"
+    case .failed(let failure) where failure.isPermanent:
+      return "\(failure.description) · Command-R retries"
+    case .failed(let failure): return failure.description
     case .idle, .running, .stopped: return ""
     }
   }

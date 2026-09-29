@@ -126,6 +126,15 @@ resets the delay; ten consecutive failed starts park it until an explicit
 restart or a definition change. The last screen stays visible, with an
 `Exited (N) · restarting automatically` footer, while it waits.
 
+A command that cannot start at all fails the same way on every retry, so it
+skips the backoff and waits: a bare name no directory of the login `PATH`
+holds (`btop: command not found · install it, then Command-R`), an executable
+`execve` refuses, or a working directory that cannot be entered. No child is
+forked for a missing command. Command-R (`popup_restart`) first rereads the
+login environment, so a tool installed since Flash started is found, and a
+configuration reload retries every such persistent popup once the environment
+is reread. `flash doctor` lists popup commands missing from the login `PATH`.
+
 **Fresh** popups (the default) run one process per showing, and dismissing
 the popup stops it. A process you end by typing into it (`exit` in a shell,
 `q` in btop) closes the popup. One that ends by itself before any key, paste

@@ -680,9 +680,18 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(
       StatusPopupController.exitFooter(.exited(code: 0), lifecycle: .persistent),
       "Exited (0) · restarting automatically")
+    for lifecycle: Config.PopupLifecycle in [.fresh, .persistent] {
+      XCTAssertEqual(
+        StatusPopupController.exitFooter(.failed(.commandNotFound("btop")), lifecycle: lifecycle),
+        "btop: command not found · install it, then Command-R")
+    }
     XCTAssertEqual(
-      StatusPopupController.exitFooter(.failed("No such file or directory"), lifecycle: .fresh),
-      "No such file or directory")
+      StatusPopupController.exitFooter(
+        .failed(.cannotExecute("/opt/tool", errno: EACCES)), lifecycle: .persistent),
+      "/opt/tool: Permission denied · Command-R retries")
+    XCTAssertEqual(
+      StatusPopupController.exitFooter(.failed(.spawnFailed(errno: EAGAIN)), lifecycle: .fresh),
+      "Resource temporarily unavailable")
     for state: TerminalSessionState in [.idle, .running(pid: 1), .stopped] {
       XCTAssertEqual(StatusPopupController.exitFooter(state, lifecycle: .fresh), "")
     }

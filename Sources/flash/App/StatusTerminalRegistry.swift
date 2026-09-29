@@ -115,9 +115,21 @@ final class StatusTerminalRegistry {
   /// shows it on a particular screen.
   var gridResolver: (Config.PopupSize) -> (columns: Int, rows: Int) = { $0.unplacedGrid }
   private let processEnvironment: FlashProcessEnvironment
+  /// Re-reads the login environment off the main thread, then calls back on
+  /// main: a command that was missing may have been installed since.
+  private let refreshEnvironment: (@escaping () -> Void) -> Void
 
-  init(environment: FlashProcessEnvironment = .shared) {
+  init(
+    environment: FlashProcessEnvironment = .shared,
+    refreshEnvironment: @escaping (@escaping () -> Void) -> Void = { completion in
+      DispatchQueue.global(qos: .userInitiated).async {
+        FlashProcessEnvironment.shared.refresh()
+        DispatchQueue.main.async(execute: completion)
+      }
+    }
+  ) {
     processEnvironment = environment
+    self.refreshEnvironment = refreshEnvironment
   }
 
   var sessions: [String: TerminalSession] { entries.mapValues(\.session) }
@@ -415,6 +427,13 @@ final class StatusTerminalRegistry {
       // typed `exit`, `q` in a TUI); one that ended by itself keeps its last
       // screen until the showing ends.
       if definition.lifecycle == .persistent {
+        // A missing or unusable command fails the same way on every retry:
+        // it waits for an explicit restart or a reload instead of the backoff.
+        if case .failed(let failure) = state, failure.isPermanent {
+          restarts[name]?.pending?.cancel()
+          restarts[name]?.pending = nil
+          return
+        }
         scheduleRestart(name)
       } else if prewarmedNames.contains(name) {
         startOnShow(name)
@@ -487,10 +506,11 @@ final class StatusTerminalRegistry {
       fields["exit_code"] = String(code)
       fields["pid"] = pid.map(String.init)
       isFailure = code != 0
-    case .failed(let reason):
+    case .failed(let failure):
       fields["state"] = "failed"
-      fields["failure_category"] = "startup_failed"
-      fields["failure_reason"] = reason
+      fields["failure_category"] = failure.category
+      fields["failure_reason"] = failure.reason
+      fields["retries"] = failure.isPermanent ? "on_restart" : "automatic"
       isFailure = true
     case .stopped:
       fields["state"] = "stopped"
@@ -508,9 +528,36 @@ final class StatusTerminalRegistry {
   }
 
   /// Restart the process explicitly: every kind, whatever its lifecycle. A
-  /// pager rereads the latest collected document.
+  /// pager rereads the latest collected document. A command that could not
+  /// start rereads the login environment first, so a tool installed since
+  /// then is found.
   func restart(name: String) {
-    restartSession(name: name, resetBackoff: true)
+    guard let entry = entries[name], case .terminal(let definition) = entry.kind,
+      case .failed(let failure) = entry.session.state, failure.isPermanent
+    else { return restartSession(name: name, resetBackoff: true) }
+    let session = entry.session
+    refreshEnvironment { [weak self] in
+      guard let self, self.entries[name]?.session === session else { return }
+      self.restartSession(
+        name: name, resetBackoff: true, environment: self.launchEnvironment(for: definition))
+    }
+  }
+
+  /// After the login environment was re-read (a configuration reload), start
+  /// again every persistent popup whose command could not start.
+  func retryFailedLaunches() {
+    dispatchPrecondition(condition: .onQueue(.main))
+    for (name, entry) in entries {
+      guard case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent,
+        case .failed(let failure) = entry.session.state, failure.isPermanent
+      else { continue }
+      restartSession(
+        name: name, resetBackoff: true, environment: launchEnvironment(for: definition))
+    }
+  }
+
+  private func launchEnvironment(for definition: Config.Terminal) -> [String: String] {
+    Self.configuration(for: definition, environment: processEnvironment.environment).environment
   }
 
   /// End the process. A persistent popup restarts it after the backoff; a
@@ -535,7 +582,9 @@ final class StatusTerminalRegistry {
     }
   }
 
-  private func restartSession(name: String, resetBackoff: Bool) {
+  private func restartSession(
+    name: String, resetBackoff: Bool, environment: [String: String]? = nil
+  ) {
     guard let entry = entries[name] else { return }
     restarts[name]?.pending?.cancel()
     restarts[name]?.pending = nil
@@ -552,7 +601,7 @@ final class StatusTerminalRegistry {
         if case .success = result { session.restart() }
       }
     case .terminal:
-      entry.session.restart()
+      entry.session.restart(environment: environment)
     }
   }
 

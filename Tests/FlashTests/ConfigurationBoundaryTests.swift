@@ -152,8 +152,8 @@ final class ConfigurationBoundaryTests: XCTestCase {
           session.frame?.text.trimmingCharacters(in: .whitespacesAndNewlines),
           "config-relative-resource")
         exited.fulfill()
-      case .failed(let message):
-        XCTFail(message)
+      case .failed(let failure):
+        XCTFail(failure.description)
         exited.fulfill()
       default: break
       }

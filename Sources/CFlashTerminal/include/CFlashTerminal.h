@@ -73,9 +73,16 @@ void flash_vt_mouse(FlashVT *vt, int action, int button, uint16_t mods,
                     double x, double y);
 void flash_vt_paste(FlashVT *vt, char *text, size_t length);
 void flash_vt_focus(FlashVT *vt, bool focused);
+/// The step of `flash_pty_spawn` that failed, reported with `errno`: creating
+/// the PTY and child, entering the working directory, or `execve`.
+#define FLASH_PTY_STEP_SPAWN 0
+#define FLASH_PTY_STEP_DIRECTORY 1
+#define FLASH_PTY_STEP_EXEC 2
+/// Forks a child on a new PTY and executes `executable` in `directory`.
+/// Returns the master descriptor, or -1 with `errno` and `failed_step` set.
 int flash_pty_spawn(const char *executable, char *const argv[],
                     char *const env[], const char *directory, uint16_t columns,
-                    uint16_t rows, pid_t *pid);
+                    uint16_t rows, pid_t *pid, int *failed_step);
 int flash_pty_resize(int fd, uint16_t columns, uint16_t rows);
 int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
                             uint32_t cell_width, uint32_t cell_height);

@@ -90,8 +90,9 @@ registered first, plugin health, hint and grid keys the current keyboard layout
 cannot type, Screen Recording when the `screenshot` plugin runs, and, once
 hints have been asked for, how recent activations went (`hint_activations`: a
 warning names each app with at least 5 recent activations of which a fifth or
-more showed no hints, or whose p95 exceeds 500 ms). It exits 1 when a check
-fails; warnings do not change the exit code.
+more showed no hints, or whose p95 exceeds 500 ms), and terminal popups whose
+command is not on the login `PATH` (`popup_commands`, a warning naming each
+popup). It exits 1 when a check fails; warnings do not change the exit code.
 
 `flash config_check` does not contact the resident. It loads the bundled
 defaults and the file (`--file`, else the path Flash would load) exactly as the

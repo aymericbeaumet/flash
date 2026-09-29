@@ -484,8 +484,9 @@ final class StatusTerminalRegistryTests: XCTestCase {
       }, evaluatedWith: nil)
     wait(for: [failed], timeout: 5)
     let failure = records.first { $0.fields["state"] == "failed" }
-    XCTAssertEqual(failure?.fields["failure_category"], "startup_failed")
+    XCTAssertEqual(failure?.fields["failure_category"], "invalid_command")
     XCTAssertEqual(failure?.fields["failure_reason"], "Invalid terminal command or environment")
+    XCTAssertEqual(failure?.fields["retries"], "on_restart")
     XCTAssertEqual(failure?.level, .warn)
     XCTAssertNil(failure?.fields["pid"])
     apply(registry, [:])
@@ -493,6 +494,77 @@ final class StatusTerminalRegistryTests: XCTestCase {
       for: NSPredicate { _, _ in records.contains { $0.fields["state"] == "stopped" } },
       evaluatedWith: nil)
     wait(for: [stopped], timeout: 5)
+  }
+
+  /// A directory on the popup's `PATH` that does not hold `tool` yet.
+  private func missingToolRegistry(
+    refreshes: @escaping () -> Void = {}
+  ) throws -> (StatusTerminalRegistry, bin: URL) {
+    let bin = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-bin-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+    let registry = StatusTerminalRegistry(
+      environment: FlashProcessEnvironment(seed: ["PATH": "\(bin.path):/usr/bin:/bin"]),
+      refreshEnvironment: { completion in
+        refreshes()
+        completion()
+      })
+    return (registry, bin)
+  }
+
+  private func install(_ tool: String, in bin: URL) throws {
+    let path = bin.appendingPathComponent(tool).path
+    try "#!/bin/sh\nexec /bin/sleep 30\n".write(toFile: path, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+  }
+
+  /// A command no `PATH` directory holds fails at once and waits for an
+  /// explicit restart instead of burning the backoff; that restart rereads
+  /// the login environment, so a tool installed since then starts.
+  func testMissingCommandWaitsForARestartThatRereadsTheEnvironment() throws {
+    var refreshes = 0
+    let (registry, bin) = try missingToolRegistry { refreshes += 1 }
+    defer {
+      registry.shutdown()
+      try? FileManager.default.removeItem(at: bin)
+    }
+    var scheduled: [FlashLog.Record] = []
+    let sink = FlashLog.addSink { record in
+      if record.source == "core:StatusTerminalRegistry.restart" { scheduled.append(record) }
+    }
+    defer { FlashLog.removeSink(sink) }
+    apply(registry, ["tool": terminal(["flash-missing-tool"], persistent: true)])
+    waitUntil {
+      registry.session(named: "tool")?.state == .failed(.commandNotFound("flash-missing-tool"))
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    XCTAssertTrue(scheduled.isEmpty, "no automatic restart: \(scheduled.map(\.message))")
+    try install("flash-missing-tool", in: bin)
+    registry.restart(name: "tool")
+    XCTAssertEqual(refreshes, 1)
+    waitUntil { self.running(registry.session(named: "tool")) != nil }
+  }
+
+  /// A reload rereads the login environment and then starts every persistent
+  /// popup whose command could not start.
+  func testReloadRetriesPopupsWhoseCommandCouldNotStart() throws {
+    let (registry, bin) = try missingToolRegistry()
+    defer {
+      registry.shutdown()
+      try? FileManager.default.removeItem(at: bin)
+    }
+    apply(
+      registry,
+      [
+        "tool": terminal(["flash-missing-tool"], persistent: true),
+        "report": terminal(["flash-missing-tool"]),
+      ])
+    waitUntil {
+      registry.session(named: "tool")?.state == .failed(.commandNotFound("flash-missing-tool"))
+    }
+    try install("flash-missing-tool", in: bin)
+    registry.retryFailedLaunches()
+    waitUntil { self.running(registry.session(named: "tool")) != nil }
   }
 
   func testOnlyExecutionChangesReplaceSessions() {

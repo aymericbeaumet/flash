@@ -57,7 +57,13 @@ extension AppDelegate {
       gridKeys: Array(config.resolvedMouseGridKeys.joined()),
       readLayout: reference.table ?? InputSources.currentLayout(),
       missingKeyboardLayout: reference.missingSourceID,
-      hintActivations: hintActivationStats.summaries)
+      hintActivations: hintActivationStats.summaries,
+      popupCommands: config.terminalPopups.compactMapValues { definition in
+        StatusTerminalRegistry.configuration(
+          for: definition, environment: FlashProcessEnvironment.shared.environment
+        ).command.first
+      },
+      popupPath: FlashProcessEnvironment.shared.environment["PATH"])
     let statuses = pluginManager.pluginStatuses()
     let screenshotEnabled = pluginManager.statusBarInfos().contains { $0.id == "screenshot" }
     let bundleURL = Bundle.main.bundleURL

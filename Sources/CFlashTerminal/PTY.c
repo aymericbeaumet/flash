@@ -56,7 +56,8 @@ int flash_spawn_file_actions_addchdir(posix_spawn_file_actions_t *actions,
 
 int flash_pty_spawn(const char *executable, char *const argv[],
                     char *const env[], const char *directory, uint16_t columns,
-                    uint16_t rows, pid_t *pid) {
+                    uint16_t rows, pid_t *pid, int *failed_step) {
+  *failed_step = FLASH_PTY_STEP_SPAWN;
   int errors[2];
   if (pipe(errors) < 0)
     return -1;
@@ -82,10 +83,14 @@ int flash_pty_spawn(const char *executable, char *const argv[],
     sigset_t signals;
     sigemptyset(&signals);
     sigprocmask(SIG_SETMASK, &signals, NULL);
-    if (!directory || chdir(directory) == 0)
+    // The step that failed and its errno, in one write below PIPE_BUF.
+    int report[2] = {FLASH_PTY_STEP_DIRECTORY, 0};
+    if (!directory || chdir(directory) == 0) {
+      report[0] = FLASH_PTY_STEP_EXEC;
       execve(executable, argv, env);
-    int error = errno;
-    write(errors[1], &error, sizeof(error));
+    }
+    report[1] = errno;
+    write(errors[1], report, sizeof(report));
     _exit(127);
   }
   close(errors[1]);
@@ -95,16 +100,17 @@ int flash_pty_spawn(const char *executable, char *const argv[],
     errno = error;
     return -1;
   }
-  int error = 0;
+  int report[2] = {FLASH_PTY_STEP_EXEC, 0};
   ssize_t count;
   do {
-    count = read(errors[0], &error, sizeof(error));
+    count = read(errors[0], report, sizeof(report));
   } while (count < 0 && errno == EINTR);
   close(errors[0]);
   if (count > 0) {
     close(master);
     waitpid(child, NULL, 0);
-    errno = error;
+    *failed_step = report[0];
+    errno = report[1];
     return -1;
   }
   fcntl(master, F_SETFD, FD_CLOEXEC);

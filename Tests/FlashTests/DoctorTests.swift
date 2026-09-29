@@ -37,6 +37,21 @@ final class DoctorTests: XCTestCase {
     XCTAssertNil(check(report, "hint_activations"), "reported only once hints were asked for")
   }
 
+  func testPopupCommandsMissingFromTheLoginPathWarnWithTheirPopup() {
+    var inputs = healthy()
+    inputs.popupCommands = ["btop": "btop", "shell": "/bin/sh", "feed": "sh"]
+    inputs.popupPath = "/usr/bin:/bin"
+    let report = Doctor.run(inputs)
+    let popups = check(report, "popup_commands")
+    XCTAssertEqual(popups?.status, .warn)
+    XCTAssertEqual(popups?.details.first, "popup.btop: btop")
+    XCTAssertEqual(report.issues, 0, "a missing popup tool is a warning, not an issue")
+    inputs.popupCommands = ["shell": "/bin/sh"]
+    XCTAssertEqual(check(Doctor.run(inputs), "popup_commands")?.status, .ok)
+    inputs.popupCommands = [:]
+    XCTAssertNil(check(Doctor.run(inputs), "popup_commands"), "only with terminal popups")
+  }
+
   func testRecentHintActivationsAreReportedOnceThereAreAny() {
     typealias Summary = HintActivationStats.Summary
     var inputs = healthy()

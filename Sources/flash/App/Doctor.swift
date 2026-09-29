@@ -1,4 +1,5 @@
 import AppKit
+import FlashTerminal
 import IOKit
 import Security
 
@@ -96,6 +97,10 @@ enum Doctor {
     var screenRecordingGranted: Bool?
     /// Recent target activations per app; empty until hints are asked for.
     var hintActivations: [HintActivationStats.Summary] = []
+    /// Each terminal popup's executable, as its launch resolves it.
+    var popupCommands: [String: String] = [:]
+    /// The `PATH` popups launch with, from the login environment.
+    var popupPath: String?
   }
 
   static func run(_ inputs: Inputs) -> Report {
@@ -210,6 +215,8 @@ enum Doctor {
       checks.append(hints)
     }
 
+    if let popups = popupCommandCheck(inputs) { checks.append(popups) }
+
     if let granted = inputs.screenRecordingGranted {
       checks.append(
         granted
@@ -231,6 +238,26 @@ enum Doctor {
   /// How hint activations have gone lately, per app. Absent until Flash has
   /// recorded any; a warning, never an issue, since an app may simply have
   /// nothing to click.
+  /// Terminal popups whose executable the popup `PATH` does not hold: they
+  /// fail as `command not found` until the tool is installed.
+  static func popupCommandCheck(_ inputs: Inputs) -> Check? {
+    guard !inputs.popupCommands.isEmpty else { return nil }
+    let missing = inputs.popupCommands.sorted { $0.key < $1.key }.filter {
+      TerminalExecutable.resolve($0.value, path: inputs.popupPath) == nil
+    }
+    guard !missing.isEmpty else {
+      return Check(
+        id: "popup_commands", status: .ok, summary: "every terminal popup's command is installed")
+    }
+    return Check(
+      id: "popup_commands", status: .warn,
+      summary: "\(missing.count) terminal popup command(s) are not on the login PATH",
+      details: missing.map { "popup.\($0.key): \($0.value)" } + [
+        "Flash reads PATH from your login shell at launch and on config reload.",
+        "After installing a tool, Command-R in its popup rereads it and starts it.",
+      ])
+  }
+
   static func hintActivationCheck(_ apps: [HintActivationStats.Summary]) -> Check? {
     guard !apps.isEmpty else { return nil }
     let flagged = apps.filter { app in

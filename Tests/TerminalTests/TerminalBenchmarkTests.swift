@@ -157,12 +157,14 @@ extension TerminalBenchmarkTests {
       Self.seconds {
         for _ in 0..<spawns {
           var child: pid_t = 0
+          var failedStep: Int32 = 0
           let arguments: [UnsafeMutablePointer<CChar>?] = [strdup("/usr/bin/true"), nil]
           let environment: [UnsafeMutablePointer<CChar>?] = [nil]
           let descriptor = arguments.withUnsafeBufferPointer { argv in
             environment.withUnsafeBufferPointer { env in
               flash_pty_spawn(
-                "/usr/bin/true", argv.baseAddress, env.baseAddress, nil, 80, 24, &child)
+                "/usr/bin/true", argv.baseAddress, env.baseAddress, nil, 80, 24, &child,
+                &failedStep)
             }
           }
           free(arguments[0])

@@ -38,7 +38,7 @@ public enum TerminalSessionState: Equatable, Sendable {
   case idle
   case running(pid: Int32)
   case exited(code: Int32)
-  case failed(String)
+  case failed(TerminalLaunchFailure)
   case stopped
 }
 
@@ -118,6 +118,9 @@ public final class TerminalSession {
   private var pending = Data()
   private var columns: Int
   private var rows: Int
+  /// Queue-confined: the environment the next start runs with, the
+  /// configuration's until `restart(environment:)` replaces it.
+  private var launchEnvironment: [String: String]
   private var cellWidth: UInt32 = 1
   private var cellHeight: UInt32 = 1
   private var started = false
@@ -131,6 +134,7 @@ public final class TerminalSession {
 
   public init(configuration: TerminalConfiguration) {
     self.configuration = configuration
+    launchEnvironment = configuration.environment
     queue.setSpecific(key: queueKey, value: true)
     columns = configuration.columns
     rows = configuration.rows
@@ -142,8 +146,11 @@ public final class TerminalSession {
   deinit { shutdown() }
 
   public func start() { queue.async { [self] in startOnQueue() } }
-  public func restart() {
+  /// Stops the process and starts it again, with `environment` when given
+  /// (a refreshed login environment) and the previous one otherwise.
+  public func restart(environment: [String: String]? = nil) {
     queue.async { [self] in
+      if let environment { launchEnvironment = environment }
       stopOnQueue()
       started = false
       buffer.invalidate()
@@ -279,25 +286,20 @@ public final class TerminalSession {
     }
     guard let command = configuration.command.first, !command.isEmpty,
       !configuration.command.contains(where: { $0.contains("\0") }),
-      !configuration.environment.contains(where: {
+      !launchEnvironment.contains(where: {
         $0.key.contains("=") || $0.key.contains("\0") || $0.value.contains("\0")
       })
     else {
-      publishState(.failed("Invalid terminal command or environment"))
+      publishState(.failed(.invalidCommand))
       return
     }
-    var environment = configuration.environment
+    var environment = launchEnvironment
     environment["TERM"] = "xterm-256color"
     environment["COLORTERM"] = "truecolor"
-    let executable: String
-    if command.contains("/") {
-      executable = command
-    } else {
-      executable =
-        (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        .split(separator: ":", omittingEmptySubsequences: false)
-        .map { String($0) + "/" + command }
-        .first { access($0, X_OK) == 0 } ?? command
+    // A name no PATH directory holds fails here, without forking a child.
+    guard let executable = TerminalExecutable.resolve(command, path: environment["PATH"]) else {
+      publishState(.failed(.commandNotFound(command)))
+      return
     }
     let argv = configuration.command.map { strdup($0) } + [nil]
     let env = environment.sorted { $0.key < $1.key }.map { strdup("\($0.key)=\($0.value)") } + [nil]
@@ -305,6 +307,7 @@ public final class TerminalSession {
       for pointer in argv { free(pointer) }
       for pointer in env { free(pointer) }
     }
+    var failedStep: Int32 = FLASH_PTY_STEP_SPAWN
     descriptor = argv.withUnsafeBufferPointer { args in
       env.withUnsafeBufferPointer { values in
         executable.withCString { path in
@@ -312,17 +315,25 @@ public final class TerminalSession {
             return directory.withCString {
               flash_pty_spawn(
                 path, args.baseAddress, values.baseAddress, $0,
-                UInt16(columns), UInt16(rows), &child)
+                UInt16(columns), UInt16(rows), &child, &failedStep)
             }
           }
           return flash_pty_spawn(
             path, args.baseAddress, values.baseAddress, nil,
-            UInt16(columns), UInt16(rows), &child)
+            UInt16(columns), UInt16(rows), &child, &failedStep)
         }
       }
     }
     guard descriptor >= 0 else {
-      publishState(.failed(String(cString: strerror(errno))))
+      let code = errno
+      switch failedStep {
+      case FLASH_PTY_STEP_DIRECTORY:
+        publishState(.failed(.workingDirectory(configuration.workingDirectory ?? "", errno: code)))
+      case FLASH_PTY_STEP_EXEC:
+        publishState(.failed(.cannotExecute(executable, errno: code)))
+      default:
+        publishState(.failed(.spawnFailed(errno: code)))
+      }
       return
     }
     let reader = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
@@ -410,7 +421,7 @@ public final class TerminalSession {
       child = 0
       closeSources()
       publishFrame()
-      publishState(.failed("Terminal child exit status is unavailable"))
+      publishState(.failed(.exitStatusUnavailable))
       return
     }
     guard result > 0 else {

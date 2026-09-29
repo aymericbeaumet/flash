@@ -121,8 +121,10 @@ extension AppDelegate {
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
-    DispatchQueue.global(qos: .userInitiated).async {
+    // Popups whose command could not start retry once it lands.
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       FlashProcessEnvironment.shared.refresh()
+      DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
     }
     let cfg = ConfigLoader.load()
     if hintSession.isActive || activationInFlight { cancelOverlay() }
