@@ -18,10 +18,10 @@ for download + upload on the default-route interface, in decimal bytes/second.
 AI percentages also cap at 99, with no padding because they change slowly.
 
 Cld/Cdx show the remaining weekly quota and the weekly reset delay. They share
-one popup, `tokscale usage`: each subscription's session, weekly and model
-quotas as its vendor reports them, with the share left and the reset time. A
-persistent popup reruns it every five minutes, so hovering shows it at once
-and never refetches; Command-R reruns it now. Left-click a label to open that
+one popup, tokscale's own TUI: tokens and cost by day and model, with every
+subscription's session, weekly and model quotas under its Usage tab. The
+popup is persistent, so hovering shows it at once and keeps the tab you left
+it on; tokscale's `autoRefreshEnabled` setting keeps it current. Left-click a label to open that
 provider’s usage page; right-click pins the popup. A stale badge becomes a
 dash (Claude: 20 minutes; Codex: 4 minutes). An empty Claude Code credential
 requires `/login` in Claude Code before live quotas can return.

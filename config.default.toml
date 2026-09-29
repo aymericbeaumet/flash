@@ -374,12 +374,12 @@ cwd = "~"
 # size = "120x36"
 # persistent = true
 #
-# AI subscription quotas from tokscale (https://github.com/junhoyeo/tokscale),
-# yours to install, e.g. `npm i -g tokscale`; wrap the AI quota labels in
-# #[popup=ai-usage]. It reruns every five minutes, so showing it is instant:
+# AI usage from tokscale's TUI (https://github.com/junhoyeo/tokscale), yours to
+# install, e.g. `npm i -g tokscale`; wrap the AI quota labels in
+# #[popup=ai-usage]. Resident, so showing it is instant:
 # [popup.ai-usage]
-# command = ["sh", "-c", 'while :; do report=$(tokscale usage 2>&1); clear; printf "%s\n" "$report"; sleep 300; done']
-# size = "68x16"
+# command = ["tokscale"]
+# size = "140x40"
 # persistent = true
 
 # Desktop widgets: a status format drawn as stacked lines on the desktop,

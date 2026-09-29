@@ -215,11 +215,11 @@ those weekly windows from the provider responses and leaves session and
 model-specific quotas out. Grok remains a launcher only; do not add quota polling that reads or mutates
 unsupported credential stores.
 
-For every quota window, show [tokscale](https://github.com/junhoyeo/tokscale)'s
-`usage` in a popup under the labels, as the
-[example status strip](examples/statusbar/flash.toml) does; install it
-yourself, for example with `npm i -g tokscale`. Flash does not rebuild that
-report.
+For every quota window, and tokens and cost by day and model, show
+[tokscale](https://github.com/junhoyeo/tokscale)'s TUI in a popup under the
+labels, as the [example status strip](examples/statusbar/flash.toml) does;
+install it yourself, for example with `npm i -g tokscale`. Flash does not
+rebuild those views.
 
 The plugin republishes a sanitized last-good cache at startup. One timer runs
 each minute to rerender relative labels and check the independent fetch TTLs: ten minutes

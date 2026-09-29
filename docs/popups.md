@@ -164,10 +164,10 @@ command = ["tokscale", "usage"]
 size = "68x16"
 ```
 
-To keep a report resident instead, so showing it is instant and never
-refetches, rerun it on a timer in a persistent popup, as the
-[example status strip](examples/statusbar/flash.toml) does; Command-R reruns
-it at once.
+When the tool has an interactive view of its own, prefer it in a persistent
+popup: it shows at once, keeps its state, and refreshes itself. The
+[example status strip](examples/statusbar/flash.toml) runs tokscale's TUI that
+way.
 
 A text popup's pager is fresh too: it starts when the popup shows and stops,
 removing its snapshot file, when it closes.
