@@ -140,7 +140,8 @@ the popup stops it. A process you end by typing into it (`exit` in a shell,
 `q` in btop) closes the popup. One that ends by itself before any key, paste
 or mouse report reached it leaves the popup open on its last screen until you
 dismiss it as usual, with an `Exited (N)` footer when the status is not 0;
-scrolling its history does not count. No process is left to read keys, so a
+scrolling its history does not count. That screen is final, so the popup drops
+its blank trailing rows and its cursor and fits the output. No process is left to read keys, so a
 focused one closes on a key press (Command-C still copies, and Command-V does
 nothing); `popup_restart` (Command-R) runs it again in place.
 
@@ -189,7 +190,10 @@ do a click anywhere outside Flash's status bar, a change of focused app or
 window, a bare Escape (swallowed while a preview shows, except in the command
 line and during hints), and `enter_normal_mode`; the preview then stays closed
 until the pointer leaves the label. A hovered text popup refreshes as its
-values change.
+values change. The panel appears with its first frame, so a pager still
+starting never shows an empty box; it waits 150 ms at most. A persistent
+popup kept parsing its output while hidden, and showing it draws that current
+screen at once rather than the one it had when it was hidden.
 
 **Click** a popup label, left or right, to pin it and focus its terminal;
 repeated clicks keep it open, and clicking another label switches popups.

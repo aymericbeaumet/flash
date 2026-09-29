@@ -478,6 +478,22 @@ public final class TerminalSession {
       self?.onStateChange?(state)
     }
   }
+  /// The screen as it is now. A hidden session keeps parsing output without
+  /// publishing frames, so its last published frame can be minutes old; a
+  /// view binding it shows this one instead. Blocks main for one incremental
+  /// snapshot on the session queue. A session not started yet has no screen.
+  public func currentFrame() -> TerminalFrame? {
+    dispatchPrecondition(condition: .onQueue(.main))
+    let current: TerminalFrame? = queue.sync {
+      guard started, let snapshot = buffer.snapshot() else { return nil }
+      lastFrameUptime = DispatchTime.now().uptimeNanoseconds
+      publishedGeneration = snapshot.generation
+      return snapshot
+    }
+    if let current { frame = current }
+    return frame
+  }
+
   /// Whether anything consumes frames. A hidden persistent popup keeps
   /// parsing output but skips the per-frame grid snapshot and the main-thread
   /// hop; re-enabling publishes one frame at once.

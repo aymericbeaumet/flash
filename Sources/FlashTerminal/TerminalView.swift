@@ -49,6 +49,8 @@ public final class TerminalView: NSView, NSTextInputClient {
   /// hidden session's grid before any view binds it.
   public static func cellSize(for font: NSFont) -> NSSize { TerminalRenderer.cellSize(for: font) }
   public private(set) var terminalFrame: TerminalFrame?
+  /// Called after each frame the bound session publishes is shown.
+  public var onFrameReceived: (() -> Void)?
   private weak var session: TerminalSession?
   private var selection: ClosedRange<Int>? {
     didSet {
@@ -157,7 +159,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     self.session?.onFrame = nil
     self.session?.setWantsFrames(false)
     self.session = session
-    terminalFrame = session?.frame
+    terminalFrame = session?.currentFrame()
     selection = nil
     mouseGesture = nil
     cursorState = nil
@@ -171,6 +173,7 @@ public final class TerminalView: NSView, NSTextInputClient {
   func receive(_ frame: TerminalFrame) {
     terminalFrame = frame
     refresh()
+    onFrameReceived?()
   }
   private func updateColors() {
     session?.setColors(foreground: foreground, background: background)

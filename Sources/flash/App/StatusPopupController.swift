@@ -47,6 +47,13 @@ final class StatusPopupController {
   private var visibleFrame = CGRect.zero
   private var style = Config.PopupStyle()
   private var font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+  /// How long a hover preview whose first frame is not drawn yet waits before
+  /// its panel shows anyway: a pager starting over its snapshot takes a few
+  /// dozen milliseconds, and an empty box would flash in the meantime.
+  static let firstFrameWait: TimeInterval = 0.15
+  /// A preview shown to the pointer whose panel waits for its first frame.
+  private(set) var isAwaitingFirstFrame = false
+  private var firstFrameFallback: DispatchWorkItem?
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
   var didDismissFocus: ((String) -> Void)?
@@ -81,6 +88,7 @@ final class StatusPopupController {
       self.dismiss(reason: "focus_lost")
     }
     terminalView.onFocusRequested = { [weak self] in self?.focus() }
+    terminalView.onFrameReceived = { [weak self] in self?.showAwaitedPreview() }
     terminalView.inputInterceptor = { [weak self] event in self?.inputInterceptor?(event) ?? false }
     terminals.willChange = { [weak self] changes in
       guard let self, let name = self.presentation.identity?.name else { return }
@@ -130,8 +138,35 @@ final class StatusPopupController {
     // A terminal popup whose session is gone dismissed itself in layout.
     guard isVisible else { return }
     terminalView.isRenderingEnabled = true
-    if windowActionsEnabled { panel.orderFrontRegardless() }
+    presentPreview()
     logLifecycle(reason: "preview")
+  }
+
+  /// Order the preview's panel front once it has a frame to show, or after
+  /// `firstFrameWait` at the latest.
+  private func presentPreview() {
+    guard terminalView.terminalFrame == nil else {
+      endFirstFrameWait()
+      if windowActionsEnabled { panel.orderFrontRegardless() }
+      return
+    }
+    guard !isAwaitingFirstFrame else { return }
+    isAwaitingFirstFrame = true
+    let fallback = DispatchWorkItem { [weak self] in self?.showAwaitedPreview() }
+    firstFrameFallback = fallback
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstFrameWait, execute: fallback)
+  }
+
+  private func showAwaitedPreview() {
+    guard isAwaitingFirstFrame else { return }
+    endFirstFrameWait()
+    if isVisible, windowActionsEnabled { panel.orderFrontRegardless() }
+  }
+
+  private func endFirstFrameWait() {
+    isAwaitingFirstFrame = false
+    firstFrameFallback?.cancel()
+    firstFrameFallback = nil
   }
 
   /// Show `name` standalone, centred on `visibleFrame` and focused. A
@@ -215,6 +250,7 @@ final class StatusPopupController {
     let wasFocused = presentation.isFocused
     if wasFocused { willDismissFocus?() }
     transition(.dismiss)
+    endFirstFrameWait()
     terminalView.isRenderingEnabled = false
     terminalView.bind(session: nil)
     if windowActionsEnabled { panel.orderOut(nil) }
@@ -241,6 +277,7 @@ final class StatusPopupController {
   }
 
   private func activateTerminalInput() {
+    endFirstFrameWait()
     guard windowActionsEnabled else { return }
     NSApp.activate()
     panel.makeKeyAndOrderFront(nil)
@@ -310,7 +347,7 @@ final class StatusPopupController {
     /// document, so that row is a blank strip under the text; clip it instead
     /// of showing it. A focused pager keeps it — that is where `/` search
     /// input and less's own messages appear.
-    var clipsTrailingRow = false
+    var clippedRows = 0
     var exitText = ""
     var footerHeight: CGFloat = 0
     var sourceKind = "terminal"
@@ -327,10 +364,14 @@ final class StatusPopupController {
         visible: visibleFrame.size, cell: cell, inset: inset, reservedHeight: footerHeight)
       columns = grid.columns
       rows = grid.rows
-      clipsTrailingRow = Self.hidesBlankTerminalRow(
-        lastRow: Self.lastRowText(of: session.frame), rows: rows,
-        interactive: presentation.isFocused || presentation.isStandalone)
+      // Bound first, so the rows judged are the screen the showing draws.
       terminalView.bind(session: session)
+      var ended = terminals.hasEnded(region.name)
+      if case .failed(let failure) = session.state, failure.isPermanent { ended = true }
+      if ended { terminalView.drawsCursor = false }
+      clippedRows = Self.clippedTrailingRows(
+        Self.rowTexts(of: terminalView.terminalFrame), rows: rows,
+        interactive: presentation.isFocused || presentation.isStandalone, ended: ended)
       session.setColors(foreground: foreground, background: background)
       session.resize(columns: columns, rows: rows)
     } else {
@@ -344,8 +385,9 @@ final class StatusPopupController {
         text: text, availableColumns: available, maximumRows: max(1, maximumRows - 1))
       columns = available
       rows = min(maximumRows, grid.rows + 1)
-      clipsTrailingRow = Self.hidesPagerPromptRow(
-        rows: rows, interactive: presentation.isFocused || presentation.isStandalone)
+      clippedRows =
+        Self.hidesPagerPromptRow(
+          rows: rows, interactive: presentation.isFocused || presentation.isStandalone) ? 1 : 0
       let session: TerminalSession
       if let existing = terminals.session(named: region.name),
         presentation.isFocused || isContentSnapshot
@@ -362,7 +404,7 @@ final class StatusPopupController {
     content = region.content
     // The session keeps every row; only the drawn height shrinks, so the
     // clipped prompt row never reaches the screen.
-    let visibleRows = rows - (clipsTrailingRow ? 1 : 0)
+    let visibleRows = rows - clippedRows
     let layout = OverlayPanel.statusBarPopupLayout(
       textSize: CGSize(
         width: CGFloat(columns) * cell.width,
@@ -506,17 +548,30 @@ final class StatusPopupController {
   /// blank strip; a focused or pinned popup keeps it, because that is where an
   /// interactive program reports errors and takes `/` input. Only a row that
   /// is actually empty is clipped, so a program using every row is untouched.
-  static func hidesBlankTerminalRow(lastRow: String?, rows: Int, interactive: Bool) -> Bool {
-    guard !interactive, rows > 1, let lastRow else { return false }
-    return lastRow.trimmingCharacters(in: .whitespaces).isEmpty
+  /// Rows left undrawn under a terminal popup's screen, one always staying.
+  /// A hover preview clips the blank last row a full-screen program keeps for
+  /// its messages. A process that has ended can no longer draw into its blank
+  /// trailing rows, so a finished report or a command that could not start
+  /// loses all of them. A focused live popup keeps every row.
+  static func clippedTrailingRows(
+    _ rowTexts: [String]?, rows: Int, interactive: Bool, ended: Bool
+  ) -> Int {
+    guard rows > 1, let rowTexts, !rowTexts.isEmpty else { return 0 }
+    let blank = rowTexts.reversed().prefix { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+      .count
+    let clippable = min(blank, rows - 1)
+    if ended { return clippable }
+    return interactive ? 0 : min(clippable, 1)
   }
 
-  /// The drawn text of a frame's last row, or nil before the first frame.
-  static func lastRowText(of frame: TerminalFrame?) -> String? {
-    guard let frame, frame.rows > 0, frame.columns > 0 else { return nil }
-    let start = (frame.rows - 1) * frame.columns
-    guard start >= 0, start + frame.columns <= frame.cells.count else { return nil }
-    return frame.cells[start..<(start + frame.columns)].map(\.text).joined()
+  /// The drawn text of each row of a frame, or nil before the first frame.
+  static func rowTexts(of frame: TerminalFrame?) -> [String]? {
+    guard let frame, frame.rows > 0, frame.columns > 0,
+      frame.cells.count >= frame.rows * frame.columns
+    else { return nil }
+    return (0..<frame.rows).map { row in
+      frame.cells[(row * frame.columns)..<((row + 1) * frame.columns)].map(\.text).joined()
+    }
   }
 
   static func documentGrid(text: String, availableColumns: Int, maximumRows: Int) -> (

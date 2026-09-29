@@ -324,18 +324,40 @@ final class StatusBarHoverTests: XCTestCase {
 
   /// A hover preview clips the blank last row a full-screen program keeps for
   /// its messages; a focused popup keeps it, and a program that fills the row
-  /// keeps it either way.
-  func testHoverPreviewClipsOnlyAnEmptyTrailingTerminalRow() {
-    func clips(_ lastRow: String?, rows: Int = 30, interactive: Bool = false) -> Bool {
-      StatusPopupController.hidesBlankTerminalRow(
-        lastRow: lastRow, rows: rows, interactive: interactive)
+  /// keeps it either way. A process that has ended loses every blank trailing
+  /// row, so a finished report fits its output.
+  func testTerminalPopupsClipTheirBlankTrailingRows() {
+    func clipped(
+      _ lastRow: String?, rows: Int = 30, interactive: Bool = false, ended: Bool = false
+    ) -> Int {
+      StatusPopupController.clippedTrailingRows(
+        lastRow.map { Array(repeating: "text", count: rows - 1) + [$0] }, rows: rows,
+        interactive: interactive, ended: ended)
     }
-    XCTAssertTrue(clips(""), "newsboat leaves its message row blank while idle")
-    XCTAssertTrue(clips("     "), "a row of spaces is still blank")
-    XCTAssertFalse(clips("Error: feed contains no items!"), "a message must stay visible")
-    XCTAssertFalse(clips("", interactive: true), "a focused popup keeps its input row")
-    XCTAssertFalse(clips(nil), "no frame yet means nothing to clip")
-    XCTAssertFalse(clips("", rows: 1), "a one-row popup has nothing left to show")
+    XCTAssertEqual(clipped(""), 1, "newsboat leaves its message row blank while idle")
+    XCTAssertEqual(clipped("     "), 1, "a row of spaces is still blank")
+    XCTAssertEqual(clipped("Error: feed contains no items!"), 0, "a message must stay visible")
+    XCTAssertEqual(clipped("", interactive: true), 0, "a focused popup keeps its input row")
+    XCTAssertEqual(clipped(nil), 0, "no frame yet means nothing to clip")
+    XCTAssertEqual(clipped("", rows: 1), 0, "a one-row popup has nothing left to show")
+    let report =
+      ["Claude", "Session 90% left", "", "Codex", "Weekly 6% left"]
+      + Array(
+        repeating: "  ", count: 11)
+    for interactive in [false, true] {
+      XCTAssertEqual(
+        StatusPopupController.clippedTrailingRows(
+          report, rows: 16, interactive: interactive, ended: true), 11,
+        "a finished report fits its output, blank line inside it kept")
+    }
+    XCTAssertEqual(
+      StatusPopupController.clippedTrailingRows(
+        report, rows: 16, interactive: false, ended: false), 1,
+      "a live preview only drops the message row")
+    XCTAssertEqual(
+      StatusPopupController.clippedTrailingRows(
+        Array(repeating: "", count: 28), rows: 28, interactive: false, ended: true), 27,
+      "a command that never started keeps one row above its footer")
   }
 
   /// Committing a left-click that has a handler closes the popup the pointer
