@@ -313,6 +313,14 @@ private struct ResidentHint: Equatable {
   let role: String?
   let frame: CGRect
 
+  var isGridCell: Bool {
+    role == "FlashMouseGridCell" || isFinalGridCell
+  }
+
+  var isFinalGridCell: Bool {
+    role == "FlashMouseGridFinalCell" || role == "FlashMouseGridFinalChip"
+  }
+
   init(_ value: [String: Any]) throws {
     guard let label = value["label"] as? String, !label.isEmpty,
       let frame = value["frame"] as? [String: NSNumber],
@@ -327,29 +335,45 @@ private struct ResidentHint: Equatable {
   }
 }
 
+private enum ResidentHintSurface: String {
+  case targets, grid
+}
+
+private func residentClickHints(
+  in state: [String: Any], surface: ResidentHintSurface
+) throws -> [ResidentHint]? {
+  guard let command = state["hint_command"] as? String, command.hasPrefix("click("),
+    let overlay = state["overlay"] as? String, overlay.hasSuffix(".hints)"),
+    state["activation_in_flight"] as? Bool == false,
+    let values = state["hints"] as? [[String: Any]]
+  else { return nil }
+  let hints = try values.map(ResidentHint.init)
+  // Target and grid sessions share the click command and hint input mode;
+  // only the grid's cell roles distinguish the displayed surface.
+  guard !hints.isEmpty,
+    hints.allSatisfy({ $0.isGridCell == (surface == .grid) })
+  else { return nil }
+  return hints
+}
+
 private func waitForResidentHints(
-  behavior: String, after previous: [ResidentHint] = [], allowInsert: Bool = false, args: Args
+  surface: ResidentHintSurface, after previous: [ResidentHint] = [], args: Args
 ) throws -> [ResidentHint] {
   let deadline = Date().addingTimeInterval(4)
   while Date() < deadline {
     let state = try fetchFlashState(args: args, timeout: 1)
-    if allowInsert, state["mode"] as? String == "insert" { return [] }
-    if state["hint_behavior"] as? String == behavior,
-      state["activation_in_flight"] as? Bool == false,
-      let values = state["hints"] as? [[String: Any]]
-    {
-      let hints = try values.map(ResidentHint.init)
-      if !hints.isEmpty, hints != previous { return hints }
+    if let hints = try residentClickHints(in: state, surface: surface), hints != previous {
+      return hints
     }
     Thread.sleep(forTimeInterval: 0.05)
   }
-  throw OracleError.flashStateUnavailable("timed out waiting for \(behavior) hint layout")
+  throw OracleError.flashStateUnavailable("timed out waiting for \(surface.rawValue) hint layout")
 }
 
 private func captureResidentHint(label: String, args: Args) throws -> ResidentHint {
   try ensureUnlockedConsole()
   try runFlash("mouse_target", args: args)
-  let hints = try waitForResidentHints(behavior: "click", args: args)
+  let hints = try waitForResidentHints(surface: .targets, args: args)
   guard let hint = hints.first(where: { $0.accessibilityLabel == label }) else {
     throw OracleError.targetMissing("resident hint for \(label)")
   }
@@ -364,10 +388,7 @@ private func commitResidentHint(label: String, args: Args) throws {
 
 private func assertResidentHintIsStillCaptured(_ hint: ResidentHint, args: Args) throws {
   let state = try fetchFlashState(args: args, timeout: 1)
-  guard state["hint_behavior"] as? String == "click",
-    state["activation_in_flight"] as? Bool == false,
-    let values = state["hints"] as? [[String: Any]],
-    try values.map(ResidentHint.init).contains(hint)
+  guard let hints = try residentClickHints(in: state, surface: .targets), hints.contains(hint)
   else { throw OracleError.flashStateUnavailable("captured hint changed before commit") }
 }
 
@@ -554,25 +575,25 @@ private func commitResidentGrid(
     hypot(hint.frame.midX - point.x, hint.frame.midY - point.y)
   }
   try runFlash("mouse_grid", args: args)
-  var hints = try waitForResidentHints(behavior: "mouseGridClick", args: args)
+  var hints = try waitForResidentHints(surface: .grid, args: args)
   // Configuration allows at most six steps. Read each new layout before the
   // next key, and only let the final click land inside this fixture's window.
   // The grid marks the cells whose selection clicks by role.
   for _ in 0..<6 {
     let candidates = hints.filter { hint in
-      let commits =
-        hint.role == "FlashMouseGridFinalChip" || hint.role == "FlashMouseGridFinalCell"
-      return !commits || safeClick(hint)
+      !hint.isFinalGridCell || safeClick(hint)
     }
     guard let selected = candidates.min(by: { distance($0) < distance($1) }) else {
       throw OracleError.targetMissing("safe non-input fixture grid cell")
     }
     try postHintLabel(selected.label)
-    hints = try waitForResidentHints(
-      behavior: "mouseGridClick", after: hints, allowInsert: true, args: args)
-    if hints.isEmpty { return }
+    if selected.isFinalGridCell {
+      try waitForResidentHintsDismissed(args: args)
+      return
+    }
+    hints = try waitForResidentHints(surface: .grid, after: hints, args: args)
   }
-  throw OracleError.flashModeTimedOut("insert after final mouse_grid cell")
+  throw OracleError.flashStateUnavailable("mouse grid did not reach a final cell within six steps")
 }
 
 private func flashMode(args: Args) throws -> String {
@@ -972,6 +993,48 @@ private func axElementAttribute(_ element: AXUIElement, _ attribute: CFString) -
   return (value as! AXUIElement)
 }
 
+private func revealStatusItemFrame(_ element: AXUIElement) throws -> CGRect {
+  guard let initialFrame = AXIntegrationHarness.frame(of: element), !initialFrame.isEmpty else {
+    throw OracleError.stateTimedOut("reading native status item geometry before reveal")
+  }
+  func distanceToTopEdge(_ screen: NSScreen) -> CGFloat {
+    let x = min(max(initialFrame.midX, screen.frame.minX), screen.frame.maxX)
+    return hypot(initialFrame.midX - x, initialFrame.midY - screen.frame.maxY)
+  }
+  guard let screen = NSScreen.screens.min(by: { distanceToTopEdge($0) < distanceToTopEdge($1) })
+  else { throw OracleError.stateTimedOut("finding native status item's screen") }
+  let revealPoint = CGPoint(
+    x: min(max(initialFrame.midX, screen.frame.minX + 1), screen.frame.maxX - 1),
+    y: screen.frame.maxY - 1)
+  try ensureUnlockedConsole()
+  guard CGWarpMouseCursorPosition(cgScreenPoint(from: revealPoint)) == .success else {
+    throw OracleError.stateTimedOut("moving the pointer to reveal the native menu bar")
+  }
+
+  // Auto-hidden status items retain offscreen AX frames. Wait for the menu
+  // bar animation to finish before using a freshly read click point.
+  let deadline = Date().addingTimeInterval(4)
+  var previousFrame: CGRect?
+  var stableSince = Date()
+  while Date() < deadline {
+    try ensureUnlockedConsole()
+    if let frame = AXIntegrationHarness.frame(of: element), !frame.isEmpty,
+      screen.frame.contains(frame)
+    {
+      if frame == previousFrame {
+        if Date().timeIntervalSince(stableSince) >= 0.15 { return frame }
+      } else {
+        previousFrame = frame
+        stableSince = Date()
+      }
+    } else {
+      previousFrame = nil
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  throw OracleError.stateTimedOut("native status item did not reveal a stable onscreen AX frame")
+}
+
 private func runResidentModeProbe(
   args: Args,
   app: NSRunningApplication,
@@ -988,10 +1051,9 @@ private func runResidentModeProbe(
       let statusNode = waitForAXNode(
         app: app,
         labels: ["FlashNativeStatus"],
-        timeout: 4),
-      let statusFrame = statusNode.frame
+        timeout: 4)
     else {
-      recorder.fail("resident status item AX frame not found")
+      recorder.fail("resident status item AX node not found")
       return
     }
 
@@ -1010,7 +1072,7 @@ private func runResidentModeProbe(
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
     try commitResidentGrid(app: app, targets: targets, args: args)
-    assertFlashMode("insert", args: args, recorder: recorder, label: "non-input mouse_grid commit")
+    assertFlashMode("normal", args: args, recorder: recorder, label: "non-input mouse_grid commit")
 
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
@@ -1053,6 +1115,7 @@ private func runResidentModeProbe(
     try waitForFlashMode("normal", args: args, timeout: 4)
     let statusBefore = readState(args.statePath)["status_popover", default: 0]
     let statusCloseBefore = readState(args.statePath)["status_popover_closed", default: 0]
+    let statusFrame = try revealStatusItemFrame(statusNode.element)
     postMouseClick(at: CGPoint(x: statusFrame.midX, y: statusFrame.midY), action: .leftClick)
     assertFlashMode("normal", args: args, recorder: recorder, label: "native status item CG click")
     if (try? waitForState(
@@ -1063,6 +1126,8 @@ private func runResidentModeProbe(
     {
       recorder.pass("resident status item opened from CG click")
     } else {
+      try runFlash("enter_normal_mode", args: args)
+      try waitForFlashMode("normal", args: args, timeout: 4)
       let error = AXUIElementPerformAction(statusNode.element, kAXPressAction as CFString)
       guard error == .success else {
         recorder.fail("resident status item AXPress fallback failed error=\(error.rawValue)")

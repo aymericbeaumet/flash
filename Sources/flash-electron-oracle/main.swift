@@ -315,6 +315,12 @@ do {
     recorder.pass("disabled Electron button is not hinted")
   }
 
+  if targets.contains(where: { $0.role == "AXMenuItem" && $0.accessibilityLabel == "Second" }) {
+    recorder.fail("unselected Electron option was hinted while the select was collapsed")
+  } else {
+    recorder.pass("unselected Electron option is not hinted while the select is collapsed")
+  }
+
   if let primary = targets.first(where: { $0.accessibilityLabel == "Electron Primary" }),
     performHostClick(primary)
   {
