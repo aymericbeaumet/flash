@@ -119,7 +119,8 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     // `-l` runs the login chain (`.zprofile`/`.profile`/…) where `PATH`
     // mutations such as mise's shims live. `env -0` prints every exported
     // variable NUL-separated and unquoted in any shell; `export -p` does not
-    // (zsh prints its tied `PATH` as `export -T PATH path=( … )`).
+    // (zsh prints its tied `PATH` as `export -T PATH path=( … )`). macOS's
+    // `env` has taken `-0` since shell_cmds-240; macOS 14 ships 302.
     process.arguments = [
       "-l", "-c", "/usr/bin/printf '\\000\(environmentMarker)\\000'; exec /usr/bin/env -0",
     ]
