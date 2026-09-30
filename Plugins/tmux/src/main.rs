@@ -8,19 +8,27 @@
 //! the catalog warm with a background refresh loop:
 //!
 //!   1. `on_start` builds and publishes the initial rows, then a 1 s
-//!      background poll keeps them current. The candidate hash gates
-//!      publishes, so unchanged refreshes are true no-ops.
+//!      background poll keeps them current while a tmux client is attached
+//!      anywhere. The candidate hash gates publishes, so unchanged refreshes
+//!      are true no-ops.
 //!   2. Host events (`core:focus.changed`, `core:apps.terminated`) trigger an
-//!      additional refresh at explicit interaction boundaries.
-//!   3. The flashlight reads the host-owned store fed by `publish`; no tmux
+//!      additional refresh at explicit interaction boundaries. While no client
+//!      is attached the poll is cancelled, and a flashlight open
+//!      (`core:session.opened`) or the focused app's settled
+//!      `core:ax.changed` burst (attaching retitles the terminal) refreshes
+//!      instead — which re-arms the poll once a client is attached.
+//!   3. A kqueue watch on the `tmux-$UID` socket directory
+//!      ([`socket_watch`]) rediscovers servers when one starts or exits,
+//!      instead of rescanning the directory on a timer.
+//!   4. The flashlight reads the host-owned store fed by `publish`; no tmux
 //!      I/O ever rides the hot path.
-//!   4. Each refresh also retains its `list-clients` + process tree
+//!   5. Each refresh also retains its `list-clients` + process tree
 //!      sample. The expensive host-wide process tree is reused while the tmux
 //!      client pid set is unchanged. Hint discovery and repeatable source
 //!      actions consult that warm cache first; the actions validate only the
 //!      cached client's live session, so `[t` / `]t` avoid a host-wide `ps`
 //!      and all-socket rediscovery before changing windows.
-//!   5. Each successful local refresh also derives the attached-client
+//!   6. Each successful local refresh also derives the attached-client
 //!      session/window/pane statusbar segments (`#{flash.plugin.tmux.session}` /
 //!      `.window` / `.pane`) from the same inventory and emits the `status`
 //!      notification only when the values change.
@@ -65,6 +73,8 @@ use serde_json::{Value, json};
 
 use flash_plugin::process as bounded_process;
 
+mod settle;
+mod socket_watch;
 mod status_hints;
 
 const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
@@ -86,6 +96,8 @@ const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
 const REMOTE_POLL_INTERVAL_SECS: u64 = 5;
 const REMOTE_RETRY_DELAYS_SECS: [u64; 3] = [15, 30, 60];
+/// Socket-directory rescan period, used only while the kqueue watch is
+/// unavailable or the last scan was incomplete.
 const SOCKET_DISCOVERY_INTERVAL_SECS: u64 = 30;
 const SOCKET_DISCOVERY_FANOUT_LIMIT: usize = 16;
 const SOCKET_RETRY_DELAYS_SECS: [u64; 3] = [5, 15, 60];
@@ -921,6 +933,9 @@ struct TmuxSocketRegistryState {
     default_identity: Option<SocketIdentity>,
     discovered_at: Option<Instant>,
     discovery_complete: bool,
+    /// The socket directory is watched ([`socket_watch`]): a change
+    /// invalidates the discovery, so a complete one never goes stale.
+    watched: bool,
 }
 
 #[derive(Default)]
@@ -972,8 +987,7 @@ fn dedupe_discovered_sockets(
 }
 
 async fn discover_tmux_sockets() -> SocketDiscovery {
-    // SAFETY: geteuid has no preconditions and does not retain pointers.
-    let uid = unsafe { libc::geteuid() };
+    let uid = nix::unistd::geteuid().as_raw();
     let mut sockets = Vec::new();
     let mut complete = true;
     for root in tmux_socket_roots(uid) {
@@ -1044,9 +1058,15 @@ async fn resolve_default_tmux_socket_identity(tmux_path: &str) -> Option<SocketI
 impl TmuxSocketRegistryState {
     fn needs_discovery(&self, now: Instant) -> bool {
         self.discovered_at.is_none_or(|discovered_at| {
-            now.saturating_duration_since(discovered_at)
-                >= Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS)
+            (!self.watched || !self.discovery_complete)
+                && now.saturating_duration_since(discovered_at)
+                    >= Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS)
         })
+    }
+
+    /// The watched directory changed: the next refresh rediscovers.
+    fn invalidate(&mut self) {
+        self.discovered_at = None;
     }
 
     fn refresh_discovery(
@@ -1208,6 +1228,16 @@ impl TmuxSocketRegistry {
 
     async fn has_unseen_sockets(&self) -> bool {
         self.state.lock().await.has_unseen_sockets()
+    }
+
+    async fn set_watched(&self, watched: bool) {
+        let mut state = self.state.lock().await;
+        state.watched = watched;
+        state.invalidate();
+    }
+
+    async fn invalidate(&self) {
+        self.state.lock().await.invalidate();
     }
 
     async fn record(&self, identity: SocketIdentity, outcome: SocketProbeOutcome, now: Instant) {
@@ -3580,7 +3610,19 @@ fn cli_failure_detail(result: &CliResult) -> String {
     }
 }
 
+/// Refresh the local catalog, then arm the one-second poll while a client is
+/// attached and cancel it while none is.
 async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
+    refresh_local_candidate_locations(plugin, ctx).await;
+    let attached = plugin
+        .client_snapshot()
+        .lock()
+        .map(|snapshot| !snapshot.clients.is_empty())
+        .unwrap_or(true);
+    plugin.candidate_poll_arc.reconcile(attached);
+}
+
+async fn refresh_local_candidate_locations(plugin: &Tmux, ctx: &Context) {
     refresh_candidate_locations_for_path(
         plugin.resolved_tmux_path().await,
         ctx,
@@ -3708,51 +3750,73 @@ async fn refresh_remote_backends(
     succeeded
 }
 
+/// Local inventory period while a tmux client is attached anywhere. With none
+/// attached the registration is cancelled: nobody is looking at a tmux
+/// window, and events (focus, app termination, flashlight opens, settled AX
+/// bursts, the socket-directory watch) refresh the catalog instead.
 const POLL_INTERVAL_SECS: u64 = 1;
-/// Poll period while no tmux client is attached anywhere: nobody is looking
-/// at a tmux window, so the catalog can lag a few seconds instead of running a
-/// `tmux` inventory subprocess every second.
-const IDLE_POLL_INTERVAL_SECS: u64 = 5;
 const STARTUP_WARM_BUDGET: Duration = Duration::from_secs(10);
+/// `core:ax.changed` names neither the notification nor the element and
+/// fires on every keystroke's value change, so while no client is attached a
+/// burst refreshes once it has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_secs(1);
+/// …or this long after it began, whichever comes first.
+const AX_MAX_WAIT: Duration = Duration::from_secs(10);
+static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
+
+/// The local inventory cadence: registered once, live while a tmux client is
+/// attached anywhere, cancelled while none is.
+#[derive(Default)]
+struct CandidatePoll {
+    handle: OnceLock<PollHandle>,
+    /// Whether the registration is live. Only transitions reach the host.
+    armed: Mutex<bool>,
+}
+
+impl CandidatePoll {
+    fn register<F, Fut>(&self, ctx: &Context, tick: F)
+    where
+        F: FnMut(Context) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let handle = ctx.interval(Duration::from_secs(POLL_INTERVAL_SECS), tick);
+        if self.handle.set(handle).is_ok() {
+            *self.armed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        }
+    }
+
+    fn armed(&self) -> bool {
+        *self.armed.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn reconcile(&self, attached: bool) {
+        let Some(handle) = self.handle.get() else {
+            return;
+        };
+        let mut armed = self.armed.lock().unwrap_or_else(|e| e.into_inner());
+        if *armed == attached {
+            return;
+        }
+        *armed = attached;
+        if attached {
+            handle.set_period(Duration::from_secs(POLL_INTERVAL_SECS));
+        } else {
+            handle.cancel();
+        }
+    }
+}
 
 fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
-    let tmux_path = std::sync::Arc::clone(&plugin.tmux_path);
-    let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
-    let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
-    let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
-    let last_status = std::sync::Arc::clone(&plugin.last_status_segments_arc);
-    let coordinator = std::sync::Arc::clone(&plugin.candidate_refresh_coordinator_arc);
-    let socket_registry = std::sync::Arc::clone(&plugin.tmux_socket_registry_arc);
-    let local_config = std::sync::Arc::clone(&plugin.local_config_arc);
+    let plugin = plugin.clone();
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let path = tmux_path.get_or_init(find_tmux).await.clone();
+        plugin.resolved_tmux_path().await;
         if retry_immediately {
-            refresh_candidate_locations_for_path(
-                path.as_deref(),
-                &ctx,
-                &last_hash,
-                &client_snapshot,
-                &partitions,
-                &last_status,
-                &local_config,
-                &coordinator,
-                &socket_registry,
-            )
-            .await;
+            refresh_local_candidate_locations(&plugin, &ctx).await;
         }
-        let handle: Arc<OnceLock<PollHandle>> = Arc::new(OnceLock::new());
-        let slot = Arc::clone(&handle);
-        let registered = ctx.interval(Duration::from_secs(POLL_INTERVAL_SECS), move |ctx| {
-            let path = path.clone();
-            let last_hash = Arc::clone(&last_hash);
-            let client_snapshot = Arc::clone(&client_snapshot);
-            let partitions = Arc::clone(&partitions);
-            let last_status = Arc::clone(&last_status);
-            let local_config = Arc::clone(&local_config);
-            let coordinator = Arc::clone(&coordinator);
-            let socket_registry = Arc::clone(&socket_registry);
-            let slot = Arc::clone(&slot);
+        let ticking = plugin.clone();
+        plugin.candidate_poll_arc.register(&ctx, move |ctx| {
+            let plugin = ticking.clone();
             async move {
                 // Drain newly discovered sockets in bounded waves before
                 // yielding the tick. Stale endpoints fail quickly, so a
@@ -3760,40 +3824,57 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 // publish budget without ever launching an unbounded
                 // subprocess fan-out.
                 loop {
-                    refresh_candidate_locations_for_path(
-                        path.as_deref(),
-                        &ctx,
-                        &last_hash,
-                        &client_snapshot,
-                        &partitions,
-                        &last_status,
-                        &local_config,
-                        &coordinator,
-                        &socket_registry,
-                    )
-                    .await;
-                    if !socket_registry.has_unseen_sockets().await {
+                    refresh_candidate_locations(&plugin, &ctx).await;
+                    if !plugin.tmux_socket_registry().has_unseen_sockets().await {
                         break;
                     }
                     tokio::task::yield_now().await;
                 }
-                // Nobody is looking at a tmux window: let the catalog lag
-                // a few seconds instead of running a `tmux` inventory
-                // subprocess every second.
-                let attached = client_snapshot
-                    .lock()
-                    .map(|snapshot| !snapshot.clients.is_empty())
-                    .unwrap_or(true);
-                if let Some(handle) = slot.get() {
-                    handle.set_period(Duration::from_secs(if attached {
-                        POLL_INTERVAL_SECS
-                    } else {
-                        IDLE_POLL_INTERVAL_SECS
-                    }));
-                }
             }
         });
-        drop(handle.set(registered));
+        // Nobody may be attached already: cancel right away rather than a
+        // tick from now.
+        let attached = plugin
+            .client_snapshot()
+            .lock()
+            .map(|snapshot| !snapshot.clients.is_empty())
+            .unwrap_or(true);
+        plugin.candidate_poll_arc.reconcile(attached);
+    });
+}
+
+/// Watch the socket directory so a server starting or exiting rediscovers
+/// sockets and refreshes at once. Without the watch, discovery falls back to
+/// its periodic rescan.
+fn start_socket_watch(plugin: &Tmux, ctx: &Context) {
+    let plugin = plugin.clone();
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        let uid = nix::unistd::geteuid().as_raw();
+        let [socket_directory, _] = tmux_socket_roots(uid);
+        let mut watch = match socket_watch::SocketDirWatch::new(socket_directory).await {
+            Ok(watch) => watch,
+            Err(error) => {
+                ctx.log(
+                    "warn",
+                    &format!("[tmux] socket directory watch unavailable; rescanning: {error}"),
+                );
+                return;
+            }
+        };
+        plugin.tmux_socket_registry().set_watched(true).await;
+        loop {
+            if let Err(error) = watch.changed().await {
+                plugin.tmux_socket_registry().set_watched(false).await;
+                ctx.log(
+                    "warn",
+                    &format!("[tmux] socket directory watch stopped; rescanning: {error}"),
+                );
+                return;
+            }
+            plugin.tmux_socket_registry().invalidate().await;
+            refresh_candidate_locations(&plugin, &ctx).await;
+        }
     });
 }
 
@@ -6792,11 +6873,64 @@ play\t3\tflash\tzsh\t/p\t1\t4\n";
         assert_eq!(frames[0]["window"], "##[bold]logs");
         assert_eq!(frames[0]["pane"], "0");
     }
+
+    #[test]
+    fn a_watched_socket_directory_is_rescanned_only_when_it_changes() {
+        let now = Instant::now();
+        let later = now + Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS);
+        let mut state = TmuxSocketRegistryState::default();
+        assert!(state.needs_discovery(now), "never discovered");
+        state.refresh_discovery(Vec::new(), None, true, now);
+        assert!(!state.needs_discovery(now));
+        assert!(state.needs_discovery(later), "unwatched: the rescan period");
+
+        state.watched = true;
+        assert!(
+            !state.needs_discovery(later + Duration::from_secs(3_600)),
+            "watched: a complete scan stays current"
+        );
+        state.invalidate();
+        assert!(state.needs_discovery(now), "a directory change rescans");
+        state.refresh_discovery(Vec::new(), None, false, now);
+        assert!(!state.needs_discovery(now));
+        assert!(
+            state.needs_discovery(later),
+            "an incomplete scan still retries on the period"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_local_poll_is_live_only_while_a_client_is_attached() {
+        let mut harness = flash_plugin::testing::Harness::new("tmux");
+        let ctx = harness.context();
+        let poll = CandidatePoll::default();
+        poll.reconcile(false);
+        assert!(!poll.armed(), "nothing to reconcile before registration");
+
+        poll.register(&ctx, |_| async {});
+        poll.reconcile(true);
+        poll.reconcile(false);
+        poll.reconcile(false);
+        assert!(!poll.armed());
+        poll.reconcile(true);
+        assert!(poll.armed());
+        let polls: Vec<Value> = harness
+            .drain()
+            .into_iter()
+            .filter(|frame| frame["method"] == "poll")
+            .map(|frame| frame["params"]["intervals"].clone())
+            .collect();
+        assert_eq!(
+            polls,
+            [json!({ "i0": 1.0 }), json!({}), json!({ "i0": 1.0 })],
+            "only transitions reach the host"
+        );
+    }
 }
 
 // ---- Plugin glue ------------------------------------------------------------
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Tmux {
     tmux_path: std::sync::Arc<tokio::sync::OnceCell<Option<String>>>,
     local_config_arc: std::sync::Arc<Mutex<LocalTmuxConfig>>,
@@ -6822,6 +6956,8 @@ struct Tmux {
     /// can finish after a newer one and publish stale rows over the host's
     /// current catalog.
     candidate_refresh_coordinator_arc: std::sync::Arc<CandidateRefreshCoordinator>,
+    /// The local inventory cadence, live only while a client is attached.
+    candidate_poll_arc: std::sync::Arc<CandidatePoll>,
 }
 
 impl Tmux {
@@ -6945,20 +7081,38 @@ impl FlashPlugin for Tmux {
             );
         }
         start_candidate_poll(self, &ctx, degraded_initial);
+        start_socket_watch(self, &ctx);
         // Remote polling can observe nothing until a host is opted in.
         if !ssh_hosts.is_empty() {
             start_remote_candidate_poll(self, &ctx, ssh_hosts, matches!(initial, Ok(true)));
         }
     }
 
-    /// Push events refresh the warm locations immediately. The poll keeps the
-    /// store current between host-visible interaction boundaries.
+    /// Push events refresh the warm locations immediately. While a client is
+    /// attached the poll keeps the store current between host-visible
+    /// interaction boundaries; while none is, flashlight opens and settled
+    /// AX bursts stand in for it.
     async fn on_event(&self, ctx: Context, event: Event) {
-        if matches!(
-            event.name.as_str(),
-            "core:focus.changed" | "core:apps.terminated"
-        ) {
-            refresh_candidate_locations(self, &ctx).await;
+        match event.name.as_str() {
+            "core:focus.changed" | "core:apps.terminated" => {
+                refresh_candidate_locations(self, &ctx).await;
+            }
+            "core:session.opened" if !self.candidate_poll_arc.armed() => {
+                refresh_candidate_locations(self, &ctx).await;
+            }
+            // The first event of a burst spawns its one waiter.
+            "core:ax.changed"
+                if !self.candidate_poll_arc.armed()
+                    && AX_BURST.note(event.pid.unwrap_or_default(), Instant::now()) =>
+            {
+                let plugin = self.clone();
+                tokio::spawn(async move {
+                    if AX_BURST.wait().await.is_some() && !plugin.candidate_poll_arc.armed() {
+                        refresh_candidate_locations(&plugin, &ctx).await;
+                    }
+                });
+            }
+            _ => {}
         }
     }
 

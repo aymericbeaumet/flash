@@ -119,6 +119,10 @@ least 50 ms.
   once it has been quiet for one second, and at most ten seconds after it
   began. The host observes AX only in the focused app; a background app's
   changes catch up when focus or the flashlight next touches it.
+- `tmux` inventories its local servers every second only while a client is
+  attached somewhere; otherwise the registration is cancelled and focus
+  changes, flashlight opens, settled AX bursts and a kqueue watch on the
+  `tmux-$UID` socket directory (a server starting or exiting) refresh it.
 - Debug plugin logs remain available in the log file but do not invalidate
   status/inspector snapshots.
 - The NDJSON frame collector scans appended bytes once and compacts the
