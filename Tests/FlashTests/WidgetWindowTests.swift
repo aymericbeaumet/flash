@@ -101,8 +101,7 @@ final class WidgetWindowTests: XCTestCase {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
     let visible = CGRect(x: 0, y: 70, width: 1440, height: 830)
     let reserved = WindowMover.usableFrame(
-      screenFrame: screen, visibleFrame: visible, statusBarReservesSpace: true, fontSize: 13,
-      fallbackNativeStatusBarHeight: 24)
+      screenFrame: screen, visibleFrame: visible, statusBarHeight: 24)
     let size = CGSize(width: 200, height: 100)
     let top = WidgetPlacement.frame(
       anchor: .topRight, gap: CGSize(width: 24, height: 24), size: size, usable: reserved)
@@ -111,7 +110,7 @@ final class WidgetWindowTests: XCTestCase {
       anchor: .bottomLeft, gap: CGSize(width: 24, height: 24), size: size, usable: reserved)
     XCTAssertEqual(bottom.minY, 70 + 24, "above the Dock")
     let unreserved = WindowMover.usableFrame(
-      screenFrame: screen, visibleFrame: visible, statusBarReservesSpace: false, fontSize: 13)
+      screenFrame: screen, visibleFrame: visible, statusBarHeight: nil)
     XCTAssertEqual(
       WidgetPlacement.frame(
         anchor: .topRight, gap: CGSize(width: 24, height: 24), size: size, usable: unreserved

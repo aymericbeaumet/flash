@@ -76,10 +76,8 @@ extension OverlayPanel {
     let visible = snapshot.mainVisibleFrame
     let screenFrame = snapshot.mainFrame ?? visible
     let statusFrame = Self.statusBarFrame(
-      screenFrame: screenFrame,
-      visibleFrame: visible,
-      panelFrame: panelFrame,
-      fontSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)))
+      screenFrame: screenFrame, height: snapshot.statusBarHeight(forScreenFrame: screenFrame),
+      panelFrame: panelFrame)
     let scale = snapshot.mainScale
     let frame = Self.commandPromptFrame(
       visibleFrame: visible,

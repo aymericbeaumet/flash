@@ -66,6 +66,7 @@ extension OverlayPanel {
       configureModeBadge(panelFrame: frame)
     } else {
       hideStatusBarClickWindows()
+      setStatusBarPaintedBands([])
     }
     syncStatusBarWindow()
     sublayers.removeAll { $0 === commandPromptLayer || $0 === candidateFinderResultsLayer }
@@ -216,6 +217,7 @@ extension OverlayPanel {
       configureModeBadge(panelFrame: frame)
     } else {
       hideStatusBarClickWindows()
+      setStatusBarPaintedBands([])
     }
     syncStatusBarWindow()
     var sublayers: [CALayer] = []
@@ -332,15 +334,17 @@ extension OverlayPanel {
       secondaryStatusBars.append(NativeStatusBarSurface())
     }
     var interactions: [StatusBarScreenInteractions] = []
+    var bands: [CGRect] = []
     let document = statusBarModel.document
     func configure(
-      _ surface: NativeStatusBarSurface, screen: CGRect, visible: CGRect,
-      scale: CGFloat, notch: CGRect?
+      _ surface: NativeStatusBarSurface, screen: CGRect, scale: CGFloat, notch: CGRect?
     ) {
+      let barFrame = Self.statusBarFrame(
+        screenFrame: screen, height: snapshot.statusBarHeight(forScreenFrame: screen),
+        panelFrame: panelFrame)
+      bands.append(barFrame.offsetBy(dx: panelFrame.minX, dy: panelFrame.minY))
       surface.render(
-        document: document,
-        barFrame: Self.statusBarFrame(
-          screenFrame: screen, visibleFrame: visible, panelFrame: panelFrame, fontSize: fontSize),
+        document: document, barFrame: barFrame,
         screenFrame: screen, scale: scale, notch: notch, font: font, labels: modeLabels,
         palette: modeBadgePalette(), modeStyle: modeSurface.style, modeText: modeSurface.label,
         notchWidth: snapshot.referenceNotchWidth)
@@ -350,8 +354,7 @@ extension OverlayPanel {
       interactions.append(.init(screenFrame: screen, links: hits.links, popups: hits.popups))
     }
     configure(
-      primaryStatusBarSurface, screen: mainFrame, visible: visible, scale: snapshot.mainScale,
-      notch: mainNotch)
+      primaryStatusBarSurface, screen: mainFrame, scale: snapshot.mainScale, notch: mainNotch)
     let stats = primaryStatusBarSurface.lastRenderStats
     FlashLog.trace(
       "[statusbar] render visible=\(stats.visible) changed=\(stats.changed) "
@@ -367,18 +370,19 @@ extension OverlayPanel {
           + "notch=\(mainNotch.map(NSStringFromRect) ?? "none")")
     }
     for (surface, screen) in zip(secondaryStatusBars, extras) {
-      configure(
-        surface, screen: screen.frame, visible: screen.visibleFrame, scale: screen.scale,
-        notch: screen.notch)
+      configure(surface, screen: screen.frame, scale: screen.scale, notch: screen.notch)
     }
     if modeSurface.barVisible {
       statusBarInteractionsByScreen = interactions
+      // Click windows cover exactly the bands just painted.
       syncStatusBarClickWindows(
-        bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),
-        links: interactions.flatMap(\.links), popups: interactions.flatMap(\.popups))
+        bandRects: bands, links: interactions.flatMap(\.links),
+        popups: interactions.flatMap(\.popups))
+      setStatusBarPaintedBands(bands)
     } else {
       statusBarInteractionsByScreen = []
       hideStatusBarClickWindows()
+      setStatusBarPaintedBands([])
     }
   }
 
@@ -402,43 +406,23 @@ extension OverlayPanel {
     statusBarFontSize
   }
 
-  /// `fallbackHeight` defaults to the native menu bar of the display at
-  /// `screenFrame`.
+  /// The top band a status bar occupies on a screen: the band macOS reserves
+  /// above `visibleFrame` (the native menu bar, when it is not auto-hidden),
+  /// or the display's measured native menu bar, whichever is taller.
   static func nativeStatusBarHeight(
     screenFrame: CGRect,
     visibleFrame: CGRect,
-    fallbackHeight: CGFloat? = nil
+    fallbackHeight: CGFloat
   ) -> CGFloat {
     let reservedTopBand = max(0, screenFrame.maxY - visibleFrame.maxY)
-    let fallback =
-      fallbackHeight
-      ?? currentScreenSnapshot().nativeStatusBarFallbackHeight(forScreenFrame: screenFrame)
-    return max(reservedTopBand, max(0, fallback))
+    return max(reservedTopBand, max(0, fallbackHeight))
   }
 
-  static func statusBarHeight(
-    screenFrame: CGRect,
-    visibleFrame: CGRect,
-    fontSize _: CGFloat,
-    fallbackNativeStatusBarHeight: CGFloat? = nil
-  ) -> CGFloat {
-    nativeStatusBarHeight(
-      screenFrame: screenFrame,
-      visibleFrame: visibleFrame,
-      fallbackHeight: fallbackNativeStatusBarHeight)
-  }
-
-  static func statusBarFrame(
-    screenFrame: CGRect,
-    visibleFrame: CGRect,
-    panelFrame: CGRect,
-    fontSize: CGFloat
-  ) -> CGRect {
-    let height = statusBarHeight(
-      screenFrame: screenFrame,
-      visibleFrame: visibleFrame,
-      fontSize: fontSize)
-    return CGRect(
+  /// The bar's frame in panel coordinates: `height` points along the top of
+  /// `screenFrame`. `height` comes from `ScreenSnapshot.statusBarHeight`, the
+  /// one value `window_move` also reserves.
+  static func statusBarFrame(screenFrame: CGRect, height: CGFloat, panelFrame: CGRect) -> CGRect {
+    CGRect(
       x: screenFrame.minX - panelFrame.minX,
       y: screenFrame.maxY - height - panelFrame.minY,
       width: screenFrame.width,

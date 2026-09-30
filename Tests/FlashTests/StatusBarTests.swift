@@ -33,41 +33,37 @@ final class StatusBarTests: XCTestCase {
   }
 
   func testStatusBarHeightUsesExactPerScreenReservedBand() {
-    let height = OverlayPanel.statusBarHeight(
+    let height = OverlayPanel.nativeStatusBarHeight(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      fallbackHeight: 22)
 
     XCTAssertEqual(height, 38)
   }
 
   func testStatusBarHeightFallsBackToSystemThicknessWhenNativeBandIsAbsent() {
-    let height = OverlayPanel.statusBarHeight(
+    let height = OverlayPanel.nativeStatusBarHeight(
       screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
       visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      fallbackHeight: 22)
 
     XCTAssertEqual(height, 22)
   }
 
   func testStatusBarHeightUsesMeasuredNativeMenuHeightWhenFoldedBandIsAbsent() {
-    let height = OverlayPanel.statusBarHeight(
+    let height = OverlayPanel.nativeStatusBarHeight(
       screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
       visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 30)
+      fallbackHeight: 30)
 
     XCTAssertEqual(height, 30)
   }
 
   func testStatusBarHeightUsesLargerNativeBandWhenBothMeasurementsExist() {
-    let height = OverlayPanel.statusBarHeight(
+    let height = OverlayPanel.nativeStatusBarHeight(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1093),
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 30)
+      fallbackHeight: 30)
 
     XCTAssertEqual(height, 30)
   }
@@ -140,17 +136,20 @@ final class StatusBarTests: XCTestCase {
   }
 
   func testStatusBarFrameUsesExactPerScreenNativeStatusBarHeight() {
+    let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let snapshot = OverlayPanel.makeScreenSnapshot(
+      screens: [
+        (
+          scale: 2, frame: screen, visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
+          notch: nil
+        )
+      ],
+      nativeStatusBarFallbackHeight: 33)
     let frame = OverlayPanel.statusBarFrame(
-      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
-      visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
-      panelFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
-      fontSize: 13)
+      screenFrame: screen, height: snapshot.statusBarHeight(forScreenFrame: screen),
+      panelFrame: screen)
 
-    XCTAssertEqual(
-      frame.height,
-      OverlayPanel.nativeStatusBarHeight(
-        screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
-        visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079)))
+    XCTAssertEqual(frame.height, 38, "the reserved band beats the shorter measured bar")
     XCTAssertEqual(frame.maxY, 1117)
   }
 
@@ -835,10 +834,8 @@ final class StatusBarTests: XCTestCase {
     let screenFrame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
     let visibleFrame = CGRect(x: 0, y: 0, width: 1728, height: 1079)
     let statusBarFrame = OverlayPanel.statusBarFrame(
-      screenFrame: screenFrame,
-      visibleFrame: visibleFrame,
-      panelFrame: screenFrame,
-      fontSize: 13)
+      screenFrame: screenFrame, height: screenFrame.maxY - visibleFrame.maxY,
+      panelFrame: screenFrame)
     let frame = OverlayPanel.commandPromptFrame(
       visibleFrame: visibleFrame,
       screenFrame: screenFrame,

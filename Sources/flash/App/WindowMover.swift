@@ -490,24 +490,41 @@ enum WindowMover {
     statusBarReservesSpace: Bool,
     statusBarMonitor: Config.StatusBar.Monitor
   ) -> [WindowScreenLayout] {
-    let fontSize = OverlayPanel.statusBarFontSize(overlayFontSize: 0)
-    let screens = NSScreen.screens
-    let mainFrame = (screens.first { $0.frame.origin == .zero } ?? screens.first)?.frame
-    return screens.enumerated().map { index, screen in
+    screenLayouts(
       // NSScreenNumber is present for physical displays. Keep a deterministic
       // fallback for virtual/test screens rather than dropping the layout.
-      let screenID = screen.displayID ?? CGDirectDisplayID(index + 1)
+      screens: NSScreen.screens.enumerated().map { index, screen in
+        (
+          id: screen.displayID ?? CGDirectDisplayID(index + 1), frame: screen.frame,
+          visibleFrame: screen.visibleFrame
+        )
+      },
+      snapshot: OverlayPanel.currentScreenSnapshot(),
+      statusBarReservesSpace: statusBarReservesSpace, statusBarMonitor: statusBarMonitor)
+  }
+
+  /// Each display's slots: its live visible frame, less the status bar band
+  /// on displays showing the bar. The band is the snapshot's
+  /// `statusBarHeight`, the very value the bar is painted with, so a slot's
+  /// top edge is the bar's bottom edge even when the live visible frame has
+  /// moved since the snapshot.
+  static func screenLayouts(
+    screens: [(id: CGDirectDisplayID, frame: CGRect, visibleFrame: CGRect)],
+    snapshot: OverlayPanel.ScreenSnapshot,
+    statusBarReservesSpace: Bool,
+    statusBarMonitor: Config.StatusBar.Monitor
+  ) -> [WindowScreenLayout] {
+    let mainFrame = (screens.first { $0.frame.origin == .zero } ?? screens.first)?.frame
+    return screens.map { screen in
+      let reserves = shouldReserveStatusBarSpace(
+        statusBarVisible: statusBarReservesSpace, monitor: statusBarMonitor,
+        isMainScreen: screen.frame == mainFrame)
       return WindowScreenLayout(
-        id: screenID,
+        id: screen.id,
         frame: screen.frame,
         usableFrame: usableFrame(
-          screenFrame: screen.frame,
-          visibleFrame: screen.visibleFrame,
-          statusBarReservesSpace: shouldReserveStatusBarSpace(
-            statusBarVisible: statusBarReservesSpace,
-            monitor: statusBarMonitor,
-            isMainScreen: screen.frame == mainFrame),
-          fontSize: fontSize))
+          screenFrame: screen.frame, visibleFrame: screen.visibleFrame,
+          statusBarHeight: reserves ? snapshot.statusBarHeight(forScreenFrame: screen.frame) : nil))
     }
   }
 
@@ -755,19 +772,12 @@ enum WindowMover {
     return intersection.width * intersection.height
   }
 
+  /// The visible frame, less `statusBarHeight` points along the screen's top
+  /// when the display shows the bar (nil when it does not).
   static func usableFrame(
-    screenFrame: CGRect,
-    visibleFrame: CGRect,
-    statusBarReservesSpace: Bool,
-    fontSize: CGFloat,
-    fallbackNativeStatusBarHeight: CGFloat? = nil
+    screenFrame: CGRect, visibleFrame: CGRect, statusBarHeight: CGFloat?
   ) -> CGRect {
-    guard statusBarReservesSpace else { return visibleFrame }
-    let statusBarHeight = OverlayPanel.statusBarHeight(
-      screenFrame: screenFrame,
-      visibleFrame: visibleFrame,
-      fontSize: fontSize,
-      fallbackNativeStatusBarHeight: fallbackNativeStatusBarHeight)
+    guard let statusBarHeight else { return visibleFrame }
     let maxY = screenFrame.maxY - statusBarHeight
     return CGRect(
       x: visibleFrame.minX,

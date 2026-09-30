@@ -47,6 +47,15 @@ extension OverlayPanel {
       colorOverride: colorOverride)
   }
 
+  /// Record the status bar bands just painted (screen coordinates; empty
+  /// while the bar is hidden) and re-stroke a shown border that must now
+  /// clear a different band.
+  func setStatusBarPaintedBands(_ bands: [CGRect]) {
+    guard bands != statusBarPaintedBands else { return }
+    statusBarPaintedBands = bands
+    restyleActiveWindowBorder()
+  }
+
   /// Re-stroke a shown border after the badge style or border config changed.
   func restyleActiveWindowBorder() {
     guard let activeWindowBorderFrame else { return }
@@ -76,7 +85,7 @@ extension OverlayPanel {
     let lineWidth = style.lineWidth
     let panelFrame = ensurePanelFrame()
     let local = Self.activeWindowBorderLocalRect(
-      targetFrame: targetFrame,
+      targetFrame: Self.activeWindowBorderTarget(targetFrame, clearing: statusBarPaintedBands),
       panelFrame: panelFrame,
       lineWidth: lineWidth)
     // Snap to the pixel grid of the screen the window is actually on. Using the
@@ -150,6 +159,22 @@ extension OverlayPanel {
       y: targetFrame.minY - panelFrame.minY + inset,
       width: max(0, targetFrame.width - inset * 2),
       height: max(0, targetFrame.height - inset * 2))
+  }
+
+  /// The part of a window the border outlines: its frame, cut off at the
+  /// bottom of any status bar band it runs under, so the stroke (drawn inside
+  /// the outline) is never covered by the bar painted above it. A window flush
+  /// with a band's bottom edge, or clear of it, is outlined whole; one wholly
+  /// under a band has nothing left to outline.
+  static func activeWindowBorderTarget(_ frame: CGRect, clearing bands: [CGRect]) -> CGRect {
+    var target = frame
+    for band in bands
+    where band.minX < target.maxX && band.maxX > target.minX && band.minY < target.maxY
+      && band.maxY > target.minY
+    {
+      target.size.height = max(0, band.minY - target.minY)
+    }
+    return target
   }
 
   /// Backing scale of the screen the window sits on (by center, then by largest

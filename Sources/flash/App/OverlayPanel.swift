@@ -210,6 +210,10 @@ final class OverlayPanel: NSPanel {
   /// `setActiveWindowBorder`. Its style is derived from `modeSurface.style` on
   /// every stroke, never stored.
   var activeWindowBorderFrame: CGRect?
+  /// The status bar bands last painted, in screen coordinates; empty while
+  /// the bar is hidden. Owned by `setStatusBarPaintedBands`; the focus
+  /// border strokes clear of them.
+  var statusBarPaintedBands: [CGRect] = []
   /// Bounding box + crosshair for the `--adjust` sub-state: outlines the
   /// matched target and marks the exact point the commit key will click.
   let adjustmentMarkerLayer = CAShapeLayer()
@@ -365,6 +369,18 @@ final class OverlayPanel: NSPanel {
     func nativeStatusBarFallbackHeight(forScreenFrame screenFrame: CGRect) -> CGFloat {
       nativeMenuBarHeights.first { $0.screenFrame == screenFrame }?.height
         ?? nativeStatusBarFallbackHeight
+    }
+
+    /// The height of the status bar band on the display at `screenFrame`,
+    /// from this snapshot alone. The bar paints exactly this band and
+    /// `window_move` reserves exactly it, so the two can never disagree about
+    /// where a slot's top edge is, even when the live visible frame moved
+    /// after the snapshot (Flash auto-hiding the native menu bar).
+    func statusBarHeight(forScreenFrame screenFrame: CGRect) -> CGFloat {
+      OverlayPanel.nativeStatusBarHeight(
+        screenFrame: screenFrame,
+        visibleFrame: screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame,
+        fallbackHeight: nativeStatusBarFallbackHeight(forScreenFrame: screenFrame))
     }
 
     /// Width of the camera housing the centre recess mimics: the connected

@@ -4,6 +4,14 @@ import XCTest
 @testable import flash
 
 final class WindowMoverTests: XCTestCase {
+  /// The bar band a one-display snapshot measures for `screenFrame`.
+  private func band(screenFrame: CGRect, visibleFrame: CGRect, measured: CGFloat) -> CGFloat {
+    OverlayPanel.makeScreenSnapshot(
+      screens: [(scale: 2, frame: screenFrame, visibleFrame: visibleFrame, notch: nil)],
+      nativeStatusBarFallbackHeight: measured
+    ).statusBarHeight(forScreenFrame: screenFrame)
+  }
+
   func testScreenRecoveryLadderReachesASlowReconnect() {
     let delays = WindowLayoutManager.defaultScreenRecoveryDelaysMs
     XCTAssertEqual(delays.sorted(), delays, "passes have to run in order")
@@ -31,9 +39,7 @@ final class WindowMoverTests: XCTestCase {
       WindowMover.usableFrame(
         screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
         visibleFrame: visibleFrame,
-        statusBarReservesSpace: false,
-        fontSize: 13,
-        fallbackNativeStatusBarHeight: 22),
+        statusBarHeight: nil),
       visibleFrame)
   }
 
@@ -41,9 +47,9 @@ final class WindowMoverTests: XCTestCase {
     let frame = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
       visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), measured: 22))
 
     XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 1440, height: 878))
   }
@@ -52,9 +58,9 @@ final class WindowMoverTests: XCTestCase {
     let frame = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
       visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 30)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080), measured: 30))
 
     XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 1920, height: 1050))
   }
@@ -63,9 +69,9 @@ final class WindowMoverTests: XCTestCase {
     let frame = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079), measured: 22))
 
     XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 1728, height: 1079))
   }
@@ -74,9 +80,9 @@ final class WindowMoverTests: XCTestCase {
     let usable = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
       visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), measured: 22))
 
     XCTAssertEqual(
       WindowMover.rectFor(position: .maximized, in: usable),
@@ -113,15 +119,15 @@ final class WindowMoverTests: XCTestCase {
     let source = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
       visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), measured: 22))
     let destination = WindowMover.usableFrame(
       screenFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800),
       visibleFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800),
+        visibleFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800), measured: 22))
     let frame = CGRect(x: 0, y: 0, width: 720, height: 878)
 
     XCTAssertEqual(

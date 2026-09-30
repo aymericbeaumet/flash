@@ -617,31 +617,6 @@ extension OverlayPanel {
     activeStatusBarPopupName = nil
   }
 
-  /// Per-screen status-bar band rects in screen coordinates, matching the bar
-  /// layout `configureModeBadge` / `configureSecondaryStatusBars` render into.
-  /// Honors `[statusbar] monitor`: with `primary`, only the main display gets
-  /// a click window — covering every screen used to swallow band clicks on
-  /// displays where no bar was drawn at all.
-  func statusBarScreenRects(panelFrame: CGRect, fontSize: CGFloat) -> [CGRect] {
-    let snapshot = OverlayPanel.currentScreenSnapshot()
-    let screens =
-      statusBarMonitor == .primary
-      ? snapshot.screens.filter { $0.frame == snapshot.mainFrame }
-      : snapshot.screens
-    return screens.map { screen in
-      let barFrame = OverlayPanel.statusBarFrame(
-        screenFrame: screen.frame,
-        visibleFrame: screen.visibleFrame,
-        panelFrame: panelFrame,
-        fontSize: fontSize)
-      return CGRect(
-        x: panelFrame.minX + barFrame.minX,
-        y: panelFrame.minY + barFrame.minY,
-        width: barFrame.width,
-        height: barFrame.height)
-    }
-  }
-
   /// Route a hovered segment (screen coordinates) to the surface drawing it;
   /// every other surface hides its wash.
   func setStatusBarHoverHighlight(_ screenRect: CGRect?) {

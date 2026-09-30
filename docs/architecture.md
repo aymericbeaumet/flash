@@ -247,7 +247,12 @@ transient teardown never detaches it.
 
 On each display the bar is as tall as that display's own native menu bar, read
 by level and bounds from WindowServer's main-menu window, and `window_move`
-slots reserve the same band. AppKit's app-wide `menuBarHeight` follows whichever
+slots reserve the same band: both take it from one screen snapshot
+(`ScreenSnapshot.statusBarHeight`), never from a live visible frame, which
+moves as soon as Flash auto-hides the native menu bar. The click windows cover
+exactly the painted bands, and the focus border outlines a window only below
+any band it runs under, so its stroke is never drawn beneath the bar.
+AppKit's app-wide `menuBarHeight` follows whichever
 display last hosted the active menu bar, so it is only the last resort. The
 heights are re-read on display changes and before every recovery pass after
 one, never on a Space switch or wake, so a restored window lands exactly where

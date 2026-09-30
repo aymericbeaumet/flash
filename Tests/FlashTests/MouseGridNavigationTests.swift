@@ -155,15 +155,16 @@ final class MouseGridNavigationTests: XCTestCase {
   private func layouts(statusBarMonitor monitor: Config.StatusBar.Monitor)
     -> [WindowScreenLayout]
   {
-    [primaryFrame, secondaryFrame].enumerated().map { index, frame in
-      WindowScreenLayout(
-        id: CGDirectDisplayID(index + 1), frame: frame,
-        usableFrame: WindowMover.usableFrame(
-          screenFrame: frame, visibleFrame: frame,
-          statusBarReservesSpace: WindowMover.shouldReserveStatusBarSpace(
-            statusBarVisible: true, monitor: monitor, isMainScreen: index == 0),
-          fontSize: 13, fallbackNativeStatusBarHeight: 22))
-    }
+    WindowMover.screenLayouts(
+      screens: [primaryFrame, secondaryFrame].enumerated().map { index, frame in
+        (id: CGDirectDisplayID(index + 1), frame: frame, visibleFrame: frame)
+      },
+      snapshot: OverlayPanel.makeScreenSnapshot(
+        screens: [primaryFrame, secondaryFrame].map {
+          (scale: 2, frame: $0, visibleFrame: $0, notch: nil)
+        },
+        nativeStatusBarFallbackHeight: 22),
+      statusBarReservesSpace: true, statusBarMonitor: monitor)
   }
 
   private func context(window: CGRect) -> AppContext {
