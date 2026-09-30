@@ -104,12 +104,11 @@ final class StatusBarClickView: NSView {
   /// reveal probe only while the pointer is actually in the band, so the
   /// probe costs nothing in the steady state.
   var onPointerEntered: (() -> Void)?
-  /// Asked with the pointer (screen coordinates) before any hover response.
-  /// False while the native menu bar owns the band (`StatusBarHoverState`).
-  /// Hover must not rely on click-through to keep this view's `.activeAlways`
-  /// tracking events away, so such an event washes nothing, opens nothing and
-  /// leaves the cursor alone.
-  var hoverPermitted: ((NSPoint) -> Bool)?
+  /// Asked before any hover response. False while the native menu bar owns
+  /// the band (`StatusBarHoverState`). Hover must not rely on click-through to
+  /// keep this view's `.activeAlways` tracking events away, so such an event
+  /// washes nothing, opens nothing and leaves the cursor alone.
+  var hoverPermitted: (() -> Bool)?
 
   /// Dispatches a named `#[range=user|<name>]` click (the `[statusbar.click]`
   /// action map). Set by the overlay from the AppDelegate's handler.
@@ -292,7 +291,7 @@ final class StatusBarClickView: NSView {
   private func updatePointer(at event: NSEvent) {
     let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
     let kind = event.type == .mouseEntered ? "entered" : "moved"
-    guard hoverPermitted?(point) ?? true else {
+    guard hoverPermitted?() ?? true else {
       logHover(event: kind, popup: nil, overLink: false, point: point, suppressed: true)
       return
     }
@@ -704,7 +703,7 @@ extension OverlayPanel {
         return popup.offsetBy(dx: -band.minX, dy: -band.minY)
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
-      view.hoverPermitted = { [weak self] point in self?.statusBarHoverPermits(at: point) ?? true }
+      view.hoverPermitted = { [weak self] in self?.statusBarHover.permitsHover ?? true }
       view.onStatusBarAction = statusBarActionHandler
       view.onLinkActivated = { [weak self] in self?.dismissStatusBarPopupForClick() }
       view.onPopupClick = { [weak self] popup, point in
@@ -758,8 +757,7 @@ extension OverlayPanel {
     screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
     if statusPopupController.containsSnapshotAnchor(pointer) { return }
-    let permitted = statusBarHoverPermits(
-      at: pointer, menuBarScreenFrame: screenSnapshot.mainFrame)
+    let permitted = statusBarHover.permitsHover
     let popup = permitted ? popups.first(where: { $0.rect.contains(pointer) }) : nil
     let link = permitted ? links.first(where: { $0.rect.contains(pointer) }) : nil
     setStatusBarHoverHighlight(
@@ -830,7 +828,7 @@ extension OverlayPanel {
     setStatusBarYieldsToNativeMenuBar(false)
     // Teardown, or the pointer already left the band: the next hover event
     // hit-tests for itself, so the fold needs no resume here.
-    updateStatusBarHover(.nativeMenuBar(revealed: false))
+    updateStatusBarHover(nativeMenuBarRevealed: false)
   }
 
   /// One probe tick, on the probe queue.
@@ -869,7 +867,7 @@ extension OverlayPanel {
       ],
       source: "core:StatusLinks.menuReveal")
     if revealed { statusBarNativeMenuDidReveal() }
-    if updateStatusBarHover(.nativeMenuBar(revealed: revealed)) == .resume {
+    if updateStatusBarHover(nativeMenuBarRevealed: revealed) == .resume {
       hitTestStatusBarHover(
         popups: statusBarInteractionsByScreen.flatMap(\.popups),
         links: statusBarInteractionsByScreen.flatMap(\.links), at: pointer)

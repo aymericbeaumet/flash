@@ -195,18 +195,19 @@ to the screen that bar is on. Moving the pointer along the label never moves
 it; moving onto another label switches to that label's popup, hung from that
 label. A refresh or a size change keeps it centred on its label, and when the
 bar re-lays out (a value gets wider) it follows the label. Leaving the label
-hides the preview immediately, and so
-do a click anywhere outside Flash's status bar, a change of focused app or
-window, a bare Escape (swallowed while a preview shows, except in the command
-line and during hints), and `enter_normal_mode`; the preview then stays closed
-until the pointer leaves the label. The native menu bar owns the band while it
-is revealed under the pointer, and on the top edge that reveals it: the bar
-shows no wash, preview or pointing hand there, a reveal clears any already
-showing, and hover resumes when the native bar folds away. A hovered text
-popup refreshes as its values change. The panel appears with its first frame,
-so a pager still starting never shows an empty box; it waits 150 ms at most.
-A persistent popup kept parsing its output while hidden, and showing it draws
-that current screen at once rather than the one it had when it was hidden.
+hides the preview immediately, and so do a click anywhere outside Flash's
+status bar, a change of focused app or window, a bare Escape (swallowed while a
+preview shows, except in the command line and during hints), and
+`enter_normal_mode`; the preview then stays closed until the pointer leaves the
+label. Hover works anywhere in the band, its top point row included, where a
+pointer thrown at the bar comes to rest. The native menu bar owns the band only
+while it is revealed under the pointer: the bar then shows no wash, preview or
+pointing hand, a reveal clears any already showing, and hover resumes when the
+native bar folds away. A hovered text popup refreshes as its values change. The
+panel appears with its first frame, so a pager still starting never shows an
+empty box; it waits 150 ms at most. A persistent popup kept parsing its output
+while hidden, and showing it draws that current screen at once rather than the
+one it had when it was hidden.
 
 **Click** a popup label, left or right, to pin it and focus its terminal;
 repeated clicks keep it open, and clicking another label switches popups.
