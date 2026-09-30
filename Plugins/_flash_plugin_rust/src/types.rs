@@ -261,6 +261,58 @@ pub mod candidate_metadata {
     pub const PRIORITY: &str = "priority";
 }
 
+/// Every AX notification `core:ax.changed` reports in
+/// [`Event::notification`] (`protocol.json` `host_events.ax_notifications`):
+/// the host forwards each of these, for every app it observes.
+pub mod ax_notifications {
+    pub const FOCUSED_UI_ELEMENT_CHANGED: &str = "AXFocusedUIElementChanged";
+    pub const FOCUSED_WINDOW_CHANGED: &str = "AXFocusedWindowChanged";
+    pub const MAIN_WINDOW_CHANGED: &str = "AXMainWindowChanged";
+    pub const LAYOUT_CHANGED: &str = "AXLayoutChanged";
+    pub const SELECTED_CHILDREN_CHANGED: &str = "AXSelectedChildrenChanged";
+    pub const SELECTED_ROWS_CHANGED: &str = "AXSelectedRowsChanged";
+    /// An element's value changed — each keystroke into a text field.
+    pub const VALUE_CHANGED: &str = "AXValueChanged";
+    pub const WINDOW_RESIZED: &str = "AXWindowResized";
+    pub const WINDOW_MOVED: &str = "AXWindowMoved";
+    pub const WINDOW_CREATED: &str = "AXWindowCreated";
+    pub const WINDOW_MINIATURIZED: &str = "AXWindowMiniaturized";
+    pub const WINDOW_DEMINIATURIZED: &str = "AXWindowDeminiaturized";
+    pub const APPLICATION_HIDDEN: &str = "AXApplicationHidden";
+    pub const APPLICATION_SHOWN: &str = "AXApplicationShown";
+    /// An element's title changed: a window retitled by a tab switch,
+    /// navigation or a terminal command.
+    pub const TITLE_CHANGED: &str = "AXTitleChanged";
+    pub const CREATED: &str = "AXCreated";
+    /// An element — possibly a window — was destroyed.
+    pub const UI_ELEMENT_DESTROYED: &str = "AXUIElementDestroyed";
+    pub const ROW_EXPANDED: &str = "AXRowExpanded";
+    pub const ROW_COLLAPSED: &str = "AXRowCollapsed";
+
+    /// In `protocol.json` order.
+    pub const ALL: [&str; 19] = [
+        FOCUSED_UI_ELEMENT_CHANGED,
+        FOCUSED_WINDOW_CHANGED,
+        MAIN_WINDOW_CHANGED,
+        LAYOUT_CHANGED,
+        SELECTED_CHILDREN_CHANGED,
+        SELECTED_ROWS_CHANGED,
+        VALUE_CHANGED,
+        WINDOW_RESIZED,
+        WINDOW_MOVED,
+        WINDOW_CREATED,
+        WINDOW_MINIATURIZED,
+        WINDOW_DEMINIATURIZED,
+        APPLICATION_HIDDEN,
+        APPLICATION_SHOWN,
+        TITLE_CHANGED,
+        CREATED,
+        UI_ELEMENT_DESTROYED,
+        ROW_EXPANDED,
+        ROW_COLLAPSED,
+    ];
+}
+
 /// Every host event name (`protocol.json` `host_events.names`), for `listen`
 /// manifests and `on_event` matches without re-typing the literals.
 /// `NETWORK_CHANGED` and `VOLUMES_CHANGED` are payload-free, coalesced
@@ -551,12 +603,32 @@ pub struct Event {
     pub pid: Option<i64>,
     pub front_window_frame: Option<Frame>,
     pub text: Option<String>,
+    /// `core:ax.changed`: the AX notification the app posted, one of
+    /// [`ax_notifications::ALL`] (`AXTitleChanged`, `AXValueChanged`, …).
+    /// Always present on that event, with [`pid`](Event::pid). Match on it
+    /// to skip changes that cannot affect what you read — a keystroke posts
+    /// `AXValueChanged` — instead of debouncing every notification alike.
+    pub notification: Option<String>,
     /// `core:status.observed`: the complete set of this plugin's status
     /// segments (manifest names, no `flash.plugin.<id>.` prefix) that a
     /// status surface currently shows. Always present on that event, unique
     /// and possibly empty — empty means nothing is observed. Order carries
     /// no meaning.
     pub segments: Option<Vec<String>>,
+}
+
+impl Event {
+    /// Whether this is a `core:ax.changed` reporting one of `notifications`
+    /// ([`ax_notifications`]): the changes that can affect what the caller
+    /// reads, so it can ignore the rest — every keystroke's value change
+    /// among them — instead of debouncing them all.
+    pub fn is_ax_change(&self, notifications: &[&str]) -> bool {
+        self.name == host_events::AX_CHANGED
+            && self
+                .notification
+                .as_deref()
+                .is_some_and(|notification| notifications.contains(&notification))
+    }
 }
 
 /// A `perform {kind: "command"}` request: the matched `:`-command or verb, its
@@ -871,6 +943,25 @@ impl HintsResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ax_changes_match_only_the_listed_notifications() {
+        let ax = |notification: &str| Event {
+            name: host_events::AX_CHANGED.into(),
+            pid: Some(7),
+            notification: Some(notification.into()),
+            ..Event::default()
+        };
+        let relevant = [ax_notifications::TITLE_CHANGED];
+        assert!(ax(ax_notifications::TITLE_CHANGED).is_ax_change(&relevant));
+        assert!(!ax(ax_notifications::VALUE_CHANGED).is_ax_change(&relevant));
+        let focus = Event {
+            name: host_events::FOCUS_CHANGED.into(),
+            notification: Some(ax_notifications::TITLE_CHANGED.into()),
+            ..Event::default()
+        };
+        assert!(!focus.is_ax_change(&relevant));
+    }
 
     #[test]
     fn hint_context_is_omitted_when_unknown_and_preserved_when_set() {

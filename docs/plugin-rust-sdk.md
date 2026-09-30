@@ -76,7 +76,12 @@ Handed to every handler; cheap to clone. Key surface:
   can change what the plugin reads from its apps — focus into, within or out
   of one, one launching or quitting, their running instances changing, a
   flashlight session opening — so an app-scripting plugin refreshes on those
-  alone (the browsers plugin). `core:status.observed` carries
+  alone (the browsers plugin). `core:ax.changed` carries
+  `Event::notification`, one of `flash_plugin::ax_notifications`; match it
+  with `Event::is_ax_change(&[…])` so a refresh follows only the
+  notifications that can change what you read (`AXTitleChanged`,
+  `AXWindowCreated`, …) and never a keystroke's `AXValueChanged`.
+  `core:status.observed` carries
   `Event::segments`: the complete set of this plugin's status segments a
   surface shows, possibly empty (the protocol's
   [status observation](plugin-protocol.md#status-observation)). Listen for it
@@ -196,10 +201,12 @@ The runtime owns finite admission queues, pinned in `protocol.json`:
   `clipboard.changed`, `config.changed`, `power.changed`, `network.changed`,
   `volumes.changed`, `space.changed`, and `status.observed` (all prefixed
   `core:`; `protocol.json` `host_events.replacement`) retains one latest
-  replacement slot, each bounded by the frame cap. Intermediate replacements can
-  coalesce; the final value, including an empty app list or an empty
-  observed set, reaches the serialized event handler. This avoids blocking
-  the stdin reader while a handler awaits a host RPC.
+  replacement slot per coalescing key — the event name, plus the app and
+  notification for `ax.changed` — each bounded by the frame cap, at most 256
+  keys at once. Intermediate replacements can coalesce; the final value,
+  including an empty app list or an empty observed set, reaches the
+  serialized event handler. This avoids blocking the stdin reader while a
+  handler awaits a host RPC.
 
 EOF cancels request/event workers and gives shutdown callbacks plus output
 draining one shared 750-ms deadline. Handlers must still avoid blocking the

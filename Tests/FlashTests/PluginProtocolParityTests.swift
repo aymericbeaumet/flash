@@ -141,6 +141,11 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertTrue(
       Set(replacement).isSubset(of: PluginProtocol.hostEvents),
       "every replacement kind is a host event")
+    // `core:ax.changed` names one of the notifications the host observes.
+    XCTAssertEqual(events["ax_notifications"] as? [String], AppMonitor.observedNotifications)
+    XCTAssertTrue(
+      Set(AppMonitor.lightObservedNotifications + AppMonitor.focusedWindowObservedNotifications)
+        .isSubset(of: AppMonitor.observedNotifications))
     for name in [PluginProtocol.networkChangedEvent, PluginProtocol.volumesChangedEvent] {
       XCTAssertTrue(PluginProtocol.hostEvents.contains(name), name)
       XCTAssertTrue(replacement.contains(name), "\(name) is a payload-free replacement signal")

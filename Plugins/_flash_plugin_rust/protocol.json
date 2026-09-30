@@ -51,7 +51,7 @@
     }
   },
   "host_events": {
-    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen` (plus capability for core:clipboard.changed). `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each kind. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
+    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen` (plus capability for core:clipboard.changed). `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
     "names": [
       "core:flash.started",
       "core:apps.changed",
@@ -81,6 +81,27 @@
       "core:volumes.changed",
       "core:space.changed",
       "core:status.observed"
+    ],
+    "ax_notifications": [
+      "AXFocusedUIElementChanged",
+      "AXFocusedWindowChanged",
+      "AXMainWindowChanged",
+      "AXLayoutChanged",
+      "AXSelectedChildrenChanged",
+      "AXSelectedRowsChanged",
+      "AXValueChanged",
+      "AXWindowResized",
+      "AXWindowMoved",
+      "AXWindowCreated",
+      "AXWindowMiniaturized",
+      "AXWindowDeminiaturized",
+      "AXApplicationHidden",
+      "AXApplicationShown",
+      "AXTitleChanged",
+      "AXCreated",
+      "AXUIElementDestroyed",
+      "AXRowExpanded",
+      "AXRowCollapsed"
     ]
   },
   "perform_kinds": [
@@ -189,7 +210,7 @@
   },
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
   "transport_limits": {
-    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of the eleven host_events.replacement kinds in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
+    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot per coalescing key (host_events) in addition to the ordinary event backlog, at most plugin_replacement_slots keys at once; each slot obeys frame_bytes, and a new key beyond the bound is dropped like an overflowing ordinary event. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
     "plugin_requests": 16,
     "plugin_request_bytes": 33554432,
     "plugin_host_calls": 64,
@@ -197,6 +218,7 @@
     "plugin_outbound_bytes": 16777216,
     "plugin_event_frames": 256,
     "plugin_event_bytes": 16777216,
+    "plugin_replacement_slots": 256,
     "host_pending_requests": 64,
     "host_host_rpcs": 64,
     "host_outbound_frames": 256,

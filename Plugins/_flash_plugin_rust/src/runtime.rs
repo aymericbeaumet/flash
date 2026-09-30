@@ -151,6 +151,8 @@ struct EventPayload {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
+    notification: Option<String>,
+    #[serde(default)]
     running_applications: Vec<RunningApplication>,
     #[serde(default)]
     segments: Option<Vec<String>>,
@@ -169,6 +171,18 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
         {
             Err("invalid event params".to_string())
         }
+        // An AX change names the app that posted it and the notification.
+        Ok(wire)
+            if wire.name == crate::types::host_events::AX_CHANGED
+                && (wire.payload.pid.is_none()
+                    || wire
+                        .payload
+                        .notification
+                        .as_deref()
+                        .is_none_or(str::is_empty)) =>
+        {
+            Err("invalid event params".to_string())
+        }
         Ok(wire) => Ok(InboundEvent {
             event: Event {
                 name: wire.name,
@@ -176,6 +190,7 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
                 pid: wire.payload.pid,
                 front_window_frame: wire.payload.front_window_frame,
                 text: wire.payload.text,
+                notification: wire.payload.notification,
                 segments: wire.payload.segments,
             },
             running_applications: wire.payload.running_applications,
@@ -1314,6 +1329,26 @@ mod tests {
         .unwrap();
         assert_eq!(event.running_applications.len(), 1);
         assert_eq!(event.event.segments, None);
+
+        // An AX change names the app and the notification it posted.
+        let ax = decode_event(json!({
+            "name": "core:ax.changed",
+            "payload": { "notification": "AXTitleChanged", "pid": 7, "bundle_id": "com.example" }
+        }))
+        .unwrap();
+        assert_eq!(ax.event.notification.as_deref(), Some("AXTitleChanged"));
+        assert_eq!(ax.event.pid, Some(7));
+        for payload in [
+            json!({ "pid": 7 }),
+            json!({ "pid": 7, "notification": "" }),
+            json!({ "pid": 7, "notification": 1 }),
+            json!({ "notification": "AXTitleChanged" }),
+        ] {
+            assert!(
+                decode_event(json!({ "name": "core:ax.changed", "payload": payload })).is_err(),
+                "{payload}"
+            );
+        }
 
         // The status observation requires its complete segment set.
         assert!(decode_event(json!({ "name": "core:status.observed", "payload": {} })).is_err());

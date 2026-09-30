@@ -76,6 +76,16 @@ struct PluginEvent {
   /// The wire frame for this event, encoded once by `PluginManager.emit` and
   /// shared by every listener instead of re-serializing the payload per plugin.
   var encodedFrame: Data?
+
+  /// `core:ax.changed`: the one AX `notification` an observed app posted
+  /// (`protocol.json` `host_events.ax_notifications`), so a plugin skips the
+  /// ones that cannot change what it reads.
+  static func axChanged(pid: pid_t, notification: String, bundleID: String?) -> PluginEvent {
+    PluginEvent(
+      name: PluginProtocol.axChangedEvent,
+      payload: ["notification": notification, "pid": Int(pid)],
+      bundleID: bundleID)
+  }
 }
 
 struct PluginStatus {

@@ -107,11 +107,17 @@ impl FlashPlugin for Probe {
     }
 
     async fn on_event(&self, _ctx: Context, event: Event) {
-        // The status observation also records its segment set, so the wire
-        // test can see the typed payload reached the hook.
-        let record = match event.segments {
-            Some(segments) => format!("{} [{}]", event.name, segments.join(",")),
-            None => event.name,
+        // The status observation also records its segment set, and an AX
+        // change its app and notification, so the wire test can see the
+        // typed payload reached the hook.
+        let record = match (event.segments, event.notification) {
+            (Some(segments), _) => format!("{} [{}]", event.name, segments.join(",")),
+            (None, Some(notification)) => format!(
+                "{} {} {notification}",
+                event.name,
+                event.pid.unwrap_or_default()
+            ),
+            (None, None) => event.name,
         };
         *self
             .last_event
@@ -535,6 +541,29 @@ mod tests {
         }}))
         .await;
         await_event_state(&mut wire, 400, "core:status.observed []").await;
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// An AX change arrives typed: the hook reads the app and the
+    /// notification it posted, and one missing its notification is dropped.
+    #[tokio::test]
+    async fn ax_changes_reach_the_event_hook_with_their_notification() {
+        let mut wire = serve(json!({})).await;
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:ax.changed",
+            "payload": { "pid": 42, "notification": "AXTitleChanged", "bundle_id": "com.example" }
+        }}))
+        .await;
+        await_event_state(&mut wire, 500, "core:ax.changed 42 AXTitleChanged").await;
+        wire.send(json!({ "method": "event", "params": {
+            "name": "core:ax.changed", "payload": { "pid": 42 }
+        }}))
+        .await;
+        assert_eq!(
+            wire.recv_notification("log").await["message"],
+            "[plugin] dropped event (invalid event params)"
+        );
         wire.close_stdin().await;
         wire.finished().await;
     }

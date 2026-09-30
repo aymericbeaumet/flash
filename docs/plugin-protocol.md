@@ -186,7 +186,11 @@ Notifications have no deadlines.
 - `ping` — `{}` → `{"ok": true}`. See Liveness.
 - `event` (notification) — `{name, payload}`, filtered by manifest `listen`
   globs: `core:flash.started`, `core:apps.changed|launched|terminated`,
-  `core:focus.changed`, `core:window.focus.changed`, `core:ax.changed`,
+  `core:focus.changed`, `core:window.focus.changed`, `core:ax.changed`
+  (`{pid, notification, bundle_id?}`: one AX notification an observed app
+  posted, among `protocol.json` `host_events.ax_notifications`; every
+  keystroke posts `AXValueChanged`, so match the notification rather than
+  debouncing every change alike),
   `core:clipboard.changed` (requires the `clipboard` capability),
   `core:config.changed`, `core:power.changed`, `core:network.changed`
   (interfaces, addresses, routes or DNS changed), `core:volumes.changed` (a
@@ -275,7 +279,8 @@ frame per key rather than overflowing on a burst of signals. Requests,
 responses and every other event keep FIFO order and their budget: a child that
 stops reading those is still restarted once the budget fills. A frame already
 written to the pipe is delivered; the plugin's own event backlog coalesces
-what it has read but not yet handled (see the SDK's replacement slots).
+what it has read but not yet handled by the same keys (see the SDK's
+replacement slots).
 
 ### Status observation
 

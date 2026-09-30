@@ -1,6 +1,6 @@
 //! A nonblocking event mailbox. Ordinary events retain wire order. When the
 //! finite backlog fills, replacement notifications retain their newest value
-//! in one slot per known event kind, so an authoritative final snapshot wins.
+//! in one slot per coalescing key, so an authoritative final snapshot wins.
 
 use crate::runtime::InboundEvent;
 use crate::types::host_events;
@@ -10,6 +10,9 @@ use tokio::sync::Notify;
 
 pub(crate) const EVENT_QUEUE_CAPACITY: usize = 256;
 pub(crate) const EVENT_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+/// Distinct coalescing keys the overflow slots hold at once
+/// (`transport_limits.plugin_replacement_slots`).
+pub(crate) const REPLACEMENT_SLOTS: usize = 256;
 
 /// State signals whose latest value supersedes every earlier one
 /// (`protocol.json` `host_events.replacement`).
@@ -27,8 +30,23 @@ pub(crate) const REPLACEMENT_EVENTS: [&str; 11] = [
     host_events::STATUS_OBSERVED,
 ];
 
-fn replacement(name: &str) -> bool {
-    REPLACEMENT_EVENTS.contains(&name)
+/// The slot a replacement event supersedes (`protocol.json`
+/// `host_events`): its name, plus the app and notification for
+/// `core:ax.changed`, which reports one fact per pair. `None` for every other
+/// event, which never coalesces.
+fn coalescing_key(event: &crate::types::Event) -> Option<String> {
+    if !REPLACEMENT_EVENTS.contains(&event.name.as_str()) {
+        return None;
+    }
+    if event.name != host_events::AX_CHANGED {
+        return Some(event.name.clone());
+    }
+    Some(format!(
+        "{}\0{}\0{}",
+        event.name,
+        event.pid.unwrap_or_default(),
+        event.notification.as_deref().unwrap_or_default()
+    ))
 }
 
 struct Entry {
@@ -55,23 +73,23 @@ impl EventMailbox {
     pub(crate) fn push(&self, event: InboundEvent, bytes: usize) -> bool {
         let mut backlog = self.backlog.lock().expect("event mailbox");
         backlog.sequence += 1;
+        let key = coalescing_key(&event.event);
         let entry = Entry {
             sequence: backlog.sequence,
             bytes,
             event,
         };
-        let name = &entry.event.event.name;
-        if backlog.latest.contains_key(name) {
-            backlog.latest.insert(name.clone(), entry);
+        if let Some(key) = key.as_ref().filter(|key| backlog.latest.contains_key(*key)) {
+            backlog.latest.insert(key.clone(), entry);
         } else if backlog.queue.len() < EVENT_QUEUE_CAPACITY
             && bytes <= EVENT_QUEUE_BYTES.saturating_sub(backlog.bytes)
         {
             backlog.bytes += bytes;
             backlog.queue.push_back(entry);
-        } else if replacement(name) {
-            // There are exactly eleven replacement kinds, each bounded by the
-            // inbound frame cap. They cannot grow with arbitrary event names.
-            backlog.latest.insert(name.clone(), entry);
+        } else if let Some(key) = key.filter(|_| backlog.latest.len() < REPLACEMENT_SLOTS) {
+            // Each slot is bounded by the inbound frame cap and the slots by
+            // count, so arbitrary keys cannot grow the backlog.
+            backlog.latest.insert(key, entry);
         } else {
             return false;
         }
@@ -144,6 +162,12 @@ mod tests {
             list("replacement"),
             REPLACEMENT_EVENTS.map(String::from).to_vec()
         );
+        assert_eq!(
+            list("ax_notifications"),
+            crate::types::ax_notifications::ALL
+                .map(String::from)
+                .to_vec()
+        );
     }
 
     /// A burst of payload-free change signals under overload collapses to one
@@ -172,6 +196,60 @@ mod tests {
             [host_events::NETWORK_CHANGED, host_events::VOLUMES_CHANGED]
         );
         assert!(mailbox.pop().is_none());
+    }
+
+    fn ax(pid: i64, notification: &str, marker: &str) -> InboundEvent {
+        InboundEvent {
+            event: Event {
+                name: host_events::AX_CHANGED.into(),
+                pid: Some(pid),
+                notification: Some(notification.into()),
+                text: Some(marker.into()),
+                ..Event::default()
+            },
+            running_applications: Vec::new(),
+        }
+    }
+
+    /// An AX change reports one fact per app and notification: under
+    /// overload a keystroke's value changes coalesce among themselves and
+    /// never supersede a pending title change, nor one app another's.
+    #[test]
+    fn ax_changes_coalesce_per_app_and_notification() {
+        let mailbox = EventMailbox::default();
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert!(mailbox.push(event("edge", "old"), 1));
+        }
+        assert!(mailbox.push(ax(7, "AXTitleChanged", "title-7"), 1));
+        for index in 0..100 {
+            assert!(mailbox.push(ax(7, "AXValueChanged", &format!("value-{index}")), 1));
+        }
+        assert!(mailbox.push(ax(8, "AXTitleChanged", "title-8"), 1));
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert_eq!(mailbox.pop().unwrap().event.name, "edge");
+        }
+        let delivered: Vec<String> = std::iter::from_fn(|| mailbox.pop())
+            .map(|inbound| inbound.event.text.unwrap())
+            .collect();
+        assert_eq!(delivered, ["title-7", "value-99", "title-8"]);
+    }
+
+    /// Replacement slots are finite: once every slot holds a distinct key,
+    /// a new key is dropped like an ordinary overflowing event.
+    #[test]
+    fn replacement_slots_are_bounded() {
+        let mailbox = EventMailbox::default();
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert!(mailbox.push(event("edge", "old"), 1));
+        }
+        for pid in 1..=REPLACEMENT_SLOTS as i64 {
+            assert!(mailbox.push(ax(pid, "AXTitleChanged", "slot"), 1));
+        }
+        assert!(!mailbox.push(ax(0x7fff, "AXTitleChanged", "extra"), 1));
+        assert!(
+            mailbox.push(ax(1, "AXTitleChanged", "latest"), 1),
+            "a held key still takes its newest value"
+        );
     }
 
     #[test]

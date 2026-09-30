@@ -346,13 +346,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
+    // Every observed AX notification reaches plugins exactly once, here.
     monitor.focusedElementDidChange = { [weak self] pid, notification in
-      guard let self else { return }
-      guard self.pluginManager.hasListener(for: "core:ax.changed") else { return }
+      guard let self, self.pluginManager.hasListener(for: PluginProtocol.axChangedEvent) else {
+        return
+      }
       self.pluginManager.emit(
-        PluginEvent(
-          name: "core:ax.changed",
-          payload: ["notification": notification, "pid": Int(pid)],
+        .axChanged(
+          pid: pid, notification: notification,
           bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier))
     }
     monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in

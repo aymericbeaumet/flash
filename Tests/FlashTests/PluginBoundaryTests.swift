@@ -89,6 +89,36 @@ final class PluginBoundaryTests: XCTestCase {
     }
   }
 
+  /// The `ax_changed` group pins what a `core:ax.changed` payload may be;
+  /// every payload the host builds must be one the SDK accepts.
+  func testAXChangedPayloadsTheHostBuildsSatisfyTheSharedCorpus() throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let data = try Data(
+      contentsOf: root.appendingPathComponent(
+        "Plugins/_flash_plugin_rust/fixtures/wire-values.fixture"))
+    let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    func accepted(_ payload: [String: Any]) -> Bool {
+      guard PluginJSON.pid(payload["pid"]) != nil,
+        let notification = payload["notification"] as? String
+      else { return false }
+      return !notification.isEmpty
+    }
+    for item in try XCTUnwrap(corpus["ax_changed"] as? [[String: Any]]) {
+      let value = try XCTUnwrap(item["value"] as? [String: Any])
+      let valid = try XCTUnwrap(item["valid"] as? Bool)
+      XCTAssertEqual(accepted(value), valid, "ax_changed: \(item["name"] ?? "")")
+    }
+    for notification in AppMonitor.observedNotifications {
+      let event = PluginEvent.axChanged(pid: 42, notification: notification, bundleID: nil)
+      XCTAssertEqual(event.name, "core:ax.changed")
+      XCTAssertTrue(accepted(event.payload), notification)
+      XCTAssertEqual(
+        PluginProtocol.coalescingKey(eventName: event.name, payload: event.payload),
+        "core:ax.changed\u{0}42\u{0}\(notification)")
+    }
+  }
+
   func testLifecycleRejectsOldAttemptEventsAndExpiresFailuresByClock() {
     var lifecycle = PluginLifecycle()
     func send(_ event: PluginLifecycle.Event, at now: TimeInterval = 0) -> [PluginLifecycle.Effect]

@@ -14,9 +14,11 @@
 //!   2. Host events (`core:focus.changed`, `core:apps.terminated`) trigger an
 //!      additional refresh at explicit interaction boundaries. While no client
 //!      is attached the poll is cancelled, and a flashlight open
-//!      (`core:session.opened`) or the focused app's settled
-//!      `core:ax.changed` burst (attaching retitles the terminal) refreshes
-//!      instead — which re-arms the poll once a client is attached.
+//!      (`core:session.opened`) or a settled burst of window retitles and
+//!      creations (`core:ax.changed`: attaching retitles the terminal, a new
+//!      window may start attached) refreshes instead — which re-arms the poll
+//!      once a client is attached. Other AX notifications, keystrokes among
+//!      them, cannot attach a client and are ignored.
 //!   3. A kqueue watch on the `tmux-$UID` socket directory
 //!      ([`socket_watch`]) rediscovers servers when one starts or exits,
 //!      instead of rescanning the directory on a timer.
@@ -65,7 +67,7 @@ use std::time::{Duration, Instant};
 use flash_plugin::{
     ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame, HintsRequest,
     HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle, Priority,
-    TERMINAL_LINK_ROLE, run,
+    TERMINAL_LINK_ROLE, ax_notifications, run,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -3756,10 +3758,16 @@ async fn refresh_remote_backends(
 /// bursts, the socket-directory watch) refresh the catalog instead.
 const POLL_INTERVAL_SECS: u64 = 1;
 const STARTUP_WARM_BUDGET: Duration = Duration::from_secs(10);
-/// `core:ax.changed` names neither the notification nor the element and
-/// fires on every keystroke's value change, so while no client is attached a
-/// burst refreshes once it has been quiet this long…
-const AX_SETTLE: Duration = Duration::from_secs(1);
+/// The AX notifications that can reveal a client attaching while none is:
+/// attaching retitles the terminal's window, and a new window may start
+/// attached.
+const AX_REFRESH_NOTIFICATIONS: [&str; 2] = [
+    ax_notifications::TITLE_CHANGED,
+    ax_notifications::WINDOW_CREATED,
+];
+/// A shell retitles the window before and after each command, so while no
+/// client is attached a burst refreshes once it has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_millis(300);
 /// …or this long after it began, whichever comes first.
 const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
@@ -5042,6 +5050,31 @@ async fn restore_navigation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// While no client is attached, only a window retitled or created can
+    /// reveal one attaching: a keystroke's value change never starts a burst.
+    #[tokio::test]
+    async fn only_window_retitles_and_creations_start_an_ax_burst() {
+        let plugin = Tmux::default();
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        for notification in ax_notifications::ALL
+            .into_iter()
+            .filter(|notification| !AX_REFRESH_NOTIFICATIONS.contains(notification))
+        {
+            plugin
+                .on_event(
+                    harness.context(),
+                    Event {
+                        name: "core:ax.changed".into(),
+                        pid: Some(42),
+                        notification: Some(notification.into()),
+                        ..Event::default()
+                    },
+                )
+                .await;
+            assert!(AX_BURST.due().is_none(), "{notification}");
+        }
+    }
 
     struct ExecutableFixture(PathBuf);
 
@@ -7102,7 +7135,8 @@ impl FlashPlugin for Tmux {
             }
             // The first event of a burst spawns its one waiter.
             "core:ax.changed"
-                if !self.candidate_poll_arc.armed()
+                if event.is_ax_change(&AX_REFRESH_NOTIFICATIONS)
+                    && !self.candidate_poll_arc.armed()
                     && AX_BURST.note(event.pid.unwrap_or_default(), Instant::now()) =>
             {
                 let plugin = self.clone();

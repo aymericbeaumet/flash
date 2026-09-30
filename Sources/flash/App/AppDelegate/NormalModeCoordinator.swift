@@ -214,13 +214,6 @@ extension AppDelegate {
         pid: pid, window: observedWindow, notification: notification,
         statusBarReservesSpace: statusBarVisible,
         statusBarMonitor: config.statusBar.monitor)
-      if pluginManager.hasListener(for: "core:ax.changed") {
-        pluginManager.emit(
-          PluginEvent(
-            name: "core:ax.changed",
-            payload: ["notification": notification, "pid": Int(pid)],
-            bundleID: app.bundleIdentifier))
-      }
       return
     }
     let isFocusChange =
@@ -243,10 +236,11 @@ extension AppDelegate {
 
     let destroyedWindow =
       notification == kAXUIElementDestroyedNotification as String ? observedWindow : nil
-    let emitsAXChanged = pluginManager.hasListener(for: "core:ax.changed")
+    // `core:ax.changed` leaves with every AX notification from
+    // `AppMonitor.focusedElementDidChange`, never from here.
     let emitsFocusChange =
       isFocusChange && pluginManager.hasListener(for: "core:window.focus.changed")
-    guard destroyedWindow != nil || emitsAXChanged || emitsFocusChange,
+    guard destroyedWindow != nil || emitsFocusChange,
       let context = currentNonFlashContext(), context.processID == pid
     else { return }
     if let observedWindow = destroyedWindow {
@@ -257,13 +251,6 @@ extension AppDelegate {
         notification: notification,
         statusBarReservesSpace: statusBarVisible,
         statusBarMonitor: config.statusBar.monitor)
-    }
-    if emitsAXChanged {
-      pluginManager.emit(
-        PluginEvent(
-          name: "core:ax.changed",
-          payload: ["notification": notification, "pid": Int(pid)],
-          bundleID: context.bundleIdentifier))
     }
     // The focused-window-changed and main-window-changed AX notifications are
     // exactly the signal plugins want to react to when they care about *which*

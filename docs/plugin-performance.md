@@ -116,16 +116,21 @@ least 50 ms.
 - Browser refreshes are single-flight, publish only changed rows, and log
   state transitions or rate-limited warnings instead of every refresh.
 - Catalog plugins do not poll the apps they mirror. `browsers`, `windows`
-  and `kitty` refresh on app lifecycle and focus events and on the focused
-  app's `core:ax.changed`. That event names neither the notification nor the
-  element and fires on every keystroke's value change, so a burst refreshes
-  once it has been quiet for one second, and at most ten seconds after it
-  began. The host observes AX only in the focused app; a background app's
-  changes catch up when focus or the flashlight next touches it.
+  and `kitty` refresh on app lifecycle and focus events and on the
+  `core:ax.changed` notifications that can change their rows, ignoring the
+  rest — every keystroke's `AXValueChanged` among them: `windows` on a window
+  retitled, created or destroyed; `kitty` on those plus its window focus
+  moving; `browsers` on a window retitled or created (web content posts
+  element creation and destruction on every DOM update). Relevant bursts —
+  a shell retitling around each command, a closing window's subtree — refresh
+  once quiet for 300 ms, and at most ten seconds after they began. The host
+  observes an app's AX only once it has been focused; changes it cannot see
+  catch up when focus or the flashlight next touches the app.
 - `tmux` inventories its local servers every second only while a client is
   attached somewhere; otherwise the registration is cancelled and focus
-  changes, flashlight opens, settled AX bursts and a kqueue watch on the
-  `tmux-$UID` socket directory (a server starting or exiting) refresh it.
+  changes, flashlight opens, settled window retitles and creations
+  (`core:ax.changed`) and a kqueue watch on the `tmux-$UID` socket directory
+  (a server starting or exiting) refresh it.
 - Debug plugin logs remain available in the log file but do not invalidate
   status/inspector snapshots.
 - The NDJSON frame collector scans appended bytes once and compacts the

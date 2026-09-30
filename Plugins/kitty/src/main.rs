@@ -29,11 +29,12 @@
 //! ## Refresh triggers
 //!
 //! Nothing polls. The catalog refreshes on startup, on `core:apps.changed`,
-//! on focus into kitty, on kitty's own `core:ax.changed` once its burst
-//! settles (a pane or tab switch, or a command setting its title, retitles
-//! the focused OS window), and when the flashlight opens — the one moment a
-//! background kitty's retitled panes must be current, since the host observes
-//! AX only in the focused app.
+//! on focus into kitty, on kitty's own `core:ax.changed` once a burst of the
+//! notifications that can change a row settles (a pane or tab switch, or a
+//! command setting its title, retitles the focused OS window; OS windows
+//! open, close and take focus), and when the flashlight opens — the one
+//! moment a background kitty's retitled panes must be current. Every other
+//! AX notification, each keystroke's value change among them, is ignored.
 //!
 //! Socket resolution order for `kitten @`: the `[plugin.kitty] listen_on`
 //! config value (`unix:/path`), then a bare invocation (covers an inherited
@@ -42,7 +43,8 @@
 //! use; failure clears it.
 
 use flash_plugin::{
-    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, run, run_command,
+    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, ax_notifications, run,
+    run_command,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -64,9 +66,19 @@ const KITTEN_APP_PATHS: [&str; 2] = [
 ];
 const KITTEN_PREFIXES: [&str; 3] = ["/usr/local", "/opt/local", "/usr"];
 
-/// `core:ax.changed` names neither the notification nor the element, so an
-/// AX burst refreshes once kitty has been quiet this long…
-const AX_SETTLE: Duration = Duration::from_secs(1);
+/// The AX notifications that can change a kitty row: an OS window retitled
+/// (a pane or tab switch, a command setting its title), opened, closed or
+/// focused.
+const AX_REFRESH_NOTIFICATIONS: [&str; 5] = [
+    ax_notifications::TITLE_CHANGED,
+    ax_notifications::WINDOW_CREATED,
+    ax_notifications::UI_ELEMENT_DESTROYED,
+    ax_notifications::FOCUSED_WINDOW_CHANGED,
+    ax_notifications::MAIN_WINDOW_CHANGED,
+];
+/// A shell retitles the window before and after each command, so a burst of
+/// those refreshes once kitty has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_millis(300);
 /// …or this long after the burst began, whichever comes first.
 const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -195,7 +207,9 @@ fn trigger(event: &Event) -> Option<Trigger> {
         // Focus into kitty bounds the interesting catalog changes; other
         // apps' focus churn is noise.
         "core:focus.changed" if kitty => Some(Trigger::Now),
-        "core:ax.changed" if kitty => Some(Trigger::AxChange),
+        "core:ax.changed" if kitty && event.is_ax_change(&AX_REFRESH_NOTIFICATIONS) => {
+            Some(Trigger::AxChange)
+        }
         _ => None,
     }
 }
@@ -576,12 +590,21 @@ mod tests {
             pid: Some(42),
             ..Event::default()
         };
+        let ax = |notification: &str, bundle_id: &str| Event {
+            notification: Some(notification.into()),
+            ..event("core:ax.changed", Some(bundle_id))
+        };
+        for notification in ax_notifications::ALL {
+            assert_eq!(
+                trigger(&ax(notification, KITTY_BUNDLE_ID)),
+                AX_REFRESH_NOTIFICATIONS
+                    .contains(&notification)
+                    .then_some(Trigger::AxChange),
+                "{notification}"
+            );
+        }
         assert_eq!(
-            trigger(&event("core:ax.changed", Some(KITTY_BUNDLE_ID))),
-            Some(Trigger::AxChange)
-        );
-        assert_eq!(
-            trigger(&event("core:ax.changed", Some("com.apple.Terminal"))),
+            trigger(&ax(ax_notifications::TITLE_CHANGED, "com.apple.Terminal")),
             None
         );
         assert_eq!(

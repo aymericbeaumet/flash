@@ -218,6 +218,19 @@ mod tests {
                 case["name"]
             );
         }
+        // `core:ax.changed` payloads name the app and the notification.
+        for case in fixture["ax_changed"].as_array().unwrap() {
+            let event = serde_json::json!({
+                "name": "core:ax.changed",
+                "payload": case["value"],
+            });
+            assert_eq!(
+                crate::runtime::decode_event(event).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "ax_changed: {}",
+                case["name"]
+            );
+        }
         for case in fixture["encoded_rows"].as_array().unwrap() {
             let encoded = serde_json::to_vec(&case["value"]).unwrap();
             assert_eq!(
@@ -241,6 +254,7 @@ mod tests {
             ("plugin_outbound_bytes", crate::emit::OUTBOUND_QUEUE_BYTES),
             ("plugin_event_frames", crate::events::EVENT_QUEUE_CAPACITY),
             ("plugin_event_bytes", crate::events::EVENT_QUEUE_BYTES),
+            ("plugin_replacement_slots", crate::events::REPLACEMENT_SLOTS),
         ] {
             assert_eq!(
                 contract["transport_limits"][key].as_u64().unwrap() as usize,

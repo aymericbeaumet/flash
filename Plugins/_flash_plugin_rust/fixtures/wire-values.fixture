@@ -1,5 +1,5 @@
 {
-  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, status-observation event payloads, and encoded byte accounting",
+  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, AX-change and status-observation event payloads, and encoded byte accounting",
   "protocol_version": [
     {
       "name": "current",
@@ -506,6 +506,43 @@
           }
         ]
       },
+      "valid": false
+    }
+  ],
+  "ax_changed": [
+    {
+      "name": "title",
+      "value": {"notification": "AXTitleChanged", "pid": 42, "bundle_id": "com.example"},
+      "valid": true
+    },
+    {
+      "name": "no-bundle",
+      "value": {"notification": "AXValueChanged", "pid": 42},
+      "valid": true
+    },
+    {
+      "name": "missing-notification",
+      "value": {"pid": 42},
+      "valid": false
+    },
+    {
+      "name": "empty-notification",
+      "value": {"notification": "", "pid": 42},
+      "valid": false
+    },
+    {
+      "name": "non-string-notification",
+      "value": {"notification": 1, "pid": 42},
+      "valid": false
+    },
+    {
+      "name": "missing-pid",
+      "value": {"notification": "AXTitleChanged"},
+      "valid": false
+    },
+    {
+      "name": "invalid-pid",
+      "value": {"notification": "AXTitleChanged", "pid": 0},
       "valid": false
     }
   ],

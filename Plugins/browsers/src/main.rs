@@ -22,19 +22,27 @@ use applescript::{CHROMIUM, Dialect, ListedTab, SAFARI, TabIdentity, TabSlot};
 use firefox::StripPosition;
 use flash_plugin::{
     ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event, NavigateRequest,
-    PerformResponse, RefreshGate, RunningApplication, run, run_osascript,
+    PerformResponse, RefreshGate, RunningApplication, ax_notifications, run, run_osascript,
 };
 use route::TabRoute;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
-/// Nothing polls: app lifecycle, focus into or out of a browser, the focused
-/// browser's AX changes, and flashlight opens drive every refresh. A tab
-/// switch, open, close or navigation in the focused browser retitles its
-/// window, but `core:ax.changed` names neither the notification nor the
-/// element and fires for each keystroke's value change too, so a browser's
-/// AX burst refreshes once it has been quiet this long…
-const AX_SETTLE: Duration = Duration::from_secs(1);
+/// Nothing polls: app lifecycle, focus into or out of a browser, a browser's
+/// retitled or new windows, and flashlight opens drive every refresh. A tab
+/// switch, open, close or navigation in the focused tab retitles its window
+/// (`AXTitleChanged`), as does a background tab renaming itself. Web content
+/// posts element creation, destruction and value changes on every keystroke
+/// and DOM update, so those are ignored: a background tab opened or closed
+/// without retitling anything catches up at the next focus change or
+/// flashlight open.
+const AX_REFRESH_NOTIFICATIONS: [&str; 2] = [
+    ax_notifications::TITLE_CHANGED,
+    ax_notifications::WINDOW_CREATED,
+];
+/// A page load retitles its window several times, so a burst refreshes once
+/// it has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_millis(300);
 /// …or this long after it began, whichever comes first.
 const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 /// Event bursts (a launch fires apps.changed + focus.changed +
@@ -449,9 +457,10 @@ impl FlashPlugin for Browsers {
     }
 }
 
-/// Whether `event` is an AX change in a supported browser.
+/// Whether `event` is an AX change in a supported browser that can change
+/// its tab list.
 fn ax_change_touches_browser(event: &Event) -> bool {
-    event.name == "core:ax.changed"
+    event.is_ax_change(&AX_REFRESH_NOTIFICATIONS)
         && event
             .bundle_id
             .as_deref()
@@ -930,16 +939,19 @@ mod tests {
         );
     }
 
-    /// The focused browser's AX changes (a tab switched, opened, closed or
-    /// navigated retitles its window) refresh the catalog; other apps' do not.
+    /// A browser's retitled or new windows (a tab switched, opened, closed
+    /// or navigated retitles its window) refresh the catalog; its keystrokes
+    /// and DOM churn do not, nor do other apps' changes.
     #[test]
     fn only_a_browsers_ax_changes_refresh_the_catalog() {
-        let ax_changed = |bundle_id: &str| Event {
+        let ax = |bundle_id: &str, notification: &str| Event {
             name: "core:ax.changed".into(),
             bundle_id: Some(bundle_id.into()),
             pid: Some(42),
+            notification: Some(notification.into()),
             ..Event::default()
         };
+        let ax_changed = |bundle_id: &str| ax(bundle_id, ax_notifications::TITLE_CHANGED);
         assert!(ax_change_touches_browser(&ax_changed("com.google.Chrome")));
         assert!(ax_change_touches_browser(&ax_changed(
             "org.mozilla.firefox"
@@ -947,6 +959,13 @@ mod tests {
         assert!(!ax_change_touches_browser(&ax_changed(
             "com.apple.Terminal"
         )));
+        for notification in ax_notifications::ALL {
+            assert_eq!(
+                ax_change_touches_browser(&ax("com.google.Chrome", notification)),
+                AX_REFRESH_NOTIFICATIONS.contains(&notification),
+                "{notification}"
+            );
+        }
         assert!(!ax_change_touches_browser(&Event {
             name: "core:ax.changed".into(),
             ..Event::default()

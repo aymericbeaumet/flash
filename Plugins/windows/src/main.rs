@@ -13,9 +13,11 @@
 //!   2. debounced/coalesced on `core:apps.changed` /
 //!      `core:window.focus.changed` / `core:focus.changed` (the SDK event
 //!      queue is bounded, so a focus storm collapses into one refresh),
-//!   3. for the focused app, on `core:ax.changed` once its burst settles
-//!      (window titles, creation, and closure all raise AX notifications),
-//!      and
+//!   3. for an app whose window was retitled, created or destroyed
+//!      (`core:ax.changed` naming `AXTitleChanged`, `AXWindowCreated` or
+//!      `AXUIElementDestroyed`), once that burst settles; value, selection,
+//!      layout and geometry changes — every keystroke among them — cannot
+//!      change a window row and are ignored, and
 //!   4. as a whole sweep when the flashlight opens (`core:session.opened`),
 //!      at most once per [`SWEEP_TTL`]: the host observes AX only in the
 //!      focused app, so this is when a background app's retitled windows
@@ -37,7 +39,9 @@
 
 mod settle;
 
-use flash_plugin::{Candidate, Context, Event, PerformResponse, RefreshGate, run};
+use flash_plugin::{
+    Candidate, Context, Event, PerformResponse, RefreshGate, ax_notifications, run,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -50,10 +54,17 @@ const SOURCE_ITEMS: &str = "windows.items";
 /// A flashlight open re-walks every app only when the last sweep is older
 /// than this, so reopening it does not queue AX work behind itself.
 const SWEEP_TTL: Duration = Duration::from_secs(60);
-/// `core:ax.changed` names neither the notification nor the element, and
-/// fires for each keystroke's value change too: re-snapshot an app once its
-/// AX events have been quiet this long…
-const AX_SETTLE: Duration = Duration::from_secs(1);
+/// The AX notifications that can change an app's window rows. Focus moves
+/// arrive as their own events.
+const AX_REFRESH_NOTIFICATIONS: [&str; 3] = [
+    ax_notifications::TITLE_CHANGED,
+    ax_notifications::WINDOW_CREATED,
+    ax_notifications::UI_ELEMENT_DESTROYED,
+];
+/// Closing a window destroys its whole subtree and a load retitles a window
+/// several times, so re-snapshot an app once those notifications have been
+/// quiet this long…
+const AX_SETTLE: Duration = Duration::from_millis(300);
 /// …or this long after its burst began, whichever comes first.
 const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 /// Event bursts (an app launch fires apps.changed + focus.changed +
@@ -138,7 +149,7 @@ impl FlashPlugin for Windows {
                 Some(pid) if pid > 0 => schedule_app_refresh(&ctx, pid),
                 _ => schedule_refresh(&ctx),
             },
-            "core:ax.changed" => {
+            "core:ax.changed" if event.is_ax_change(&AX_REFRESH_NOTIFICATIONS) => {
                 if let Some(pid) = event.pid.filter(|pid| *pid > 0) {
                     schedule_ax_refresh(&ctx, pid);
                 }
@@ -644,8 +655,18 @@ mod tests {
         assert!(polls(&frames).is_empty(), "{frames:?}");
     }
 
-    /// An AX change in the focused app re-snapshots that app alone once its
-    /// burst settles.
+    fn ax_changed(notification: &str) -> Event {
+        Event {
+            name: "core:ax.changed".into(),
+            bundle_id: Some("com.example.editor".into()),
+            pid: Some(42),
+            notification: Some(notification.into()),
+            ..Event::default()
+        }
+    }
+
+    /// A window retitled, created or destroyed re-snapshots its app alone
+    /// once the burst settles; the keystrokes typed meanwhile do not.
     #[tokio::test]
     async fn an_ax_change_resnapshots_its_app_once_the_burst_settles() {
         let mut harness = flash_plugin::testing::Harness::new("windows");
@@ -654,15 +675,12 @@ mod tests {
             pid: 42,
             localized_name: "Editor".to_string(),
         }]);
-        let ax_changed = Event {
-            name: "core:ax.changed".into(),
-            bundle_id: Some("com.example.editor".into()),
-            pid: Some(42),
-            ..Event::default()
-        };
-        for _ in 0..3 {
+        for notification in AX_REFRESH_NOTIFICATIONS
+            .into_iter()
+            .chain([ax_notifications::VALUE_CHANGED; 3])
+        {
             Windows
-                .on_event(harness.context(), ax_changed.clone())
+                .on_event(harness.context(), ax_changed(notification))
                 .await;
         }
         let (id, method, params) = harness.next_host_request().await.expect("snapshot");
@@ -690,6 +708,22 @@ mod tests {
             harness.next_host_request().await.is_none(),
             "one burst, one snapshot"
         );
+    }
+
+    /// Value, selection, focus, layout and geometry changes cannot change a
+    /// window row: none of them snapshots anything.
+    #[tokio::test]
+    async fn irrelevant_ax_changes_snapshot_nothing() {
+        let mut harness = flash_plugin::testing::Harness::new("windows");
+        for notification in ax_notifications::ALL
+            .into_iter()
+            .filter(|notification| !AX_REFRESH_NOTIFICATIONS.contains(notification))
+        {
+            Windows
+                .on_event(harness.context(), ax_changed(notification))
+                .await;
+        }
+        assert!(harness.next_host_request().await.is_none());
     }
 
     #[test]
