@@ -102,7 +102,10 @@ the host has received *no frame at all* from a plugin for `idle_before_ping`
 (60 s) and has nothing in flight, it sends `ping`; one missed reply (10 s)
 tears down and restarts. Any plugin frame — a publish, a log line, a response
 — resets the idle clock. A blocking single-threaded plugin is fully
-conformant: pings never race in-flight requests.
+conformant: pings never race in-flight requests. The host checks idleness on
+one shared low-priority sweep at half that threshold (registered only while a
+plugin runs, held while the displays sleep), so the ping follows 60–90 s of
+silence; a chatty plugin is never pinged and costs no wake-up.
 
 ## Framing
 

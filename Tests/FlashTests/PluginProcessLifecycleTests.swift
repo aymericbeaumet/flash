@@ -560,6 +560,35 @@ final class PluginProcessLifecycleTests: XCTestCase {
     }
   }
 
+  /// Every plugin's idle probe rides one `.low` sweep on the shared clock,
+  /// registered only while a plugin runs — never a timer chain per plugin.
+  func testIdleProbesRideOneSharedSweepOnlyWhileAPluginRuns() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "sweeper",
+      manifest: PluginFixtureKit.manifest(id: "sweeper"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    func sweepRegistered() -> Bool {
+      let listed = DispatchSemaphore(value: 0)
+      var ids: [String] = []
+      PollScheduler.shared.registeredIDs {
+        ids = $0
+        listed.signal()
+      }
+      listed.wait()
+      return ids.contains(PluginLivenessSweep.clientID)
+    }
+    try withSeams(idleBeforePingMs: 150, pingTimeoutMs: 1_000) {
+      let process = try makeProcess(fixture)
+      process.start()
+      waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+      waitUntilTrue("sweep registered") { sweepRegistered() }
+      waitUntilTrue("idle ping answered") { fixture.pingCount() >= 1 }
+      process.stopAndWait(reason: "test")
+      waitUntilTrue("sweep released with the last plugin") { !sweepRegistered() }
+    }
+  }
+
   func testMissedIdlePingTearsDownAndRestarts() throws {
     // ONE missed ping tears down and restarts. The fixture ignores only the
     // first ping ever (global counter in the data dir), so the restarted

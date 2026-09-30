@@ -137,7 +137,6 @@ final class PluginProcess {
   /// Uptime of the most recent inbound frame — any frame resets the idle
   /// clock, so a plugin that publishes or logs is never pinged.
   private var lastInboundFrameAt = DispatchTime.now()
-  private var idlePingWork: DispatchWorkItem?
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
   private var reloadWork: DispatchWorkItem?
   private var lastError: String?
@@ -390,8 +389,7 @@ final class PluginProcess {
     reloadWork = nil
     installer?.cancel()
     installer = nil
-    idlePingWork?.cancel()
-    idlePingWork = nil
+    PluginLivenessSweep.shared.leave(self)
     removeFileWatchers()
     invalidateTransport()
     if let process, process.isRunning {
@@ -632,7 +630,7 @@ final class PluginProcess {
     // sent even when it is empty.
     deliveredStatusSegments = nil
     deliverObservedStatusSegments()
-    armIdlePing()
+    PluginLivenessSweep.shared.join(self)
     let deferred = deferredPerforms
     deferredPerforms.removeAll()
     for item in deferred {
@@ -664,27 +662,18 @@ final class PluginProcess {
 
   /// The one residual liveness probe: after `idleBeforePingMs` of inbound
   /// silence with nothing in flight, send `ping`; one missed reply tears
-  /// down and restarts. Any inbound frame resets the clock, and pending
-  /// requests suppress it — a blocking single-threaded plugin is fully
-  /// conformant.
-  private func armIdlePing(afterMs: Int? = nil) {
-    idlePingWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      self?.idlePingTick()
-    }
-    idlePingWork = work
-    queue.asyncAfter(
-      deadline: .now() + .milliseconds(afterMs ?? Self.idleBeforePingMs), execute: work)
+  /// down and restarts. Any inbound frame (the reply included) resets the
+  /// silence, and pending requests suppress it — a blocking single-threaded
+  /// plugin is fully conformant. `PluginLivenessSweep` asks; nothing here
+  /// arms a timer.
+  func checkIdleLiveness() {
+    queue.async { [weak self] in self?.pingIfIdle() }
   }
 
-  private func idlePingTick() {
-    guard runtimeStateSnapshot() == .running, process?.isRunning == true else { return }
-    let idleMs = Int(Self.elapsedMillisecondsValue(since: lastInboundFrameAt))
-    guard pending.isEmpty, idleMs >= Self.idleBeforePingMs else {
-      armIdlePing(
-        afterMs: pending.isEmpty ? max(1, Self.idleBeforePingMs - idleMs) : Self.idleBeforePingMs)
-      return
-    }
+  private func pingIfIdle() {
+    guard runtimeStateSnapshot() == .running, process?.isRunning == true, pending.isEmpty,
+      Int(Self.elapsedMillisecondsValue(since: lastInboundFrameAt)) >= Self.idleBeforePingMs
+    else { return }
     sendRequest(
       method: "ping",
       params: [:],
@@ -697,7 +686,6 @@ final class PluginProcess {
         self.applyLifecycle(.interrupted(self.lifecycle.generation))
         return
       }
-      self.armIdlePing()
     }
   }
 
