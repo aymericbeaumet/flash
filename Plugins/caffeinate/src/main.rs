@@ -1,4 +1,6 @@
+use std::io;
 use std::mem;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -7,6 +9,11 @@ use flash_plugin::{
     CommandRequest, Context, ManagedChild, ManagedChildError, PerformResponse, StatusValue, run,
     spawn_managed,
 };
+use nix::errno::Errno;
+use nix::libc::timespec;
+use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -165,6 +172,7 @@ impl Caffeinate {
         let mut argv = self.command_prefix.clone();
         argv.extend(caffeinate_args(std::process::id(), seconds));
         let child = spawn_managed(ctx, &argv)?;
+        watch_exit(self.state.clone(), ctx.clone(), child.id());
         let Some(seconds) = seconds else {
             *state = AssertionState::Indefinite { child };
             return Ok(None);
@@ -237,6 +245,70 @@ fn emit_state(ctx: &Context, state: &AssertionState) {
         StatusValue::empty()
     };
     ctx.status([("state", value)]);
+}
+
+/// Clear the status the moment the assertion's process exits on its own —
+/// killed, or its `-t` bound reached — rather than at the next command.
+/// Stopping or replacing it exits it too; the pid check makes that a no-op.
+fn watch_exit(state: Arc<Mutex<AssertionState>>, ctx: Context, pid: u32) {
+    tokio::spawn(async move {
+        if exited(pid).await.is_err() {
+            // No watch: the next command still reconciles.
+            return;
+        }
+        let mut state = state.lock().await;
+        if state.pid() != Some(pid) {
+            return;
+        }
+        if reconcile(&mut state).is_ok() && state.pid().is_none() {
+            emit_state(&ctx, &state);
+        }
+    });
+}
+
+/// `Kqueue` exposes `AsFd`; Tokio's reactor wants `AsRawFd`.
+struct Queue(Kqueue);
+
+impl AsRawFd for Queue {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0.as_fd().as_raw_fd()
+    }
+}
+
+const NO_WAIT: timespec = timespec {
+    tv_sec: 0,
+    tv_nsec: 0,
+};
+
+/// Resolves when `pid` exits: kqueue's `EVFILT_PROC`/`NOTE_EXIT`, waited on
+/// through Tokio's reactor, so nothing polls. The child stays unreaped until
+/// `reconcile`, so its pid cannot be reused meanwhile.
+async fn exited(pid: u32) -> io::Result<()> {
+    // Readable only: a kqueue descriptor rejects a write filter.
+    let queue = AsyncFd::with_interest(Queue(Kqueue::new()?), Interest::READABLE)?;
+    let exit = KEvent::new(
+        pid as usize,
+        EventFilter::EVFILT_PROC,
+        EvFlags::EV_ADD | EvFlags::EV_ONESHOT,
+        FilterFlag::NOTE_EXIT,
+        0,
+        0,
+    );
+    match queue.get_ref().0.kevent(&[exit], &mut [], Some(NO_WAIT)) {
+        Ok(_) => {}
+        // Already gone.
+        Err(Errno::ESRCH) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    loop {
+        let mut ready = queue.readable().await?;
+        let mut events = [exit];
+        let count = queue.get_ref().0.kevent(&[], &mut events, Some(NO_WAIT))?;
+        ready.clear_ready();
+        if count > 0 {
+            return Ok(());
+        }
+    }
 }
 
 fn schedule_expiry(
@@ -344,6 +416,30 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("timed assertion did not expire");
+    }
+
+    /// A caffeinate that dies on its own (killed, or its `-t` ran out) clears
+    /// the status as it exits, not at the next command.
+    #[tokio::test]
+    async fn an_assertion_that_dies_clears_its_status_without_a_command() {
+        let (plugin, mut harness) = fixture().await;
+        assert!(invoke(&plugin, &harness, "on", &[]).await.is_ok());
+        let pid = plugin.state.lock().await.pid().unwrap();
+        assert_eq!(harness.drain_status().last().unwrap()["state"], "on");
+        let killed = tokio::process::Command::new("/bin/kill")
+            .args(["-9", &pid.to_string()])
+            .status()
+            .await
+            .unwrap();
+        assert!(killed.success());
+        for _ in 0..200 {
+            if matches!(*plugin.state.lock().await, AssertionState::Stopped) {
+                assert_eq!(harness.drain_status().last().unwrap()["state"], "");
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("a dead assertion kept its status");
     }
 
     #[tokio::test]
