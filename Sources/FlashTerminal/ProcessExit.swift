@@ -24,22 +24,25 @@ public enum ProcessExit {
   public static func reapWhenExited(_ pid: pid_t, completion: @escaping () -> Void = {}) {
     let source = DispatchSource.makeProcessSource(
       identifier: pid, eventMask: .exit, queue: reaperQueue)
+    // Both paths run on the serial reaper queue; the first one finishes.
     var finished = false
-    let finish = {
+    let finish = { (reaped: Bool) in
       guard !finished else { return }
       finished = true
       // Cancelling releases the handler, and with it this closure's hold on
       // the source.
       source.cancel()
-      _ = reap(pid)
+      // A pid reaped here is never waited on again: it may already name
+      // another process.
+      if !reaped { _ = reap(pid) }
       completion()
     }
-    source.setEventHandler(handler: finish)
+    source.setEventHandler { finish(false) }
     source.resume()
     reaperQueue.async {
       var status: Int32 = 0
       let result = flash_pty_wait(pid, &status)
-      if result == pid || (result < 0 && errno == ECHILD) { finish() }
+      if result == pid || (result < 0 && errno == ECHILD) { finish(true) }
     }
   }
 
