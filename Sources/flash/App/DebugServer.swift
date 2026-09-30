@@ -15,7 +15,7 @@ final class DebugServer {
   /// Queue-confined. The listener's outcome: nil while it is still binding.
   private var readiness: ListenerReadiness?
   /// Queue-confined callers of `whenListening` waiting for that outcome.
-  private var readinessWaiters: [(UInt16?) -> Void] = []
+  private var readinessWaiters: [UUID: (UInt16?) -> Void] = [:]
   /// Queue-confined: whether the state refresh cadence is registered.
   private var stateTimerRegistered = false
   private var stopped = false
@@ -123,13 +123,14 @@ final class DebugServer {
       case .failed: return deliver(nil)
       case nil: break
       }
-      readinessWaiters.append(deliver)
+      // Each waiter owns its deadline, so an earlier caller's expiry never
+      // cuts a later one short.
+      let id = UUID()
+      readinessWaiters[id] = deliver
       queue.asyncAfter(deadline: .now() + timeoutSeconds) { [self] in
-        guard readiness == nil, !readinessWaiters.isEmpty else { return }
+        guard let waiter = readinessWaiters.removeValue(forKey: id) else { return }
         FlashLog.warn("[debug] inspector did not start in time")
-        let waiters = readinessWaiters
-        readinessWaiters.removeAll()
-        for waiter in waiters { waiter(nil) }
+        waiter(nil)
       }
     }
   }
@@ -140,7 +141,7 @@ final class DebugServer {
     readiness = outcome
     let port: UInt16?
     if case .listening(let bound) = outcome { port = bound } else { port = nil }
-    let waiters = readinessWaiters
+    let waiters = readinessWaiters.values
     readinessWaiters.removeAll()
     for waiter in waiters { waiter(port) }
   }
