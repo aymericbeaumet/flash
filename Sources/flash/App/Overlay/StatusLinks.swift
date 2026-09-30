@@ -15,10 +15,27 @@ enum StatusBarHoverGate: Equatable {
 }
 
 struct StatusBarPopupRegion: Equatable {
+  /// The hover and click target: the whole span, across the bar's height.
   var rect: CGRect
   var name: String
   var content: String
   var document: [FlashStatusTextSegment]? = nil
+  /// The span's visible text without its outer separator spaces, across the
+  /// bar's height: the bounds the hover wash hugs. Nil when no bar measured
+  /// the span.
+  var textBounds: CGRect? = nil
+
+  /// What the popup hangs from (`OverlayPanel.statusBarPopupFrame`).
+  var anchor: CGRect { textBounds ?? rect }
+
+  /// The same span in a space offset by (`dx`, `dy`), such as a click
+  /// window's.
+  func offsetBy(dx: CGFloat, dy: CGFloat) -> Self {
+    var moved = self
+    moved.rect = rect.offsetBy(dx: dx, dy: dy)
+    moved.textBounds = textBounds?.offsetBy(dx: dx, dy: dy)
+    return moved
+  }
 }
 
 enum StatusBarHintAction: Equatable {
@@ -98,7 +115,8 @@ final class StatusBarClickView: NSView {
   /// action map). Set by the overlay from the AppDelegate's handler.
   var onStatusBarAction: ((String) -> Void)?
   /// Reports the popup under the pointer (or nil) and the pointer in screen
-  /// coordinates. The overlay moves its popup layer on every event.
+  /// coordinates. The popup hangs from its label, so moving along the label
+  /// leaves it in place.
   var onPopupHover: ((StatusBarPopupRegion?, NSPoint) -> Void)?
   var onPopupClick: ((StatusBarPopupRegion, NSPoint) -> Void)?
   /// A committed left-click found a handler (a link or a named range
@@ -460,11 +478,15 @@ extension OverlayPanel {
     }
   }
 
-  /// Popup placement oracle: horizontally centered under the pointer, then
-  /// clamped to the hovered display's visible frame (including negative-origin
-  /// secondary displays). Oversized content is clipped to that frame.
+  /// Where a label's popup shows, hovered or pinned: horizontally centred on
+  /// the span it hangs from (`StatusBarPopupRegion.anchor`), its top `offset`
+  /// below the bar (spans cover the bar's height, so the span's bottom is the
+  /// bar's), then clamped to the visible frame of the bar's display (including
+  /// negative-origin secondary displays). Oversized content is clipped to that
+  /// frame. The pointer plays no part, so moving along the label never moves
+  /// the popup.
   static func statusBarPopupFrame(
-    pointer: CGPoint,
+    span: CGRect,
     popupSize: CGSize,
     visibleFrame: CGRect,
     offset: CGFloat
@@ -472,9 +494,9 @@ extension OverlayPanel {
     let width = min(max(1, popupSize.width), visibleFrame.width)
     let height = min(max(1, popupSize.height), visibleFrame.height)
     let x = min(
-      max(pointer.x - width / 2, visibleFrame.minX),
+      max(span.midX - width / 2, visibleFrame.minX),
       visibleFrame.maxX - width)
-    let top = min(pointer.y - max(0, offset), visibleFrame.maxY)
+    let top = min(span.minY - max(0, offset), visibleFrame.maxY)
     let y = max(visibleFrame.minY, top - height)
     return CGRect(x: x, y: y, width: width, height: height)
   }
@@ -537,14 +559,16 @@ extension OverlayPanel {
     statusBarHoverDwellName = nil
     statusBarHoverGate = statusBarHoverGate.hovering(popup.name)
     guard statusBarHoverGate.permits(popup.name) else { return }
+    // The popup shows on the display whose bar draws its label.
+    let labelCentre = CGPoint(x: popup.anchor.midX, y: popup.anchor.midY)
     guard
-      let screen = snapshot.screens.first(where: { $0.frame.contains(pointer) })
+      let screen = snapshot.screens.first(where: { $0.frame.contains(labelCentre) })
         ?? snapshot.screens.first(where: { $0.frame.intersects(popup.rect) })
     else {
       hideStatusBarPopup(reason: "screen_missing")
       return
     }
-    if let current = statusPopupController.presentation.identity?.name, current != popup.name {
+    if let current = statusPopupController.presentation.name, current != popup.name {
       hideStatusBarPopup(reason: "anchor_changed")
     }
     guard statusBarTerminalPrepareHandler?(popup.name) ?? true else {
@@ -552,12 +576,11 @@ extension OverlayPanel {
       return
     }
     statusPopupController.preview(
-      popup, pointer: pointer,
-      visibleFrame: screen.visibleFrame, style: popupStyle,
+      popup, visibleFrame: screen.visibleFrame, style: popupStyle,
       font: NSFont.monospacedSystemFont(
         ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
         weight: .medium), preservingContent: preservingContent)
-    activeStatusBarPopupName = statusPopupController.presentation.identity?.name
+    activeStatusBarPopupName = statusPopupController.presentation.name
     activeStatusBarPopupContent = statusPopupController.content
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
@@ -582,7 +605,10 @@ extension OverlayPanel {
     StatusBarClickView.openExternally(url)
   }
 
-  func activateStatusBarPopup(_ popup: StatusBarPopupRegion, at pointer: CGPoint) {
+  func activateStatusBarPopup(
+    _ popup: StatusBarPopupRegion, at pointer: CGPoint,
+    screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
+  ) {
     let wasFocused = statusPopupController.focusedName
     guard wasFocused != popup.name else { return }
     if wasFocused != nil {
@@ -593,7 +619,7 @@ extension OverlayPanel {
       }
     }
     statusBarHoverGate = .ready
-    showStatusBarPopup(popup, at: pointer)
+    showStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot)
     statusPopupController.focus()
   }
 
@@ -602,7 +628,7 @@ extension OverlayPanel {
   /// pointer leaves its region; a pinned popup is left alone because it is no
   /// longer tied to hover.
   func dismissStatusBarPopupForClick() {
-    guard let name = statusPopupController.presentation.identity?.name,
+    guard let name = statusPopupController.presentation.name,
       !statusPopupController.presentation.isStandalone
     else { return }
     statusBarHoverGate = .dismissed(name)
@@ -644,7 +670,8 @@ extension OverlayPanel {
         "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)"
       }
       + popups.map {
-        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.name)|\($0.content)"
+        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.anchor.minX),"
+          + "\($0.anchor.width)|\($0.name)|\($0.content)"
       })
       .joined(separator: ";")
     if signature == lastStatusBarClickSignature { return }
@@ -674,32 +701,24 @@ extension OverlayPanel {
       }
       view.popups = popups.compactMap { popup in
         guard band.intersects(popup.rect) else { return nil }
-        return StatusBarPopupRegion(
-          rect: popup.rect.offsetBy(dx: -band.minX, dy: -band.minY),
-          name: popup.name,
-          content: popup.content,
-          document: popup.document)
+        return popup.offsetBy(dx: -band.minX, dy: -band.minY)
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
       view.hoverPermitted = { [weak self] point in self?.statusBarHoverPermits(at: point) ?? true }
       view.onStatusBarAction = statusBarActionHandler
       view.onLinkActivated = { [weak self] in self?.dismissStatusBarPopupForClick() }
       view.onPopupClick = { [weak self] popup, point in
-        var screenPopup = popup
-        screenPopup.rect = popup.rect.offsetBy(dx: band.minX, dy: band.minY)
-        self?.activateStatusBarPopup(screenPopup, at: point)
+        self?.activateStatusBarPopup(popup.offsetBy(dx: band.minX, dy: band.minY), at: point)
       }
       view.onPopupHover = { [weak self] popup, point in
         guard let self else { return }
         if let popup {
-          var screenPopup = popup
-          screenPopup.rect = popup.rect.offsetBy(dx: band.minX, dy: band.minY)
-          self.showStatusBarPopup(screenPopup, at: point)
+          self.showStatusBarPopup(popup.offsetBy(dx: band.minX, dy: band.minY), at: point)
         } else {
           if self.statusPopupController.containsSnapshotAnchor(point) { return }
           self.statusBarHoverGate = .ready
           self.statusPopupController.leaveAnchor()
-          self.activeStatusBarPopupName = self.statusPopupController.presentation.identity?.name
+          self.activeStatusBarPopupName = self.statusPopupController.presentation.name
         }
       }
       view.onHoverHighlight = { [weak self] rect in
@@ -717,7 +736,7 @@ extension OverlayPanel {
   }
 
   /// Re-hit-test live status content, including the wash under a stationary
-  /// pointer. An open popup updates in place and keeps its latest anchor.
+  /// pointer. An open popup updates in place, still hanging from its label.
   func refreshStatusBarPopup(
     popups: [StatusBarPopupRegion],
     links: [(rect: CGRect, url: URL)] = [],
@@ -725,7 +744,7 @@ extension OverlayPanel {
     screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
     statusPopupController.refresh(popups)
-    activeStatusBarPopupName = statusPopupController.presentation.identity?.name
+    activeStatusBarPopupName = statusPopupController.presentation.name
     activeStatusBarPopupContent = statusPopupController.content
     hitTestStatusBarHover(popups: popups, links: links, at: pointer, screenSnapshot: screenSnapshot)
   }

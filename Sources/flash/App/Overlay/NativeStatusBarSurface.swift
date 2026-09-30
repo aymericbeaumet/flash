@@ -530,6 +530,12 @@ final class NativeStatusBarSurface {
         }
       }
     }
+    // A popup hangs from the text its wash hugs, not from its outer spaces.
+    for index in popups.indices {
+      let local = popups[index].rect.offsetBy(
+        dx: -(panelFrame.minX + bar.minX), dy: -(panelFrame.minY + bar.minY))
+      popups[index].textBounds = hoverTextBounds(in: local).map(rect)
+    }
     // Only ranges closed by the native layout are actionable; unclosed ranges
     // and cell metadata left behind by clipping cannot create an extra hit area.
     for range in layout.ranges where range.range.kind == .user {

@@ -1,19 +1,20 @@
-import CoreGraphics
-
+/// Which popup shows and in which state. Where a label's popup shows is its
+/// span's business (`OverlayPanel.statusBarPopupFrame`), never the pointer's,
+/// so the state carries no position.
 enum StatusPopupPresentation: Equatable {
   case hidden
-  case preview(name: String, anchor: CGPoint)
-  case focused(name: String, anchor: CGPoint)
+  /// Hovered: hangs below its label while the pointer stays on it.
+  case preview(name: String)
+  /// Pinned by a click: focused, still hanging below its label.
+  case focused(name: String)
   /// Shown by `enter_terminal_mode`: centred on a screen, focused, tied to no
   /// label.
   case standalone(name: String)
 
-  var identity: (name: String, anchor: CGPoint?)? {
+  var name: String? {
     switch self {
     case .hidden: return nil
-    case .standalone(let name): return (name, nil)
-    case .preview(let name, let anchor), .focused(let name, let anchor):
-      return (name, anchor)
+    case .preview(let name), .focused(let name), .standalone(let name): return name
     }
   }
 
@@ -28,7 +29,7 @@ enum StatusPopupPresentation: Equatable {
   /// elsewhere or a focus change closes it. A focused popup closes when it
   /// loses key instead, and a standalone popup stays until dismissed.
   var ephemeralName: String? {
-    if case .preview(let name, _) = self { return name }
+    if case .preview(let name) = self { return name }
     return nil
   }
 
@@ -39,7 +40,7 @@ enum StatusPopupPresentation: Equatable {
 
   enum Event {
     case standalone(name: String)
-    case anchor(name: String, point: CGPoint)
+    case anchor(name: String)
     case leaveAnchor
     case focus
     case dismiss
@@ -53,12 +54,12 @@ enum StatusPopupPresentation: Equatable {
       return .standalone(name: name)
     case .leaveAnchor:
       return isFocused ? self : .hidden
-    case .anchor(let name, let point):
+    case .anchor(let name):
       guard !isFocused else { return self }
-      return .preview(name: name, anchor: point)
+      return .preview(name: name)
     case .focus:
-      guard let identity, let anchor = identity.anchor else { return self }
-      return .focused(name: identity.name, anchor: anchor)
+      guard case .preview(let name) = self else { return self }
+      return .focused(name: name)
     }
   }
 }

@@ -260,7 +260,7 @@ extension OverlayPanel {
       hideStatusBarPopup()
     }
     // Hidden popups sized in percentages refit to the new geometry.
-    statusTerminals.refitHidden(except: statusPopupController.presentation.identity?.name)
+    statusTerminals.refitHidden(except: statusPopupController.presentation.name)
     renderModeSurface()
   }
 

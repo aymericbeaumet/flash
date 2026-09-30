@@ -77,7 +77,6 @@ final class StatusPopupSnapshotTests: XCTestCase {
     controller.willFocus = { focusCalls += 1 }
     controller.preview(
       StatusBarPopupRegion(rect: .zero, name: "details", content: "initial"),
-      pointer: CGPoint(x: 100, y: 100),
       visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400),
       style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     controller.focus()

@@ -301,22 +301,6 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(layout.popupSize.height - layout.labelFrame.maxY - 1, 10)
   }
 
-  func testPopupFrameIsCenteredBelowPointerAndClampedToVisibleScreen() {
-    let centred = OverlayPanel.statusBarPopupFrame(
-      pointer: CGPoint(x: 500, y: 700),
-      popupSize: CGSize(width: 200, height: 100),
-      visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800),
-      offset: 8)
-    XCTAssertEqual(centred, CGRect(x: 400, y: 592, width: 200, height: 100))
-
-    let clamped = OverlayPanel.statusBarPopupFrame(
-      pointer: CGPoint(x: -1_190, y: 900),
-      popupSize: CGSize(width: 1_400, height: 100),
-      visibleFrame: CGRect(x: -1_200, y: 0, width: 1_200, height: 800),
-      offset: 8)
-    XCTAssertEqual(clamped, CGRect(x: -1_200, y: 700, width: 1_200, height: 100))
-  }
-
   func testPopupRectsHonorRightAlignmentAndPanelCoordinates() {
     let panel = OverlayPanel()
     let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
@@ -527,7 +511,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(second.popupDocuments["metrics"]?.map(\.text).joined(), "CPU 56%\nMEM 78%")
   }
 
-  func testVisiblePopupRefreshesContentInPlaceAtTheLatestPointer() {
+  func testVisiblePopupRefreshesContentInPlaceOnItsLabel() {
     let screenFrame = CGRect(x: 0, y: 0, width: 1_440, height: 900)
     let visibleFrame = CGRect(x: 0, y: 0, width: 1_440, height: 875)
     let snapshot = OverlayPanel.ScreenSnapshot(
@@ -538,33 +522,20 @@ final class StatusBarTests: XCTestCase {
       mainVisibleFrame: visibleFrame,
       nativeStatusBarFallbackHeight: 25)
     let panel = OverlayPanel()
-    let firstPointer = CGPoint(
-      x: visibleFrame.midX - 80,
-      y: visibleFrame.midY - 20)
-    let secondPointer = CGPoint(
-      x: visibleFrame.midX + 80,
-      y: visibleFrame.midY + 20)
+    let label = CGRect(x: 690, y: 875, width: 60, height: 25)
+    let firstPointer = CGPoint(x: label.minX + 5, y: label.midY)
+    let secondPointer = CGPoint(x: label.maxX - 5, y: label.midY)
     let popup = panel.statusPopupController
     defer { panel.hideStatusBarPopup() }
 
     panel.refreshStatusBarPopup(
-      popups: [
-        StatusBarPopupRegion(
-          rect: screenFrame,
-          name: "metrics",
-          content: "CPU 12%\nMEM 34%")
-      ],
+      popups: [StatusBarPopupRegion(rect: label, name: "metrics", content: "CPU 12%\nMEM 34%")],
       at: firstPointer,
       screenSnapshot: snapshot)
     let firstFrame = popup.frame
 
     panel.refreshStatusBarPopup(
-      popups: [
-        StatusBarPopupRegion(
-          rect: screenFrame,
-          name: "metrics",
-          content: "CPU 56%\nMEM 78%")
-      ],
+      popups: [StatusBarPopupRegion(rect: label, name: "metrics", content: "CPU 56%\nMEM 78%")],
       at: secondPointer,
       screenSnapshot: snapshot)
 
@@ -572,31 +543,19 @@ final class StatusBarTests: XCTestCase {
     XCTAssertTrue(popup.isVisible)
     XCTAssertEqual(panel.activeStatusBarPopupName, "metrics")
     XCTAssertEqual(panel.activeStatusBarPopupContent, "CPU 56%\nMEM 78%")
-    XCTAssertEqual(
-      popup.content,
-      "CPU 56%\nMEM 78%")
-    XCTAssertEqual(popup.frame.size, firstFrame.size)
-    XCTAssertEqual(
-      popup.frame.midX - firstFrame.midX,
-      secondPointer.x - firstPointer.x,
-      accuracy: 0.001)
-    XCTAssertEqual(
-      popup.frame.midY - firstFrame.midY,
-      secondPointer.y - firstPointer.y,
-      accuracy: 0.001)
+    XCTAssertEqual(popup.content, "CPU 56%\nMEM 78%")
+    XCTAssertEqual(popup.frame, firstFrame, "the popup hangs from its label, not the pointer")
+    XCTAssertEqual(popup.frame.midX, label.midX, accuracy: 0.5, "on whole points")
 
     let padding = CGFloat(panel.popupStyle.padding)
     let border = CGFloat(panel.popupStyle.borderWidth)
-    let label = popup.terminalView.frame
-    XCTAssertEqual(label.minX - border, padding, accuracy: 0.001)
-    XCTAssertEqual(label.minY - border, padding, accuracy: 0.001)
-    XCTAssertEqual(popup.frame.width - label.maxX - border, padding, accuracy: 0.001)
-    XCTAssertEqual(popup.frame.height - label.maxY - border, padding, accuracy: 0.001)
+    let text = popup.terminalView.frame
+    XCTAssertEqual(text.minX - border, padding, accuracy: 0.001)
+    XCTAssertEqual(text.minY - border, padding, accuracy: 0.001)
+    XCTAssertEqual(popup.frame.width - text.maxX - border, padding, accuracy: 0.001)
+    XCTAssertEqual(popup.frame.height - text.maxY - border, padding, accuracy: 0.001)
 
-    let anchor = StatusBarPopupRegion(
-      rect: CGRect(x: secondPointer.x - 5, y: secondPointer.y - 5, width: 10, height: 10),
-      name: "metrics", content: "CPU 56%\nMEM 78%")
-    panel.refreshStatusBarPopup(popups: [anchor], at: secondPointer, screenSnapshot: snapshot)
+    let anchor = StatusBarPopupRegion(rect: label, name: "metrics", content: "CPU 56%\nMEM 78%")
     let insidePopup = CGPoint(x: popup.frame.midX, y: popup.frame.midY)
     XCTAssertFalse(anchor.rect.contains(insidePopup))
     for _ in 0..<2 {

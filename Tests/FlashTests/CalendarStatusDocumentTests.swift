@@ -370,7 +370,7 @@ final class CalendarStatusDocumentTests: XCTestCase {
       StatusBarPopupRegion(
         rect: CGRect(x: 1400, y: 925, width: 40, height: 20), name: "date",
         content: text(runs), document: runs),
-      pointer: CGPoint(x: 1420, y: 930), visibleFrame: screen, style: style, font: font)
+      visibleFrame: screen, style: style, font: font)
     let drawn = expectation(
       for: NSPredicate { _, _ in
         controller.terminalView.terminalFrame?.text.contains("Moon") == true

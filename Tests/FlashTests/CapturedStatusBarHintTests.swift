@@ -97,7 +97,7 @@ final class CapturedStatusBarHintTests: XCTestCase {
     let replacement = StatusBarPopupRegion(
       rect: CGRect(x: 400, y: 700, width: 200, height: 24), name: "article", content: "Replacement")
     controller.preview(
-      original, pointer: CGPoint(x: 110, y: 710),
+      original,
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 700), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular), preservingContent: true)
     controller.refresh([replacement])

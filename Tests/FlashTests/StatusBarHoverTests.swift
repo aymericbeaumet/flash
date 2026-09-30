@@ -113,7 +113,7 @@ final class StatusBarHoverTests: XCTestCase {
       focused.fulfill()
     }
     controller.preview(
-      region, pointer: CGPoint(x: 150, y: 812),
+      region,
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     panel.activateStatusBarPopup(region, at: .zero)

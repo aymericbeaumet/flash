@@ -419,7 +419,7 @@ struct Config {
     /// Widest a text popup's pager grows, in points: 80 columns, room for
     /// the three-month calendar.
     var maxWidth: Double = 750
-    /// Gap between the pointer and a hover popup's top edge.
+    /// Gap between the status bar and a hover popup's top edge.
     var offset: Double = 8
   }
 

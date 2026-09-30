@@ -62,7 +62,7 @@ final class PopupLatencyBenchmarkTests: XCTestCase {
 
   private func preview(_ controller: StatusPopupController, _ region: StatusBarPopupRegion) {
     controller.preview(
-      region, pointer: CGPoint(x: 750, y: 990), visibleFrame: screen, style: .init(), font: font)
+      region, visibleFrame: screen, style: .init(), font: font)
   }
 
   private func running(_ session: TerminalSession?) -> Bool {

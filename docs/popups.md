@@ -53,7 +53,7 @@ closest style key.
 | `padding` | `8` | Space around the terminal, 0–64 points |
 | `min_width` | `480` | Narrowest a text popup gets, 80–2000 points |
 | `max_width` | `750` | Widest a text popup grows, 80–2000 points |
-| `offset` | `8` | Gap between the pointer and a hover popup, 0–64 points |
+| `offset` | `8` | Gap between the status bar and a hover popup, 0–64 points |
 
 Colours are `#RRGGBB` or `#RRGGBBAA`. Terminal text is opaque, so a translucent
 `fg` is mixed over `bg`. At the 13-point font with 10-point padding and a
@@ -188,8 +188,14 @@ removing its snapshot file, when it closes.
 
 ## Showing popups
 
-**Hover** previews the popup under the pointer: centred below it and clamped
-to the hovered screen. Leaving the label hides the preview immediately, and so
+**Hover** previews the label's popup, placed once from the label, not the
+pointer: centred on the label's text (the span the hover wash covers, without
+its outer separator spaces), its top `offset` points below the bar, and clamped
+to the screen that bar is on. Moving the pointer along the label never moves
+it; moving onto another label switches to that label's popup, hung from that
+label. A refresh or a size change keeps it centred on its label, and when the
+bar re-lays out (a value gets wider) it follows the label. Leaving the label
+hides the preview immediately, and so
 do a click anywhere outside Flash's status bar, a change of focused app or
 window, a bare Escape (swallowed while a preview shows, except in the command
 line and during hints), and `enter_normal_mode`; the preview then stays closed
@@ -205,8 +211,8 @@ that current screen at once rather than the one it had when it was hidden.
 **Click** a popup label, left or right, to pin it and focus its terminal;
 repeated clicks keep it open, and clicking another label switches popups.
 Labels with a click action or link keep their left-click action; right-click
-or Option-click pins their popup. A pinned popup stays anchored while the
-pointer moves.
+or Option-click pins their popup. Pinning leaves a preview where it is, and a
+pinned popup stays hung from its label while the pointer moves.
 
 **`enter_terminal_mode --name=<name>`** shows a popup standalone, centred on
 the focused application's screen and focused. Without a name it opens
@@ -288,10 +294,13 @@ presentation.
 popup name, with an explicit kind: `pager` (a text or inline popup's `less`
 over a private snapshot file) or `terminal` (a configured command). A terminal
 popup's lifecycle is `persistent` or `fresh`. `StatusPopupController` owns only
-presentation — hidden, preview, focused, or standalone — and tells the registry
-when a showing starts (`open`, `preparePager`) and, exactly once, when it ends
-(`hide`); the registry decides from the kind and lifecycle whether that stops
-the process. One restart mechanism, a per-name backoff with one pending work
+presentation — hidden, preview, focused, or standalone — and places a label's
+popup with `OverlayPanel.statusBarPopupFrame`, a pure function of the label's
+span, the popup size, the screen's visible frame and `offset`; a refresh
+re-hangs a shown popup from the nearest span of the same name. It tells the
+registry when a showing starts (`open`, `preparePager`) and, exactly once, when
+it ends (`hide`); the registry decides from the kind and lifecycle whether that
+stops the process. One restart mechanism, a per-name backoff with one pending work
 item, revives a persistent process. A fresh process that ends by itself while
 showing stays registered, exited, until `hide`; `TerminalSession.receivedInput`
 tells a typed exit, which releases it at once, from a report. Removing,
@@ -395,4 +404,6 @@ terminal environment and parallel shutdown; `StatusPopupControllerTests` and
 `OneShotTerminalTests` cover pager ownership and cleanup, placement,
 percentage sizes across screens, standalone text popups, preview dismissal,
 pinned focus, kept report screens and their exit footers, and crash recovery
-in every presentation.
+in every presentation. `StatusPopupPlacementTests` keep a label's popup on its
+label through pointer moves, label switches, refreshes, resizes, relayouts,
+pinning and clamping at both screen edges.

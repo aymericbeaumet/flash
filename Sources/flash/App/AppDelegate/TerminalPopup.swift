@@ -159,7 +159,7 @@ extension AppDelegate {
 
   func suppressDismissedPopupHover() {
     let popup = overlay.statusPopupController
-    if let name = popup.presentation.identity?.name, !popup.presentation.isStandalone {
+    if let name = popup.presentation.name, !popup.presentation.isStandalone {
       overlay.statusBarHoverGate = .dismissed(name)
     }
   }

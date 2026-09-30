@@ -43,6 +43,8 @@ final class StatusPopupController {
   private var lastLayoutName: String?
   private var lastLayoutFields: [String: String] = [:]
   private let exitLabel = NSTextField(labelWithString: "")
+  /// The label a preview or pinned popup hangs from, or a standalone popup's
+  /// label-less stand-in.
   private var region: StatusBarPopupRegion?
   private var visibleFrame = CGRect.zero
   private var style = Config.PopupStyle()
@@ -51,7 +53,7 @@ final class StatusPopupController {
   /// its panel shows anyway: a pager starting over its snapshot takes a few
   /// dozen milliseconds, and an empty box would flash in the meantime.
   static let firstFrameWait: TimeInterval = 0.15
-  /// A preview shown to the pointer whose panel waits for its first frame.
+  /// A hover preview whose panel waits for its first frame.
   private(set) var isAwaitingFirstFrame = false
   private var firstFrameFallback: DispatchWorkItem?
   var willFocus: (() -> Void)?
@@ -68,8 +70,8 @@ final class StatusPopupController {
     set { panel.sharingType = newValue }
   }
   var exitStatusText: String { exitLabel.stringValue }
-  var isVisible: Bool { presentation.identity != nil }
-  var focusedName: String? { presentation.isFocused ? presentation.identity?.name : nil }
+  var isVisible: Bool { presentation.name != nil }
+  var focusedName: String? { presentation.isFocused ? presentation.name : nil }
 
   func containsSnapshotAnchor(_ point: CGPoint) -> Bool {
     isContentSnapshot && region?.rect.contains(point) == true
@@ -91,7 +93,7 @@ final class StatusPopupController {
     terminalView.onFrameReceived = { [weak self] in self?.showAwaitedPreview() }
     terminalView.inputInterceptor = { [weak self] event in self?.inputInterceptor?(event) ?? false }
     terminals.willChange = { [weak self] changes in
-      guard let self, let name = self.presentation.identity?.name else { return }
+      guard let self, let name = self.presentation.name else { return }
       if changes.contains(.remove(name)) {
         self.dismiss(reason: "terminal_removed")
       } else if changes.contains(.replace(name)), self.presentation.isFocused {
@@ -104,26 +106,18 @@ final class StatusPopupController {
     }
   }
 
+  /// Show `region`'s popup hanging from that label; `visibleFrame` is the
+  /// visible frame of the display whose bar draws it.
   func preview(
-    _ region: StatusBarPopupRegion, pointer: CGPoint,
+    _ region: StatusBarPopupRegion,
     visibleFrame: CGRect, style: Config.PopupStyle, font: NSFont,
     preservingContent: Bool = false
   ) {
-    guard !presentation.isStandalone else { return }
+    // A pinned popup keeps the label and screen it was pinned on (`refresh`
+    // moves it with that label), and a standalone one has no label.
+    guard !presentation.isFocused else { return }
     guard !isContentSnapshot || preservingContent else { return }
-    if presentation.isFocused {
-      if presentation.identity?.name == region.name {
-        if terminals.isPager(region.name) { return }
-        self.region = region
-        self.style = style
-        self.font = font
-        self.visibleFrame = visibleFrame
-        layout(region: region)
-        return
-      }
-      return
-    }
-    if let previous = presentation.identity?.name, previous != region.name,
+    if let previous = presentation.name, previous != region.name,
       terminals.isPager(previous)
     {
       dismiss(reason: "popup_changed")
@@ -133,7 +127,7 @@ final class StatusPopupController {
     self.visibleFrame = visibleFrame
     self.style = style
     self.font = font
-    transition(.anchor(name: region.name, point: pointer))
+    transition(.anchor(name: region.name))
     layout(region: region)
     // A terminal popup whose session is gone dismissed itself in layout.
     guard isVisible else { return }
@@ -210,8 +204,8 @@ final class StatusPopupController {
 
   func refresh(_ regions: [StatusBarPopupRegion]) {
     guard !presentation.isStandalone else { return }
-    guard let name = presentation.identity?.name else { return }
-    guard let updated = regions.first(where: { $0.name == name }) else {
+    guard let name = presentation.name, let current = region else { return }
+    guard let updated = Self.span(matching: current, in: regions) else {
       if isContentSnapshot { return }
       dismiss(reason: "region_removed")
       return
@@ -219,6 +213,14 @@ final class StatusPopupController {
     if terminals.isPager(name), presentation.isFocused || isContentSnapshot {
       let segments = updated.document ?? FlashStatusBarRenderer.segments(from: updated.content)
       terminals.stagePopup(name: name, data: Self.documentVT(segments))
+      guard !isContentSnapshot else { return }
+      // A focused pager keeps its document but still hangs from its label.
+      var moved = current
+      moved.rect = updated.rect
+      moved.textBounds = updated.textBounds
+      guard moved != current else { return }
+      region = moved
+      layout(region: moved)
       return
     }
     if isContentSnapshot { return }
@@ -229,10 +231,23 @@ final class StatusPopupController {
   /// A standalone text popup keeps the document it opened with; the latest
   /// collected one waits for an explicit restart, as in a focused pager.
   func stageStandalone(_ documents: [String: [FlashStatusTextSegment]]) {
-    guard presentation.isStandalone, let name = presentation.identity?.name,
+    guard presentation.isStandalone, let name = presentation.name,
       terminals.isPager(name), let document = documents[name]
     else { return }
     terminals.stagePopup(name: name, data: Self.documentVT(document))
+  }
+
+  /// The refreshed span a shown popup hangs from: the same-named span nearest
+  /// the one it hung from. A bar that re-laid out (a value got wider) moves
+  /// the popup with its label, and the same label elsewhere on the bar or on
+  /// another display never captures it. Ties keep the earlier span.
+  static func span(
+    matching current: StatusBarPopupRegion, in regions: [StatusBarPopupRegion]
+  ) -> StatusBarPopupRegion? {
+    func distance(_ region: StatusBarPopupRegion) -> CGFloat {
+      hypot(region.rect.midX - current.rect.midX, region.rect.midY - current.rect.midY)
+    }
+    return regions.filter { $0.name == current.name }.min { distance($0) < distance($1) }
   }
 
   func updateStyle(_ style: Config.PopupStyle) {
@@ -246,7 +261,7 @@ final class StatusPopupController {
   }
 
   func dismiss(reason: String = "dismiss") {
-    let previousName = presentation.identity?.name
+    let previousName = presentation.name
     let wasFocused = presentation.isFocused
     if wasFocused { willDismissFocus?() }
     transition(.dismiss)
@@ -264,10 +279,10 @@ final class StatusPopupController {
   }
 
   func focus() {
-    guard isVisible, !presentation.isFocused, let name = presentation.identity?.name else { return }
+    guard isVisible, !presentation.isFocused, let name = presentation.name else { return }
     transition(.focus)
     terminals.freezePopup(name: name) { [weak self] in
-      guard let self, self.presentation.isFocused, self.presentation.identity?.name == name else {
+      guard let self, self.presentation.isFocused, self.presentation.name == name else {
         return
       }
       self.willFocus?()
@@ -299,7 +314,7 @@ final class StatusPopupController {
 
   private func logLifecycle(reason: String) {
     let fields = diagnosticState()
-    let name = presentation.identity?.name
+    let name = presentation.name
     guard lastLifecycleName != name || lastLifecycleFields != fields else { return }
     let popupName = name ?? lastLifecycleName
     lastLifecycleName = name
@@ -329,7 +344,7 @@ final class StatusPopupController {
   }
 
   private func layout(region: StatusBarPopupRegion) {
-    guard let identity = presentation.identity else { return }
+    guard isVisible else { return }
     terminalView.drawsCursor = presentation.isFocused || presentation.isStandalone
     if terminalView.font != font { terminalView.font = font }
     let colors = StatusPopupColors(style)
@@ -416,15 +431,15 @@ final class StatusPopupController {
         height: CGFloat(visibleRows) * cell.height + footerHeight),
       padding: CGFloat(style.padding), borderWidth: CGFloat(style.borderWidth))
     let target: CGRect
-    if let anchor = identity.anchor {
-      target = OverlayPanel.statusBarPopupFrame(
-        pointer: anchor,
-        popupSize: layout.popupSize, visibleFrame: visibleFrame, offset: CGFloat(style.offset))
-    } else {
+    if presentation.isStandalone {
       target = CGRect(
         x: visibleFrame.midX - layout.popupSize.width / 2,
         y: visibleFrame.midY - layout.popupSize.height / 2,
         width: layout.popupSize.width, height: layout.popupSize.height)
+    } else {
+      target = OverlayPanel.statusBarPopupFrame(
+        span: region.anchor, popupSize: layout.popupSize, visibleFrame: visibleFrame,
+        offset: CGFloat(style.offset))
     }
     CATransaction.begin()
     CATransaction.setDisableActions(true)

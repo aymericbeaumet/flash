@@ -44,7 +44,7 @@ final class StatusPopupControllerTests: XCTestCase {
     screen: CGRect = CGRect(x: 0, y: 0, width: 600, height: 400)
   ) {
     controller.preview(
-      region, pointer: CGPoint(x: screen.midX, y: screen.maxY), visibleFrame: screen,
+      region, visibleFrame: screen,
       style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
   }
 
@@ -261,7 +261,7 @@ final class StatusPopupControllerTests: XCTestCase {
     defer { registry.shutdown() }
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
     controller.preview(
-      region(text: "Captured article"), pointer: CGPoint(x: 300, y: 400),
+      region(text: "Captured article"),
       visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
       preservingContent: true)
@@ -381,12 +381,8 @@ final class StatusPopupControllerTests: XCTestCase {
     }
     preview(controller, region: popup)
     let settledRecordCount = records.count
-    for offset in 0..<10 {
-      controller.preview(
-        popup, pointer: CGPoint(x: 300 + offset, y: 400),
-        visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400), style: .init(),
-        font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
-    }
+    // Every mouse move along the label repeats the preview.
+    for _ in 0..<10 { preview(controller, region: popup) }
     XCTAssertEqual(records.count, settledRecordCount)
     controller.focus()
     controller.leaveAnchor()

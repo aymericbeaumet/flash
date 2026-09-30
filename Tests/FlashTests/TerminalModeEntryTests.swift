@@ -57,7 +57,7 @@ final class TerminalModeEntryTests: XCTestCase {
       content: "CPU 42 %",
       document: [FlashStatusTextSegment(text: "CPU 42 %", foreground: .defaultForeground)])
     popup.preview(
-      region, pointer: CGPoint(x: 150, y: 510),
+      region,
       visibleFrame: CGRect(x: 0, y: 0, width: 600, height: 400), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     XCTAssertTrue(registry.isPager("details"))

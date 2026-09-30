@@ -15,7 +15,7 @@ final class StatusPopupDismissalTests: XCTestCase {
     panel.statusPopupController = StatusPopupController(
       terminals: panel.statusTerminals, windowActionsEnabled: false)
     panel.statusPopupController.preview(
-      region, pointer: CGPoint(x: 150, y: 812),
+      region,
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
     return panel
@@ -23,8 +23,8 @@ final class StatusPopupDismissalTests: XCTestCase {
 
   func testOnlyAPreviewIsEphemeral() {
     XCTAssertEqual(
-      StatusPopupPresentation.preview(name: "article", anchor: .zero).ephemeralName, "article")
-    XCTAssertNil(StatusPopupPresentation.focused(name: "article", anchor: .zero).ephemeralName)
+      StatusPopupPresentation.preview(name: "article").ephemeralName, "article")
+    XCTAssertNil(StatusPopupPresentation.focused(name: "article").ephemeralName)
     XCTAssertNil(StatusPopupPresentation.standalone(name: "shell").ephemeralName)
     XCTAssertNil(StatusPopupPresentation.hidden.ephemeralName)
   }

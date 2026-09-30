@@ -92,10 +92,10 @@ extension OverlayPanel {
     statusBarHoverDwellWork = nil
     statusBarHoverDwellName = nil
     setStatusBarHoverHighlight(nil)
-    // Only a preview follows the pointer; the reveal itself dismisses a
+    // Only a preview is tied to the pointer; the reveal itself dismisses a
     // pinned popup (`statusBarNativeMenuDidReveal`).
     statusPopupController.leaveAnchor()
-    activeStatusBarPopupName = statusPopupController.presentation.identity?.name
+    activeStatusBarPopupName = statusPopupController.presentation.name
     NSCursor.arrow.set()
   }
 }
