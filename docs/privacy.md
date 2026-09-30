@@ -76,7 +76,16 @@ the others make their own requests or run the CLI tools named here.
 - **Notes, Reminders, Contacts:** through Apple Events (`apple`).
 - **Files:** Spotlight queries (`files`).
 - **Terminals:** tmux through the `tmux` CLI; kitty through its remote-control
-  socket when you enable it in kitty.
+  socket when you enable it in kitty. While one of your clients is attached
+  to a local tmux server, the `tmux` plugin keeps one control-mode client of
+  its own attached to it, on the session your last-used client shows, to hear
+  about session and window changes. It asks for no pane output, never resizes
+  a window, never applies `update-environment`, and leaves when your last
+  client does. tmux counts it like any client: `list-clients` shows it with
+  the `control-mode` and `no-output` flags, `client-attached` and
+  `client-detached` hooks run for it, and until your next keystroke a tmux
+  command that names no client, run from a script outside tmux, may resolve
+  to it.
 - **Menu bar and Notification Center:** `mouse_menubar` reads the focused
   app's menu titles through Accessibility, and where the status items sit from
   WindowServer geometry. `mouse_notifications` reads the banners, alerts and

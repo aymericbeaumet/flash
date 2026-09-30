@@ -38,6 +38,11 @@ on empty output only when its policy explicitly permits it; sources are not merg
 Accessibility is the universal provider; tmux is the volatile terminal provider and
 vscode is the bundle-scoped AX-enhancer provider (`hints` with `fallback_on_empty`).
 
+Tmux keeps its window catalog and status segments warm from tmux's own
+control-mode notifications, through one output-free control client per local
+server a user's client is attached to, never from a timer
+([plugin performance](plugin-performance.md)).
+
 Tmux discovers pane anchors and every identified link in the visible pane grids;
 there is no per-pane link cap. Its executable is resolved once, including mise
 shims, so version-manager startup never consumes each hint query's deadline.

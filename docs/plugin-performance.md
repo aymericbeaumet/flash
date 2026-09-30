@@ -126,11 +126,23 @@ least 50 ms.
   once quiet for 300 ms, and at most ten seconds after they began. The host
   observes an app's AX only once it has been focused; changes it cannot see
   catch up when focus or the flashlight next touches the app.
-- `tmux` inventories its local servers every second only while a client is
-  attached somewhere; otherwise the registration is cancelled and focus
-  changes, flashlight opens, settled window retitles and creations
-  (`core:ax.changed`) and a kqueue watch on the `tmux-$UID` socket directory
-  (a server starting or exiting) refresh it.
+- `tmux` never re-reads its local servers on a timer. Each server a user's
+  client is attached to is followed by one control-mode client (`no-output`,
+  `ignore-size`; it never starts a server or applies `update-environment`),
+  and one inventory read follows each burst of the notifications that can
+  change it — sessions and windows created, closed, renamed (automatic-rename
+  included) or selected, panes selected, added or closed, clients attaching,
+  switching or detaching — settled for 100 ms, at most a second after the
+  burst began. What tmux never notifies — a window's working directory, its
+  command once automatic-rename is off, which client was used last — is
+  re-read on focus changes, app termination and flashlight opens. A client
+  attaching to a server nobody is attached to reaches no observer, so while
+  such a server runs, settled window retitles and creations
+  (`core:ax.changed`) refresh too; a kqueue watch on the `tmux-$UID` socket
+  directory catches servers starting or exiting. A socket whose probe fails
+  transiently is retried once per backoff step (5, 15, then 60 s). Remote
+  hosts in `ssh_hosts`, which no local notification reaches, keep a
+  five-second refresh.
 - Debug plugin logs remain available in the log file but do not invalidate
   status/inspector snapshots.
 - The NDJSON frame collector scans appended bytes once and compacts the
