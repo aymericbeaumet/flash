@@ -347,8 +347,12 @@ exit event (`kqueue`) rather than sleeping between polls, so a stop returns as
 soon as the child is gone. Application shutdown stops every active and retiring
 session at once through `TerminalSession.shutdown(_:)`, each on its own queue,
 so quitting takes as long as the slowest child rather than the sum.
-Exceptional kernel exit delays are tracked by an in-process reaper and logged;
-they never block the main thread indefinitely. The registry retains retiring
+Exceptional kernel exit delays are tracked by an in-process reaper, which reaps
+the child when the kernel reports its exit (a process-exit dispatch source, no
+retry timer), and logged; they never block the main thread indefinitely. A
+child's exit event is followed by a blocking reap, which waits out the
+moment between the kernel's report and the child becoming reapable instead of
+re-checking on a timer. The registry retains retiring
 sessions until their asynchronous stop completes. Commands should remain in
 the foreground; popups are not a mechanism for launching detached services.
 

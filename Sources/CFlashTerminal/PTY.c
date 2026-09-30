@@ -140,6 +140,17 @@ int flash_pty_wait(pid_t pid, int *status) {
   return (int)result;
 }
 
+int flash_pty_reap(pid_t pid, int *status) {
+  int raw;
+  pid_t result;
+  do {
+    result = waitpid(pid, &raw, 0);
+  } while (result < 0 && errno == EINTR);
+  if (result > 0)
+    *status = WIFEXITED(raw) ? WEXITSTATUS(raw) : 128 + WTERMSIG(raw);
+  return (int)result;
+}
+
 int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
                             uint32_t cell_width, uint32_t cell_height) {
   struct winsize size = {

@@ -1,5 +1,6 @@
 import CFlashTerminal
 import Darwin
+import FlashTerminal
 import Foundation
 
 /// An owned stdout job. Output is drained as it arrives, and a process group
@@ -88,12 +89,12 @@ final class StatusFormatCommandJob {
       identifier: process, eventMask: .exit, queue: queue)
     source.setEventHandler { [weak self] in
       guard let self else { return }
-      var status: Int32 = 0
-      if waitpid(self.process, &status, WNOHANG) == self.process {
-        self.exitStatus = status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
-        self.readAvailable()
-        self.finishIfReady()
-      }
+      // The exit event can precede the reapable state by the kernel's last
+      // exit steps; a non-blocking wait there returned nothing and the job
+      // never completed. The reap waits them out.
+      self.exitStatus = ProcessExit.reap(self.process) ?? 0
+      self.readAvailable()
+      self.finishIfReady()
     }
     exitSource = source
     source.resume()
@@ -118,6 +119,9 @@ final class StatusFormatCommandJob {
 
   /// Called on the jobs' owner queue. One deadline covers the whole batch, so
   /// quitting cannot multiply a per-process grace period by the source count.
+  /// Every wait ends on the kernel's exit events: the grace period ends as
+  /// soon as every group has left on SIGTERM, and the deadline only bounds a
+  /// group that will not.
   @discardableResult
   static func shutdown(
     _ jobs: [StatusFormatCommandJob], graceSeconds: TimeInterval = 0.1,
@@ -129,26 +133,21 @@ final class StatusFormatCommandJob {
       job.closeSources()
       kill(-job.process, SIGTERM)
     }
-    let started = ProcessInfo.processInfo.systemUptime
+    let started = DispatchTime.now()
     let deadline = started + max(0, deadlineSeconds)
     let killAt = min(deadline, started + max(0, graceSeconds))
-    var killed = false
-    while true {
-      let now = ProcessInfo.processInfo.systemUptime
-      if !killed, now >= killAt {
-        for job in active { kill(-job.process, SIGKILL) }
-        killed = true
-      }
-      for job in active where job.exitStatus == nil { job.reapIfExited() }
-      let allReaped = active.allSatisfy { $0.exitStatus != nil }
-      let anyGroupAlive = active.contains { kill(-$0.process, 0) == 0 || errno == EPERM }
-      if allReaped && !anyGroupAlive { break }
-      if now >= deadline { break }
-      usleep(2_000)
-    }
-    if !killed { for job in active { kill(-job.process, SIGKILL) } }
+    let groups = active.map(\.process)
+    var exited: Set<pid_t> = []
+    _ = ProcessExit.waitForGroups(groups, until: killAt, exited: &exited)
+    // A command which backgrounds children still owns their process group.
+    for job in active { kill(-job.process, SIGKILL) }
+    _ = ProcessExit.waitForGroups(groups, until: deadline, exited: &exited)
     for job in active {
-      job.reapIfExited()
+      if job.exitStatus == nil, exited.contains(job.process) {
+        job.exitStatus = ProcessExit.reap(job.process) ?? 0
+      } else {
+        job.reapIfExited()
+      }
       job.completed = job.exitStatus != nil
       job.reachedEOF = true
     }
@@ -244,18 +243,10 @@ final class StatusFormatCommandJob {
   deinit {
     closeSources()
     if !completed, process > 0 {
-      let pid = process
-      kill(-pid, SIGKILL)
-      // Reap off whichever thread dropped the last reference: a bounded
-      // poll on a utility queue, never a sleep loop inside `deinit`.
-      DispatchQueue.global(qos: .utility).async {
-        let deadline = ProcessInfo.processInfo.systemUptime + 1
-        repeat {
-          var status: Int32 = 0
-          if waitpid(pid, &status, WNOHANG) != 0 { return }
-          usleep(2_000)
-        } while ProcessInfo.processInfo.systemUptime < deadline
-      }
+      kill(-process, SIGKILL)
+      // Reaped when the kernel reports the exit, off whichever thread
+      // dropped the last reference; nothing waits in `deinit`.
+      ProcessExit.reapWhenExited(process)
     }
   }
 }

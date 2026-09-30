@@ -88,6 +88,12 @@ int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
                             uint32_t cell_width, uint32_t cell_height);
 void flash_pty_signal(int fd, pid_t pid, int signal, bool include_leader);
 int flash_pty_wait(pid_t pid, int *status);
+/// Reap child `pid`, blocking until it is reapable, and store its status as
+/// a shell reports it (exit code, or 128 + signal). Call it only once the
+/// child's exit was reported: the kernel posts the exit event a moment before
+/// the child becomes reapable, and this waits out those last exit steps.
+/// Returns the pid, or -1 (errno ECHILD) when there is nothing to reap.
+int flash_pty_reap(pid_t pid, int *status);
 /// Wait up to `timeout_ms` for `pid` to exit without polling. Returns 1 once
 /// the kernel reports the exit, 0 on timeout, -1 when no exit event can be
 /// registered (the process already exited, or kqueue failed).

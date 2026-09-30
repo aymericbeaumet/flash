@@ -48,8 +48,6 @@ public enum TerminalSessionDiagnostic: Equatable, Sendable {
 }
 
 enum TerminalChildReaping {
-  private static let queue = DispatchQueue(label: "com.flash.terminal.reaper", qos: .utility)
-
   static func poll(_ pid: pid_t) -> Bool {
     var status: Int32 = 0
     let result = flash_pty_wait(pid, &status)
@@ -78,17 +76,10 @@ enum TerminalChildReaping {
     } while true
   }
 
-  static func reapLater(
-    pid: pid_t, poll: @escaping (pid_t) -> Bool = Self.poll,
-    completion: @escaping () -> Void
-  ) {
-    queue.asyncAfter(deadline: .now() + .milliseconds(100)) {
-      if poll(pid) {
-        completion()
-      } else {
-        reapLater(pid: pid, poll: poll, completion: completion)
-      }
-    }
+  /// A child that outlived both stop deadlines is reaped when the kernel
+  /// reports its exit, not by re-checking on a timer.
+  static func reapLater(pid: pid_t, completion: @escaping () -> Void) {
+    ProcessExit.reapWhenExited(pid, completion: completion)
   }
 }
 
@@ -415,19 +406,13 @@ public final class TerminalSession {
   private func childExited(expectedPID: pid_t) {
     guard child == expectedPID, child > 0 else { return }
     readAvailable()
-    var status: Int32 = 0
-    let result = flash_pty_wait(child, &status)
-    if result < 0 && errno != EINTR {
+    // The exit event is the kernel's report that the child is exiting; the
+    // blocking reap waits out its last exit steps instead of re-checking.
+    guard let status = ProcessExit.reap(child) else {
       child = 0
       closeSources()
       publishFrame()
       publishState(.failed(.exitStatusUnavailable))
-      return
-    }
-    guard result > 0 else {
-      queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-        self?.childExited(expectedPID: expectedPID)
-      }
       return
     }
     flash_pty_signal(descriptor, child, SIGKILL, false)

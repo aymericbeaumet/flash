@@ -345,7 +345,10 @@ regex cache to 128 entries/256 KiB of patterns. Evaluation limits recursion to
 16 MiB per operation. Job output buffers retain at most 1 MiB; each read callback
 drains at most 256 KiB before yielding its utility queue. Reload and quit
 terminate owned process groups with one bounded batch deadline and reap their
-leaders. Successful shell completion also terminates residual group children.
+leaders; every wait there ends on the kernel's exit events for each group's
+members (`ProcessExit`), so the grace period ends as soon as the groups leave
+and nothing sleeps between checks. Successful shell completion also terminates
+residual group children.
 
 Unicode is pinned to **utf8proc 2.12.0 / Unicode 18.0**, with tmux 3.7c's width
 overrides. Flash's data is modified into 482 compact non-unit width intervals,

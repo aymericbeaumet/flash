@@ -342,20 +342,72 @@ final class TerminalTests: XCTestCase {
     XCTAssertLessThan(Date().timeIntervalSince(before), 0.2)
   }
 
-  func testDeferredReaperRetriesUntilChildIsReaped() {
+  func testDeferredReaperReapsWhenTheKernelReportsTheExit() throws {
+    let pid = try spawnChild(["/bin/sleep", "0.3"])
+    let started = Date()
     let completed = expectation(description: "deferred child reaped")
-    var polls = 0
-    TerminalChildReaping.reapLater(
-      pid: 42,
-      poll: { _ in
-        polls += 1
-        return polls == 3
-      },
-      completion: {
-        XCTAssertEqual(polls, 3)
-        completed.fulfill()
-      })
+    TerminalChildReaping.reapLater(pid: pid) { completed.fulfill() }
+    wait(for: [completed], timeout: 5)
+    XCTAssertGreaterThan(Date().timeIntervalSince(started), 0.2, "reaped only after it exited")
+    XCTAssertEqual(waitpid(pid, nil, WNOHANG), -1)
+    XCTAssertEqual(errno, ECHILD)
+  }
+
+  func testDeferredReaperReapsAChildAlreadyAZombie() throws {
+    let pid = try spawnChild(["/usr/bin/true"])
+    // Block until it is a zombie without reaping it.
+    var info = siginfo_t()
+    XCTAssertEqual(waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT), 0)
+    let completed = expectation(description: "zombie reaped")
+    TerminalChildReaping.reapLater(pid: pid) { completed.fulfill() }
     wait(for: [completed], timeout: 2)
+    XCTAssertEqual(waitpid(pid, nil, WNOHANG), -1)
+  }
+
+  func testExitWaitsEndOnTheExitEventOrTheDeadline() throws {
+    let quick = try spawnChild(["/bin/sleep", "0.2"])
+    let started = Date()
+    XCTAssertTrue(ProcessExit.waitForExit(quick, until: .now() + 5))
+    XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    XCTAssertEqual(ProcessExit.reap(quick), 0)
+    // An already-reaped pid is gone: nothing to wait for or reap.
+    XCTAssertTrue(ProcessExit.waitForExit(quick, until: .now() + 5))
+    XCTAssertNil(ProcessExit.reap(quick))
+
+    let slow = try spawnChild(["/bin/sleep", "30"])
+    XCTAssertFalse(ProcessExit.waitForExit(slow, until: .now() + .milliseconds(100)))
+    kill(slow, SIGKILL)
+    XCTAssertTrue(ProcessExit.waitForExit(slow, until: .now() + 5))
+    XCTAssertEqual(ProcessExit.reap(slow), 128 + SIGKILL)
+  }
+
+  func testGroupWaitsCoverEveryMemberNotJustTheLeader() throws {
+    // The leader exits after 0.1 s; its background child keeps the group
+    // alive until 0.4 s.
+    let leader = try spawnChild(["/bin/sh", "-c", "/bin/sleep 0.4 & /bin/sleep 0.1"], group: true)
+    let started = Date()
+    var exited: Set<pid_t> = []
+    XCTAssertTrue(ProcessExit.waitForGroups([leader], until: .now() + 5, exited: &exited))
+    XCTAssertGreaterThan(Date().timeIntervalSince(started), 0.3)
+    XCTAssertTrue(exited.contains(leader))
+    XCTAssertEqual(ProcessExit.reap(leader), 0)
+    XCTAssertTrue(ProcessExit.members(ofGroup: leader).isEmpty)
+  }
+
+  private func spawnChild(_ argv: [String], group: Bool = false) throws -> pid_t {
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    if group {
+      posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+      posix_spawnattr_setpgroup(&attributes, 0)
+    }
+    var pid: pid_t = 0
+    var arguments = argv.map { strdup($0) } + [nil]
+    defer { for argument in arguments { free(argument) } }
+    let error = posix_spawn(&pid, argv[0], nil, &attributes, &arguments, environ)
+    guard error == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(error)) }
+    return pid
   }
 
   func testImmediateStopAndRestartOfShortLivedChildrenCompletes() {

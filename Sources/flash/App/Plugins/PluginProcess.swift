@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import FlashCore
+import FlashTerminal
 import Foundation
 
 /// One managed plugin child process speaking the NDJSON wire protocol
@@ -394,14 +395,17 @@ final class PluginProcess {
     removeFileWatchers()
     invalidateTransport()
     if let process, process.isRunning {
+      // Each stage ends on the child's exit event; the deadlines only bound
+      // a child that ignores stdin EOF and then SIGTERM.
+      let pid = process.processIdentifier
       stdinPipe?.fileHandleForWriting.closeFile()
-      waitForExit(process, timeout: Double(PluginProtocol.shutdownGraceMs) / 1_000)
-      if process.isRunning {
+      if !ProcessExit.waitForExit(
+        pid, until: .now() + .milliseconds(PluginProtocol.shutdownGraceMs))
+      {
         process.terminate()
-        waitForExit(process, timeout: 0.5)
-      }
-      if process.isRunning {
-        kill(process.processIdentifier, SIGKILL)
+        if !ProcessExit.waitForExit(pid, until: .now() + .milliseconds(500)), process.isRunning {
+          kill(pid, SIGKILL)
+        }
       }
     }
     (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
@@ -1321,13 +1325,6 @@ final class PluginProcess {
       environment[key] = value
     }
     return environment
-  }
-
-  private func waitForExit(_ process: Process, timeout: TimeInterval) {
-    let deadline = Date().addingTimeInterval(timeout)
-    while process.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
   }
 
   static var startupTimeoutSeconds: Int { FlashTunables.pluginStartupTimeoutSeconds }
