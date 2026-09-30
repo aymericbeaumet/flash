@@ -172,6 +172,9 @@ final class OverlayPanel: NSPanel {
   /// True while the bar sits below a pointer-revealed native menu bar; see
   /// `setStatusBarYieldsToNativeMenuBar`.
   var statusBarYieldsToNativeMenuBar = false
+  /// Whether hover feedback may answer the pointer; written only through
+  /// `updateStatusBarHover`.
+  var statusBarHover = StatusBarHoverState()
   /// Invalidation token for the command-line key-window recovery ladder
   /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
   /// from a superseded pass die silently.

@@ -399,4 +399,168 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertEqual(opened, ["user|1"])
   }
 
+  /// One popup segment on a bar along the top of the real main display (the
+  /// click view places its preview on a live display), its click window, and
+  /// a recorder for every preview a hover asks for. Declining the preview
+  /// keeps the test from starting a pager.
+  private struct HoverBar {
+    let panel: OverlayPanel
+    let surface: NativeStatusBarSurface
+    let popup: StatusBarPopupRegion
+    let window: StatusBarClickPanel
+    let snapshot: OverlayPanel.ScreenSnapshot
+    let previews: () -> [String]
+
+    func hover(at point: CGPoint) throws {
+      window.clickView.mouseMoved(
+        with: try XCTUnwrap(
+          NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: CGPoint(x: point.x - window.frame.minX, y: point.y - window.frame.minY),
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 0, pressure: 0)))
+    }
+  }
+
+  private func makeHoverBar() throws -> HoverBar {
+    let panel = OverlayPanel()
+    panel.statusPopupController = StatusPopupController(
+      terminals: panel.statusTerminals, windowActionsEnabled: false)
+    addTeardownBlock {
+      panel.hideStatusBarClickWindows()
+      panel.hideStatusBarPopup()
+    }
+    let previews = PreviewRecorder()
+    panel.statusBarTerminalPrepareHandler = { name in
+      previews.names.append(name)
+      return false
+    }
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    guard let screen = snapshot.mainFrame else { throw XCTSkip("No display to host the bar") }
+    panel.setFrame(screen, display: false)
+    let barFrame = CGRect(x: 0, y: screen.height - 26, width: screen.width, height: 26)
+    let surface = panel.primaryStatusBarSurface
+    surface.render(
+      document: StatusFormatDocument.parse("#[popup=feed]AGGR#[nopopup]"),
+      barFrame: barFrame, screenFrame: screen, scale: 2, notch: nil,
+      font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium), labels: .init(),
+      palette: OverlayPanel.normalPalette, modeStyle: .normal, modeText: "NORMAL")
+    let popup = try XCTUnwrap(
+      surface.interactionRects(
+        panelFrame: screen, popupTexts: ["feed": "Preview"], popupDocuments: [:]
+      ).popups.first)
+    let band = barFrame.offsetBy(dx: screen.minX, dy: screen.minY)
+    panel.statusBarInteractionsByScreen = [
+      .init(screenFrame: screen, links: [], popups: [popup])
+    ]
+    panel.syncStatusBarClickWindows(bandRects: [band], links: [], popups: [popup])
+    let window = try XCTUnwrap(panel.statusBarClickWindows.first)
+    XCTAssertEqual(window.frame, band)
+    // The click windows' own stationary re-hit-test used the real pointer.
+    previews.names.removeAll()
+    return HoverBar(
+      panel: panel, surface: surface, popup: popup, window: window, snapshot: snapshot,
+      previews: { previews.names })
+  }
+
+  private final class PreviewRecorder {
+    var names: [String] = []
+  }
+
+  /// Once the native menu bar is revealed under the pointer the band is its:
+  /// the wash showing when the reveal lands clears, and neither the click
+  /// view's tracking events nor a stationary re-hit-test after a content
+  /// refresh washes a segment or opens a preview. Folding the native bar away
+  /// resumes hover under a parked pointer.
+  func testRevealedNativeMenuBarSilencesStatusBarHoverUntilItFolds() throws {
+    let bar = try makeHoverBar()
+    let panel = bar.panel
+    let pointer = CGPoint(x: bar.popup.rect.midX, y: bar.popup.rect.midY)
+
+    try bar.hover(at: pointer)
+    XCTAssertEqual(bar.previews(), ["feed"])
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 1)
+
+    panel.nativeMenuBarRevealDidChange(true, pointer: pointer)
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 0, "The reveal clears the wash it lands on")
+    try bar.hover(at: pointer)
+    panel.refreshStatusBarPopup(popups: [bar.popup], at: pointer, screenSnapshot: bar.snapshot)
+    XCTAssertEqual(
+      bar.previews(), ["feed"], "No hover path may open a preview under the native menu bar")
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 0, "No hover path may wash under it either")
+
+    panel.nativeMenuBarRevealDidChange(false, pointer: pointer)
+    XCTAssertEqual(
+      bar.previews(), ["feed", "feed"], "Folding away resumes hover under a parked pointer")
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 1)
+  }
+
+  /// Touching the display's top edge is what reveals the native menu bar, and
+  /// the probe confirms a reveal only on a later tick: hover stops on that
+  /// row at once, a pending spawn dwell included, and resumes below it.
+  func testTopEdgeRowSilencesStatusBarHoverBeforeTheRevealIsConfirmed() throws {
+    let bar = try makeHoverBar()
+    let panel = bar.panel
+    panel.statusBarTerminalNeedsSpawnHandler = { _ in true }
+    let pointer = CGPoint(x: bar.popup.rect.midX, y: bar.popup.rect.midY)
+    let edge = CGPoint(x: pointer.x, y: bar.popup.rect.maxY - 0.5)
+    XCTAssertTrue(bar.popup.rect.contains(edge))
+
+    try bar.hover(at: pointer)
+    XCTAssertEqual(panel.statusBarHoverDwellName, "feed")
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 1)
+
+    try bar.hover(at: edge)
+    XCTAssertNil(panel.statusBarHoverDwellName, "The edge drops the pending spawn dwell")
+    XCTAssertNil(panel.statusBarHoverDwellWork)
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 0)
+    XCTAssertFalse(
+      panel.statusBarHoverPermits(at: edge, menuBarScreenFrame: bar.snapshot.mainFrame))
+
+    try bar.hover(at: pointer)
+    XCTAssertEqual(panel.statusBarHoverDwellName, "feed")
+    XCTAssertEqual(bar.surface.hoverHighlight.opacity, 1)
+  }
+
+  func testHoverEligibilityFollowsTheRevealAndTheRevealEdge() {
+    var state = StatusBarHoverState()
+    XCTAssertTrue(state.permitsHover)
+    func apply(_ event: StatusBarHoverState.Event) -> StatusBarHoverState.Effect {
+      let (next, effect) = state.applying(event)
+      state = next
+      return effect
+    }
+    XCTAssertEqual(apply(.pointer(onRevealEdge: false)), .none)
+    XCTAssertEqual(apply(.nativeMenuBar(revealed: true)), .suppress)
+    XCTAssertFalse(state.permitsHover)
+    XCTAssertEqual(
+      apply(.pointer(onRevealEdge: false)), .none, "A revealed bar keeps the band off the edge")
+    XCTAssertEqual(apply(.nativeMenuBar(revealed: false)), .resume)
+    XCTAssertTrue(state.permitsHover)
+    XCTAssertEqual(
+      apply(.pointer(onRevealEdge: true)), .suppress, "The edge suppresses before any verdict")
+    XCTAssertEqual(apply(.nativeMenuBar(revealed: true)), .none, "Already suppressed")
+    XCTAssertEqual(apply(.nativeMenuBar(revealed: false)), .none, "Still on the edge")
+    XCTAssertEqual(apply(.pointer(onRevealEdge: false)), .resume)
+    XCTAssertEqual(
+      apply(.nativeMenuBar(revealed: false)), .none, "Repeated verdicts change nothing")
+    XCTAssertEqual(state, StatusBarHoverState())
+  }
+
+  func testRevealEdgeIsTheTopPointRowOfTheMenuBarDisplay() {
+    let main = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    func onEdge(_ x: CGFloat, _ y: CGFloat, _ frame: CGRect? = main) -> Bool {
+      StatusBarHoverState.pointerIsOnRevealEdge(CGPoint(x: x, y: y), menuBarScreenFrame: frame)
+    }
+    XCTAssertTrue(onEdge(700, 982), "AppKit reports the top row at maxY")
+    XCTAssertTrue(onEdge(700, 981.5))
+    XCTAssertTrue(onEdge(0, 982))
+    XCTAssertTrue(onEdge(1512, 982))
+    XCTAssertFalse(onEdge(700, 981), "One point down is the bar's own band")
+    XCTAssertFalse(onEdge(700, 960))
+    XCTAssertFalse(onEdge(-1, 982), "Another display's top row reveals nothing here")
+    XCTAssertFalse(onEdge(1513, 982))
+    XCTAssertFalse(onEdge(700, 982, nil))
+  }
+
 }

@@ -52,8 +52,9 @@ struct StatusBarScreenInteractions {
 /// bar's own clicks, the window flips to click-through
 /// (`ignoresMouseEvents = true`) and the bar window drops below the menu bar
 /// whenever the auto-hidden menu bar is actually revealed under the pointer
-/// (`OverlayPanel.menuBarRevealTimer`), so native wins then; when the menu bar
-/// is folded away, the band is Flash's and the window swallows the click.
+/// (`OverlayPanel.startMenuBarRevealTracking`), so native wins then; when the
+/// menu bar is folded away, the band is Flash's and the window swallows the
+/// click. Hover feedback follows `StatusBarHoverState` instead.
 final class StatusBarClickView: NSView {
   /// Link sub-rects in this view's coordinate space, with their targets.
   var links: [(rect: CGRect, url: URL)] = [] {
@@ -86,6 +87,12 @@ final class StatusBarClickView: NSView {
   /// reveal probe only while the pointer is actually in the band, so the
   /// probe costs nothing in the steady state.
   var onPointerEntered: (() -> Void)?
+  /// Asked with the pointer (screen coordinates) before any hover response.
+  /// False while the native menu bar owns the band (`StatusBarHoverState`).
+  /// Hover must not rely on click-through to keep this view's `.activeAlways`
+  /// tracking events away, so such an event washes nothing, opens nothing and
+  /// leaves the cursor alone.
+  var hoverPermitted: ((NSPoint) -> Bool)?
 
   /// Dispatches a named `#[range=user|<name>]` click (the `[statusbar.click]`
   /// action map). Set by the overlay from the AppDelegate's handler.
@@ -265,6 +272,12 @@ final class StatusBarClickView: NSView {
 
   /// Pointing hand over a link run, the default arrow over the rest of the bar.
   private func updatePointer(at event: NSEvent) {
+    let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
+    let kind = event.type == .mouseEntered ? "entered" : "moved"
+    guard hoverPermitted?(point) ?? true else {
+      logHover(event: kind, popup: nil, overLink: false, point: point, suppressed: true)
+      return
+    }
     let local = convert(event.locationInWindow, from: nil)
     let link = links.first(where: { $0.rect.contains(local) })
     let overLink = link != nil
@@ -274,18 +287,17 @@ final class StatusBarClickView: NSView {
     } else {
       NSCursor.arrow.set()
     }
-    let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
-    logHover(
-      event: event.type == .mouseEntered ? "entered" : "moved",
-      popup: popup, overLink: overLink, point: point)
+    logHover(event: kind, popup: popup, overLink: overLink, point: point)
     onPopupHover?(popup, point)
     onHoverHighlight?(Self.hoverWashRect(link: link?.rect, popup: popup?.rect))
   }
 
-  private func logHover(event: String, popup: StatusBarPopupRegion?, overLink: Bool, point: CGPoint)
-  {
+  private func logHover(
+    event: String, popup: StatusBarPopupRegion?, overLink: Bool, point: CGPoint,
+    suppressed: Bool = false
+  ) {
     let popupID = popup.map { StatusFormatDocument.stableID($0.name) } ?? "none"
-    let signature = "\(popupID):\(overLink):\(window?.ignoresMouseEvents ?? false)"
+    let signature = "\(popupID):\(overLink):\(window?.ignoresMouseEvents ?? false):\(suppressed)"
     guard event != "moved" || signature != hoverDiagnosticSignature else { return }
     hoverDiagnosticSignature = event == "exited" ? nil : signature
     FlashLog.debug(
@@ -294,6 +306,7 @@ final class StatusBarClickView: NSView {
         "event": event, "popup_id": popupID, "over_link": String(overLink),
         "window": String(window?.windowNumber ?? 0),
         "ignores_mouse": String(window?.ignoresMouseEvents ?? false),
+        "hover_suppressed": String(suppressed),
         "popup_count": String(popups.count),
         "content_bytes": String(popup?.content.utf8.count ?? 0),
         "pointer": NSStringFromPoint(point),
@@ -693,6 +706,7 @@ extension OverlayPanel {
           document: popup.document)
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
+      view.hoverPermitted = { [weak self] point in self?.statusBarHoverPermits(at: point) ?? true }
       view.onStatusBarAction = statusBarActionHandler
       view.onLinkActivated = { [weak self] in self?.dismissStatusBarPopupForClick() }
       view.onPopupClick = { [weak self] popup, point in
@@ -738,10 +752,22 @@ extension OverlayPanel {
     statusPopupController.refresh(popups)
     activeStatusBarPopupName = statusPopupController.presentation.identity?.name
     activeStatusBarPopupContent = statusPopupController.content
+    hitTestStatusBarHover(popups: popups, links: links, at: pointer, screenSnapshot: screenSnapshot)
+  }
+
+  /// Answer a pointer that may not have moved, as a hover event would: after
+  /// a content refresh, or once the native menu bar folds away.
+  func hitTestStatusBarHover(
+    popups: [StatusBarPopupRegion],
+    links: [(rect: CGRect, url: URL)],
+    at pointer: CGPoint,
+    screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
+  ) {
     if statusPopupController.containsSnapshotAnchor(pointer) { return }
-    let acceptsPointer = !statusBarClickWindows.contains(where: \.ignoresMouseEvents)
-    let popup = acceptsPointer ? popups.first(where: { $0.rect.contains(pointer) }) : nil
-    let link = acceptsPointer ? links.first(where: { $0.rect.contains(pointer) }) : nil
+    let permitted = statusBarHoverPermits(
+      at: pointer, menuBarScreenFrame: screenSnapshot.mainFrame)
+    let popup = permitted ? popups.first(where: { $0.rect.contains(pointer) }) : nil
+    let link = permitted ? links.first(where: { $0.rect.contains(pointer) }) : nil
     setStatusBarHoverHighlight(
       StatusBarClickView.hoverWashRect(link: link?.rect, popup: popup?.rect))
     guard !statusPopupController.presentation.isFocused else { return }
@@ -808,6 +834,9 @@ extension OverlayPanel {
       window.ignoresMouseEvents = false
     }
     setStatusBarYieldsToNativeMenuBar(false)
+    // Teardown, or the pointer already left the band: the next hover event
+    // hit-tests for itself, so the fold needs no resume here.
+    updateStatusBarHover(.nativeMenuBar(revealed: false))
   }
 
   /// One probe tick, on the probe queue.
@@ -820,26 +849,36 @@ extension OverlayPanel {
     let changed = revealed != menuBarRevealedShadow
     menuBarRevealedShadow = revealed
     if changed {
-      DispatchQueue.main.async { [weak self] in
-        guard let self else { return }
-        for window in self.statusBarClickWindows where window.ignoresMouseEvents != revealed {
-          window.ignoresMouseEvents = revealed
-        }
-        self.setStatusBarYieldsToNativeMenuBar(revealed)
-        FlashLog.debug(
-          "Status menu reveal changed",
-          fields: [
-            "revealed": String(revealed),
-            "click_windows": String(self.statusBarClickWindows.count),
-          ],
-          source: "core:StatusLinks.menuReveal")
-        if revealed { self.statusBarNativeMenuDidReveal() }
-      }
+      DispatchQueue.main.async { [weak self] in self?.nativeMenuBarRevealDidChange(revealed) }
     }
     if !pointerNearBand && !revealed {
       // Pointer left the band with the menu bar folded: nothing to watch.
       // `mouseEntered` re-arms on the next hover.
       DispatchQueue.main.async { [weak self] in self?.stopMenuBarRevealTracking() }
+    }
+  }
+
+  /// Apply one reveal verdict from the probe, on the main thread: clicks and
+  /// the bar's level go to the native menu bar, and so does hover — whatever
+  /// hover feedback the reveal lands on is cleared, and a fold re-hit-tests
+  /// the pointer where it rests.
+  func nativeMenuBarRevealDidChange(_ revealed: Bool, pointer: CGPoint = NSEvent.mouseLocation) {
+    for window in statusBarClickWindows where window.ignoresMouseEvents != revealed {
+      window.ignoresMouseEvents = revealed
+    }
+    setStatusBarYieldsToNativeMenuBar(revealed)
+    FlashLog.debug(
+      "Status menu reveal changed",
+      fields: [
+        "revealed": String(revealed),
+        "click_windows": String(statusBarClickWindows.count),
+      ],
+      source: "core:StatusLinks.menuReveal")
+    if revealed { statusBarNativeMenuDidReveal() }
+    if updateStatusBarHover(.nativeMenuBar(revealed: revealed)) == .resume {
+      hitTestStatusBarHover(
+        popups: statusBarInteractionsByScreen.flatMap(\.popups),
+        links: statusBarInteractionsByScreen.flatMap(\.links), at: pointer)
     }
   }
 

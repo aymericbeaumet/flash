@@ -189,11 +189,14 @@ to the hovered screen. Leaving the label hides the preview immediately, and so
 do a click anywhere outside Flash's status bar, a change of focused app or
 window, a bare Escape (swallowed while a preview shows, except in the command
 line and during hints), and `enter_normal_mode`; the preview then stays closed
-until the pointer leaves the label. A hovered text popup refreshes as its
-values change. The panel appears with its first frame, so a pager still
-starting never shows an empty box; it waits 150 ms at most. A persistent
-popup kept parsing its output while hidden, and showing it draws that current
-screen at once rather than the one it had when it was hidden.
+until the pointer leaves the label. The native menu bar owns the band while it
+is revealed under the pointer, and on the top edge that reveals it: the bar
+shows no wash, preview or pointing hand there, a reveal clears any already
+showing, and hover resumes when the native bar folds away. A hovered text
+popup refreshes as its values change. The panel appears with its first frame,
+so a pager still starting never shows an empty box; it waits 150 ms at most.
+A persistent popup kept parsing its output while hidden, and showing it draws
+that current screen at once rather than the one it had when it was hidden.
 
 **Click** a popup label, left or right, to pin it and focus its terminal;
 repeated clicks keep it open, and clicking another label switches popups.
@@ -254,7 +257,8 @@ Set `[debug] log_level = "debug"` (or `"trace"`) to record popup diagnostics in
 `~/Library/Logs/Flash/flash.log`:
 
 - `Status hover regions changed` and `Status hover target changed`: hover
-  regions, pointer targets and whether the window passes mouse input through.
+  regions, pointer targets, whether the window passes mouse input through and
+  whether the native menu bar suppressed the hover.
 - `Status popup presentation changed` / `Status popup layout changed`:
   dismissal reason, terminal grid, frame readiness, rendering state and panel
   visibility.
@@ -264,7 +268,8 @@ Set `[debug] log_level = "debug"` (or `"trace"`) to record popup diagnostics in
   restart, under `core:StatusTerminalRegistry.restart`; `Status popup
   prewarmed` marks each prewarmed start, and `Status popup starts on show` a
   prewarmed process that ended before any showing.
-- `Status menu reveal changed` and `Status inline popup rejected`.
+- `Status menu reveal changed`, `Status hover eligibility changed` and
+  `Status inline popup rejected`.
 
 Records carry a hashed popup ID; they exclude popup names, text, URLs, terminal
 contents and command arguments. A healthy plugin with no hover target points to

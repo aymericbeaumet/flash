@@ -237,11 +237,13 @@ active, a wake) slides those windows in behind the bar instead of painting over
 it for a second. The pointer is the exception: while the reveal probe sees the
 native menu bar actually revealed under the pointer, the bar window drops below
 it and the click windows turn click-through, so reaching for the top edge still
-gets the real menu bar and its clicks. Enabling the bar also asks macOS to
-auto-hide the native menu bar, and disabling it restores only a menu bar Flash
-itself hid. The overlay panel keeps the focus border at `.floating` and
-transient surfaces at the screen-saver level, so status hints still render above
-the bar and transient teardown never detaches it.
+gets the real menu bar and its clicks. Hover goes with it: `StatusBarHoverState`
+silences the wash, previews and pointing hand from the top edge on and for as
+long as the reveal lasts. Enabling the bar also asks macOS to auto-hide the
+native menu bar, and disabling it restores only a menu bar Flash itself hid.
+The overlay panel keeps the focus border at `.floating` and transient surfaces
+at the screen-saver level, so status hints still render above the bar and
+transient teardown never detaches it.
 
 On each display the bar is as tall as that display's own native menu bar, read
 by level and bounds from WindowServer's main-menu window, and `window_move`
