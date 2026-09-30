@@ -58,6 +58,13 @@ The other monitors use the SDK interval primitive, whose delay begins after the
 awaited callback completes, so their cadence is nominal rather than a wall-
 clock guarantee.
 
+The monitors are status-bound, so the host runs them only while a surface shows
+one of their segments — except once a command such as `:cpu` has started one,
+when it keeps running unobserved. Their cadences therefore also follow
+`core:status.observed`: cancelled while none of the plugin's segments is shown,
+re-armed with an immediate sample as soon as one is. Unobserved, a bare `:cpu`,
+`:memory` or `:disks` samples before it answers.
+
 Details add context using the same snapshots and histories, without additional
 collection:
 
@@ -235,8 +242,9 @@ Quota labels show an unpadded dash once the cache is older than twice the provid
 TTL. Status layout is a pure read of that state and performs no authentication
 or API calls. The plugin is status-bound, so it is resident only while the bar
 or a popup shows one of its segments. A chat-launcher bang such as `!claude` still starts
-it on demand, and a started process keeps the quota timer, including its
-credential reads, until it exits.
+it on demand; the quota timer, including its credential reads, runs only while
+`core:status.observed` lists a quota segment, and resumes with an immediate
+refresh when one is shown again.
 
 Claude Code's credentials are read-only by default. The plugin reads the
 `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and

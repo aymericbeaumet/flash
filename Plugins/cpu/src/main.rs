@@ -1,9 +1,11 @@
+mod observed;
+
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
     StatusValue, run, run_command, sys,
 };
 use nix::time::{ClockId, clock_gettime};
@@ -156,6 +158,7 @@ struct Cpu {
     state: Arc<Mutex<MonitorState>>,
     cpu_gate: Arc<tokio::sync::Mutex<()>>,
     gpu_gate: Arc<tokio::sync::Mutex<()>>,
+    cadences: observed::ObservedCadences,
 }
 
 impl Default for Cpu {
@@ -164,6 +167,7 @@ impl Default for Cpu {
             state: Arc::new(Mutex::new(MonitorState::default())),
             cpu_gate: Arc::new(tokio::sync::Mutex::new(())),
             gpu_gate: Arc::new(tokio::sync::Mutex::new(())),
+            cadences: observed::ObservedCadences::default(),
         }
     }
 }
@@ -184,27 +188,59 @@ impl FlashPlugin for Cpu {
 
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.cpu_gate);
-        drop(ctx.interval(CPU_SAMPLE_PERIOD, move |ctx| {
+        self.cadences.interval(&ctx, CPU_SAMPLE_PERIOD, move |ctx| {
             let state = Arc::clone(&state);
             let gate = Arc::clone(&gate);
             async move {
                 refresh_cpu(&ctx, &state, &gate).await;
             }
-        }));
+        });
 
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.gpu_gate);
-        drop(ctx.interval(GPU_INTERVAL, move |ctx| {
+        self.cadences.interval(&ctx, GPU_INTERVAL, move |ctx| {
             let state = Arc::clone(&state);
             let gate = Arc::clone(&gate);
             async move {
                 refresh_gpu(&ctx, &state, &gate).await;
             }
-        }));
+        });
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        else {
+            return;
+        };
+        if self.cadences.observe(segments) {
+            let (state, cpu_gate, gpu_gate) = (
+                Arc::clone(&self.state),
+                Arc::clone(&self.cpu_gate),
+                Arc::clone(&self.gpu_gate),
+            );
+            tokio::spawn(async move {
+                refresh_all(&ctx, &state, &cpu_gate, &gpu_gate, GatePolicy::Wait).await;
+            });
+        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
+            // Unobserved, nothing samples between commands: sample first.
+            "" if !self.cadences.observed() => {
+                refresh_all(
+                    &ctx,
+                    &self.state,
+                    &self.cpu_gate,
+                    &self.gpu_gate,
+                    GatePolicy::SkipIfBusy,
+                )
+                .await;
+                details_response(current_report(&ctx, &self.state))
+            }
             "" => details_response(current_report(&ctx, &self.state)),
             "refresh" => {
                 refresh_all(

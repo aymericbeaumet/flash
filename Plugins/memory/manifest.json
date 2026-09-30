@@ -25,5 +25,8 @@
     "percent",
     "history"
   ],
+  "listen": [
+    "core:status.observed"
+  ],
   "sandbox": {}
 }

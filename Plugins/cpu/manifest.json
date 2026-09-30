@@ -27,6 +27,9 @@
     "load",
     "uptime"
   ],
+  "listen": [
+    "core:status.observed"
+  ],
   "sandbox": {
     "exec": [
       "/usr/sbin/ioreg"

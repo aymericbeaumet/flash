@@ -1,3 +1,5 @@
+mod observed;
+
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -6,7 +8,7 @@ use flash_plugin::status::{
     bytes_iec, bytes_iec_compact, percent2, rate_iec, sparkline_padded, sparkline_scaled,
 };
 use flash_plugin::{
-    Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
     RefreshGate, StatusValue, run, run_command,
 };
 
@@ -19,6 +21,8 @@ const HISTORY_LEN: usize = 20;
 
 static STATE: LazyLock<Mutex<DiskState>> = LazyLock::new(|| Mutex::new(DiskState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+static CADENCES: LazyLock<observed::ObservedCadences> =
+    LazyLock::new(observed::ObservedCadences::default);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct IoCounters {
@@ -209,13 +213,33 @@ impl FlashPlugin for Disks {
     async fn on_start(&self, ctx: Context) {
         warn_invalid_summary_mode(&ctx);
         refresh_disks(&ctx, true).await;
-        drop(ctx.interval(ACTIVITY_POLL, |ctx| async move {
+        CADENCES.interval(&ctx, ACTIVITY_POLL, |ctx| async move {
             refresh_disks(&ctx, false).await;
-        }));
+        });
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        else {
+            return;
+        };
+        if CADENCES.observe(segments) {
+            tokio::spawn(async move {
+                refresh_disks(&ctx, true).await;
+            });
+        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
+            // Unobserved, nothing samples between commands: sample first.
+            "" if !CADENCES.observed() => {
+                try_refresh_disks(&ctx, true).await;
+                current_response()
+            }
             "" => current_response(),
             "refresh" => {
                 try_refresh_disks(&ctx, true).await;

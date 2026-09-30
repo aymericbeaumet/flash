@@ -1,9 +1,11 @@
+mod observed;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flash_plugin::status::{bytes_iec, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    Color, CommandRequest, Context, History, Markup, PerformResponse, Preview, Published,
+    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
     StatusValue, run, sys,
 };
 
@@ -125,6 +127,7 @@ struct MonitorState {
 struct Memory {
     state: Arc<Mutex<MonitorState>>,
     refresh_gate: Arc<tokio::sync::Mutex<()>>,
+    cadences: observed::ObservedCadences,
 }
 
 impl Default for Memory {
@@ -132,6 +135,7 @@ impl Default for Memory {
         Self {
             state: Arc::new(Mutex::new(MonitorState::default())),
             refresh_gate: Arc::new(tokio::sync::Mutex::new(())),
+            cadences: observed::ObservedCadences::default(),
         }
     }
 }
@@ -145,17 +149,44 @@ impl FlashPlugin for Memory {
 
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.refresh_gate);
-        drop(ctx.interval(REFRESH_INTERVAL, move |ctx| {
+        self.cadences.interval(&ctx, REFRESH_INTERVAL, move |ctx| {
             let state = Arc::clone(&state);
             let gate = Arc::clone(&gate);
             async move {
                 refresh_and_publish(&ctx, &state, &gate, GatePolicy::Wait).await;
             }
-        }));
+        });
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        else {
+            return;
+        };
+        if self.cadences.observe(segments) {
+            let (state, gate) = (Arc::clone(&self.state), Arc::clone(&self.refresh_gate));
+            tokio::spawn(async move {
+                refresh_and_publish(&ctx, &state, &gate, GatePolicy::Wait).await;
+            });
+        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
+            // Unobserved, nothing samples between commands: sample first.
+            "" if !self.cadences.observed() => {
+                refresh_and_publish(
+                    &ctx,
+                    &self.state,
+                    &self.refresh_gate,
+                    GatePolicy::SkipIfBusy,
+                )
+                .await;
+                details_response(current_status(&ctx, &self.state))
+            }
             "" => details_response(current_status(&ctx, &self.state)),
             "refresh" => {
                 refresh_and_publish(

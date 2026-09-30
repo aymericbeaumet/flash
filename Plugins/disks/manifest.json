@@ -33,5 +33,8 @@
     "write_bps",
     "read",
     "write"
+  ],
+  "listen": [
+    "core:status.observed"
   ]
 }
