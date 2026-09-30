@@ -312,8 +312,9 @@ Notifications:
   segments, rendered as `#{flash.plugin.<id>.<segment>}`. A value is markup
   (`""` clears) or a carousel object
   `{"prefix"?: markup, "lines": [markup], "cycle_seconds": >= 1}`: the host
-  rotates the lines on its own clock (a republish keeps the visible line until
-  its scheduled rotation), draws `prefix` still before the visible line, and
+  rotates the lines on its own clock, only while a visible surface shows the
+  segment (a republish keeps the visible line until its scheduled rotation),
+  draws `prefix` still before the visible line, and
   wraps that line in `#[cyc]…#[nocyc]` for the carousel transition; blank
   lines are dropped, no lines clears, and a malformed object is rejected whole
   with a content-free warning. Undeclared names are ignored. Segments are live

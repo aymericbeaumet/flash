@@ -189,6 +189,30 @@ final class StatusBarControllerTests: XCTestCase {
     XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
   }
 
+  /// A carousel no visible surface reads rotates nothing anyone sees, so it
+  /// holds no wake-up; referencing it again arms its rotation.
+  func testOnlyCarouselsAVisibleSurfaceReadsHoldWakeups() {
+    let harness = Harness("#{flash.plugin.feed.label}")
+    defer { harness.controller.stop() }
+    harness.queue.sync {
+      harness.pluginStatuses = [
+        PluginStatusBarInfo(
+          id: "feed", state: "running", hasError: false,
+          statusSegments: [
+            "summary": .carousel(prefix: "", lines: ["one", "two"], cycleSeconds: 30),
+            "label": .text("NEWS"),
+          ])
+      ]
+    }
+    harness.controller.refreshPluginSections()
+    harness.drain()
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+    harness.update("#{flash.plugin.feed.summary}")
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 130)
+    harness.update("#{flash.plugin.feed.label}")
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+  }
+
   func testUnchangedReloadPreservesRunningSourceAndCompletion() {
     let source = FlashStatusBarSourceDefinition(command: ["/bin/value"], intervalSeconds: 60)
     let harness = Harness("#{flash.source.value}", sources: ["value": source])

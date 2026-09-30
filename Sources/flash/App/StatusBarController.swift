@@ -49,9 +49,15 @@ final class FlashStatusBarController {
     /// as tmux keeps a client's job output until the new command answers.
     var jobValues: [String: String] = [:]
     var sources: Set<String> = []
+    /// The plugin segments it read, keyed `<plugin>.<segment>` like
+    /// `pluginCycles`: only a carousel some active surface reads rotates on a
+    /// wake-up.
+    var pluginSegments: Set<String> = []
     /// The finest time unit this surface shows; its clock ticks on that
     /// unit's boundaries. Nil: it shows no time.
     var clock: StatusFormatTimeResolution?
+
+    static let pluginValuePrefix = "flash.plugin."
 
     func isCurrent(_ native: StatusFormatContext) -> Bool {
       guard let memo else { return false }
@@ -73,6 +79,9 @@ final class FlashStatusBarController {
         if let value = native.jobs[job.rawCommand] { values[job.rawCommand] = value }
       }
       (sources, clock) = FlashStatusBarTemplateEngine.requirements(of: dependencies)
+      pluginSegments = Set(
+        dependencies.values.lazy.filter { $0.hasPrefix(Self.pluginValuePrefix) }
+          .map { String($0.dropFirst(Self.pluginValuePrefix.count)) })
     }
   }
 
@@ -123,6 +132,8 @@ final class FlashStatusBarController {
   var nextWakeup: TimeInterval? { schedule?.nextWakeup }
   private var nextJobToken: UInt64 = 0
   private var requiredSources: Set<String> = []
+  /// Plugin segments (`<plugin>.<segment>`) an active surface reads.
+  private var requiredPluginSegments: Set<String> = []
   private var requiredJobs: [String: StatusFormatJobRequest] = [:]
   /// The bar's surface; nil while `[statusbar] enabled` is off.
   private var bar: SurfaceState? = SurfaceState()
@@ -522,10 +533,12 @@ final class FlashStatusBarController {
   private func reconcileRequirements(now: TimeInterval) {
     requirementsChanged = false
     var sources = Set<String>()
+    var pluginSegments = Set<String>()
     var jobs: [String: StatusFormatJobRequest] = [:]
     var cadences: [String: TimeInterval] = [:]
     for (surface, interval) in activeSurfaces {
       sources.formUnion(surface.sources)
+      pluginSegments.formUnion(surface.pluginSegments)
       let cadence = Self.cadence(interval)
       for job in surface.jobs {
         let key = Self.shellKey(job)
@@ -536,6 +549,7 @@ final class FlashStatusBarController {
       }
     }
     requiredSources = sources
+    requiredPluginSegments = pluginSegments
     requiredJobs = jobs
     let obsolete = shellRecords.keys.filter { requiredJobs[$0] == nil }
     var obsoleteJobs = obsolete.compactMap { shellRecords.removeValue(forKey: $0)?.job }
@@ -741,7 +755,10 @@ final class FlashStatusBarController {
     }
     dates += requiredSources.compactMap { sourceRecords[$0]?.cycle }
       .filter(\.needsRotationTimer).map(\.nextRotationAt)
-    dates += pluginCycles.values.filter(\.needsRotationTimer).map(\.nextRotationAt)
+    // A carousel no active surface reads keeps its rotation state for when
+    // one shows it again, but wakes nobody meanwhile.
+    dates += pluginCycles.filter { requiredPluginSegments.contains($0.key) }.values
+      .filter(\.needsRotationTimer).map(\.nextRotationAt)
     if let clockDeadline = clockDeadline(now: clock()) { dates.append(clockDeadline) }
     if let pendingJobPublish = schedule.pendingJobPublish { dates.append(pendingJobPublish) }
     guard let next = dates.filter(\.isFinite).min() else { return }
