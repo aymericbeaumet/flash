@@ -20,8 +20,6 @@
 //! the bundled GitHub plugin's `subprocess` posture. Tokens are passed through
 //! stdin, never argv or logs.
 
-mod observed;
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +29,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use flash_plugin::process;
 use flash_plugin::status::duration_compact;
 use flash_plugin::{
-    Color, CommandRequest, Context, Event, Markup, PerformResponse, Published, RefreshGate, run,
-    run_osascript,
+    Color, CommandRequest, Context, Event, Markup, ObservedCadences, PerformResponse, Published,
+    RefreshGate, run, run_osascript,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1115,14 +1113,14 @@ struct AiProviders {
     /// The quota tick runs only while a surface shows a quota segment: a
     /// chat bang starts this plugin too, and must not leave it reading
     /// credentials and calling the usage APIs every minute for nobody.
-    cadences: observed::ObservedCadences,
+    cadences: ObservedCadences,
 }
 
 impl Default for AiProviders {
     fn default() -> Self {
         Self {
             usage: Arc::new(RwLock::new(UsageRuntime::default())),
-            cadences: observed::ObservedCadences::default(),
+            cadences: ObservedCadences::default(),
         }
     }
 }

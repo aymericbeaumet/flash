@@ -1,5 +1,3 @@
-mod observed;
-
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -8,8 +6,8 @@ use flash_plugin::status::{
     bytes_iec, bytes_iec_compact, percent2, rate_iec, sparkline_padded, sparkline_scaled,
 };
 use flash_plugin::{
-    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
-    RefreshGate, StatusValue, run, run_command,
+    Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
+    Preview, Published, RefreshGate, StatusValue, run, run_command,
 };
 
 const ACTIVITY_POLL: Duration = Duration::from_secs(3);
@@ -21,8 +19,7 @@ const HISTORY_LEN: usize = 20;
 
 static STATE: LazyLock<Mutex<DiskState>> = LazyLock::new(|| Mutex::new(DiskState::default()));
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-static CADENCES: LazyLock<observed::ObservedCadences> =
-    LazyLock::new(observed::ObservedCadences::default);
+static CADENCES: LazyLock<ObservedCadences> = LazyLock::new(ObservedCadences::default);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct IoCounters {

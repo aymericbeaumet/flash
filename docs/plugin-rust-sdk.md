@@ -80,12 +80,22 @@ Handed to every handler; cheap to clone. Key surface:
   `Event::notification`, one of `flash_plugin::ax_notifications`; match it
   with `Event::is_ax_change(&[…])` so a refresh follows only the
   notifications that can change what you read (`AXTitleChanged`,
-  `AXWindowCreated`, …) and never a keystroke's `AXValueChanged`.
+  `AXWindowCreated`, …) and never a keystroke's `AXValueChanged`. A
+  `static Settle<K>` coalesces a burst of such events into one refresh:
+  `schedule(key, refresh)` runs `refresh` with every key the burst named
+  (the apps whose windows changed) once it has been quiet for its settle
+  period, or at its ceiling when it never is, and costs nothing between
+  bursts (the windows, kitty, browsers and tmux plugins).
   `core:status.observed` carries
   `Event::segments`: the complete set of this plugin's status segments a
   surface shows, possibly empty (the protocol's
   [status observation](plugin-protocol.md#status-observation)). Listen for it
-  to scope work that only feeds a segment to the time it is shown.
+  to scope work that only feeds a segment to the time it is shown:
+  `ObservedCadences` registers `interval`s that tick only while a segment is
+  observed — `observe(segments)` cancels or re-arms them and returns true
+  when they were just re-armed, so you sample at once; `observed()` tells a
+  command to sample first, since nothing sampled meanwhile (the cpu, memory,
+  disks and aiproviders plugins).
 - Status values: `status(segments)` takes anything `Into<StatusSegment>` —
   a plain string is ready-made markup, build `StatusValue::text(visible)`
   and attach a hover document with `.with_preview(Preview)`, or publish a

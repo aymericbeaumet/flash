@@ -1,12 +1,10 @@
-mod observed;
-
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
-    StatusValue, run, run_command, sys,
+    Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
+    Preview, Published, StatusValue, run, run_command, sys,
 };
 use nix::time::{ClockId, clock_gettime};
 
@@ -158,7 +156,7 @@ struct Cpu {
     state: Arc<Mutex<MonitorState>>,
     cpu_gate: Arc<tokio::sync::Mutex<()>>,
     gpu_gate: Arc<tokio::sync::Mutex<()>>,
-    cadences: observed::ObservedCadences,
+    cadences: ObservedCadences,
 }
 
 impl Default for Cpu {
@@ -167,7 +165,7 @@ impl Default for Cpu {
             state: Arc::new(Mutex::new(MonitorState::default())),
             cpu_gate: Arc::new(tokio::sync::Mutex::new(())),
             gpu_gate: Arc::new(tokio::sync::Mutex::new(())),
-            cadences: observed::ObservedCadences::default(),
+            cadences: ObservedCadences::default(),
         }
     }
 }

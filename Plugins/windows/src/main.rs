@@ -37,10 +37,8 @@
 //! so movement history records the jump. A vanished window degrades to plain
 //! app activation.
 
-mod settle;
-
 use flash_plugin::{
-    Candidate, Context, Event, PerformResponse, RefreshGate, ax_notifications, run,
+    Candidate, Context, Event, PerformResponse, RefreshGate, Settle, ax_notifications, run,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -96,7 +94,7 @@ static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 static APP_REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 static PENDING_PIDS: LazyLock<Mutex<BTreeSet<i64>>> = LazyLock::new(|| Mutex::new(BTreeSet::new()));
 /// Pending `core:ax.changed` burst and the apps it named.
-static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
 /// When the last whole sweep began.
 static LAST_SWEEP: Mutex<Option<Instant>> = Mutex::new(None);
 /// Last-good rows per app. A focus or AX event re-snapshots only its own app
@@ -206,14 +204,9 @@ fn schedule_app_refresh(ctx: &Context, pid: i64) {
 
 /// Re-snapshot the app once its AX burst settles.
 fn schedule_ax_refresh(ctx: &Context, pid: i64) {
-    if !AX_BURST.note(pid, Instant::now()) {
-        return;
-    }
     let ctx = ctx.clone();
-    tokio::spawn(async move {
-        if let Some(pids) = AX_BURST.wait().await {
-            refresh_apps(&ctx, pids.into_iter().collect()).await;
-        }
+    AX_BURST.schedule(pid, move |pids| async move {
+        refresh_apps(&ctx, pids.into_iter().collect()).await;
     });
 }
 

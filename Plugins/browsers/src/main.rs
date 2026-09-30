@@ -11,7 +11,6 @@ mod firefox;
 mod lz4;
 mod route;
 mod session_store;
-mod settle;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +21,7 @@ use applescript::{CHROMIUM, Dialect, ListedTab, SAFARI, TabIdentity, TabSlot};
 use firefox::StripPosition;
 use flash_plugin::{
     ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event, NavigateRequest,
-    PerformResponse, RefreshGate, RunningApplication, ax_notifications, run, run_osascript,
+    PerformResponse, RefreshGate, RunningApplication, Settle, ax_notifications, run, run_osascript,
 };
 use route::TabRoute;
 use serde::{Deserialize, Serialize};
@@ -61,7 +60,7 @@ static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 /// schedule it: focus changes elsewhere cannot change a tab list.
 static BROWSER_EVENTS: AppWatch = AppWatch::new();
 /// Pending `core:ax.changed` burst from a focused browser.
-static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
 static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
     LazyLock::new(|| Mutex::new(RefreshLogState::default()));
 /// Each running browser's last listed rows behind the one published catalog.
@@ -469,14 +468,9 @@ fn ax_change_touches_browser(event: &Event) -> bool {
 
 /// Refresh once the browser's AX burst settles.
 fn schedule_ax_refresh(ctx: &Context, pid: i64) {
-    if !AX_BURST.note(pid, Instant::now()) {
-        return;
-    }
     let ctx = ctx.clone();
-    tokio::spawn(async move {
-        if AX_BURST.wait().await.is_some() {
-            refresh_locations(&ctx).await;
-        }
+    AX_BURST.schedule(pid, move |_| async move {
+        refresh_locations(&ctx).await;
     });
 }
 

@@ -43,8 +43,8 @@
 //! use; failure clears it.
 
 use flash_plugin::{
-    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, ax_notifications, run,
-    run_command,
+    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, Settle,
+    ax_notifications, run, run_command,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -52,8 +52,6 @@ use std::os::unix::fs::FileTypeExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
-
-mod settle;
 
 const SOURCE_WINDOWS: &str = "kitty.windows";
 const KITTY_BUNDLE_ID: &str = "net.kovidgoyal.kitty";
@@ -93,7 +91,7 @@ const MAX_TITLE_CHARS: usize = 256;
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
-static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
 /// Whether kitty was running at the last refresh. Absence publishes the
 /// authoritative empty catalog once, on the transition, instead of an empty
 /// publish plus a log frame on every refresh while kitty is not installed.
@@ -215,14 +213,9 @@ fn trigger(event: &Event) -> Option<Trigger> {
 }
 
 fn schedule_ax_refresh(ctx: &Context, pid: i64) {
-    if !AX_BURST.note(pid, Instant::now()) {
-        return;
-    }
     let ctx = ctx.clone();
-    tokio::spawn(async move {
-        if AX_BURST.wait().await.is_some() {
-            refresh_catalog(&ctx).await;
-        }
+    AX_BURST.schedule(pid, move |_| async move {
+        refresh_catalog(&ctx).await;
     });
 }
 

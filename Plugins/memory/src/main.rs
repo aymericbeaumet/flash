@@ -1,12 +1,10 @@
-mod observed;
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flash_plugin::status::{bytes_iec, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
-    Color, CommandRequest, Context, Event, History, Markup, PerformResponse, Preview, Published,
-    StatusValue, run, sys,
+    Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
+    Preview, Published, StatusValue, run, sys,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -127,7 +125,7 @@ struct MonitorState {
 struct Memory {
     state: Arc<Mutex<MonitorState>>,
     refresh_gate: Arc<tokio::sync::Mutex<()>>,
-    cadences: observed::ObservedCadences,
+    cadences: ObservedCadences,
 }
 
 impl Default for Memory {
@@ -135,7 +133,7 @@ impl Default for Memory {
         Self {
             state: Arc::new(Mutex::new(MonitorState::default())),
             refresh_gate: Arc::new(tokio::sync::Mutex::new(())),
-            cadences: observed::ObservedCadences::default(),
+            cadences: ObservedCadences::default(),
         }
     }
 }

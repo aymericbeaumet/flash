@@ -1,19 +1,38 @@
 //! Host cadences scoped to status observation.
-//!
-//! This plugin is status-bound: the host runs it only while a status surface
-//! shows one of its segments — except once a command has started it, when it
-//! keeps running unobserved. Its cadences therefore follow
-//! `core:status.observed` as well: cancelled while none of its segments is
-//! shown, re-armed as soon as one is, so an unobserved process never samples.
 
 use std::future::Future;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use flash_plugin::{Context, PollHandle};
+use crate::context::{Context, PollHandle};
 
+/// Host cadences ([`Context::interval`]) that tick only while a status
+/// surface shows one of this plugin's segments, as `core:status.observed`
+/// reports. A status-bound plugin runs only while one is shown — except once
+/// a command has started it, when it keeps running unobserved — so its
+/// sampling follows the observation too: cancelled while no segment is
+/// shown, re-armed as soon as one is. An unobserved process never samples.
+///
+/// Register the cadences in `on_start`, feed every observation to
+/// [`observe`](Self::observe), and sample before answering a command while
+/// [`observed`](Self::observed) is false, since nothing sampled meanwhile:
+///
+/// ```ignore
+/// async fn on_event(&self, ctx: Context, event: Event) {
+///     let Some(segments) = event
+///         .segments
+///         .as_deref()
+///         .filter(|_| event.name == host_events::STATUS_OBSERVED)
+///     else {
+///         return;
+///     };
+///     if self.cadences.observe(segments) {
+///         tokio::spawn(async move { sample(&ctx).await });
+///     }
+/// }
+/// ```
 #[derive(Default)]
-pub(crate) struct ObservedCadences {
+pub struct ObservedCadences {
     state: Mutex<State>,
 }
 
@@ -31,7 +50,7 @@ impl ObservedCadences {
     }
 
     /// Register a host cadence that ticks only while a segment is observed.
-    pub(crate) fn interval<F, Fut>(&self, ctx: &Context, period: Duration, tick: F)
+    pub fn interval<F, Fut>(&self, ctx: &Context, period: Duration, tick: F)
     where
         F: FnMut(Context) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -46,13 +65,14 @@ impl ObservedCadences {
 
     /// Whether a surface may show a segment: false only once the host has
     /// reported that none is shown.
-    pub(crate) fn observed(&self) -> bool {
+    pub fn observed(&self) -> bool {
         self.lock().observed != Some(false)
     }
 
-    /// Apply the host's observed segment set. True when the cadences were
-    /// just re-armed, so the caller refreshes now rather than a period later.
-    pub(crate) fn observe(&self, segments: &[String]) -> bool {
+    /// Apply the host's observed segment set (`Event::segments`). True when
+    /// the cadences were just re-armed, so the caller samples now rather
+    /// than a period later.
+    pub fn observe(&self, segments: &[String]) -> bool {
         let observed = !segments.is_empty();
         let mut state = self.lock();
         let previous = state.observed.replace(observed);
@@ -73,7 +93,7 @@ impl ObservedCadences {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flash_plugin::testing::Harness;
+    use crate::testing::Harness;
 
     fn segments(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()

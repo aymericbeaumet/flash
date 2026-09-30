@@ -67,7 +67,7 @@ use std::time::{Duration, Instant};
 use flash_plugin::{
     ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame, HintsRequest,
     HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle, Priority,
-    TERMINAL_LINK_ROLE, ax_notifications, run,
+    Settle, TERMINAL_LINK_ROLE, ax_notifications, run,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -75,7 +75,6 @@ use serde_json::{Value, json};
 
 use flash_plugin::process as bounded_process;
 
-mod settle;
 mod socket_watch;
 mod status_hints;
 
@@ -3770,7 +3769,7 @@ const AX_REFRESH_NOTIFICATIONS: [&str; 2] = [
 const AX_SETTLE: Duration = Duration::from_millis(300);
 /// …or this long after it began, whichever comes first.
 const AX_MAX_WAIT: Duration = Duration::from_secs(10);
-static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
 
 /// The local inventory cadence: registered once, live while a tmux client is
 /// attached anywhere, cancelled while none is.
@@ -7133,15 +7132,13 @@ impl FlashPlugin for Tmux {
             "core:session.opened" if !self.candidate_poll_arc.armed() => {
                 refresh_candidate_locations(self, &ctx).await;
             }
-            // The first event of a burst spawns its one waiter.
             "core:ax.changed"
                 if event.is_ax_change(&AX_REFRESH_NOTIFICATIONS)
-                    && !self.candidate_poll_arc.armed()
-                    && AX_BURST.note(event.pid.unwrap_or_default(), Instant::now()) =>
+                    && !self.candidate_poll_arc.armed() =>
             {
                 let plugin = self.clone();
-                tokio::spawn(async move {
-                    if AX_BURST.wait().await.is_some() && !plugin.candidate_poll_arc.armed() {
+                AX_BURST.schedule(event.pid.unwrap_or_default(), move |_| async move {
+                    if !plugin.candidate_poll_arc.armed() {
                         refresh_candidate_locations(&plugin, &ctx).await;
                     }
                 });

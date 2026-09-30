@@ -11,8 +11,10 @@ mod deadline;
 mod emit;
 mod events;
 mod framing;
+mod observed;
 pub mod process;
 mod runtime;
+mod settle;
 pub mod status;
 pub mod sys;
 pub mod testing;
@@ -30,8 +32,10 @@ pub use context::{
     AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate, applescript_quote,
     run_command, run_command_with_slow_threshold, run_osascript, shorten, spawn_managed,
 };
+pub use observed::ObservedCadences;
 pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{Plugin, run};
+pub use settle::Settle;
 pub use status::{
     Align, Color, Column, History, MAX_INLINE_PREVIEW_ENCODED_BYTES, Markup, Preview,
     PreviewTooLarge, Published, StatusCarousel, StatusSegment, StatusValue, Style, Table,
