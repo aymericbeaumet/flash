@@ -11,6 +11,7 @@ mod firefox;
 mod lz4;
 mod route;
 mod session_store;
+mod settle;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,10 +28,15 @@ use route::TabRoute;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
-/// Safety-net poll; events (app/focus changes, flashlight open) drive the
-/// authoritative refreshes, so this only bounds staleness for tab changes
-/// that emit no host event.
-const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Nothing polls: app lifecycle, focus into or out of a browser, the focused
+/// browser's AX changes, and flashlight opens drive every refresh. A tab
+/// switch, open, close or navigation in the focused browser retitles its
+/// window, but `core:ax.changed` names neither the notification nor the
+/// element and fires for each keystroke's value change too, so a browser's
+/// AX burst refreshes once it has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_secs(1);
+/// …or this long after it began, whichever comes first.
+const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 /// Event bursts (a launch fires apps.changed + focus.changed +
 /// window.focus.changed back to back) coalesce into one refresh.
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -46,6 +52,8 @@ static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 /// A refresh reads every running browser, so only events touching one
 /// schedule it: focus changes elsewhere cannot change a tab list.
 static BROWSER_EVENTS: AppWatch = AppWatch::new();
+/// Pending `core:ax.changed` burst from a focused browser.
+static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
 static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
     LazyLock::new(|| Mutex::new(RefreshLogState::default()));
 /// Each running browser's last listed rows behind the one published catalog.
@@ -414,13 +422,12 @@ impl FlashPlugin for Browsers {
                 refresh_locations(&retry_ctx).await;
             });
         }
-        drop(ctx.interval(POLL_INTERVAL, |ctx| async move {
-            refresh_locations(&ctx).await;
-        }));
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        if BROWSER_EVENTS.touches(
+        if ax_change_touches_browser(&event) {
+            schedule_ax_refresh(&ctx, event.pid.unwrap_or_default());
+        } else if BROWSER_EVENTS.touches(
             &event,
             || ctx.running_applications(),
             |bundle| browser_for(bundle).is_some(),
@@ -440,6 +447,28 @@ impl FlashPlugin for Browsers {
     async fn on_navigate(&self, ctx: Context, request: NavigateRequest) -> PerformResponse {
         restore_navigation(&ctx, &request).await
     }
+}
+
+/// Whether `event` is an AX change in a supported browser.
+fn ax_change_touches_browser(event: &Event) -> bool {
+    event.name == "core:ax.changed"
+        && event
+            .bundle_id
+            .as_deref()
+            .is_some_and(|bundle| browser_for(bundle).is_some())
+}
+
+/// Refresh once the browser's AX burst settles.
+fn schedule_ax_refresh(ctx: &Context, pid: i64) {
+    if !AX_BURST.note(pid, Instant::now()) {
+        return;
+    }
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        if AX_BURST.wait().await.is_some() {
+            refresh_locations(&ctx).await;
+        }
+    });
 }
 
 /// Coalesce an event burst into one refresh `EVENT_DEBOUNCE` out.
@@ -888,6 +917,46 @@ mod tests {
     use crate::route::TabTarget;
     use flash_plugin::ActionContext;
     use flash_plugin::candidate_metadata::{CURRENT_LOCATION, NAVIGATION_URL};
+
+    /// Events drive every refresh: startup registers no cadence.
+    #[tokio::test]
+    async fn startup_registers_no_cadence() {
+        let mut harness = flash_plugin::testing::Harness::new("browsers");
+        Browsers.on_start(harness.context()).await;
+        let frames = harness.drain();
+        assert!(
+            !frames.iter().any(|frame| frame["method"] == "poll"),
+            "{frames:?}"
+        );
+    }
+
+    /// The focused browser's AX changes (a tab switched, opened, closed or
+    /// navigated retitles its window) refresh the catalog; other apps' do not.
+    #[test]
+    fn only_a_browsers_ax_changes_refresh_the_catalog() {
+        let ax_changed = |bundle_id: &str| Event {
+            name: "core:ax.changed".into(),
+            bundle_id: Some(bundle_id.into()),
+            pid: Some(42),
+            ..Event::default()
+        };
+        assert!(ax_change_touches_browser(&ax_changed("com.google.Chrome")));
+        assert!(ax_change_touches_browser(&ax_changed(
+            "org.mozilla.firefox"
+        )));
+        assert!(!ax_change_touches_browser(&ax_changed(
+            "com.apple.Terminal"
+        )));
+        assert!(!ax_change_touches_browser(&Event {
+            name: "core:ax.changed".into(),
+            ..Event::default()
+        }));
+        assert!(!ax_change_touches_browser(&Event {
+            name: "core:focus.changed".into(),
+            bundle_id: Some("com.google.Chrome".into()),
+            ..Event::default()
+        }));
+    }
 
     #[test]
     fn engine_table_distinguishes_browser_editions() {

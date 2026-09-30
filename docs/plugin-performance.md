@@ -111,7 +111,14 @@ least 50 ms.
 - Full catalog replacements that are semantically unchanged do not advance
   the store generation, timestamp, or subscriber notifications.
 - Browser refreshes are single-flight, publish only changed rows, and log
-  state transitions or rate-limited warnings instead of every poll.
+  state transitions or rate-limited warnings instead of every refresh.
+- Catalog plugins do not poll the apps they mirror. `browsers`, `windows`
+  and `kitty` refresh on app lifecycle and focus events and on the focused
+  app's `core:ax.changed`. That event names neither the notification nor the
+  element and fires on every keystroke's value change, so a burst refreshes
+  once it has been quiet for one second, and at most ten seconds after it
+  began. The host observes AX only in the focused app; a background app's
+  changes catch up when focus or the flashlight next touches it.
 - Debug plugin logs remain available in the log file but do not invalidate
   status/inspector snapshots.
 - The NDJSON frame collector scans appended bytes once and compacts the

@@ -45,6 +45,7 @@
     "core:apps.terminated",
     "core:focus.changed",
     "core:window.focus.changed",
+    "core:ax.changed",
     "core:session.opened"
   ],
   "sources": [
