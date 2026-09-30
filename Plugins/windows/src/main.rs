@@ -12,8 +12,16 @@
 //!      host keeps its last-good catalog),
 //!   2. debounced/coalesced on `core:apps.changed` /
 //!      `core:window.focus.changed` / `core:focus.changed` (the SDK event
-//!      queue is bounded, so a focus storm collapses into one refresh), and
-//!   3. on a 60 s interval as a safety net for title changes no event covers.
+//!      queue is bounded, so a focus storm collapses into one refresh),
+//!   3. for the focused app, on `core:ax.changed` once its burst settles
+//!      (window titles, creation, and closure all raise AX notifications),
+//!      and
+//!   4. as a whole sweep when the flashlight opens (`core:session.opened`),
+//!      at most once per [`SWEEP_TTL`]: the host observes AX only in the
+//!      focused app, so this is when a background app's retitled windows
+//!      catch up.
+//!
+//! Nothing polls.
 //!
 //! Each refresh pushes a full-replacement `publish`; the flashlight reads
 //! host memory — no AX I/O on the hot path.
@@ -27,6 +35,8 @@
 //! so movement history records the jump. A vanished window degrades to plain
 //! app activation.
 
+mod settle;
+
 use flash_plugin::{Candidate, Context, Event, PerformResponse, RefreshGate, run};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -37,8 +47,15 @@ use std::time::{Duration, Instant};
 
 const SOURCE_ITEMS: &str = "windows.items";
 
-/// Safety-net poll for renames/moves that emit no host event.
-const REFRESH_SECONDS: u64 = 60;
+/// A flashlight open re-walks every app only when the last sweep is older
+/// than this, so reopening it does not queue AX work behind itself.
+const SWEEP_TTL: Duration = Duration::from_secs(60);
+/// `core:ax.changed` names neither the notification nor the element, and
+/// fires for each keystroke's value change too: re-snapshot an app once its
+/// AX events have been quiet this long…
+const AX_SETTLE: Duration = Duration::from_secs(1);
+/// …or this long after its burst began, whichever comes first.
+const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 /// Event bursts (an app launch fires apps.changed + focus.changed +
 /// window.focus.changed back to back) coalesce into one refresh.
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -67,8 +84,12 @@ static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 /// focus events until it fires.
 static APP_REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
 static PENDING_PIDS: LazyLock<Mutex<BTreeSet<i64>>> = LazyLock::new(|| Mutex::new(BTreeSet::new()));
-/// Last-good rows per app. A focus event re-snapshots only its own app and
-/// republishes the rest from here; the 60 s sweep rebuilds it whole.
+/// Pending `core:ax.changed` burst and the apps it named.
+static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
+/// When the last whole sweep began.
+static LAST_SWEEP: Mutex<Option<Instant>> = Mutex::new(None);
+/// Last-good rows per app. A focus or AX event re-snapshots only its own app
+/// and republishes the rest from here; a whole sweep rebuilds it.
 static ROWS_BY_PID: LazyLock<Mutex<BTreeMap<i64, Vec<Candidate>>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
@@ -107,11 +128,6 @@ impl FlashPlugin for Windows {
                 refresh_catalog(&retry_ctx).await;
             });
         }
-        drop(
-            ctx.interval(Duration::from_secs(REFRESH_SECONDS), |ctx| async move {
-                refresh_catalog(&ctx).await;
-            }),
-        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -122,7 +138,17 @@ impl FlashPlugin for Windows {
                 Some(pid) if pid > 0 => schedule_app_refresh(&ctx, pid),
                 _ => schedule_refresh(&ctx),
             },
+            "core:ax.changed" => {
+                if let Some(pid) = event.pid.filter(|pid| *pid > 0) {
+                    schedule_ax_refresh(&ctx, pid);
+                }
+            }
             "core:apps.changed" => schedule_refresh(&ctx),
+            "core:session.opened" if claim_sweep(Instant::now()) => {
+                tokio::spawn(async move {
+                    refresh_catalog(&ctx).await;
+                });
+            }
             _ => {}
         }
     }
@@ -165,6 +191,35 @@ fn schedule_app_refresh(ctx: &Context, pid: i64) {
                 .collect();
         refresh_apps(&ctx, pids).await;
     });
+}
+
+/// Re-snapshot the app once its AX burst settles.
+fn schedule_ax_refresh(ctx: &Context, pid: i64) {
+    if !AX_BURST.note(pid, Instant::now()) {
+        return;
+    }
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        if let Some(pids) = AX_BURST.wait().await {
+            refresh_apps(&ctx, pids.into_iter().collect()).await;
+        }
+    });
+}
+
+/// Whether a flashlight open is due a whole sweep: none has begun within
+/// [`SWEEP_TTL`].
+fn sweep_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.saturating_duration_since(last) >= SWEEP_TTL)
+}
+
+/// Record a sweep beginning at `now` when one is due.
+fn claim_sweep(now: Instant) -> bool {
+    let mut last = LAST_SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+    let due = sweep_due(*last, now);
+    if due {
+        *last = Some(now);
+    }
+    due
 }
 
 /// Re-snapshot the named apps and republish the catalog from the last-good
@@ -230,6 +285,7 @@ async fn refresh_catalog(ctx: &Context) -> bool {
     REFRESH_GATE
         .run(ctx, |ctx, running| async move {
             let started_at = Instant::now();
+            *LAST_SWEEP.lock().unwrap_or_else(|e| e.into_inner()) = Some(started_at);
             let mut by_pid: BTreeMap<i64, Vec<Candidate>> = BTreeMap::new();
             let mut total = 0usize;
             let mut snapshot_failures = 0usize;
@@ -570,5 +626,77 @@ mod tests {
         assert_eq!(pick_window(&rows, "gone", Some(1)), Some(11));
         assert_eq!(pick_window(&rows, "gone", Some(9)), None);
         assert_eq!(pick_window(&rows, "gone", None), None);
+    }
+
+    fn polls(frames: &[Value]) -> Vec<&Value> {
+        frames
+            .iter()
+            .filter(|frame| frame["method"] == "poll")
+            .collect()
+    }
+
+    /// Events drive every refresh: startup registers no cadence.
+    #[tokio::test]
+    async fn startup_registers_no_cadence() {
+        let mut harness = flash_plugin::testing::Harness::new("windows");
+        Windows.on_start(harness.context()).await;
+        let frames = harness.drain();
+        assert!(polls(&frames).is_empty(), "{frames:?}");
+    }
+
+    /// An AX change in the focused app re-snapshots that app alone once its
+    /// burst settles.
+    #[tokio::test]
+    async fn an_ax_change_resnapshots_its_app_once_the_burst_settles() {
+        let mut harness = flash_plugin::testing::Harness::new("windows");
+        harness.set_running_applications(vec![flash_plugin::RunningApplication {
+            bundle_id: "com.example.editor".to_string(),
+            pid: 42,
+            localized_name: "Editor".to_string(),
+        }]);
+        let ax_changed = Event {
+            name: "core:ax.changed".into(),
+            bundle_id: Some("com.example.editor".into()),
+            pid: Some(42),
+            ..Event::default()
+        };
+        for _ in 0..3 {
+            Windows
+                .on_event(harness.context(), ax_changed.clone())
+                .await;
+        }
+        let (id, method, params) = harness.next_host_request().await.expect("snapshot");
+        assert_eq!(method, "host.ax_snapshot");
+        assert_eq!(params["pid"], 42);
+        assert!(harness.reply_host(
+            id,
+            broker_reply(json!([
+                { "handle": 1, "attrs": { "AXRole": "AXWindow", "AXTitle": "notes.md" } }
+            ]))
+        ));
+        let rows = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let frames = harness.drain();
+                if let Some(frame) = frames.iter().find(|frame| frame["method"] == "publish") {
+                    break frame["params"]["rows"].clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("published");
+        assert_eq!(rows[0]["title"], "Editor — notes.md");
+        assert!(
+            harness.next_host_request().await.is_none(),
+            "one burst, one snapshot"
+        );
+    }
+
+    #[test]
+    fn a_flashlight_open_sweeps_every_app_at_most_once_per_ttl() {
+        let now = Instant::now();
+        assert!(sweep_due(None, now));
+        assert!(!sweep_due(Some(now - Duration::from_secs(5)), now));
+        assert!(sweep_due(Some(now - SWEEP_TTL), now));
     }
 }
