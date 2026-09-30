@@ -47,7 +47,7 @@ extension AppDelegate {
       bundleID: currentNonFlashRunningApplication()?.bundleIdentifier ?? fallbackBundleID)
   }
 
-  private func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {
+  func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {
     let key = context.cacheKey
     if let cached = effectiveMappingCache[key] { return cached }
     let pluginMappings = pluginManager.mappings(in: context)

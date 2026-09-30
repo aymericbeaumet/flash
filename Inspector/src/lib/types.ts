@@ -65,6 +65,9 @@ export interface MappingRow {
 export interface MappingsState {
   normal_leader: string;
   rows: MappingRow[];
+  effective_rows?: MappingRow[];
+  bundle_id?: string | null;
+  localized_name?: string | null;
 }
 
 export interface ClipboardEntry {
@@ -84,8 +87,21 @@ export interface DocTopic {
 }
 
 export interface InspectorState {
+  snapshot_at_unix_ms?: number;
+  runtime?: {
+    version?: string;
+    build?: string;
+    pid?: number;
+    uptime_seconds?: number;
+    accessibility_trusted?: boolean;
+    keyboard_capture_active?: boolean;
+    secure_input?: boolean;
+    advanced_mode?: boolean;
+    config_path?: string;
+    config_error?: string | null;
+  };
   mode?: string;
-  overlay?: string;
+  overlay?: string | null;
   focused_app?: FocusedApp;
   config?: Record<string, unknown>;
   plugins?: PluginInfo[];

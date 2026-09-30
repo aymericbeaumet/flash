@@ -1038,6 +1038,8 @@ extension AppDelegate {
       performSourceAction(.tabNew, repeatCount: repeatCount)
     case .showUsage(let topic):
       showHelp(topic: topic)
+    case .showMappings:
+      showMappings()
     case .showPlugins:
       openDebugDashboard(tab: "plugins")
     case .showAbout:
@@ -1104,10 +1106,10 @@ extension AppDelegate {
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
 
-  /// `:help [topic]` — docs live in the HTTP dashboard's Docs tab, so open the
-  /// browser there (deep-linked to the topic when one is named).
+  /// Open the help homepage, or a named guide when a topic is supplied.
   func showHelp(topic: String? = nil) {
-    openDebugDashboard(tab: "docs", topic: topic)
+    let topic = topic?.trimmed
+    openDebugDashboard(tab: topic?.isEmpty == false ? "docs" : "home", topic: topic)
   }
 
   /// Open the HTTP debug inspector dashboard in the default browser on `tab`
@@ -1131,13 +1133,7 @@ extension AppDelegate {
   private func openDebugDashboardWhenReady(tab: String, topic: String?, attempt: Int) {
     guard let server = debugServer else { return }
     if let port = server.listeningPort {
-      let host =
-        (server.host == "0.0.0.0" || server.host.isEmpty) ? "127.0.0.1" : server.host
-      let fragment =
-        topic.flatMap { $0.isEmpty ? nil : $0 }
-        .map { "\(tab)/\($0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0)" }
-        ?? tab
-      if let url = URL(string: "http://\(host):\(port)/#\(fragment)") {
+      if let url = DebugServer.dashboardURL(host: server.host, port: port, tab: tab, topic: topic) {
         NSWorkspace.shared.open(
           url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")

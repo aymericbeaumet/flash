@@ -122,6 +122,7 @@ enum URLCommand: Hashable {
   case showAlert(AlertCommand)
   case dismissAlert
   case showUsage(topic: String?)
+  case showMappings
   case showPlugins
   case showAbout
   case dismissHints
@@ -686,6 +687,8 @@ final class URLEventHandler: NSObject {
 
     "help_show": .init(
       [.text("topic", "topic")], parse: { a in .showUsage(topic: a.value("topic")) }),
+
+    "mappings_show": .init(parse: { _ in .showMappings }),
 
     "plugins": .init(parse: { _ in .showPlugins }),
 

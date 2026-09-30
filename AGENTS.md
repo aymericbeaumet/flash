@@ -180,6 +180,8 @@ Surface requests that would violate these constraints before implementing them.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.
 - Keep this guide actionable and concise; explanations belong in `docs/`.
+  Browser help routes, runtime data, and the single-file UI build are documented
+  in `docs/help.md`; rebuild the committed inspector resource after frontend edits.
   Resumption notes belong in transient `.handouts/`, never external memory.
   Static unused-code reports need caller/protocol/dynamic-dispatch review before
   deletion; app-layer declarations can still have runtime consumers.

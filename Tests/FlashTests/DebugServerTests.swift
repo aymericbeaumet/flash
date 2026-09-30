@@ -1,9 +1,59 @@
+import AppKit
 import Network
 import XCTest
 
 @testable import flash
 
 final class DebugServerTests: XCTestCase {
+  func testRuntimeSnapshotIsSerializableAndKeepsPluginSettingsPrivate() throws {
+    _ = NSApplication.shared
+    let delegate = AppDelegate()
+    delegate.overlay = OverlayPanel()
+    delegate.overlay.statusPopupController = StatusPopupController(
+      terminals: delegate.overlay.statusTerminals, windowActionsEnabled: false)
+    defer { delegate.overlay.statusTerminals.shutdown() }
+    delegate.config = ConfigLoader.parse(
+      """
+      [plugin.sample]
+      token = "private-test-token"
+      """)
+    let state = delegate.debugStateJSON()
+    let data = try JSONSerialization.data(withJSONObject: state)
+    let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+    XCTAssertFalse(json.contains("private-test-token"))
+    let runtime = try XCTUnwrap(state["runtime"] as? [String: Any])
+    XCTAssertEqual(runtime["pid"] as? Int32, ProcessInfo.processInfo.processIdentifier)
+    XCTAssertGreaterThanOrEqual(try XCTUnwrap(runtime["uptime_seconds"] as? Double), 0)
+    XCTAssertEqual(runtime["keyboard_capture_active"] as? Bool, false)
+    XCTAssertNotNil(state["snapshot_at_unix_ms"] as? Int64)
+    XCTAssertEqual(state["overlay"] as? String, String(describing: delegate.overlay.inputMode))
+    let mappings = try XCTUnwrap(state["mappings"] as? [String: Any])
+    let rows = try XCTUnwrap(mappings["effective_rows"] as? [[String: String]])
+    XCTAssertEqual(rows, mappings["rows"] as? [[String: String]])
+    XCTAssertTrue(rows.contains { $0["key"] == "?" && $0["action"] == "flash mappings_show" })
+  }
+
+  func testDashboardLinksKeepHomepageMappingsAndTopicRoutesDistinct() throws {
+    XCTAssertEqual(
+      DebugServer.dashboardURL(host: "localhost", port: 4242, tab: "home")?.absoluteString,
+      "http://localhost:4242/#home")
+    XCTAssertEqual(
+      DebugServer.dashboardURL(host: "127.0.0.1", port: 4242, tab: "mappings")?.fragment,
+      "mappings")
+    let topic = "plugin / symbols #?%"
+    let url = try XCTUnwrap(
+      DebugServer.dashboardURL(host: "::1", port: 4242, tab: "docs", topic: topic))
+    XCTAssertTrue(url.absoluteString.hasPrefix("http://[::1]:4242/#docs/"))
+    let fragment = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+      .percentEncodedFragment
+    XCTAssertEqual(fragment?.split(separator: "/").count, 2)
+    XCTAssertEqual(fragment?.removingPercentEncoding, "docs/" + topic)
+    XCTAssertEqual(
+      DebugServer.dashboardURL(host: "localhost", port: 4242, tab: "home", topic: "  ")?.fragment,
+      "home")
+    XCTAssertNil(DebugServer.dashboardURL(host: "example.com", port: 4242, tab: "home"))
+  }
+
   func testTracesSummarizeEachInteractionAcrossHostAndPlugins() {
     let logs: [[String: Any]] = [
       [
@@ -110,7 +160,7 @@ final class DebugServerTests: XCTestCase {
     // The inspector UI is the Svelte single-file bundle shipped as a
     // resource; assert on stable, non-minified markers rather than the
     // old inline-JS internals.
-    XCTAssertTrue(body.contains("<title>Flash Inspector</title>"), body)
+    XCTAssertTrue(body.contains("<title>Flash Help</title>"), "missing help document title")
     XCTAssertTrue(body.contains("id=\"app\""), body)
     // The runtime data wiring survives minification as string literals.
     XCTAssertTrue(body.contains("/events"), body)

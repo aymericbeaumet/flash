@@ -67,8 +67,10 @@ document-URL and mark commands remain available for explicit mappings.
   under the hint.
 - `sF` / `dF` use the [mouse grid](#mouse-grid) for secondary/double clicks.
 - `mF` moves the cursor with the mouse grid.
-- `:mappings` opens the resolved mapping table, including expanded leader
+- `?` and `:mappings` open the browser mapping reference for the focused app,
+  with both effective plugin-merged and configured mappings, including expanded leader
   bindings and argv mappings.
+- `:help` opens the browser help homepage; `:help <topic>` opens a feature guide.
 
 ## Mouse grid
 

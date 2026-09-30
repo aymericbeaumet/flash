@@ -404,6 +404,9 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashHelp() {
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mappings_show"])?.command?.diagnosticDescription,
+      "flash mappings_show")
     let help = parseMappingCommand(argv: ["flash", "help_show"])
     guard case .flashCommand(.showUsage(topic: nil)) = help else {
       return XCTFail("expected .showUsage for help_show")

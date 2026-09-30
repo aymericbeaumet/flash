@@ -90,13 +90,17 @@ extension NormalModeDispatcher {
 
         ## Command Line
 
-        Bind `enter_command_mode` to a shortcut of your choice to open the
-        command line. Use `:help` for the topic index,
-        `:help plugins` for plugin docs, and `:mappings` for the resolved
-        mapping table. `:flashlight <query>` searches source candidates;
+        `:` opens the command line in NORMAL. You can also bind
+        `enter_command_mode` to a shortcut of your choice. Use `:help` for
+        the browser help homepage, `:help plugins` for plugin docs, and
+        `?` or `:mappings` for the live mapping reference.
+        `:flashlight <query>` searches source candidates;
         `:open <args>` forwards verbatim to `open` (URLs, files, `-a App`).
 
-        ## Active Mappings
+        ## Configured mappings
+
+        These are the base mappings from your configuration. The [live mapping
+        reference](#mappings) includes plugin overrides for the focused app.
 
         ```text
         \(helpText(config: config, showModes: showModes))
@@ -201,12 +205,12 @@ extension NormalModeDispatcher {
 
   /// The configured mappings as structured rows for the inspector's Mappings
   /// tab — the same scope data `mappingsText` renders, minus Markdown formatting.
-  static func mappingsJSON(config: Config) -> [[String: String]] {
-    (mappingRows(scope: "all", mappings: config.mode.all)
-      + mappingRows(scope: "normal", mappings: config.mode.normal)
-      + mappingRows(scope: "insert", mappings: config.mode.insert)
-      + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
-      + mappingRows(scope: "command", mappings: config.mode.command))
+  static func mappingsJSON(mode: Config.Mode) -> [[String: String]] {
+    (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
+      + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
+      + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))
+      + mappingRows(scope: "terminal", mappings: mode.effectiveTerminalMappings)
+      + mappingRows(scope: "command", mappings: Config.Mode.resolveMappings(mode.command)))
       .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
   }
 

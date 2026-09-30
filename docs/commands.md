@@ -1,7 +1,9 @@
 # Commands
 
 Run `flash <verb>` from a terminal or put the same argv in a mapping. Open
-`:help` or `flash help_show` for the installed command inventory.
+`:commands` for the installed command inventory. `:help` or `flash help_show`
+opens the browser help homepage; `?`, `:mappings` or `flash mappings_show`
+opens the live mapping reference.
 
 ```bash
 flash mouse_target                       # current-context click (terminal links add Shift)
@@ -39,7 +41,9 @@ flash enter_command_mode                 # open the command line
 flash enter_terminal_mode                # show and focus the terminal popup; see docs/popups.md
 flash enter_terminal_mode --name=btop    # show a [popup.<name>] centred and focused
 flash leave_mode                         # leave insert, or close the command panel or popup
-flash help_show                          # show built-in help
+flash help_show                          # open the help homepage
+flash help_show --topic=flashlight       # open a feature guide
+flash mappings_show                     # open mappings for the focused app
 flash plugins                            # inspect plugins
 flash about                              # open the About Flash window
 flash quit                               # stop the resident app

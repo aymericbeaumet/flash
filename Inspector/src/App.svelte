@@ -2,232 +2,162 @@
   import ClipboardPanel from "./lib/ClipboardPanel.svelte";
   import CommandsPanel from "./lib/CommandsPanel.svelte";
   import DocsPanel from "./lib/DocsPanel.svelte";
+  import HomePanel from "./lib/HomePanel.svelte";
+  import Icon from "./lib/Icon.svelte";
   import LogList from "./lib/LogList.svelte";
   import MappingsPanel from "./lib/MappingsPanel.svelte";
   import PluginsPanel from "./lib/PluginsPanel.svelte";
+  import RuntimePanel from "./lib/RuntimePanel.svelte";
   import { store } from "./lib/store.svelte";
 
-  type Tab =
-    | "logs"
-    | "plugins"
-    | "commands"
-    | "mappings"
-    | "docs"
-    | "clipboard"
-    | "state";
-  const validTabs: Tab[] = [
-    "logs",
-    "plugins",
-    "commands",
-    "mappings",
-    "docs",
-    "clipboard",
-    "state",
+  const sections = [
+    { id: "home", label: "Home", group: "Explore" },
+    { id: "docs", label: "Documentation", group: "Explore" },
+    { id: "mappings", label: "Key mappings", group: "Your Flash" },
+    { id: "commands", label: "Commands", group: "Your Flash" },
+    { id: "plugins", label: "Plugins", group: "Your Flash" },
+    { id: "state", label: "Runtime & config", group: "Inspect" },
+    { id: "logs", label: "Live logs", group: "Inspect" },
+    { id: "clipboard", label: "Clipboard", group: "Inspect" },
   ];
-
-  // The hash is `#<tab>` or, for the Docs tab, `#docs/<topic>` so `:help <topic>`
-  // can deep-link. Split once: first segment selects the tab, the rest is the
-  // topic (Docs only).
-  function parseHash(): { tab: Tab; topic: string } {
-    const raw = location.hash.replace(/^#/, "");
-    const slash = raw.indexOf("/");
-    const head = slash === -1 ? raw : raw.slice(0, slash);
-    const rest = slash === -1 ? "" : raw.slice(slash + 1);
-    const tab = (validTabs as string[]).includes(head) ? (head as Tab) : "logs";
-    let topic = "";
-    try {
-      topic = decodeURIComponent(rest);
-    } catch {
-      topic = rest;
-    }
-    return { tab, topic };
+  function parseHash() {
+    const [head, ...tail] = location.hash.slice(1).split("/");
+    let topic = tail.join("/");
+    try { topic = decodeURIComponent(topic); } catch { /* Keep malformed routes readable. */ }
+    return { tab: sections.some((section) => section.id === head) ? head : "home", topic };
   }
-  let tab = $state<Tab>(parseHash().tab);
-  let topic = $state<string>(parseHash().topic);
-
-  function selectTab(id: Tab) {
-    tab = id;
-    topic = "";
-    if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
-  }
+  let route = $state(parseHash());
+  let search = $state("");
+  let searchInput = $state<HTMLInputElement>();
+  let mobileNav = $state(false);
+  let content = $state<HTMLElement>();
+  const current = $derived(sections.find((section) => section.id === route.tab)!);
+  const docs = $derived(store.state.docs ?? []);
+  const plugins = $derived(store.state.plugins ?? []);
+  const commands = $derived(store.state.commands ?? []);
+  const mappings = $derived(store.state.mappings ?? { normal_leader: "", rows: [] });
+  const results = $derived.by(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const matches = (text: string) => text.toLowerCase().includes(q);
+    const matchesFound = [
+      ...docs.filter((doc) => matches([doc.title, doc.name, doc.summary, doc.body, ...(doc.aliases ?? [])].join(" "))).map((doc) => ({ title: doc.title, summary: doc.summary, kind: "Guide", icon: "docs", href: "#docs/" + encodeURIComponent(doc.name) })),
+      ...commands.filter((command) => matches([command.name, command.syntax, command.description, ...(command.aliases ?? [])].join(" "))).map((command) => ({ title: command.name, summary: command.description ?? command.source, kind: "Command", icon: "commands", href: "#commands/" + encodeURIComponent(command.name) })),
+      ...(mappings.effective_rows ?? mappings.rows).filter((row) => matches(row.key + " " + row.action)).map((row) => ({ title: row.key, summary: row.action, kind: "Mapping", icon: "mappings", href: "#mappings/" + encodeURIComponent(row.key) })),
+      ...plugins.filter((plugin) => matches([plugin.id, plugin.name, plugin.description].join(" "))).map((plugin) => ({ title: plugin.name || plugin.id, summary: plugin.description ?? plugin.state, kind: "Plugin", icon: "plugins", href: "#plugins/" + encodeURIComponent(plugin.id) })),
+    ];
+    const rank = (title: string) => {
+      const name = title.toLowerCase().replace(/^:/, "");
+      const needle = q.replace(/^:/, "");
+      return name === needle ? 0 : name.startsWith(needle) ? 1 : name.includes(needle) ? 2 : 3;
+    };
+    return matchesFound.sort((a, b) => rank(a.title) - rank(b.title));
+  });
 
   $effect(() => {
     store.start();
-    // `:logs`/`:plugins`/`:commands`/`:help` open the dashboard at `#<tab>`;
-    // honor the initial hash and follow it when the host re-opens an
-    // already-open page (DocsPanel pushes `#docs/<topic>` on topic clicks).
     const onHash = () => {
-      const p = parseHash();
-      tab = p.tab;
-      topic = p.topic;
+      route = parseHash();
+      search = "";
+      mobileNav = false;
+      content?.scrollTo({ top: 0 });
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault(); searchInput?.focus();
+      }
+      if (event.key === "Escape") { search = ""; mobileNav = false; searchInput?.blur(); }
     };
     window.addEventListener("hashchange", onHash);
-    return () => {
-      window.removeEventListener("hashchange", onHash);
-      store.stop();
-    };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("keydown", onKey); store.stop(); };
   });
-
-  const plugins = $derived(store.state.plugins ?? []);
-  const commands = $derived(store.state.commands ?? []);
-  const docs = $derived(store.state.docs ?? []);
-  const clipboard = $derived(store.state.clipboard ?? []);
-  const mappings = $derived(store.state.mappings ?? { normal_leader: "", rows: [] });
-  const focused = $derived(store.state.focused_app);
-
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "logs", label: "Logs" },
-    { id: "plugins", label: "Plugins" },
-    { id: "commands", label: "Commands" },
-    { id: "mappings", label: "Mappings" },
-    { id: "docs", label: "Docs" },
-    { id: "clipboard", label: "Clipboard" },
-    { id: "state", label: "State" },
-  ];
-
-  const stateSummary = $derived(
-    JSON.stringify(
-      {
-        mode: store.state.mode,
-        overlay: store.state.overlay,
-        focused_app: focused,
-      },
-      null,
-      2,
-    ),
-  );
-  const configJSON = $derived(JSON.stringify(store.state.config ?? {}, null, 2));
+  $effect(() => { document.title = `${current.label} · Flash Help`; });
 </script>
 
-<header>
-  <strong class="brand">Flash Inspector</strong>
-  <nav>
-    {#each tabs as t}
-      <button class:active={tab === t.id} onclick={() => selectTab(t.id)}>
-        {t.label}
-        {#if t.id === "plugins"}<span class="pill">{plugins.length}</span>{/if}
-        {#if t.id === "commands"}<span class="pill">{commands.length}</span>{/if}
-        {#if t.id === "mappings"}<span class="pill">{mappings.rows.length}</span>{/if}
-        {#if t.id === "docs"}<span class="pill">{docs.length}</span>{/if}
-        {#if t.id === "clipboard"}<span class="pill">{clipboard.length}</span>{/if}
-      </button>
-    {/each}
-  </nav>
-  <span class="conn" class:on={store.connected}>
-    {store.connected ? "live" : "offline"}
-  </span>
-</header>
-
-<main>
-  {#if tab === "logs"}
-    <LogList logs={store.logs} />
-  {:else if tab === "plugins"}
-    <PluginsPanel {plugins} />
-  {:else if tab === "commands"}
-    <CommandsPanel {commands} />
-  {:else if tab === "mappings"}
-    <MappingsPanel {mappings} />
-  {:else if tab === "docs"}
-    <DocsPanel {docs} {topic} />
-  {:else if tab === "clipboard"}
-    <ClipboardPanel entries={clipboard} />
-  {:else}
-    <div class="state-grid">
-      <section>
-        <h2>Current State</h2>
-        <pre>{stateSummary}</pre>
-      </section>
-      <section>
-        <h2>Resolved Config</h2>
-        <pre>{configJSON}</pre>
-      </section>
-    </div>
-  {/if}
-</main>
+<a class="skip-link" href="#main-content" onclick={(event) => { event.preventDefault(); content?.focus(); }}>Skip to content</a>
+<div class="workspace">
+  <aside class="sidebar" class:expanded={mobileNav}>
+    <a href="#home" class="brand" aria-label="Flash Help home"><span class="brand-mark"><Icon name="bolt" size={24} /></span><span>Flash<span class="brand-sub">Help & reference</span></span></a>
+    <nav aria-label="Main navigation">
+      {#each ["Explore", "Your Flash", "Inspect"] as group}
+        <div class="nav-group"><div class="eyebrow">{group}</div>
+          {#each sections.filter((section) => section.group === group) as section}
+            <a href={"#" + section.id} onclick={() => { mobileNav = false; search = ""; }} class:active={route.tab === section.id} aria-current={route.tab === section.id ? "page" : undefined}><Icon name={section.id} /><span>{section.label}</span>{#if section.id === "plugins"}<span class="nav-count">{plugins.length}</span>{/if}</a>
+          {/each}
+        </div>
+      {/each}
+    </nav>
+    <div class="sidebar-footer"><span class="local-mark"><Icon name="shield" size={15} /> On your Mac</span><p>Documentation and live information,<br />directly from your running Flash.</p><a href="#docs/privacy">Privacy & permissions <span>↗</span></a></div>
+  </aside>
+  <div class="main-column">
+    <header class="topbar">
+      <button class="mobile-toggle" aria-label="Toggle navigation" aria-expanded={mobileNav} onclick={() => mobileNav = !mobileNav}><Icon name="menu" /></button>
+      <div class="breadcrumb"><span>Flash Help</span><Icon name="chevron" size={12} /><strong>{current.label}</strong></div>
+      <div class="searchbox"><Icon name="search" size={16} /><input bind:this={searchInput} bind:value={search} type="search" aria-label="Search all documentation, commands, mappings and plugins" placeholder="Search anything…" /><kbd>⌘ K</kbd></div>
+      <a href="#state" class="connection" class:connected={store.connected}><i></i>{store.connected ? "Live" : "Reconnecting"}</a>
+    </header>
+    {#if !store.connected}<div class="connection-note" role="status">{store.state.snapshot_at_unix_ms ? "Connection interrupted. Showing the last received snapshot; reconnecting automatically." : "Connecting to Flash. Live information will appear when the resident app is available."}</div>{/if}
+    <main id="main-content" tabindex="-1" bind:this={content}>
+      {#if search.trim()}
+        <div class="page"><div class="page-heading"><p class="eyebrow">Across your Flash</p><h1>Search results</h1><p>{results.length} results for “{search}”</p></div><div class="search-results surface">
+          {#each results.slice(0, 80) as result}<a href={result.href} onclick={() => search = ""}><span class="result-icon"><Icon name={result.icon} /></span><span><strong>{result.title}</strong><span class="result-summary">{result.summary}</span></span><span class="badge neutral">{result.kind}</span><Icon name="arrow" size={16} /></a>{/each}
+          {#if results.length === 0}<div class="empty"><strong>No matches yet</strong>Try a feature, command, key, or plugin name.</div>{/if}
+          {#if results.length > 80}<p class="empty">Showing the first 80 matches. Add another word to narrow your search.</p>{/if}
+        </div></div>
+      {:else if route.tab === "home"}<HomePanel state={store.state} connected={store.connected} />
+      {:else if route.tab === "docs"}<DocsPanel {docs} topic={route.topic} />
+      {:else if route.tab === "mappings"}<MappingsPanel {mappings} filter={route.topic} />
+      {:else if route.tab === "commands"}<CommandsPanel {commands} filter={route.topic} />
+      {:else if route.tab === "plugins"}<PluginsPanel {plugins} filter={route.topic} />
+      {:else if route.tab === "state"}<RuntimePanel state={store.state} connected={store.connected} />
+      {:else if route.tab === "logs"}<div class="page log-page"><div class="page-heading"><p class="eyebrow">Inspect</p><h1>Live logs</h1><p>Follow what Flash is doing. Select a record to inspect its full details.</p></div><div class="surface log-surface"><LogList logs={store.logs} /></div></div>
+      {:else if route.tab === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} />{/if}
+    </main>
+  </div>
+</div>
 
 <style>
-  header {
-    height: 40px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 0 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-  }
-  .brand {
-    color: var(--accent);
-    letter-spacing: 0.3px;
-  }
-  nav {
-    display: flex;
-    gap: 4px;
-  }
-  nav button {
-    min-width: 0;
-    background: transparent;
-    border: 1px solid transparent;
-  }
-  nav button.active {
-    border-color: var(--border);
-    background: var(--bg);
-    color: var(--accent);
-  }
-  .pill {
-    margin-left: 4px;
-    padding: 0 5px;
-    border-radius: 8px;
-    background: var(--panel-strong);
-    color: var(--muted);
-    font-size: 10px;
-  }
-  .conn {
-    margin-left: auto;
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-  }
-  .conn::before {
-    content: "";
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #d9574f;
-    margin-right: 6px;
-    vertical-align: middle;
-  }
-  .conn.on {
-    color: var(--accent);
-  }
-  .conn.on::before {
-    background: #4ad97f;
-  }
-  main {
-    height: calc(100vh - 40px);
-    min-height: 0;
-  }
-  .state-grid {
-    height: 100%;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1px;
-    background: var(--border);
-  }
-  section {
-    overflow: auto;
-    min-height: 0;
-    background: var(--bg);
-    padding: 10px 12px;
-  }
-  h2 {
-    margin: 0 0 8px;
-    font-size: 12px;
-    color: var(--accent);
-  }
-  pre {
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
+  .workspace { display: grid; grid-template-columns: 224px minmax(0, 1fr); height: 100dvh; }
+  .sidebar { background: #f1f4ee; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 29px 18px 22px; overflow: auto; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 23px; font-weight: 650; line-height: 1.2; padding: 0 8px; text-decoration: none; }
+  .brand-mark { display: grid; place-items: center; color: #eff6e7; background: #2e5b43; width: 38px; height: 43px; border-radius: 11px; }
+  .brand-sub { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 4px; letter-spacing: .02em; }
+  nav { margin-top: 36px; }
+  .nav-group { margin-bottom: 27px; }
+  .nav-group .eyebrow { padding: 0 12px; margin-bottom: 9px; font-size: 9px; }
+  nav a { display: flex; align-items: center; gap: 11px; min-height: 41px; padding: 9px 12px; margin: 3px 0; border-radius: 7px; color: #59665c; font-size: 12px; font-weight: 500; text-decoration: none; }
+  nav a:hover { background: #e7ede1; }
+  nav a.active { background: #e0e9d8; color: #244f38; font-weight: 600; }
+  .nav-count { margin-left: auto; font-size: 10px; opacity: .7; }
+  .sidebar-footer { margin-top: auto; padding: 20px 10px 0; border-top: 1px solid var(--border); font-size: 10px; color: var(--muted); }
+  .local-mark { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: #4d5e4f; }
+  .sidebar-footer p { margin: 8px 0 12px; line-height: 1.7; }
+  .sidebar-footer a { display: flex; justify-content: space-between; }
+  .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .topbar { min-height: 72px; display: flex; align-items: center; gap: 24px; padding: 15px 40px; border-bottom: 1px solid var(--border); background: #ffffffc9; }
+  .breadcrumb { display: flex; align-items: center; gap: 9px; font-size: 11px; white-space: nowrap; color: var(--muted); }
+  .breadcrumb strong { font-weight: 500; color: var(--text); }
+  .searchbox { margin-left: auto; display: flex; align-items: center; gap: 8px; width: min(300px, 34vw); border: 1px solid var(--border); border-radius: 7px; padding: 0 10px; color: var(--muted); background: #f8faf6; }
+  .searchbox input { border: 0; background: none; width: 100%; min-height: 34px; padding: 4px 0; font-size: 12px; outline-offset: 0; }
+  .searchbox kbd { font-size: 9px; padding: 0 4px; color: var(--muted); }
+  .connection { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .connection i { width: 6px; height: 6px; border-radius: 50%; background: #c99c55; }
+  .connection.connected i { background: #5c9662; box-shadow: 0 0 0 3px #e9f1e4; }
+  .connection-note { padding: 8px 24px; font-size: 11px; color: #78642c; background: #fff9e6; border-bottom: 1px solid #e7ddba; }
+  main { flex: 1; overflow: auto; min-height: 0; }
+  .mobile-toggle { display: none; padding: 6px; }
+  .search-results { overflow: hidden; }
+  .search-results a { display: flex; align-items: center; gap: 16px; padding: 17px 20px; border-bottom: 1px solid var(--border-soft); color: var(--text); text-decoration: none; }
+  .search-results a:hover { background: #f5f8f0; }
+  .result-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); flex-shrink: 0; }
+  .search-results a > span:nth-child(2) { flex: 1; min-width: 0; }
+  .result-summary { display: block; font-size: 12px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-top: 3px; }
+  .log-page { height: 100%; display: flex; flex-direction: column; }
+  .log-surface { flex: 1; min-height: 320px; overflow: hidden; }
+  .skip-link { position: fixed; top: -100px; left: 12px; z-index: 100; background: #fff; border: 1px solid var(--border); padding: 10px; }
+  .skip-link:focus { top: 12px; }
+  @media (max-width: 1150px) { .topbar { padding: 14px 24px; gap: 16px; } .workspace { grid-template-columns: 205px minmax(0, 1fr); } }
+  @media (max-width: 850px) { .breadcrumb > span, .breadcrumb :global(svg) { display: none; } .topbar { gap: 14px; } .searchbox { width: min(260px, 35vw); } }
+  @media (max-width: 700px) { .workspace { grid-template-columns: minmax(0, 1fr); } .sidebar { display: none; } .sidebar.expanded { display: flex; position: fixed; top: 64px; bottom: 0; left: 0; width: 235px; z-index: 5; box-shadow: 15px 0 40px #26342125; } .sidebar.expanded .brand { display: none; } .sidebar.expanded nav { margin-top: 0; } .mobile-toggle { display: flex; } .topbar { min-height: 64px; padding: 12px 18px; gap: 10px; } .breadcrumb { display: none; } .searchbox { width: auto; flex: 1; } .searchbox kbd { display: none; } .connection { font-size: 10px; } }
 </style>

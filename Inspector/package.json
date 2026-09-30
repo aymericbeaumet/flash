@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Flash Inspector — live HTTP debug UI served by the flash runtime.",
+  "description": "Flash Help — documentation and live runtime information served by Flash.",
   "packageManager": "pnpm@12.6.0",
   "scripts": {
     "dev": "vite",

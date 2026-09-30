@@ -1097,9 +1097,43 @@ extension PluginManager {
     body: """
       # Plugins
 
+      Plugins add flashlight catalogs, inline answers, actions, hints,
+      status values and their own help. Open [Plugins](#plugins) to inspect
+      this installation's processes, health, errors and capabilities;
+      [Commands](#commands) lists the commands they contribute.
+
+      ## Enable and configure
+
+      Bundled plugins are enabled unless excluded. Plugin-specific settings
+      live in `[plugin.<id>]`; use the plugin's guide for its accepted keys.
+
+      ```toml
+      [plugins]
+      disabled = ["feed"]
+      third_party = ["file:./my-plugin"]
+
+      [plugin.processes]
+      top_count = 5
+      ```
+
+      Third-party GitHub references must pin a full commit:
+      `github:owner/repository@<40-character-commit>`. Review a plugin before
+      enabling it. Its [permissions and data access](#docs/privacy) depend
+      on the manifest and any tools it runs. A stopped on-demand plugin is
+      not necessarily failing; it starts when a matching command needs it.
+
+      `:plugins reload` reloads all plugins. Configuration and watched plugin
+      directory changes also reconcile the running set.
+
+      ## Build an extension
+
       Plugins are managed child processes owned by Flash, speaking NDJSON
       (one JSON object per newline-terminated line) on stdin/stdout —
-      protocol v1, documented in `docs/plugin-protocol.md`. Each plugin is a
+      protocol v1, documented in the
+      [protocol reference](\(HelpDocs.repositoryRoot)/docs/plugin-protocol.md).
+      Start with the [cookbook](\(HelpDocs.repositoryRoot)/docs/plugin-cookbook.md)
+      or [Rust SDK](\(HelpDocs.repositoryRoot)/docs/plugin-rust-sdk.md).
+      Each plugin is a
       directory with a `manifest.json` declaring what it serves: `sources`
       (push-published flashlight catalogs), `query` (inline answers),
       `hints`, `status` segments, `listen` event patterns, `commands`

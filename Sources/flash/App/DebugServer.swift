@@ -137,6 +137,21 @@ final class DebugServer {
 
   static let pollClientID = "core:debug_inspector"
 
+  static func dashboardURL(host: String, port: UInt16, tab: String, topic: String? = nil) -> URL? {
+    guard parse(host: host, port: Int(port)) != nil else { return nil }
+    var components = URLComponents()
+    components.scheme = "http"
+    components.host = host == "::1" ? "[::1]" : host
+    components.port = Int(port)
+    components.path = "/"
+    let topic = topic?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let segmentCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    let encodedTopic = topic?.addingPercentEncoding(withAllowedCharacters: segmentCharacters)
+    components.percentEncodedFragment =
+      encodedTopic.flatMap { $0.isEmpty ? nil : "\(tab)/\($0)" } ?? tab
+    return components.url
+  }
+
   private func handle(_ connection: NWConnection) {
     guard Self.isLoopback(endpoint: connection.endpoint) else {
       connection.cancel()

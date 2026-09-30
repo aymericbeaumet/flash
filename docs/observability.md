@@ -59,10 +59,15 @@ the listener itself, so a web page rebinding its own hostname to 127.0.0.1
 can't read it. Its log view receives what the log file does, at the
 configured level.
 
+The same server hosts [browser help](help.md): `:help` opens its homepage,
+`?` / `:mappings` opens the effective mapping reference, and `:help <topic>`
+opens a guide. Those commands start the server on demand even when the
+launch-time inspector is disabled.
+
 | Endpoint | Content |
 | --- | --- |
-| `/` | the inspector UI |
-| `/state` | config, mappings, focused app, current hints, windows, plugins (state, restarts, last error and log line, CPU %, memory) |
+| `/` | the help and runtime UI |
+| `/state` | snapshot time, version/build, uptime, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, restarts, last error and log line, CPU %, memory) |
 | `/logs` | the last 2,000 lines; `/logs?trace=<id>` returns one interaction's lines |
 | `/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
 | `/events` | server-sent `state`, `logs` and `log` events |

@@ -28,6 +28,30 @@ final class EffectiveMappingsTests: XCTestCase {
         (priority: 25, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))
       ])
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
+    XCTAssertEqual(
+      NormalModeDispatcher.mappingsJSON(mode: effective).filter { $0["scope"] == "normal" },
+      [["scope": "normal", "key": "q", "action": URLCommand.redo.diagnosticDescription]])
+    XCTAssertEqual(
+      NormalModeDispatcher.mappingsJSON(mode: base).first { $0["scope"] == "normal" },
+      ["scope": "normal", "key": "q", "action": URLCommand.undo.diagnosticDescription])
+  }
+
+  func testMappingReferenceShowsOnlyTheWinningPhysicalChord() {
+    let base = mode(normal: [
+      ModeMapping(key: "cmd+shift+]", action: .flashCommand(.tabPrev))
+    ])
+    let effective = EffectiveMappings.merge(
+      base: base,
+      plugin: [
+        (
+          priority: 25, scope: .normal,
+          mapping: ModeMapping(key: "cmd+shift+}", action: .flashCommand(.tabNext))
+        )
+      ])
+    let rows = NormalModeDispatcher.mappingsJSON(mode: effective)
+      .filter { $0["scope"] == "normal" }
+    XCTAssertEqual(rows.count, 1)
+    XCTAssertEqual(rows.first?["action"], URLCommand.tabNext.diagnosticDescription)
   }
 
   func testPluginMappingOnAKeyTheConfigRemovedIsDropped() {

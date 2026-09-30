@@ -160,10 +160,13 @@ references must pin a full commit SHA.
 
 ## Local inspector
 
-`:help`, `:logs`, `:plugins`, and `:commands` open a debug page in your browser.
+`:help`, `?`, `:mappings`, `:logs`, `:plugins`, and `:commands` open
+Flash's help and runtime pages in your browser.
 Flash serves it on `localhost` (port 4242 by default) from the first such
 command until Flash quits, or from launch when
-`[debug] http_inspector_enabled = true`. It shows logs, plugin state, and recent
-clipboard entries. It rejects requests addressed to other host names and sends
+`[debug] http_inspector_enabled = true`. It shows bundled documentation,
+app version and uptime, Accessibility/capture state, the configuration path and
+diagnostics, effective mappings for the focused app, logs, plugin state, and recent
+clipboard entries. Plugin setting values remain redacted. It rejects requests addressed to other host names and sends
 no CORS headers, so web pages cannot read it, but other programs on your Mac
 can while it runs.

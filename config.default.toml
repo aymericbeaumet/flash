@@ -631,7 +631,7 @@ leader = "\\"
 "y" = ["flash", "yank_selection"]
 "p" = ["flash", "paste"]
 "/" = ["flash", "app_find"]
-"?" = ["flash", "help_show"]
+"?" = ["flash", "mappings_show"]
 
 # enter_terminal_mode opens a popup standalone, centred on the focused app's
 # screen and focused (see [popup]):

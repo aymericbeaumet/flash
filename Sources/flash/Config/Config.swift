@@ -828,7 +828,7 @@ struct Config {
         ("y", .flashCommand(.yankSelection(register: nil))),
         ("p", .flashCommand(.paste(register: nil))),
         ("/", .flashCommand(.find)),
-        ("?", .flashCommand(.showUsage(topic: nil))),
+        ("?", .flashCommand(.showMappings)),
       ]
       // Every built-in bracket-pair mapping follows vim-unimpaired repetition:
       // after `[x` or `]x`, additional presses of `x` repeat the action.
@@ -1392,6 +1392,8 @@ extension URLCommand {
     case .showUsage(let topic):
       if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }
       return verb("help_show")
+    case .showMappings:
+      return verb("mappings_show")
     case .showPlugins: return verb("plugins")
     case .showAbout: return verb("about")
     case .dismissHints: return verb("hints_dismiss")
@@ -1496,32 +1498,60 @@ extension Config {
     body: """
       # Configuration
 
-      Flash reads `$XDG_CONFIG_HOME/flash/flash.toml`, then
-      `~/.config/flash/flash.toml` when XDG is unset. The active file is
-      watched and reloaded live. When no file exists, Flash writes a
-      commented starter there on launch and never rewrites it afterwards.
+      Open your file from the menu-bar bolt's **Open Configuration** entry.
+      Flash loads bundled defaults, then your selected file, then supported
+      environment overrides. `FLASH_CONFIG` selects the file; otherwise it
+      uses `$XDG_CONFIG_HOME/flash/flash.toml`, or `~/.config/flash/flash.toml`
+      when XDG is unset. The file reloads when saved. On first launch Flash
+      creates a commented starter if needed, then leaves your edits yours.
 
-      User-facing sections are:
+      [Runtime](#state) shows the selected path and configuration diagnostics.
+      `flash config_check` validates independently of the resident;
+      `flash config_check --file=/path/to/flash.toml` checks another file.
+      Invalid values are diagnosed and retain the previous valid value
+      according to that field's validation contract.
 
-      - `[hints]`
-      - `[flashlight]`
-      - `[plugins]`
-      - `[popup]` and `[popup.<name>]`
-      - `[mode]`
-      - `[mode.all.mappings]`
-      - `[mode.normal]`
-      - `[mode.normal.mappings]`
-      - `[mode.insert.mappings]`
-      - `[mode.terminal.mappings]`
-      - `[mode.command.mappings]`
-      - `[debug]`
+      ## Find the setting
 
-      Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`,
-      or the same form with a Flash executable path as the head, dispatches
-      the verb in-process; any other head is executed as argv with `~`/env
-      expansion. Relative argv paths containing `/` resolve from the config
-      file location.
+      | Section | Controls |
+      | --- | --- |
+      | `[app]` | Autostart, menu-bar icon and keyboard reference layout |
+      | `[hints]` | Label alphabet, grid geometry and pointer behavior |
+      | `[overlay]`, `[overlay.dark]` | Appearance and click feedback |
+      | `[mode]`, `[mode.normal]` | Sequences, leader and scrolling |
+      | `[mode.<scope>.mappings]` | Keys in all, normal, insert, command or terminal scope |
+      | `[flashlight]` | Search, aliases and source precedence |
+      | `[statusbar]`, `[statusbar.click]` | Bar format and clickable actions |
+      | `[statusbar.sources.<name>]` | Commands providing reusable status values |
+      | `[widgets.<name>]` | Passive desktop status panels |
+      | `[popup]`, `[popup.<name>]` | Shared popup style and named terminal/text popups |
+      | `[plugins]`, `[plugin.<id>]` | Enabled plugins and their settings |
+      | `[debug]` | Logging and the local inspector |
 
-      `config.default.toml` is the canonical reference for all accepted keys.
-      """)
+      ## Bind commands
+
+      Mapping values are argv arrays or a table with `command` and optional
+      `repeat`; `false` removes a default. Flash arguments use `--flag` and
+      `--name=value`:
+
+      ```toml
+      [mode.normal.mappings]
+      "gb" = ["flash", "send_key", "--keys=cmd+shift+b"]
+      "[a" = { command = ["flash", "app_previous"], repeat = true }
+      "t" = false
+      ```
+
+      A Flash executable as the head dispatches in process; another executable
+      launches as argv. Only executable and working-directory fields resolve
+      relative to the defining file. Other arguments stay opaque during
+      loading. Use an explicit shell for shell syntax and `working_directory`
+      (sources) or `cwd` (popups) for relative data paths.
+
+      See [live mappings](#mappings), [mapping syntax](#docs/mappings),
+      [status formats](#docs/status-format) and the
+      [canonical configuration reference](\(HelpDocs.repositoryRoot)/config.default.toml).
+      The [configuration guide](\(HelpDocs.repositoryRoot)/docs/configuration.md)
+      covers environment overrides, keyboard layouts and validation details.
+      """,
+    aliases: ["configuration"])
 }

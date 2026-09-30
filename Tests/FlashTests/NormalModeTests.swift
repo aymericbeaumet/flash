@@ -462,8 +462,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(command(chars: "I", ignoring: "i", flags: [.shift]))
     XCTAssertNil(command(chars: "o"))
     XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
-    XCTAssertEqual(command(chars: "?"), .showUsage(topic: nil))
-    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
+    XCTAssertEqual(command(chars: "?"), .showMappings)
+    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showMappings)
     XCTAssertNil(
       NormalModeInterpreter.interpret(
         pending: "",
@@ -2667,7 +2667,7 @@ final class NormalModeTests: XCTestCase {
 
   func testShiftOnlyStillPrefersTypedCharacters() {
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
-    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
+    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showMappings)
   }
 
   func testConfiguredShellMappingsProduceActions() {

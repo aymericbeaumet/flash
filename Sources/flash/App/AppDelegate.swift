@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   var config = Config.default
+  let runtimeStartedAt = ProcessInfo.processInfo.systemUptime
   let pluginManager = PluginManager()
   /// `[app] keyboard_layout`'s reference table, rebuilt off the key path and
   /// handed to the overlay.
@@ -546,6 +547,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       overlay.dismissAlert()
     case .showUsage(let topic):
       showHelp(topic: topic)
+    case .showMappings:
+      showMappings()
     case .showPlugins:
       openDebugDashboard(tab: "plugins")
     case .showAbout:

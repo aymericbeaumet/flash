@@ -137,7 +137,7 @@ final class TerminalModeTests: XCTestCase {
     XCTAssertTrue(
       config.loadingDiagnostics.contains { $0.message.contains("uses <leader> outside") })
     XCTAssertTrue(
-      NormalModeDispatcher.mappingsJSON(config: config).contains { $0["scope"] == "terminal" })
+      NormalModeDispatcher.mappingsJSON(mode: config.mode).contains { $0["scope"] == "terminal" })
   }
 
   func testConfigReloadKeepsTerminalInputAndUpdatesItsReturnMode() {

@@ -59,6 +59,7 @@ enum FlashCLI {
       flash window_move --position=lefthalf
       flash window_move --x=10% --y=10% --width=80% --height=80%
       flash help_show
+      flash mappings_show
     """
 
   static func run(args: [String]) -> Int32 {

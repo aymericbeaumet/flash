@@ -60,6 +60,11 @@ after an update while the toggle still shows as on. If hints stop working after
 
 To build from source, see [development](docs/development.md).
 
+Open `:help` (or `flash help_show` from a terminal) for the browser help
+homepage: feature guides, searchable commands, plugins, and live runtime
+information. In NORMAL mode, `?` jumps straight to your mappings; `:help
+flashlight` opens a specific guide. See [browser help](docs/help.md).
+
 ## Start easy, go deep
 
 ### 1. One hotkey

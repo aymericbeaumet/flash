@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import FlashCore
 
 /// Hot-reload pipeline for `flash.toml`. The file watcher fires
@@ -283,6 +284,11 @@ extension AppDelegate {
     }
     let app = NSWorkspace.shared.frontmostApplication
     let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
+    let mappingApp = currentNonFlashRunningApplication() ?? app
+    let effectiveMappings = effectiveMode(
+      for: PluginSelectorContext(bundleID: mappingApp?.bundleIdentifier))
+    let bundleInfo = Bundle.main.infoDictionary ?? [:]
+    let secureInput = IsSecureEventInputEnabled()
     let statuses = pluginManager.pluginStatuses()
     var commands = NormalModeDispatcher.coreCommandCatalog()
     for status in statuses {
@@ -315,13 +321,31 @@ extension AppDelegate {
       ]
     }
     return [
+      "snapshot_at_unix_ms": Int64(Date().timeIntervalSince1970 * 1000),
+      "runtime": [
+        "version": bundleInfo["CFBundleShortVersionString"] as? String ?? "development",
+        "build": bundleInfo["CFBundleVersion"] as? String ?? "unknown",
+        "pid": ProcessInfo.processInfo.processIdentifier,
+        "uptime_seconds": max(0, ProcessInfo.processInfo.systemUptime - runtimeStartedAt),
+        "accessibility_trusted": PermissionCheck.isAccessibilityTrusted,
+        "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput,
+        "secure_input": secureInput,
+        "advanced_mode": modeBadgeEnabled,
+        "config_path": ConfigLoader.resolvePath(
+          environment: ProcessInfo.processInfo.environment
+        ).path,
+        "config_error": config.loadingErrorAlertMessage as Any? ?? NSNull(),
+      ] as [String: Any],
       "config": configJSON,
       "commands": commands,
       "clipboard": clipboardEntries.map { ["preview": $0.preview, "value": $0.value] },
       "docs": docs,
       "mappings": [
         "normal_leader": config.mode.normalLeader ?? "",
-        "rows": NormalModeDispatcher.mappingsJSON(config: config),
+        "rows": NormalModeDispatcher.mappingsJSON(mode: config.mode),
+        "effective_rows": NormalModeDispatcher.mappingsJSON(mode: effectiveMappings),
+        "bundle_id": mappingApp?.bundleIdentifier as Any? ?? NSNull(),
+        "localized_name": mappingApp?.localizedName as Any? ?? NSNull(),
       ] as [String: Any],
       "focused_app": [
         "bundle_id": app?.bundleIdentifier ?? NSNull(),
@@ -346,7 +370,7 @@ extension AppDelegate {
       "hint_command": String(describing: hintSession.command),
       "activation_in_flight": activationInFlight,
       "terminals": statusTerminalDebugState(),
-      "overlay": String(describing: overlay?.inputMode),
+      "overlay": overlay.map { String(describing: $0.inputMode) } as Any? ?? NSNull(),
       "statusbar": overlay?.statusBarDiagnostics() ?? [:],
       "widgets": widgetController?.diagnostics() ?? [:],
       "windows": NSApp.windows.map { window -> [String: Any] in
