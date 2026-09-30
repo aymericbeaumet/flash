@@ -431,6 +431,17 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertFalse(animated.isEmpty)
   }
 
+  /// Moving an overflow cut onto a one-cell glyph swaps it for the ellipsis
+  /// in the same cell: a re-budget, not a new value, so it snaps.
+  func testCutLandingOnAGlyphSnapsInsteadOfCrossfading() {
+    let surface = render("#[shrink]éé#[noshrink]#[align=right]RRRR", columns: 6)
+    XCTAssertEqual(surface.visibleRuns.first?.segment.text, "é")
+    redraw(surface, "#[shrink]éé#[noshrink]#[align=right]RRRRR", columns: 6)
+    XCTAssertEqual(surface.visibleRuns.first?.segment.text, "…")
+    XCTAssertNil(surface.runLayers[0].text.animation(forKey: crossfadeKey))
+    XCTAssertNil(surface.runLayers[0].outgoing.animation(forKey: crossfadeKey))
+  }
+
   func testTruncationEquivalenceIgnoresEllipsisAndTrailingSpaceOnly() {
     XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("Hello wor…", "Hello world"))
     XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("Hello world ", "Hello"))
@@ -510,8 +521,10 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertFalse(surface.centreNotch.isHidden)
     let notch = try XCTUnwrap(surface.centreNotch.path).boundingBox
     let notchColumns = Int(ceil(notchWidth / surface.cellWidth))
-    let reserve = NativeStatusBarSurface.centreReservation(
-      StatusFormatDocument.parse(source), columns: columns, notchColumns: notchColumns)
+    let reserve = StatusBarOverflow.reserve(
+      centre: 6,
+      in: NativeStatusBarSurface.overflowGeometry(
+        columns: columns, cellWidth: surface.cellWidth, notchWidth: notchWidth, leftColumns: nil))
     XCTAssertEqual(reserve.count, notchColumns)
     XCTAssertEqual(notch.width, CGFloat(notchColumns) * surface.cellWidth, accuracy: 0.51)
     XCTAssertEqual(
@@ -545,8 +558,10 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       sublayers.suffix(from: washIndex + 1).allSatisfy { layer in
         surface.runLayers.contains { $0.container === layer }
       })
-    // The housing width is fixed: longer centred content is clipped to its
-    // interior instead of widening it.
+    // The recess is at least the housing. A longer centre could widen it, but
+    // these lanes need every column: once the centre is the longest section
+    // it gives way with the lanes, down to the housing's interior and no
+    // further, where it is clipped with an ellipsis.
     redraw(
       surface,
       source.replacingOccurrences(
@@ -596,11 +611,132 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(unicode.map(\.segment.text).joined(), "👩‍💻🇫🇷")
   }
 
-  func testShrinkExtensionPreservesFixedSuffixBeforeNativeTrimming() {
+  func testShrinkSpanGivesWayBeforeTheSectionTail() {
     let surface = render("HN #[shrink]abcdefghijklmnopqrstuvwxyz#[noshrink] END", columns: 14)
     XCTAssertEqual(surface.layout.text, "HN abcdef… END")
-    let native = render("abcdefghijklmnopqrstuvwxyz END", columns: 14)
-    XCTAssertEqual(native.layout.text, "abcdefghijklmn")
+    // Unmarked text used to fall to tmux's silent clip ("abcdefghijklmn");
+    // a section with no `#[shrink]` span now loses its own tail with an
+    // ellipsis, the default truncation point.
+    let unmarked = render("abcdefghijklmnopqrstuvwxyz END", columns: 14)
+    XCTAssertEqual(unmarked.layout.text, "abcdefghijklm…")
+  }
+
+  /// A right lane with nothing marked loses its tail (the clock goes before
+  /// the CPU), and only once every `#[shrink]` span elsewhere is exhausted.
+  func testUnmarkedRightLaneLosesItsTailOnlyAfterMarkedSpansAreExhausted() {
+    let right = "CPU 10% MEM 20% 12:34"
+    XCTAssertEqual(
+      render(
+        "HN #[shrink]" + String(repeating: "a", count: 30) + "#[noshrink]#[align=right]" + right,
+        columns: 30
+      ).layout.text,
+      "HN aaaaa…" + right, "the marked title gives way while the right lane fits")
+    XCTAssertEqual(
+      render(
+        "HN #[shrink]" + String(repeating: "a", count: 30) + "#[noshrink]#[align=right]" + right,
+        columns: 20
+      ).layout.text,
+      "HN …CPU 10% MEM 20%…")
+
+    // With a drawn recess the centred span narrows to the housing first; the
+    // right lane's tail goes only after that.
+    let housing = 24
+    let columns = 80
+    let longRight = "CPU 10% · MEM 20% · NET 1.2k · Wed 12:34"
+    let surface = render(
+      "N#[align=absolute-centre]#[shrink]" + String(repeating: "c", count: 30)
+        + "#[noshrink]#[align=right]" + longRight,
+      columns: columns, notchWidth: housingWidth(columns: housing))
+    let margin = NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth)
+    let interior = housing - NativeStatusBarSurface.centreGutterColumns * 2
+    XCTAssertEqual(
+      text(surface, .absoluteCentre), String(repeating: "c", count: interior - 1) + "…")
+    let rightBudget = (columns - housing + 1) / 2 - margin
+    XCTAssertEqual(text(surface, .right), String(longRight.prefix(rightBudget - 1)) + "…")
+    XCTAssertEqual(
+      try XCTUnwrap(surface.centreNotch.path).boundingBox.width,
+      CGFloat(housing) * surface.cellWidth, accuracy: 0.51)
+  }
+
+  /// A long centred name uses the columns the lanes leave free, with no
+  /// fixed `#{=/N/…:}` width in the template, and the recess widens to hold
+  /// it; a short name keeps the housing's width.
+  func testLongCentredLabelUsesFreeColumnsAndWidensTheRecess() throws {
+    let columns = 200
+    let housing = 24
+    let label = "Microsoft Visual Studio Code — flash (ab/dev)"
+    XCTAssertEqual(label.count, 45)
+    func source(_ label: String) -> String {
+      "#[pill]N#[nopill] FEED#[align=absolute-centre]#[shrink]\(label)#[noshrink]"
+        + "#[align=right]CPU 10% 12:34"
+    }
+    let surface = render(
+      source(label), columns: columns, notchWidth: housingWidth(columns: housing))
+    XCTAssertEqual(text(surface, .absoluteCentre), label)
+    let recess = try XCTUnwrap(surface.centreNotch.path).boundingBox
+    let gutter = NativeStatusBarSurface.centreGutterColumns
+    XCTAssertEqual(recess.width, CGFloat(45 + gutter * 2) * surface.cellWidth, accuracy: 0.51)
+    let centre = surface.visibleRuns.indices.filter {
+      surface.visibleRuns[$0].segment.alignment == .absoluteCentre
+    }.map { surface.runFrames[$0] }.reduce(CGRect.null) { $0.union($1) }
+    XCTAssertEqual(centre.minX - recess.minX, CGFloat(gutter) * surface.cellWidth, accuracy: 0.51)
+    XCTAssertEqual(recess.maxX - centre.maxX, CGFloat(gutter) * surface.cellWidth, accuracy: 0.51)
+
+    redraw(
+      surface, source("Finder"), columns: columns, notchWidth: housingWidth(columns: housing))
+    XCTAssertEqual(text(surface, .absoluteCentre), "Finder")
+    XCTAssertEqual(
+      try XCTUnwrap(surface.centreNotch.path).boundingBox.width,
+      CGFloat(housing) * surface.cellWidth, accuracy: 0.51)
+  }
+
+  /// A centred `#[shrink]` label contracts (with an ellipsis) before either
+  /// side lane's unmarked text loses a character.
+  func testCentredShrinkLabelContractsBeforeASideLaneIsCut() throws {
+    let columns = 100
+    let lane = 30
+    let surface = render(
+      String(repeating: "L", count: lane) + "#[align=absolute-centre]#[shrink]"
+        + String(repeating: "c", count: 40) + "#[noshrink]#[align=right]"
+        + String(repeating: "R", count: lane),
+      columns: columns, notchWidth: housingWidth(columns: 24))
+    XCTAssertEqual(text(surface, .left), String(repeating: "L", count: lane))
+    XCTAssertEqual(text(surface, .right), String(repeating: "R", count: lane))
+    let margin = NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth)
+    let centre = columns - 2 * (lane + margin) - NativeStatusBarSurface.centreGutterColumns * 2
+    XCTAssertEqual(
+      text(surface, .absoluteCentre), String(repeating: "c", count: centre - 1) + "…")
+    try assertLanesClearTheRecess(surface)
+  }
+
+  /// Unmarked centred text is fixed while a lane's `#[shrink]` group can
+  /// still give way.
+  func testUnmarkedCentreStaysIntactWhileALaneGroupCanContract() throws {
+    let label = "Unmarked centred application"
+    let surface = render(
+      "FEED #[shrink]" + String(repeating: "t", count: 80)
+        + "#[noshrink]#[align=absolute-centre]\(label)#[align=right]CPU 10%",
+      columns: 100, notchWidth: housingWidth(columns: 24))
+    XCTAssertEqual(text(surface, .absoluteCentre), label)
+    XCTAssertTrue(text(surface, .left).hasPrefix("FEED t"))
+    XCTAssertTrue(text(surface, .left).hasSuffix("…"))
+    XCTAssertEqual(text(surface, .right), "CPU 10%")
+    try assertLanesClearTheRecess(surface)
+  }
+
+  /// The widest marked span gives way first, whichever section it is in;
+  /// level spans then alternate in template order.
+  func testLongestShrinkGroupContractsFirstAcrossCentreAndLane() {
+    let surface = render(
+      "F #[shrink]" + String(repeating: "t", count: 50)
+        + "#[noshrink]#[align=absolute-centre]#[shrink]" + String(repeating: "a", count: 30)
+        + "#[noshrink]#[align=right]" + String(repeating: "R", count: 20),
+      columns: 90, notchWidth: housingWidth(columns: 24))
+    XCTAssertEqual(
+      NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth), 1)
+    XCTAssertEqual(text(surface, .left), "F " + String(repeating: "t", count: 25) + "…")
+    XCTAssertEqual(text(surface, .absoluteCentre), String(repeating: "a", count: 26) + "…")
+    XCTAssertEqual(text(surface, .right), String(repeating: "R", count: 20))
   }
 
   /// The absolute centre owns its columns plus a gutter: side lanes with
@@ -612,9 +748,10 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
         + "#[align=absolute-centre]CENTRE"
         + "#[align=right]" + String(repeating: "R", count: 40),
       columns: columns)
-    let reserve = NativeStatusBarSurface.centreReservation(
-      StatusFormatDocument.parse(
-        "L#[align=absolute-centre]CENTRE#[align=right]R"), columns: columns)
+    let reserve = StatusBarOverflow.reserve(
+      centre: 6,
+      in: NativeStatusBarSurface.overflowGeometry(
+        columns: columns, cellWidth: surface.cellWidth, notchWidth: 0, leftColumns: nil))
     XCTAssertEqual(reserve.count, 6 + NativeStatusBarSurface.centreGutterColumns * 2)
     let centre = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "CENTRE" })
     let centreFrame = surface.runFrames[centre]
@@ -627,36 +764,101 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(surface.layout.text.contains("CENTRE"))
   }
 
-  /// The left lane loses its tail and the right lane its head, so each keeps
-  /// the end that carries meaning.
-  func testClampedLanesTrimTheEndAwayFromTheCentre() {
+  /// With nothing marked, every section loses its own tail: the right lane
+  /// used to lose its head ("…fghij") to keep the end away from the centre,
+  /// and the default truncation point is now the end of each section.
+  func testUnmarkedLanesLoseTheirOwnTail() {
     let document = StatusFormatDocument.parse(
       "ABCDEFGHIJ#[align=absolute-centre]C#[align=right]abcdefghij")
-    let clamped = NativeStatusBarSurface.clampedLanes(document, columns: 30, reserve: 12..<18)
-    let texts = clamped.runs.filter { !$0.isStyleBoundary }.map(\.text)
-    XCTAssertEqual(texts.first, "ABCDEFGHIJ", "a lane inside its budget is untouched")
-    let narrow = NativeStatusBarSurface.clampedLanes(document, columns: 20, reserve: 6..<14)
-    let narrowed = narrow.runs.filter { !$0.isStyleBoundary }.map(\.text)
-    XCTAssertEqual(narrowed[0], "ABCDE…")
-    XCTAssertEqual(narrowed[2], "…fghij")
-    XCTAssertEqual(narrowed[1], "C", "the centre is never trimmed")
+    func fitted(columns: Int) -> (texts: [String], reserve: Range<Int>) {
+      let fitted = NativeStatusBarSurface.fitted(
+        document,
+        in: .init(
+          columns: columns, housingColumns: 8, gutterColumns: 2, marginColumns: 0,
+          minimumLaneColumns: 6))
+      return (fitted.document.runs.filter { !$0.isStyleBoundary }.map(\.text), fitted.reserve)
+    }
+    let wide = fitted(columns: 30)
+    XCTAssertEqual(wide.reserve, 11..<19)
+    XCTAssertEqual(
+      wide.texts, ["ABCDEFGHIJ", "C", "abcdefghij"], "lanes within budget are untouched")
+    let narrow = fitted(columns: 20)
+    XCTAssertEqual(narrow.reserve, 6..<14)
+    XCTAssertEqual(
+      narrow.texts, ["ABCDE…", "C", "abcde…"], "the centre within the housing is kept")
   }
 
-  /// A template without an absolute centre keeps the native tmux geometry.
+  /// A template without an absolute centre reserves nothing.
   func testNoAbsoluteCentreReservesNothing() {
     let document = StatusFormatDocument.parse("LEFT#[align=centre]MID#[align=right]RIGHT")
-    XCTAssertTrue(NativeStatusBarSurface.centreReservation(document, columns: 40).isEmpty)
-    XCTAssertEqual(
-      NativeStatusBarSurface.clampedLanes(document, columns: 40, reserve: 0..<0).runs.map(\.text),
-      document.runs.map(\.text))
+    let fitted = NativeStatusBarSurface.fitted(
+      document,
+      in: NativeStatusBarSurface.overflowGeometry(
+        columns: 40, cellWidth: 8, notchWidth: 185, leftColumns: nil))
+    XCTAssertTrue(fitted.reserve.isEmpty)
+    XCTAssertEqual(fitted.document.runs.map(\.text), document.runs.map(\.text))
   }
 
   /// A bar too narrow for both lanes and the centre gives the centre up rather
   /// than erasing a lane.
   func testNarrowBarDropsTheCentreReservationInsteadOfStarvingALane() {
     let document = StatusFormatDocument.parse("L#[align=absolute-centre]CENTRE#[align=right]R")
-    XCTAssertTrue(NativeStatusBarSurface.centreReservation(document, columns: 16).isEmpty)
-    XCTAssertFalse(NativeStatusBarSurface.centreReservation(document, columns: 60).isEmpty)
+    func reserve(columns: Int) -> Range<Int> {
+      NativeStatusBarSurface.fitted(
+        document,
+        in: NativeStatusBarSurface.overflowGeometry(
+          columns: columns, cellWidth: 8, notchWidth: 0, leftColumns: nil)
+      ).reserve
+    }
+    XCTAssertTrue(reserve(columns: 16).isEmpty)
+    XCTAssertFalse(reserve(columns: 60).isEmpty)
+  }
+
+  private var cellWidth: CGFloat {
+    ("M" as NSString).size(withAttributes: [
+      .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    ]).width
+  }
+
+  /// A housing that occupies exactly `columns` cells of the test font.
+  private func housingWidth(columns: Int) -> CGFloat {
+    (CGFloat(columns) - 0.5) * cellWidth
+  }
+
+  /// The drawn text of one lane; the left lane includes the default one, and
+  /// the blank fill (which carries the default alignment) is trimmed away.
+  private func text(_ surface: NativeStatusBarSurface, _ alignment: StatusFormatAlignment)
+    -> String
+  {
+    surface.visibleRuns.filter {
+      $0.segment.alignment == alignment
+        || (alignment == .left && $0.segment.alignment == .default)
+    }.map(\.segment.text).joined().trimmingCharacters(in: .whitespaces)
+  }
+
+  /// Every side-lane glyph ends at least the notch margin short of the recess.
+  private func assertLanesClearTheRecess(
+    _ surface: NativeStatusBarSurface, file: StaticString = #filePath, line: UInt = #line
+  ) throws {
+    let recess = try XCTUnwrap(surface.centreNotch.path, file: file, line: line).boundingBox
+    let margin =
+      CGFloat(NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth))
+      * surface.cellWidth
+    for (index, run) in surface.visibleRuns.enumerated()
+    where run.segment.alignment != .absoluteCentre {
+      let text = run.segment.text
+      guard let first = text.firstIndex(where: { !$0.isWhitespace }),
+        let last = text.lastIndex(where: { !$0.isWhitespace })
+      else { continue }
+      let frame = surface.runFrames[index]
+      let minX =
+        frame.minX + CGFloat(text.distance(from: text.startIndex, to: first)) * surface.cellWidth
+      let maxX =
+        frame.minX + CGFloat(text.distance(from: text.startIndex, to: last) + 1) * surface.cellWidth
+      XCTAssertTrue(
+        maxX <= recess.minX - margin + 0.51 || minX >= recess.maxX + margin - 0.51,
+        "'\(text)' spans \(minX)..<\(maxX) and crowds the recess \(recess)", file: file, line: line)
+    }
   }
 
   private func render(

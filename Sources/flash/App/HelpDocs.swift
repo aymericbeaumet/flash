@@ -570,6 +570,7 @@ enum HelpDocs {
       | `#{?flash.secure_input,SECURE,}` | Conditional content |
       | `#[meter=12]42#[nometer]` | Numeric bar |
       | `#[spark]1 4 2 7 3#[nospark]` | Numeric history |
+      | `#[shrink]#{flash.active_app_name}#[noshrink]` | Cut here first on overflow |
 
       Write `%%` for a literal percent in a template. Missing values expand
       to empty text. A plugin's numeric value is empty when unknown; do not

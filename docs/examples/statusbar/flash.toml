@@ -5,7 +5,7 @@ enabled = true
 # sit on its own lines.
 template = """
 #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
-#[align=absolute-centre]#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
+#[align=absolute-centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
 #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
 #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
 #[fg=colour245] · #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup] #[popup=memory]#{flash.plugin.memory.label}#[nopopup] #[popup=disks]#{flash.plugin.disks.label}#[nopopup] #[popup=network]#{flash.plugin.network.label}#[nopopup] #[popup=battery]#{flash.plugin.power.label}#[nopopup]

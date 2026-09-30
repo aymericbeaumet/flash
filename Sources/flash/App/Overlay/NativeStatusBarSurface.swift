@@ -52,9 +52,9 @@ final class NativeStatusBarSurface {
   /// run's text instead of only the runs whose value changed.
   func invalidateDrawnRuns() { renderer.invalidateDrawnRuns() }
 
-  /// `notchWidth` fixes the centre reservation (and the recess drawn behind
-  /// it) to the real camera housing's width; zero keeps the reservation
-  /// hugging the centred content.
+  /// `notchWidth` is the real camera housing's width: the centre reservation
+  /// (and the recess drawn behind it) is never narrower, and widens to hold a
+  /// longer centred label. Zero lets the reservation hug the centred content.
   func render(
     document: StatusFormatDocument, barFrame: CGRect, screenFrame: CGRect,
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
@@ -95,27 +95,12 @@ final class NativeStatusBarSurface {
     let leftColumns = notchLocal.map {
       max(0, Int(floor(($0.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth)))
     }
-    // Contraction first, then the hard clamp: the elastic span gives way
-    // before a lane loses characters outright.
-    let notchColumns = notchWidth > 0 ? Int(ceil(notchWidth / cellWidth)) : 0
-    let reserve = Self.centreReservation(
-      prepared, columns: availableColumns, notchColumns: notchColumns)
-    // The side lanes clear the drawn recess by the same margin they clear a
-    // real camera housing by, so both notches sit in identical space.
-    let marginColumns = Self.centreMarginColumns(cellWidth: cellWidth)
-    let laneReserve =
-      reserve.isEmpty
-      ? reserve
-      : max(
-        0, reserve.lowerBound - marginColumns)..<min(
-          availableColumns, reserve.upperBound + marginColumns)
-    layout = StatusFormatLayout.layout(
-      Self.clampedLanes(
-        Self.shrinkingDocument(
-          prepared, columns: availableColumns, leftColumns: leftColumns, reserve: laneReserve),
-        columns: availableColumns, reserve: laneReserve,
-        centreColumns: notchColumns > 0 ? reserve.count - Self.centreGutterColumns * 2 : 0),
-      columns: availableColumns)
+    let fitted = Self.fitted(
+      prepared,
+      in: Self.overflowGeometry(
+        columns: availableColumns, cellWidth: cellWidth, notchWidth: notchWidth,
+        leftColumns: leftColumns))
+    layout = StatusFormatLayout.layout(fitted.document, columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
     runFrames = Self.frames(
       for: visibleRuns, cellWidth: cellWidth, pillWidth: pillWidth,
@@ -142,7 +127,7 @@ final class NativeStatusBarSurface {
       height: min(barFrame.height, textHeight + Self.hoverWashVerticalPadding * 2))
     hoverHighlight.contentsScale = scale
     renderCentreNotch(
-      reserve: reserve, barFrame: barFrame, scale: scale, fill: fillColor,
+      reserve: fitted.reserve, barFrame: barFrame, scale: scale, fill: fillColor,
       hidden: notch != nil)
     renderer.render(
       zip(visibleRuns, runFrames).map { run, frame in
@@ -200,8 +185,9 @@ final class NativeStatusBarSurface {
     return path
   }
 
-  /// The notch spans the centre reservation exactly, so the side lanes (which
-  /// stop at the reservation) end where the recess begins.
+  /// The notch spans the centre reservation exactly — the housing's width, or
+  /// the centred label plus gutters when that is wider — so the side lanes
+  /// (which stop the margin short of the reservation) clear the recess.
   private func renderCentreNotch(
     reserve: Range<Int>, barFrame: CGRect, scale: CGFloat, fill: NSColor, hidden: Bool
   ) {
@@ -342,8 +328,6 @@ final class NativeStatusBarSurface {
       + String(repeating: " ", count: max(0, columns - width - left))
   }
 
-  /// Flash's opt-in elastic spans consume overflow before native alignment and
-  /// list drawing. Unmarked formats pass through to tmux's clipping unchanged.
   /// Blank columns kept *inside* the reservation, between the recess edge and
   /// the centred label. This is a text inset rather than a margin around the
   /// notch — it clears the recess's rounded corners, which a real housing has
@@ -351,10 +335,10 @@ final class NativeStatusBarSurface {
   static let centreGutterColumns = 2
   /// Clearance between a side lane and the notch, as whole columns of the
   /// shared `[statusbar] notch_margin` — the very same points a real camera
-  /// housing reserves above. A drawn recess and real hardware are the same
-  /// width, so keeping the same margin makes a notched Mac and an external
-  /// display lay the bar out identically. Rounded up, so a lane never
-  /// encroaches on the gap by a fraction of a cell.
+  /// housing reserves above. A drawn recess is at least the real housing's
+  /// width and keeps the same margin, so a notched Mac and an external display
+  /// lay the bar out alike. Rounded up, so a lane never encroaches on the gap
+  /// by a fraction of a cell.
   static func centreMarginColumns(cellWidth: CGFloat) -> Int {
     guard cellWidth > 0 else { return 0 }
     return Int(ceil(OverlayPanel.statusBarNotchMargin / cellWidth))
@@ -363,154 +347,121 @@ final class NativeStatusBarSurface {
   /// for all three the centre gives ground rather than erasing a lane.
   static let centreReservationMinimumLaneColumns = 8
 
-  /// The columns an absolute-centre run owns, gutters included. Empty when the
-  /// document has no absolute centre, which keeps every other template on the
-  /// native tmux geometry byte for byte. A positive `notchColumns` fixes the
-  /// reservation to the camera housing's width regardless of the content.
-  static func centreReservation(
-    _ document: StatusFormatDocument, columns: Int, notchColumns: Int = 0
-  ) -> Range<Int> {
-    let width = document.runs.filter {
-      !$0.isStyleBoundary && $0.alignment == .absoluteCentre
-    }.reduce(0) { $0 + StatusFormatCells.width($1.text, styles: false) }
-    guard width > 0 else { return 0..<0 }
-    let available = max(0, columns - centreReservationMinimumLaneColumns * 2)
-    let reserved = min(available, notchColumns > 0 ? notchColumns : width + centreGutterColumns * 2)
-    guard reserved > 0 else { return 0..<0 }
-    let start = (columns - reserved) / 2
-    return start..<(start + reserved)
+  /// The bar's overflow constraints in columns of `cellWidth`.
+  static func overflowGeometry(
+    columns: Int, cellWidth: CGFloat, notchWidth: CGFloat, leftColumns: Int?
+  ) -> StatusBarOverflow.Geometry {
+    .init(
+      columns: columns, leftColumns: leftColumns,
+      housingColumns: notchWidth > 0 && cellWidth > 0 ? Int(ceil(notchWidth / cellWidth)) : 0,
+      gutterColumns: centreGutterColumns,
+      marginColumns: centreMarginColumns(cellWidth: cellWidth),
+      minimumLaneColumns: centreReservationMinimumLaneColumns)
   }
 
-  static func shrinkingDocument(
-    _ document: StatusFormatDocument, columns: Int, leftColumns: Int? = nil,
-    reserve: Range<Int> = 0..<0
-  ) -> StatusFormatDocument {
+  /// Resolve overflow before native drawing, and reserve the absolute
+  /// centre's columns. Explicit `#[shrink]` groups give way first, in any
+  /// section; only once they are exhausted does a section lose its own tail.
+  /// Both passes narrow the widest span that relieves a violated constraint
+  /// (`StatusBarOverflow.budgets`) and end the cut in "…", so a truncation is
+  /// always a prefix of the full text. A document that fits is returned
+  /// unchanged, and one without an absolute centre reserves nothing.
+  static func fitted(_ document: StatusFormatDocument, in geometry: StatusBarOverflow.Geometry)
+    -> (document: StatusFormatDocument, reserve: Range<Int>)
+  {
     var runs = document.runs
     let ordinary = runs.indices.filter {
-      !runs[$0].isStyleBoundary && runs[$0].alignment != .absoluteCentre
-        && runs[$0].list != .leftMarker && runs[$0].list != .rightMarker
+      !runs[$0].isStyleBoundary && runs[$0].list != .leftMarker
+        && runs[$0].list != .rightMarker
     }
-    var overflow = max(
-      0, ordinary.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) } - columns
-    )
-    let leftLimit = min(leftColumns ?? columns, reserve.isEmpty ? columns : reserve.lowerBound)
-    let rightLimit = reserve.isEmpty ? columns : columns - reserve.upperBound
-    func isLeft(_ index: Int) -> Bool {
-      runs[index].alignment == .left || runs[index].alignment == .default
-    }
-    func isRight(_ index: Int) -> Bool { runs[index].alignment == .right }
-    var leftOverflow = max(
-      0,
-      ordinary.filter(isLeft).reduce(0) {
-        $0 + StatusFormatCells.width(runs[$1].text, styles: false)
-      }
-        - leftLimit)
-    var rightOverflow = max(
-      0,
-      ordinary.filter(isRight).reduce(0) {
-        $0 + StatusFormatCells.width(runs[$1].text, styles: false)
-      }
-        - rightLimit)
-    guard overflow > 0 || leftOverflow > 0 || rightOverflow > 0 else { return document }
-    var groups: [[Int]] = []
-    var group: [Int] = []
+    var widths = Array(repeating: 0, count: runs.count)
     for index in ordinary {
-      if runs[index].shrink {
-        if let previous = group.last, runs[previous].alignment != runs[index].alignment {
-          groups.append(group)
-          group = []
-        }
-        group.append(index)
-      } else if !group.isEmpty {
-        groups.append(group)
-        group = []
+      widths[index] = StatusFormatCells.width(runs[index].text, styles: false)
+    }
+    func lane(_ index: Int) -> StatusBarOverflow.Lane {
+      switch runs[index].alignment {
+      case .default, .left: return .left
+      case .centre: return .centre
+      case .right: return .right
+      case .absoluteCentre: return .absoluteCentre
       }
     }
-    if !group.isEmpty { groups.append(group) }
-    for group in groups {
-      let left = isLeft(group[0])
-      let right = isRight(group[0])
-      let required = max(overflow, left ? leftOverflow : (right ? rightOverflow : 0))
-      let width = group.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) }
-      let removed = min(required, max(0, width - 1))
-      guard removed > 0 else { continue }
-      var remaining = width - removed - 1
-      var truncated = false
-      for index in group {
-        let text = runs[index].text
-        runs[index].text = ""
-        for character in text {
-          let cellCount = StatusFormatCells.width(String(character), styles: false)
-          if cellCount <= remaining && !truncated {
-            runs[index].text.append(character)
-            remaining -= cellCount
-          } else if !truncated {
-            runs[index].text.append("…")
-            truncated = true
-          }
-        }
+    // Narrow each span to its budget, cutting only its `cut` runs; the rest
+    // of a span (a section's pills) keeps its width.
+    func contract(_ spans: [(runs: [Int], cut: [Int])]) {
+      var fixed: [StatusBarOverflow.Lane: Int] = [:]
+      let members = Set(spans.flatMap(\.runs))
+      for index in ordinary where !members.contains(index) {
+        fixed[lane(index), default: 0] += widths[index]
       }
-      overflow = max(0, overflow - removed)
-      if left { leftOverflow = max(0, leftOverflow - removed) }
-      if right { rightOverflow = max(0, rightOverflow - removed) }
+      let full = spans.map { $0.runs.reduce(0) { $0 + widths[$1] } }
+      let kept = spans.indices.map { full[$0] - spans[$0].cut.reduce(0) { $0 + widths[$1] } }
+      let budgets = StatusBarOverflow.budgets(
+        spans.indices.map {
+          .init(lane: lane(spans[$0].runs[0]), width: full[$0], minimum: kept[$0] + 1)
+        }, fixed: fixed, in: geometry)
+      for (index, span) in spans.enumerated() where budgets[index] < full[index] {
+        truncate(&runs, span.cut, to: budgets[index] - kept[index])
+        for run in span.cut { widths[run] = StatusFormatCells.width(runs[run].text, styles: false) }
+      }
     }
-    return StatusFormatDocument(runs: runs)
+    // The explicit truncation points: consecutive `#[shrink]` runs of a lane.
+    var groups: [[Int]] = []
+    var open = false
+    for index in ordinary {
+      if runs[index].shrink, open, let last = groups.last?.last, lane(last) == lane(index) {
+        groups[groups.count - 1].append(index)
+      } else if runs[index].shrink {
+        groups.append([index])
+      }
+      open = runs[index].shrink
+    }
+    if !groups.isEmpty { contract(groups.map { ($0, $0) }) }
+    // The default truncation point: each section's tail. A section ranks by
+    // its whole width, but pills and native list content keep their own
+    // geometry and are never cut.
+    var sections: [(runs: [Int], cut: [Int])] = []
+    for index in ordinary {
+      let cut = !runs[index].pill && runs[index].list == .off
+      if let section = sections.firstIndex(where: { lane($0.runs[0]) == lane(index) }) {
+        sections[section].runs.append(index)
+        if cut { sections[section].cut.append(index) }
+      } else {
+        sections.append(([index], cut ? [index] : []))
+      }
+    }
+    contract(sections.filter { !$0.cut.isEmpty })
+    let centre = ordinary.filter { lane($0) == .absoluteCentre }.reduce(0) { $0 + widths[$1] }
+    return (
+      StatusFormatDocument(runs: runs), StatusBarOverflow.reserve(centre: centre, in: geometry)
+    )
   }
 
-  /// Trim the side lanes to the columns the centre reservation leaves them,
-  /// and the centred content to the reservation's interior when the
-  /// reservation is fixed (the notch). Elastic `#[shrink]` contraction runs
-  /// first; this is the backstop for a lane with nothing elastic in it, so a
-  /// left lane that keeps growing loses its tail and a right lane loses its
-  /// head rather than either colliding with the centred label. Each lane keeps
-  /// the end that carries meaning.
-  static func clampedLanes(
-    _ document: StatusFormatDocument, columns: Int, reserve: Range<Int>, centreColumns: Int = 0
-  ) -> StatusFormatDocument {
-    guard !reserve.isEmpty else { return document }
-    var runs = document.runs
-    func trim(_ indices: [Int], to limit: Int, fromTail: Bool) {
-      let width = indices.reduce(0) { $0 + StatusFormatCells.width(runs[$1].text, styles: false) }
-      var excess = width - limit
-      guard excess > 0 else { return }
-      for index in fromTail ? indices.reversed() : indices {
-        guard excess > 0 else { break }
-        let characters = Array(runs[index].text)
-        var kept: [Character] = []
-        var dropped = 0
-        // Walk in from the end being trimmed, so `kept` accumulates the end
-        // that survives.
-        for character in fromTail ? characters.reversed() : characters {
-          let cells = StatusFormatCells.width(String(character), styles: false)
-          if dropped + cells <= excess + 1 && dropped < excess + 1 {
-            dropped += cells
-          } else {
-            kept.append(character)
-          }
-        }
-        if !kept.isEmpty || dropped > 0 {
-          let text = fromTail ? String(kept.reversed()) : String(kept)
-          runs[index].text = fromTail ? text + "…" : "…" + text
-        }
-        excess -= max(0, dropped - 1)
+  /// Keep the head of the spanned runs within `width` cells, the last of them
+  /// an ellipsis; runs past the cut are emptied.
+  private static func truncate(
+    _ runs: inout [FlashStatusTextSegment], _ span: [Int], to width: Int
+  ) {
+    var remaining = width - 1
+    var truncated = false
+    for index in span {
+      guard !truncated else {
+        runs[index].text = ""
+        continue
       }
+      var kept = ""
+      for character in runs[index].text {
+        let cells = StatusFormatCells.width(String(character), styles: false)
+        guard cells <= remaining else {
+          kept.append("…")
+          truncated = true
+          break
+        }
+        kept.append(character)
+        remaining -= cells
+      }
+      runs[index].text = kept
     }
-    let ordinary = runs.indices.filter {
-      !runs[$0].isStyleBoundary && runs[$0].alignment != .absoluteCentre
-        && runs[$0].list != .leftMarker && runs[$0].list != .rightMarker
-    }
-    trim(
-      ordinary.filter { runs[$0].alignment == .left || runs[$0].alignment == .default },
-      to: reserve.lowerBound, fromTail: true)
-    trim(
-      ordinary.filter { runs[$0].alignment == .right },
-      to: columns - reserve.upperBound, fromTail: false)
-    if centreColumns > 0 {
-      trim(
-        runs.indices.filter { !runs[$0].isStyleBoundary && runs[$0].alignment == .absoluteCentre },
-        to: max(1, centreColumns), fromTail: true)
-    }
-    return StatusFormatDocument(runs: runs)
   }
 
   static func visibleRuns(

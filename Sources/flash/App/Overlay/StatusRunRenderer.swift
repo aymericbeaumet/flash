@@ -255,10 +255,11 @@ final class StatusRunRenderer {
             layers, outgoing: outgoingString, textRect: textRect, travel: rect.height,
             startedAt: cycleStartedAt)
         } else if allowsTransition, !segment.cycle, samePlace, let previousText,
-          previousText != segment.text
+          previousText != segment.text, !Self.onlyCutMoved(previousText, segment.text)
         {
           // A value changing in place (a metric tick, the clock) crossfades
-          // instead of snapping; a run that moved or was re-segmented does not.
+          // instead of snapping; a run that moved or was re-segmented, or
+          // whose overflow cut merely moved, does not.
           stats.crossfades += 1
           Self.runCrossfade(layers, outgoing: outgoingString, textRect: textRect)
         }
@@ -435,6 +436,12 @@ final class StatusRunRenderer {
     guard lhs.link == rhs.link, lhs.popup == rhs.popup, lhs.popupContent == rhs.popupContent
     else { return false }
     return truncationEquivalent(lhs.text, rhs.text)
+  }
+
+  /// True when a re-budget only moved where an overflow cut falls: one side
+  /// ends in the `…` marker and the texts are otherwise truncation-equivalent.
+  static func onlyCutMoved(_ lhs: String, _ rhs: String) -> Bool {
+    (lhs.hasSuffix("…") || rhs.hasSuffix("…")) && truncationEquivalent(lhs, rhs)
   }
 
   /// True when one text is the other cut short (with or without the `…`

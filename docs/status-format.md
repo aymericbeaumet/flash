@@ -166,28 +166,25 @@ The additional style tokens are `pill/nopill`, `shrink/noshrink`,
 numeric drawings `meter=W[/MAX]/nometer` and `spark[=MIN/MAX]/nospark`
 described under [Flash extensions](#flash-extensions).
 Native `range=user|name` selects a `[statusbar.click]` action. The status renderer
-reserves explicit mode-pill space and notch clearance, then draws the native
-cell layout. Elastic `#[shrink]` spans in either side lane reserve any fixed suffix
-and stop before the notch or an absolute-centre component. The feed uses this
-for title-only ellipsis with an always-visible outbound arrow. An
-absolute-centre component owns its own columns plus a small gutter: a side
-lane contracts its elastic span first and then loses characters from its far
-end rather than reaching the centred label. That reservation is drawn as a
-recessed notch — the bar fill sunk slightly — tracing the hardware outline:
-widest flush with the top edge, flaring inward through the top corners rather
-than meeting the bezel square, straight down the sides, and rounded at the two
-bottom corners. Its width is the real housing's (a connected notched display's,
-else the 16-inch MacBook Pro's 185 pt), which is that widest measurement. macOS
-publishes the notch rect but neither radius, so both are constants.
-The side lanes clear it by `[statusbar]
-notch_margin`, the same points they clear a real housing by, so both notches
-occupy identical space; centred content longer than the recess interior is
-clipped with an ellipsis. A screen with a physical notch hides the centre and
-draws no recess, since the hardware already supplies the gap. A bar too narrow to
-hold both lanes and that reservation drops the reservation instead of erasing a
-lane. A lane re-budget that only contracts or clamps a carousel row
-keeps the row in place; the carousel pushes vertically only for a different
-article. These host surfaces do not alter format evaluation.
+reserves explicit mode-pill space and notch clearance, resolves overflow (see
+[Overflow and `#[shrink]`](#overflow-and-shrink)), then draws the native cell
+layout. The feed marks only its title `#[shrink]`, so it folds with an ellipsis
+while the domain and outbound arrow stay visible. An absolute-centre component
+owns its own columns plus a small gutter, and the side lanes stop `[statusbar]
+notch_margin` short of them, the same points they clear a real housing by. That
+reservation is drawn as a recessed notch — the bar fill sunk slightly — tracing
+the hardware outline: widest flush with the top edge, flaring inward through the
+top corners rather than meeting the bezel square, straight down the sides, and
+rounded at the two bottom corners. It is never narrower than the real housing (a
+connected notched display's, else the 16-inch MacBook Pro's 185 pt, which is
+that widest measurement) and widens to hold a longer centred label. macOS
+publishes the notch rect but neither radius, so both are constants. A screen
+with a physical notch hides the centre and draws no recess, since the hardware
+already supplies the gap. A bar too narrow to hold both lanes and that
+reservation drops the reservation instead of erasing a lane. A lane re-budget
+that only contracts or clamps a carousel row keeps the row in place; the
+carousel pushes vertically only for a different article. These host surfaces
+do not alter format evaluation.
 
 Bare `#{flash.mode}` references retain their identity through template and
 conditional expansion. The renderer resolves their text from the current mode in
@@ -223,9 +220,10 @@ The bar, hit regions, and terminal document encoder consume the same typed runs.
 The status bar consumes the ordered typed format document through
 `StatusFormatLayout`. Its cells determine painted positions and native
 closed-range hit areas, including list focus/markers, fill colors, alignment
-clipping, and absolute-centre overlays. Flash shortens explicitly elastic
-`#[shrink]` spans before native drawing; unmarked formats retain native
-trimming. The mode pill requires explicit `#[pill]` metadata. It keeps the
+clipping, and absolute-centre overlays. Flash resolves overflow before native
+drawing ([Overflow and `#[shrink]`](#overflow-and-shrink)), so native clipping
+applies only to what cannot give way further. The mode pill requires explicit
+`#[pill]` metadata. It keeps the
 original point-based padding and centred label, reserving the longest
 configured base-mode label; the transient TERMINAL label of a focused popup
 uses that same width, so focusing a popup does not shift adjacent segments.
@@ -247,9 +245,9 @@ left and right content, so unequal side widths shift that label.
 
 ## Flash extensions
 
-Flash adds meters and sparklines to the tmux language. Like `pill` or
-`popup=`, they are Flash-only style tokens, which tmux rejects as a malformed
-marker. Every other format evaluates as in tmux, which the pinned corpus
+Flash adds meters, sparklines, and overflow control to the tmux language. Like
+`pill` or `popup=`, they are Flash-only style tokens, which tmux rejects as a
+malformed marker. Every other format evaluates as in tmux, which the pinned corpus
 verifies: `#{E:@name,a}` reads one option literally named `@name,a`.
 
 ### Meters and sparklines
@@ -282,6 +280,34 @@ unless it follows a digit or a point. The typed runs carry the drawn text, so
 serialization emits no `meter`/`spark` tokens and hit testing, layout and the
 terminal document encoder see ordinary one-cell block characters. The system
 monospaced font draws every block glyph at one cell.
+
+### Overflow and `#[shrink]`
+
+A bar wider than its screen gives way before native drawing. By default each
+section — the left lane, the centre or absolute centre, the right lane — is cut
+at its own end, with `…`. `#[shrink]` … `#[noshrink]` marks where to cut
+instead, in any section; unmarked text keeps its width until every marked span
+that could make room is down to its ellipsis:
+
+```text
+#[align=absolute-centre]#[shrink]#{flash.active_app_name}#[noshrink]
+```
+
+Both passes — the `#[shrink]` spans first, then the section tails — repeatedly
+narrow the widest span that relieves an overflow, ties in template order, each
+keeping at least one cell and ending in `…`. Mode pills and native list content
+are never cut. The constraints are the bar width, a physical notch, and the
+absolute centre's reservation: its content plus gutters, never narrower than
+the housing, centred on the bar, with each side lane ending `notch_margin` short
+of it. Narrowing the centre therefore frees a column for both side lanes, while
+narrowing a lane frees only that lane, so a centred label uses exactly the
+columns the lanes leave and needs no fixed `#{=/N/…:…}` width. A cut is always
+a prefix of the full text, so a re-budget never animates as a value change.
+
+This is an extension rather than a tmux list: an absolute-centre `#[list=on]`
+is trimmed against the full width and drawn over the side lanes, keeps the part
+around its focus rather than the head, and allows one list per line, so it
+cannot express "fit this label between the lanes".
 
 ## Implementation and validation
 

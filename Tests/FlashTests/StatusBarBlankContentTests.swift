@@ -6,7 +6,7 @@ final class StatusBarBlankContentTests: XCTestCase {
   private let template = FlashStatusBarTemplate(
     template: """
       #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
-      #[align=absolute-centre]#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
+      #[align=absolute-centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
       #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
       #[popup=quota]#{flash.plugin.quota.label}#[nopopup]
       #[fg=colour245] · #{flash.plugin.cpu.label} #{flash.plugin.memory.label}
@@ -107,18 +107,17 @@ final class StatusBarBlankContentTests: XCTestCase {
   ) -> [StatusFormatLayout.PositionedRun] {
     let prepared = NativeStatusBarSurface.preparedDocument(
       document, pillColumns: 10, hideCentre: physicalNotch)
-    let reserve =
-      physicalNotch
-      ? (columns / 2 - 12)..<(columns / 2 + 12)
-      : NativeStatusBarSurface.centreReservation(prepared, columns: columns)
-    let shrunk = NativeStatusBarSurface.shrinkingDocument(
-      prepared, columns: columns, reserve: reserve)
-    let clamped = NativeStatusBarSurface.clampedLanes(shrunk, columns: columns, reserve: reserve)
-    let result = StatusFormatLayout.layout(clamped, columns: columns)
+    let notch = (columns / 2 - 12)..<(columns / 2 + 12)
+    let fitted = NativeStatusBarSurface.fitted(
+      prepared,
+      in: NativeStatusBarSurface.overflowGeometry(
+        columns: columns, cellWidth: 8, notchWidth: OverlayPanel.defaultNotchWidth,
+        leftColumns: physicalNotch ? notch.lowerBound : nil))
+    let result = StatusFormatLayout.layout(fitted.document, columns: columns)
     let excluded: Range<CGFloat>?
     if physicalNotch {
-      let start = OverlayPanel.statusBarEdgePadding + CGFloat(reserve.lowerBound) * 8
-      let end = OverlayPanel.statusBarEdgePadding + CGFloat(reserve.upperBound) * 8
+      let start = OverlayPanel.statusBarEdgePadding + CGFloat(notch.lowerBound) * 8
+      let end = OverlayPanel.statusBarEdgePadding + CGFloat(notch.upperBound) * 8
       excluded = start..<end
     } else {
       excluded = nil

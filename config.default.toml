@@ -271,8 +271,11 @@ notch_margin = 6
 # Flash styles: link=URL/nolink, popup=name/nopopup (a [popup.<name>]),
 # popup=inline:<percent-encoded-rich-text>, breathing/nobreathing,
 # pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first
-# number inside) and spark[=MIN/MAX]/nospark (a sparkline of every number
-# inside). Native range=user|name binds statusbar.click.
+# number inside), spark[=MIN/MAX]/nospark (a sparkline of every number
+# inside) and shrink/noshrink (a span cut first, ending in "…", when the bar
+# overflows; after that each left/centre/right section loses its own end), e.g.
+# #[align=absolute-centre]#[shrink]#{flash.active_app_name}#[noshrink].
+# Native range=user|name binds statusbar.click.
 # Values stay plain text unless a plugin intentionally publishes rich status.
 template = "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
 # A popup marker can wrap several labels at once, for example:
