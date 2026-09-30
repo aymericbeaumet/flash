@@ -139,7 +139,7 @@ Surface requests that would violate these constraints before implementing them.
   are ticked with `core:poll:<name>`. Pick the priority that matches how visible
   lateness is — slack is what lets wake-ups coalesce — and scope every
   registration to when it can observe anything (a subscriber present, the
-  pointer in the band, the log level emitted), saying so where it is armed.
+  pointer in the band, a browser listening), saying so where it is armed.
   Polls pause while displays sleep or the session is locked; the scheduler
   owns that gate and resumes with one catch-up tick, so clients never check it.
 - Keep native controls outside the custom layer-hosting drawing view. AppKit owns

@@ -40,7 +40,6 @@ final class AppMonitor {
   /// an AX walk on `axQueue`. Window-list reads never run here; see
   /// `WindowSnapshot.windowList`.
   let geometryQueue = DispatchQueue(label: "flash.window_geometry", qos: .userInitiated)
-  let mainThreadWatchdog = MainThreadWatchdog()
   var focusedElementDidChange: ((pid_t, String) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var activeWindowMayHaveChanged: ((pid_t, String, AXUIElement?) -> Void)?

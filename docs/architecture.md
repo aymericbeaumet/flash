@@ -120,8 +120,9 @@ it was already taking, and the tightest priority riding a wake-up sets it, so a
 lax client can never loosen a demanding one. Registrations are also scoped to
 when they can observe anything at all: the pasteboard watcher runs only while a
 plugin subscribes to `clipboard.changed`, the menu-bar reveal probe only while
-the pointer is in the band, the watchdog only while its level is logged, and
-the inspector broadcast only while a browser is listening.
+the pointer is in the band, and the inspector broadcast only while a browser
+is listening. Main-thread stalls need no poll at all: the run loop reports
+each busy stretch itself.
 
 Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's

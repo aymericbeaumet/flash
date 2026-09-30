@@ -397,14 +397,13 @@ share the main run loop. Treat that loop as the input latency budget:
   active scope.
 
 `MainRunLoopStallObserver` records a `main_busy` warning, at any log level,
-for every main run-loop busy stretch over 250 ms; at `debug`, the ping-based
-`MainThreadWatchdog` also records `main_thread_stall` while a stall is still
-in progress. Both carry `last_activity_ms_ago`: the most
-recent coarse main-thread units of work (`tap_key`, `mode_effects`,
-`mode_overlay`, `effective_mappings`, `activation`, `hint_commit`,
-`config_reload`) with their age, so a stall names what main was doing. Call
-`MainThreadWatchdog.note` at the top of any new coarse main-thread unit of
-work. A
+for every main run-loop busy stretch over 250 ms. It needs no timer: the run
+loop reports each wake and each return to sleep. The warning carries
+`last_activity_ms_ago`: the most recent coarse main-thread units of work
+(`tap_key`, `mode_effects`, `mode_overlay`, `effective_mappings`,
+`activation`, `hint_commit`, `config_reload`) with their age, so a stall names
+what main was doing. Call `MainThreadActivity.note` at the top of any new
+coarse main-thread unit of work. A
 timeout-disabled event tap also logs before being re-enabled; either message is
 evidence of main-thread work that needs moving or narrowing.
 

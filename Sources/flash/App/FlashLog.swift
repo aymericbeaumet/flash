@@ -106,7 +106,7 @@ enum FlashLog {
   }
 
   /// Whether `level` currently reaches the log file or a sink. Diagnostic-only
-  /// machinery (the main-thread watchdog, pipeline summaries) uses this to
+  /// machinery (pipeline summaries, request tracing) uses this to
   /// stay off entirely when nothing would read its output.
   static func wouldEmit(_ level: Level) -> Bool {
     lock.lock()

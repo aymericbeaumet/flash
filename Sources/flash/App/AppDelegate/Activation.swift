@@ -52,7 +52,7 @@ extension AppDelegate {
   }
 
   private func activate(command: MouseCommand, contextOverride: AppContext?) {
-    MainThreadWatchdog.note("activation")
+    MainThreadActivity.note("activation")
     FlashLog.trace(
       "[activation] begin command=\(command) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")

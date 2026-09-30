@@ -1104,7 +1104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// in a multi-key sequence. Try Carbon first, then fall back to the normal
   /// interpreter.
   func routeTapCapturedKey(_ event: NSEvent) {
-    MainThreadWatchdog.note("tap_key")
+    MainThreadActivity.note("tap_key")
     if tapEscapeClosedPopup {
       tapEscapeClosedPopup = false
       return

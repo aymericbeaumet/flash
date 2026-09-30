@@ -77,7 +77,7 @@ for line in lines():
     minutes.add(ts // 60_000)
     levels[record.get("level", "?")] += 1
     message = record.get("message", "")
-    if "main_thread_stall" in message:
+    if "[watchdog] main_busy" in message:
         stalls.append(message.split("ms=")[-1])
     elif "[tap] re-enabled" in message:
         tap += 1

@@ -77,9 +77,9 @@ launch-time inspector is disabled.
 The keyboard tap, AX observers and all mode logic share the main thread, so a
 busy main thread is felt as dropped or late keys. A run-loop observer reports
 every busy stretch over 250 ms as `[watchdog] main_busy ms=…` at any log
-level, with the last activity labels main recorded. At `debug`, a ping
-watchdog also reports stalls while they are still in progress
-(`[watchdog] main_thread_stall`).
+level, with the last activity labels main recorded. Nothing pings the main
+thread to find them: the run loop's own wake and sleep reports bound each
+stretch.
 
 ## Plugins
 

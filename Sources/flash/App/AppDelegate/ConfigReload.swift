@@ -118,7 +118,7 @@ extension AppDelegate {
   /// then publish to overlay + monitor under their internal locks. Every
   /// future activation snapshots the new config at the start of its walk.
   private func reloadConfig() {
-    MainThreadWatchdog.note("config_reload")
+    MainThreadActivity.note("config_reload")
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
@@ -194,9 +194,6 @@ extension AppDelegate {
         payload: [:],
         bundleID: nil))
     configureDebugServer(for: cfg)
-    // After the inspector's sink is added or removed: the ping watchdog runs
-    // only while debug output has a reader.
-    monitor.mainThreadWatchdog.setEnabled(FlashLog.wouldEmit(.debug))
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
     registry.scheduleRunningApplicationsRefresh()
