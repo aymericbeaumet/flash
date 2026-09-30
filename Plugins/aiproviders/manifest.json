@@ -39,6 +39,9 @@
     "claude_label",
     "codex_label"
   ],
+  "listen": [
+    "core:status.observed"
+  ],
   "capabilities": [
     "open",
     "network",

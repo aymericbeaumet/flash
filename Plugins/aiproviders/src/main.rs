@@ -20,6 +20,8 @@
 //! the bundled GitHub plugin's `subprocess` posture. Tokens are passed through
 //! stdin, never argv or logs.
 
+mod observed;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,7 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use flash_plugin::process;
 use flash_plugin::status::duration_compact;
 use flash_plugin::{
-    Color, CommandRequest, Context, Markup, PerformResponse, Published, RefreshGate, run,
+    Color, CommandRequest, Context, Event, Markup, PerformResponse, Published, RefreshGate, run,
     run_osascript,
 };
 use serde::de::DeserializeOwned;
@@ -1110,12 +1112,17 @@ async fn executable_file(path: &Path) -> bool {
 
 struct AiProviders {
     usage: Arc<RwLock<UsageRuntime>>,
+    /// The quota tick runs only while a surface shows a quota segment: a
+    /// chat bang starts this plugin too, and must not leave it reading
+    /// credentials and calling the usage APIs every minute for nobody.
+    cadences: observed::ObservedCadences,
 }
 
 impl Default for AiProviders {
     fn default() -> Self {
         Self {
             usage: Arc::new(RwLock::new(UsageRuntime::default())),
+            cadences: observed::ObservedCadences::default(),
         }
     }
 }
@@ -1133,18 +1140,38 @@ impl FlashPlugin for AiProviders {
         publish_current_status(&ctx, &self.usage).await;
 
         let refresh_credentials = configured_credential_refresh(&ctx);
-        let refresh_ctx = ctx.clone();
+        if self.cadences.observed() {
+            let refresh_ctx = ctx.clone();
+            let refresh_usage_state = Arc::clone(&self.usage);
+            tokio::spawn(async move {
+                refresh_usage(&refresh_ctx, &refresh_usage_state, refresh_credentials).await;
+            });
+        }
         let refresh_usage_state = Arc::clone(&self.usage);
-        tokio::spawn(async move {
-            refresh_usage(&refresh_ctx, &refresh_usage_state, refresh_credentials).await;
-        });
-        let refresh_usage_state = Arc::clone(&self.usage);
-        drop(ctx.interval(STATUS_PUBLISH_INTERVAL, move |ctx| {
-            let usage = Arc::clone(&refresh_usage_state);
-            async move {
+        self.cadences
+            .interval(&ctx, STATUS_PUBLISH_INTERVAL, move |ctx| {
+                let usage = Arc::clone(&refresh_usage_state);
+                async move {
+                    refresh_usage(&ctx, &usage, refresh_credentials).await;
+                }
+            });
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        else {
+            return;
+        };
+        if self.cadences.observe(segments) {
+            let usage = Arc::clone(&self.usage);
+            tokio::spawn(async move {
+                let refresh_credentials = configured_credential_refresh(&ctx);
                 refresh_usage(&ctx, &usage, refresh_credentials).await;
-            }
-        }));
+            });
+        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
