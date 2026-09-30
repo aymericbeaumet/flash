@@ -248,6 +248,28 @@ fixtures:
 ./Scripts/benchmark-hints.sh --class=electron --runs=30    # before and after
 ```
 
+## Idle wake-ups
+
+An idle resident reacts to events; what remains periodic is ahead-of-time
+work whose source has no change notification, and all of it rides the one
+`PollScheduler` clock (see [runtime ownership](architecture.md)):
+
+| Wake-up | When it exists | Cadence |
+| --- | --- | --- |
+| Status time | A visible surface shows time | The next boundary of the finest unit shown: second, minute or day |
+| Status jobs and named sources | A visible surface reads them | Their configured `interval` |
+| Plugin cadences (`poll`) | A plugin registered one | The plugin's period |
+| Clipboard watcher | A plugin subscribes to `core:clipboard.changed` | 0.5 s (no pasteboard notification exists) |
+| Menu-bar reveal probe | The pointer is in the top band | 80 ms, `system` priority (no reveal notification exists) |
+| Plugin liveness sweep | A plugin runs | 30 s, `low` priority; pings only a plugin silent for 60 s |
+| Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input |
+| Inspector state refresh | A browser holds `/api/events` | 1 s |
+
+Every one of them is held while the displays sleep, the session is locked or
+switched out, or the system sleeps, and resumes with one catch-up tick.
+Waiting for a child process ends on its kernel exit event, never a sleep loop,
+and main-thread stalls are measured by the run loop itself, with no ping.
+
 ## Widgets budget
 
 [Desktop widgets](widgets.md) must cost close to nothing while you work. They
