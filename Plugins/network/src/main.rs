@@ -6,15 +6,31 @@ use flash_plugin::status::{
     bytes_iec, bytes_iec_compact, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled,
 };
 use flash_plugin::{
-    Candidate, Color, CommandRequest, Context, History, Markup, PerformResponse, Preview,
-    Published, RefreshGate, StatusValue, run, run_command, sys,
+    Candidate, Color, CommandRequest, Context, Event, History, Markup, PerformResponse, PollHandle,
+    Preview, Published, RefreshGate, StatusValue, run, run_command, sys,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
+use tokio::task::JoinHandle;
 
 const SOURCE_ADDRESSES: &str = "network.addresses";
+/// Traffic sampling cadence, registered with the host only while a surface
+/// shows one of [`TRAFFIC_SEGMENTS`].
 const TRAFFIC_POLL: Duration = Duration::from_secs(1);
+/// Interface, route, address and SSID discovery. It feeds the
+/// `network.addresses` catalog and the `address` segment, so it runs whether
+/// or not a status surface shows the plugin.
 const DISCOVERY_POLL: Duration = Duration::from_secs(30);
+/// The segments the traffic sample feeds; `address` follows discovery alone.
+const TRAFFIC_SEGMENTS: [&str; 7] = [
+    "summary",
+    "label",
+    "details",
+    "down_bps",
+    "up_bps",
+    "down_history",
+    "up_history",
+];
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_RATE_INTERVAL: Duration = Duration::from_secs(10);
@@ -178,8 +194,11 @@ struct NetworkState {
     received_history: History<HISTORY_LEN>,
     sent_history: History<HISTORY_LEN>,
     catalog: Option<CatalogSnapshot>,
-    last_discovery_attempt: Option<Instant>,
     last_traffic_success: Option<Instant>,
+    /// A surface shows a traffic-fed segment: only then is traffic sampled.
+    traffic_observed: bool,
+    /// Registered on first observation, re-armed or cancelled in place after.
+    traffic_poll: Option<PollHandle>,
     published: Published<RenderedStatus>,
     discovery_failure_logged: bool,
     traffic_failure_logged: bool,
@@ -250,6 +269,26 @@ enum WiFiSSIDRead {
     Prefetched(Option<String>),
 }
 
+/// What one refresh collects. Traffic is sampled only while observed.
+#[derive(Clone, Copy)]
+struct Pass {
+    discover: bool,
+    sample: bool,
+}
+
+const STARTUP: Pass = Pass {
+    discover: true,
+    sample: true,
+};
+const DISCOVERY_TICK: Pass = Pass {
+    discover: true,
+    sample: false,
+};
+const TRAFFIC_TICK: Pass = Pass {
+    discover: false,
+    sample: true,
+};
+
 struct Network;
 
 flash_plugin::plugin!(Network);
@@ -257,10 +296,20 @@ flash_plugin::plugin!(Network);
 impl FlashPlugin for Network {
     async fn on_start(&self, ctx: Context) {
         warn_invalid_summary_mode(&ctx);
-        refresh_network(&ctx, true).await;
-        drop(ctx.interval(TRAFFIC_POLL, |ctx| async move {
-            refresh_network(&ctx, false).await;
+        refresh_network(&ctx, STARTUP).await;
+        drop(ctx.interval(DISCOVERY_POLL, |ctx| async move {
+            refresh_network(&ctx, DISCOVERY_TICK).await;
         }));
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        if let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        {
+            drop(observe_traffic(&ctx, segments));
+        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
@@ -268,7 +317,7 @@ impl FlashPlugin for Network {
             "" => current_response(),
             "refresh" => {
                 let wifi_ssid = ctx.wifi_ssid(true).await;
-                try_refresh_network(&ctx, true, wifi_ssid).await;
+                try_refresh_network(&ctx, STARTUP, wifi_ssid).await;
                 current_response()
             }
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
@@ -276,35 +325,64 @@ impl FlashPlugin for Network {
     }
 }
 
-async fn refresh_network(ctx: &Context, force_discovery: bool) {
+/// Apply the host's observed segment set: the traffic cadence is armed only
+/// while a traffic-fed segment is observed and cancelled as soon as none is,
+/// clearing the rates so showing them again never reads stale figures.
+/// Returns the immediate sample when traffic just became observed.
+fn observe_traffic(ctx: &Context, segments: &[String]) -> Option<JoinHandle<()>> {
+    let observed = segments
+        .iter()
+        .any(|segment| TRAFFIC_SEGMENTS.contains(&segment.as_str()));
+    {
+        let mut state = state();
+        if state.traffic_observed == observed {
+            return None;
+        }
+        state.traffic_observed = observed;
+        if observed {
+            match &state.traffic_poll {
+                Some(poll) => poll.set_period(TRAFFIC_POLL),
+                None => {
+                    state.traffic_poll = Some(ctx.interval(TRAFFIC_POLL, |ctx| async move {
+                        refresh_network(&ctx, TRAFFIC_TICK).await;
+                    }));
+                }
+            }
+        } else {
+            if let Some(poll) = &state.traffic_poll {
+                poll.cancel();
+            }
+            state.reset_rates();
+        }
+    }
+    if !observed {
+        emit_status_if_changed(ctx);
+        return None;
+    }
+    let ctx = ctx.clone();
+    Some(tokio::spawn(async move {
+        refresh_network(&ctx, TRAFFIC_TICK).await;
+    }))
+}
+
+async fn refresh_network(ctx: &Context, pass: Pass) {
     REFRESH_GATE
         .run(ctx, move |ctx, _applications| async move {
-            refresh_network_locked(&ctx, force_discovery, WiFiSSIDRead::Passive).await;
+            refresh_network_locked(&ctx, pass, WiFiSSIDRead::Passive).await;
         })
         .await;
 }
 
-async fn try_refresh_network(ctx: &Context, force_discovery: bool, wifi_ssid: Option<String>) {
+async fn try_refresh_network(ctx: &Context, pass: Pass, wifi_ssid: Option<String>) {
     let _ = REFRESH_GATE
         .try_run(ctx, move |ctx, _applications| async move {
-            refresh_network_locked(&ctx, force_discovery, WiFiSSIDRead::Prefetched(wifi_ssid))
-                .await;
+            refresh_network_locked(&ctx, pass, WiFiSSIDRead::Prefetched(wifi_ssid)).await;
         })
         .await;
 }
 
-async fn refresh_network_locked(
-    ctx: &Context,
-    force_discovery: bool,
-    wifi_ssid_read: WiFiSSIDRead,
-) {
-    let discovery_due = {
-        let state = state();
-        force_discovery
-            || state
-                .last_discovery_attempt
-                .is_none_or(|last| last.elapsed() >= DISCOVERY_POLL)
-    };
+async fn refresh_network_locked(ctx: &Context, pass: Pass, wifi_ssid_read: WiFiSSIDRead) {
+    let discovery_due = pass.discover;
 
     let discovery = if discovery_due {
         let wifi_ssid = async move {
@@ -328,7 +406,6 @@ async fn refresh_network_locked(
     let (interface, log_discovery_failure) = {
         let mut state = state();
         if let Some((interface, wifi_ssid, catalog)) = discovery {
-            state.last_discovery_attempt = Some(Instant::now());
             state.wifi_ssid = wifi_ssid;
             if let Some(interface) = interface {
                 state.set_interface(interface);
@@ -362,16 +439,21 @@ async fn refresh_network_locked(
     }
 
     let mut traffic_failed = None;
-    if let Some(interface) = interface {
+    if let Some(interface) = interface.filter(|_| pass.sample && state().traffic_observed) {
         // Lifetime byte counters straight from the routing sysctl — the same
         // 64-bit figures `netstat -bI` prints, without a subprocess per second.
         match interface_counters(&interface) {
             Some(counters) => {
-                state().apply_sample(TimedCounters {
-                    interface,
-                    counters,
-                    sampled_at: Instant::now(),
-                });
+                let mut state = state();
+                // Checked again under the lock: observation may have ended
+                // while the counters were read.
+                if state.traffic_observed {
+                    state.apply_sample(TimedCounters {
+                        interface,
+                        counters,
+                        sampled_at: Instant::now(),
+                    });
+                }
                 traffic_failed = Some(false);
             }
             None => traffic_failed = Some(true),
@@ -767,7 +849,7 @@ mod tests {
 
     use flash_plugin::CandidateEffect;
     use flash_plugin::testing::Harness;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -1227,6 +1309,73 @@ default fe80::%utun6 UGcIg utun6\n";
             raw: format!(":network {subcommand}"),
             ..CommandRequest::default()
         }
+    }
+
+    fn polls(frames: &[Value]) -> Vec<Value> {
+        frames
+            .iter()
+            .filter(|frame| frame["method"] == "poll")
+            .map(|frame| frame["params"]["intervals"].clone())
+            .collect()
+    }
+
+    fn segments(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    /// The one-second traffic sample runs only while a surface shows a
+    /// segment it feeds; the 30-second discovery keeps the address catalog.
+    #[tokio::test]
+    async fn traffic_is_sampled_only_while_a_traffic_segment_is_observed() {
+        let (_guard, mut harness) = scenario_harness().await;
+        let ctx = harness.context();
+        state().default_interface = Some("lo0".to_string());
+
+        // `address` follows discovery alone: no traffic cadence.
+        assert!(observe_traffic(&ctx, &segments(&["address"])).is_none());
+        assert!(polls(&harness.drain()).is_empty());
+
+        // Showing the label arms the cadence and samples at once.
+        let sample = observe_traffic(&ctx, &segments(&["address", "label"])).expect("sample");
+        sample.await.unwrap();
+        assert_eq!(polls(&harness.drain()), [json!({ "i0": 1.0 })]);
+        assert!(
+            state().previous.is_some(),
+            "the first sample seeds the rate"
+        );
+        assert!(observe_traffic(&ctx, &segments(&["label", "summary"])).is_none());
+        assert!(polls(&harness.drain()).is_empty(), "still armed");
+
+        // Nothing traffic-fed observed: the cadence is cancelled and the
+        // rates are cleared rather than left to go stale.
+        state().rates = Some(TransferRates {
+            received: 600_000.0,
+            sent: 600_000.0,
+        });
+        assert!(observe_traffic(&ctx, &segments(&["address"])).is_none());
+        let frames = harness.drain();
+        assert_eq!(polls(&frames), [json!({})]);
+        let status = frames
+            .iter()
+            .rfind(|frame| frame["method"] == "status")
+            .expect("cleared status");
+        assert_eq!(status["params"]["segments"]["down_bps"], "");
+        assert!(state().rates.is_none() && state().previous.is_none());
+
+        // A tick that raced the change does not sample.
+        refresh_network(&ctx, TRAFFIC_TICK).await;
+        assert!(state().previous.is_none());
+    }
+
+    #[tokio::test]
+    async fn startup_registers_only_the_discovery_cadence() {
+        let (_guard, mut harness) = scenario_harness().await;
+        let ctx = harness.context();
+        let startup = tokio::spawn(async move { Network.on_start(ctx).await });
+        let (id, _, _) = harness.next_host_request().await.expect("wifi read");
+        assert!(harness.reply_host(id, json!({ "ok": true, "present": false })));
+        startup.await.unwrap();
+        assert_eq!(polls(&harness.drain()), [json!({ "i0": 30.0 })]);
     }
 
     #[tokio::test]

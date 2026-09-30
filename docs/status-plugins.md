@@ -43,7 +43,7 @@ default to compact, and warn before falling back from an invalid value.
 | `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU metadata every 15 seconds (`ioreg`) | `:cpu [refresh]` |
 | `memory` | Memory composition every second (`host_statistics64` + `sysctl`, in-process) | — | `:memory [refresh]` |
 | `disks` | I/O counters every three seconds (`ioreg`) | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
-| `network` | Default-interface traffic every second (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
+| `network` | Default-interface traffic every second while a traffic segment is shown (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
 | `power` | Battery/power snapshot on `core:power.changed` (IOKit power-source notification); no poll | Health collected during refreshes with a 30-second TTL; explicit `refresh` forces it | `:power [refresh]` |
 
 Every monitor retains 20 fast samples for its chart. The one-second samplers
