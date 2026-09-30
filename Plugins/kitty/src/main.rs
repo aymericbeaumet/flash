@@ -24,7 +24,16 @@
 //!   - kitty running but remote control unavailable (no `allow_remote_control`
 //!     in kitty.conf, or no reachable socket) → `kitten @ ls` fails and the
 //!     catalog publishes authoritative empty: rows that can never resolve
-//!     must not linger. Discovery retries on the next cycle.
+//!     must not linger. Discovery retries on the next refresh.
+//!
+//! ## Refresh triggers
+//!
+//! Nothing polls. The catalog refreshes on startup, on `core:apps.changed`,
+//! on focus into kitty, on kitty's own `core:ax.changed` once its burst
+//! settles (a pane or tab switch, or a command setting its title, retitles
+//! the focused OS window), and when the flashlight opens — the one moment a
+//! background kitty's retitled panes must be current, since the host observes
+//! AX only in the focused app.
 //!
 //! Socket resolution order for `kitten @`: the `[plugin.kitty] listen_on`
 //! config value (`unix:/path`), then a bare invocation (covers an inherited
@@ -42,6 +51,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+mod settle;
+
 const SOURCE_WINDOWS: &str = "kitty.windows";
 const KITTY_BUNDLE_ID: &str = "net.kovidgoyal.kitty";
 
@@ -53,7 +64,11 @@ const KITTEN_APP_PATHS: [&str; 2] = [
 ];
 const KITTEN_PREFIXES: [&str; 3] = ["/usr/local", "/opt/local", "/usr"];
 
-const REFRESH_SECONDS: u64 = 15;
+/// `core:ax.changed` names neither the notification nor the element, so an
+/// AX burst refreshes once kitty has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_secs(1);
+/// …or this long after the burst began, whichever comes first.
+const AX_MAX_WAIT: Duration = Duration::from_secs(10);
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
 const KITTEN_TIMEOUT: Duration = Duration::from_secs(3);
 /// Socket-scan bound: how many discovered candidate sockets one discovery
@@ -66,9 +81,10 @@ const MAX_TITLE_CHARS: usize = 256;
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static AX_BURST: settle::Settle = settle::Settle::new(AX_SETTLE, AX_MAX_WAIT);
 /// Whether kitty was running at the last refresh. Absence publishes the
 /// authoritative empty catalog once, on the transition, instead of an empty
-/// publish plus a log frame on every poll while kitty is not installed.
+/// publish plus a log frame on every refresh while kitty is not installed.
 static KITTY_PRESENT: AtomicBool = AtomicBool::new(true);
 /// The `--to` argument of the last successful `kitten @` invocation
 /// (`None` = bare invocation worked or no route known yet).
@@ -125,23 +141,13 @@ impl FlashPlugin for Kitty {
         // the handshake. Every refresh outcome publishes (rows or
         // authoritative empty — unresolvable rows must not linger).
         refresh_catalog(&ctx).await;
-        drop(
-            ctx.interval(Duration::from_secs(REFRESH_SECONDS), |ctx| async move {
-                refresh_catalog(&ctx).await;
-            }),
-        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        let relevant = match event.name.as_str() {
-            "core:apps.changed" => true,
-            // Focus transitions into/out of kitty bound the interesting
-            // catalog changes; other apps' focus churn is noise.
-            "core:focus.changed" => event.bundle_id.as_deref() == Some(KITTY_BUNDLE_ID),
-            _ => false,
-        };
-        if relevant {
-            schedule_refresh(&ctx);
+        match trigger(&event) {
+            Some(Trigger::Now) => schedule_refresh(&ctx),
+            Some(Trigger::AxChange) => schedule_ax_refresh(&ctx, event.pid.unwrap_or_default()),
+            None => {}
         }
     }
 
@@ -172,6 +178,38 @@ impl FlashPlugin for Kitty {
         }
         PerformResponse::ok().target_pid(kitty_pid)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Trigger {
+    /// Refresh after the short event debounce.
+    Now,
+    /// Refresh once kitty's AX burst settles.
+    AxChange,
+}
+
+fn trigger(event: &Event) -> Option<Trigger> {
+    let kitty = event.bundle_id.as_deref() == Some(KITTY_BUNDLE_ID);
+    match event.name.as_str() {
+        "core:apps.changed" | "core:session.opened" => Some(Trigger::Now),
+        // Focus into kitty bounds the interesting catalog changes; other
+        // apps' focus churn is noise.
+        "core:focus.changed" if kitty => Some(Trigger::Now),
+        "core:ax.changed" if kitty => Some(Trigger::AxChange),
+        _ => None,
+    }
+}
+
+fn schedule_ax_refresh(ctx: &Context, pid: i64) {
+    if !AX_BURST.note(pid, Instant::now()) {
+        return;
+    }
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        if AX_BURST.wait().await.is_some() {
+            refresh_catalog(&ctx).await;
+        }
+    });
 }
 
 fn schedule_refresh(ctx: &Context) {
@@ -506,6 +544,52 @@ mod tests {
     use super::*;
     use flash_plugin::RunningApplication;
     use flash_plugin::testing::Harness;
+
+    /// Events drive every refresh: startup registers no cadence.
+    #[tokio::test]
+    async fn startup_registers_no_cadence() {
+        let mut harness = Harness::new("kitty");
+        Kitty.on_start(harness.context()).await;
+        let frames = harness.drain();
+        assert!(
+            !frames.iter().any(|frame| frame["method"] == "poll"),
+            "{frames:?}"
+        );
+    }
+
+    #[test]
+    fn kitty_events_and_flashlight_opens_trigger_refreshes() {
+        let event = |name: &str, bundle_id: Option<&str>| Event {
+            name: name.into(),
+            bundle_id: bundle_id.map(Into::into),
+            pid: Some(42),
+            ..Event::default()
+        };
+        assert_eq!(
+            trigger(&event("core:ax.changed", Some(KITTY_BUNDLE_ID))),
+            Some(Trigger::AxChange)
+        );
+        assert_eq!(
+            trigger(&event("core:ax.changed", Some("com.apple.Terminal"))),
+            None
+        );
+        assert_eq!(
+            trigger(&event("core:focus.changed", Some(KITTY_BUNDLE_ID))),
+            Some(Trigger::Now)
+        );
+        assert_eq!(
+            trigger(&event("core:focus.changed", Some("com.apple.Terminal"))),
+            None
+        );
+        assert_eq!(
+            trigger(&event("core:apps.changed", None)),
+            Some(Trigger::Now)
+        );
+        assert_eq!(
+            trigger(&event("core:session.opened", None)),
+            Some(Trigger::Now)
+        );
+    }
 
     /// Canned `kitten @ ls` output following kitty's documented schema:
     /// os_windows[].tabs[].windows[] with id/title/is_focused, plus fields

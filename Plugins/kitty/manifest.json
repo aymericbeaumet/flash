@@ -21,7 +21,9 @@
   ],
   "listen": [
     "core:apps.changed",
-    "core:focus.changed"
+    "core:focus.changed",
+    "core:ax.changed",
+    "core:session.opened"
   ],
   "commands": [
     {
