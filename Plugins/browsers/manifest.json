@@ -96,8 +96,6 @@
   ],
   "actions": [
     "tab_select",
-    "tab_new",
-    "tab_close",
     "tab_move_previous",
     "tab_move_next"
   ],

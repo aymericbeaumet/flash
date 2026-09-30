@@ -1557,33 +1557,6 @@ fn is_ancestor(ancestor_pid: i64, descendant_pid: i64, parent_map: &HashMap<i64,
     false
 }
 
-/// One-line diagnostic for why `client_hosted_by_*` resolved no client: the
-/// focused pid, the `ps` parent-map size, and for every listed client whether
-/// its pid is known to the process sample and whether it chains up to the
-/// focused terminal. Logged on the otherwise-silent no-client path so a single
-/// repro distinguishes empty-client-list vs wrong-focused-pid vs broken-ancestry.
-fn client_resolution_diag(
-    focused_pid: i64,
-    clients: &[TmuxClient],
-    parent_map: &HashMap<i64, i64>,
-) -> String {
-    let clients_in_process_sample = clients
-        .iter()
-        .filter(|client| parent_map.contains_key(&client.client_pid))
-        .count();
-    let ancestry_matches = clients
-        .iter()
-        .filter(|client| is_ancestor(focused_pid, client.client_pid, parent_map))
-        .count();
-    format!(
-        "diag pmap_len={} client_count={} clients_in_pmap={} ancestry_matches={}",
-        parent_map.len(),
-        clients.len(),
-        clients_in_process_sample,
-        ancestry_matches,
-    )
-}
-
 fn client_hosted_by_from_map(
     clients: &[TmuxClient],
     focused_pid: i64,
@@ -4499,18 +4472,13 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
     let resolution_started = Instant::now();
     let Some((client, client_resolution)) = source_action_client(plugin, ctx, pid, &req.name).await
     else {
-        let clients = list_clients(
-            plugin.resolved_tmux_path().await,
-            plugin.tmux_socket_registry(),
-        )
-        .await;
-        let pmap = parent_pid_map().await;
+        // A terminal without tmux is the common case: the host falls back to
+        // the app's chord at once, without waiting on a diagnostic scan.
         ctx.log(
-            "warn",
+            "debug",
             &format!(
-                "[tmux] source_action {} unhandled: no hosted tmux client | {}",
-                req.name,
-                client_resolution_diag(pid, &clients, &pmap)
+                "[tmux] source_action {} unhandled: no hosted tmux client pid={pid}",
+                req.name
             ),
         );
         return PerformResponse::unhandled();

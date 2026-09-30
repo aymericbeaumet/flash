@@ -17,12 +17,6 @@ pub struct Dialect {
     select_tab: &'static str,
     /// Make tab number `tabIndex` the current tab of window `w`.
     select_nth: &'static str,
-    /// Create a window when none exists.
-    new_window: &'static str,
-    /// Create and focus a tab, inside `tell front window`.
-    new_tab: &'static str,
-    /// The front window's current tab, as a `close` target.
-    current_tab: &'static str,
     /// Whether scripting can reorder tabs. Chromium's `move` recreates the
     /// moved tab as a blank one, so its moves use the native
     /// ctrl+shift+pageup/pagedown chords instead (`action_keystrokes`).
@@ -34,9 +28,6 @@ pub const CHROMIUM: Dialect = Dialect {
     title: "title",
     select_tab: "set active tab index of w to i",
     select_nth: "set active tab index of w to tabIndex",
-    new_window: "make new window",
-    new_tab: "make new tab",
-    current_tab: "active tab",
     scripts_tab_moves: false,
 };
 
@@ -45,9 +36,6 @@ pub const SAFARI: Dialect = Dialect {
     title: "name",
     select_tab: "set current tab of w to t",
     select_nth: "set current tab of w to tab tabIndex of w",
-    new_window: "make new document",
-    new_tab: "set current tab to (make new tab)",
-    current_tab: "current tab",
     scripts_tab_moves: true,
 };
 
@@ -302,25 +290,6 @@ return "missing"
         )
     }
 
-    pub fn tab_new_script(&self, app: &str) -> String {
-        format!(
-            r#"
-tell application {app}
-  activate
-  if (count of windows) is 0 then
-    {new_window}
-  else
-    tell front window to {new_tab}
-  end if
-  return "ok"
-end tell
-"#,
-            app = applescript_quote(app),
-            new_window = self.new_window,
-            new_tab = self.new_tab,
-        )
-    }
-
     /// Move the front window's current tab one place toward the end
     /// (`forward`) or the start, by moving its neighbour across it: the moved
     /// tab keeps its page and stays current. `None` when this dialect cannot
@@ -348,22 +317,6 @@ end tell
             app = applescript_quote(app),
             active_index = self.active_index,
         ))
-    }
-
-    /// Closing the last tab collapses to closing the window — same as ⌘W
-    /// natively. The gesture stays "close this thing in this context".
-    pub fn tab_close_script(&self, app: &str) -> String {
-        format!(
-            r#"
-tell application {app}
-  if (count of windows) is 0 then return "missing"
-  tell front window to close {current_tab}
-  return "ok"
-end tell
-"#,
-            app = applescript_quote(app),
-            current_tab = self.current_tab,
-        )
     }
 }
 

@@ -848,8 +848,6 @@ async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformRespons
             Some(index) => dialect.tab_select_script(app, index),
             None => return PerformResponse::unhandled(),
         },
-        "tab_new" => dialect.tab_new_script(app),
-        "tab_close" => dialect.tab_close_script(app),
         // Unhandled for Chromium: the host then sends the manifest's chord.
         "tab_move_next" | "tab_move_previous" => {
             match dialect.tab_move_script(app, action.name == "tab_move_next") {
@@ -1287,6 +1285,32 @@ mod tests {
                 args: Default::default(),
             };
             assert!(perform_action(&ctx, &action).await.is_unhandled(), "{name}");
+        }
+    }
+
+    /// Every browser opens and closes tabs through its own Command-T and
+    /// Command-W: a script would only add an osascript round trip and an
+    /// Automation grant for the same result.
+    #[tokio::test]
+    async fn every_browser_leaves_tab_creation_and_closing_to_its_chords() {
+        let harness = flash_plugin::testing::Harness::new("browsers");
+        let ctx = harness.context();
+        for bundle_id in ["com.google.Chrome", "com.apple.Safari"] {
+            for name in ["tab_new", "tab_close"] {
+                let action = ActionRequest {
+                    name: name.into(),
+                    context: ActionContext {
+                        bundle_id: Some(bundle_id.into()),
+                        pid: Some(4242),
+                        front_window_frame: None,
+                    },
+                    args: Default::default(),
+                };
+                assert!(
+                    perform_action(&ctx, &action).await.is_unhandled(),
+                    "{bundle_id} {name}"
+                );
+            }
         }
     }
 
