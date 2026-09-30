@@ -40,6 +40,8 @@ final class WidgetController {
   private var screenObserver: NSObjectProtocol?
   /// The displays as of the last full reconcile; a line update re-uses them.
   private var layouts: [WindowScreenLayout] = []
+  /// Observation only: widget windows were placed, redrawn or closed.
+  var didChange: (() -> Void)?
 
   init(
     setVisible: @escaping (String, Bool) -> Void,
@@ -98,6 +100,7 @@ final class WidgetController {
   /// Create, re-place, redraw or close windows so each enabled widget has one
   /// per display it selects. Frames are set only when they change.
   private func reconcile(only: String? = nil) {
+    defer { didChange?() }
     if only == nil { layouts = screenLayouts(statusBarReservesSpace, statusBarMonitor) }
     var wanted = Set<WindowKey>()
     for name in only.map({ [$0] }) ?? widgets.keys.sorted() {

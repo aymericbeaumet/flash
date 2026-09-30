@@ -90,6 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var registry: SourceRegistry!
   var monitor: AppMonitor!
   var debugServer: DebugServer?
+  /// The notifications only the inspector needs; see `attachDebugServer`.
+  var inspectorChangeObservers: InspectorChangeObservers?
   var overlay: OverlayPanel!
   /// Pushes the system appearance to the overlay for `[overlay.dark]`.
   var appearanceObserver: AppearanceObserver?
@@ -138,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let overlay else { return }
       overlay.hintKeyRoute = hintSession.keyRoute
       overlay.hintSessionCapture = hintSession.capture
-      if debugServer != nil, oldValue.hints.map(\.label) != hintSession.hints.map(\.label) {
+      if debugServer != nil, !hintSession.showsSameInspectorState(as: oldValue) {
         debugStateDidChange()
       }
       if oldValue.isActive != hintSession.isActive {
@@ -174,10 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
   /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
   /// then surfaced through `debugStateJSON`.
-  var clipboardEntries: [ClipboardModalEntry] = []
+  var clipboardEntries: [ClipboardModalEntry] = [] {
+    didSet { debugStateDidChange() }
+  }
   var pluginStateRefreshWork: DispatchWorkItem?
-  /// A pending inspector push; see `debugStateDidChange`.
-  var debugStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
   var commandLineCompletionSelectedIndex = 0
@@ -274,7 +276,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Captures NORMAL / hints keystrokes without taking key-window focus. nil
   /// (no grant) falls back to the legacy key-window capture in
   /// `captureKeyboardInput`.
-  var keyboardCaptureTap: KeyboardCaptureTap?
+  var keyboardCaptureTap: KeyboardCaptureTap? {
+    didSet { debugStateDidChange() }
+  }
   /// See `noteSecureInput`.
   var secureInputObserved = false
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
@@ -289,7 +293,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
     didSet {
-      if oldValue.inFlight != activationLifecycle.inFlight { refreshOverlayInputRouting() }
+      guard oldValue.inFlight != activationLifecycle.inFlight else { return }
+      refreshOverlayInputRouting()
+      debugStateDidChange()
     }
   }
   var activationInFlight: Bool { activationLifecycle.inFlight }
@@ -458,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.performStatusBarClickAction(named: name)
     }
     configureTerminalPopupInput()
+    wireInspectorChangeSources()
     statusItemController.aboutVisibilityDidChange = { [weak self] visible in
       self?.aboutWindowVisibilityDidChange(visible)
     }
@@ -670,6 +677,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
+      // The inspector's `focused_app` follows every activation, Flash's own too.
+      self.debugStateDidChange()
       // Ignore Flash itself activating (it shouldn't, but be safe).
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
         app.bundleIdentifier == Bundle.main.bundleIdentifier
@@ -931,7 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  private func applyFocusedApplicationChange(
+  func applyFocusedApplicationChange(
     _ app: NSRunningApplication,
     reason: String,
     emitFocusEvent: Bool
@@ -1207,8 +1216,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
-    debugStateRefreshWork?.cancel()
-    debugStateRefreshWork = nil
     clipboardMonitor?.stop()
     clipboardMonitor = nil
     powerSourceMonitor?.stop()
@@ -1223,8 +1230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.statusTerminals.shutdown()
     monitor?.stop()
     pluginManager.stop()
-    debugServer?.stop()
-    debugServer = nil
+    stopDebugServer()
     frecencyStore?.drain()
     frecencyStore = nil
     commandHistoryStore?.drain()

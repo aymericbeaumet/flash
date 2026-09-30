@@ -168,6 +168,7 @@ extension AppDelegate {
     secureInputObserved = enabled
     FlashLog.debug("[input] secure_input=\(enabled ? "on" : "off")")
     statusBarController?.updateSecureInput(enabled)
+    debugStateDidChange()
   }
 
   private func performHintActivation(_ request: HintActivationRequest) {

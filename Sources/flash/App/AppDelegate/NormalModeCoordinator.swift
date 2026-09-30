@@ -354,6 +354,7 @@ extension AppDelegate {
     guard overlay.inputMode != routed else { return }
     FlashLog.trace("[mode] input_route from=\(overlay.inputMode) to=\(routed)")
     overlay.inputMode = routed
+    debugStateDidChange()
   }
 
   func applyModeOverlay(captureOverride: Bool? = nil) {
@@ -1105,12 +1106,7 @@ extension AppDelegate {
   func openDebugDashboard(_ page: DebugServer.Page) {
     finishCommandLineInteraction(reason: "debug_dashboard")
     if debugServer == nil {
-      let server = DebugServer(
-        host: config.debug.httpInspectorHost,
-        port: config.debug.httpInspectorPort,
-        stateProvider: { [weak self] in self?.debugStateJSON() ?? [:] })
-      debugServer = server
-      server.start()
+      startDebugServer(host: config.debug.httpInspectorHost, port: config.debug.httpInspectorPort)
     }
     guard let server = debugServer else { return }
     // The listener's ready state answers; 1.5 s bounds one that never binds.
@@ -1153,8 +1149,8 @@ extension AppDelegate {
   }
 
   /// Pull the full clipboard history from the plugin into `clipboardEntries`
-  /// (the dashboard payload) and rebroadcast state so an open inspector updates
-  /// live. Driven by `:clipboard` and by each pasteboard change.
+  /// (the dashboard payload), which pushes it to an open inspector. Driven by
+  /// `:clipboard` and by each pasteboard change.
   func refreshClipboardDashboardCache() {
     _ = pluginManager.invoke(
       command: "clipboard", subcommand: "", args: [], raw: ":clipboard",
@@ -1164,7 +1160,6 @@ extension AppDelegate {
       DispatchQueue.main.async {
         guard let self else { return }
         self.clipboardEntries = entries
-        self.debugServer?.broadcastState()
       }
     }
   }

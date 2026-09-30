@@ -225,39 +225,93 @@ final class DebugServerTests: XCTestCase {
     XCTAssertEqual(endpoint.body, "not found")
   }
 
-  /// Nothing refreshes the inspector's state on a clock while no browser
-  /// holds an event stream; the cadence starts with the first stream and
-  /// stops with the last.
-  func testStateRefreshRunsOnlyWhileAnEventStreamIsOpen() throws {
-    let scheduler = PollScheduler()
-    let server = DebugServer(host: "localhost", port: 0, scheduler: scheduler) { ["ok": true] }
+  /// The inspector has no clock: an open event stream registers nothing with
+  /// the shared poll scheduler, and a burst of changes reaches it as exactly
+  /// one pushed snapshot.
+  func testAnOpenEventStreamRegistersNoCadenceAndReceivesOneSnapshotPerBurst() throws {
+    var version = 0
+    let server = DebugServer(host: "localhost", port: 0) {
+      version += 1
+      return ["version": version]
+    }
     server.start()
     defer { server.stop() }
     let port = try waitForListeningPort(server)
-    XCTAssertEqual(registrations(scheduler), [])
+    let before = registrations(PollScheduler.shared)
 
-    let client = NWConnection(
-      host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
-    let streaming = expectation(description: "event stream open")
-    client.stateUpdateHandler = { state in
-      guard case .ready = state else { return }
-      let request = "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n"
-      client.send(content: request.data(using: .utf8), completion: .idempotent)
-      client.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, _ in
-        if String(decoding: data ?? Data(), as: UTF8.self).contains("text/event-stream") {
-          streaming.fulfill()
-        }
-      }
+    let stream = EventStreamClient(port: port)
+    defer { stream.cancel() }
+    XCTAssertTrue(
+      spin { stream.count(of: "event: logs") == 1 && server.publication.streams == 1 },
+      "the stream opens with the cached state and logs")
+    XCTAssertEqual(stream.count(of: "event: state"), 1)
+    XCTAssertEqual(
+      registrations(PollScheduler.shared), before, "an open stream registers no cadence")
+
+    for _ in 0..<5 { server.stateDidChange() }
+    XCTAssertTrue(spin { stream.count(of: "event: state") == 2 }, "the burst is pushed")
+    spin(for: 0.3)
+    XCTAssertEqual(stream.count(of: "event: state"), 2, "a burst is one snapshot, then quiet")
+    XCTAssertTrue(stream.text.contains("\"version\":2"), stream.text)
+    XCTAssertEqual(registrations(PollScheduler.shared), before)
+
+    stream.cancel()
+    XCTAssertTrue(spin { server.publication.streams == 0 }, "the closed stream is released")
+  }
+
+  /// Changes inside one window collapse into one snapshot; with no stream
+  /// open nothing is taken, and a stream arriving on a stale cache gets a
+  /// fresh snapshot.
+  func testChangesCoalesceIntoOneSnapshotPerWindowOnlyWhileObserved() {
+    var snapshots = 0
+    let server = DebugServer(host: "localhost", port: 0, coalescingWindow: .milliseconds(20)) {
+      snapshots += 1
+      return [:]
     }
-    client.start(queue: DispatchQueue(label: "debug.tests.client"))
-    wait(for: [streaming], timeout: 10)
-    XCTAssertTrue(
-      waitFor { self.registrations(scheduler) == [DebugServer.pollClientID] },
-      "an open stream registers the refresh")
+    defer { server.stop() }
+    server.streamsDidChange(by: 1)
+    for _ in 0..<10 { server.stateDidChange() }
+    XCTAssertEqual(snapshots, 0, "the first change waits out the window")
+    XCTAssertTrue(spin { snapshots == 1 })
+    spin(for: 0.1)
+    XCTAssertEqual(snapshots, 1, "ten changes, one snapshot")
+    server.stateDidChange()
+    XCTAssertTrue(spin { snapshots == 2 }, "the next burst is the next snapshot")
 
-    client.cancel()
+    server.streamsDidChange(by: -1)
+    server.stateDidChange()
+    server.stateDidChange()
+    spin(for: 0.1)
+    XCTAssertEqual(snapshots, 2, "nobody reads it, nothing is taken")
+    XCTAssertTrue(server.publication.stale)
+    server.streamsDidChange(by: 1)
+    XCTAssertTrue(spin { snapshots == 3 }, "a stream opening on a stale cache gets a fresh one")
+    XCTAssertFalse(server.publication.stale)
+  }
+
+  /// `/api/state` answers from the cache while it is current; a stale cache
+  /// or an explicit `?refresh=1` takes one fresh snapshot.
+  func testStateRequestsSnapshotOnlyWhenStaleOrAskedTo() throws {
+    var snapshots = 0
+    let server = DebugServer(host: "localhost", port: 0, coalescingWindow: .milliseconds(10)) {
+      snapshots += 1
+      return ["n": snapshots]
+    }
+    server.start()
+    defer { server.stop() }
+    let port = try waitForListeningPort(server)
+    XCTAssertEqual(snapshots, 1, "start seeds the cache")
+
+    for _ in 0..<3 { server.stateDidChange() }
+    spin(for: 0.1)
+    XCTAssertEqual(snapshots, 1, "no stream is open")
+    XCTAssertTrue(try fetchSpinningMain(port: port, path: "/api/state").contains("\"n\":2"))
+    XCTAssertEqual(snapshots, 2, "the stale cache is refreshed once")
+    XCTAssertTrue(try fetchSpinningMain(port: port, path: "/api/state").contains("\"n\":2"))
+    XCTAssertEqual(snapshots, 2, "a current cache answers without a snapshot")
     XCTAssertTrue(
-      waitFor { self.registrations(scheduler).isEmpty }, "the last stream closing releases it")
+      try fetchSpinningMain(port: port, path: "/api/state?refresh=1").contains("\"n\":3"))
+    XCTAssertEqual(snapshots, 3, "an explicit refresh resamples")
   }
 
   func testWhenListeningAnswersFromTheListenerState() throws {
@@ -300,13 +354,32 @@ final class DebugServerTests: XCTestCase {
     return ids
   }
 
-  private func waitFor(_ condition: () -> Bool) -> Bool {
-    let deadline = Date().addingTimeInterval(10)
+  /// Runs the main run loop, where the server's publication lives, until
+  /// `condition` holds or `timeout` passes.
+  @discardableResult
+  private func spin(timeout: TimeInterval = 10, until condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
     while !condition() {
       guard Date() < deadline else { return false }
-      Thread.sleep(forTimeInterval: 0.02)
+      RunLoop.main.run(until: Date().addingTimeInterval(0.01))
     }
     return true
+  }
+
+  private func spin(for seconds: TimeInterval) {
+    spin(timeout: seconds) { false }
+  }
+
+  /// A request that may need the main thread to answer (a stale cache).
+  private func fetchSpinningMain(port: UInt16, path: String) throws -> String {
+    let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)\(path)"))
+    var body: String?
+    URLSession.shared.dataTask(with: url) { data, _, _ in
+      let text = String(decoding: data ?? Data(), as: UTF8.self)
+      DispatchQueue.main.async { body = text }
+    }.resume()
+    XCTAssertTrue(spin { body != nil }, "no reply for \(path)")
+    return body ?? ""
   }
 
   /// Polls until the `NWListener` reaches `.ready` and publishes its port.
@@ -347,5 +420,49 @@ final class DebugServerTests: XCTestCase {
     }
     if let lastError { throw lastError }
     return (0, "")
+  }
+}
+
+/// A raw `/api/events` subscriber accumulating everything the server sends.
+private final class EventStreamClient {
+  private let connection: NWConnection
+  private let lock = NSLock()
+  private var received = ""
+
+  init(port: UInt16) {
+    connection = NWConnection(
+      host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    connection.stateUpdateHandler = { [weak self] state in
+      guard let self, case .ready = state else { return }
+      let request = "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n"
+      self.connection.send(content: request.data(using: .utf8), completion: .idempotent)
+      self.receive()
+    }
+    connection.start(queue: DispatchQueue(label: "debug.tests.stream"))
+  }
+
+  var text: String {
+    lock.lock()
+    defer { lock.unlock() }
+    return received
+  }
+
+  func count(of marker: String) -> Int {
+    text.components(separatedBy: marker).count - 1
+  }
+
+  func cancel() { connection.cancel() }
+
+  private func receive() {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) {
+      [weak self] data, _, isComplete, error in
+      guard let self else { return }
+      if let data {
+        self.lock.lock()
+        self.received += String(decoding: data, as: UTF8.self)
+        self.lock.unlock()
+      }
+      if !isComplete, error == nil { self.receive() }
+    }
   }
 }

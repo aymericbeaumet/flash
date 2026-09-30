@@ -138,7 +138,10 @@ extension OverlayPanel {
     guard statusBarHintSnapshot.receive(model) else { return }
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
+    defer {
+      CATransaction.commit()
+      statusBarDidChange?()
+    }
 
     statusBarModel = model
     statusBarPopupTexts = model.popupTexts

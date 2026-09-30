@@ -224,6 +224,9 @@ final class OverlayPanel: NSPanel {
   }
   var modeSurface = ModeSurface.initial
   var statusBarModel = FlashStatusBarModel(appText: "", modeText: "", rightText: "")
+  /// The bar received a model or changed its window level: what the
+  /// inspector's `statusbar` diagnostics read.
+  var statusBarDidChange: (() -> Void)?
   var statusBarHintSnapshot = StatusBarHintSnapshot.live
   var commandPromptVisible = false
   var commandPromptPrefix = ":"

@@ -233,173 +233,22 @@ extension AppDelegate {
   }
 
   /// Plugins emit a state notification on every log line, lifecycle
-  /// transition, and publish. Coalesce a burst into a single status/debug refresh. Candidate
+  /// transition, and publish. Coalesce a burst into a single status refresh;
+  /// the inspector coalesces its own push. Candidate
   /// surfaces deliberately do not re-render from plugin-state churn; their
   /// typed-query update points are explicit so rows do not reshuffle while
   /// the prompt is idle.
   func pluginStateDidChange() {
+    debugStateDidChange()
     pluginStateRefreshWork?.cancel()
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
       self.reconcileClipboardMonitor()
       self.reconcileHostEventSources()
       self.statusBarController?.refreshPluginSections()
-      self.debugServer?.broadcastState()
     }
     pluginStateRefreshWork = work
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
-  }
-
-  /// The inspector's state follows the app's own changes — mode, focus,
-  /// hints — instead of a clock, so `/api/state` and an open event stream are
-  /// current without polling. A burst collapses into one snapshot, and
-  /// nothing is taken while the inspector is off.
-  func debugStateDidChange() {
-    guard debugServer != nil, debugStateRefreshWork == nil else { return }
-    let work = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      self.debugStateRefreshWork = nil
-      self.debugServer?.broadcastState()
-    }
-    debugStateRefreshWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
-  }
-
-  func configureDebugServer(for cfg: Config) {
-    guard cfg.debug.httpInspectorEnabled else {
-      debugServer?.stop()
-      debugServer = nil
-      return
-    }
-    let host = cfg.debug.httpInspectorHost
-    let port = cfg.debug.httpInspectorPort
-    if debugServer?.host == host, debugServer?.port == port {
-      debugServer?.broadcastState()
-      return
-    }
-    debugServer?.stop()
-    let server = DebugServer(
-      host: host,
-      port: port,
-      stateProvider: { [weak self] in self?.debugStateJSON() ?? [:] })
-    debugServer = server
-    server.start()
-  }
-
-  func debugStateJSON() -> [String: Any] {
-    let configJSON: Any
-    if let data = config.resolvedConfigJSON.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data)
-    {
-      configJSON = object
-    } else {
-      configJSON = config.resolvedConfigJSON
-    }
-    let app = NSWorkspace.shared.frontmostApplication
-    let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
-    let mappingApp = currentNonFlashRunningApplication() ?? app
-    let effectiveMappings = effectiveMode(
-      for: PluginSelectorContext(bundleID: mappingApp?.bundleIdentifier))
-    let bundleInfo = Bundle.main.infoDictionary ?? [:]
-    let secureInput = IsSecureEventInputEnabled()
-    let statuses = pluginManager.pluginStatuses()
-    var commands = NormalModeDispatcher.coreCommandCatalog()
-    for status in statuses {
-      for command in status.commands {
-        commands.append([
-          "name": ":\(command.command) \(command.subcommand)",
-          "syntax": ":\(command.command) \(command.subcommand)",
-          "command": command.command,
-          "subcommand": command.subcommand,
-          "description": command.description,
-          "source": status.id,
-          "source_kind": "plugin",
-        ])
-      }
-    }
-    // Docs are Markdown in `HelpTopic.body`; the inspector's Docs tab renders
-    // them (and `:help [topic]` deep-links there). Ship the raw Markdown so the
-    // browser owns rendering, collapsibles, and topic navigation.
-    let docs = HelpDocs.allTopics(
-      config: config,
-      showModes: modeBadgeEnabled,
-      pluginTopics: pluginManager.pluginHelpTopics()
-    ).map { topic -> [String: Any] in
-      [
-        "name": topic.name,
-        "title": topic.title,
-        "summary": topic.summary,
-        "body": topic.body,
-        "aliases": topic.aliases,
-      ]
-    }
-    return [
-      "snapshot_at_unix_ms": Int64(Date().timeIntervalSince1970 * 1000),
-      "runtime": [
-        "version": bundleInfo["CFBundleShortVersionString"] as? String ?? "development",
-        "build": bundleInfo["CFBundleVersion"] as? String ?? "unknown",
-        "pid": ProcessInfo.processInfo.processIdentifier,
-        "started_at_unix_ms": Int64(runtimeStartedAt.timeIntervalSince1970 * 1000),
-        "accessibility_trusted": PermissionCheck.isAccessibilityTrusted,
-        "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput,
-        "secure_input": secureInput,
-        "advanced_mode": modeBadgeEnabled,
-        "config_path": ConfigLoader.resolvePath(
-          environment: ProcessInfo.processInfo.environment
-        ).path,
-        "config_error": config.loadingErrorAlertMessage as Any? ?? NSNull(),
-      ] as [String: Any],
-      "config": configJSON,
-      "commands": commands,
-      "clipboard": clipboardEntries.map { ["preview": $0.preview, "value": $0.value] },
-      "docs": docs,
-      "mappings": [
-        "normal_leader": config.mode.normalLeader ?? "",
-        "rows": NormalModeDispatcher.mappingsJSON(mode: config.mode),
-        "effective_rows": NormalModeDispatcher.mappingsJSON(mode: effectiveMappings),
-        "bundle_id": mappingApp?.bundleIdentifier as Any? ?? NSNull(),
-        "localized_name": mappingApp?.localizedName as Any? ?? NSNull(),
-      ] as [String: Any],
-      "focused_app": [
-        "bundle_id": app?.bundleIdentifier ?? NSNull(),
-        "localized_name": app?.localizedName ?? NSNull(),
-        "pid": focusedPID,
-      ],
-      "mode": String(describing: modeStore.mode.label),
-      "hints": hintSession.hints.map { hint -> [String: Any] in
-        [
-          "label": hint.label,
-          "accessibility_label": hint.target.accessibilityLabel ?? "",
-          "role": hint.target.role ?? "",
-          "enters_insert_mode": hint.target.entersInsertMode,
-          "frame": [
-            "x": hint.target.frame.origin.x,
-            "y": hint.target.frame.origin.y,
-            "width": hint.target.frame.width,
-            "height": hint.target.frame.height,
-          ],
-        ]
-      },
-      "hint_command": String(describing: hintSession.command),
-      "activation_in_flight": activationInFlight,
-      "terminals": statusTerminalDebugState(),
-      "overlay": overlay.map { String(describing: $0.inputMode) } as Any? ?? NSNull(),
-      "statusbar": overlay?.statusBarDiagnostics() ?? [:],
-      "widgets": widgetController?.diagnostics() ?? [:],
-      "windows": NSApp.windows.map { window -> [String: Any] in
-        [
-          "class": String(describing: type(of: window)),
-          "frame": [
-            Double(window.frame.minX), Double(window.frame.minY), Double(window.frame.width),
-            Double(window.frame.height),
-          ],
-          "visible": window.isVisible,
-          "level": window.level.rawValue,
-          "number": window.windowNumber,
-        ]
-      },
-      "plugins": statuses.map(\.jsonObject),
-    ]
   }
 
   func selectInitialModeIfNeeded() {

@@ -6,7 +6,9 @@ final class DebugServer {
   let port: Int
   private(set) var listeningPort: UInt16?
   private let stateProvider: () -> [String: Any]
-  private let scheduler: PollScheduler
+  /// How long the first change of a burst waits for the rest: every change
+  /// inside the window joins one snapshot.
+  private let coalescingWindow: DispatchTimeInterval
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
   private var listener: NWListener?
   private var logSinkID: UUID?
@@ -16,8 +18,6 @@ final class DebugServer {
   private var readiness: ListenerReadiness?
   /// Queue-confined callers of `whenListening` waiting for that outcome.
   private var readinessWaiters: [UUID: (UInt16?) -> Void] = [:]
-  /// Queue-confined: whether the state refresh cadence is registered.
-  private var stateTimerRegistered = false
   private var stopped = false
 
   private enum ListenerReadiness {
@@ -29,17 +29,36 @@ final class DebugServer {
   /// calling `stateProvider` on its own queue (which raced the main thread, the
   /// data race this fixes — and a synchronous main hop would instead deadlock if
   /// a caller blocks main, as the test harness does). Seeded in `start()` and
-  /// refreshed by `broadcastState()` and the state timer.
+  /// replaced by each publish.
   private var cachedState: [String: Any] = [:]
+  /// Queue-confined mirror of `publication.stale`, in main's order: whether
+  /// `cachedState` still reflects every change main has reported.
+  private var cachedStateIsCurrent = true
+  /// Main-confined: what the pushed state owes its readers.
+  private(set) var publication = Publication()
   private let maxLogs = 2_000
 
+  /// Main-confined publication state. The inspector has no clock: app
+  /// changes call `stateDidChange`, and a snapshot is taken only when someone
+  /// can read it — once per coalescing window while a browser holds an event
+  /// stream, or when a request finds the cache stale.
+  struct Publication: Equatable {
+    /// Event streams open, mirrored from `queue`.
+    var streams = 0
+    /// A change arrived since the last snapshot.
+    var stale = false
+    /// A coalesced publish is waiting out its window.
+    var armed = false
+    var stopped = false
+  }
+
   init(
-    host: String, port: Int, scheduler: PollScheduler = .shared,
+    host: String, port: Int, coalescingWindow: DispatchTimeInterval = .milliseconds(100),
     stateProvider: @escaping () -> [String: Any]
   ) {
     self.host = host
     self.port = port
-    self.scheduler = scheduler
+    self.coalescingWindow = coalescingWindow
     self.stateProvider = stateProvider
   }
 
@@ -77,9 +96,8 @@ final class DebugServer {
         }
       }
       // Seed the cache on the main thread (start() runs on main) so the first
-      // /api/state request returns data before any broadcast/timer refresh fires.
-      let initialState = stateProvider()
-      queue.async { [weak self] in self?.cachedState = initialState }
+      // /api/state request is answered without a main hop.
+      publishState()
       listener.start(queue: queue)
       self.listener = listener
       // Follows `[debug] log_level`: the inspector shows what the log file
@@ -94,6 +112,7 @@ final class DebugServer {
   }
 
   func stop() {
+    publication.stopped = true
     if let logSinkID {
       FlashLog.removeSink(logSinkID)
     }
@@ -106,7 +125,6 @@ final class DebugServer {
         connection.cancel()
       }
       eventConnections.removeAll()
-      updateStateTimer()
       settleReadiness(.failed)
     }
   }
@@ -146,30 +164,71 @@ final class DebugServer {
     for waiter in waiters { waiter(port) }
   }
 
-  /// Refresh the cache and push state to subscribers. Must be called on the main
-  /// thread — `stateProvider` reads main-only app state (mode, overlay input,
-  /// clipboard, frontmost app, plugin statuses). The snapshot is taken here, on
-  /// main, then the immutable value is handed to `queue`.
-  func broadcastState() {
+  /// The one entry for every app change the state reflects (main thread).
+  /// With a browser on the event stream, the first change of a burst arms
+  /// one publish `coalescingWindow` later and the rest join it; with none,
+  /// nothing is taken — the cache is only marked stale, and the next request
+  /// or stream takes a fresh snapshot.
+  func stateDidChange() {
+    dispatchPrecondition(condition: .onQueue(.main))
+    guard !publication.stopped else { return }
+    if !publication.stale {
+      publication.stale = true
+      queue.async { [weak self] in self?.cachedStateIsCurrent = false }
+    }
+    armPublishIfObserved()
+  }
+
+  /// Main thread: an event stream opened (+1) or closed (-1). A stream that
+  /// opens on a stale cache gets a fresh snapshot through the same window.
+  func streamsDidChange(by delta: Int) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    publication.streams = max(0, publication.streams + delta)
+    armPublishIfObserved()
+  }
+
+  private func armPublishIfObserved() {
+    guard publication.stale, publication.streams > 0, !publication.armed, !publication.stopped
+    else { return }
+    publication.armed = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + coalescingWindow) { [weak self] in
+      guard let self else { return }
+      self.publication.armed = false
+      // The last stream may have closed meanwhile: the cache stays stale.
+      guard self.publication.stale, self.publication.streams > 0, !self.publication.stopped
+      else { return }
+      self.publishState()
+    }
+  }
+
+  /// Take a snapshot now, on main — `stateProvider` reads main-only app state
+  /// — and hand the immutable value to `queue` to cache and push. Main
+  /// enqueues both this and the stale marks, so the queue applies them in
+  /// the order main saw them.
+  private func publishState() {
+    dispatchPrecondition(condition: .onQueue(.main))
+    publication.stale = false
     let snapshot = stateProvider()
     queue.async { [weak self] in
       guard let self else { return }
       self.cachedState = snapshot
+      self.cachedStateIsCurrent = true
       self.broadcast(event: "state", object: snapshot)
     }
   }
 
-  /// Refresh the cached snapshot from the main thread, then broadcast it. Async,
-  /// so a busy/blocked main thread only delays the refresh — it can never
-  /// deadlock the server queue the way a synchronous main hop would.
-  private func refreshStateFromMain() {
+  /// Runs on `queue`. A current cache answers at once; a stale one, or an
+  /// explicit `?refresh=1` — the way to resample values no event reports,
+  /// such as plugin memory — hops to main for a fresh snapshot, which every
+  /// open stream receives too.
+  private func sendState(refresh: Bool, connection: NWConnection) {
+    guard refresh || !cachedStateIsCurrent else {
+      return sendJSON(cachedState, connection: connection)
+    }
     DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      let snapshot = self.stateProvider()
-      self.queue.async {
-        self.cachedState = snapshot
-        self.broadcast(event: "state", object: snapshot)
-      }
+      guard let self else { return connection.cancel() }
+      if refresh || self.publication.stale { self.publishState() }
+      self.queue.async { self.sendJSON(self.cachedState, connection: connection) }
     }
   }
 
@@ -184,26 +243,6 @@ final class DebugServer {
       self.broadcast(event: "log", object: object)
     }
   }
-
-  /// App changes (mode, focus, hints, plugins, configuration) push state as
-  /// they happen. Plugin CPU and memory figures have no change notification,
-  /// so an open inspector also refreshes once a second — registered with the
-  /// shared clock only while a browser holds an event stream, and released
-  /// with the last one. Runs on `queue`.
-  private func updateStateTimer() {
-    let wanted = !stopped && !eventConnections.isEmpty
-    guard wanted != stateTimerRegistered else { return }
-    stateTimerRegistered = wanted
-    guard wanted else {
-      scheduler.unregister(Self.pollClientID)
-      return
-    }
-    scheduler.register(Self.pollClientID, everyMs: 1000, priority: .low, on: queue) {
-      [weak self] in self?.refreshStateFromMain()
-    }
-  }
-
-  static let pollClientID = "core:debug_inspector"
 
   static func dashboardURL(host: String, port: UInt16, page: Page) -> URL? {
     guard parse(host: host, port: Int(port)) != nil else { return nil }
@@ -243,7 +282,8 @@ final class DebugServer {
       case .app(let found):
         self.sendHTML(found: found, connection: connection)
       case .state:
-        self.sendJSON(self.cachedState, connection: connection)
+        self.sendState(
+          refresh: Self.queryValue("refresh", in: request) == "1", connection: connection)
       case .logs:
         let trace = Self.queryValue("trace", in: request)
         let logs =
@@ -309,7 +349,7 @@ final class DebugServer {
     guard !stopped else { return connection.cancel() }
     let id = UUID()
     eventConnections[id] = connection
-    updateStateTimer()
+    DispatchQueue.main.async { [weak self] in self?.streamsDidChange(by: 1) }
     let headers = """
       HTTP/1.1 200 OK\r
       Content-Type: text/event-stream\r
@@ -318,15 +358,16 @@ final class DebugServer {
       \r
       """
     send(headers, connection: connection, close: false)
-    sendEvent("state", object: cachedState, connection: connection)
+    // A stale cache is not sent: the publish this stream arms delivers the
+    // current state instead.
+    if cachedStateIsCurrent { sendEvent("state", object: cachedState, connection: connection) }
     sendEvent("logs", object: ["logs": logs], connection: connection)
     // Handlers run on `queue`, where the connection was started.
     connection.stateUpdateHandler = { [weak self] state in
       switch state {
       case .cancelled:
-        guard let self else { return }
-        self.eventConnections.removeValue(forKey: id)
-        self.updateStateTimer()
+        guard let self, self.eventConnections.removeValue(forKey: id) != nil else { return }
+        DispatchQueue.main.async { self.streamsDidChange(by: -1) }
       case .failed:
         connection.cancel()
       default:

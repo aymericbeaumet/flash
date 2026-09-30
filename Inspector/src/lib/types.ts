@@ -90,6 +90,7 @@ export interface DocTopic {
 }
 
 export interface InspectorState {
+  /** When Flash took this snapshot: it pushes one on each change. */
   snapshot_at_unix_ms?: number;
   runtime?: {
     version?: string;

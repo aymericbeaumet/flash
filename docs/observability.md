@@ -67,18 +67,25 @@ launch-time inspector is disabled.
 | Endpoint | Content |
 | --- | --- |
 | `/`, `/docs/<topic>`, `/mappings`, … | the help and runtime UI ([routes](help.md#routes-and-ownership)) |
-| `/api/state` | snapshot time, version/build, start time, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, start time, restarts, last error and log line, CPU time, memory) |
+| `/api/state` | snapshot time, version/build, start time, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, start time, restarts, last error and log line, CPU time, memory); `?refresh=1` takes a fresh snapshot |
 | `/api/logs` | the last 2,000 lines; `/api/logs?trace=<id>` returns one interaction's lines |
 | `/api/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
 | `/api/events` | server-sent `state`, `logs` and `log` events |
 
-The state snapshot follows the app's changes instead of a clock: mode, focus,
-hints, plugin state and configuration each push a fresh one (a burst within
-100 ms is one push). Plugin CPU time and memory have no change notification, so
-while a browser holds `/api/events` the state is also refreshed once a
-second; the cadence is released with the last stream. Uptimes are derived in
-the page from the start times the state carries. Opening a page waits
-for the listener's ready state, not a retry loop.
+The state snapshot follows the app's changes and has no clock: mode and
+input routing, focus and mappings, hints and activation, input capture and
+the Accessibility grant, clipboard history, plugin state, configuration, the
+status bar, popups and widgets, and Flash's own windows each push one
+(`AppDelegate.debugStateJSON` maps every field to its change). The first change
+arms a 100 ms window that the rest of its burst joins, so a burst is one
+snapshot. Snapshots are taken only while a browser holds `/api/events`;
+otherwise a change only marks the cached one stale, and the next request or
+stream takes a fresh one. Uptimes are derived in the page from the start times
+the state carries. Plugin CPU time and memory have no change notification:
+they are sampled with each snapshot, and the page's Refresh and Resample
+buttons (`/api/state?refresh=1`) take one on request. Log records stream as
+they are written. Opening a page waits for the listener's ready state, not a
+retry loop.
 
 ## Stalls
 

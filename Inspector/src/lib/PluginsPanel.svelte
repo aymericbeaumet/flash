@@ -5,7 +5,7 @@
   import { bytes, duration } from "./format";
   import { now } from "./clock.svelte";
 
-  let { plugins, filter = "" }: { plugins: PluginInfo[]; filter?: string } = $props();
+  let { plugins, filter = "", sampledAt, onresample }: { plugins: PluginInfo[]; filter?: string; sampledAt?: number; onresample: () => void } = $props();
   let query = $state("");
   let health = $state("all");
   let selectedID = $state<string | null>(null);
@@ -79,6 +79,7 @@
       <div class="detail-metrics">
         <div><span>CPU time</span><strong>{duration(selected.cpu_time_ms)}</strong></div><div><span>Memory</span><strong>{bytes(selected.memory_bytes)}</strong></div><div><span>Uptime</span><strong>{selected.started_at_unix_ms == null ? "—" : duration(Math.max(0, now() - selected.started_at_unix_ms))}</strong></div><div><span>Process ID</span><strong>{selected.pid ?? "—"}</strong></div><div><span>Restarts</span><strong>{selected.restart_count ?? 0}</strong></div><div><span>Sources</span><strong>{selected.source_count ?? 0}</strong></div>
       </div>
+      <p class="sampled">CPU time and memory as of {sampledAt ? new Date(sampledAt).toLocaleTimeString() : "the last snapshot"}; they change without an event, so Flash samples them with each update. <button onclick={onresample}>Resample</button></p>
       <div class="detail-columns">
         <section><h3>Commands <span class="badge neutral">{selected.commands?.length ?? 0}</span></h3>{#if selected.commands?.length}<div class="command-list">{#each selected.commands as command}<a href={paths.commands(`:${command.command} ${command.subcommand}`.trim())}><code>:{command.command} {command.subcommand}</code><span>{command.description || "No description provided."}</span><Icon name="chevron" size={13} /></a>{/each}</div>{:else}<p class="detail-empty">This plugin does not register commands.</p>{/if}</section>
         <section><h3>Live status</h3>{#if selected.status_segments && Object.keys(selected.status_segments).length}<dl class="status-segments">{#each Object.entries(selected.status_segments) as [key, value]}<dt>{key}</dt><dd>{value || "—"}</dd>{/each}</dl>{:else}<p class="detail-empty">No status segments published.</p>{/if}{#if selected.last_log}<h4>Latest diagnostic</h4><pre class="last-log">{selected.last_log}</pre>{/if}</section>
@@ -124,7 +125,9 @@
   .detail-description { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .close { display: flex; align-items: center; justify-content: center; min-height: 30px; padding: 6px; margin-left: auto; }
   .notice pre { margin: 7px 0 0; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .detail-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 8px; background: #fafbf7; margin-bottom: 26px; }
+  .detail-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 8px; background: #fafbf7; margin-bottom: 10px; }
+  .sampled { color: var(--muted); font-size: 10px; margin: 0 0 26px; }
+  .sampled button { min-height: 0; padding: 1px 8px; margin-left: 6px; font-size: 10px; }
   .detail-metrics > div { padding: 13px 16px; border-right: 1px solid var(--border); }
   .detail-metrics > div:last-child { border-right: 0; }
   .detail-metrics span { display: block; color: var(--muted); font-size: 10px; }
@@ -154,7 +157,7 @@
   @media (max-width: 650px) { .overview > div { padding: 16px 12px; }.overview .eyebrow { font-size: 8px; }.plugin-grid { padding: 12px; grid-template-columns: minmax(0, 1fr); }.detail { padding: 20px 16px; }.detail-columns { grid-template-columns: 1fr; gap: 24px; }.detail-metrics > div { padding: 12px; } }
   @media print {
     .overview { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; break-inside: avoid; }
-    .overview > a, .details-link, .close { display: none; }
+    .overview > a, .details-link, .close, .sampled button { display: none; }
     .overview > div:nth-child(3) { border-right: 0; }
     .plugin-browser { overflow: visible; border: 0; }
     .plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0; background: none; }

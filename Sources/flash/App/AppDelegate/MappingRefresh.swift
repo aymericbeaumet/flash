@@ -20,6 +20,7 @@ extension AppDelegate {
         timeoutMs: config.mode.sequenceTimeoutMs)
       mappings.apply(mode: effective)
       lastAppliedMappingMode = effective
+      debugStateDidChange()
     }
   }
 

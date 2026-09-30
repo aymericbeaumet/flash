@@ -72,6 +72,7 @@ extension OverlayPanel {
     guard statusBarYieldsToNativeMenuBar != yields else { return }
     statusBarYieldsToNativeMenuBar = yields
     applyStatusBarWindowLevel()
+    statusBarDidChange?()
   }
 
   func applyStatusBarWindowLevel() {

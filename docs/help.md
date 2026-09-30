@@ -30,9 +30,13 @@ troubleshooting and development. Plugin manifests add their own topics.
 | Logs | Recent structured diagnostics and interaction traces |
 | Clipboard | Recent entries supplied by the clipboard plugin |
 
-The browser follows the resident's event stream. A disconnected browser keeps
-its last snapshot and marks the connection state; it must not present that
-snapshot as current. Runtime state can include private app or clipboard data;
+The browser follows the resident's event stream: Flash pushes a snapshot when
+something it shows changes, never on a timer, and the page derives uptimes
+from the start times it carries. Plugin CPU time and memory change without an
+event, so they read as of the last snapshot; Refresh on the runtime page and
+Resample on a plugin's details ask for a fresh one. A disconnected browser
+keeps its last snapshot and marks the connection state; it must not present
+that snapshot as current. Runtime state can include private app or clipboard data;
 see [privacy](privacy.md#local-inspector) before sharing it.
 
 ## Routes and ownership
@@ -48,7 +52,7 @@ the browser commands needs it, or at launch with
 | `/mappings`, `/commands` | Effective mappings; command catalog. `?q=<text>` starts the list filtered |
 | `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
 | `/state`, `/logs`, `/clipboard` | Runtime, logs and clipboard pages |
-| `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read |
+| `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |
 
 The page routes itself with the History API: same-origin page links navigate
 in place, back/forward restore each page's scroll position, and modified,

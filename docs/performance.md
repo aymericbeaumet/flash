@@ -263,7 +263,6 @@ work whose source has no change notification, and all of it rides the one
 | Menu-bar reveal probe | The pointer is in the top band | 80 ms, `system` priority (no reveal notification exists) |
 | Plugin liveness sweep | A plugin runs | 30 s, `low` priority; pings only a plugin silent for 60 s |
 | Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input |
-| Inspector state refresh | A browser holds `/api/events` | 1 s |
 
 Bundled plugins register cadences only for values no event reports, and only
 while something can see them: `cpu`, `memory`, `disks`, `processes` and
@@ -272,7 +271,8 @@ traffic while a traffic segment is shown, `tmux` inventory while a client is
 attached, and the `feed` and `answers` refreshes. Network discovery follows
 `core:network.changed`, the disk mount set `core:volumes.changed`, and the
 window, tab and terminal catalogs the `core:ax.changed` notifications that can
-change them; none of those polls.
+change them; none of those polls. The [HTTP inspector](observability.md#http-inspector)
+has no cadence either: its state is pushed on the changes it shows.
 
 Every one of them is held while the displays sleep, the session is locked or
 switched out, or the system sleeps, and resumes with one catch-up tick.

@@ -61,6 +61,9 @@ final class StatusPopupController {
   var didDismissFocus: ((String) -> Void)?
   /// Observation only: the registry has already been told the showing ended.
   var didDismiss: ((String) -> Void)?
+  /// Observation only: the presentation or one of the registry's sessions
+  /// changed.
+  var didChange: (() -> Void)?
   var inputInterceptor: ((NSEvent) -> Bool)?
 
   var frame: CGRect { panel.frame }
@@ -101,7 +104,9 @@ final class StatusPopupController {
       }
     }
     terminals.didChange = { [weak self] in
-      guard let self, let region = self.region, self.isVisible else { return }
+      guard let self else { return }
+      self.didChange?()
+      guard let region = self.region, self.isVisible else { return }
       self.layout(region: region)
     }
   }
@@ -341,6 +346,7 @@ final class StatusPopupController {
       terminalView.isRenderingEnabled = false
       if windowActionsEnabled { panel.orderOut(nil) }
     }
+    didChange?()
   }
 
   private func layout(region: StatusBarPopupRegion) {

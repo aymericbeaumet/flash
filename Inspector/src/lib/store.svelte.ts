@@ -51,6 +51,19 @@ class InspectorStore {
     });
   }
 
+  /** Ask Flash for a fresh snapshot. Everything else is pushed as it
+   * changes; plugin CPU time and memory have no change to push, so they are
+   * resampled with each snapshot and on this request. */
+  async refresh() {
+    try {
+      const response = await fetch("/api/state?refresh=1");
+      if (!response.ok) return;
+      const state = (await response.json()) as InspectorState;
+      // The same snapshot also arrives on the stream; never go back in time.
+      if (state && typeof state === "object" && (state.snapshot_at_unix_ms ?? 0) >= (this.state.snapshot_at_unix_ms ?? 0)) this.state = state;
+    } catch { /* The stream keeps the page current; a failed resample changes nothing. */ }
+  }
+
   stop() {
     this.requests?.abort();
     this.requests = null;
