@@ -8,10 +8,9 @@ use flash_plugin::{
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-/// Safety poll only: `core:power.changed` (an IOKit power-source notification
-/// the host relays) drives every charge, source, and state change, so the
-/// timer merely bounds how stale the display can get if an event is missed.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// Minimum age of the `ioreg` health read before a power event repeats it.
+/// There is no poll: `core:power.changed` (the host's IOKit power-source
+/// notification) drives every charge, source, and state change.
 const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const PMSET: &str = "/usr/bin/pmset";
 const IOREG: &str = "/usr/sbin/ioreg";
@@ -130,9 +129,6 @@ impl FlashPlugin for Power {
     async fn on_start(&self, ctx: Context) {
         warn_invalid_summary_mode(&ctx);
         let _ = refresh_and_publish(&ctx, true).await;
-        drop(ctx.interval(REFRESH_INTERVAL, |ctx| async move {
-            let _ = refresh_and_publish(&ctx, false).await;
-        }));
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -653,6 +649,20 @@ mod tests {
         }
     }
 
+    /// `core:power.changed` (the host's IOKit power-source notification) is
+    /// the only refresh trigger after startup: nothing registers a cadence.
+    #[tokio::test]
+    async fn startup_registers_no_cadence() {
+        let mut harness = flash_plugin::testing::Harness::new("power");
+        Power.on_start(harness.context()).await;
+        let polls: Vec<_> = harness
+            .drain()
+            .into_iter()
+            .filter(|frame| frame["method"] == "poll")
+            .collect();
+        assert!(polls.is_empty(), "{polls:?}");
+    }
+
     #[test]
     fn publishes_the_preview_inline_on_the_summary_only() {
         let mut harness = flash_plugin::testing::Harness::new("power");
@@ -845,7 +855,6 @@ mod tests {
 #[fg=colour245]Adapter       #[default] 67 W\n\
 #[fg=colour245]History       #[default]····················"
         );
-        assert_eq!(REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(HEALTH_REFRESH_INTERVAL, Duration::from_secs(30));
         assert!(!details.as_str().ends_with('\n'));
         assert_eq!(
