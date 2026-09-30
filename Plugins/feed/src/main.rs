@@ -91,22 +91,17 @@ impl FlashPlugin for Feed {
             settings.label,
             settings.cycle_interval,
         )));
-        let refreshed = Arc::new(tokio::sync::Notify::new());
-        drop(tokio::spawn(expire_articles(
-            ctx.clone(),
-            Arc::clone(&state),
-            Arc::clone(&refreshed),
-        )));
         let failure_logged = Arc::new(Mutex::new(false));
+        // Each tick fetches and, even when the fetch fails, drops the
+        // articles that left the window: expiry rides the refresh cadence
+        // rather than arming a timer of its own.
         let refresh = {
             let state = Arc::clone(&state);
-            let refreshed = Arc::clone(&refreshed);
             let failure_logged = Arc::clone(&failure_logged);
             let url = settings.url.clone();
             move |ctx: Context| {
                 let client = client.clone();
                 let state = Arc::clone(&state);
-                let refreshed = Arc::clone(&refreshed);
                 let failure_logged = Arc::clone(&failure_logged);
                 let url = url.clone();
                 async move {
@@ -144,7 +139,6 @@ impl FlashPlugin for Feed {
                         .unwrap()
                         .refresh(result.map_err(|_| ()), Utc::now().timestamp());
                     publish(&ctx, segment);
-                    refreshed.notify_one();
                 }
             }
         };
@@ -152,32 +146,6 @@ impl FlashPlugin for Feed {
         // one after it from the shared clock.
         refresh(ctx.clone()).await;
         drop(ctx.interval(settings.refresh_interval, refresh));
-    }
-}
-
-/// Rotation belongs to the host; the plugin only wakes when the oldest
-/// article leaves the window, so the carousel never shows a stale headline.
-async fn expire_articles(
-    ctx: Context,
-    state: Arc<Mutex<state::State>>,
-    refreshed: Arc<tokio::sync::Notify>,
-) {
-    loop {
-        let delay = state.lock().unwrap().expires_in(Utc::now().timestamp());
-        match delay {
-            Some(delay) => {
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {}
-                    _ = refreshed.notified() => continue,
-                }
-            }
-            None => {
-                refreshed.notified().await;
-                continue;
-            }
-        }
-        let segment = state.lock().unwrap().expire(Utc::now().timestamp());
-        publish(&ctx, segment);
     }
 }
 

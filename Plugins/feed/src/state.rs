@@ -36,6 +36,9 @@ impl State {
         }
     }
 
+    /// Apply one refresh tick: a successful fetch replaces the articles, a
+    /// failed one keeps the last good ones, and either way the articles that
+    /// left the window by `now` drop out. There is no separate expiry timer.
     pub(crate) fn refresh(
         &mut self,
         articles: Result<Vec<Article>, ()>,
@@ -45,19 +48,6 @@ impl State {
             self.articles = articles;
         }
         self.publish(now)
-    }
-
-    pub(crate) fn expire(&mut self, now: i64) -> Option<Segments> {
-        self.publish(now)
-    }
-
-    /// Time until the oldest retained article leaves the window.
-    pub(crate) fn expires_in(&self, now: i64) -> Option<Duration> {
-        self.articles
-            .iter()
-            .map(|article| (article.published_at + feed::WINDOW_SECONDS - now).max(0) as u64)
-            .min()
-            .map(Duration::from_secs)
     }
 
     fn publish(&mut self, now: i64) -> Option<Segments> {
@@ -204,30 +194,21 @@ mod tests {
     }
 
     #[test]
-    fn expiry_drops_old_articles_and_clears_when_none_remain() {
+    fn a_failed_refresh_tick_still_expires_old_articles_and_clears_when_none_remain() {
         let a = article("A", 100);
         let b = article("B", 200);
         let mut state = State::new("AGGR".into(), Duration::from_secs(30));
         state.refresh(Ok(vec![a, b.clone()]), 201);
+        assert_eq!(state.refresh(Err(()), 99 + feed::WINDOW_SECONDS), None);
         assert_eq!(
-            state.expires_in(99 + feed::WINDOW_SECONDS),
-            Some(Duration::from_secs(1))
-        );
-        assert_eq!(state.expire(99 + feed::WINDOW_SECONDS), None);
-        assert_eq!(
-            carousel(state.expire(100 + feed::WINDOW_SECONDS)).lines,
+            carousel(state.refresh(Err(()), 100 + feed::WINDOW_SECONDS)).lines,
             vec![render(&b)]
-        );
-        assert_eq!(
-            state.expires_in(100 + feed::WINDOW_SECONDS),
-            Some(Duration::from_secs(100))
         );
         assert_eq!(
             state.refresh(Err(()), 200 + feed::WINDOW_SECONDS),
             cleared()
         );
-        assert_eq!(state.expires_in(200 + feed::WINDOW_SECONDS), None);
-        assert_eq!(state.expire(201 + feed::WINDOW_SECONDS), None);
+        assert_eq!(state.refresh(Err(()), 201 + feed::WINDOW_SECONDS), None);
     }
 
     #[test]

@@ -270,13 +270,14 @@ to 300 seconds and `cycle_interval` to 30 seconds. The plugin publishes every
 article in the window as one host-rotated carousel; Flash rotates it, keeps the
 visible headline until its scheduled rotation across refreshes, and slides the
 title, domain, and outbound arrow together through the full bar height while
-the label stays still as the carousel's prefix. The plugin wakes only when the
-oldest article leaves the window.
+the label stays still as the carousel's prefix. The refresh cadence, driven by
+the host clock, is the plugin's only timer: an article that leaves the window
+drops out at the next refresh.
 Other metrics update without this transition, including when pooled layers are reused.
 
 Only items with a valid publication date within the rolling last 24 hours
 participate, newest first. Missing dates and future dates are excluded.
-Rotation also expires old items during a failed refresh; a transient network
+A failed refresh still expires old items; a transient network
 or parse failure retains the remaining last-good items, while a successful
 empty feed clears the segment.
 
