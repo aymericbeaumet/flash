@@ -67,16 +67,17 @@ launch-time inspector is disabled.
 | Endpoint | Content |
 | --- | --- |
 | `/`, `/docs/<topic>`, `/mappings`, … | the help and runtime UI ([routes](help.md#routes-and-ownership)) |
-| `/api/state` | snapshot time, version/build, uptime, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, restarts, last error and log line, CPU %, memory) |
+| `/api/state` | snapshot time, version/build, start time, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, start time, restarts, last error and log line, CPU time, memory) |
 | `/api/logs` | the last 2,000 lines; `/api/logs?trace=<id>` returns one interaction's lines |
 | `/api/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
 | `/api/events` | server-sent `state`, `logs` and `log` events |
 
 The state snapshot follows the app's changes instead of a clock: mode, focus,
 hints, plugin state and configuration each push a fresh one (a burst within
-100 ms is one push). Plugin CPU and memory have no change notification, so
+100 ms is one push). Plugin CPU time and memory have no change notification, so
 while a browser holds `/api/events` the state is also refreshed once a
-second; the cadence is released with the last stream. Opening a page waits
+second; the cadence is released with the last stream. Uptimes are derived in
+the page from the start times the state carries. Opening a page waits
 for the listener's ready state, not a retry loop.
 
 ## Stalls
@@ -107,8 +108,8 @@ stretch.
   counts the ones held back.
 - A `search` or `hints` handler that runs out of its request's `deadline_ms`
   logs `[plugin] <method> exceeded its deadline` under the request's trace.
-- Per-plugin CPU % (`/api/state`, `:plugins`) is computed from real CPU time;
-  rusage reports Mach ticks, converted to nanoseconds.
+- Per-plugin CPU time (`/api/state`, `:plugins`) is the process's user plus
+  system time; rusage reports Mach ticks, converted to nanoseconds.
 
 ## Privacy
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { InspectorState } from "./types";
   import { duration } from "./format";
+  import { now } from "./clock.svelte";
   let { state: snapshot, connected }: { state: InspectorState; connected: boolean } = $props();
   let configQuery = $state("");
   let showJSON = $state(false);
@@ -12,7 +13,7 @@
 <div class="page"><div class="page-heading"><p class="eyebrow">Inspect</p><h1>Runtime & configuration</h1><p>The state of your running Flash, including permissions, input routing, and resolved settings.</p></div>
   {#if runtime?.config_error}<div class="notice error"><strong>Configuration error</strong><p>{runtime.config_error}</p><a href="/docs/config">Configuration reference →</a></div>{/if}
   <div class="runtime-grid">
-    <section class="surface"><h2>Resident app <span class="badge" class:neutral={!connected}>{connected ? "Connected" : "Disconnected"}</span></h2><dl><dt>Version</dt><dd>{runtime?.version ?? "—"}{#if runtime?.build} <span class="muted">({runtime.build})</span>{/if}</dd><dt>Process</dt><dd>{runtime?.pid ?? "—"}</dd><dt>Uptime</dt><dd>{runtime?.uptime_seconds == null ? "—" : duration(runtime.uptime_seconds * 1000)}</dd><dt>Snapshot</dt><dd>{snapshot.snapshot_at_unix_ms ? new Date(snapshot.snapshot_at_unix_ms).toLocaleTimeString() : "Waiting for Flash"}</dd></dl></section>
+    <section class="surface"><h2>Resident app <span class="badge" class:neutral={!connected}>{connected ? "Connected" : "Disconnected"}</span></h2><dl><dt>Version</dt><dd>{runtime?.version ?? "—"}{#if runtime?.build} <span class="muted">({runtime.build})</span>{/if}</dd><dt>Process</dt><dd>{runtime?.pid ?? "—"}</dd><dt>Uptime</dt><dd>{runtime?.started_at_unix_ms == null ? "—" : duration(Math.max(0, now() - runtime.started_at_unix_ms))}</dd><dt>Snapshot</dt><dd>{snapshot.snapshot_at_unix_ms ? new Date(snapshot.snapshot_at_unix_ms).toLocaleTimeString() : "Waiting for Flash"}</dd></dl></section>
     <section class="surface"><h2>Input & permissions</h2><dl><dt>Mode</dt><dd><span class="badge">{snapshot.mode ?? "—"}</span></dd><dt>Overlay</dt><dd>{snapshot.overlay || "None"}</dd><dt>Accessibility</dt><dd>{yesNo(runtime?.accessibility_trusted, "Granted", "Not granted")}</dd><dt>Keyboard capture</dt><dd>{yesNo(runtime?.keyboard_capture_active, "Active", "Inactive")}</dd><dt>Secure input</dt><dd>{yesNo(runtime?.secure_input, "Enabled; capture suspended", "Inactive")}</dd><dt>Advanced mode</dt><dd>{yesNo(runtime?.advanced_mode, "Enabled", "Disabled")}</dd></dl><a href="/docs/normal-mode">How input capture works →</a></section>
     <section class="surface"><h2>Focused application</h2><dl><dt>Application</dt><dd>{snapshot.focused_app?.localized_name ?? "None"}</dd><dt>Bundle ID</dt><dd><code>{snapshot.focused_app?.bundle_id ?? "—"}</code></dd><dt>Process</dt><dd>{snapshot.focused_app?.pid ?? "—"}</dd><dt>Mapping context</dt><dd>{snapshot.mappings?.localized_name ?? "Global"}</dd></dl><a href="/mappings">See effective mappings →</a></section>
     <section class="surface"><h2>Configuration</h2><p class="config-path"><code>{runtime?.config_path ?? "Waiting for config path"}</code></p><p class="muted">The values below are the resolved configuration. Save your TOML file to apply changes live.</p><a href="/docs/config">Configuration reference →</a></section>

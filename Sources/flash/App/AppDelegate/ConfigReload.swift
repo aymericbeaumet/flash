@@ -339,7 +339,7 @@ extension AppDelegate {
         "version": bundleInfo["CFBundleShortVersionString"] as? String ?? "development",
         "build": bundleInfo["CFBundleVersion"] as? String ?? "unknown",
         "pid": ProcessInfo.processInfo.processIdentifier,
-        "uptime_seconds": max(0, ProcessInfo.processInfo.systemUptime - runtimeStartedAt),
+        "started_at_unix_ms": Int64(runtimeStartedAt.timeIntervalSince1970 * 1000),
         "accessibility_trusted": PermissionCheck.isAccessibilityTrusted,
         "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput,
         "secure_input": secureInput,

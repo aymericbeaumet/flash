@@ -22,11 +22,6 @@ export function bytes(value?: number | null): string {
   return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
-export function percent(value?: number | null): string {
-  if (value == null) return "-";
-  return `${value.toFixed(1)}%`;
-}
-
 export function duration(ms?: number | null): string {
   if (ms == null) return "-";
   if (ms < 1000) return `${ms}ms`;

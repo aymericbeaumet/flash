@@ -23,7 +23,11 @@ final class DebugServerTests: XCTestCase {
     XCTAssertFalse(json.contains("private-test-token"))
     let runtime = try XCTUnwrap(state["runtime"] as? [String: Any])
     XCTAssertEqual(runtime["pid"] as? Int32, ProcessInfo.processInfo.processIdentifier)
-    XCTAssertGreaterThanOrEqual(try XCTUnwrap(runtime["uptime_seconds"] as? Double), 0)
+    // Uptime is derived client-side from a fixed start time, never pushed.
+    XCTAssertNil(runtime["uptime_seconds"])
+    let started = try XCTUnwrap(runtime["started_at_unix_ms"] as? Int64)
+    XCTAssertEqual(
+      Double(started), delegate.runtimeStartedAt.timeIntervalSince1970 * 1000, accuracy: 1)
     XCTAssertEqual(runtime["keyboard_capture_active"] as? Bool, false)
     XCTAssertNotNil(state["snapshot_at_unix_ms"] as? Int64)
     XCTAssertEqual(state["overlay"] as? String, String(describing: delegate.overlay.inputMode))

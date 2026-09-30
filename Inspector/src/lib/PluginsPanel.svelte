@@ -2,7 +2,8 @@
   import Icon from "./Icon.svelte";
   import { paths } from "./routes";
   import type { PluginInfo } from "./types";
-  import { bytes, duration, percent } from "./format";
+  import { bytes, duration } from "./format";
+  import { now } from "./clock.svelte";
 
   let { plugins, filter = "" }: { plugins: PluginInfo[]; filter?: string } = $props();
   let query = $state("");
@@ -60,7 +61,7 @@
           <button class="plugin-card" class:selected={plugin.id === selectedID} aria-expanded={plugin.id === selectedID} aria-controls="plugin-detail" onclick={() => selectedID = selectedID === plugin.id ? null : plugin.id}>
             <span class="card-heading"><span class="plugin-icon"><Icon name="plugins" size={19} /></span><span class="plugin-title"><strong>{plugin.name || plugin.id}</strong><code>{plugin.id}{plugin.version ? ` · ${plugin.version}` : ""}</code></span><span class="badge {stateClass(plugin)}">{label(plugin.state)}</span></span>
             <span class="card-description">{plugin.description || "No description provided."}</span>
-            <span class="card-metrics"><span><span class="metric-label">CPU</span><strong>{percent(plugin.cpu_percent)}</strong></span><span><span class="metric-label">Memory</span><strong>{bytes(plugin.memory_bytes)}</strong></span><span><span class="metric-label">Commands</span><strong>{plugin.command_count ?? plugin.commands?.length ?? 0}</strong></span></span>
+            <span class="card-metrics"><span><span class="metric-label">CPU time</span><strong>{duration(plugin.cpu_time_ms)}</strong></span><span><span class="metric-label">Memory</span><strong>{bytes(plugin.memory_bytes)}</strong></span><span><span class="metric-label">Commands</span><strong>{plugin.command_count ?? plugin.commands?.length ?? 0}</strong></span></span>
             <span class="card-footer"><span>{label(plugin.activation || "resident")}{plugin.origin ? ` · ${plugin.origin}` : ""}</span><span class="details-link">{plugin.id === selectedID ? "Close details" : "Inspect"}<Icon name="chevron" size={12} /></span></span>
             {#if plugin.last_error}<span class="card-error">{plugin.last_error}</span>{/if}
           </button>
@@ -76,7 +77,7 @@
       <header><div><p class="eyebrow">Plugin details</p><h2>{selected.name || selected.id} <span class="badge {stateClass(selected)}">{label(selected.state)}</span></h2><p class="detail-description">{selected.description || selected.id}</p></div><button class="close" aria-label="Close plugin details" onclick={() => selectedID = null}><Icon name="close" size={17} /></button></header>
       {#if selected.last_error}<div class="notice error"><strong>Last reported error</strong><pre>{selected.last_error}</pre></div>{/if}
       <div class="detail-metrics">
-        <div><span>CPU</span><strong>{percent(selected.cpu_percent)}</strong></div><div><span>Memory</span><strong>{bytes(selected.memory_bytes)}</strong></div><div><span>Uptime</span><strong>{duration(selected.uptime_ms)}</strong></div><div><span>Process ID</span><strong>{selected.pid ?? "—"}</strong></div><div><span>Restarts</span><strong>{selected.restart_count ?? 0}</strong></div><div><span>Sources</span><strong>{selected.source_count ?? 0}</strong></div>
+        <div><span>CPU time</span><strong>{duration(selected.cpu_time_ms)}</strong></div><div><span>Memory</span><strong>{bytes(selected.memory_bytes)}</strong></div><div><span>Uptime</span><strong>{selected.started_at_unix_ms == null ? "—" : duration(Math.max(0, now() - selected.started_at_unix_ms))}</strong></div><div><span>Process ID</span><strong>{selected.pid ?? "—"}</strong></div><div><span>Restarts</span><strong>{selected.restart_count ?? 0}</strong></div><div><span>Sources</span><strong>{selected.source_count ?? 0}</strong></div>
       </div>
       <div class="detail-columns">
         <section><h3>Commands <span class="badge neutral">{selected.commands?.length ?? 0}</span></h3>{#if selected.commands?.length}<div class="command-list">{#each selected.commands as command}<a href={paths.commands(`:${command.command} ${command.subcommand}`.trim())}><code>:{command.command} {command.subcommand}</code><span>{command.description || "No description provided."}</span><Icon name="chevron" size={13} /></a>{/each}</div>{:else}<p class="detail-empty">This plugin does not register commands.</p>{/if}</section>

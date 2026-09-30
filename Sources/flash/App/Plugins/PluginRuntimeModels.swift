@@ -98,16 +98,17 @@ struct PluginStatus {
   var state: String
   var activation: String
   var pid: Int?
-  var uptimeMs: Int?
+  /// When the running process started; readers derive its uptime.
+  var startedAtUnixMs: Int64?
   var sourceCount: Int
   var commandCount: Int
   var restartCount: Int
   var lastError: String?
   var lastLog: String?
-  /// Instantaneous CPU usage (% of one core) sampled from the plugin's
-  /// own subprocess; `nil` until the second sample lets us compute a
-  /// delta, or when the process isn't running.
-  var cpuPercent: Double?
+  /// User plus system CPU time the plugin subprocess has used, read when
+  /// the status is taken; nil when the process isn't running. A total
+  /// rather than a rate, so it needs no previous sample.
+  var cpuTimeMs: Int?
   /// Resident set size in bytes for the plugin subprocess.
   var memoryBytes: Int?
   /// Bundle identifiers the plugin's root selector is scoped to.
@@ -126,7 +127,7 @@ struct PluginStatus {
       "commands": commands.map {
         ["command": $0.command, "subcommand": $0.subcommand, "description": $0.description]
       },
-      "cpu_percent": cpuPercent ?? NSNull(),
+      "cpu_time_ms": cpuTimeMs ?? NSNull(),
       "description": description,
       "id": id,
       "last_error": lastError ?? NSNull(),
@@ -140,9 +141,9 @@ struct PluginStatus {
       "restart_count": restartCount,
       "root": root,
       "source_count": sourceCount,
+      "started_at_unix_ms": startedAtUnixMs ?? NSNull(),
       "state": state,
       "status_segments": statusSegments,
-      "uptime_ms": uptimeMs ?? NSNull(),
       "version": version,
     ]
   }

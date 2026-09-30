@@ -24,13 +24,16 @@ export interface PluginInfo {
   /** resident | on_demand | manifest_only */
   activation?: string;
   pid?: number | null;
-  uptime_ms?: number | null;
+  /** When the running process started; the page derives its uptime. */
+  started_at_unix_ms?: number | null;
   source_count?: number;
   command_count?: number;
   restart_count?: number;
   last_error?: string | null;
   last_log?: string | null;
-  cpu_percent?: number | null;
+  /** Cumulative CPU time, sampled with the snapshot (`snapshot_at_unix_ms`). */
+  cpu_time_ms?: number | null;
+  /** Resident memory, sampled with the snapshot. */
   memory_bytes?: number | null;
   only_bundle_ids?: string[];
   priority?: number;
@@ -92,7 +95,8 @@ export interface InspectorState {
     version?: string;
     build?: string;
     pid?: number;
-    uptime_seconds?: number;
+    /** When the resident started; the page derives its uptime. */
+    started_at_unix_ms?: number;
     accessibility_trusted?: boolean;
     keyboard_capture_active?: boolean;
     secure_input?: boolean;

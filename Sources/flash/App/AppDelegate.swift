@@ -70,7 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   var config = Config.default
-  let runtimeStartedAt = ProcessInfo.processInfo.systemUptime
+  /// When this resident started; the inspector derives uptime from it.
+  let runtimeStartedAt = Date()
   let pluginManager = PluginManager()
   /// `[app] keyboard_layout`'s reference table, rebuilt off the key path and
   /// handed to the overlay.
