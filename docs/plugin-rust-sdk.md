@@ -136,7 +136,8 @@ Handed to every handler; cheap to clone. Key surface:
   time: the processes plugin arms its top-N sample when `core:status.observed`
   first lists `top_cpu` or `top_mem`, cancels it when neither is listed, and
   clears the table nobody shows. A callback that overruns its period simply
-  misses ticks. Prefer `on_event`: the host exposes an event for every source
+  misses ticks, and no tick arrives while the displays sleep or the session is
+  locked (one catch-up tick follows). Prefer `on_event`: the host exposes an event for every source
   it can observe, and a cadence is the answer only when nothing else can tell
   you the value changed.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications

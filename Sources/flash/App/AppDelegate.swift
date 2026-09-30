@@ -663,7 +663,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.overlay.hideStatusBarPopup()
         let secureUI = Self.activeWindowBorderSecureUISuspendsSession(
           bundleIdentifier: app.bundleIdentifier)
-        self.setActiveWindowBorderSessionSuspended(
+        self.setSessionSuspended(
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
         self.applyFocusedApplicationChange(app, reason: "focus_changed", emitFocusEvent: true)
         self.cancelOverlay()
@@ -763,7 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.setActiveWindowBorderSessionSuspended(
+      self?.setSessionSuspended(
         true, source: .session, reason: "session_resigned")
     }
     let sessionBecameActive = nc.addObserver(
@@ -773,12 +773,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] _ in
       guard let self else { return }
       self.overlay.reassertStatusBar(reason: "session_active")
-      self.setActiveWindowBorderSessionSuspended(
+      self.setSessionSuspended(
         false, source: .session, reason: "session_active")
       // The secure login surface may have activated without a corresponding
       // regular-app activation on the way back. A session switch-in is the
       // authoritative signal that it no longer owns the desktop.
-      self.setActiveWindowBorderSessionSuspended(
+      self.setSessionSuspended(
         false, source: .secureUI, reason: "session_active")
     }
     let screensSlept = nc.addObserver(
@@ -786,7 +786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.setActiveWindowBorderSessionSuspended(
+      self?.setSessionSuspended(
         true, source: .screens, reason: "screens_sleep")
     }
     let screensWoke = nc.addObserver(
@@ -795,7 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       self?.overlay.reassertStatusBar(reason: "screens_wake")
-      self?.setActiveWindowBorderSessionSuspended(
+      self?.setSessionSuspended(
         false, source: .screens, reason: "screens_wake")
     }
     let systemWillSleep = nc.addObserver(
@@ -803,7 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.setActiveWindowBorderSessionSuspended(
+      self?.setSessionSuspended(
         true, source: .systemSleep, reason: "system_sleep")
     }
     let systemWoke = nc.addObserver(
@@ -812,7 +812,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       self?.overlay.reassertStatusBar(reason: "system_wake")
-      self?.setActiveWindowBorderSessionSuspended(
+      self?.setSessionSuspended(
         false, source: .systemSleep, reason: "system_wake")
     }
     workspaceTokens = [
@@ -950,6 +950,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// is the one unavoidable poll on that path — and with no subscriber there
   /// is nothing to poll for. Owning the watch here keeps plugins free of
   /// polling; the clipboard plugin just subscribes to the event.
+  /// Every session-suspension signal lands here: the active-window border
+  /// hides, and the shared poll clock holds every registration — nothing a
+  /// poll produces can be seen while the displays sleep or the session is
+  /// locked or switched out. The last release resumes both.
+  func setSessionSuspended(
+    _ suspended: Bool, source: ActiveWindowBorderSessionSuspension, reason: String
+  ) {
+    let poll: PollScheduler.Suspension
+    switch source {
+    case .session: poll = .session
+    case .screens: poll = .screens
+    case .systemSleep: poll = .systemSleep
+    case .secureUI: poll = .secureUI
+    }
+    PollScheduler.shared.setSuspended(suspended, reason: poll)
+    setActiveWindowBorderSessionSuspended(suspended, source: source, reason: reason)
+  }
+
   func reconcileClipboardMonitor() {
     let wanted = pluginManager.hasListener(for: "core:clipboard.changed")
     guard wanted != (clipboardMonitor != nil) else { return }

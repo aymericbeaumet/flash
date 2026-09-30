@@ -11,7 +11,10 @@ import Foundation
 ///
 /// The scheduler stops completely when nothing is registered, and a client
 /// whose previous tick has not returned is skipped rather than queued, so a
-/// slow collector can never pile work up behind itself.
+/// slow collector can never pile work up behind itself. It also holds every
+/// registration while nothing a poll produces can be seen or acted on —
+/// displays asleep, the session switched out or locked, the system going to
+/// sleep — and resumes with one catch-up tick for whatever fell due meanwhile.
 final class PollScheduler {
   /// The process-wide clock. Core watchers and plugin registrations share it
   /// so the whole app wakes on one schedule.
@@ -62,6 +65,55 @@ final class PollScheduler {
     /// Slack for that wake-up: the tightest requirement among the clients
     /// riding it, so one demanding client cannot be loosened by a lax one.
     var leewayMs: Int = Priority.low.leewayMs
+  }
+
+  /// Why every registration is held. Each is set and cleared by its own
+  /// workspace notification, so the reasons overlap freely.
+  enum Suspension: Hashable, CaseIterable {
+    /// The user session is switched out (fast user switching).
+    case session
+    /// The displays are asleep.
+    case screens
+    /// The system is going to sleep.
+    case systemSleep
+    /// The login window (a locked screen) or the screen saver is in front.
+    case secureUI
+  }
+
+  /// Pure suspension state: the reasons in force and the transition a change
+  /// makes. Only the first reason suspends and only the last one's release
+  /// resumes.
+  struct Gate: Equatable {
+    enum Transition: Equatable {
+      case unchanged
+      case suspended
+      case resumed
+    }
+
+    private(set) var reasons: Set<Suspension> = []
+    var isSuspended: Bool { !reasons.isEmpty }
+
+    mutating func set(_ reason: Suspension, active: Bool) -> Transition {
+      let wasSuspended = isSuspended
+      if active {
+        guard reasons.insert(reason).inserted else { return .unchanged }
+      } else {
+        guard reasons.remove(reason) != nil else { return .unchanged }
+      }
+      switch (wasSuspended, isSuspended) {
+      case (false, true): return .suspended
+      case (true, false): return .resumed
+      default: return .unchanged
+      }
+    }
+  }
+
+  /// Milliseconds on a clock that keeps counting while the system sleeps
+  /// (`CLOCK_MONOTONIC`, unlike `DispatchTime`'s uptime): a wake finds every
+  /// deadline that passed during the sleep overdue, so they run in the one
+  /// catch-up tick instead of each waiting out its full interval again.
+  static func continuousNowMs() -> Int {
+    Int(clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1_000_000)
   }
 
   struct ClientState: Equatable {
@@ -127,10 +179,33 @@ final class PollScheduler {
   private var clients: [String: Client] = [:]
   private var timer: DispatchSourceTimer?
   private var armedForMs: Int?
+  private var gate = Gate()
   private let clock: () -> Int
 
-  init(clock: @escaping () -> Int = { Int(DispatchTime.now().uptimeNanoseconds / 1_000_000) }) {
+  init(clock: @escaping () -> Int = PollScheduler.continuousNowMs) {
     self.clock = clock
+  }
+
+  /// Hold (or release) every registration for `reason`. Registrations keep
+  /// changing while held; nothing fires. The release of the last reason runs
+  /// each client whose deadline passed meanwhile exactly once — a repeating
+  /// client then returns to its grid, a deadline registration is dropped.
+  func setSuspended(_ suspended: Bool, reason: Suspension) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      switch self.gate.set(reason, active: suspended) {
+      case .unchanged:
+        return
+      case .suspended:
+        FlashLog.debug("[poll] suspended reason=\(reason)")
+        self.timer?.cancel()
+        self.timer = nil
+        self.armedForMs = nil
+      case .resumed:
+        FlashLog.debug("[poll] resumed reason=\(reason)")
+        self.rearm(now: self.clock())
+      }
+    }
   }
 
   /// Register (or re-register) `id` at `everyMs`. The handler runs on `queue`
@@ -199,7 +274,7 @@ final class PollScheduler {
 
   private func rearm(now: Int) {
     let plan = Self.plan(nowMs: now, clients: clients.values.map(\.state))
-    guard let wakeup = plan.nextWakeupMs else {
+    guard !gate.isSuspended, let wakeup = plan.nextWakeupMs else {
       timer?.cancel()
       timer = nil
       armedForMs = nil
@@ -218,6 +293,7 @@ final class PollScheduler {
   }
 
   private func fire() {
+    guard !gate.isSuspended else { return }
     let now = clock()
     let plan = Self.plan(nowMs: now, clients: clients.values.map(\.state))
     for (id, next) in plan.rescheduled { clients[id]?.state.nextAtMs = next }

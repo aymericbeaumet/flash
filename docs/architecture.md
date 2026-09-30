@@ -101,6 +101,17 @@ surface's clock and pending output — each time one lands, for the bar and
 desktop widgets alike. Plugins register over the wire with `poll` and are ticked with a
 `core:poll:<name>` event.
 
+Nothing a poll produces can be seen while the displays sleep, the session is
+switched out, the login window (a locked screen) or screen saver is in front,
+or the system is going to sleep, so the scheduler holds every registration —
+plugin cadences, status jobs and clocks, the clipboard watcher — while any of
+those holds (`PollScheduler.Gate`, fed by the same workspace notifications
+that hide the window border). Registrations keep changing while held; the
+last release runs each one that fell due meanwhile exactly once, then
+repeating ones return to their grid. The scheduler's clock counts time spent
+asleep (`CLOCK_MONOTONIC`), so a wake finds those deadlines overdue rather than
+each waiting out its interval again. Clients never check the gate themselves.
+
 Each registration carries a priority, which sets how much slack its wake-up
 allows: `system` for input-adjacent probes whose lateness is visible, `high`
 for surfaces on screen, `normal` for ordinary sampling, `low` for background

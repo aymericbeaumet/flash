@@ -327,8 +327,10 @@ Notifications:
   `[a-z0-9_-]`, the floor is 0.05 s, and a malformed frame is rejected whole.
   Ticks are one-way and unacknowledged, so a plugin whose previous callback is
   still running drops the ticks it missed rather than running back-to-back to
-  catch up. Reach for a cadence only when no event can tell you the value
-  changed.
+  catch up. No tick is delivered while the displays sleep, the session is
+  locked or switched out, or the system is going to sleep; when that ends, a
+  cadence that fell due meanwhile ticks once. Reach for a cadence only when no
+  event can tell you the value changed.
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
   elapsed ms, method names — never query text, candidate data, clipboard
   content, config values, or event payloads).

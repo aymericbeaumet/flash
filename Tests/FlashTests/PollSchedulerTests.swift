@@ -165,6 +165,73 @@ final class PollSchedulerTests: XCTestCase {
     wait(for: [again], timeout: 5)
   }
 
+  // MARK: - Suspension
+
+  func testTheGateHoldsWhileAnyReasonRemainsAndResumesOnTheLast() {
+    var gate = PollScheduler.Gate()
+    XCTAssertFalse(gate.isSuspended)
+    XCTAssertEqual(gate.set(.screens, active: true), .suspended)
+    // A second reason neither re-suspends nor lets a lone release resume.
+    XCTAssertEqual(gate.set(.session, active: true), .unchanged)
+    XCTAssertEqual(gate.set(.screens, active: true), .unchanged)
+    XCTAssertEqual(gate.set(.screens, active: false), .unchanged)
+    XCTAssertTrue(gate.isSuspended)
+    // Releasing a reason that never held is not a transition.
+    XCTAssertEqual(gate.set(.systemSleep, active: false), .unchanged)
+    XCTAssertEqual(gate.set(.session, active: false), .resumed)
+    XCTAssertFalse(gate.isSuspended)
+    XCTAssertEqual(gate.set(.session, active: false), .unchanged)
+  }
+
+  func testResumeRunsEveryOverdueClientOnceAndReturnsItToTheGrid() {
+    // A registration that missed forty ticks while the displays slept is
+    // owed one catch-up tick, not forty.
+    let plan = PollScheduler.plan(
+      nowMs: 45_300,
+      clients: [
+        client("sampler", every: 1000, at: 5_000),
+        PollScheduler.ClientState(
+          id: "deadline", intervalMs: 20_000, nextAtMs: 20_000, busy: false, repeats: false),
+        client("later", every: 60_000, at: 60_000),
+      ])
+    XCTAssertEqual(plan.fire, ["deadline", "sampler"])
+    XCTAssertEqual(plan.rescheduled, ["sampler": 46_000])
+    XCTAssertEqual(plan.expired, ["deadline"])
+    XCTAssertEqual(plan.nextWakeupMs, 46_000)
+  }
+
+  func testASuspendedSchedulerFiresNothingUntilItResumes() {
+    let scheduler = PollScheduler()
+    let queue = DispatchQueue(label: "poll.suspend.tests")
+    scheduler.setSuspended(true, reason: .screens)
+    let held = expectation(description: "nothing fires while suspended")
+    held.isInverted = true
+    let resumed = expectation(description: "the catch-up tick fires after resuming")
+    resumed.assertForOverFulfill = false
+    var suspended = true
+    scheduler.register("core:held", everyMs: 50, on: queue) {
+      if suspended { held.fulfill() } else { resumed.fulfill() }
+    }
+    scheduler.scheduleOnce("core:held.once", afterMs: 60, on: queue) {
+      if suspended { held.fulfill() }
+    }
+    wait(for: [held], timeout: 0.4)
+    queue.sync { suspended = false }
+    scheduler.setSuspended(false, reason: .screens)
+    wait(for: [resumed], timeout: 5)
+    scheduler.unregister("core:held")
+  }
+
+  func testTheSharedClockCountsTimeSpentAsleep() {
+    // Deadlines ride a clock that keeps running through system sleep, so a
+    // wake finds every deadline that passed meanwhile overdue.
+    let uptime = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    let continuous = clock_gettime_nsec_np(CLOCK_MONOTONIC)
+    let now = PollScheduler.continuousNowMs()
+    XCTAssertGreaterThanOrEqual(now, Int(continuous / 1_000_000))
+    XCTAssertGreaterThanOrEqual(continuous, uptime)
+  }
+
   // MARK: - The plugin-facing registration
 
   func testPluginPollRegistrationsDecodeSecondsAndRejectMalformedFrames() {
