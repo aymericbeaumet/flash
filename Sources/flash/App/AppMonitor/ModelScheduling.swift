@@ -11,11 +11,25 @@ extension AppMonitor {
 
   func invalidatePreparedModel(for pid: pid_t) {
     preparedModels.discardModel(pid: pid)
+    cancelMaintenance(pid: pid)
+  }
+
+  /// Revoke `pid`'s maintenance ticket and release its wake on the shared
+  /// clock, so a cancelled maintenance costs no wake-up.
+  func cancelMaintenance(pid: pid_t) {
     modelScheduler.cancelMaintenance(pid: pid)
+    releaseMaintenanceWake(pid: pid)
+  }
+
+  private func releaseMaintenanceWake(pid: pid_t?) {
+    guard let pending = maintenanceWakePID, pid == nil || pid == pending else { return }
+    maintenanceWakePID = nil
+    pollScheduler.unregister(Self.maintenanceClientID)
   }
 
   func cancelRefreshWork(for pid: pid_t) {
     modelScheduler.reset(pid: pid)
+    releaseMaintenanceWake(pid: pid)
     pendingModelCompletion.removeValue(forKey: pid)
     slowAutomaticModelRefreshPIDs.remove(pid)
     readinessRewalkBudget.removeValue(forKey: pid)
@@ -23,6 +37,7 @@ extension AppMonitor {
 
   func cancelAllRefreshWork() {
     modelScheduler.reset()
+    releaseMaintenanceWake(pid: nil)
     pendingModelCompletion.removeAll()
     slowAutomaticModelRefreshPIDs.removeAll()
     readinessRewalkBudget.removeAll()
@@ -51,6 +66,7 @@ extension AppMonitor {
 
   func suppressScheduledBackgroundModelRefresh(for pid: pid_t) {
     modelScheduler.suppressSpeculativeRefresh(pid: pid)
+    releaseMaintenanceWake(pid: pid)
   }
 
   /// The focus change's walk. A runtime that builds its tree asynchronously
@@ -156,7 +172,7 @@ extension AppMonitor {
     let wasSlow = slowAutomaticModelRefreshPIDs.contains(pid)
     if Self.automaticModelRefreshIsSlow(elapsedMs: elapsedMs) {
       slowAutomaticModelRefreshPIDs.insert(pid)
-      modelScheduler.suppressSpeculativeRefresh(pid: pid)
+      suppressScheduledBackgroundModelRefresh(for: pid)
       if !wasSlow {
         FlashLog.debug(
           "[ax] model_refresh_backoff",
@@ -175,50 +191,81 @@ extension AppMonitor {
         pid: pid, targets: targets, hasVolatileProvider: hasVolatileProvider)
     else { return }
     modelScheduler.cancelRefresh(pid: pid)
-    modelScheduler.cancelMaintenance(pid: pid)
+    cancelMaintenance(pid: pid)
     modelScheduler.cancelReadiness(pid: pid)
     FlashLog.info(
       "[ax] model_refresh_gated pid=\(pid) bundle=\(bundleIdentifier) "
         + "empty_walks=\(EmptyBackgroundWalkGate.threshold) reason=volatile_provider")
   }
 
+  /// Debounce and readiness wakes are bounded one-shots on the main queue.
   private func armRefreshTimer(_ arm: PreparedModelScheduler.Arm) {
     DispatchQueue.main.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: arm.deadline)) {
-      [weak self] in
-      guard let self else { return }
-      let pid = arm.ticket.pid
-      switch self.modelScheduler.wake(arm.ticket, now: DispatchTime.now().uptimeNanoseconds) {
-      case .stale: return
-      case .wait(let extended): self.armRefreshTimer(extended)
-      case .fire(.refresh(let reason)):
-        guard self.allowsAutomaticRefresh(pid: pid, reason: reason) else { return }
-        self.runModelRefresh(pid: pid, reason: reason, completion: nil)
-      case .fire(.readiness(let step, let then)):
-        self.runReadinessStep(pid: pid, step: step, then: then)
-      case .fire(.maintenance(let dirtyToken, let configRevision)):
-        guard (self.dirtyTokens[pid] ?? 0) == dirtyToken,
-          self.configRevision == configRevision,
-          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
-        else { return }
-        // Idle desk, locked screen, or sleeping display: nothing is looking
-        // at the hints, so let the model expire; the next activation walks.
-        guard Self.userInputIsRecent(withinSeconds: Self.maintenanceIdleSuspendSeconds) else {
-          FlashLog.debug("[ax] maintenance_suspended pid=\(pid) reason=user_idle")
-          return
-        }
-        self.scheduleModelRefresh(for: pid, reason: .maintenance)
-      }
+      [weak self] in self?.wakeRefreshTimer(arm, rearm: { $0.armRefreshTimer($1) })
     }
   }
 
-  private func scheduleMaintenanceRefresh(for model: PreparedModel) {
-    modelScheduler.cancelMaintenance(pid: model.pid)
+  static let maintenanceClientID = "core:prepared_model_maintenance"
+
+  /// Maintenance is the one self-renewing wake: every stored model arms the
+  /// next, ahead of its freshness ceiling (AOT: an activation served from a
+  /// warm model only draws). It rides the shared clock as a deadline
+  /// registration, so it coalesces with every other wake-up and is held
+  /// while the displays sleep or the session is locked. Only the frontmost
+  /// app's model is ever stored, so one registration serves: arming another
+  /// app's replaces it. `.normal`: its 100-ms slack stays inside the 250-ms
+  /// maintenance lead, so a late wake still lands before the ceiling.
+  private func armMaintenanceWake(_ arm: PreparedModelScheduler.Arm) {
+    let now = DispatchTime.now().uptimeNanoseconds
+    let delayMs = arm.deadline > now ? Int((arm.deadline - now + 999_999) / 1_000_000) : 0
+    maintenanceWakePID = arm.ticket.pid
+    pollScheduler.scheduleOnce(
+      Self.maintenanceClientID, afterMs: delayMs, priority: .normal, on: .main
+    ) { [weak self] in
+      guard let self else { return }
+      if self.maintenanceWakePID == arm.ticket.pid { self.maintenanceWakePID = nil }
+      self.wakeRefreshTimer(arm, rearm: { $0.armMaintenanceWake($1) })
+    }
+  }
+
+  /// A wake consumes its own ticket: a cancelled or replaced one is stale,
+  /// and one that fired early re-arms the same way it was armed.
+  private func wakeRefreshTimer(
+    _ arm: PreparedModelScheduler.Arm,
+    rearm: (AppMonitor, PreparedModelScheduler.Arm) -> Void
+  ) {
+    let pid = arm.ticket.pid
+    switch modelScheduler.wake(arm.ticket, now: DispatchTime.now().uptimeNanoseconds) {
+    case .stale: return
+    case .wait(let extended): rearm(self, extended)
+    case .fire(.refresh(let reason)):
+      guard allowsAutomaticRefresh(pid: pid, reason: reason) else { return }
+      runModelRefresh(pid: pid, reason: reason, completion: nil)
+    case .fire(.readiness(let step, let then)):
+      runReadinessStep(pid: pid, step: step, then: then)
+    case .fire(.maintenance(let dirtyToken, let configRevision)):
+      guard (dirtyTokens[pid] ?? 0) == dirtyToken,
+        self.configRevision == configRevision,
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+      else { return }
+      // Idle desk, locked screen, or sleeping display: nothing is looking
+      // at the hints, so let the model expire; the next activation walks.
+      guard Self.userInputIsRecent(withinSeconds: Self.maintenanceIdleSuspendSeconds) else {
+        FlashLog.debug("[ax] maintenance_suspended pid=\(pid) reason=user_idle")
+        return
+      }
+      scheduleModelRefresh(for: pid, reason: .maintenance)
+    }
+  }
+
+  func scheduleMaintenanceRefresh(for model: PreparedModel) {
+    cancelMaintenance(pid: model.pid)
     guard allowsAutomaticRefresh(pid: model.pid, reason: .maintenance) else { return }
     let arm = modelScheduler.scheduleMaintenance(
       pid: model.pid, computedAt: model.computedAt.uptimeNanoseconds,
       dirtyToken: model.dirtyToken, configRevision: model.configRevision,
       freshnessNs: UInt64(model.freshnessMs) * 1_000_000)
-    armRefreshTimer(arm)
+    armMaintenanceWake(arm)
   }
 
   /// Seconds since the last keyboard, mouse, or scroll event in the session.
@@ -256,7 +303,7 @@ extension AppMonitor {
     // every ticket before starting so no callback can consume a later rearmed
     // request.
     modelScheduler.cancelRefresh(pid: pid)
-    modelScheduler.cancelMaintenance(pid: pid)
+    cancelMaintenance(pid: pid)
     modelScheduler.cancelReadiness(pid: pid)
 
     guard PermissionCheck.isAccessibilityTrusted else {

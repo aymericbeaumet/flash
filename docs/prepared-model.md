@@ -23,7 +23,17 @@ walk reproduces the previous model unchanged — same dirty token,
 configuration revision, and target geometry/role digest — and resets to 1.5 s
 on any other outcome. A maintenance wake is skipped outright after 60 s
 without keyboard or pointer input; the model then expires and the next
-activation walks on demand. The lead allows eligible
+activation walks on demand.
+
+Maintenance is the one self-renewing wake — each stored model arms the next —
+so it is a deadline registration on the shared `PollScheduler`
+(`core:prepared_model_maintenance`) rather than a timer of its own: it
+coalesces with the process's other wake-ups and is held while the displays
+sleep or the session is locked. Only the frontmost app's model is stored, so
+one registration serves, and a cancelled maintenance releases it. Its
+`.normal` priority allows 100 ms of slack, inside the 250-ms lead, so a late
+wake still starts before the ceiling. Debounce and readiness wakes stay
+bounded one-shots on the main queue. The lead allows eligible
 cheap walks to finish before the current model expires. A newer completed
 model replaces the prior maintenance ticket even when its dirty token and
 configuration revision are unchanged.

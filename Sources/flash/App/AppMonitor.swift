@@ -135,10 +135,17 @@ final class AppMonitor {
     !OnDemandHintApps.contains(bundleIdentifier)
   }
 
-  init(registry: SourceRegistry, config: Config) {
+  init(registry: SourceRegistry, config: Config, pollScheduler: PollScheduler = .shared) {
     self.registry = registry
     self.config = config
+    self.pollScheduler = pollScheduler
   }
+
+  /// The shared clock maintenance wakes ride; see `armMaintenanceWake`.
+  let pollScheduler: PollScheduler
+  /// The pid whose maintenance wake is registered on `pollScheduler`. Main
+  /// thread only.
+  var maintenanceWakePID: pid_t?
 
   // MARK: Prepared model state
   //

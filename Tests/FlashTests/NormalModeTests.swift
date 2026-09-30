@@ -751,6 +751,35 @@ final class NormalModeTests: XCTestCase {
     monitor.cancelRefreshWork(for: pid)
   }
 
+  /// Maintenance is the one self-renewing wake — every stored model arms the
+  /// next — so it rides the shared clock, and a cancellation leaves it.
+  func testMaintenanceRidesTheSharedClockAndLeavesItWhenCancelled() {
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let scheduler = PollScheduler()
+    let monitor = AppMonitor(registry: registry, config: .default, pollScheduler: scheduler)
+    func registered() -> [String] {
+      let listed = DispatchSemaphore(value: 0)
+      var ids: [String] = []
+      scheduler.registeredIDs {
+        ids = $0
+        listed.signal()
+      }
+      listed.wait()
+      return ids
+    }
+    let model = PreparedModel(
+      pid: 44, targets: [], hints: [], computedAt: .now(), dirtyToken: 0, configRevision: 0,
+      fingerprint: 0, freshnessMs: AppMonitor.modelFreshnessMs)
+    monitor.scheduleMaintenanceRefresh(for: model)
+    XCTAssertEqual(registered(), [AppMonitor.maintenanceClientID])
+    monitor.cancelRefreshWork(for: 44)
+    XCTAssertEqual(registered(), [])
+
+    monitor.scheduleMaintenanceRefresh(for: model)
+    monitor.invalidatePreparedModel(for: 44)
+    XCTAssertEqual(registered(), [])
+  }
+
   func testAXEventStormThresholdUsesEventRate() {
     XCTAssertTrue(
       AppMonitor.axEventRateIsStorm(
