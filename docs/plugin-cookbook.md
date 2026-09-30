@@ -18,8 +18,9 @@ plugins.
    persisted under `share_dir()`, and `listen` events keeping it fresh.
 3. **Push catalog via native APIs — `Plugins/processes` (~300 LOC).** A
    `sources` plugin building its complete row set and pushing it with
-   `publish` from `on_start`, refreshed by events + a poll, backed by the
-   SDK's libproc sampler — plus the golden-output test pattern. No readiness
+   `publish` from `on_start`, refreshed by events alone (app launch/quit,
+   flashlight open), backed by the host's process table — plus cadences
+   armed only while `core:status.observed` shows their segment. No readiness
    dance: initialize replies immediately and the catalog lands when ready.
 4. **Event-driven catalog + actions + navigation — `Plugins/browsers`
    (~2,500 LOC).** Browser tabs behind one per-bundle engine table: a shared
