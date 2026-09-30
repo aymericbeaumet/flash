@@ -47,7 +47,9 @@
   ],
   "listen": [
     "core:config.*",
-    "core:apps.*"
+    "core:apps.*",
+    "core:focus.changed",
+    "core:session.opened"
   ],
   "sources": [
     {

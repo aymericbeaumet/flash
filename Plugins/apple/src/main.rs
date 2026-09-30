@@ -1,6 +1,13 @@
 //! Notes, Reminders and Contacts catalogs. Each app is one [`Engine`] in a
-//! table; the running-app gate, the 60 s poll, the union publish and the
-//! `open`/`refresh` commands are shared.
+//! table; the running-app gate, the event-driven refreshes, the union
+//! publish and the `open`/`refresh` commands are shared.
+//!
+//! Nothing polls. An engine lists its app when the plugin starts, when the
+//! app launches, when focus leaves it (the user may have just edited it),
+//! and when the flashlight opens — then only if the app is focused or its
+//! listing is older than [`SESSION_TTL`], which bounds how stale a change
+//! synced in the background can be. The store stays the last-good catalog
+//! meanwhile, so the flashlight's first paint never waits on AppleScript.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
@@ -12,7 +19,9 @@ use flash_plugin::{
 };
 use serde::{Deserialize, Serialize};
 
-const POLL_SECONDS: u64 = 60;
+/// A flashlight open relists a running engine whose listing began at least
+/// this long ago.
+const SESSION_TTL: Duration = Duration::from_secs(60);
 const SLOW_REFRESH_MS: u128 = 1_000;
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 const SELECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -219,6 +228,54 @@ fn engine_by(key: fn(&Engine) -> &'static str, value: &str) -> Option<usize> {
 }
 
 static GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+static FRESHNESS: LazyLock<Mutex<Freshness>> = LazyLock::new(Mutex::default);
+
+fn freshness() -> MutexGuard<'static, Freshness> {
+    FRESHNESS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What the event-driven refreshes need to know: the focused app, and when
+/// each engine's listing last began.
+#[derive(Default)]
+struct Freshness {
+    focused: Option<String>,
+    listed: [Option<Instant>; ENGINES.len()],
+}
+
+impl Freshness {
+    /// Record focus moving to `bundle_id`. Returns the engine whose app it
+    /// left, which the user may have just edited.
+    fn focus(&mut self, bundle_id: Option<&str>) -> Option<usize> {
+        let previous = std::mem::replace(&mut self.focused, bundle_id.map(str::to_string));
+        if previous == self.focused {
+            return None;
+        }
+        engine_by(|engine| engine.bundle_id, previous.as_deref()?)
+    }
+
+    /// The running engines a flashlight open relists — the focused one, and
+    /// any whose listing began at least [`SESSION_TTL`] before `now` — marked
+    /// as listed at `now` so a reopen does not queue them again.
+    fn claim_on_open(&mut self, running: &[RunningApplication], now: Instant) -> Vec<usize> {
+        let due: Vec<usize> = (0..ENGINES.len())
+            .filter(|&index| {
+                let engine = &ENGINES[index];
+                engine.is_running(running)
+                    && (self.focused.as_deref() == Some(engine.bundle_id)
+                        || self.listed[index]
+                            .is_none_or(|at| now.saturating_duration_since(at) >= SESSION_TTL))
+            })
+            .collect();
+        self.mark(&due, now);
+        due
+    }
+
+    fn mark(&mut self, indices: &[usize], now: Instant) {
+        for &index in indices {
+            self.listed[index] = Some(now);
+        }
+    }
+}
 
 /// Process-local last-good rows per engine. `publish` replaces the whole
 /// catalog, so every refresh re-emits the union of all engines.
@@ -242,7 +299,7 @@ impl FlashPlugin for Apple {
         // Runs after the initialize reply, so a slow listing never delays the
         // handshake. A failed listing publishes nothing for that engine — the
         // host keeps its last-good catalog — and retries once in the
-        // background before the poll takes over.
+        // background; events drive every later refresh.
         if !refresh(&ctx, 0..ENGINES.len()).await {
             log_degraded_initial(&ctx);
             let retry_ctx = ctx.clone();
@@ -250,11 +307,6 @@ impl FlashPlugin for Apple {
                 refresh(&retry_ctx, 0..ENGINES.len()).await;
             });
         }
-        drop(
-            ctx.interval(Duration::from_secs(POLL_SECONDS), |ctx| async move {
-                refresh(&ctx, 0..ENGINES.len()).await;
-            }),
-        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -269,6 +321,23 @@ impl FlashPlugin for Apple {
             }
             ("core:config.changed", _) => {
                 refresh(&ctx, 0..ENGINES.len()).await;
+            }
+            // Listings run detached, so a slow AppleScript never holds back
+            // the focus events behind it.
+            ("core:focus.changed", _) => {
+                if let Some(index) = freshness().focus(event.bundle_id.as_deref()) {
+                    tokio::spawn(async move {
+                        refresh(&ctx, [index]).await;
+                    });
+                }
+            }
+            ("core:session.opened", _) => {
+                let due = freshness().claim_on_open(&ctx.running_applications(), Instant::now());
+                if !due.is_empty() {
+                    tokio::spawn(async move {
+                        refresh(&ctx, due).await;
+                    });
+                }
             }
             _ => {}
         }
@@ -330,6 +399,7 @@ async fn refresh(ctx: &Context, indices: impl IntoIterator<Item = usize>) -> boo
         for index in indices {
             let engine = &ENGINES[index];
             let started_at = Instant::now();
+            freshness().mark(&[index], started_at);
             let rows = if engine.is_running(&running) {
                 let result = run_osascript(&ctx, engine.list_script, LIST_TIMEOUT).await;
                 if !result.ok {
@@ -543,5 +613,66 @@ mod tests {
         );
         catalog[1].clear();
         assert_eq!(sources(&union(&catalog)), ["notes.notes", "contacts.cards"]);
+    }
+
+    /// Events drive every refresh: startup registers no cadence.
+    #[tokio::test]
+    async fn startup_registers_no_cadence() {
+        let mut harness = flash_plugin::testing::Harness::new("apple");
+        Apple.on_start(harness.context()).await;
+        let frames = harness.drain();
+        assert!(
+            !frames.iter().any(|frame| frame["method"] == "poll"),
+            "{frames:?}"
+        );
+    }
+
+    #[test]
+    fn leaving_an_engines_app_names_it_for_a_refresh() {
+        let mut freshness = Freshness::default();
+        assert_eq!(freshness.focus(Some("com.apple.Notes")), None);
+        assert_eq!(freshness.focus(Some("com.apple.Notes")), None, "no move");
+        assert_eq!(
+            freshness.focus(Some("com.apple.reminders")),
+            engine_by(|engine| engine.command, "notes")
+        );
+        assert_eq!(
+            freshness.focus(Some("com.apple.Terminal")),
+            engine_by(|engine| engine.command, "reminders")
+        );
+        assert_eq!(freshness.focus(None), None);
+    }
+
+    #[test]
+    fn a_flashlight_open_refreshes_the_focused_engine_and_stale_ones() {
+        let notes = engine_by(|engine| engine.command, "notes").unwrap();
+        let reminders = engine_by(|engine| engine.command, "reminders").unwrap();
+        let contacts = engine_by(|engine| engine.command, "contacts").unwrap();
+        let everything = [
+            running("com.apple.Notes"),
+            running("com.apple.reminders"),
+            running("com.apple.AddressBook"),
+        ];
+        let now = Instant::now();
+        let mut freshness = Freshness::default();
+        // Never listed: every running engine is due; a stopped one never is.
+        assert_eq!(
+            freshness.claim_on_open(&everything[..2], now),
+            [notes, reminders]
+        );
+        // Just listed: nothing is due, unless its app is focused (the user
+        // may be editing it right now).
+        assert!(freshness.claim_on_open(&everything[..2], now).is_empty());
+        freshness.focus(Some("com.apple.reminders"));
+        assert_eq!(
+            freshness.claim_on_open(&everything, now),
+            [reminders, contacts]
+        );
+        freshness.focus(Some("com.apple.Terminal"));
+        // Listings older than the TTL are due again.
+        assert_eq!(
+            freshness.claim_on_open(&everything, now + SESSION_TTL),
+            [notes, reminders, contacts]
+        );
     }
 }
