@@ -71,6 +71,11 @@ final class PluginProcess {
   private var frameCollector = NDJSONFrameCollector(maxLineBytes: PluginProtocol.maxFrameBytes)
   private let transportLock = NSLock()
   private var transportBudget = PluginTransportBudget()
+  /// Frames admitted by `transportBudget` and not yet written, drained in
+  /// order on `writeQueue`. Guarded by `transportLock`.
+  private var outbound = PluginOutboundQueue()
+  /// Whether a `writeQueue` drain owns `outbound`. Guarded by `transportLock`.
+  private var outboundDraining = false
   private let lock = NSLock()
   private var state: PluginRuntimeState = .stopped
   /// Runtime status-bar segments, merged under `lock` on every `status`
@@ -741,11 +746,14 @@ final class PluginProcess {
   }
 
   private func deliverEventOnQueue(_ event: PluginEvent) {
+    var payload = event.payload
+    if payload["pid"] == nil, let pid = event.pid { payload["pid"] = Int(pid) }
+    let coalescingKey = PluginProtocol.coalescingKey(eventName: event.name, payload: payload)
     if let frame = event.encodedFrame, frame.count - 1 <= PluginProtocol.maxFrameBytes {
-      enqueueWrite(frame, label: "event")
+      enqueueWrite(frame, label: "event", coalescingKey: coalescingKey)
       return
     }
-    writeFrame(Self.eventFrameObject(event))
+    writeFrame(Self.eventFrameObject(event), coalescingKey: coalescingKey)
   }
 
   // MARK: - Host → plugin requests
@@ -1432,6 +1440,7 @@ final class PluginProcess {
     let generation = lifecycle.generation
     transportLock.lock()
     transportBudget.begin(generation)
+    outbound = PluginOutboundQueue()
     transportLock.unlock()
     readQueue.sync {
       frameCollector = NDJSONFrameCollector(maxLineBytes: PluginProtocol.maxFrameBytes)
@@ -1442,6 +1451,7 @@ final class PluginProcess {
   private func invalidateTransport() {
     transportLock.lock()
     transportBudget.begin(0)
+    outbound = PluginOutboundQueue()
     transportLock.unlock()
   }
 
@@ -1468,8 +1478,10 @@ final class PluginProcess {
 
   /// Queue one encoded frame without ever blocking the lifecycle queue on a
   /// child that stopped reading stdin. The timeout still includes time spent
-  /// in this bounded FIFO.
-  private func enqueueWrite(_ frame: Data, label: String) {
+  /// in this bounded FIFO. A frame with a `coalescingKey` first retires the
+  /// unsent frame it supersedes (see `PluginOutboundQueue`), so a burst of
+  /// state signals to a stalled child never exhausts the budget.
+  private func enqueueWrite(_ frame: Data, label: String, coalescingKey: String? = nil) {
     guard let handle = stdinPipe?.fileHandleForWriting else {
       transportLock.lock()
       let generation = transportBudget.generation
@@ -1482,23 +1494,49 @@ final class PluginProcess {
 
     transportLock.lock()
     let generation = transportBudget.generation
-    let reservation = transportBudget.reserve(.writeFrames, bytes: frame.count)
-    transportLock.unlock()
-    guard let reservation else {
+    if let coalescingKey, let superseded = outbound.removeSuperseded(by: coalescingKey) {
+      transportBudget.release(superseded.reservation)
+    }
+    guard let reservation = transportBudget.reserve(.writeFrames, bytes: frame.count) else {
+      transportLock.unlock()
       handleTransportFailureOnQueue(
         generation: generation, message: "[plugin] IPC write queue overflow (method=\(label))")
       return
     }
-    writeQueue.async { [weak self, handle] in
-      guard let self else { return }
-      defer { self.releaseTransport(reservation) }
-      guard self.isTransportActive(generation) else { return }
-      do { try handle.write(contentsOf: frame) } catch {
-        self.queue.async { [weak self] in
-          self?.handleTransportFailureOnQueue(
-            generation: generation, message: "[plugin] IPC write failed (method=\(label))")
+    outbound.append(
+      PluginOutboundQueue.Frame(
+        data: frame, label: label, coalescingKey: coalescingKey, handle: handle,
+        reservation: reservation))
+    let startDrain = !outboundDraining
+    outboundDraining = true
+    transportLock.unlock()
+    if startDrain {
+      writeQueue.async { [weak self] in self?.drainOutbound() }
+    }
+  }
+
+  /// Write queued frames in order until none is left. Runs on `writeQueue`;
+  /// a write blocks only while the child's stdin pipe is full, and frames
+  /// queued meanwhile stay replaceable until this loop takes them.
+  private func drainOutbound() {
+    while true {
+      transportLock.lock()
+      guard let frame = outbound.popFirst() else {
+        outboundDraining = false
+        transportLock.unlock()
+        return
+      }
+      transportLock.unlock()
+      let generation = frame.reservation.generation
+      if isTransportActive(generation) {
+        do { try frame.handle.write(contentsOf: frame.data) } catch {
+          queue.async { [weak self] in
+            self?.handleTransportFailureOnQueue(
+              generation: generation, message: "[plugin] IPC write failed (method=\(frame.label))")
+          }
         }
       }
+      releaseTransport(frame.reservation)
     }
   }
 
@@ -1523,7 +1561,7 @@ final class PluginProcess {
     applyLifecycle(.interrupted(lifecycle.generation))
   }
 
-  private func writeFrame(_ object: [String: Any]) {
+  private func writeFrame(_ object: [String: Any], coalescingKey: String? = nil) {
     let label = object["method"] as? String ?? "response"
     let frame: Data
     do {
@@ -1553,7 +1591,7 @@ final class PluginProcess {
       }
       return
     }
-    enqueueWrite(frame, label: label)
+    enqueueWrite(frame, label: label, coalescingKey: coalescingKey)
   }
 
   private func handleStdout(_ data: Data, generation: UInt64) {

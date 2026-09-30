@@ -153,6 +153,112 @@ final class PluginBoundaryTests: XCTestCase {
     process.stopAndWait(reason: "test")
   }
 
+  /// A child that briefly stops reading stdin must not be restarted for a
+  /// burst of pure state signals: while a replacement event waits unsent, a
+  /// newer one with the same coalescing key replaces it. The child then reads
+  /// the latest event of every key, in emission order, and every other frame
+  /// in FIFO order.
+  func testReplacementEventBurstToAStalledChildCoalescesInsteadOfOverflowing() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "stalled",
+      manifest: PluginFixtureKit.manifest(id: "stalled", extra: #""listen": ["core:*"]"#),
+      script: PluginFixtureKit.script(
+        onInitialize: """
+          \(PluginFixtureKit.initializeOK)
+          while [ ! -f "$D/go" ]; do sleep 0.02; done
+          exec cat >> "$D/events"
+          """))
+    defer { fixture.cleanup() }
+    let process = PluginProcess(
+      root: fixture.root,
+      manifest: try PluginManifest.load(from: fixture.root),
+      origin: .official,
+      baseDataDir: fixture.baseDataDir,
+      watchFiles: false)
+    process.start()
+    defer { process.stopAndWait(reason: "test") }
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+
+    // Far beyond the pipe buffer plus the 256-frame outbound budget.
+    let burst = 4 * PluginProtocol.maxOutboundFrames * 8
+    var latest: [String: Int] = [:]
+    for sequence in 0..<burst {
+      let pid = 100 + sequence % 3
+      let notification = sequence % 2 == 0 ? "AXValueChanged" : "AXTitleChanged"
+      latest["\(pid) \(notification)"] = sequence
+      process.sendEvent(
+        PluginEvent(
+          name: "core:ax.changed",
+          payload: ["notification": notification, "pid": pid, "sequence": sequence],
+          bundleID: "dev.flash.stalled"))
+      if sequence % 1_000 == 0 {
+        process.sendEvent(
+          PluginEvent(
+            name: "core:apps.launched", payload: ["sequence": sequence], bundleID: nil))
+      }
+    }
+    process.sendEvent(
+      PluginEvent(name: "core:apps.launched", payload: ["sequence": burst], bundleID: nil))
+    settleRunLoop(0.5)
+    FileManager.default.createFile(
+      atPath: fixture.dataDir.appendingPathComponent("go").path, contents: Data())
+
+    func delivered() -> [[String: Any]] {
+      guard
+        let text = try? String(
+          contentsOf: fixture.dataDir.appendingPathComponent("events"), encoding: .utf8)
+      else { return [] }
+      return text.split(separator: "\n").compactMap {
+        let frame = try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+        return frame?["params"] as? [String: Any]
+      }
+    }
+    func sequence(_ event: [String: Any]) -> Int? {
+      (event["payload"] as? [String: Any])?["sequence"] as? Int
+    }
+    waitUntilTrue("the burst's final marker") {
+      delivered().contains {
+        $0["name"] as? String == "core:apps.launched" && sequence($0) == burst
+      }
+    }
+    XCTAssertEqual(fixture.spawnCount(), 1, "the stalled child was never restarted")
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running)
+    XCTAssertNil(process.statusSnapshot().lastError)
+
+    let events = delivered()
+    let ordered = events.compactMap(sequence)
+    XCTAssertEqual(ordered, ordered.sorted(), "a subsequence of emission order")
+    let markers = events.filter { $0["name"] as? String == "core:apps.launched" }
+    XCTAssertEqual(
+      markers.compactMap(sequence), Array(stride(from: 0, to: burst, by: 1_000)) + [burst],
+      "non-replacement events are never coalesced")
+    var received: [String: Int] = [:]
+    for event in events where event["name"] as? String == "core:ax.changed" {
+      let payload = try XCTUnwrap(event["payload"] as? [String: Any])
+      let key = "\(payload["pid"] as? Int ?? 0) \(payload["notification"] as? String ?? "")"
+      received[key] = sequence(event)
+    }
+    XCTAssertEqual(received, latest, "the latest event of every key arrives")
+    XCTAssertLessThan(events.count, burst / 2, "superseded frames were dropped")
+  }
+
+  func testOnlyReplacementEventsCoalesceAndAXChangesKeyByAppAndNotification() {
+    func key(_ name: String, _ payload: [String: Any] = [:]) -> String? {
+      PluginProtocol.coalescingKey(eventName: name, payload: payload)
+    }
+    for name in PluginProtocol.hostEvents
+    where !PluginProtocol.replacementEvents.contains(name) {
+      XCTAssertNil(key(name, ["pid": 1]), name)
+    }
+    XCTAssertNil(key("core:poll:tick"))
+    XCTAssertEqual(key("core:focus.changed", ["pid": 1]), key("core:focus.changed", ["pid": 2]))
+    XCTAssertNotEqual(key("core:focus.changed"), key("core:space.changed"))
+    let title = key("core:ax.changed", ["pid": 7, "notification": "AXTitleChanged"])
+    XCTAssertEqual(title, key("core:ax.changed", ["notification": "AXTitleChanged", "pid": 7]))
+    XCTAssertNotEqual(title, key("core:ax.changed", ["pid": 7, "notification": "AXValueChanged"]))
+    XCTAssertNotEqual(title, key("core:ax.changed", ["pid": 8, "notification": "AXTitleChanged"]))
+  }
+
   func testTransportAdmissionRecoversCapacityWithoutAcceptingStaleReleases() throws {
     var budget = PluginTransportBudget()
     XCTAssertNil(budget.reserve(.readChunks, bytes: 1))

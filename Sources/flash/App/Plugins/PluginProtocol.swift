@@ -66,6 +66,9 @@ enum PluginProtocol {
 
   // MARK: - Host events
 
+  /// An AX notification of an observed app; payload `{pid, notification,
+  /// bundle_id?}`.
+  static let axChangedEvent = "core:ax.changed"
   /// Network interfaces, addresses, routes or DNS changed; payload `{}`.
   static let networkChangedEvent = "core:network.changed"
   /// A volume mounted, unmounted or was renamed; payload `{}`.
@@ -79,7 +82,7 @@ enum PluginProtocol {
     "core:apps.terminated",
     "core:focus.changed",
     "core:window.focus.changed",
-    "core:ax.changed",
+    axChangedEvent,
     "core:clipboard.changed",
     "core:config.changed",
     "core:power.changed",
@@ -89,6 +92,37 @@ enum PluginProtocol {
     "core:status.observed",
     "core:session.opened",
   ]
+
+  /// State signals whose latest value supersedes every earlier one, in
+  /// contract order (`host_events.replacement`).
+  static let replacementEvents = [
+    "core:apps.changed",
+    "core:focus.changed",
+    "core:window.focus.changed",
+    axChangedEvent,
+    "core:clipboard.changed",
+    "core:config.changed",
+    "core:power.changed",
+    networkChangedEvent,
+    volumesChangedEvent,
+    "core:space.changed",
+    "core:status.observed",
+  ]
+  private static let replacementEventNames = Set(replacementEvents)
+
+  /// Which earlier unsent event `name` supersedes; nil when it supersedes
+  /// none. A replacement event's key is its name, except that
+  /// `core:ax.changed` reports one fact per app and notification, so its key
+  /// adds the payload `pid` and `notification`: a keystroke's value change
+  /// never replaces a pending title change, and no app's event replaces
+  /// another's.
+  static func coalescingKey(eventName name: String, payload: [String: Any]) -> String? {
+    guard replacementEventNames.contains(name) else { return nil }
+    guard name == axChangedEvent else { return name }
+    let pid = PluginJSON.pid(payload["pid"]).map(String.init) ?? ""
+    let notification = payload["notification"] as? String ?? ""
+    return "\(name)\u{0}\(pid)\u{0}\(notification)"
+  }
 
   // MARK: - Perform
 

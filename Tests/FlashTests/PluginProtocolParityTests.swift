@@ -137,6 +137,7 @@ final class PluginProtocolParityTests: XCTestCase {
     let events = try XCTUnwrap(try spec()["host_events"] as? [String: Any])
     XCTAssertEqual(events["names"] as? [String], PluginProtocol.hostEvents)
     let replacement = try XCTUnwrap(events["replacement"] as? [String])
+    XCTAssertEqual(replacement, PluginProtocol.replacementEvents)
     XCTAssertTrue(
       Set(replacement).isSubset(of: PluginProtocol.hostEvents),
       "every replacement kind is a host event")

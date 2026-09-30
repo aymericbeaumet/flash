@@ -257,6 +257,26 @@ Notifications have no deadlines.
   to a plugin in `failed`/unspawnable state — it settles as `unhandled`
   without burning the deadline (nothing could have started).
 
+### Event coalescing
+
+The replacement kinds in `protocol.json` `host_events.replacement` are state
+signals: each one supersedes the earlier ones with the same coalescing key.
+The key is the event name, except for `core:ax.changed`, which reports one
+fact per app and notification and adds the payload `pid` and `notification`
+— a keystroke's `AXValueChanged` never replaces a pending `AXTitleChanged`,
+and one app's change never replaces another's.
+
+The host queues every frame for a child's stdin in send order under the
+256-frame / 20 MiB transport budget. When it queues a replacement event while
+an unsent one with the same key is still waiting, it drops the older frame and
+appends the newer, so a child reads a subsequence of the emitted events, in
+emission order, and a child that briefly stops reading accumulates at most one
+frame per key rather than overflowing on a burst of signals. Requests,
+responses and every other event keep FIFO order and their budget: a child that
+stops reading those is still restarted once the budget fills. A frame already
+written to the pipe is delivered; the plugin's own event backlog coalesces
+what it has read but not yet handled (see the SDK's replacement slots).
+
 ### Status observation
 
 `core:status.observed` tells a plugin which of its own status segments a
@@ -288,9 +308,9 @@ cadence only while `top_cpu` or `top_mem` is observed.
   plugin's set changes — a configuration reload, the bar being enabled or
   disabled, a widget appearing or disappearing — and never repeats an
   unchanged set. Observation does not change activation or residency.
-- **Coalescing.** The set is a full replacement. Under event backlog
-  overload the plugin keeps only the latest one (see the SDK's replacement
-  slots), so intermediate sets may be skipped but the final set arrives.
+- **Coalescing.** The set is a full replacement, coalesced like every
+  replacement event (see [Event coalescing](#event-coalescing)), so
+  intermediate sets may be skipped but the final set arrives.
 - **Rejection.** A payload whose `segments` is missing, null, not an array
   of strings, or contains an empty or duplicate name is malformed. The Rust
   SDK drops it whole with a content-free warning and does not deliver it.

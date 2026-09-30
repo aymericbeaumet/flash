@@ -51,7 +51,7 @@
     }
   },
   "host_events": {
-    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen` (plus capability for core:clipboard.changed). `replacement` kinds are state signals: under backlog the plugin keeps only the latest of each. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
+    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen` (plus capability for core:clipboard.changed). `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each kind. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
     "names": [
       "core:flash.started",
       "core:apps.changed",

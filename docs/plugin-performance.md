@@ -94,7 +94,10 @@ least 50 ms.
 - Plugin stdout framing, JSON parsing, catalog publication decoding, and stdin
   writes stay off the lifecycle queue. Input and output queues are bounded;
   a stalled or flooding child is restarted instead of
-  freezing every lifecycle operation. Deadlines include time spent awaiting
+  freezing every lifecycle operation. An unsent replacement event is
+  superseded by the next one with its coalescing key, so a burst of state
+  signals such as `core:ax.changed` never exhausts a briefly stalled child's
+  outbound budget (see [event coalescing](plugin-protocol.md#event-coalescing)). Deadlines include time spent awaiting
   queue admission, and teardown invalidates work from the old child generation.
   Stderr drains on its pipe callback without scheduling lifecycle work.
 - Third-party installation drains stdout/stderr concurrently on its own job
