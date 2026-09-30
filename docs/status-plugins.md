@@ -42,8 +42,8 @@ default to compact, and warn before falling back from an invalid value.
 | --- | --- | --- | --- |
 | `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU metadata every 15 seconds (`ioreg`) | `:cpu [refresh]` |
 | `memory` | Memory composition every second (`host_statistics64` + `sysctl`, in-process) | — | `:memory [refresh]` |
-| `disks` | I/O counters every three seconds (`ioreg`) | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
-| `network` | Default-interface traffic every second while a traffic segment is shown (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
+| `disks` | I/O counters every three seconds (`ioreg`) | Mounted volumes re-read on `core:volumes.changed`; free space every 30 seconds (`df`) | `:disks [refresh]` |
+| `network` | Default-interface traffic every second while a traffic segment is shown (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery at start and on `core:network.changed`; no poll | `:network [refresh]`, `network.addresses` |
 | `power` | Battery/power snapshot on `core:power.changed` (IOKit power-source notification); no poll | Health collected during refreshes with a 30-second TTL; explicit `refresh` forces it | `:power [refresh]` |
 
 Every monitor retains 20 fast samples for its chart. The one-second samplers
@@ -131,9 +131,9 @@ not zero: a desktop without a battery clears `power.percent`, and a rate
 before its second sample or after its stale window clears with its history,
 while an idle disk or link publishes `0`. `power.state` prefers the battery's
 own reading; `ac` covers a desktop and a battery held on the adapter without
-charging. `network.address` follows the 30-second discovery pass and stays
-empty for an IPv6-only default route. `cpu.uptime` is one `CLOCK_MONOTONIC`
-read per CPU sample through the `nix` crate, which `network` already uses for
+charging. `network.address` follows discovery (at start and on each
+`core:network.changed`) and stays empty for an IPv6-only default route.
+`cpu.uptime` is one `CLOCK_MONOTONIC` read per CPU sample through the `nix` crate, which `network` already uses for
 `getifaddrs`; Darwin derives that clock from `kern.boottime`, so it counts
 sleep, as `uptime(1)` does.
 
@@ -216,8 +216,8 @@ scope; battery temperature reported by the power APIs is ordinary health data.
 uses `/usr/sbin/netstat -rn -f inet[6]`, traffic uses in-process interface counters,
 and local addresses use `getifaddrs`. Do not replace route discovery with `/sbin/route`,
 which requires a broad system-socket grant. SSID reads go through the narrow
-`wifi_info` host capability: background polling is passive, and only the
-explicit `:network refresh` action may request Location authorization.
+`wifi_info` host capability: event-driven discovery reads passively, and only
+the explicit `:network refresh` action may request Location authorization.
 
 ## Adjacent AI usage status
 

@@ -7,10 +7,16 @@ use flash_plugin::status::{
 };
 use flash_plugin::{
     Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
-    Preview, Published, RefreshGate, StatusValue, run, run_command,
+    Preview, Published, RefreshGate, StatusValue, host_events, run, run_command,
 };
 
+/// I/O counters have no change event, so they are sampled — only while a
+/// segment is observed.
 const ACTIVITY_POLL: Duration = Duration::from_secs(3);
+/// Free space has no change event either: while observed, an activity tick
+/// re-reads capacity at most this often. The mount set does have one, so a
+/// volume mounting, unmounting or being renamed (`core:volumes.changed`)
+/// re-reads it at once.
 const CAPACITY_POLL: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MIN_RATE_INTERVAL: Duration = Duration::from_secs(1);
@@ -216,14 +222,16 @@ impl FlashPlugin for Disks {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        let Some(segments) = event
-            .segments
-            .as_deref()
-            .filter(|_| event.name == "core:status.observed")
-        else {
-            return;
+        let rearmed = match event.name.as_str() {
+            // Unobserved, nothing samples: a command samples first.
+            host_events::VOLUMES_CHANGED => CADENCES.observed(),
+            host_events::STATUS_OBSERVED => event
+                .segments
+                .as_deref()
+                .is_some_and(|segments| CADENCES.observe(segments)),
+            _ => false,
         };
-        if CADENCES.observe(segments) {
+        if rearmed {
             tokio::spawn(async move {
                 refresh_disks(&ctx, true).await;
             });
@@ -1108,6 +1116,40 @@ Free          100 KiB"
 
         publish_status(&ctx, &mut DiskState::default());
         assert!(harness.drain_status().is_empty());
+    }
+
+    /// A mount, unmount or rename re-reads the mount set at once while a
+    /// segment is observed, instead of at the next capacity tick; unobserved,
+    /// nothing samples (a command samples first).
+    #[tokio::test]
+    async fn a_volume_change_rereads_the_mount_set_only_while_observed() {
+        let harness = Harness::new("disks");
+        // run_command uses the data dir as cwd; create it like the host does.
+        tokio::fs::create_dir_all(harness.data_dir()).await.unwrap();
+        let change = || Event {
+            name: "core:volumes.changed".into(),
+            ..Event::default()
+        };
+        let attempted = Instant::now();
+        *state() = DiskState {
+            last_capacity_attempt: Some(attempted),
+            ..DiskState::default()
+        };
+
+        CADENCES.observe(&[]);
+        Disks.on_event(harness.context(), change()).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(state().last_capacity_attempt, Some(attempted));
+
+        CADENCES.observe(&["summary".to_string()]);
+        Disks.on_event(harness.context(), change()).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state().last_capacity_attempt == Some(attempted) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the mount set was re-read before the capacity tick");
     }
 
     #[test]

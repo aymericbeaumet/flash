@@ -7,7 +7,7 @@ use flash_plugin::status::{
 };
 use flash_plugin::{
     Candidate, Color, CommandRequest, Context, Event, History, Markup, PerformResponse, PollHandle,
-    Preview, Published, RefreshGate, StatusValue, run, run_command, sys,
+    Preview, Published, RefreshGate, StatusValue, host_events, run, run_command, sys,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
@@ -15,12 +15,12 @@ use tokio::task::JoinHandle;
 
 const SOURCE_ADDRESSES: &str = "network.addresses";
 /// Traffic sampling cadence, registered with the host only while a surface
-/// shows one of [`TRAFFIC_SEGMENTS`].
+/// shows one of [`TRAFFIC_SEGMENTS`]: byte counters have no change event.
+/// Interface, route, address and SSID discovery feeds the `network.addresses`
+/// catalog and the `address` segment whether or not a surface shows the
+/// plugin, so it runs at start, on every `core:network.changed` and on
+/// `:network refresh`, and never on a timer.
 const TRAFFIC_POLL: Duration = Duration::from_secs(1);
-/// Interface, route, address and SSID discovery. It feeds the
-/// `network.addresses` catalog and the `address` segment, so it runs whether
-/// or not a status surface shows the plugin.
-const DISCOVERY_POLL: Duration = Duration::from_secs(30);
 /// The segments the traffic sample feeds; `address` follows discovery alone.
 const TRAFFIC_SEGMENTS: [&str; 7] = [
     "summary",
@@ -280,7 +280,7 @@ const STARTUP: Pass = Pass {
     discover: true,
     sample: true,
 };
-const DISCOVERY_TICK: Pass = Pass {
+const DISCOVERY: Pass = Pass {
     discover: true,
     sample: false,
 };
@@ -297,18 +297,23 @@ impl FlashPlugin for Network {
     async fn on_start(&self, ctx: Context) {
         warn_invalid_summary_mode(&ctx);
         refresh_network(&ctx, STARTUP).await;
-        drop(ctx.interval(DISCOVERY_POLL, |ctx| async move {
-            refresh_network(&ctx, DISCOVERY_TICK).await;
-        }));
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        if let Some(segments) = event
-            .segments
-            .as_deref()
-            .filter(|_| event.name == "core:status.observed")
-        {
-            drop(observe_traffic(&ctx, segments));
+        match event.name.as_str() {
+            // Interfaces, addresses, routes or DNS changed: rediscover off
+            // the event worker, so an observation never waits behind it.
+            host_events::NETWORK_CHANGED => {
+                tokio::spawn(async move {
+                    refresh_network(&ctx, DISCOVERY).await;
+                });
+            }
+            host_events::STATUS_OBSERVED => {
+                if let Some(segments) = event.segments.as_deref() {
+                    drop(observe_traffic(&ctx, segments));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1202,7 +1207,6 @@ default fe80::%utun6 UGcIg utun6\n";
 #[fg=colour245]Hostname      #[default]—"
         );
         assert_eq!(TRAFFIC_POLL, Duration::from_secs(1));
-        assert_eq!(DISCOVERY_POLL, Duration::from_secs(30));
         assert_eq!(HISTORY_LEN, 20);
     }
 
@@ -1324,7 +1328,7 @@ default fe80::%utun6 UGcIg utun6\n";
     }
 
     /// The one-second traffic sample runs only while a surface shows a
-    /// segment it feeds; the 30-second discovery keeps the address catalog.
+    /// segment it feeds; discovery keeps the address catalog regardless.
     #[tokio::test]
     async fn traffic_is_sampled_only_while_a_traffic_segment_is_observed() {
         let (_guard, mut harness) = scenario_harness().await;
@@ -1367,15 +1371,46 @@ default fe80::%utun6 UGcIg utun6\n";
         assert!(state().previous.is_none());
     }
 
+    /// Discovery follows `core:network.changed`: startup registers no
+    /// cadence at all.
     #[tokio::test]
-    async fn startup_registers_only_the_discovery_cadence() {
+    async fn startup_registers_no_cadence() {
         let (_guard, mut harness) = scenario_harness().await;
         let ctx = harness.context();
         let startup = tokio::spawn(async move { Network.on_start(ctx).await });
         let (id, _, _) = harness.next_host_request().await.expect("wifi read");
         assert!(harness.reply_host(id, json!({ "ok": true, "present": false })));
         startup.await.unwrap();
-        assert_eq!(polls(&harness.drain()), [json!({ "i0": 30.0 })]);
+        assert!(polls(&harness.drain()).is_empty());
+    }
+
+    /// A network change re-runs discovery — interface, addresses and a
+    /// passive SSID read — whether or not traffic is observed.
+    #[tokio::test]
+    async fn a_network_change_rediscovers_the_network() {
+        let (_guard, mut harness) = scenario_harness().await;
+        let change = Event {
+            name: "core:network.changed".into(),
+            ..Event::default()
+        };
+        Network.on_event(harness.context(), change).await;
+        let (id, method, params) = harness.next_host_request().await.expect("wifi read");
+        assert_eq!(
+            (method.as_str(), params),
+            ("host.wifi_info", json!({ "request_authorization": false }))
+        );
+        assert!(harness.reply_host(
+            id,
+            json!({ "ok": true, "present": true, "ssid": "Atelier" })
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while state().wifi_ssid.as_deref() != Some("Atelier") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("rediscovered");
+        assert!(polls(&harness.drain()).is_empty(), "no cadence either");
     }
 
     #[tokio::test]

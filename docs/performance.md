@@ -265,6 +265,15 @@ work whose source has no change notification, and all of it rides the one
 | Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input |
 | Inspector state refresh | A browser holds `/api/events` | 1 s |
 
+Bundled plugins register cadences only for values no event reports, and only
+while something can see them: `cpu`, `memory`, `disks`, `processes` and
+`aiproviders` samples while a status surface shows their segments, `network`
+traffic while a traffic segment is shown, `tmux` inventory while a client is
+attached, and the `feed` and `answers` refreshes. Network discovery follows
+`core:network.changed`, the disk mount set `core:volumes.changed`, and the
+window, tab and terminal catalogs the `core:ax.changed` notifications that can
+change them; none of those polls.
+
 Every one of them is held while the displays sleep, the session is locked or
 switched out, or the system sleeps, and resumes with one catch-up tick.
 Waiting for a child process ends on its kernel exit event, never a sleep loop,
