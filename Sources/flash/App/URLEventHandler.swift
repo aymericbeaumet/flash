@@ -64,7 +64,6 @@ enum URLCommand: Hashable {
   case archive
   case resourceNext
   case resourcePrevious
-  case close
   case tabClose
   case find
   case candidateFinder(all: Bool)
@@ -616,8 +615,6 @@ final class URLEventHandler: NSObject {
     "resource_next": .init(parse: { _ in .resourceNext }),
 
     "resource_previous": .init(parse: { _ in .resourcePrevious }),
-
-    "window_close": .init(parse: { _ in .close }),
 
     "tab_close": .init(parse: { _ in .tabClose }),
 

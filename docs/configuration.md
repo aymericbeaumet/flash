@@ -193,7 +193,7 @@ and `false` removes it.
 
 ```toml
 [mode.normal.mappings]
-"t" = false                                   # drop the default Cmd-T
+"t" = false                                   # drop the default new tab
 "tf" = ["flash", "mouse_target", "--triple"]  # now fires without a timeout
 ```
 
@@ -205,9 +205,13 @@ It also drops plugin mappings on that key in that table, including a chord
 spelled another way (`cmd+shift+]` and `cmd+shift+}`). `true` and
 `{ command = false }` are rejected.
 
-NORMAL persists across commands and focus changes. Its unmapped keys are swallowed;
-use `send_key` to pass a chosen chord to the app. INSERT entry rules and complete
-defaults live in [normal mode](normal-mode.md).
+NORMAL persists across commands and focus changes. Its unmapped keys are swallowed.
+Map keys to high-level actions such as `tab_new` or `app_reload`: each resolves in
+the focused app's context, through a source, the chord a plugin declares for that
+app or the macOS convention, and does nothing where the app lacks it (see
+[source actions](normal-mode.md#source-actions)). No default maps a key to
+`send_key`; it remains an escape hatch for a chord no action covers. INSERT entry
+rules and complete defaults live in [normal mode](normal-mode.md).
 
 Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured
 magic modifiers held on the final hint key. The complete set reaches every target.

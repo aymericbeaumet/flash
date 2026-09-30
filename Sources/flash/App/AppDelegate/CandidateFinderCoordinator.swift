@@ -1383,7 +1383,7 @@ extension AppDelegate {
     case .newTab:
       performMappedCommand(.tabNew)
     case .close:
-      performMappedCommand(.close)
+      performMappedCommand(.tabClose)
     case .closeWindow:
       closeFocusedWindowInNormalMode()
     case .find:

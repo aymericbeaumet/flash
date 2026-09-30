@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 import FlashCore
 import Foundation
 import XCTest
@@ -221,17 +220,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
-    assertSendKey(
-      c.mode.normal.first(where: { $0.key == key("[t") })?.action.command,
-      keys: "cmd+shift+[", keyCode: CGKeyCode(kVK_ANSI_LeftBracket),
-      flags: [.maskCommand, .maskShift])
-    assertSendKey(
-      c.mode.normal.first(where: { $0.key == key("]t") })?.action.command,
-      keys: "cmd+shift+]", keyCode: CGKeyCode(kVK_ANSI_RightBracket),
-      flags: [.maskCommand, .maskShift])
-    assertSendKey(
-      c.mode.normal.first(where: { $0.key == "t" })?.action.command,
-      keys: "cmd+t", keyCode: CGKeyCode(kVK_ANSI_T), flags: .maskCommand)
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("[t") }?.action.command, .tabPrev)
+    XCTAssertEqual(c.mode.normal.first { $0.key == key("]t") }?.action.command, .tabNext)
+    XCTAssertEqual(c.mode.normal.first { $0.key == "t" }?.action.command, .tabNew)
     XCTAssertEqual(c.mode.normal.first { $0.key == key("[m") }?.action.command, .tabMovePrev)
     XCTAssertEqual(c.mode.normal.first { $0.key == key("]m") }?.action.command, .tabMoveNext)
     for rawKey in ["[a", "]a", "[t", "]t", "[m", "]m"] {
@@ -1229,7 +1220,7 @@ final class ConfigLoaderTests: XCTestCase {
     let bundled = ConfigLoader.Layer(
       text: """
         [mode.normal.mappings]
-        "t" = ["flash", "send_key", "--keys=cmd+t"]
+        "t" = ["flash", "tab_new"]
         """,
       diagnosticLabel: "config.default.toml")
     let user = ConfigLoader.Layer(
@@ -1244,11 +1235,11 @@ final class ConfigLoaderTests: XCTestCase {
     let override = ConfigLoader.Layer(
       text: """
         [mode.normal.mappings]
-        "t" = ["flash", "tab_new"]
+        "t" = ["flash", "tab_close"]
         """,
       diagnosticLabel: "FLASH_TEST")
     let readded = ConfigLoader.parseLayers([bundled, user, override])
-    XCTAssertEqual(readded.mode.compiledNormal.mapping(for: "t")?.action.command, .tabNew)
+    XCTAssertEqual(readded.mode.compiledNormal.mapping(for: "t")?.action.command, .tabClose)
     XCTAssertEqual(readded.mode.unmapped[.normal] ?? [], [])
     XCTAssertTrue(readded.loadingDiagnostics.isEmpty)
   }
@@ -1678,22 +1669,6 @@ final class ConfigLoaderTests: XCTestCase {
 
   private func key(_ raw: String) -> String {
     NormalModeInterpreter.canonicalizeMappingKey(raw)!
-  }
-
-  private func assertSendKey(
-    _ command: URLCommand?,
-    keys: String,
-    keyCode: CGKeyCode,
-    flags: CGEventFlags = [],
-    file: StaticString = #filePath,
-    line: UInt = #line
-  ) {
-    guard case .sendKey(let actualKeys, let actualKeyCode, let flagsRawValue) = command else {
-      return XCTFail("expected send_key \(keys)", file: file, line: line)
-    }
-    XCTAssertEqual(actualKeys, keys, file: file, line: line)
-    XCTAssertEqual(actualKeyCode, keyCode, file: file, line: line)
-    XCTAssertEqual(flagsRawValue, flags.rawValue, file: file, line: line)
   }
 
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {

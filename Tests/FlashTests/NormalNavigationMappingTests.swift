@@ -14,22 +14,12 @@ final class NormalNavigationMappingTests: XCTestCase {
       mappings: Config.default.mode.compiledNormal)
   }
 
-  func testNumberedTabDefaultsSendLiteralCommandDigitsInEveryTerminal() throws {
+  func testNumberedTabDefaultsSelectTheTabByIndex() {
     for index in 1...9 {
       let transition = interpret(pending: "g", character: String(index))
-      guard case .sendKey(let keys, let key, let flags) = transition.command else {
-        XCTFail("g\(index) must directly send Cmd-\(index)")
-        continue
-      }
-      XCTAssertEqual(keys, "cmd+\(index)")
-      XCTAssertEqual(flags, CGEventFlags.maskCommand.rawValue)
+      XCTAssertEqual(transition.command, .tabSelect(index: index), "g\(index)")
       XCTAssertEqual(transition.pending, "")
       XCTAssertNil(transition.repeatAnchor)
-      XCTAssertFalse(
-        AppDelegate.commandChordTypesTextInTerminal(
-          key: key, flags: CGEventFlags(rawValue: flags)
-        ) { false },
-        "g\(index) in a terminal")
     }
   }
 

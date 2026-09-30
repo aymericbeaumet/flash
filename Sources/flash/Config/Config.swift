@@ -782,18 +782,18 @@ struct Config {
         ("G", .flashCommand(.scroll(.bottom))),
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
-        ("[t", sendKeyMapping("cmd+shift+[")),
-        ("]t", sendKeyMapping("cmd+shift+]")),
-        ("t", sendKeyMapping("cmd+t")),
-        ("g1", sendKeyMapping("cmd+1")),
-        ("g2", sendKeyMapping("cmd+2")),
-        ("g3", sendKeyMapping("cmd+3")),
-        ("g4", sendKeyMapping("cmd+4")),
-        ("g5", sendKeyMapping("cmd+5")),
-        ("g6", sendKeyMapping("cmd+6")),
-        ("g7", sendKeyMapping("cmd+7")),
-        ("g8", sendKeyMapping("cmd+8")),
-        ("g9", sendKeyMapping("cmd+9")),
+        ("[t", .flashCommand(.tabPrev)),
+        ("]t", .flashCommand(.tabNext)),
+        ("t", .flashCommand(.tabNew)),
+        ("g1", .flashCommand(.tabSelect(index: 1))),
+        ("g2", .flashCommand(.tabSelect(index: 2))),
+        ("g3", .flashCommand(.tabSelect(index: 3))),
+        ("g4", .flashCommand(.tabSelect(index: 4))),
+        ("g5", .flashCommand(.tabSelect(index: 5))),
+        ("g6", .flashCommand(.tabSelect(index: 6))),
+        ("g7", .flashCommand(.tabSelect(index: 7))),
+        ("g8", .flashCommand(.tabSelect(index: 8))),
+        ("g9", .flashCommand(.tabSelect(index: 9))),
         ("g0", .flashCommand(.tabFirst)),
         ("g^", .flashCommand(.tabFirst)),
         ("g$", .flashCommand(.tabLast)),
@@ -825,10 +825,10 @@ struct Config {
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
-        ("x", sendKeyMapping("cmd+w")),
-        ("X", sendKeyMapping("cmd+shift+t")),
-        ("r", sendKeyMapping("cmd+r")),
-        ("R", sendKeyMapping("cmd+shift+r")),
+        ("x", .flashCommand(.tabClose)),
+        ("X", .flashCommand(.tabReopen)),
+        ("r", .flashCommand(.reload(force: false))),
+        ("R", .flashCommand(.reload(force: true))),
         ("y", .flashCommand(.yankSelection(register: nil))),
         ("p", .flashCommand(.paste(register: nil))),
         ("/", .flashCommand(.find)),
@@ -847,13 +847,6 @@ struct Config {
           action: action,
           repeatsOnFinalKey: repeatableKeys.contains(key))
       }
-    }
-
-    private static func sendKeyMapping(_ keys: String) -> MappingCommand {
-      guard let action = parseMappingCommand(argv: ["flash", "send_key", "--keys=\(keys)"]) else {
-        preconditionFailure("invalid default send_key mapping: \(keys)")
-      }
-      return action
     }
 
     func mappings(for mode: FlashMode) -> [ModeMapping] {
@@ -1350,7 +1343,6 @@ extension URLCommand {
     case .archive: return verb("resource_archive")
     case .resourceNext: return verb("resource_next")
     case .resourcePrevious: return verb("resource_previous")
-    case .close: return verb("window_close")
     case .tabClose: return verb("tab_close")
     case .find: return verb("app_find")
     case .candidateFinder(let all):
@@ -1541,7 +1533,7 @@ extension Config {
 
       ```toml
       [mode.normal.mappings]
-      "gb" = ["flash", "send_key", "--keys=cmd+shift+b"]
+      "gs" = ["flash", "mouse_target", "--scope=screen"]
       "[a" = { command = ["flash", "app_previous"], repeat = true }
       "t" = false
       ```

@@ -941,13 +941,11 @@ extension AppDelegate {
     case .archive:
       performSourceAction(.resourceArchive, repeatCount: repeatCount)
     case .resourceNext:
-      resourceNavigationInNormalMode(direction: .next, repeatCount: repeatCount)
+      performSourceAction(.resourceNext, repeatCount: repeatCount)
     case .resourcePrevious:
-      resourceNavigationInNormalMode(direction: .previous, repeatCount: repeatCount)
-    case .close:
-      closeInNormalMode(.windowClose, repeatCount: repeatCount)
+      performSourceAction(.resourcePrevious, repeatCount: repeatCount)
     case .tabClose:
-      closeInNormalMode(.tabClose, repeatCount: repeatCount)
+      performSourceAction(.tabClose, repeatCount: repeatCount)
     case .find:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
@@ -994,7 +992,7 @@ extension AppDelegate {
     case .tabPrev:
       performSourceAction(.tabPrevious, repeatCount: repeatCount)
     case .tabFirst:
-      tabFirstInNormalMode()
+      performSourceAction(.tabFirst)
     case .tabLast:
       performSourceAction(.tabLast)
     case .tabSelect(let explicitIndex):
@@ -1016,9 +1014,9 @@ extension AppDelegate {
     case .tabReopen:
       performSourceAction(.tabReopen, repeatCount: repeatCount)
     case .historyBack:
-      navigateTargetHistory(.historyBack, key: kVK_ANSI_LeftBracket, repeatCount: repeatCount)
+      performSourceAction(.historyBack, repeatCount: repeatCount)
     case .historyForward:
-      navigateTargetHistory(.historyForward, key: kVK_ANSI_RightBracket, repeatCount: repeatCount)
+      performSourceAction(.historyForward, repeatCount: repeatCount)
     case .movementBack:
       navigateMovementHistory(direction: .back)
     case .movementForward:
@@ -1324,15 +1322,6 @@ extension AppDelegate {
         NormalModeDispatcher.insertUnicode(text, to: pid)
       }
       self.scheduleNormalModeRecapture()
-    }
-  }
-
-  /// Back/forward is a source action: an app's own chord where a plugin
-  /// declares one (editors use Control-Minus), else the platform's
-  /// Cmd-[ / Cmd-].
-  private func navigateTargetHistory(_ name: SourceActionName, key: Int, repeatCount: Int) {
-    performSourceAction(name, repeatCount: repeatCount) { [weak self] _, count in
-      self?.sendNormalModeKey(CGKeyCode(key), flags: .maskCommand, repeatCount: count)
     }
   }
 

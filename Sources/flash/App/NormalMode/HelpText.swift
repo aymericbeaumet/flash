@@ -39,19 +39,26 @@ extension NormalModeDispatcher {
 
         ## Editing And Navigation
 
+        Keys map to high-level actions that resolve in the focused app: tmux
+        windows inside tmux, browser tabs, native tabs, and nothing where the
+        app lacks the action. No default sends a raw key chord.
+
         - `u` undoes; `ctrl-r` redoes.
         - `y` copies the selection; `p` pastes.
-        - `/` opens Find; `x` closes the current view.
+        - `/` opens Find; `x` closes the current tab and `X` reopens the last
+          closed one.
         - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
           to repeat (`[aaaa` / `]aaaa`).
-        - `[t` / `]t` sends Cmd-Shift-[ / Cmd-Shift-] in every app;
-          keep pressing `t` to repeat while staying in NORMAL.
-        - `t` sends Cmd-T to open a new tab and stays in NORMAL.
+        - `[t` / `]t` switch to the previous/next tab; keep pressing `t` to
+          repeat while staying in NORMAL.
+        - `t` opens a tab and `g1`–`g9` select one; NORMAL stays.
+        - `r` reloads and `R` hard-reloads where the app has a reload
+          (browsers, tmux).
         - `ctrl-o` / `ctrl-i` traverse Flash's movement history.
         - `H` / `L` go back/forward in the app (Cmd-[ / Cmd-], or the app's
           own chord; nothing in terminals and apps without history).
-        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, reload,
-          archive, find-match, URL-copy and mark shortcuts are opt-in.
+        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, archive,
+          find-match, URL-copy and mark shortcuts are opt-in.
 
         ## Mouse Targets
 

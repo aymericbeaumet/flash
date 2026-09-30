@@ -172,11 +172,15 @@ Surface requests that would violate these constraints before implementing them.
 - Config validation is shared by all layers; preserve authored values and derive
   only after overrides. Only executable/working-directory fields receive path
   resolution; argv tails stay opaque. Update whole-section default parity tests.
-- Keep NORMAL defaults consistent across apps: Flash-owned actions, standard
-  editing/scrolling. `t` / `[t` / `]t` send Cmd-T / Cmd-Shift-[ / Cmd-Shift-]
-  directly in every app, including terminals. Vertical scroll bindings send
-  configurable line-based wheel events system-wide, without AX fallback.
-  Additional app-specific actions remain explicit choices; keep guides in sync.
+- NORMAL defaults and bundled plugin mappings bind keys to high-level actions,
+  never to raw chords: none uses `send_key`, which stays a user escape hatch
+  (a test enforces it). An action resolves in the focused app's context: a
+  source that owns it (tmux, browsers, the AX tab strip), else the chord or
+  explicit none a plugin declares in `action_keystrokes`, else the platform
+  convention in `SourceActionFallback`, else nothing; terminals never receive
+  a chord they would type. App knowledge is manifest data, never host
+  conditionals. Vertical scroll bindings send configurable line-based wheel
+  events system-wide, without AX fallback. Keep guides in sync.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.
 - Keep this guide actionable and concise; explanations belong in `docs/`.

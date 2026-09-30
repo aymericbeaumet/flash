@@ -1083,12 +1083,19 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?["com.apple.dt.Xcode"], "ctrl+cmd+left")
     XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?["com.apple.Notes"], "")
     XCTAssertNil(defaults.actionKeystrokes[.historyBack]?[""], "Cmd-[ is the host's convention")
+    XCTAssertEqual(defaults.actionKeystrokes[.tabNew]?[cursor], "cmd+n")
+    XCTAssertEqual(defaults.actionKeystrokes[.tabReopen]?[cursor], "cmd+shift+t")
+    XCTAssertEqual(
+      defaults.actionKeystrokes[.tabNew]?["com.apple.Notes"], "",
+      "Cmd-T opens the Fonts panel, not a tab")
+    XCTAssertNil(defaults.actionKeystrokes[.tabNew]?[""], "Cmd-T is the host's convention")
     let vscode = try manifest("vscode")
+    XCTAssertEqual(vscode.actionKeystrokes[.tabNew]?[""], "cmd+n")
+    XCTAssertEqual(vscode.actionKeystrokes[.tabReopen]?[""], "cmd+shift+t")
     XCTAssertEqual(vscode.actionKeystrokes[.historyBack]?[""], "ctrl+-")
     XCTAssertEqual(vscode.actionKeystrokes[.historyForward]?[""], "ctrl+shift+-")
     XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])
-    XCTAssertEqual(
-      defaults.mappings.filter(\.repeatsOnFinalKey).map(\.key).sorted(), ["[t", "]t"])
+    XCTAssertEqual(defaults.mappings, [], "Messages' tab chord is action data, not a mapping")
     let terminals = try manifest("terminals")
     XCTAssertEqual(terminals.activation, .manifestOnly)
     XCTAssertTrue(

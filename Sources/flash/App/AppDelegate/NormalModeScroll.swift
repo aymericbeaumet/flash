@@ -25,9 +25,7 @@ extension AppDelegate {
     // its own buffer, else an app's declared chord (a browser's Cmd-Up), else
     // the focused-window scroller.
     if kind == .top || kind == .bottom {
-      performSourceAction(kind == .top ? .scrollTop : .scrollBottom) { [weak self] context, count in
-        self?.scrollViaScroller(kind, context: context, repeats: count)
-      }
+      performSourceAction(kind == .top ? .scrollTop : .scrollBottom)
       return
     }
     guard let context = normalModeDispatchContext() else {

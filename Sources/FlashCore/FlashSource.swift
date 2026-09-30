@@ -45,13 +45,13 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// left/right). Tmux runs `swap-window -t -1`/`+1`; browsers have no
   /// portable shortcut so they don't claim this capability.
   public static let tabReorder = FlashSourceCapabilities(rawValue: 1 << 9)
-  /// Source handles `T` (reopen the most recently closed tab). Browsers
-  /// claim this via their ⌘⇧T fallback; tmux returns `.unhandled` (no
-  /// equivalent gesture).
+  /// Source handles `X` (`tab_reopen`: reopen the most recently closed tab).
+  /// No bundled source claims it; browsers and editors declare their ⌘⇧T
+  /// through `action_keystrokes`, and tmux has no closed-window history.
   public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
-  /// Source handles `r` / `R` (`app_reload`). Browsers usually fall back to
-  /// their native refresh chords; terminal-backed sources can opt in when
-  /// they have a real refresh primitive.
+  /// Source handles `r` / `R` (`app_reload`). Browsers declare their native
+  /// refresh chords through `action_keystrokes`; terminal-backed sources opt
+  /// in when they have a real refresh primitive (tmux refreshes its client).
   public static let reload = FlashSourceCapabilities(rawValue: 1 << 11)
   /// Source handles `e` (`resource_archive`) for the currently focused
   /// resource. Web-app integrations use this for app-specific archive
@@ -112,11 +112,6 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
 extension SourceAction {
   /// Short tag used in source-action trace logs (`tab_next`, `scroll_top`, …).
   public var traceTag: String { wireName }
-}
-
-public enum SourceTabDirection: Sendable {
-  case next
-  case previous
 }
 
 public enum CandidateScope: Sendable {
@@ -442,7 +437,6 @@ public enum SourceActionName: String, CaseIterable, Sendable {
   case tabReopen = "tab_reopen"
   case tabMoveNext = "tab_move_next"
   case tabMovePrevious = "tab_move_previous"
-  case windowClose = "window_close"
   case paneNext = "pane_next"
   case panePrevious = "pane_previous"
   case paneSplitVertical = "pane_split_vertical"
@@ -465,7 +459,7 @@ public enum SourceActionName: String, CaseIterable, Sendable {
     case .tabFirst: return .tabFirst
     case .tabLast: return .tabLast
     case .tabNew: return .tabNew
-    case .tabClose, .windowClose: return .tabClose
+    case .tabClose: return .tabClose
     case .tabReopen: return .tabReopen
     case .tabMoveNext: return .tabMoveNext
     case .tabMovePrevious: return .tabMovePrev

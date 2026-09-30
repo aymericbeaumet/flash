@@ -2,7 +2,7 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path; the shortcuts apps without a plugin of their own bind for Flash's built-in actions, such as editors' back/forward; and the apps whose accessibility tree is walked only on demand.",
+  "description": "Provides Flash's default plugin-layer behavior: the canonical app keystroke verbs (app_save, app_print, document_open, window_new), bypassing plugin RPC on the hot path; the shortcuts apps without a plugin of their own bind for Flash's built-in actions, such as editors' new and reopened tabs and back/forward, or none where an app lacks the action; and the apps whose accessibility tree is walked only on demand.",
   "verbs": [
     {
       "name": "app_save",
@@ -40,6 +40,28 @@
     "tab_previous": {
       "com.apple.MobileSMS": "ctrl+shift+tab"
     },
+    "tab_new": {
+      "com.todesktop.230313mzl4w4u92": "cmd+n",
+      "com.microsoft.VSCodeInsiders": "cmd+n",
+      "com.vscodium": "cmd+n",
+      "com.exafunction.windsurf": "cmd+n",
+      "dev.zed.Zed": "cmd+n",
+      "dev.zed.Zed-Preview": "cmd+n",
+      "com.sublimetext.4": "cmd+n",
+      "com.apple.Notes": "",
+      "com.apple.TextEdit": "",
+      "com.apple.iWork.Pages": "",
+      "com.apple.mail": ""
+    },
+    "tab_reopen": {
+      "com.todesktop.230313mzl4w4u92": "cmd+shift+t",
+      "com.microsoft.VSCodeInsiders": "cmd+shift+t",
+      "com.vscodium": "cmd+shift+t",
+      "com.exafunction.windsurf": "cmd+shift+t",
+      "dev.zed.Zed": "cmd+shift+t",
+      "dev.zed.Zed-Preview": "cmd+shift+t",
+      "com.sublimetext.4": "cmd+shift+t"
+    },
     "history_back": {
       "com.todesktop.230313mzl4w4u92": "ctrl+-",
       "com.microsoft.VSCodeInsiders": "ctrl+-",
@@ -72,37 +94,13 @@
   "on_demand_hints": [
     "com.apple.Notes"
   ],
-  "mappings": [
-    {
-      "key": "]t",
-      "command": [
-        "flash",
-        "tab_next"
-      ],
-      "repeat": true,
-      "only_bundle_ids": [
-        "com.apple.MobileSMS"
-      ]
-    },
-    {
-      "key": "[t",
-      "command": [
-        "flash",
-        "tab_previous"
-      ],
-      "repeat": true,
-      "only_bundle_ids": [
-        "com.apple.MobileSMS"
-      ]
-    }
-  ],
   "help": {
     "topics": [
       {
         "name": "defaults",
         "title": "Defaults",
         "summary": "Bundled plugin-layer defaults, including canonical app shortcut verbs.",
-        "body": "# Defaults\n\nThis bundled plugin owns Flash's default plugin-layer behavior. Today it registers the canonical app-shortcut verbs:\n\n- `flash app_save` - Cmd-S\n- `flash app_print` - Cmd-P\n- `flash document_open` - Cmd-O\n- `flash window_new` - Cmd-N\n\nEach verb uses the manifest's `keystrokes` table, so the host translates it directly into a core keystroke action without round-tripping through the plugin process. Users who want a raw host-only experience can disable this plugin with `[plugins] disabled = [\"defaults\"]`.\n"
+        "body": "# Defaults\n\nThis bundled plugin owns Flash's default plugin-layer behavior. Today it registers the canonical app-shortcut verbs:\n\n- `flash app_save` - Cmd-S\n- `flash app_print` - Cmd-P\n- `flash document_open` - Cmd-O\n- `flash window_new` - Cmd-N\n\nEach verb uses the manifest's `keystrokes` table, so the host translates it directly into a core keystroke action without round-tripping through the plugin process. It also declares, as `action_keystrokes`, the chords apps bind for Flash's high-level actions where the macOS convention does not cover them (editors open a tab with Cmd-N, reopen one with Cmd-Shift-T and go back with Control-Minus), and the apps that lack an action, such as Notes, where Cmd-T would open the Fonts panel instead of a tab. Users who want a raw host-only experience can disable this plugin with `[plugins] disabled = [\"defaults\"]`.\n"
       }
     ]
   }

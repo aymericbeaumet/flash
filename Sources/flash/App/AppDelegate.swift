@@ -526,7 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .terminalMode(let name):
       enterTerminalMode(named: name)
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
-      .close, .tabClose, .find, .candidateFinder,
+      .tabClose, .find, .candidateFinder,
       .enterCommand, .copyURL, .yankSelection, .paste,
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect,
       .tabMovePrev, .tabMoveNext, .tabReopen,

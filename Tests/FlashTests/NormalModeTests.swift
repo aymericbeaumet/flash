@@ -82,50 +82,20 @@ final class NormalModeTests: XCTestCase {
       """
     )
     XCTAssertTrue(config.diagnostics.isEmpty)
-    assertSendKeyKeys(
-      command(pending: "[", chars: "t", mappings: config.mode.normal), "cmd+shift+[")
-    assertSendKeyKeys(
-      command(pending: "]", chars: "t", mappings: config.mode.normal), "cmd+shift+]")
+    XCTAssertEqual(command(pending: "[", chars: "t", mappings: config.mode.normal), .tabPrev)
+    XCTAssertEqual(command(pending: "]", chars: "t", mappings: config.mode.normal), .tabNext)
     let newTab = transition(chars: "t", mappings: config.mode.normal)
-    assertSendKeyKeys(newTab.command, "cmd+t")
+    XCTAssertEqual(newTab.command, .tabNew)
     XCTAssertEqual(newTab.pending, "")
     XCTAssertNil(newTab.repeatAnchor)
-    assertSendKeyKeys(command(chars: "x", mappings: config.mode.normal), "cmd+w")
-    assertSendKeyKeys(
-      command(chars: "X", flags: [.shift], mappings: config.mode.normal), "cmd+shift+t")
-    assertSendKeyKeys(command(chars: "r", mappings: config.mode.normal), "cmd+r")
-    assertSendKeyKeys(
-      command(chars: "R", flags: [.shift], mappings: config.mode.normal), "cmd+shift+r")
+    XCTAssertEqual(command(chars: "x", mappings: config.mode.normal), .tabClose)
+    XCTAssertEqual(
+      command(chars: "X", flags: [.shift], mappings: config.mode.normal), .tabReopen)
+    XCTAssertEqual(command(chars: "r", mappings: config.mode.normal), .reload(force: false))
+    XCTAssertEqual(
+      command(chars: "R", flags: [.shift], mappings: config.mode.normal), .reload(force: true))
     XCTAssertEqual(command(chars: "i", mappings: config.mode.normal), .insertMode)
     XCTAssertNil(command(chars: "i"))
-  }
-
-  func testDefaultTabChordsAreAllowedInEveryTerminal() throws {
-    let commands = [
-      command(pending: "[", chars: "t"), command(pending: "]", chars: "t"), command(chars: "t"),
-      command(chars: "x"), command(chars: "X", flags: [.shift]),
-    ]
-    for command in commands {
-      guard case .sendKey(_, let keyCode, let flags) = command else {
-        return XCTFail("Tab defaults must send the standard app shortcut directly")
-      }
-      XCTAssertFalse(
-        AppDelegate.commandChordTypesTextInTerminal(
-          key: keyCode, flags: CGEventFlags(rawValue: flags)
-        ) { false })
-    }
-  }
-
-  func testDefaultReloadChordsAreRefusedInTerminalsWhereTheyWouldTypeAnR() throws {
-    for command in [command(chars: "r"), command(chars: "R", flags: [.shift])] {
-      guard case .sendKey(_, let keyCode, let flags) = command else {
-        return XCTFail("Reload defaults must send the standard app shortcut directly")
-      }
-      XCTAssertTrue(
-        AppDelegate.commandChordTypesTextInTerminal(
-          key: keyCode, flags: CGEventFlags(rawValue: flags)
-        ) { false })
-    }
   }
 
   func testVerticalScrollPostsLineEventsInEveryAppWithoutWindowGeometry() throws {
@@ -330,18 +300,8 @@ final class NormalModeTests: XCTestCase {
     let cases: [(prefix: String, letter: String, command: URLCommand)] = [
       ("[", "a", .appPrev),
       ("]", "a", .appNext),
-      (
-        "[", "t",
-        .sendKey(
-          keys: "cmd+shift+[", keyCode: CGKeyCode(kVK_ANSI_LeftBracket),
-          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
-      ),
-      (
-        "]", "t",
-        .sendKey(
-          keys: "cmd+shift+]", keyCode: CGKeyCode(kVK_ANSI_RightBracket),
-          flagsRawValue: CGEventFlags([.maskCommand, .maskShift]).rawValue)
-      ),
+      ("[", "t", .tabPrev),
+      ("]", "t", .tabNext),
     ]
     for testCase in cases {
       let first = transition(pending: testCase.prefix, chars: testCase.letter)
@@ -473,9 +433,9 @@ final class NormalModeTests: XCTestCase {
         charactersIgnoringModifiers: " ",
         mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
       ).command)
-    assertSendKeyKeys(command(chars: "r"), "cmd+r")
+    XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertNil(command(chars: ":"))
-    assertSendKeyKeys(command(chars: "x"), "cmd+w")
+    XCTAssertEqual(command(chars: "x"), .tabClose)
     XCTAssertTrue(
       NormalModeInterpreter.recognizesPhysicalKey(
         pending: "",
@@ -538,7 +498,7 @@ final class NormalModeTests: XCTestCase {
       command(pending: first.pending, chars: "f", mappings: mappings),
       .mouseTarget(.click(.tripleClick, modifiers: [])))
 
-    // With the default `t` kept, the same prefix parks Cmd-T for the timeout.
+    // With the default `t` kept, the same prefix parks `tab_new` for the timeout.
     let kept = ConfigLoader.parse(
       """
       [mode.normal.mappings]
@@ -2375,8 +2335,8 @@ final class NormalModeTests: XCTestCase {
       "flash mouse_target --double", "flash mouse_target --move",
       "flash mouse_grid", "flash mouse_grid --double",
       "flash app_previous", "flash app_next", "flash app_undo", "flash app_redo", "?",
-      "flash send_key --keys=cmd+shift+[", "flash send_key --keys=cmd+shift+]",
-      "flash send_key --keys=cmd+t",
+      "flash tab_previous", "flash tab_next", "flash tab_new", "flash tab_select --index=1",
+      "flash tab_close", "flash tab_reopen", "flash app_reload", "flash app_reload --force",
     ] {
       XCTAssertTrue(
         help.contains(mapping),
@@ -2389,7 +2349,7 @@ final class NormalModeTests: XCTestCase {
     // Only TERMINAL, a focused popup, ships an exit: Command-W, in its column.
     let leave = help.split(separator: "\n").filter { $0.hasPrefix("flash leave_mode ") }
     XCTAssertEqual(leave.map { $0.split(separator: " ").count }, [3], "\(leave)")
-    XCTAssertFalse(help.contains("flash app_reload"))
+    XCTAssertFalse(help.contains("send_key"), "defaults map keys to actions, never to chords")
     XCTAssertFalse(help.contains(":q[uit]"))
   }
 
@@ -2921,38 +2881,8 @@ final class NormalModeTests: XCTestCase {
       mappings: CompiledMappings(mappings))
   }
 
-  private func assertSendKey(
-    _ command: URLCommand?,
-    keys: String,
-    keyCode: CGKeyCode,
-    file: StaticString = #filePath,
-    line: UInt = #line
-  ) {
-    guard case .sendKey(let actualKeys, let actualKeyCode, let flagsRawValue) = command else {
-      return XCTFail("expected send_key \(keys)", file: file, line: line)
-    }
-    XCTAssertEqual(actualKeys, keys, file: file, line: line)
-    XCTAssertEqual(actualKeyCode, keyCode, file: file, line: line)
-    XCTAssertEqual(flagsRawValue, 0, file: file, line: line)
-  }
-
   private func key(_ raw: String) -> String {
     NormalModeInterpreter.canonicalizeMappingKey(raw)!
-  }
-
-  /// Assert a command is a `send_key` for the given hotkey, checking only
-  /// the hotkey string (the keyCode / flags are derived from it). Used for
-  /// modified sends like `cmd+g` where the flags raw value is non-zero.
-  private func assertSendKeyKeys(
-    _ command: URLCommand?,
-    _ keys: String,
-    file: StaticString = #filePath,
-    line: UInt = #line
-  ) {
-    guard case .sendKey(let actualKeys, _, _) = command else {
-      return XCTFail("expected send_key \(keys)", file: file, line: line)
-    }
-    XCTAssertEqual(actualKeys, keys, file: file, line: line)
   }
 
   private func editableRepairCandidate(

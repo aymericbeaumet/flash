@@ -471,10 +471,10 @@ or stale host", never ambiguity.
   },
   "mappings": [
     {
-      "key": "R",
+      "key": "ge",
       "mode": "normal",
-      "command": ["flash", "send_key", "--keys=cmd+option+r"],
-      "only_bundle_ids": ["com.apple.Safari"]
+      "command": ["flash", "resource_archive"],
+      "only_bundle_ids": ["org.mozilla.firefox"]
     }
   ],
   "help": { "topics": [] }
@@ -525,10 +525,12 @@ Section semantics:
   that the app has no shortcut for the action, so the host sends nothing
   rather than its own convention. The host sends the chord when no source
   performs the action in the focused app; an app's own entry beats a
-  plugin-wide one, then selector specificity and `priority` decide. Names are
+  plugin-wide one, then selector specificity and `priority` decide. Without a
+  declaration the host's platform convention applies where the action has one
+  (see [source actions](normal-mode.md#source-actions)). Names are
   `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_new`,
   `tab_close`, `tab_reopen`, `tab_move_next`, `tab_move_previous`,
-  `window_close`, `pane_next`, `pane_previous`, `pane_split_vertical`,
+  `pane_next`, `pane_previous`, `pane_split_vertical`,
   `pane_split_horizontal`, `pane_close`, `app_reload`, `app_reload_force`,
   `resource_archive`, `resource_next`, `resource_previous`, `scroll_top`,
   `scroll_bottom`, `history_back` and `history_forward`; an unknown name or
@@ -549,7 +551,9 @@ Section semantics:
 - **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
   `normal`); `command` is an argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
-  when its final key is pressed again, as in config. Terminal mappings are local to a focused
+  when its final key is pressed again, as in config. Map keys to high-level
+  actions; an app's own chord for one belongs in `action_keystrokes`, and no
+  bundled mapping uses `send_key`. Terminal mappings are local to a focused
   popup. Every global mapping registration is suspended while that view
   owns input; only winning INSERT-active `enter_normal_mode` bindings are
   inherited as terminal defaults, and explicit terminal bindings override them.

@@ -105,7 +105,7 @@ enum HelpDocs {
 
       [mode.normal.mappings]
       "t" = false
-      "gb" = ["flash", "send_key", "--keys=cmd+shift+b"]
+      "gs" = ["flash", "mouse_target", "--scope=screen"]
       "[a" = { command = ["flash", "app_previous"], repeat = true }
       ```
 

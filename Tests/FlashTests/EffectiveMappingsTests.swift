@@ -91,7 +91,7 @@ final class EffectiveMappingsTests: XCTestCase {
 
   func testEmptyPluginListReturnsBaseUnchanged() {
     let base = mode(
-      all: [ModeMapping(key: "x", action: .flashCommand(.close))],
+      all: [ModeMapping(key: "x", action: .flashCommand(.tabClose))],
       normal: [ModeMapping(key: "q", action: .flashCommand(.undo))],
       insert: [ModeMapping(key: "z", action: .flashCommand(.insertMode))])
     let effective = EffectiveMappings.merge(base: base, plugin: [])

@@ -3,9 +3,11 @@
 Normal mode mappings are owned by `Sources/flash/App/NormalMode.swift` and the
 default mapping list in `Sources/flash/Config/Config.swift`.
 
-Defaults use Flash-owned actions, standard macOS editing commands and basic tab
-actions. Other tab, pane, page-history, reload, archive, find-match,
-document-URL and mark commands remain available for explicit mappings.
+Defaults map keys to high-level actions, never to raw key chords: each action
+resolves in the focused app's context (see [source actions](#source-actions)),
+and an app without the action gets nothing. Other tab, pane, archive,
+find-match, document-URL and mark commands remain available for explicit
+mappings.
 
 - `h` / `l` scroll left/right. `ctrl+e` / `ctrl+y` send a mouse-wheel scroll
   down/up by 3 lines; `ctrl+d` / `ctrl+u` send 20 lines down/up. Configure these
@@ -14,18 +16,25 @@ document-URL and mark commands remain available for explicit mappings.
 - `gg` / `G` go to the top/bottom.
 - `u` undoes and `ctrl+r` redoes. Bare `d`, `j` and `k` are unbound.
 - `y` copies immediately, `p` pastes and `/` opens Find.
-- `x` sends Cmd-W to close the current tab; `X` sends Cmd-Shift-T to reopen it.
-  Both preserve NORMAL and send the same shortcut in every app.
-- `r` sends Cmd-R to reload; `R` sends Cmd-Shift-R to hard-reload. Terminals
-  leave Cmd-R unbound, so there both do nothing rather than typing an `r`.
+- `x` closes the current tab (`tab_close`); `X` reopens the last closed one
+  (`tab_reopen`). Inside tmux `x` closes the tmux window after tmux's own
+  confirmation. `X` acts in browsers and editors; tmux, terminals and Finder
+  keep no closed tabs, so there it does nothing.
+- `r` reloads (`app_reload`); `R` hard-reloads (`app_reload --force`).
+  Browsers use their own chords (Safari's hard reload is Cmd-Option-R) and
+  tmux refreshes its client. Other apps, terminals included, do nothing:
+  Cmd-R replies in Mail and runs in Xcode.
 - `[a` / `]a` cycle previous/next app in MRU order.
-- `[t` / `]t` send Cmd-Shift-[ / Cmd-Shift-] directly in every app, including
-  terminals. Repeat the final `t` to keep switching tabs. WhatsApp binds the
-  chord to its previous/next chat; in Messages, which leaves it unbound, the
-  `defaults` plugin maps `[t` / `]t` to `tab_previous` / `tab_next`, whose
-  Messages chord is Control-(Shift-)Tab.
-- `t` sends Cmd-T directly. `g1`–`g9` send Cmd-1…Cmd-9 directly, including in
-  terminals and tmux. These shortcuts preserve NORMAL.
+- `[t` / `]t` switch to the previous/next tab (`tab_previous` / `tab_next`);
+  repeat the final `t` to keep switching. Inside tmux they switch tmux windows;
+  elsewhere the app's own chord (Control-(Shift-)Tab in Messages), else
+  Cmd-Shift-[ / Cmd-Shift-], which WhatsApp binds to its previous/next chat.
+- `t` opens a tab (`tab_new`): a tmux window inside tmux, Cmd-N in editors
+  whose Cmd-T searches symbols, nothing in Notes, TextEdit, Pages and Mail,
+  whose Cmd-T opens the Fonts panel, and Cmd-T elsewhere, terminals included.
+- `g1`–`g9` select a tab by position (`tab_select`): a tmux window by ordinal,
+  a browser tab through the browsers plugin, a native tab strip through
+  Accessibility, else Cmd-1…Cmd-9. These actions preserve NORMAL.
 - `g0` / `g^` go to the first tab and `g$` to the last. tmux and plugin
   sources select their own first and last windows; otherwise the first tab is
   Cmd-1, and the last is the chord an app's plugin declares (Cmd-9 in
@@ -171,17 +180,30 @@ each direction.
 
 ## Source actions
 
-Tab, pane, reload, archive, back/forward and `gg` / `G` verbs are source
-actions. Each runs one policy that knows no app by name: a source that performs
-the action in the focused app (tmux, a browser plugin, the accessibility tab
-strip); else the chord a plugin manifest declares for the action in that app
-(`action_keystrokes`, see [plugin protocol](plugin-protocol.md)), or nothing
-when it declares the app has none; else the platform convention the core owns
-for a few actions (Cmd-W closes a tab or window, Cmd-1 selects the first tab,
-Cmd-[ / Cmd-] go back/forward, `resource_next` / `resource_previous` scroll,
-`gg` / `G` use the focused-window scroller); else nothing. A terminal
+Tab, pane, reload, archive, back/forward and `gg` / `G` verbs are high-level
+source actions, and no default or bundled mapping sends a raw chord instead
+(`send_key` remains an explicit escape hatch). Each action runs one policy that
+knows no app by name:
+
+1. a source that performs it in the focused app: tmux for the windows and
+   panes of the tmux client hosting the focused terminal, the browsers plugin,
+   the Accessibility tab strip for `tab_select`;
+2. else the chord a plugin manifest declares for the action in that app
+   (`action_keystrokes`, see [plugin protocol](plugin-protocol.md)), or
+   nothing when it declares the app has none;
+3. else the platform convention `SourceActionFallback` owns: Cmd-Shift-[ /
+   Cmd-Shift-] switch tabs, Cmd-T opens one, Cmd-W closes it, Cmd-1…Cmd-9
+   select one (Cmd-1 is also the first tab), Cmd-[ / Cmd-] go back/forward,
+   `resource_next` / `resource_previous` scroll, and `gg` / `G` use the
+   focused-window scroller;
+4. else nothing. Reload, reopen, the last tab, tab moves, panes and archiving
+   have no convention: their chords mean different things across apps.
+
+A source that claims an action and fails reports `.failed`, and no chord
+follows it. App knowledge lives in manifest data (the `browsers`, `defaults`,
+`terminals` and `vscode` plugins), never in host conditionals. A terminal
 treats a Command chord a plugin declares for it as bound, like the chords
-every emulator binds.
+every emulator binds; any other Command chord is refused (see below).
 
 ## Shared mode exit
 
@@ -192,10 +214,11 @@ and `gi` do not enter INSERT. Users explicitly choose their shortcuts,
 including bindings that prefill the command line with `:flashlight`.
 
 NORMAL is hermetic: every unmapped key and modifier chord is swallowed, and
-only explicit mappings act. A chord the focused app should receive is bound
-to `send_key`, or the user enters INSERT first. The release of a swallowed
-key is swallowed with it, because a terminal running the Kitty keyboard
-protocol encodes key releases to its pty.
+only explicit mappings act. Map a key to the high-level action it stands for;
+for a chord no action covers, `send_key` is the explicit escape hatch, or the
+user enters INSERT first. The release of a swallowed key is swallowed with it,
+because a terminal running the Kitty keyboard protocol encodes key releases to
+its pty.
 
 A synthesized chord reaches an iOS app (Mac Catalyst or iPad) with its
 modifiers pressed and released around the key, as a keyboard sends it: UIKit

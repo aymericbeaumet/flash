@@ -28,7 +28,8 @@ Accessibility permission, and nothing else.
   inside your terminal.
 - **Normal mode.** A persistent, Vim-like layer over all of macOS: `f` for
   hints, `[t` / `]t` for tabs, `gg` / `G`, `ctrl+d` / `ctrl+u` to scroll, `u` to
-  undo.
+  undo. Keys map to actions that fit the focused app: `]t` is the next browser
+  tab, Finder tab or tmux window.
 - **flashlight.** A command bar that searches apps, browser tabs, tmux windows,
   emoji, and plugin data, with inline math, unit, and currency answers.
 - **Status bar and desktop widgets.** tmux-format templates with meters,
@@ -140,8 +141,8 @@ Every default binding can be changed or removed, including the ones plugins add:
 
 ```toml
 [mode.normal.mappings]
-"t" = false                                        # remove a default
-"gb" = ["flash", "send_key", "--keys=cmd+shift+b"] # add your own
+"t" = false                                          # remove a default
+"gs" = ["flash", "mouse_target", "--scope=screen"]   # add your own
 ```
 
 `flash config_check` validates the file without the app running, so it fits in

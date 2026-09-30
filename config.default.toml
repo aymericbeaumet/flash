@@ -555,13 +555,21 @@ send_key_interval_ms = 35
 leader = "\\"
 
 [mode.normal.mappings]
-# Defaults use Flash-owned actions and standard macOS editing/scrolling.
-# Tabs use [t / ]t to switch, t to open, g1–g9 to send Cmd-1…Cmd-9,
-# and [m / ]m to reorder through the source or supported native shortcut.
+# Defaults map keys to high-level actions, never to raw key chords: each action
+# resolves in the focused app's context. A source performs it where it owns
+# the context (tmux windows inside a terminal, browser tabs); otherwise the app
+# gets the chord a plugin declares for it (action_keystrokes), else the macOS
+# convention (Cmd-Shift-[ / ] switch tabs, Cmd-T opens one, Cmd-W closes it,
+# Cmd-1…Cmd-9 select one), and an app without the action gets nothing.
+# Reload and reopen have no shared chord, so they act only where a source or a
+# plugin knows the app: reload in browsers and tmux, reopen in browsers and
+# editors. Terminals never receive a chord that would type text.
+# [t / ]t switch tabs, t opens one, g1–g9 select one, x closes it, X reopens
+# the last closed one, r / R reload / hard-reload, [m / ]m reorder.
 # H / L go back/forward: Cmd-[ / Cmd-], or the app's own chord (editors use
 # Control-Minus), and nothing in apps without history such as Notes.
-# Other tab, split, reload, archive, URL and mark commands remain
-# available for explicit mappings. Bare d, j and k are unbound.
+# Other tab, split, archive, URL and mark commands remain available for
+# explicit mappings. Bare d, j and k are unbound.
 # Entries extend the defaults; reusing a key overrides that mapping, and
 # "<key>" = false removes it (a later layer may map it again). A removed key
 # also drops plugin mappings on it; removal applies to this table only.
@@ -579,18 +587,18 @@ leader = "\\"
 "G" = ["flash", "scroll_bottom"]
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "]a" = { command = ["flash", "app_next"], repeat = true }
-"[t" = { command = ["flash", "send_key", "--keys=cmd+shift+["], repeat = true }
-"]t" = { command = ["flash", "send_key", "--keys=cmd+shift+]"], repeat = true }
-"t" = ["flash", "send_key", "--keys=cmd+t"]
-"g1" = ["flash", "send_key", "--keys=cmd+1"]
-"g2" = ["flash", "send_key", "--keys=cmd+2"]
-"g3" = ["flash", "send_key", "--keys=cmd+3"]
-"g4" = ["flash", "send_key", "--keys=cmd+4"]
-"g5" = ["flash", "send_key", "--keys=cmd+5"]
-"g6" = ["flash", "send_key", "--keys=cmd+6"]
-"g7" = ["flash", "send_key", "--keys=cmd+7"]
-"g8" = ["flash", "send_key", "--keys=cmd+8"]
-"g9" = ["flash", "send_key", "--keys=cmd+9"]
+"[t" = { command = ["flash", "tab_previous"], repeat = true }
+"]t" = { command = ["flash", "tab_next"], repeat = true }
+"t" = ["flash", "tab_new"]
+"g1" = ["flash", "tab_select", "--index=1"]
+"g2" = ["flash", "tab_select", "--index=2"]
+"g3" = ["flash", "tab_select", "--index=3"]
+"g4" = ["flash", "tab_select", "--index=4"]
+"g5" = ["flash", "tab_select", "--index=5"]
+"g6" = ["flash", "tab_select", "--index=6"]
+"g7" = ["flash", "tab_select", "--index=7"]
+"g8" = ["flash", "tab_select", "--index=8"]
+"g9" = ["flash", "tab_select", "--index=9"]
 "g0" = ["flash", "tab_first"]
 "g^" = ["flash", "tab_first"]
 "g$" = ["flash", "tab_last"]
@@ -623,14 +631,15 @@ leader = "\\"
 "mF" = ["flash", "mouse_grid", "--move"]
 "u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]
-# x uses the app's native close chord. y/p use the system clipboard unless
-# prefixed with a register, e.g. "ay / "ap for register a. y resolves immediately.
-"x" = ["flash", "send_key", "--keys=cmd+w"]
-"X" = ["flash", "send_key", "--keys=cmd+shift+t"]
-# r reloads and R hard-reloads with the app's native chords. Terminals leave
-# cmd+r unbound, so there both do nothing instead of typing an r.
-"r" = ["flash", "send_key", "--keys=cmd+r"]
-"R" = ["flash", "send_key", "--keys=cmd+shift+r"]
+# x closes the current tab (tmux: its window, after tmux's confirmation) and X
+# reopens the last closed one. r reloads and R hard-reloads (tmux: refreshes
+# the client); apps without a reload, terminals included, do nothing.
+# y/p use the system clipboard unless prefixed with a register, e.g. "ay / "ap
+# for register a. y resolves immediately.
+"x" = ["flash", "tab_close"]
+"X" = ["flash", "tab_reopen"]
+"r" = ["flash", "app_reload"]
+"R" = ["flash", "app_reload", "--force"]
 "y" = ["flash", "yank_selection"]
 "p" = ["flash", "paste"]
 "/" = ["flash", "app_find"]
