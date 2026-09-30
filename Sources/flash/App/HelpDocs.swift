@@ -642,8 +642,8 @@ enum HelpDocs {
       this passive surface. Open [plugins](#plugins) if a metric is empty,
       or [runtime](#state) to inspect your loaded configuration.
 
-      Browse [ready-made panels](\(HelpDocs.repositoryRoot)/docs/examples/widgets/README.md)
-      or the [widget reference](\(HelpDocs.repositoryRoot)/docs/widgets.md)
+      Browse [ready-made panels](\#(HelpDocs.repositoryRoot)/docs/examples/widgets/README.md)
+      or the [widget reference](\#(HelpDocs.repositoryRoot)/docs/widgets.md)
       for all settings and a conky migration table.
       """#,
     aliases: ["widget"])
