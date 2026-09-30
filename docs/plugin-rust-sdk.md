@@ -138,8 +138,10 @@ Handed to every handler; cheap to clone. Key surface:
   clears the table nobody shows. A callback that overruns its period simply
   misses ticks, and no tick arrives while the displays sleep or the session is
   locked (one catch-up tick follows). Prefer `on_event`: the host exposes an event for every source
-  it can observe, and a cadence is the answer only when nothing else can tell
-  you the value changed.
+  it can observe (`flash_plugin::host_events` names them all; for example
+  `NETWORK_CHANGED` for interface, address and route changes and
+  `VOLUMES_CHANGED` for mounts), and a cadence is the answer only when nothing
+  else can tell you the value changed.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
   (content-free); a line logged while serving a request carries that
   request's `trace` id automatically (tasks the handler spawns itself don't); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
@@ -191,9 +193,10 @@ The runtime owns finite admission queues, pinned in `protocol.json`:
   queue is exhausted the transport closes so the host can recover.
 - Ordinary events have a 256-frame/16-MiB backlog. Under overload, each of
   `apps.changed`, `focus.changed`, `window.focus.changed`, `ax.changed`,
-  `clipboard.changed`, `config.changed`, `power.changed`, `space.changed`,
-  and `status.observed` (all prefixed `core:`) retains one latest replacement
-  slot, each bounded by the frame cap. Intermediate replacements can
+  `clipboard.changed`, `config.changed`, `power.changed`, `network.changed`,
+  `volumes.changed`, `space.changed`, and `status.observed` (all prefixed
+  `core:`; `protocol.json` `host_events.replacement`) retains one latest
+  replacement slot, each bounded by the frame cap. Intermediate replacements can
   coalesce; the final value, including an empty app list or an empty
   observed set, reaches the serialized event handler. This avoids blocking
   the stdin reader while a handler awaits a host RPC.

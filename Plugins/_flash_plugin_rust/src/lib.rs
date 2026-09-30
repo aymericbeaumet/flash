@@ -40,5 +40,5 @@ pub use types::{
     ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest, EvaluateRequest,
     EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest,
     Perform, PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest,
-    SearchResponse, TERMINAL_LINK_ROLE, candidate_metadata,
+    SearchResponse, TERMINAL_LINK_ROLE, candidate_metadata, host_events,
 };

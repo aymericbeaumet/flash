@@ -3,6 +3,7 @@
 //! in one slot per known event kind, so an authoritative final snapshot wins.
 
 use crate::runtime::InboundEvent;
+use crate::types::host_events;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 use tokio::sync::Notify;
@@ -10,19 +11,24 @@ use tokio::sync::Notify;
 pub(crate) const EVENT_QUEUE_CAPACITY: usize = 256;
 pub(crate) const EVENT_QUEUE_BYTES: usize = 16 * 1024 * 1024;
 
+/// State signals whose latest value supersedes every earlier one
+/// (`protocol.json` `host_events.replacement`).
+pub(crate) const REPLACEMENT_EVENTS: [&str; 11] = [
+    host_events::APPS_CHANGED,
+    host_events::FOCUS_CHANGED,
+    host_events::WINDOW_FOCUS_CHANGED,
+    host_events::AX_CHANGED,
+    host_events::CLIPBOARD_CHANGED,
+    host_events::CONFIG_CHANGED,
+    host_events::POWER_CHANGED,
+    host_events::NETWORK_CHANGED,
+    host_events::VOLUMES_CHANGED,
+    host_events::SPACE_CHANGED,
+    host_events::STATUS_OBSERVED,
+];
+
 fn replacement(name: &str) -> bool {
-    matches!(
-        name,
-        "core:apps.changed"
-            | "core:focus.changed"
-            | "core:window.focus.changed"
-            | "core:ax.changed"
-            | "core:clipboard.changed"
-            | "core:config.changed"
-            | "core:power.changed"
-            | "core:space.changed"
-            | "core:status.observed"
-    )
+    REPLACEMENT_EVENTS.contains(&name)
 }
 
 struct Entry {
@@ -63,7 +69,7 @@ impl EventMailbox {
             backlog.bytes += bytes;
             backlog.queue.push_back(entry);
         } else if replacement(name) {
-            // There are exactly nine replacement kinds, each bounded by the
+            // There are exactly eleven replacement kinds, each bounded by the
             // inbound frame cap. They cannot grow with arbitrary event names.
             backlog.latest.insert(name.clone(), entry);
         } else {
@@ -119,6 +125,53 @@ mod tests {
             },
             running_applications: Vec::new(),
         }
+    }
+
+    #[test]
+    fn host_events_match_the_shared_protocol_contract() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let list = |key: &str| -> Vec<String> {
+            contract["host_events"][key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|name| name.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(list("names"), host_events::ALL.map(String::from).to_vec());
+        assert_eq!(
+            list("replacement"),
+            REPLACEMENT_EVENTS.map(String::from).to_vec()
+        );
+    }
+
+    /// A burst of payload-free change signals under overload collapses to one
+    /// delivery, which is all a plugin that re-reads its state needs.
+    #[test]
+    fn network_and_volume_signals_coalesce_under_overload() {
+        let mailbox = EventMailbox::default();
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert!(mailbox.push(event("edge", "old"), 1));
+        }
+        for name in [host_events::NETWORK_CHANGED, host_events::VOLUMES_CHANGED] {
+            for _ in 0..100 {
+                assert!(mailbox.push(event(name, "signal"), 1));
+            }
+        }
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            assert_eq!(mailbox.pop().unwrap().event.name, "edge");
+        }
+        let mut coalesced = vec![
+            mailbox.pop().unwrap().event.name,
+            mailbox.pop().unwrap().event.name,
+        ];
+        coalesced.sort();
+        assert_eq!(
+            coalesced,
+            [host_events::NETWORK_CHANGED, host_events::VOLUMES_CHANGED]
+        );
+        assert!(mailbox.pop().is_none());
     }
 
     #[test]

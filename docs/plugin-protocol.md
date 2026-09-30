@@ -188,11 +188,19 @@ Notifications have no deadlines.
   globs: `core:flash.started`, `core:apps.changed|launched|terminated`,
   `core:focus.changed`, `core:window.focus.changed`, `core:ax.changed`,
   `core:clipboard.changed` (requires the `clipboard` capability),
-  `core:config.changed`, `core:power.changed`, `core:space.changed`,
+  `core:config.changed`, `core:power.changed`, `core:network.changed`
+  (interfaces, addresses, routes or DNS changed), `core:volumes.changed` (a
+  volume mounted, unmounted or was renamed), `core:space.changed`,
   `core:status.observed` (which of the plugin's own status segments a
   surface shows; see [Status observation](#status-observation)), and
   `core:session.opened` (the flashlight opened; advisory — eager plugins may
-  refresh, nothing is required).
+  refresh, nothing is required). `protocol.json` `host_events` pins the list.
+  `core:network.changed` and `core:volumes.changed` carry an empty payload —
+  no interface, address, network name or volume — and coalesce a burst of OS
+  notifications into one event within 500 ms; re-read what you show instead
+  of polling for it. The host observes the network (System Configuration's
+  dynamic store) and volume mounts (workspace notifications) only while at
+  least one plugin's `listen` matches the event.
 - `evaluate` — `{query, scope, surface}` → `{"ok": true, "answers": [...]}`.
   The per-input evaluator: synchronous, CPU-only over state prepared earlier
   — no I/O. Unclaimed input answers `{"ok": true, "answers": []}` —

@@ -132,4 +132,40 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(row["required"] as? [String], ["source", "title"])
     XCTAssertEqual(row["optional"] as? [String], ["url", "metadata", "effect"])
   }
+
+  func testHostEventsMatchSpec() throws {
+    let events = try XCTUnwrap(try spec()["host_events"] as? [String: Any])
+    XCTAssertEqual(events["names"] as? [String], PluginProtocol.hostEvents)
+    let replacement = try XCTUnwrap(events["replacement"] as? [String])
+    XCTAssertTrue(
+      Set(replacement).isSubset(of: PluginProtocol.hostEvents),
+      "every replacement kind is a host event")
+    for name in [PluginProtocol.networkChangedEvent, PluginProtocol.volumesChangedEvent] {
+      XCTAssertTrue(PluginProtocol.hostEvents.contains(name), name)
+      XCTAssertTrue(replacement.contains(name), "\(name) is a payload-free replacement signal")
+    }
+  }
+
+  /// A `core:*` event the host emits but the contract does not name would
+  /// reach plugins unpinned: every dotted `core:` literal in the host is one
+  /// of the contract's events.
+  func testEveryEventTheHostEmitsIsPinned() throws {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Sources/flash")
+    let literal = try NSRegularExpression(pattern: #""(core:[a-z]+(?:\.[a-z]+)+)""#)
+    var emitted = Set<String>()
+    let files = try XCTUnwrap(
+      FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+    for case let file as URL in files where file.pathExtension == "swift" {
+      let text = try String(contentsOf: file, encoding: .utf8)
+      for match in literal.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+        if let range = Range(match.range(at: 1), in: text) { emitted.insert(String(text[range])) }
+      }
+    }
+    XCTAssertFalse(emitted.isEmpty)
+    XCTAssertTrue(
+      emitted.isSubset(of: PluginProtocol.hostEvents),
+      "unpinned: \(emitted.subtracting(PluginProtocol.hostEvents).sorted())")
+  }
 }

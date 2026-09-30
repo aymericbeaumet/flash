@@ -261,6 +261,49 @@ pub mod candidate_metadata {
     pub const PRIORITY: &str = "priority";
 }
 
+/// Every host event name (`protocol.json` `host_events.names`), for `listen`
+/// manifests and `on_event` matches without re-typing the literals.
+/// `NETWORK_CHANGED` and `VOLUMES_CHANGED` are payload-free, coalesced
+/// signals: re-read the state you show when one arrives instead of polling.
+pub mod host_events {
+    pub const FLASH_STARTED: &str = "core:flash.started";
+    pub const APPS_CHANGED: &str = "core:apps.changed";
+    pub const APPS_LAUNCHED: &str = "core:apps.launched";
+    pub const APPS_TERMINATED: &str = "core:apps.terminated";
+    pub const FOCUS_CHANGED: &str = "core:focus.changed";
+    pub const WINDOW_FOCUS_CHANGED: &str = "core:window.focus.changed";
+    pub const AX_CHANGED: &str = "core:ax.changed";
+    pub const CLIPBOARD_CHANGED: &str = "core:clipboard.changed";
+    pub const CONFIG_CHANGED: &str = "core:config.changed";
+    pub const POWER_CHANGED: &str = "core:power.changed";
+    /// Network interfaces, addresses, routes or DNS changed.
+    pub const NETWORK_CHANGED: &str = "core:network.changed";
+    /// A volume mounted, unmounted or was renamed.
+    pub const VOLUMES_CHANGED: &str = "core:volumes.changed";
+    pub const SPACE_CHANGED: &str = "core:space.changed";
+    pub const STATUS_OBSERVED: &str = "core:status.observed";
+    pub const SESSION_OPENED: &str = "core:session.opened";
+
+    /// In `protocol.json` order.
+    pub const ALL: [&str; 15] = [
+        FLASH_STARTED,
+        APPS_CHANGED,
+        APPS_LAUNCHED,
+        APPS_TERMINATED,
+        FOCUS_CHANGED,
+        WINDOW_FOCUS_CHANGED,
+        AX_CHANGED,
+        CLIPBOARD_CHANGED,
+        CONFIG_CHANGED,
+        POWER_CHANGED,
+        NETWORK_CHANGED,
+        VOLUMES_CHANGED,
+        SPACE_CHANGED,
+        STATUS_OBSERVED,
+        SESSION_OPENED,
+    ];
+}
+
 impl Candidate {
     pub fn new(source: impl Into<String>, title: impl Into<String>) -> Self {
         Self {

@@ -64,6 +64,32 @@ enum PluginProtocol {
   static let maxInboundFrames = 256
   static let maxInboundBytes = 20 * 1_024 * 1_024
 
+  // MARK: - Host events
+
+  /// Network interfaces, addresses, routes or DNS changed; payload `{}`.
+  static let networkChangedEvent = "core:network.changed"
+  /// A volume mounted, unmounted or was renamed; payload `{}`.
+  static let volumesChangedEvent = "core:volumes.changed"
+
+  /// Every `core:*` event the host delivers, in contract order.
+  static let hostEvents = [
+    "core:flash.started",
+    "core:apps.changed",
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed",
+    "core:window.focus.changed",
+    "core:ax.changed",
+    "core:clipboard.changed",
+    "core:config.changed",
+    "core:power.changed",
+    networkChangedEvent,
+    volumesChangedEvent,
+    "core:space.changed",
+    "core:status.observed",
+    "core:session.opened",
+  ]
+
   // MARK: - Perform
 
   /// The four `perform` kinds, the universal action vocabulary.

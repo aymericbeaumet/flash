@@ -50,6 +50,39 @@
       "host.ax_select_child": "accessibility"
     }
   },
+  "host_events": {
+    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen` (plus capability for core:clipboard.changed). `replacement` kinds are state signals: under backlog the plugin keeps only the latest of each. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
+    "names": [
+      "core:flash.started",
+      "core:apps.changed",
+      "core:apps.launched",
+      "core:apps.terminated",
+      "core:focus.changed",
+      "core:window.focus.changed",
+      "core:ax.changed",
+      "core:clipboard.changed",
+      "core:config.changed",
+      "core:power.changed",
+      "core:network.changed",
+      "core:volumes.changed",
+      "core:space.changed",
+      "core:status.observed",
+      "core:session.opened"
+    ],
+    "replacement": [
+      "core:apps.changed",
+      "core:focus.changed",
+      "core:window.focus.changed",
+      "core:ax.changed",
+      "core:clipboard.changed",
+      "core:config.changed",
+      "core:power.changed",
+      "core:network.changed",
+      "core:volumes.changed",
+      "core:space.changed",
+      "core:status.observed"
+    ]
+  },
   "perform_kinds": [
     "resolve",
     "command",
@@ -156,7 +189,7 @@
   },
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
   "transport_limits": {
-    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of nine known state notifications in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
+    "$comment": "Per-process admission bounds. Plugin replacement-event overflow retains one latest slot for each of the eleven host_events.replacement kinds in addition to the ordinary event backlog; each slot obeys frame_bytes. A full synchronous control reply queue closes the transport rather than blocking the stdin reader.",
     "plugin_requests": 16,
     "plugin_request_bytes": 33554432,
     "plugin_host_calls": 64,

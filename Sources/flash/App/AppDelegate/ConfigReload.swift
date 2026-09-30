@@ -242,6 +242,7 @@ extension AppDelegate {
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
       self.reconcileClipboardMonitor()
+      self.reconcileHostEventSources()
       self.statusBarController?.refreshPluginSections()
       self.debugServer?.broadcastState()
     }

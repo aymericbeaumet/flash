@@ -260,6 +260,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModePendingCommandToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
+  /// `core:network.changed` and `core:volumes.changed`, each observed only
+  /// while a plugin listens; see `reconcileHostEventSources`.
+  lazy var hostEventSources = HostEventSources([
+    PluginProtocol.networkChangedEvent: { [weak self] in
+      NetworkChangeMonitor { self?.emitSignal(PluginProtocol.networkChangedEvent) }
+    },
+    PluginProtocol.volumesChangedEvent: { [weak self] in
+      VolumeChangeMonitor { self?.emitSignal(PluginProtocol.volumesChangedEvent) }
+    },
+  ])
   /// Captures NORMAL / hints keystrokes without taking key-window focus. nil
   /// (no grant) falls back to the legacy key-window capture in
   /// `captureKeyboardInput`.
@@ -481,6 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     checkAccessibilityAtLaunch()
     installDismissObservers()
     reconcileClipboardMonitor()
+    reconcileHostEventSources()
     startPowerSourceMonitor()
     pluginManager.emit(
       PluginEvent(
@@ -974,6 +985,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     setActiveWindowBorderSessionSuspended(suspended, source: source, reason: reason)
   }
 
+  /// Start or stop each host event monitor as plugins start or stop
+  /// listening to its event.
+  func reconcileHostEventSources() {
+    hostEventSources.reconcile { pluginManager.hasListener(for: $0) }
+  }
+
+  /// A payload-free change signal: listeners re-read what they show.
+  private func emitSignal(_ name: String) {
+    pluginManager.emit(PluginEvent(name: name, payload: [:], bundleID: nil))
+  }
+
   func reconcileClipboardMonitor() {
     let wanted = pluginManager.hasListener(for: "core:clipboard.changed")
     guard wanted != (clipboardMonitor != nil) else { return }
@@ -1189,6 +1211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clipboardMonitor = nil
     powerSourceMonitor?.stop()
     powerSourceMonitor = nil
+    hostEventSources.stopAll()
     statusBarController?.stopAndWait()
     statusBarController = nil
     widgetController?.stop()
