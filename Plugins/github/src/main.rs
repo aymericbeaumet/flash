@@ -8,18 +8,19 @@
 //!
 //! Rows carry real `https://` URLs, so selection opens natively through
 //! LaunchServices — no resolver. The refresh runs in `on_start` (after the
-//! initialize reply) and then every 600 s; each healthy cycle pushes one
+//! initialize reply) and then when the flashlight opens (`core:session.opened`)
+//! once the catalog is [`FRESH_TTL`] old; nothing polls, and the first paint
+//! still reads the host's last-good store. Each healthy cycle pushes one
 //! full-replacement `publish` carrying both sources' rows.
 //!
 //! ## Degradation
 //!
 //! `gh` missing, or present but unauthenticated, publishes authoritative
-//! empty catalogs and logs once at info — no crash, no retry spin; one
-//! delayed retry is scheduled after a degraded startup (gh may still be
-//! signing in / the network may still be coming up), then the 600 s interval
-//! is the only cadence. Transient failures (network blip, GitHub 5xx) skip
-//! the publish while any source is still unknown, so the host keeps its
-//! last-good catalog.
+//! empty catalogs and logs once at info — no crash, no retry spin: a degraded
+//! cycle (gh may still be signing in, the network may still be coming up) is
+//! retried by the next flashlight open at least [`RETRY_TTL`] later.
+//! Transient failures (network blip, GitHub 5xx) skip the publish while any
+//! source is still unknown, so the host keeps its last-good catalog.
 //!
 //! ## Sandbox posture (deliberate)
 //!
@@ -34,7 +35,7 @@
 //! `[plugin.github] token`, forwarded to gh as `GH_TOKEN`.
 
 use flash_plugin::process as bounded_process;
-use flash_plugin::{Candidate, Context, RefreshGate, run};
+use flash_plugin::{Candidate, Context, Event, RefreshGate, run};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,9 +46,10 @@ use tokio::sync::OnceCell;
 const SOURCE_REPOS: &str = "github.repos";
 const SOURCE_PRS: &str = "github.prs";
 
-const REFRESH_SECONDS: u64 = 600;
-/// One delayed retry after a degraded startup; afterwards only the interval.
-const RETRY_DELAY: Duration = Duration::from_secs(60);
+/// A flashlight open refreshes a healthy catalog at least this old…
+const FRESH_TTL: Duration = Duration::from_secs(600);
+/// …and retries a degraded one at least this old.
+const RETRY_TTL: Duration = Duration::from_secs(60);
 /// Per-`gh`-invocation budget: two calls run concurrently, so a slow API
 /// still fits the startup budget.
 const GH_TIMEOUT: Duration = Duration::from_secs(6);
@@ -75,7 +77,22 @@ static CATALOG: Mutex<Catalog> = Mutex::new(Catalog {
 });
 /// One info-level degradation log per process, not one per cycle.
 static DEGRADED_LOGGED: AtomicBool = AtomicBool::new(false);
-static RETRY_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static LAST_REFRESH: Mutex<Option<LastRefresh>> = Mutex::new(None);
+
+/// When the last cycle began and whether it was fully healthy.
+#[derive(Clone, Copy)]
+struct LastRefresh {
+    at: Instant,
+    healthy: bool,
+}
+
+/// Whether a flashlight open should refresh after `last`.
+fn refresh_due(last: Option<LastRefresh>, now: Instant) -> bool {
+    last.is_none_or(|last| {
+        let ttl = if last.healthy { FRESH_TTL } else { RETRY_TTL };
+        now.saturating_duration_since(last.at) >= ttl
+    })
+}
 
 struct Catalog {
     repos: Option<Vec<Candidate>>,
@@ -90,28 +107,20 @@ impl FlashPlugin for Github {
     async fn on_start(&self, ctx: Context) {
         // Runs after the initialize reply, so a slow gh never delays the
         // handshake; the flashlight reads the host store meanwhile.
-        if !refresh_catalogs(&ctx).await {
-            schedule_single_retry(&ctx);
-        }
-        drop(
-            ctx.interval(Duration::from_secs(REFRESH_SECONDS), |ctx| async move {
-                refresh_catalogs(&ctx).await;
-            }),
-        );
-    }
-}
-
-/// At most one delayed retry per process — a degraded gh must never turn
-/// into a retry spin.
-fn schedule_single_retry(ctx: &Context) {
-    if RETRY_SCHEDULED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let ctx = ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(RETRY_DELAY).await;
         refresh_catalogs(&ctx).await;
-    });
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let last = *LAST_REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+        if event.name == "core:session.opened" && refresh_due(last, Instant::now()) {
+            // Detached, and skipped while a cycle is already in flight.
+            tokio::spawn(async move {
+                REFRESH_GATE
+                    .try_run(&ctx, |ctx, _running| refresh_cycle(ctx))
+                    .await;
+            });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -131,41 +140,52 @@ enum FetchOutcome {
 /// Refresh both catalogs. Returns whether the cycle was fully healthy.
 async fn refresh_catalogs(ctx: &Context) -> bool {
     REFRESH_GATE
-        .run(ctx, |ctx, _running| async move {
-            let started_at = Instant::now();
-            let Some(gh) = resolved_gh_path().await else {
-                publish_empty(&ctx);
-                log_degraded_once(&ctx, "gh_missing");
-                log_refresh(&ctx, "gh_missing", 0, started_at);
-                return false;
-            };
-            let repos = fetch_repos(&ctx, &gh);
-            let prs = fetch_prs(&ctx, &gh);
-            let (repos, prs) = tokio::join!(repos, prs);
-            let mut healthy = true;
-            for (source, outcome) in [(SOURCE_REPOS, repos), (SOURCE_PRS, prs)] {
-                match outcome {
-                    FetchOutcome::Rows(rows) => store_rows(source, rows),
-                    FetchOutcome::Unusable(reason) => {
-                        healthy = false;
-                        store_rows(source, Vec::new());
-                        log_degraded_once(&ctx, reason);
-                    }
-                    // Keep the last-known rows; while a source has none the
-                    // union stays unpublishable and the host keeps last-good.
-                    FetchOutcome::Transient => healthy = false,
-                }
-            }
-            let count = publish_union(&ctx);
-            log_refresh(
-                &ctx,
-                if healthy { "ok" } else { "degraded" },
-                count.unwrap_or(0),
-                started_at,
-            );
-            healthy
-        })
+        .run(ctx, |ctx, _running| refresh_cycle(ctx))
         .await
+}
+
+/// One cycle, run under the refresh gate; records when it began and whether
+/// it was healthy for [`refresh_due`].
+async fn refresh_cycle(ctx: Context) -> bool {
+    let started_at = Instant::now();
+    let healthy = refresh_sources(&ctx, started_at).await;
+    *LAST_REFRESH.lock().unwrap_or_else(|e| e.into_inner()) = Some(LastRefresh {
+        at: started_at,
+        healthy,
+    });
+    healthy
+}
+
+async fn refresh_sources(ctx: &Context, started_at: Instant) -> bool {
+    let Some(gh) = resolved_gh_path().await else {
+        publish_empty(ctx);
+        log_degraded_once(ctx, "gh_missing");
+        log_refresh(ctx, "gh_missing", 0, started_at);
+        return false;
+    };
+    let (repos, prs) = tokio::join!(fetch_repos(ctx, &gh), fetch_prs(ctx, &gh));
+    let mut healthy = true;
+    for (source, outcome) in [(SOURCE_REPOS, repos), (SOURCE_PRS, prs)] {
+        match outcome {
+            FetchOutcome::Rows(rows) => store_rows(source, rows),
+            FetchOutcome::Unusable(reason) => {
+                healthy = false;
+                store_rows(source, Vec::new());
+                log_degraded_once(ctx, reason);
+            }
+            // Keep the last-known rows; while a source has none the union
+            // stays unpublishable and the host keeps last-good.
+            FetchOutcome::Transient => healthy = false,
+        }
+    }
+    let count = publish_union(ctx);
+    log_refresh(
+        ctx,
+        if healthy { "ok" } else { "degraded" },
+        count.unwrap_or(0),
+        started_at,
+    );
+    healthy
 }
 
 fn store_rows(source: &str, rows: Vec<Candidate>) {
@@ -649,5 +669,29 @@ mod tests {
         publish_empty(&ctx);
         let rows = harness.drain_published_rows().expect("one publish frame");
         assert!(rows.is_empty());
+    }
+
+    /// Nothing polls: a flashlight open refreshes a healthy catalog once it
+    /// is `FRESH_TTL` old, and retries a degraded one after `RETRY_TTL`.
+    #[test]
+    fn a_flashlight_open_refreshes_only_a_stale_catalog() {
+        let now = Instant::now();
+        assert!(refresh_due(None, now), "never refreshed");
+        let healthy = |age| {
+            Some(LastRefresh {
+                at: now - age,
+                healthy: true,
+            })
+        };
+        let degraded = |age| {
+            Some(LastRefresh {
+                at: now - age,
+                healthy: false,
+            })
+        };
+        assert!(!refresh_due(healthy(RETRY_TTL), now));
+        assert!(refresh_due(healthy(FRESH_TTL), now));
+        assert!(!refresh_due(degraded(Duration::from_secs(5)), now));
+        assert!(refresh_due(degraded(RETRY_TTL), now));
     }
 }
