@@ -545,9 +545,20 @@ mod tests {
     use flash_plugin::RunningApplication;
     use flash_plugin::testing::Harness;
 
+    /// Refreshes share the process-wide `KITTY_PRESENT` latch, so the tests
+    /// that run one serialize on this lock and start from kitty present.
+    static REFRESHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn refreshing() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = REFRESHING.lock().await;
+        KITTY_PRESENT.store(true, Ordering::SeqCst);
+        guard
+    }
+
     /// Events drive every refresh: startup registers no cadence.
     #[tokio::test]
     async fn startup_registers_no_cadence() {
+        let _guard = refreshing().await;
         let mut harness = Harness::new("kitty");
         Kitty.on_start(harness.context()).await;
         let frames = harness.drain();
@@ -757,6 +768,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_without_kitty_publishes_an_authoritative_empty_catalog() {
+        let _guard = refreshing().await;
         let mut harness = Harness::new("kitty");
         let ctx = harness.context();
         harness.set_running_applications(vec![RunningApplication {
