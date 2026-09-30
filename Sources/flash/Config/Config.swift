@@ -656,8 +656,8 @@ struct Config {
     var borderSize: Double = 0
     var cornerRadius: Double = 8
     var padding: Double = 8
-    /// Clock and `#()` refresh cadence in seconds; 0 follows
-    /// `[statusbar] interval`.
+    /// `#()` refresh cadence in seconds; 0 follows `[statusbar] interval`.
+    /// Time shown refreshes on its own boundaries, not on this cadence.
     var intervalSeconds: Double = 0
     /// Ask the window server to leave the widget out of screen captures.
     var hideFromCapture = false

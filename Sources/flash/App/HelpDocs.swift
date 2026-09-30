@@ -575,7 +575,8 @@ enum HelpDocs {
       Write `%%` for a literal percent in a template. Missing values expand
       to empty text. A plugin's numeric value is empty when unknown; do not
       assume that means zero. The status bar is one line; widgets and text
-      popups preserve multiple lines.
+      popups preserve multiple lines. Time is never polled: `%H:%M` refreshes
+      on the minute and `%S` every second, whatever `interval` says.
 
       ## Use your own command
 

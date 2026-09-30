@@ -26,6 +26,8 @@ final class StatusSurfaceControllerTests: XCTestCase {
   private final class Harness {
     let queue = DispatchQueue(label: "status.surface.tests")
     var now: TimeInterval = 100
+    /// Twenty seconds past a minute: a minute clock is 40 s away.
+    var wall = Date(timeIntervalSince1970: 1_800_000_020)
     var tasks: [Task] = []
     var controller: FlashStatusBarController!
 
@@ -37,6 +39,7 @@ final class StatusSurfaceControllerTests: XCTestCase {
         template: .init(template: bar ?? ""), sources: sources,
         refreshIntervalSeconds: interval,
         scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
+        wallClock: { [unowned self] in wall },
         makeJob: { [unowned self] invocation, _, line, completion in
           let task = Task(invocation, line: line, completion: completion)
           tasks.append(task)
@@ -133,23 +136,24 @@ final class StatusSurfaceControllerTests: XCTestCase {
     XCTAssertEqual(harness.nextWakeup, 111)
   }
 
-  func testAWidgetIntervalArmsItsOwnClockBesideTheBars() {
+  func testTheClockTicksAtTheFinestUnitAVisibleSurfaceShows() {
     let harness = Harness(bar: "%H:%M", interval: 60)
     defer { harness.controller.stop() }
-    XCTAssertEqual(harness.nextWakeup, 160)
-    harness.controller.updateWidgets(["seconds": widget("%S", interval: 1)])
+    XCTAssertEqual(harness.nextWakeup, 140)
+    // A seconds widget ticks every second whatever its interval says.
+    harness.controller.updateWidgets(["seconds": widget("%S", interval: 30)])
     harness.drain()
     XCTAssertEqual(harness.nextWakeup, 101)
-    harness.queue.sync { harness.now = 101 }
+    harness.queue.sync {
+      harness.now = 101
+      harness.wall = Date(timeIntervalSince1970: 1_800_000_021)
+    }
     harness.tick()
     XCTAssertEqual(harness.nextWakeup, 102)
-    // A widget without its own interval follows the bar's cadence.
-    harness.controller.updateWidgets(["seconds": widget("%S")])
-    harness.drain()
-    XCTAssertEqual(harness.nextWakeup, 160)
+    // Covered, it stops asking: the bar's minute is the only clock left.
     harness.controller.setWidgetVisible(name: "seconds", false)
     harness.drain()
-    XCTAssertEqual(harness.nextWakeup, 160)
+    XCTAssertEqual(harness.nextWakeup, 140)
   }
 
   func testAJobSharedAcrossSurfacesRefreshesAtTheFastestCadence() {

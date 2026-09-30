@@ -205,7 +205,7 @@ load #[spark]#{flash.history.load}#[nospark] #{flash.source.load}
 | `border`, `border_size` | `"#00000000"`, `0` | Border colour and width in points. |
 | `corner_radius` | `8` | Points. |
 | `padding` | `8` | Points between the edge and the text. |
-| `interval` | `0` | Seconds between clock refreshes and `#()` re-runs; `0` follows `[statusbar] interval`. |
+| `interval` | `0` | Seconds between `#()` re-runs; `0` follows `[statusbar] interval`. Time refreshes on its own boundaries. |
 | `hide_from_capture` | `false` | Ask the window server to leave the widget out of screenshots, recordings and screen sharing. Best effort, as for `[overlay] screen_capture`, which also applies. |
 
 The whole format is written inline in `template`; there is no
@@ -217,8 +217,11 @@ Widgets are evaluated by the status bar's controller, beside the bar: one set
 of sources and jobs, one clock deadline on the shared `PollScheduler`, and no
 timer of their own. A source shown by the bar and a widget runs once. Each
 surface is re-evaluated only when a value it read changed. A job shown by
-several surfaces refreshes at the fastest of their intervals, and surfaces
-with the same interval share one clock tick. Meters and sparklines are drawn
+several surfaces refreshes at the fastest of their intervals. Time is never
+polled: every surface shares one clock tick, at the next boundary of the finest
+unit any of them shows (see [status formats](status-format.md#time)), so a
+seconds widget ticks every second and a date-only one at midnight. Meters and
+sparklines are drawn
 while the document is parsed, with no extra evaluation.
 
 A widget whose windows are all covered — a maximized or full-screen app over

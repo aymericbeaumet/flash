@@ -297,8 +297,9 @@ new query starts from the catalog plus only the current live result set.
 
 Status jobs retain their running process and value when effective definitions
 are unchanged. Replacements invalidate tokens before stopping children in one
-bounded batch. The scheduler arms only evaluated jobs, active cycles, clock
-expansion and pending output publication. Inactive shell jobs and their output
+bounded batch. The scheduler arms only evaluated jobs, active cycles, the
+next boundary of the finest time unit a visible surface shows, and pending
+output publication. Inactive shell jobs and their output
 are discarded; inactive named sources retain last-good values without wakeups.
 See [status formats](status-format.md) and [popup ownership](popups.md#internals).
 

@@ -20,17 +20,69 @@ struct StatusFormatDiagnostic: Equatable {
   var message: String
 }
 
+/// The finest time unit an evaluation showed: a status surface's clock ticks
+/// on that unit's boundaries and on no others.
+enum StatusFormatTimeResolution: Int, Comparable {
+  case day
+  case minute
+  case second
+
+  static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+
+  /// Conversions whose text changes every second.
+  private static let secondConversions: Set<UInt8> = Set("STsXrc+".utf8)
+  /// Conversions whose text changes at most once a day.
+  private static let dayConversions: Set<UInt8> = Set("aAbBhdejuwUVWGgyYCmDFx".utf8)
+  /// Literal output, not time: `%%`, `%n`, `%t`.
+  private static let literalConversions: Set<UInt8> = Set("%nt".utf8)
+  /// Darwin's padding flags and alternative-representation modifiers.
+  private static let modifiers: Set<UInt8> = Set("-_0^#EO".utf8)
+
+  /// The finest unit a strftime format shows, or nil when it converts
+  /// nothing. An unknown conversion counts as minutes.
+  static func of(strftime format: String) -> Self? {
+    let bytes = Array(format.utf8)
+    var finest: Self?
+    var index = 0
+    while index < bytes.count {
+      guard bytes[index] == UInt8(ascii: "%") else {
+        index += 1
+        continue
+      }
+      index += 1
+      while index < bytes.count, modifiers.contains(bytes[index]) { index += 1 }
+      guard index < bytes.count else { break }
+      let conversion = bytes[index]
+      index += 1
+      guard !literalConversions.contains(conversion) else { continue }
+      let unit: Self =
+        secondConversions.contains(conversion)
+        ? .second : dayConversions.contains(conversion) ? .day : .minute
+      finest = max(finest ?? unit, unit)
+    }
+    return finest
+  }
+}
+
 struct StatusFormatDependencies: Equatable {
   var values: Set<String> = []
   var options: Set<String> = []
   var containsJobs = false
   var containsTime = false
+  /// The finest time unit the evaluation expanded; nil when it showed none.
+  var timeResolution: StatusFormatTimeResolution?
 
   mutating func formUnion(_ other: Self) {
     values.formUnion(other.values)
     options.formUnion(other.options)
     containsJobs = containsJobs || other.containsJobs
     containsTime = containsTime || other.containsTime
+    noteTime(other.timeResolution)
+  }
+
+  mutating func noteTime(_ resolution: StatusFormatTimeResolution?) {
+    guard let resolution else { return }
+    timeResolution = max(timeResolution ?? resolution, resolution)
   }
 }
 
@@ -446,6 +498,7 @@ private struct StatusFormatEvaluator {
     context.timeExpansion = time || context.timeExpansion
     if context.timeExpansion, program.source.contains("%") {
       dependencies.containsTime = true
+      dependencies.noteTime(StatusFormatTimeResolution.of(strftime: program.source))
       let expanded = Self.strftime(program.source, date: context.now, timeZone: context.timeZone)
       program = StatusFormatProgram.compile(source: expanded, origin: program.origin)
     }
@@ -694,6 +747,8 @@ private struct StatusFormatEvaluator {
     guard var value else { return nil }
     if names.contains("t") {
       dependencies.containsTime = true
+      // A pretty time reads the current time; the minute bounds its change.
+      dependencies.noteTime(.minute)
       guard let timestamp = StatusFormatNumber.integer(value), timestamp > 0 else { return nil }
       let date = Date(timeIntervalSince1970: Double(timestamp))
       let times = modifiers.filter { $0.name == "t" }

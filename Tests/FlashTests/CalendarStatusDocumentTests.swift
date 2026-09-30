@@ -321,7 +321,7 @@ final class CalendarStatusDocumentTests: XCTestCase {
       popupTemplates: ["date": FlashStatusBarTemplate(template: "#{flash.calendar}")],
       context: FlashStatusBarContext(now: date(2026, 9, 16), calendar: calendar))
 
-    XCTAssertTrue(result.needsClock)
+    XCTAssertEqual(result.clock, .day, "the calendar changes once a day")
     XCTAssertTrue(result.dependencies.values.contains("flash.calendar"))
     XCTAssertTrue(result.jobs.isEmpty)
     XCTAssertTrue(result.sources.isEmpty)

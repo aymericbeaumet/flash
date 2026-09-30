@@ -75,11 +75,42 @@ final class StatusFormatLinesTests: XCTestCase {
     XCTAssertTrue(evaluation.dependencies.values.contains("flash.history.b"))
     let requirements = FlashStatusBarTemplateEngine.requirements(of: evaluation.dependencies)
     XCTAssertEqual(requirements.sources, ["a", "b"])
-    XCTAssertTrue(requirements.needsClock)
+    XCTAssertEqual(requirements.clock, .minute, "#{flash.date} shows minutes")
     XCTAssertEqual(StatusFormatDocument(runs: evaluation.runs).lines().count, 2)
-    XCTAssertFalse(
+    XCTAssertNil(
       FlashStatusBarTemplateEngine.requirements(
         of: StatusFormatProgram.compile(source: "#{flash.source.a}").dependencies
-      ).needsClock)
+      ).clock)
+  }
+
+  /// A surface's clock ticks at the finest unit it shows: seconds only when a
+  /// seconds field is expanded, the day when nothing finer is.
+  func testTheClockFollowsTheFinestTimeUnitShown() {
+    func clock(_ template: String) -> StatusFormatTimeResolution? {
+      let evaluation = FlashStatusBarTemplateEngine.evaluateDocument(
+        FlashStatusBarTemplate(template: template),
+        native: FlashStatusBarTemplateEngine.formatContext(.init()))
+      return FlashStatusBarTemplateEngine.requirements(of: evaluation.dependencies).clock
+    }
+    XCTAssertEqual(clock("%H:%M"), .minute)
+    XCTAssertEqual(clock("%a %d %b"), .day)
+    XCTAssertEqual(clock("#{flash.calendar}"), .day)
+    XCTAssertEqual(clock("#{flash.calendar} %H:%M"), .minute)
+    for seconds in ["%S", "%T", "%s", "%X", "%r", "%c", "%+", "%-S", "%OS", "%H:%M:%S"] {
+      XCTAssertEqual(clock(seconds), .second, seconds)
+    }
+    // A literal percent is not a clock.
+    XCTAssertNil(clock("CPU 50%%"))
+    XCTAssertNil(clock("static"))
+  }
+
+  func testTimeResolutionScansStrftimeConversions() {
+    XCTAssertNil(StatusFormatTimeResolution.of(strftime: "100%% %n%t"))
+    XCTAssertEqual(StatusFormatTimeResolution.of(strftime: "%Y-%m-%d"), .day)
+    XCTAssertEqual(StatusFormatTimeResolution.of(strftime: "%d %H"), .minute)
+    XCTAssertEqual(StatusFormatTimeResolution.of(strftime: "%d %_H:%M:%S"), .second)
+    // Unknown conversions stay conservative.
+    XCTAssertEqual(StatusFormatTimeResolution.of(strftime: "%Q"), .minute)
+    XCTAssertNil(StatusFormatTimeResolution.of(strftime: "trailing %"))
   }
 }

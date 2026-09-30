@@ -10,7 +10,11 @@ import Foundation
 final class FlashStatusBarController {
   private weak var overlay: OverlayPanel?
   private let queue: DispatchQueue
+  /// Uptime seconds: every deadline is measured on it.
   private let clock: () -> TimeInterval
+  /// The wall clock the surfaces show; clock boundaries are read from it.
+  private let wallClock: () -> Date
+  private var clockObservers: [NSObjectProtocol] = []
   private let makeJob: StatusCommandFactory
   private var template: FlashStatusBarTemplate
   private var popupTemplates: [String: FlashStatusBarTemplate]
@@ -27,9 +31,6 @@ final class FlashStatusBarController {
   /// the state, so a stopped controller can never hold a clock tick or a
   /// pending publish that a later start would fire.
   private struct Schedule {
-    /// Clock-driven re-evaluation, one deadline per refresh interval in use:
-    /// surfaces sharing an interval share its tick.
-    var clocks: [TimeInterval: TimeInterval] = [:]
     var pendingJobPublish: TimeInterval?
     var nextWakeup: TimeInterval?
   }
@@ -48,7 +49,9 @@ final class FlashStatusBarController {
     /// as tmux keeps a client's job output until the new command answers.
     var jobValues: [String: String] = [:]
     var sources: Set<String> = []
-    var needsClock = false
+    /// The finest time unit this surface shows; its clock ticks on that
+    /// unit's boundaries. Nil: it shows no time.
+    var clock: StatusFormatTimeResolution?
 
     func isCurrent(_ native: StatusFormatContext) -> Bool {
       guard let memo else { return false }
@@ -69,7 +72,7 @@ final class FlashStatusBarController {
       jobValues = jobs.reduce(into: [:]) { values, job in
         if let value = native.jobs[job.rawCommand] { values[job.rawCommand] = value }
       }
-      (sources, needsClock) = FlashStatusBarTemplateEngine.requirements(of: dependencies)
+      (sources, clock) = FlashStatusBarTemplateEngine.requirements(of: dependencies)
     }
   }
 
@@ -178,6 +181,7 @@ final class FlashStatusBarController {
     scheduler: PollScheduler = .shared,
     queue: DispatchQueue = DispatchQueue(label: "flash.status_bar", qos: .userInitiated),
     clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    wallClock: @escaping () -> Date = Date.init,
     makeJob: @escaping StatusCommandFactory = { invocation, queue, onLine, onCompletion in
       try StatusFormatCommandJob(
         queue: queue, argv: invocation.argv,
@@ -190,6 +194,7 @@ final class FlashStatusBarController {
     self.scheduler = scheduler
     self.queue = queue
     self.clock = clock
+    self.wallClock = wallClock
     self.makeJob = makeJob
     self.overlay = overlay
     self.template = template
@@ -198,6 +203,47 @@ final class FlashStatusBarController {
     self.terminalPopupNames = terminalPopupNames
     self.refreshIntervalSeconds = refreshIntervalSeconds
     self.pluginStatusesProvider = pluginStatusesProvider
+    observeClockChanges()
+  }
+
+  deinit {
+    for observer in clockObservers {
+      NotificationCenter.default.removeObserver(observer)
+      NSWorkspace.shared.notificationCenter.removeObserver(observer)
+    }
+  }
+
+  /// The clock deadline is a wall-clock boundary measured in uptime, so
+  /// anything that moves the wall clock against uptime — the clock being
+  /// set, a time-zone change, a sleep — or a new day re-plans it at once.
+  private func observeClockChanges() {
+    let center = NotificationCenter.default
+    let changes: [(Notification.Name, String)] = [
+      (.NSSystemClockDidChange, "clock_set"),
+      (.NSSystemTimeZoneDidChange, "time_zone"),
+      (.NSCalendarDayChanged, "day_changed"),
+    ]
+    for (name, reason) in changes {
+      clockObservers.append(
+        center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+          if name == .NSSystemTimeZoneDidChange { NSTimeZone.resetSystemTimeZone() }
+          self?.clockDidChange(reason: reason)
+        })
+    }
+    clockObservers.append(
+      NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+      ) { [weak self] _ in self?.clockDidChange(reason: "wake") })
+  }
+
+  /// Re-read the time and re-plan the next clock boundary from the wall
+  /// clock as it now reads. Nothing is scheduled while stopped.
+  func clockDidChange(reason: String) {
+    queue.async { [weak self] in
+      guard let self, self.schedule != nil else { return }
+      FlashLog.debug("[statusbar] clock_changed reason=\(reason)")
+      self.publishCurrentModel()
+    }
   }
 
   func start() {
@@ -335,10 +381,8 @@ final class FlashStatusBarController {
       }
       if let terminalPopupNames { self.terminalPopupNames = terminalPopupNames }
       if let refreshIntervalSeconds, refreshIntervalSeconds != self.refreshIntervalSeconds {
-        // A new cadence starts from now: the clocks re-arm, and the job
-        // records re-plan against their new cadence when reconciled.
+        // The job records re-plan against their new cadence when reconciled.
         self.refreshIntervalSeconds = refreshIntervalSeconds
-        self.schedule?.clocks.removeAll()
         self.requirementsChanged = true
       }
       self.publishCurrentModel()
@@ -412,7 +456,6 @@ final class FlashStatusBarController {
     }
     if requirementsChanged { reconcileRequirements(now: now) }
     guard schedule != nil else { return }
-    armClocks(now: now)
     runDueJobs(now: now)
     armTimer()
   }
@@ -455,7 +498,7 @@ final class FlashStatusBarController {
   }
 
   /// The surfaces that require anything right now, with the refresh interval
-  /// each one's clock and `#()` jobs run at. Occluded widgets are absent.
+  /// each one's `#()` jobs run at. Occluded widgets are absent.
   private var activeSurfaces: [(surface: SurfaceState, interval: TimeInterval)] {
     var surfaces = bar.map { [($0, refreshIntervalSeconds)] } ?? []
     for name in widgets.keys.sorted() {
@@ -522,19 +565,39 @@ final class FlashStatusBarController {
     stopJobs(obsoleteJobs)
   }
 
-  /// One clock deadline per interval an active clock-driven surface uses; a
-  /// fired deadline re-arms from now, an unused one is dropped.
-  private func armClocks(now: TimeInterval) {
-    guard var schedule else { return }
-    var intervals = Set<TimeInterval>()
-    for (surface, interval) in activeSurfaces where surface.needsClock && interval > 0 {
-      intervals.insert(interval)
+  /// The next boundary of the finest time unit any active surface shows, as
+  /// an uptime deadline. It is recomputed from the wall clock at every plan,
+  /// so it never holds a stale boundary; nil when no active surface shows
+  /// time. The refresh interval plays no part: a minute is read on the
+  /// minute, not up to one interval late.
+  private func clockDeadline(now: TimeInterval) -> TimeInterval? {
+    guard let resolution = activeSurfaces.compactMap(\.surface.clock).max() else { return nil }
+    let wall = wallClock()
+    let boundary = Self.nextClockBoundary(after: wall, resolution: resolution)
+    return now + max(0, boundary.timeIntervalSince(wall))
+  }
+
+  /// Seconds and minutes are whole units of Unix time in every current time
+  /// zone; a day ends at the local midnight or the next daylight-saving
+  /// transition, whichever comes first.
+  static func nextClockBoundary(
+    after date: Date, resolution: StatusFormatTimeResolution, calendar: Calendar = .current
+  ) -> Date {
+    let seconds = date.timeIntervalSince1970
+    switch resolution {
+    case .second:
+      return Date(timeIntervalSince1970: seconds.rounded(.down) + 1)
+    case .minute:
+      return Date(timeIntervalSince1970: (seconds / 60).rounded(.down) * 60 + 60)
+    case .day:
+      // The calendar shows the UTC offset, so a daylight-saving transition
+      // inside the day is a boundary too.
+      guard let midnight = calendar.dateInterval(of: .day, for: date)?.end else {
+        return nextClockBoundary(after: date, resolution: .minute)
+      }
+      return min(
+        midnight, calendar.timeZone.nextDaylightSavingTimeTransition(after: date) ?? midnight)
     }
-    schedule.clocks = schedule.clocks.filter { intervals.contains($0.key) }
-    for interval in intervals where schedule.clocks[interval] == nil {
-      schedule.clocks[interval] = now + max(1, interval)
-    }
-    self.schedule = schedule
   }
 
   private func runDueJobs(now: TimeInterval) {
@@ -660,8 +723,8 @@ final class FlashStatusBarController {
   static let pollClientID = "core:status_bar"
 
   /// These wake-ups are not a fixed cadence but the earliest of the user's
-  /// declared per-source intervals, cycle rotations, each surface's clock and
-  /// pending output — so the controller re-registers its next deadline on the
+  /// declared per-source intervals, cycle rotations, the next boundary of the
+  /// finest time unit shown and pending output — so the controller re-registers its next deadline on the
   /// shared clock each time one lands, rather than owning a timer. It is armed
   /// only while a visible surface requires something.
   private func armTimer() {
@@ -679,7 +742,7 @@ final class FlashStatusBarController {
     dates += requiredSources.compactMap { sourceRecords[$0]?.cycle }
       .filter(\.needsRotationTimer).map(\.nextRotationAt)
     dates += pluginCycles.values.filter(\.needsRotationTimer).map(\.nextRotationAt)
-    dates += schedule.clocks.values
+    if let clockDeadline = clockDeadline(now: clock()) { dates.append(clockDeadline) }
     if let pendingJobPublish = schedule.pendingJobPublish { dates.append(pendingJobPublish) }
     guard let next = dates.filter(\.isFinite).min() else { return }
     schedule.nextWakeup = next
@@ -704,7 +767,6 @@ final class FlashStatusBarController {
         shellRecords[key]?.value = "<'\(key)' not ready>"
       }
     }
-    if let clocks = schedule?.clocks { schedule?.clocks = clocks.filter { $0.value > now } }
     if let pendingJobPublish = schedule?.pendingJobPublish, pendingJobPublish <= now {
       schedule?.pendingJobPublish = nil
       lastJobPublish = now

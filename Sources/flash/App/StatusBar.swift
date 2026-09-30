@@ -381,7 +381,8 @@ struct FlashStatusBarSourceDefinition: Equatable {
 /// placement stay with the window side; this is only the text's inputs.
 struct StatusWidgetSpec: Equatable {
   var template: FlashStatusBarTemplate
-  /// Clock and `#()` refresh cadence; 0 follows `[statusbar] interval`.
+  /// `#()` refresh cadence; 0 follows `[statusbar] interval`. Time shown
+  /// refreshes on its own boundaries, not on this cadence.
   var intervalSeconds: TimeInterval = 0
   /// `#{flash.widget.columns}`: the configured width, else `max_columns`.
   var columns: Int
@@ -411,6 +412,9 @@ enum FlashStatusBarTemplateEngine {
     var options: [String: String?]
     var jobs: [String: String]
     var second: Int?
+    /// The zone time was shown in: a zone change re-evaluates within the
+    /// same second too.
+    var timeZone: String?
 
     static func capture(
       dependencies: StatusFormatDependencies, native: StatusFormatContext
@@ -422,7 +426,8 @@ enum FlashStatusBarTemplateEngine {
       return EvaluationInputs(
         values: values, options: options,
         jobs: dependencies.containsJobs ? native.jobs : [:],
-        second: dependencies.containsTime ? Int(native.now.timeIntervalSince1970) : nil)
+        second: dependencies.containsTime ? Int(native.now.timeIntervalSince1970) : nil,
+        timeZone: dependencies.containsTime ? native.timeZone.identifier : nil)
     }
   }
 
@@ -449,7 +454,7 @@ enum FlashStatusBarTemplateEngine {
     popupCache: PopupEvaluationCache? = nil
   ) -> (
     model: FlashStatusBarModel, jobs: [StatusFormatJobRequest], sources: Set<String>,
-    needsClock: Bool, dependencies: StatusFormatDependencies
+    clock: StatusFormatTimeResolution?, dependencies: StatusFormatDependencies
   ) {
     let native =
       nativeContext ?? formatContext(context, dynamicValues: dynamicValues, jobValues: jobValues)
@@ -507,7 +512,7 @@ enum FlashStatusBarTemplateEngine {
             var run = $0
             run.text = normalizedTemplate(run.text)
             return run
-          })), jobs, needs.sources, needs.needsClock, dependencies
+          })), jobs, needs.sources, needs.clock, dependencies
     )
   }
 
@@ -530,9 +535,10 @@ enum FlashStatusBarTemplateEngine {
   }
 
   /// What a surface's evaluation asks of the controller: the named sources
-  /// it reads (a value or its history) and whether it needs the clock.
+  /// it reads (a value or its history) and the finest time unit it shows,
+  /// whose boundaries its clock ticks on (nil: no clock).
   static func requirements(of dependencies: StatusFormatDependencies) -> (
-    sources: Set<String>, needsClock: Bool
+    sources: Set<String>, clock: StatusFormatTimeResolution?
   ) {
     var sources = Set<String>()
     for value in dependencies.values {
@@ -540,11 +546,11 @@ enum FlashStatusBarTemplateEngine {
         sources.insert(String(value.dropFirst(prefix.count)))
       }
     }
-    return (
-      sources,
-      dependencies.containsTime
-        || !dependencies.values.isDisjoint(with: ["flash.date", "flash.calendar"])
-    )
+    var clock = dependencies
+    // `#{flash.date}` shows minutes; `#{flash.calendar}` changes once a day.
+    if dependencies.values.contains("flash.date") { clock.noteTime(.minute) }
+    if dependencies.values.contains("flash.calendar") { clock.noteTime(.day) }
+    return (sources, clock.timeResolution)
   }
 
   /// A popup body without the blank lines at its edges.

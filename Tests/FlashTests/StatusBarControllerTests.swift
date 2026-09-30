@@ -24,6 +24,8 @@ final class StatusBarControllerTests: XCTestCase {
   private final class Harness {
     let queue = DispatchQueue(label: "status.tests")
     var now: TimeInterval = 100
+    /// Twenty seconds past a minute: a minute clock is 40 s away.
+    var wall = Date(timeIntervalSince1970: 1_800_000_020)
     var tasks: [Task] = []
     var controller: FlashStatusBarController!
 
@@ -38,6 +40,7 @@ final class StatusBarControllerTests: XCTestCase {
         refreshIntervalSeconds: interval,
         pluginStatusesProvider: { [unowned self] in pluginStatuses },
         scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
+        wallClock: { [unowned self] in wall },
         makeJob: { [unowned self] invocation, _, line, completion in
           let task = Task(invocation, line: line, completion: completion)
           tasks.append(task)
@@ -63,7 +66,7 @@ final class StatusBarControllerTests: XCTestCase {
   func testStoppingDropsEveryDeadlineAndARestartPlansAfresh() {
     // `%H:%M` needs the clock, so a running bar always has a next wake-up.
     let harness = Harness("%H:%M", interval: 60)
-    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 160)
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140)
 
     harness.controller.stop()
     harness.drain()
@@ -72,11 +75,68 @@ final class StatusBarControllerTests: XCTestCase {
     harness.update("%H:%M:%S", interval: 30)
     XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
 
-    harness.queue.sync { harness.now = 500 }
+    harness.queue.sync {
+      harness.now = 500
+      harness.wall = Date(timeIntervalSince1970: 1_800_000_020.25)
+    }
     harness.controller.start()
     harness.drain()
-    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 530)
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 500.75)
     harness.controller.stop()
+  }
+
+  /// The minute used to be re-read every `[statusbar] interval`, so it turned
+  /// up to that many seconds late. It is read on the minute instead, and the
+  /// interval (even 0, "run once") no longer decides it.
+  func testAMinuteClockWakesOnTheMinuteNotEveryInterval() {
+    for interval in [5.0, 0] {
+      let harness = Harness("%H:%M", interval: interval)
+      defer { harness.controller.stop() }
+      XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140, "\(interval)")
+      harness.queue.sync {
+        harness.now = 140
+        harness.wall = Date(timeIntervalSince1970: 1_800_000_060)
+      }
+      harness.tick()
+      XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 200, "\(interval)")
+    }
+  }
+
+  func testACalendarAloneWakesAtTheNextLocalMidnight() {
+    let harness = Harness("#{flash.calendar}")
+    defer { harness.controller.stop() }
+    let wall = harness.queue.sync { harness.wall }
+    let midnight = Calendar.current.dateInterval(of: .day, for: wall)!.end
+    let boundary = min(
+      midnight, TimeZone.current.nextDaylightSavingTimeTransition(after: wall) ?? midnight)
+    XCTAssertEqual(
+      harness.queue.sync { harness.controller.nextWakeup }!,
+      100 + boundary.timeIntervalSince(wall), accuracy: 0.001)
+  }
+
+  func testADayEndsAtADaylightSavingTransitionInsideIt() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+    // 2026-03-08 00:30 local; the clocks spring forward at 02:00 (10:00 UTC).
+    let date = Date(timeIntervalSince1970: 1_772_958_600)
+    XCTAssertEqual(
+      FlashStatusBarController.nextClockBoundary(after: date, resolution: .day, calendar: calendar),
+      Date(timeIntervalSince1970: 1_772_964_000))
+    XCTAssertEqual(
+      FlashStatusBarController.nextClockBoundary(after: date, resolution: .minute),
+      Date(timeIntervalSince1970: 1_772_958_660))
+  }
+
+  /// A clock set, time-zone change, new day or wake re-plans the next
+  /// boundary from the wall clock as it now reads.
+  func testAWallClockChangeReplansTheNextBoundary() {
+    let harness = Harness("%H:%M")
+    defer { harness.controller.stop() }
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140)
+    harness.queue.sync { harness.wall = Date(timeIntervalSince1970: 1_800_000_050) }
+    harness.controller.clockDidChange(reason: "test")
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 110)
   }
 
   func testPluginCarouselRotatesOnTheHostClockAndKeepsTheVisibleLineAcrossRefreshes() {

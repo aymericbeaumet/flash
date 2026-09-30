@@ -242,8 +242,10 @@ enabled = false
 # Which displays show the bar: "all" (default, every screen's top band) or
 # "primary" (only the main / menu-bar display).
 monitor = "all"
-# Default poll cadence for named Flash sources. Each source can override it.
-# 0 runs once; cycle_interval controls rotation independently of polling.
+# Default poll cadence for named Flash sources and #(...) jobs. Each source can
+# override it. 0 runs once; cycle_interval controls rotation independently of
+# polling. Time (strftime codes, flash.date, flash.calendar) is not polled: it
+# refreshes on the next second, minute or day it shows.
 interval = 5
 # Bar text size in points (the mode pill uses the same size).
 font_size = 13
@@ -425,7 +427,7 @@ cwd = "~"
 # border_size = 0
 # corner_radius = 8
 # padding = 8
-# interval = 0              # clock and #(...) refresh seconds; 0 = statusbar.interval
+# interval = 0              # #(...) refresh seconds; 0 = statusbar.interval
 # hide_from_capture = false # best effort: leave it out of screenshots and sharing
 
 [flashlight]

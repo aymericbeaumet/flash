@@ -309,6 +309,19 @@ is trimmed against the full width and drawn over the side lanes, keeps the part
 around its focus rather than the head, and allows one list per line, so it
 cannot express "fit this label between the lanes".
 
+## Time
+
+Time is read on its own boundaries, never polled on an interval. Each
+evaluation reports the finest unit it showed: seconds when a strftime seconds
+conversion (`%S`, `%T`, `%s`, `%X`, `%r`, `%c`, `%+`) was expanded; days when
+only date conversions or `#{flash.calendar}` were; minutes for anything else,
+including `#{flash.date}` and `t:` times. A literal `%%` is not time. The
+controller wakes at the next boundary of the finest unit any visible surface
+shows; a day ends at local midnight or at a daylight-saving transition inside
+it. Setting the clock, a time-zone change, a new calendar day and a wake
+re-plan that boundary at once. `[statusbar] interval` and a widget's
+`interval` govern only `#()` jobs and named sources.
+
 ## Implementation and validation
 
 `StatusFormatProgram` owns the shared byte lexer, nested AST, diagnostics,
