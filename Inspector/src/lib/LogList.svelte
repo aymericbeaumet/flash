@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flushSync } from "svelte";
   import Icon from "./Icon.svelte";
   import type { LogRecord } from "./types";
   import { logSearchText, timestamp } from "./format";
@@ -17,6 +18,16 @@
   let selected = $state<LogRecord | null>(null);
   let copied = $state(false);
   let copyError = $state("");
+  // The viewport renders only the visible rows; printing renders every
+  // filtered record once, beside it, for the length of the print.
+  let printing = $state(false);
+  $effect(() => {
+    const before = () => flushSync(() => { printing = true; });
+    const after = () => { printing = false; };
+    window.addEventListener("beforeprint", before);
+    window.addEventListener("afterprint", after);
+    return () => { window.removeEventListener("beforeprint", before); window.removeEventListener("afterprint", after); };
+  });
 
   const sources = $derived([...new Set(logs.map((record) => record.source).filter((value): value is string => !!value))].sort());
   const filtered = $derived.by(() => {
@@ -102,6 +113,11 @@
       <div class="empty"><strong>{logs.length ? "No matching records" : "Listening for activity"}</strong><p>{logs.length ? "Change the filters to see more of the log." : "New records appear here as Flash and its plugins work."}</p></div>
     {/if}
   </div>
+  {#if printing}
+    <div class="print-rows">
+      {#each filtered as record}<div class="print-row"><span class="time">{record.time_unix_ms ? timestamp(record.time_unix_ms).slice(11) : "—"}</span><span class="level level-{record.level || 'info'}">{record.level || "info"}</span><span class="source">{record.source || "—"}</span><span class="message">{record.message || "(no message)"}{#if fieldsPreview(record)}<span class="fields">{fieldsPreview(record)}</span>{/if}</span></div>{/each}
+    </div>
+  {/if}
   {#if selected}
     <section class="detail" id="log-detail" aria-label="Selected log record">
       <div class="detail-bar"><span class="level level-{selected.level || 'info'}">{selected.level || "info"}</span><strong>{selected.source || "Record details"}</strong><span class="detail-time">{timestamp(selected.time_unix_ms)}</span><button class="copy" onclick={copySelected}><Icon name={copied ? "check" : "clipboard"} size={13} />{copied ? "Copied" : "Copy JSON"}</button><button class="close" aria-label="Close log details" onclick={() => selected = null}><Icon name="close" size={15} /></button></div>
@@ -155,4 +171,14 @@
   .empty { font-size: 12px; }
   @media (max-width: 850px) { .header, .row { gap: 9px; padding-left: 13px; padding-right: 13px; grid-template-columns: 91px 49px minmax(75px, .25fr) minmax(160px, 1fr) 12px; }.detail-time { display: none; }.source-filter { max-width: 140px; } }
   @media (max-width: 640px) { .log-caption { flex-wrap: wrap; gap: 3px; }.toolbar { gap: 7px; }.toolbar input { flex-basis: 100%; }.header { grid-template-columns: 91px 49px 75px minmax(160px, 1fr) 12px; overflow: hidden; }.header span { white-space: nowrap; } }
+  .print-rows { display: none; }
+  @media print {
+    .logs { display: block; height: auto; }
+    .toolbar, .viewport, .header, .detail, .log-caption > span:last-child { display: none; }
+    .log-caption { padding: 0 0 8px; }
+    .print-rows { display: block; }
+    .print-row { display: grid; grid-template-columns: 90px 44px minmax(80px, .25fr) minmax(0, 1fr); gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border-soft); break-inside: avoid; }
+    .print-row .source, .print-row .message { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+    .print-row .fields { display: block; margin: 2px 0 0; }
+  }
 </style>

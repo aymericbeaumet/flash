@@ -100,7 +100,7 @@ extension NormalModeDispatcher {
         ## Configured mappings
 
         These are the base mappings from your configuration. The [live mapping
-        reference](#mappings) includes plugin overrides for the focused app.
+        reference](/mappings) includes plugin overrides for the focused app.
 
         ```text
         \(helpText(config: config, showModes: showModes))

@@ -32,7 +32,7 @@
 
 <div class="page">
   <div class="page-heading"><p class="eyebrow">Inspect</p><h1>Clipboard</h1><p>Find something you copied earlier and put it back on your clipboard. This history comes from your running clipboard plugin.</p></div>
-  <div class="privacy-note"><Icon name="shield" size={16} /><span>History is provided by your local Flash instance.</span><a href="#docs/privacy">About clipboard privacy</a></div>
+  <div class="privacy-note"><Icon name="shield" size={16} /><span>History is provided by your local Flash instance.</span><a href="/docs/privacy">About clipboard privacy</a></div>
   {#if copyError}<div class="notice error" role="alert">{copyError}</div>{/if}
   <div class="sr-status" role="status" aria-live="polite">{copied !== null ? "Entry copied to your clipboard." : ""}</div>
   <div class="surface clipboard">
@@ -52,7 +52,7 @@
         {/each}
       </div>
     {:else}
-      <div class="empty"><span class="empty-icon"><Icon name="clipboard" size={25} /></span><strong>{entries.length ? "No matching entries" : "Your clipboard history is empty"}</strong><p>{entries.length ? "Try another word or clear the search." : "Copy some text in another app. If nothing appears, check that the clipboard plugin is running."}</p>{#if entries.length}<button onclick={() => query = ""}>Clear search</button>{:else}<a href="#plugins/clipboard">Check clipboard plugin <span>→</span></a>{/if}</div>
+      <div class="empty"><span class="empty-icon"><Icon name="clipboard" size={25} /></span><strong>{entries.length ? "No matching entries" : "Your clipboard history is empty"}</strong><p>{entries.length ? "Try another word or clear the search." : "Copy some text in another app. If nothing appears, check that the clipboard plugin is running."}</p>{#if entries.length}<button onclick={() => query = ""}>Clear search</button>{:else}<a href="/plugins/clipboard">Check clipboard plugin <span>→</span></a>{/if}</div>
     {/if}
   </div>
 </div>
@@ -77,4 +77,9 @@
   .empty a, .empty button { display: inline-block; margin-top: 17px; font-size: 12px; }
   .sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   @media (max-width: 640px) { .entry { padding: 18px 14px; gap: 10px; grid-template-columns: 19px minmax(0, 1fr) auto; }.privacy-note { flex-wrap: wrap; }.privacy-note a { margin-left: 24px; } }
+  @media print {
+    .privacy-note a, .copy-button { display: none; }
+    .clipboard { overflow: visible; border: 0; }
+    .entry { grid-template-columns: 27px minmax(0, 1fr); padding: 12px 0; break-inside: avoid; }
+  }
 </style>

@@ -66,4 +66,29 @@ pre { font-size: 12px; overflow: auto; line-height: 1.65; }
 .notice.error { background: #fff3ef; border-color: #f0c9bf; color: var(--danger); }
 @media (max-width: 1050px) { .page { padding: 28px 24px 48px; } }
 @media (max-width: 640px) { .page { padding: 24px 18px 40px; } .toolbar { padding: 12px; } .data-table th, .data-table td { padding: 12px; } .page-heading { margin-bottom: 22px; } }
+/* Print the whole page, not the viewport: the app shell scrolls inside a
+   fixed-height layout on screen, so every page releases its heights and
+   scroll containers here and drops navigation, filters and live chrome. */
+@media print {
+  @page { margin: 14mm 12mm; }
+  :root { background: #fff; color: #1b211e; --bg: #fff; --panel: #fff; --text: #1b211e; --muted: #4f5a52; --accent: #1d5439; --border: #c5cec1; --border-soft: #dce3d8; }
+  body { font-size: 12px; }
+  .page { padding: 0; max-width: none; }
+  .page-heading { margin-bottom: 18px; }
+  .page-heading p { font-size: 13px; }
+  h1 { font-size: 26px; }
+  h1, h2, h3, h4, .eyebrow { break-after: avoid; }
+  input, select, .segmented, .toolbar button { display: none !important; }
+  .toolbar { padding: 0 0 8px; border: 0; }
+  .count { margin-left: 0; }
+  .surface { border-radius: 6px; }
+  .table-wrap { overflow: visible; }
+  .data-table thead { display: table-header-group; }
+  .data-table tr, .notice, kbd { break-inside: avoid; }
+  .data-table th { background: none; }
+  .data-table th, .data-table td { padding: 6px 10px; }
+  .data-table tbody tr:hover { background: none; }
+  pre { max-height: none !important; overflow: visible !important; white-space: pre-wrap !important; overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }

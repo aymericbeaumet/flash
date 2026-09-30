@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import ClipboardPanel from "./lib/ClipboardPanel.svelte";
   import CommandsPanel from "./lib/CommandsPanel.svelte";
   import DocsPanel from "./lib/DocsPanel.svelte";
@@ -8,30 +9,26 @@
   import MappingsPanel from "./lib/MappingsPanel.svelte";
   import PluginsPanel from "./lib/PluginsPanel.svelte";
   import RuntimePanel from "./lib/RuntimePanel.svelte";
+  import { router } from "./lib/router.svelte";
+  import { paths } from "./lib/routes";
   import { store } from "./lib/store.svelte";
 
   const sections = [
-    { id: "home", label: "Home", group: "Explore" },
-    { id: "docs", label: "Documentation", group: "Explore" },
-    { id: "mappings", label: "Key mappings", group: "Your Flash" },
-    { id: "commands", label: "Commands", group: "Your Flash" },
-    { id: "plugins", label: "Plugins", group: "Your Flash" },
-    { id: "state", label: "Runtime & config", group: "Inspect" },
-    { id: "logs", label: "Live logs", group: "Inspect" },
-    { id: "clipboard", label: "Clipboard", group: "Inspect" },
+    { id: "home", href: "/", label: "Home", group: "Explore" },
+    { id: "docs", href: paths.docs(), label: "Documentation", group: "Explore" },
+    { id: "mappings", href: paths.mappings(), label: "Key mappings", group: "Your Flash" },
+    { id: "commands", href: paths.commands(), label: "Commands", group: "Your Flash" },
+    { id: "plugins", href: paths.plugins(), label: "Plugins", group: "Your Flash" },
+    { id: "state", href: "/state", label: "Runtime & config", group: "Inspect" },
+    { id: "logs", href: "/logs", label: "Live logs", group: "Inspect" },
+    { id: "clipboard", href: "/clipboard", label: "Clipboard", group: "Inspect" },
   ];
-  function parseHash() {
-    const [head, ...tail] = location.hash.slice(1).split("/");
-    let topic = tail.join("/");
-    try { topic = decodeURIComponent(topic); } catch { /* Keep malformed routes readable. */ }
-    return { tab: sections.some((section) => section.id === head) ? head : "home", topic };
-  }
-  let route = $state(parseHash());
+  const route = $derived(router.route);
   let search = $state("");
   let searchInput = $state<HTMLInputElement>();
   let mobileNav = $state(false);
   let content = $state<HTMLElement>();
-  const current = $derived(sections.find((section) => section.id === route.tab)!);
+  const current = $derived(sections.find((section) => section.id === route.page)?.label ?? "Page not found");
   const docs = $derived(store.state.docs ?? []);
   const plugins = $derived(store.state.plugins ?? []);
   const commands = $derived(store.state.commands ?? []);
@@ -41,10 +38,10 @@
     if (!q) return [];
     const matches = (text: string) => text.toLowerCase().includes(q);
     const matchesFound = [
-      ...docs.filter((doc) => matches([doc.title, doc.name, doc.summary, doc.body, ...(doc.aliases ?? [])].join(" "))).map((doc) => ({ title: doc.title, summary: doc.summary, kind: "Guide", icon: "docs", href: "#docs/" + encodeURIComponent(doc.name) })),
-      ...commands.filter((command) => matches([command.name, command.syntax, command.description, ...(command.aliases ?? [])].join(" "))).map((command) => ({ title: command.name, summary: command.description ?? command.source, kind: "Command", icon: "commands", href: "#commands/" + encodeURIComponent(command.name) })),
-      ...(mappings.effective_rows ?? mappings.rows).filter((row) => matches(row.key + " " + row.action)).map((row) => ({ title: row.key, summary: row.action, kind: "Mapping", icon: "mappings", href: "#mappings/" + encodeURIComponent(row.key) })),
-      ...plugins.filter((plugin) => matches([plugin.id, plugin.name, plugin.description].join(" "))).map((plugin) => ({ title: plugin.name || plugin.id, summary: plugin.description ?? plugin.state, kind: "Plugin", icon: "plugins", href: "#plugins/" + encodeURIComponent(plugin.id) })),
+      ...docs.filter((doc) => matches([doc.title, doc.name, doc.summary, doc.body, ...(doc.aliases ?? [])].join(" "))).map((doc) => ({ title: doc.title, summary: doc.summary, kind: "Guide", icon: "docs", href: paths.docs(doc.name) })),
+      ...commands.filter((command) => matches([command.name, command.syntax, command.description, ...(command.aliases ?? [])].join(" "))).map((command) => ({ title: command.name, summary: command.description ?? command.source, kind: "Command", icon: "commands", href: paths.commands(command.name) })),
+      ...(mappings.effective_rows ?? mappings.rows).filter((row) => matches(row.key + " " + row.action)).map((row) => ({ title: row.key, summary: row.action, kind: "Mapping", icon: "mappings", href: paths.mappings(row.key) })),
+      ...plugins.filter((plugin) => matches([plugin.id, plugin.name, plugin.description].join(" "))).map((plugin) => ({ title: plugin.name || plugin.id, summary: plugin.description ?? plugin.state, kind: "Plugin", icon: "plugins", href: paths.plugins(plugin.id) })),
     ];
     const rank = (title: string) => {
       const name = title.toLowerCase().replace(/^:/, "");
@@ -56,63 +53,60 @@
 
   $effect(() => {
     store.start();
-    const onHash = () => {
-      route = parseHash();
-      search = "";
-      mobileNav = false;
-      content?.scrollTo({ top: 0 });
-    };
+    const stopRouter = router.start(content!, () => { search = ""; mobileNav = false; });
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault(); searchInput?.focus();
       }
       if (event.key === "Escape") { search = ""; mobileNav = false; searchInput?.blur(); }
     };
-    window.addEventListener("hashchange", onHash);
     window.addEventListener("keydown", onKey);
-    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("keydown", onKey); store.stop(); };
+    return () => { window.removeEventListener("keydown", onKey); stopRouter(); store.stop(); };
   });
-  $effect(() => { document.title = `${current.label} · Flash Help`; });
+  // Guides arrive with the first snapshot; reveal a linked heading once it renders.
+  $effect(() => { void docs; void tick().then(() => router.revealAnchor()); });
+  $effect(() => { document.title = `${current} · Flash Help`; });
 </script>
 
 <a class="skip-link" href="#main-content" onclick={(event) => { event.preventDefault(); content?.focus(); }}>Skip to content</a>
 <div class="workspace">
   <aside class="sidebar" class:expanded={mobileNav}>
-    <a href="#home" class="brand" aria-label="Flash Help home"><span class="brand-mark"><Icon name="bolt" size={24} /></span><span>Flash<span class="brand-sub">Help & reference</span></span></a>
+    <a href="/" class="brand" aria-label="Flash Help home"><span class="brand-mark"><Icon name="bolt" size={24} /></span><span>Flash<span class="brand-sub">Help & reference</span></span></a>
     <nav aria-label="Main navigation">
       {#each ["Explore", "Your Flash", "Inspect"] as group}
         <div class="nav-group"><div class="eyebrow">{group}</div>
           {#each sections.filter((section) => section.group === group) as section}
-            <a href={"#" + section.id} onclick={() => { mobileNav = false; search = ""; }} class:active={route.tab === section.id} aria-current={route.tab === section.id ? "page" : undefined}><Icon name={section.id} /><span>{section.label}</span>{#if section.id === "plugins"}<span class="nav-count">{plugins.length}</span>{/if}</a>
+            <a href={section.href} class:active={route.page === section.id} aria-current={route.page === section.id ? "page" : undefined}><Icon name={section.id} /><span>{section.label}</span>{#if section.id === "plugins"}<span class="nav-count">{plugins.length}</span>{/if}</a>
           {/each}
         </div>
       {/each}
     </nav>
-    <div class="sidebar-footer"><span class="local-mark"><Icon name="shield" size={15} /> On your Mac</span><p>Documentation and live information,<br />directly from your running Flash.</p><a href="#docs/privacy">Privacy & permissions <span>↗</span></a></div>
+    <div class="sidebar-footer"><span class="local-mark"><Icon name="shield" size={15} /> On your Mac</span><p>Documentation and live information,<br />directly from your running Flash.</p><a href={paths.docs("privacy")}>Privacy & permissions <span>↗</span></a></div>
   </aside>
   <div class="main-column">
     <header class="topbar">
       <button class="mobile-toggle" aria-label="Toggle navigation" aria-expanded={mobileNav} onclick={() => mobileNav = !mobileNav}><Icon name="menu" /></button>
-      <div class="breadcrumb"><span>Flash Help</span><Icon name="chevron" size={12} /><strong>{current.label}</strong></div>
+      <div class="breadcrumb"><span>Flash Help</span><Icon name="chevron" size={12} /><strong>{current}</strong></div>
       <div class="searchbox"><Icon name="search" size={16} /><input bind:this={searchInput} bind:value={search} type="search" aria-label="Search all documentation, commands, mappings and plugins" placeholder="Search anything…" /><kbd>⌘ K</kbd></div>
-      <a href="#state" class="connection" class:connected={store.connected}><i></i>{store.connected ? "Live" : "Reconnecting"}</a>
+      <a href="/state" class="connection" class:connected={store.connected}><i></i>{store.connected ? "Live" : "Reconnecting"}</a>
     </header>
     {#if !store.connected}<div class="connection-note" role="status">{store.state.snapshot_at_unix_ms ? "Connection interrupted. Showing the last received snapshot; reconnecting automatically." : "Connecting to Flash. Live information will appear when the resident app is available."}</div>{/if}
     <main id="main-content" tabindex="-1" bind:this={content}>
       {#if search.trim()}
         <div class="page"><div class="page-heading"><p class="eyebrow">Across your Flash</p><h1>Search results</h1><p>{results.length} results for “{search}”</p></div><div class="search-results surface">
-          {#each results.slice(0, 80) as result}<a href={result.href} onclick={() => search = ""}><span class="result-icon"><Icon name={result.icon} /></span><span><strong>{result.title}</strong><span class="result-summary">{result.summary}</span></span><span class="badge neutral">{result.kind}</span><Icon name="arrow" size={16} /></a>{/each}
+          {#each results.slice(0, 80) as result}<a href={result.href}><span class="result-icon"><Icon name={result.icon} /></span><span><strong>{result.title}</strong><span class="result-summary">{result.summary}</span></span><span class="badge neutral">{result.kind}</span><Icon name="arrow" size={16} /></a>{/each}
           {#if results.length === 0}<div class="empty"><strong>No matches yet</strong>Try a feature, command, key, or plugin name.</div>{/if}
           {#if results.length > 80}<p class="empty">Showing the first 80 matches. Add another word to narrow your search.</p>{/if}
         </div></div>
-      {:else if route.tab === "home"}<HomePanel state={store.state} connected={store.connected} />
-      {:else if route.tab === "docs"}<DocsPanel {docs} topic={route.topic} />
-      {:else if route.tab === "mappings"}<MappingsPanel {mappings} filter={route.topic} />
-      {:else if route.tab === "commands"}<CommandsPanel {commands} filter={route.topic} />
-      {:else if route.tab === "plugins"}<PluginsPanel {plugins} filter={route.topic} />
-      {:else if route.tab === "state"}<RuntimePanel state={store.state} connected={store.connected} />
-      {:else if route.tab === "logs"}<div class="page log-page"><div class="page-heading"><p class="eyebrow">Inspect</p><h1>Live logs</h1><p>Follow what Flash is doing. Select a record to inspect its full details.</p></div><div class="surface log-surface"><LogList logs={store.logs} /></div></div>
-      {:else if route.tab === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} />{/if}
+      {:else if route.page === "home"}<HomePanel state={store.state} connected={store.connected} />
+      {:else if route.page === "docs"}<DocsPanel {docs} topic={route.param} />
+      {:else if route.page === "mappings"}<MappingsPanel {mappings} filter={route.param} />
+      {:else if route.page === "commands"}<CommandsPanel {commands} filter={route.param} />
+      {:else if route.page === "plugins"}<PluginsPanel {plugins} filter={route.param} />
+      {:else if route.page === "state"}<RuntimePanel state={store.state} connected={store.connected} />
+      {:else if route.page === "logs"}<div class="page log-page"><div class="page-heading"><p class="eyebrow">Inspect</p><h1>Live logs</h1><p>Follow what Flash is doing. Select a record to inspect its full details.</p></div><div class="surface log-surface"><LogList logs={store.logs} /></div></div>
+      {:else if route.page === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} />
+      {:else}<div class="page"><div class="page-heading"><p class="eyebrow">Flash Help</p><h1>Page not found</h1><p>This address is not part of Flash Help. Start from the homepage, browse the guides, or search above.</p></div><p class="not-found-links"><a href="/">Help homepage →</a><a href={paths.docs()}>All guides →</a></p></div>{/if}
     </main>
   </div>
 </div>
@@ -159,5 +153,12 @@
   .skip-link:focus { top: 12px; }
   @media (max-width: 1150px) { .topbar { padding: 14px 24px; gap: 16px; } .workspace { grid-template-columns: 205px minmax(0, 1fr); } }
   @media (max-width: 850px) { .breadcrumb > span, .breadcrumb :global(svg) { display: none; } .topbar { gap: 14px; } .searchbox { width: min(260px, 35vw); } }
+  .not-found-links { display: flex; gap: 24px; font-size: 13px; }
   @media (max-width: 700px) { .workspace { grid-template-columns: minmax(0, 1fr); } .sidebar { display: none; } .sidebar.expanded { display: flex; position: fixed; top: 64px; bottom: 0; left: 0; width: 235px; z-index: 5; box-shadow: 15px 0 40px #26342125; } .sidebar.expanded .brand { display: none; } .sidebar.expanded nav { margin-top: 0; } .mobile-toggle { display: flex; } .topbar { min-height: 64px; padding: 12px 18px; gap: 10px; } .breadcrumb { display: none; } .searchbox { width: auto; flex: 1; } .searchbox kbd { display: none; } .connection { font-size: 10px; } }
+  @media print {
+    .workspace, .main-column, main, .log-page { display: block; height: auto; overflow: visible; }
+    .sidebar, .topbar, .connection-note, .skip-link { display: none !important; }
+    .search-results, .log-surface { overflow: visible; min-height: 0; border: 0; }
+    .search-results a { break-inside: avoid; padding: 10px 0; }
+  }
 </style>

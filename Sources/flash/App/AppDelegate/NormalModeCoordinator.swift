@@ -1041,7 +1041,7 @@ extension AppDelegate {
     case .showMappings:
       showMappings()
     case .showPlugins:
-      openDebugDashboard(tab: "plugins")
+      openDebugDashboard(.plugins(id: nil))
     case .showAbout:
       handleURLCommand(command)
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
@@ -1109,15 +1109,14 @@ extension AppDelegate {
   /// Open the help homepage, or a named guide when a topic is supplied.
   func showHelp(topic: String? = nil) {
     let topic = topic?.trimmed
-    openDebugDashboard(tab: topic?.isEmpty == false ? "docs" : "home", topic: topic)
+    openDebugDashboard(topic?.isEmpty == false ? .docs(topic: topic) : .home)
   }
 
-  /// Open the HTTP debug inspector dashboard in the default browser on `tab`
-  /// (`logs` / `plugins` / `commands` / `state` / `docs`), optionally deep-linked
-  /// to a `topic` (Docs). Backs `:logs`, `:plugins`, `:commands`, `:help`. The
-  /// inspector is loopback-only and on by default; we still start it on demand if
-  /// it was disabled, and open the page once the listener has a bound port.
-  func openDebugDashboard(tab: String, topic: String? = nil) {
+  /// Open a page of the HTTP inspector's browser help in the default browser.
+  /// Backs `:help`, `:mappings`, `:plugins`, `:commands`, `:logs` and
+  /// `:clipboard`. The inspector is loopback-only; it starts on demand when
+  /// disabled at launch, and the page opens once the listener has a bound port.
+  func openDebugDashboard(_ page: DebugServer.Page) {
     finishCommandLineInteraction(reason: "debug_dashboard")
     if debugServer == nil {
       let server = DebugServer(
@@ -1127,13 +1126,13 @@ extension AppDelegate {
       debugServer = server
       server.start()
     }
-    openDebugDashboardWhenReady(tab: tab, topic: topic, attempt: 0)
+    openDebugDashboardWhenReady(page, attempt: 0)
   }
 
-  private func openDebugDashboardWhenReady(tab: String, topic: String?, attempt: Int) {
+  private func openDebugDashboardWhenReady(_ page: DebugServer.Page, attempt: Int) {
     guard let server = debugServer else { return }
     if let port = server.listeningPort {
-      if let url = DebugServer.dashboardURL(host: server.host, port: port, tab: tab, topic: topic) {
+      if let url = DebugServer.dashboardURL(host: server.host, port: port, page: page) {
         NSWorkspace.shared.open(
           url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")
@@ -1145,36 +1144,36 @@ extension AppDelegate {
       return
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-      self?.openDebugDashboardWhenReady(tab: tab, topic: topic, attempt: attempt + 1)
+      self?.openDebugDashboardWhenReady(page, attempt: attempt + 1)
     }
   }
 
   func runPluginsSubcommand(_ sub: NormalModeDispatcher.PluginsSubcommand) {
     switch sub {
     case .modal:
-      openDebugDashboard(tab: "plugins")
+      openDebugDashboard(.plugins(id: nil))
     case .reload:
       let ids = pluginManager.reloadAll()
       FlashLog.info("[plugins] reload command ids=\(ids.joined(separator: ","))")
       // The plugins tab shows live runtime state, so the reload's progress and
       // result land there instead of a one-shot modal.
-      openDebugDashboard(tab: "plugins")
+      openDebugDashboard(.plugins(id: nil))
     }
   }
 
-  /// `:mappings` — the resolved mapping table now lives in the dashboard's
-  /// Mappings tab (fed by `debugStateJSON`).
+  /// `:mappings` — the resolved mapping table lives on the browser help's
+  /// Mappings page (fed by `debugStateJSON`).
   func showMappings() {
-    openDebugDashboard(tab: "mappings")
+    openDebugDashboard(.mappings)
   }
 
-  /// `:clipboard` — history now lives in the HTTP dashboard's Clipboard tab.
+  /// `:clipboard` — history lives on the browser help's Clipboard page.
   /// Refresh the host cache from the plugin, then open the browser there. The
   /// history travels over the plugin command RPC (keeping this surface
   /// decoupled from the flashlight candidate pool).
   func openClipboardDashboard() {
     refreshClipboardDashboardCache()
-    openDebugDashboard(tab: "clipboard")
+    openDebugDashboard(.clipboard)
   }
 
   /// Pull the full clipboard history from the plugin into `clipboardEntries`

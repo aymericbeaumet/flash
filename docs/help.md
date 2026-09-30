@@ -41,20 +41,35 @@ The inspector listens on loopback (port 4242 by default), starting when one of
 the browser commands needs it, or at launch with
 `[debug] http_inspector_enabled = true`. It stays available until Flash quits.
 
-| Fragment | Destination |
+| Path | Destination |
 | --- | --- |
-| `#home` | Help homepage |
-| `#mappings` | Effective mappings |
-| `#docs/<topic>` | Documentation topic, including aliases |
-| `#commands`, `#plugins`, `#state`, `#logs`, `#clipboard` | Live reference pages |
+| `/` | Help homepage |
+| `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
+| `/mappings`, `/commands` | Effective mappings; command catalog. `?q=<text>` starts the list filtered |
+| `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
+| `/state`, `/logs`, `/clipboard` | Runtime, logs and clipboard pages |
+| `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read |
+
+The page routes itself with the History API: same-origin page links navigate
+in place, back/forward restore each page's scroll position, and modified,
+middle or new-window clicks keep the browser's behavior. The server answers
+a direct load or reload of any page with the app, an unknown path with the
+app's not-found page and a 404 status, and an unknown `/api/` path with a
+plain 404. `DebugServer.Page` and `Inspector/src/lib/routes.ts` hold the same
+page table; change them together.
+
+Fragments are in-page anchors. Guide headings take GitHub-style slugs, so
+`/docs/normal-mode#input-capture-and-latency` opens a guide at a section, and a
+guide's `#heading` links and `other-guide.md#heading` references resolve.
 
 `HelpDocs.allTopics` merges built-in and manifest topics. A name or alias may
 identify only one accepted topic: built-ins take precedence, then the first
 plugin topic claiming the name wins. The browser's navigation and search use
-that installed inventory. Links between guides use `#docs/<topic>`; links to
-runtime companions use their live fragments. Repository references use
-absolute links pinned to the bundle's `FlashGitCommit` when available, so
-they work from a locally served page and follow the installed source revision.
+that installed inventory. Links between guides use `/docs/<topic>`; links to
+runtime companions use their page paths, such as `/mappings` or `/state`.
+Repository references use absolute links pinned to the bundle's
+`FlashGitCommit` when available, so they work from a locally served page and
+follow the installed source revision.
 
 Built-in prose lives in `HelpDocs.swift` or beside the feature that owns it
 (`Config.helpTopic`, `NormalModeDispatcher.helpTopic`,
@@ -66,7 +81,17 @@ in `docs/` and are linked from the concise browser guides.
 When adding a feature, update its owning topic or add a topic to `HelpDocs`,
 link its live companion when available, and keep routes unique. The help
 tests cover core workflow discoverability, alias resolution, plugin collisions,
-internal guide links, mapping resolution and browser URL construction.
+internal guide links, mapping resolution, browser URL construction and the
+server's page, endpoint and not-found routing.
+
+## Printing
+
+Every page prints in full: print styles release the app shell's fixed-height
+scroll container, drop the navigation, search, filters and connection status,
+repeat table headers across pages and keep rows whole. The log list prints
+every filtered record rather than its visible window. Printing the mappings
+page gives a complete reference of the effective bindings; filter it first to
+print a subset.
 
 ## Frontend changes
 
@@ -76,6 +101,7 @@ committed `Sources/flash/Resources/inspector.html`. Plain SwiftPM builds serve
 that resource; CI checks that it matches the frontend source. A dev install
 builds a separate unminified page and stages it into the installed app.
 
-Check browser routes, search, guide links, live/disconnected states and narrow
-layouts after UI changes. The page must remain self-contained and must render
+Check browser routes (direct loads, back/forward, heading anchors), search,
+guide links, live/disconnected states, narrow layouts and print preview after
+UI changes. The page must remain self-contained and must render
 plugin-authored Markdown as untrusted content.

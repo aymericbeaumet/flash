@@ -7,7 +7,7 @@ set -euo pipefail
 # Each class reuses its integration script's setup (build, sign and install
 # the oracle and fixture) and runs the oracle in bench mode: bring the fixture
 # forward, post the trigger, wait for hints through the debug inspector's
-# /state, dismiss them, repeat. Flash logs one `[latency] hints_visible` line
+# /api/state, dismiss them, repeat. Flash logs one `[latency] hints_visible` line
 # per activation; this script reads them from ~/Library/Logs/Flash/flash.log*
 # by trace id, within the window each oracle measured.
 #
@@ -83,7 +83,7 @@ esac
 
 FLASH_CLI="${FLASH_CLI:-$HOME/.local/bin/flash}"
 LOG_DIR="$HOME/Library/Logs/Flash"
-STATE_URL="http://127.0.0.1:4242/state"
+STATE_URL="http://127.0.0.1:4242/api/state"
 
 echo "==> Preflight"
 if [[ ! -x "$FLASH_CLI" ]]; then

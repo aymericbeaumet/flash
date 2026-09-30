@@ -1098,9 +1098,9 @@ extension PluginManager {
       # Plugins
 
       Plugins add flashlight catalogs, inline answers, actions, hints,
-      status values and their own help. Open [Plugins](#plugins) to inspect
+      status values and their own help. Open [Plugins](/plugins) to inspect
       this installation's processes, health, errors and capabilities;
-      [Commands](#commands) lists the commands they contribute.
+      [Commands](/commands) lists the commands they contribute.
 
       ## Enable and configure
 
@@ -1118,7 +1118,7 @@ extension PluginManager {
 
       Third-party GitHub references must pin a full commit:
       `github:owner/repository@<40-character-commit>`. Review a plugin before
-      enabling it. Its [permissions and data access](#docs/privacy) depend
+      enabling it. Its [permissions and data access](/docs/privacy) depend
       on the manifest and any tools it runs. A stopped on-demand plugin is
       not necessarily failing; it starts when a matching command needs it.
 

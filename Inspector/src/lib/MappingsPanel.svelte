@@ -14,11 +14,11 @@
 </script>
 
 <div class="page"><div class="page-heading"><p class="eyebrow">Your Flash</p><h1>A key for every move.</h1><p>Explore your live mappings. Find the key you need, see exactly what it does, and make it your own.</p></div>
-  <div class="mapping-context surface"><span class="context-icon"><Icon name="mappings" size={22} /></span><div><strong>{view === "effective" ? "Effective mappings" : "Configured mappings"}</strong><p>{view === "effective" ? `Resolved for ${mappings.localized_name ?? mappings.bundle_id ?? "the current application"}, including active plugin contributions.` : "Mappings from your resolved Flash configuration, before active plugin contributions."}</p></div>{#if mappings.normal_leader}<span class="leader">Leader <kbd>{mappings.normal_leader}</kbd></span>{/if}<a href="#docs/mappings">Mapping syntax <Icon name="arrow" size={15} /></a></div>
+  <div class="mapping-context surface"><span class="context-icon"><Icon name="mappings" size={22} /></span><div><strong>{view === "effective" ? "Effective mappings" : "Configured mappings"}</strong><p>{view === "effective" ? `Resolved for ${mappings.localized_name ?? mappings.bundle_id ?? "the current application"}, including active plugin contributions.` : "Mappings from your resolved Flash configuration, before active plugin contributions."}</p></div>{#if mappings.normal_leader}<span class="leader">Leader <kbd>{mappings.normal_leader}</kbd></span>{/if}<a href="/docs/mappings">Mapping syntax <Icon name="arrow" size={15} /></a></div>
   <div class="surface mapping-list"><div class="toolbar"><input type="search" aria-label="Search mappings by key, action or scope" placeholder="Find a key, action, or scope…" bind:value={query} /><select bind:value={scope} aria-label="Filter mappings by mode"><option value="">All modes</option>{#each scopes as item}<option value={item}>{item}</option>{/each}</select><div class="segmented" aria-label="Mapping source"><button class:active={view === "effective"} aria-pressed={view === "effective"} onclick={() => { view = "effective"; scope = ""; }}>Effective</button><button class:active={view === "configured"} aria-pressed={view === "configured"} onclick={() => { view = "configured"; scope = ""; }}>Configured</button></div><span class="count">{filtered.length} of {rows.length}</span></div>
     {#each categories as category}<section class="mapping-group"><div class="group-label"><span class="badge" class:neutral={category !== "normal"}>{category}</span><p>{category === "all" ? "Available across modes" : category === "normal" ? "Navigate and act while NORMAL is active" : category === "insert" ? "Available while typing in INSERT" : "Mappings for this context"}</p><span>{filtered.filter((row) => row.scope === category).length} bindings</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Key sequence</th><th>Action</th></tr></thead><tbody>{#each filtered.filter((row) => row.scope === category) as row}<tr><td><kbd>{row.key}</kbd></td><td><code>{row.action}</code></td></tr>{/each}</tbody></table></div></section>{/each}
     {#if !filtered.length}<div class="empty"><strong>No mappings match</strong>Try a different key or action, or select all modes.</div>{/if}
-  </div><p class="mapping-tip">Changes to your TOML file appear here after reload. <a href="#docs/config">Learn how to customize mappings →</a></p>
+  </div><p class="mapping-tip">Changes to your TOML file appear here after reload. <a href="/docs/config">Learn how to customize mappings →</a></p>
 </div>
 
 <style>
@@ -43,4 +43,15 @@
   .mapping-tip { color: var(--muted); font-size: 11px; margin-top: 20px; }
   @media (max-width: 1100px) { .mapping-context { flex-wrap: wrap; } .mapping-context > div { min-width: 230px; } .leader { margin-left: 37px; } .key-column { width: 150px; } }
   @media (max-width: 600px) { .group-label p { display: none; } .mapping-context { padding: 17px; } .key-column { width: 110px; } .toolbar input { flex-basis: 100%; } .mapping-context > div { min-width: 160px; } }
+  @media print {
+    .mapping-context { padding: 0 0 14px; border: 0; }
+    .mapping-context a, .context-icon, .mapping-tip { display: none; }
+    .mapping-list { overflow: visible; border: 0; }
+    .group-label { padding: 14px 0 6px; background: none; break-after: avoid; }
+    .group-label p { display: block; }
+    .key-column { width: 170px; }
+    .data-table td { padding-top: 4px; padding-bottom: 4px; }
+    .data-table kbd { padding: 0 6px; font-size: 11px; border-bottom-width: 1px; }
+    .data-table code { color: var(--text); }
+  }
 </style>

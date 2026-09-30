@@ -66,11 +66,11 @@ launch-time inspector is disabled.
 
 | Endpoint | Content |
 | --- | --- |
-| `/` | the help and runtime UI |
-| `/state` | snapshot time, version/build, uptime, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, restarts, last error and log line, CPU %, memory) |
-| `/logs` | the last 2,000 lines; `/logs?trace=<id>` returns one interaction's lines |
-| `/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
-| `/events` | server-sent `state`, `logs` and `log` events |
+| `/`, `/docs/<topic>`, `/mappings`, … | the help and runtime UI ([routes](help.md#routes-and-ownership)) |
+| `/api/state` | snapshot time, version/build, uptime, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, restarts, last error and log line, CPU %, memory) |
+| `/api/logs` | the last 2,000 lines; `/api/logs?trace=<id>` returns one interaction's lines |
+| `/api/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
+| `/api/events` | server-sent `state`, `logs` and `log` events |
 
 ## Stalls
 
@@ -100,7 +100,7 @@ watchdog also reports stalls while they are still in progress
   counts the ones held back.
 - A `search` or `hints` handler that runs out of its request's `deadline_ms`
   logs `[plugin] <method> exceeded its deadline` under the request's trace.
-- Per-plugin CPU % (`/state`, `:plugins`) is computed from real CPU time;
+- Per-plugin CPU % (`/api/state`, `:plugins`) is computed from real CPU time;
   rusage reports Mach ticks, converted to nanoseconds.
 
 ## Privacy

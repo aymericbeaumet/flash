@@ -35,19 +35,32 @@ final class HelpDocsTests: XCTestCase {
     }
   }
 
+  /// Guides link to browser help pages by path; fragments are reserved for
+  /// headings on the same page.
   func testTopicLinksResolveWithinTheInstalledBuiltInInventory() throws {
     let topics = HelpDocs.allTopics(config: .default, showModes: true)
     let names = Set(topics.flatMap { [$0.name] + $0.aliases })
-    let expression = try NSRegularExpression(pattern: #"\]\(#docs/([a-z0-9-]+)\)"#)
+    let expression = try NSRegularExpression(pattern: #"\]\(([^)\s]+)\)"#)
+    var guideLinks = 0
     for topic in topics {
       let body = topic.body as NSString
       for match in expression.matches(
         in: topic.body, range: NSRange(location: 0, length: body.length))
       {
         let destination = body.substring(with: match.range(at: 1))
-        XCTAssertTrue(names.contains(destination), "\(topic.name) links to missing \(destination)")
+        if destination.hasPrefix("https://") { continue }
+        XCTAssertTrue(
+          destination.hasPrefix("/"), "\(topic.name) links to \(destination) instead of a page")
+        let path = String(destination.prefix { $0 != "#" && $0 != "?" })
+        let page = DebugServer.Page(path: path)
+        XCTAssertNotNil(page, "\(topic.name) links to unknown page \(destination)")
+        if case .docs(let name?) = page {
+          guideLinks += 1
+          XCTAssertTrue(names.contains(name), "\(topic.name) links to missing \(name)")
+        }
       }
     }
+    XCTAssertGreaterThan(guideLinks, 0)
   }
 
   func testPluginTopicsCannotClaimAnExistingNameOrAlias() {

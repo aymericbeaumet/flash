@@ -10,7 +10,7 @@ private struct Args {
   var fixtureAppPath: String = "/Applications/Flash Native Fixture.app"
   var fixtureBundleID: String = "com.flash.native-fixture"
   var flashCLIPath: String = "\(NSHomeDirectory())/.local/bin/flash"
-  var flashStateURL: String = "http://127.0.0.1:4242/state"
+  var flashStateURL: String = "http://127.0.0.1:4242/api/state"
   var skipResidentModeTests = false
   var statePath: String = "/tmp/flash-native-fixture-state.json"
   var timingsPath: String?

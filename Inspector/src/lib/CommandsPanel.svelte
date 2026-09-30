@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { paths } from "./routes";
   import type { CommandInfo } from "./types";
 
   let { commands, filter = "" }: { commands: CommandInfo[]; filter?: string } = $props();
@@ -30,7 +31,7 @@
   <div class="command-guide">
     <span class="guide-icon"><Icon name="commands" size={22} /></span>
     <div><strong>Start with a colon.</strong><p>In NORMAL mode, press <kbd>:</kbd>, enter a command, then press <kbd>Return</kbd>. <kbd>Tab</kbd> completes command names.</p></div>
-    <a href="#docs/commands">Command guide <Icon name="arrow" size={15} /></a>
+    <a href="/docs/verbs">Command guide <Icon name="arrow" size={15} /></a>
   </div>
   <div class="surface catalog">
     <div class="toolbar">
@@ -51,7 +52,7 @@
               <tr>
                 <td class="command-cell"><code class="command-name">{command.name}</code>{#if command.syntax && command.syntax !== command.name}<code class="syntax">{command.syntax}</code>{/if}{#if command.aliases?.length}<span class="aliases">Also {command.aliases.join(", ")}</span>{/if}</td>
                 <td class="description">{command.description || "No description provided."}</td>
-                <td>{#if command.source_kind === "plugin"}<a class="badge neutral" href={"#plugins/" + encodeURIComponent(command.source)}>{command.source} <Icon name="chevron" size={11} /></a>{:else}<span class="badge">Built-in</span>{/if}</td>
+                <td>{#if command.source_kind === "plugin"}<a class="badge neutral" href={paths.plugins(command.source)}>{command.source} <Icon name="chevron" size={11} /></a>{:else}<span class="badge">Built-in</span>{/if}</td>
               </tr>
             {/each}
           </tbody>
@@ -80,4 +81,11 @@
   .description { width: 48%; color: #58655c; font-size: 12px; }
   .empty button { margin-top: 16px; font-size: 12px; }
   @media (max-width: 900px) { .command-guide { align-items: flex-start; flex-wrap: wrap; }.command-guide a { margin-left: 37px; } }
+  @media print {
+    .command-guide { padding: 0 0 14px; background: none; border: 0; }
+    .command-guide a, .guide-icon { display: none; }
+    .catalog { overflow: visible; border: 0; }
+    .data-table { min-width: 0; }
+    .description { color: var(--text); }
+  }
 </style>

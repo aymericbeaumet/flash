@@ -16,16 +16,16 @@ class InspectorStore {
     let receivedState = false;
     let receivedLogs = false;
     // The initial HTTP snapshots must not overwrite a newer stream event.
-    void fetch("/state", { signal: requests.signal })
+    void fetch("/api/state", { signal: requests.signal })
       .then((response) => { if (!response.ok) throw new Error("State unavailable"); return response.json(); })
       .then((state: InspectorState) => { if (!receivedState && !requests.signal.aborted) this.state = state; })
       .catch(() => {});
-    void fetch("/logs", { signal: requests.signal })
+    void fetch("/api/logs", { signal: requests.signal })
       .then((response) => { if (!response.ok) throw new Error("Logs unavailable"); return response.json(); })
       .then((value: { logs?: LogRecord[] }) => { if (!receivedLogs && !requests.signal.aborted) this.logs = (value.logs ?? []).slice(-MAX_LOGS); })
       .catch(() => {});
 
-    const source = new EventSource("/events");
+    const source = new EventSource("/api/events");
     this.source = source;
     source.onopen = () => { this.connected = true; };
     source.onerror = () => { this.connected = false; };

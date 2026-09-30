@@ -1505,7 +1505,7 @@ extension Config {
       when XDG is unset. The file reloads when saved. On first launch Flash
       creates a commented starter if needed, then leaves your edits yours.
 
-      [Runtime](#state) shows the selected path and configuration diagnostics.
+      [Runtime](/state) shows the selected path and configuration diagnostics.
       `flash config_check` validates independently of the resident;
       `flash config_check --file=/path/to/flash.toml` checks another file.
       Invalid values are diagnosed and retain the previous valid value
@@ -1547,8 +1547,8 @@ extension Config {
       loading. Use an explicit shell for shell syntax and `working_directory`
       (sources) or `cwd` (popups) for relative data paths.
 
-      See [live mappings](#mappings), [mapping syntax](#docs/mappings),
-      [status formats](#docs/status-format) and the
+      See [live mappings](/mappings), [mapping syntax](/docs/mappings),
+      [status formats](/docs/status-format) and the
       [canonical configuration reference](\(HelpDocs.repositoryRoot)/config.default.toml).
       The [configuration guide](\(HelpDocs.repositoryRoot)/docs/configuration.md)
       covers environment overrides, keyboard layouts and validation details.

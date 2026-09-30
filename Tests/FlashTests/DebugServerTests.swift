@@ -33,25 +33,56 @@ final class DebugServerTests: XCTestCase {
     XCTAssertTrue(rows.contains { $0["key"] == "?" && $0["action"] == "flash mappings_show" })
   }
 
-  func testDashboardLinksKeepHomepageMappingsAndTopicRoutesDistinct() throws {
+  func testDashboardLinksUsePagePaths() throws {
     XCTAssertEqual(
-      DebugServer.dashboardURL(host: "localhost", port: 4242, tab: "home")?.absoluteString,
-      "http://localhost:4242/#home")
+      DebugServer.dashboardURL(host: "localhost", port: 4242, page: .home)?.absoluteString,
+      "http://localhost:4242/")
     XCTAssertEqual(
-      DebugServer.dashboardURL(host: "127.0.0.1", port: 4242, tab: "mappings")?.fragment,
-      "mappings")
+      DebugServer.dashboardURL(host: "127.0.0.1", port: 4242, page: .mappings)?.absoluteString,
+      "http://127.0.0.1:4242/mappings")
     let topic = "plugin / symbols #?%"
     let url = try XCTUnwrap(
-      DebugServer.dashboardURL(host: "::1", port: 4242, tab: "docs", topic: topic))
-    XCTAssertTrue(url.absoluteString.hasPrefix("http://[::1]:4242/#docs/"))
-    let fragment = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
-      .percentEncodedFragment
-    XCTAssertEqual(fragment?.split(separator: "/").count, 2)
-    XCTAssertEqual(fragment?.removingPercentEncoding, "docs/" + topic)
+      DebugServer.dashboardURL(host: "::1", port: 4242, page: .docs(topic: topic)))
     XCTAssertEqual(
-      DebugServer.dashboardURL(host: "localhost", port: 4242, tab: "home", topic: "  ")?.fragment,
-      "home")
-    XCTAssertNil(DebugServer.dashboardURL(host: "example.com", port: 4242, tab: "home"))
+      url.absoluteString, "http://[::1]:4242/docs/plugin%20%2F%20symbols%20%23%3F%25")
+    XCTAssertNil(url.fragment)
+    XCTAssertNil(url.query)
+    XCTAssertEqual(DebugServer.Page(path: url.path(percentEncoded: true)), .docs(topic: topic))
+    XCTAssertEqual(
+      DebugServer.dashboardURL(host: "localhost", port: 4242, page: .docs(topic: "  "))?.path,
+      "/docs")
+    XCTAssertNil(DebugServer.dashboardURL(host: "example.com", port: 4242, page: .home))
+  }
+
+  func testEveryPageRoundTripsThroughItsPath() {
+    let pages: [DebugServer.Page] = [
+      .home, .docs(topic: nil), .docs(topic: "getting-started"), .docs(topic: "é/ü"),
+      .mappings, .commands, .plugins(id: nil), .plugins(id: "tmux"), .state, .logs, .clipboard,
+    ]
+    for page in pages {
+      XCTAssertEqual(DebugServer.Page(path: page.path), page, page.path)
+      XCTAssertEqual(DebugServer.route(path: page.path), .app(found: true), page.path)
+    }
+  }
+
+  /// Every page path, including deep links and reloads, receives the help
+  /// app; data lives under `/api/`; anything else is not found.
+  func testRoutesSeparatePagesFromEndpoints() {
+    XCTAssertEqual(DebugServer.route(path: "/api/state"), .state)
+    XCTAssertEqual(DebugServer.route(path: "/api/logs"), .logs)
+    XCTAssertEqual(DebugServer.route(path: "/api/traces"), .traces)
+    XCTAssertEqual(DebugServer.route(path: "/api/events"), .events)
+    for path in ["/api", "/api/", "/api/state/x", "/api/docs"] {
+      XCTAssertEqual(DebugServer.route(path: path), .missingEndpoint, path)
+    }
+    for path in ["/docs/", "/mappings/", "/plugins/tmux/"] {
+      XCTAssertEqual(DebugServer.route(path: path), .app(found: true), path)
+    }
+    for path in [
+      "/home", "/missing", "/docs/a/b", "/state/x", "/mappings/gg", "/docs/%zz", "/index.html",
+    ] {
+      XCTAssertEqual(DebugServer.route(path: path), .app(found: false), path)
+    }
   }
 
   func testTracesSummarizeEachInteractionAcrossHostAndPlugins() {
@@ -76,15 +107,15 @@ final class DebugServerTests: XCTestCase {
     XCTAssertEqual(first["worst_level"] as? String, "warn")
     XCTAssertEqual(first["sources"] as? [String], ["core", "plugin:tmux"])
     XCTAssertEqual(
-      DebugServer.queryValue("trace", in: "GET /logs?x=1&trace=a1 HTTP/1.1\r\n"), "a1")
-    XCTAssertNil(DebugServer.queryValue("trace", in: "GET /logs HTTP/1.1\r\n"))
+      DebugServer.queryValue("trace", in: "GET /api/logs?x=1&trace=a1 HTTP/1.1\r\n"), "a1")
+    XCTAssertNil(DebugServer.queryValue("trace", in: "GET /api/logs HTTP/1.1\r\n"))
   }
 
   /// DNS rebinding: a page on its own hostname, rebound to 127.0.0.1, must
   /// not read the inspector; only requests naming this listener pass.
   func testInspectorServesOnlyRequestsForItsOwnLoopbackHost() {
     func request(_ host: String?) -> String {
-      "GET /state HTTP/1.1\r\n" + (host.map { "Host: \($0)\r\n" } ?? "") + "Accept: */*\r\n\r\n"
+      "GET /api/state HTTP/1.1\r\n" + (host.map { "Host: \($0)\r\n" } ?? "") + "Accept: */*\r\n\r\n"
     }
     for host in ["127.0.0.1:4242", "localhost:4242", "[::1]:4242", "LOCALHOST:4242"] {
       XCTAssertTrue(DebugServer.hostIsLoopback(request: request(host), port: 4242), host)
@@ -141,12 +172,13 @@ final class DebugServerTests: XCTestCase {
     defer { server.stop() }
 
     let port = try waitForListeningPort(server)
-    let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/state"))
-    let body = try fetch(url: url, deadline: Date().addingTimeInterval(10))
-    XCTAssertTrue(body.contains("\"ok\":true"), body)
+    let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/api/state"))
+    let response = try fetch(url: url, deadline: Date().addingTimeInterval(10))
+    XCTAssertEqual(response.status, 200)
+    XCTAssertTrue(response.body.contains("\"ok\":true"), response.body)
   }
 
-  func testServesSvelteInspectorBundle() throws {
+  func testServesSvelteInspectorBundleOnEveryPage() throws {
     let server = DebugServer(host: "localhost", port: 0) {
       ["ok": true]
     }
@@ -154,8 +186,10 @@ final class DebugServerTests: XCTestCase {
     defer { server.stop() }
 
     let port = try waitForListeningPort(server)
-    let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/"))
-    let body = try fetch(url: url, deadline: Date().addingTimeInterval(10))
+    let root = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/"))
+    let home = try fetch(url: root, deadline: Date().addingTimeInterval(10))
+    XCTAssertEqual(home.status, 200)
+    let body = home.body
 
     // The inspector UI is the Svelte single-file bundle shipped as a
     // resource; assert on stable, non-minified markers rather than the
@@ -163,12 +197,28 @@ final class DebugServerTests: XCTestCase {
     XCTAssertTrue(body.contains("<title>Flash Help</title>"), "missing help document title")
     XCTAssertTrue(body.contains("id=\"app\""), body)
     // The runtime data wiring survives minification as string literals.
-    XCTAssertTrue(body.contains("/events"), body)
-    XCTAssertTrue(body.contains("/state"), body)
+    XCTAssertTrue(body.contains("/api/events"), body)
+    XCTAssertTrue(body.contains("/api/state"), body)
     // Confirms it is the built bundle, not the missing-resource fallback.
     XCTAssertGreaterThan(body.count, 5_000, "served body looks like the fallback page")
     // The rename is complete — no "Flash Debug" anywhere.
     XCTAssertFalse(body.contains("Flash Debug"), body)
+
+    // Direct loads and reloads of deep pages receive the same app; unknown
+    // pages receive it with a 404 so it can render its own not-found view.
+    for (path, status) in [
+      ("/docs/getting-started", 200), ("/mappings?q=gg", 200), ("/state", 200),
+      ("/missing", 404),
+    ] {
+      let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)\(path)"))
+      let response = try fetch(url: url, deadline: Date().addingTimeInterval(10))
+      XCTAssertEqual(response.status, status, path)
+      XCTAssertEqual(response.body, body, path)
+    }
+    let missing = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/api/missing"))
+    let endpoint = try fetch(url: missing, deadline: Date().addingTimeInterval(10))
+    XCTAssertEqual(endpoint.status, 404)
+    XCTAssertEqual(endpoint.body, "not found")
   }
 
   /// Polls until the `NWListener` reaches `.ready` and publishes its port.
@@ -182,24 +232,25 @@ final class DebugServerTests: XCTestCase {
     return try XCTUnwrap(server.listeningPort, "DebugServer never started listening")
   }
 
-  private func fetch(url: URL, deadline: Date) throws -> String {
+  private func fetch(url: URL, deadline: Date) throws -> (status: Int, body: String) {
     var lastError: Error?
     while Date() < deadline {
       let sem = DispatchSemaphore(value: 0)
-      var result: Result<String, Error>?
-      URLSession.shared.dataTask(with: url) { data, _, error in
+      var result: Result<(status: Int, body: String), Error>?
+      URLSession.shared.dataTask(with: url) { data, response, error in
         if let error {
           result = .failure(error)
         } else {
-          result = .success(String(data: data ?? Data(), encoding: .utf8) ?? "")
+          let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+          result = .success((status, String(data: data ?? Data(), encoding: .utf8) ?? ""))
         }
         sem.signal()
       }.resume()
       _ = sem.wait(timeout: .now() + 0.25)
       if let result {
         switch result {
-        case .success(let body):
-          return body
+        case .success(let response):
+          return response
         case .failure(let error):
           lastError = error
         }
@@ -207,6 +258,6 @@ final class DebugServerTests: XCTestCase {
       Thread.sleep(forTimeInterval: 0.05)
     }
     if let lastError { throw lastError }
-    return ""
+    return (0, "")
   }
 }

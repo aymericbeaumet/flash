@@ -93,7 +93,7 @@ enum HelpDocs {
     body: """
       # Mapping Syntax
 
-      The [live mappings page](#mappings) shows the effective bindings from
+      The [live mappings page](/mappings) shows the effective bindings from
       defaults, plugins and your configuration. Press `?` in NORMAL or run
       `:mappings` to open it. This guide explains how to write your own.
 
@@ -116,8 +116,8 @@ enum HelpDocs {
 
       An argv beginning with `flash` dispatches a Flash verb. Other argv
       launch a program. Use an explicit shell (`/bin/sh`, `-c`, script)
-      when you need pipes or redirection. See the [command inventory](#commands)
-      for installed verbs and the [configuration guide](#docs/config).
+      when you need pipes or redirection. See the [command inventory](/commands)
+      for installed verbs and the [configuration guide](/docs/config).
 
       ## Writing keys
 
@@ -224,7 +224,7 @@ enum HelpDocs {
       the label on the control you want. Escape cancels.
 
       The starter configuration supplies that shortcut. Your actual bindings
-      are listed in [Mappings](#mappings), including changes made by plugins
+      are listed in [Mappings](/mappings), including changes made by plugins
       or your own file. From a terminal, `flash mouse_target` does the same job.
 
       ## Make it yours
@@ -258,10 +258,10 @@ enum HelpDocs {
       shortcut to type again; clicking or selecting an input also enters INSERT.
       NORMAL otherwise stays active as you switch apps and tabs.
 
-      Next: [hints](#docs/hints), [grid](#docs/mouse-grid),
-      [NORMAL mode](#docs/normal-mode), [flashlight](#docs/flashlight),
-      or [configuration](#docs/config). If something fails, start with
-      [troubleshooting](#docs/troubleshooting) and [live runtime state](#state).
+      Next: [hints](/docs/hints), [grid](/docs/mouse-grid),
+      [NORMAL mode](/docs/normal-mode), [flashlight](/docs/flashlight),
+      or [configuration](/docs/config). If something fails, start with
+      [troubleshooting](/docs/troubleshooting) and [live runtime state](/state).
       """,
     aliases: ["start"])
 
@@ -292,7 +292,7 @@ enum HelpDocs {
 
       Hold a configured magic modifier on the final hint key to include it in
       the click; Shift is always available. Terminal link hints add Shift so
-      your terminal opens the link. The [command inventory](#commands) lists
+      your terminal opens the link. The [command inventory](/commands) lists
       all flags, scopes and installed mouse verbs.
 
       ## Beyond the focused window
@@ -301,7 +301,7 @@ enum HelpDocs {
       including supported Picture in Picture and Stage Manager controls.
       `mouse_menubar`, `mouse_dock` and `mouse_notifications` target those
       system surfaces. When an app does not expose a control through
-      Accessibility, the [grid](#docs/mouse-grid) can click its screen position.
+      Accessibility, the [grid](/docs/mouse-grid) can click its screen position.
 
       ## Tune labels and pointer behavior
 
@@ -316,8 +316,8 @@ enum HelpDocs {
       at the pointer, so this choice also determines where scrolling lands.
 
       A primary click on an input enters INSERT; a secondary click preserves
-      NORMAL. Discovery with no targets stays silent. Inspect [runtime state](#state)
-      and [logs](#logs) for diagnostics, or read [troubleshooting](#docs/troubleshooting).
+      NORMAL. Discovery with no targets stays silent. Inspect [runtime state](/state)
+      and [logs](/logs) for diagnostics, or read [troubleshooting](/docs/troubleshooting).
       """,
     aliases: ["hint", "mouse"])
 
@@ -373,7 +373,7 @@ enum HelpDocs {
       pointer moves drag it, including `mf` and `mF`. Toggle again to drop.
       Escape, leaving the mode and quitting release the held button.
 
-      See [commands](#commands) for exact flags and [mappings](#mappings)
+      See [commands](/commands) for exact flags and [mappings](/mappings)
       for the shortcuts effective in this running instance.
       """,
     aliases: ["grid", "pointer"])
@@ -474,30 +474,30 @@ enum HelpDocs {
 
       ## Find your next step
 
-      - [Getting started](#docs/getting-started): one hotkey, then grid, search and modes.
-      - [Hints](#docs/hints) and [grid](#docs/mouse-grid): click controls or any screen position.
-      - [NORMAL mode](#docs/normal-mode): navigate and edit across apps.
-      - [Flashlight](#docs/flashlight): find apps, tabs and plugin data, or calculate an answer.
-      - [Configuration](#docs/config) and [mapping syntax](#docs/mappings): make it yours.
-      - [Status bar](#docs/statusbar), [widgets](#docs/widgets) and [popups](#docs/popups):
+      - [Getting started](/docs/getting-started): one hotkey, then grid, search and modes.
+      - [Hints](/docs/hints) and [grid](/docs/mouse-grid): click controls or any screen position.
+      - [NORMAL mode](/docs/normal-mode): navigate and edit across apps.
+      - [Flashlight](/docs/flashlight): find apps, tabs and plugin data, or calculate an answer.
+      - [Configuration](/docs/config) and [mapping syntax](/docs/mappings): make it yours.
+      - [Status bar](/docs/statusbar), [widgets](/docs/widgets) and [popups](/docs/popups):
         bring the information and terminal tools you use into reach.
-      - [Plugins](#docs/plugins): add catalogs, actions, answers and status values.
+      - [Plugins](/docs/plugins): add catalogs, actions, answers and status values.
 
       ## This browser is also your live reference
 
-      [Mappings](#mappings) lists effective keys; [commands](#commands) lists
-      built-in and installed plugin commands. [Plugins](#plugins) shows process
-      health and capabilities, [runtime](#state) shows the current configuration
-      and app state, and [logs](#logs) follows diagnostics as they happen.
+      [Mappings](/mappings) lists effective keys; [commands](/commands) lists
+      built-in and installed plugin commands. [Plugins](/plugins) shows process
+      health and capabilities, [runtime](/state) shows the current configuration
+      and app state, and [logs](/logs) follows diagnostics as they happen.
       These describe this resident, including your changes.
 
-      `?` in NORMAL opens mappings. `:help` opens the [homepage](#home).
+      `?` in NORMAL opens mappings. `:help` opens the [homepage](/).
       `:help <topic>` opens a guide, for example `:help widgets`.
       Plugin guides appear alongside built-in topics when their manifests load.
 
-      Start with [troubleshooting](#docs/troubleshooting) when behavior differs
-      from what you expect. [Privacy](#docs/privacy) explains permissions and
-      stored data; [development](#docs/development) links the architecture and
+      Start with [troubleshooting](/docs/troubleshooting) when behavior differs
+      from what you expect. [Privacy](/docs/privacy) explains permissions and
+      stored data; [development](/docs/development) links the architecture and
       contributor references.
       """,
     aliases: ["help"])
@@ -538,11 +538,11 @@ enum HelpDocs {
       search = ["flash", "enter_command_mode", "--input=:flashlight "]
       ```
 
-      `#[popup=name]label#[nopopup]` connects a label to a [popup](#docs/popups).
+      `#[popup=name]label#[nopopup]` connects a label to a [popup](/docs/popups).
       Plugin summaries may already carry links, actions and detail popups.
-      Inspect [plugins](#plugins) to see which are available and healthy.
+      Inspect [plugins](/plugins) to see which are available and healthy.
 
-      Next: [format language](#docs/status-format), [desktop widgets](#docs/widgets),
+      Next: [format language](/docs/status-format), [desktop widgets](/docs/widgets),
       [status plugin values](\(HelpDocs.repositoryRoot)/docs/status-plugins.md),
       and a [complete example](\(HelpDocs.repositoryRoot)/docs/examples/statusbar/README.md).
       """,
@@ -596,7 +596,7 @@ enum HelpDocs {
       output lines and cannot combine with `history`. Set `working_directory`
       for source-relative arguments. Failed or empty output keeps the last good value.
 
-      See [runtime](#state) for effective settings, [plugins](#plugins) for
+      See [runtime](/state) for effective settings, [plugins](/plugins) for
       status publishers, and the
       [full format reference](\(HelpDocs.repositoryRoot)/docs/status-format.md)
       for operators, escaping, layouts and source lifecycles.
@@ -610,7 +610,7 @@ enum HelpDocs {
     body: #"""
       # Desktop widgets
 
-      A widget draws a multiline [status format](#docs/status-format) above
+      A widget draws a multiline [status format](/docs/status-format) above
       the wallpaper and below desktop icons and app windows. It never takes
       focus and clicks pass through it. Widgets work with the status bar off.
 
@@ -639,8 +639,8 @@ enum HelpDocs {
 
       Widgets share plugin data, named sources and jobs with the status bar.
       Meters and sparklines work; links and popup markers have no action on
-      this passive surface. Open [plugins](#plugins) if a metric is empty,
-      or [runtime](#state) to inspect your loaded configuration.
+      this passive surface. Open [plugins](/plugins) if a metric is empty,
+      or [runtime](/state) to inspect your loaded configuration.
 
       Browse [ready-made panels](\#(HelpDocs.repositoryRoot)/docs/examples/widgets/README.md)
       or the [widget reference](\#(HelpDocs.repositoryRoot)/docs/widgets.md)
@@ -657,7 +657,7 @@ enum HelpDocs {
 
       Popups appear under status-bar labels or as standalone windows.
       Every popup runs in a real terminal. A text popup evaluates a
-      [status format](#docs/status-format) and displays it in a pager;
+      [status format](/docs/status-format) and displays it in a pager;
       a terminal popup runs the argv you choose.
 
       ```toml
@@ -693,7 +693,7 @@ enum HelpDocs {
 
       If a command is missing, install it in your login PATH, then press
       Command-R. `flash doctor` reports missing popup commands. See
-      [troubleshooting](#docs/troubleshooting), [live logs](#logs) and the
+      [troubleshooting](/docs/troubleshooting), [live logs](/logs) and the
       [popup reference](\(HelpDocs.repositoryRoot)/docs/popups.md)
       for input, focus and lifecycle details.
       """,
@@ -740,9 +740,9 @@ enum HelpDocs {
       Do not share a log or runtime export without reviewing its contents.
 
       Most plugins run with manifest-declared sandbox capabilities; some need
-      unsandboxed helper access. Inspect [plugins](#plugins) and the privacy
+      unsandboxed helper access. Inspect [plugins](/plugins) and the privacy
       inventory for those boundaries. `flash doctor` checks permissions;
-      [runtime](#state) shows the resident's current permission and input status.
+      [runtime](/state) shows the resident's current permission and input status.
       """,
     aliases: ["permissions"])
 
@@ -764,8 +764,8 @@ enum HelpDocs {
       `doctor` checks permissions, input capture, configuration, hotkeys and
       plugin health. `status` describes the running instance.
       `config_check --file=/path/to/flash.toml` validates a file without
-      requiring the resident. Compare them with [runtime](#state),
-      [mappings](#mappings), [plugins](#plugins) and [logs](#logs).
+      requiring the resident. Compare them with [runtime](/state),
+      [mappings](/mappings), [plugins](/plugins) and [logs](/logs).
 
       ## Hints do not appear or stopped after an update
 
@@ -774,12 +774,12 @@ enum HelpDocs {
       looks enabled: remove Flash from Accessibility and add it again.
       Focus the app you intend to target and try `flash mouse_target`.
       Some controls have no Accessibility representation; use
-      [mouse grid](#docs/mouse-grid) to reach their screen positions.
+      [mouse grid](/docs/mouse-grid) to reach their screen positions.
       No-target discovery intentionally shows no error overlay.
 
       ## A key types, does nothing or runs a different action
 
-      Check the current mode and effective binding on [Mappings](#mappings).
+      Check the current mode and effective binding on [Mappings](/mappings).
       NORMAL captures unmapped keys; INSERT passes normal typing through.
       A mapping that prefixes a longer sequence waits for its timeout.
       macOS or another app may own a global shortcut. Secure input can hide
@@ -788,27 +788,27 @@ enum HelpDocs {
 
       ## A saved config change is missing
 
-      Check the active config path and diagnostics on [Runtime](#state).
+      Check the active config path and diagnostics on [Runtime](/state).
       `FLASH_CONFIG` or `XDG_CONFIG_HOME` may select a different file.
       Invalid values are diagnosed and preserve the previous valid value
       according to the field's validation rule. Avoid duplicate TOML tables.
-      See [configuration](#docs/config) for layering and path resolution.
+      See [configuration](/docs/config) for layering and path resolution.
 
       ## A plugin, metric or popup is unavailable
 
-      Inspect its last error, state and capabilities on [Plugins](#plugins).
+      Inspect its last error, state and capabilities on [Plugins](/plugins).
       Check required tools and permissions; a stopped on-demand plugin can
       be healthy. `:plugins reload` reloads all plugins. Empty numeric status
       values mean unknown or unavailable, rather than zero. Missing popup
       commands are checked against the login PATH; after installing one,
       Command-R rereads that environment and retries it.
 
-      For slowness, filter [Logs](#logs) by source or trace and inspect hint
+      For slowness, filter [Logs](/logs) by source or trace and inspect hint
       timings in `flash status --json`. The
       [observability guide](\(HelpDocs.repositoryRoot)/docs/observability.md)
       explains traces and the
       [performance guide](\(HelpDocs.repositoryRoot)/docs/performance.md)
-      describes repeatable measurements. Review [privacy](#docs/privacy)
+      describes repeatable measurements. Review [privacy](/docs/privacy)
       before sharing diagnostics.
       """,
     aliases: ["doctor", "diagnostics"])
@@ -851,9 +851,9 @@ enum HelpDocs {
 
       ## Inspect the resident
 
-      [Runtime](#state), [plugins](#plugins) and [logs](#logs) describe the
-      installed process. The loopback server also exposes `/state`, `/logs`,
-      `/traces` and the `/events` stream. `flash status` and `flash doctor`
+      [Runtime](/state), [plugins](/plugins) and [logs](/logs) describe the
+      installed process. The loopback server also exposes `/api/state`, `/api/logs`,
+      `/api/traces` and the `/api/events` stream. `flash status` and `flash doctor`
       return local CLI diagnostics over the existing AppleEvent channel.
       Plugin help belongs in its manifest; built-in command documentation
       stays beside its definitions so help follows the installed feature set.

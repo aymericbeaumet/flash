@@ -12,7 +12,7 @@ final class DebugServer {
   private var logs: [[String: Any]] = []
   private var eventConnections: [UUID: NWConnection] = [:]
   /// Last app-state snapshot — taken on the main thread, then confined to
-  /// `queue`. The server serves this on `/state` and `/events` rather than
+  /// `queue`. The server serves this on `/api/state` and `/api/events` rather than
   /// calling `stateProvider` on its own queue (which raced the main thread, the
   /// data race this fixes — and a synchronous main hop would instead deadlock if
   /// a caller blocks main, as the test harness does). Seeded in `start()` and
@@ -54,7 +54,7 @@ final class DebugServer {
         }
       }
       // Seed the cache on the main thread (start() runs on main) so the first
-      // /state request returns data before any broadcast/timer refresh fires.
+      // /api/state request returns data before any broadcast/timer refresh fires.
       let initialState = stateProvider()
       queue.async { [weak self] in self?.cachedState = initialState }
       listener.start(queue: queue)
@@ -137,18 +137,13 @@ final class DebugServer {
 
   static let pollClientID = "core:debug_inspector"
 
-  static func dashboardURL(host: String, port: UInt16, tab: String, topic: String? = nil) -> URL? {
+  static func dashboardURL(host: String, port: UInt16, page: Page) -> URL? {
     guard parse(host: host, port: Int(port)) != nil else { return nil }
     var components = URLComponents()
     components.scheme = "http"
     components.host = host == "::1" ? "[::1]" : host
     components.port = Int(port)
-    components.path = "/"
-    let topic = topic?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let segmentCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-    let encodedTopic = topic?.addingPercentEncoding(withAllowedCharacters: segmentCharacters)
-    components.percentEncodedFragment =
-      encodedTopic.flatMap { $0.isEmpty ? nil : "\(tab)/\($0)" } ?? tab
+    components.percentEncodedPath = page.path
     return components.url
   }
 
@@ -169,38 +164,40 @@ final class DebugServer {
         return
       }
       // A loopback peer is not enough: a web page can rebind its own hostname
-      // to 127.0.0.1 and read /state (clipboard, hints) and /logs through the
+      // to 127.0.0.1 and read /api/state (clipboard, hints) and /api/logs through the
       // victim's browser. That request carries the attacker's hostname.
       guard Self.hostIsLoopback(request: request, port: self.listeningPort) else {
         FlashLog.warn("[debug] http inspector refused a request for a foreign host")
         self.sendText("forbidden", status: "403 Forbidden", connection: connection)
         return
       }
-      let path = Self.requestPath(request)
-      switch path {
-      case "/":
-        self.sendHTML(connection)
-      case "/state":
+      switch Self.route(path: Self.requestPath(request)) {
+      case .app(let found):
+        self.sendHTML(found: found, connection: connection)
+      case .state:
         self.sendJSON(self.cachedState, connection: connection)
-      case "/logs":
+      case .logs:
         let trace = Self.queryValue("trace", in: request)
         let logs =
           trace.map { id in self.logs.filter { $0["trace"] as? String == id } } ?? self.logs
         self.sendJSON(["logs": logs], connection: connection)
-      case "/traces":
+      case .traces:
         self.sendJSON(["traces": Self.traceSummaries(self.logs)], connection: connection)
-      case "/events":
+      case .events:
         self.startEvents(connection)
-      default:
+      case .missingEndpoint:
         self.sendText("not found", status: "404 Not Found", connection: connection)
       }
     }
   }
 
-  private func sendHTML(_ connection: NWConnection) {
+  /// Every page path receives the same single-page app, which renders its own
+  /// view (including "not found") from the URL; only the status differs.
+  private func sendHTML(found: Bool, connection: NWConnection) {
     send(
       Self.response(
         body: Self.pageHTML,
+        status: found ? "200 OK" : "404 Not Found",
         contentType: "text/html; charset=utf-8"),
       connection: connection,
       close: true)
@@ -316,7 +313,7 @@ final class DebugServer {
 
   /// Recent interactions (`Trace`), newest first: when each began and last
   /// logged, how many lines it produced, its worst level, and which host and
-  /// plugin sources took part — the index into `/logs?trace=`.
+  /// plugin sources took part — the index into `/api/logs?trace=`.
   static func traceSummaries(_ logs: [[String: Any]]) -> [[String: Any]] {
     struct Summary {
       var origin = ""
@@ -377,6 +374,29 @@ final class DebugServer {
     return nil
   }
 
+  /// How the server answers a request path. Data endpoints live under
+  /// `/api/`; every other path belongs to the help app, found or not.
+  enum Route: Equatable {
+    case app(found: Bool)
+    case state
+    case logs
+    case traces
+    case events
+    case missingEndpoint
+  }
+
+  static func route(path: String) -> Route {
+    switch path {
+    case "/api/state": return .state
+    case "/api/logs": return .logs
+    case "/api/traces": return .traces
+    case "/api/events": return .events
+    default:
+      if path == "/api" || path.hasPrefix("/api/") { return .missingEndpoint }
+      return .app(found: Page(path: path) != nil)
+    }
+  }
+
   private static func requestPath(_ request: String) -> String {
     let first = request.split(separator: "\n", maxSplits: 1).first ?? ""
     let parts = first.split(separator: " ")
@@ -416,5 +436,80 @@ final class DebugServer {
       return false
     }
   }
+}
 
+extension DebugServer {
+  /// A page of the browser help app. The app routes itself with the History
+  /// API; the server recognizes the same paths so a direct load or reload of
+  /// any page receives the app. `Inspector/src/lib/routes.ts` mirrors this
+  /// table: `/`, `/docs[/<topic>]`, `/mappings`, `/commands`,
+  /// `/plugins[/<id>]`, `/state`, `/logs` and `/clipboard`. Fragments stay
+  /// free for in-page anchors.
+  enum Page: Equatable {
+    case home
+    case docs(topic: String?)
+    case mappings
+    case commands
+    case plugins(id: String?)
+    case state
+    case logs
+    case clipboard
+
+    /// Pages that accept one detail segment, such as a topic or plugin id.
+    private static let detailPages: Set<String> = ["docs", "plugins"]
+    private static let pages: Set<String> = [
+      "docs", "mappings", "commands", "plugins", "state", "logs", "clipboard",
+    ]
+    /// RFC 3986 unreserved characters: everything else in a detail segment,
+    /// including `/`, `?` and `#`, is percent-encoded.
+    private static let segmentCharacters = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+    /// The percent-encoded absolute path of the page.
+    var path: String {
+      switch self {
+      case .home: return "/"
+      case .docs(let topic): return Self.path("docs", detail: topic)
+      case .mappings: return "/mappings"
+      case .commands: return "/commands"
+      case .plugins(let id): return Self.path("plugins", detail: id)
+      case .state: return "/state"
+      case .logs: return "/logs"
+      case .clipboard: return "/clipboard"
+      }
+    }
+
+    /// Parses a percent-encoded request path without its query.
+    init?(path: String) {
+      guard path.hasPrefix("/") else { return nil }
+      let segments = path.split(separator: "/").map(String.init)
+      guard let head = segments.first else {
+        self = .home
+        return
+      }
+      guard Self.pages.contains(head), segments.count <= (Self.detailPages.contains(head) ? 2 : 1)
+      else { return nil }
+      var detail: String?
+      if segments.count == 2 {
+        guard let decoded = segments[1].removingPercentEncoding else { return nil }
+        detail = decoded
+      }
+      switch head {
+      case "docs": self = .docs(topic: detail)
+      case "mappings": self = .mappings
+      case "commands": self = .commands
+      case "plugins": self = .plugins(id: detail)
+      case "state": self = .state
+      case "logs": self = .logs
+      default: self = .clipboard
+      }
+    }
+
+    private static func path(_ name: String, detail: String?) -> String {
+      guard let detail = detail?.trimmed, !detail.isEmpty,
+        let encoded = detail.addingPercentEncoding(withAllowedCharacters: segmentCharacters)
+      else { return "/\(name)" }
+      return "/\(name)/\(encoded)"
+    }
+  }
 }

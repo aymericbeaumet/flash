@@ -1405,9 +1405,9 @@ extension AppDelegate {
     case .help(let topic):
       showHelp(topic: topic)
     case .logs:
-      openDebugDashboard(tab: "logs")
+      openDebugDashboard(.logs)
     case .commands:
-      openDebugDashboard(tab: "commands")
+      openDebugDashboard(.commands)
     case .about:
       handleURLCommand(.showAbout)
     case .doctor:

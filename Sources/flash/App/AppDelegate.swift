@@ -550,7 +550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .showMappings:
       showMappings()
     case .showPlugins:
-      openDebugDashboard(tab: "plugins")
+      openDebugDashboard(.plugins(id: nil))
     case .showAbout:
       statusItemController.showAbout()
     case .dismissHints:

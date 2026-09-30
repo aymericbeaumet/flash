@@ -4,7 +4,7 @@ import Foundation
 /// verb — named by a short id that every log line it causes carries: the
 /// host's own lines, the plugin requests it sends (`trace` on the envelope),
 /// and the lines those plugins log while serving them. `rg` for the id in
-/// `flash.log`, or the inspector's `/logs?trace=` and `/traces`, reassembles
+/// `flash.log`, or the inspector's `/api/logs?trace=` and `/api/traces`, reassembles
 /// the interaction end to end.
 ///
 /// The current id lives on the main thread, where interactions start and

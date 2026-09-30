@@ -81,7 +81,7 @@ window.
 For each class the script runs `Scripts/test-integration-<class>.sh` with
 `--bench=N`. The oracle launches its fixture, runs two unmeasured warm-up
 activations, then N measured ones: bring the fixture forward, post the
-trigger, wait for `/state` to show a finished hint layout (the first poll
+trigger, wait for `/api/state` to show a finished hint layout (the first poll
 waits 300 ms so polling does not load the main thread mid-activation), and
 dismiss with `flash hints_dismiss`. The script then reads the
 `[latency] hints_visible` lines logged inside each class's measurement window

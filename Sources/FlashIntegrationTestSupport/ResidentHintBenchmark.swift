@@ -5,7 +5,7 @@ import Foundation
 /// `--bench=N` for the integration oracles: drive the installed resident
 /// through N hint activations on a fixture the oracle already launched, for
 /// `Scripts/benchmark-hints.sh`. Each run brings the fixture forward, posts
-/// the trigger, waits for `/state` to show a finished hint layout, dismisses
+/// the trigger, waits for `/api/state` to show a finished hint layout, dismisses
 /// it and waits for it to go. Flash logs `[latency] hints_visible` for every
 /// activation; the script reads those lines from its log between the
 /// `bench measure_start_ms=` / `bench measure_end_ms=` markers this prints.
@@ -42,7 +42,7 @@ public struct ResidentHintBenchmark {
   /// Unmeasured activations first: a cold walk and prepared-model warm-up.
   public var warmup = 2
   public var flashCLIPath = "\(NSHomeDirectory())/.local/bin/flash"
-  public var stateURL = URL(string: "http://127.0.0.1:4242/state")!
+  public var stateURL = URL(string: "http://127.0.0.1:4242/api/state")!
 
   public init(runs: Int, trigger: Trigger) {
     self.runs = runs
@@ -102,7 +102,7 @@ public struct ResidentHintBenchmark {
       activate()
       Thread.sleep(forTimeInterval: 0.2)
       try fire()
-      // `/state` is built on Flash's main thread: the first poll waits out a
+      // `/api/state` is built on Flash's main thread: the first poll waits out a
       // typical activation so polling does not slow the one being measured.
       let state = try waitForState(
         "hints", timeout: 8, firstPollAfter: 0.3, until: Self.hintsVisible)

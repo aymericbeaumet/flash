@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { paths } from "./routes";
   import type { PluginInfo } from "./types";
   import { bytes, duration, percent } from "./format";
 
@@ -43,7 +44,7 @@
     <div><span class="eyebrow">Loaded</span><strong>{plugins.length}</strong><span>plugins discovered</span></div>
     <div><span class="eyebrow">Running</span><strong>{runningCount}<i class="running-dot"></i></strong><span>processes active</span></div>
     <div class:attention={errorCount > 0}><span class="eyebrow">Need attention</span><strong>{errorCount}</strong><span>{errorCount ? "with errors to inspect" : "no reported errors"}</span></div>
-    <a href="#docs/plugins"><span class="guide-icon"><Icon name="plugins" size={23} /></span><strong>Make Flash your own</strong><span>Read the plugin guide <Icon name="arrow" size={14} /></span></a>
+    <a href="/docs/plugins"><span class="guide-icon"><Icon name="plugins" size={23} /></span><strong>Make Flash your own</strong><span>Read the plugin guide <Icon name="arrow" size={14} /></span></a>
   </div>
   <div class="surface plugin-browser">
     <div class="toolbar">
@@ -78,7 +79,7 @@
         <div><span>CPU</span><strong>{percent(selected.cpu_percent)}</strong></div><div><span>Memory</span><strong>{bytes(selected.memory_bytes)}</strong></div><div><span>Uptime</span><strong>{duration(selected.uptime_ms)}</strong></div><div><span>Process ID</span><strong>{selected.pid ?? "—"}</strong></div><div><span>Restarts</span><strong>{selected.restart_count ?? 0}</strong></div><div><span>Sources</span><strong>{selected.source_count ?? 0}</strong></div>
       </div>
       <div class="detail-columns">
-        <section><h3>Commands <span class="badge neutral">{selected.commands?.length ?? 0}</span></h3>{#if selected.commands?.length}<div class="command-list">{#each selected.commands as command}<a href={"#commands/" + encodeURIComponent(`:${command.command} ${command.subcommand}`.trim())}><code>:{command.command} {command.subcommand}</code><span>{command.description || "No description provided."}</span><Icon name="chevron" size={13} /></a>{/each}</div>{:else}<p class="detail-empty">This plugin does not register commands.</p>{/if}</section>
+        <section><h3>Commands <span class="badge neutral">{selected.commands?.length ?? 0}</span></h3>{#if selected.commands?.length}<div class="command-list">{#each selected.commands as command}<a href={paths.commands(`:${command.command} ${command.subcommand}`.trim())}><code>:{command.command} {command.subcommand}</code><span>{command.description || "No description provided."}</span><Icon name="chevron" size={13} /></a>{/each}</div>{:else}<p class="detail-empty">This plugin does not register commands.</p>{/if}</section>
         <section><h3>Live status</h3>{#if selected.status_segments && Object.keys(selected.status_segments).length}<dl class="status-segments">{#each Object.entries(selected.status_segments) as [key, value]}<dt>{key}</dt><dd>{value || "—"}</dd>{/each}</dl>{:else}<p class="detail-empty">No status segments published.</p>{/if}{#if selected.last_log}<h4>Latest diagnostic</h4><pre class="last-log">{selected.last_log}</pre>{/if}</section>
       </div>
       <details class="runtime-fields"><summary>All runtime fields <span>{detailEntries.length}</span></summary><dl>{#each detailEntries as [key, value]}<dt>{key}</dt><dd><pre>{formatValue(value)}</pre></dd>{/each}</dl></details>
@@ -150,4 +151,13 @@
   .empty button { margin-top: 15px; font-size: 12px; }
   @media (max-width: 1050px) { .overview { grid-template-columns: repeat(3, 1fr); }.overview > a { display: none; }.overview > div:last-of-type { border-right: 0; }.detail-metrics { grid-template-columns: repeat(3, 1fr); }.detail-metrics > div:nth-child(3) { border-right: 0; }.detail-metrics > div:nth-child(-n+3) { border-bottom: 1px solid var(--border); } }
   @media (max-width: 650px) { .overview > div { padding: 16px 12px; }.overview .eyebrow { font-size: 8px; }.plugin-grid { padding: 12px; grid-template-columns: minmax(0, 1fr); }.detail { padding: 20px 16px; }.detail-columns { grid-template-columns: 1fr; gap: 24px; }.detail-metrics > div { padding: 12px; } }
+  @media print {
+    .overview { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; break-inside: avoid; }
+    .overview > a, .details-link, .close { display: none; }
+    .overview > div:nth-child(3) { border-right: 0; }
+    .plugin-browser { overflow: visible; border: 0; }
+    .plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0; background: none; }
+    .plugin-card { break-inside: avoid; }
+    .detail { break-inside: auto; }
+  }
 </style>
