@@ -8,7 +8,8 @@
 //! in the plugin cache, and raw responses stay in memory.
 //!
 //! Claude Code's credentials are read-only by default: an expired token leaves
-//! the Claude quota to age out until Claude Code renews it. Only
+//! the Claude quota to age out until Claude Code renews it, with the store
+//! reread every minute and the gap logged once through `ClaudeHealth`. Only
 //! `[plugin.aiproviders] refresh_claude_code_credentials = true` lets the
 //! plugin renew the token itself and write the rotation back to Claude Code's
 //! own store.
@@ -19,6 +20,7 @@
 //! the bundled GitHub plugin's `subprocess` posture. Tokens are passed through
 //! stdin, never argv or logs.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -181,6 +183,109 @@ struct StatusSegments {
 struct UsageRuntime {
     state: UsageState,
     published: Published<StatusSegments>,
+    claude_health: ClaudeHealth,
+}
+
+/// Why a Claude refresh produced no reading. Content-free: a failure class
+/// and, for a request, only its HTTP status (0 when no response arrived).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClaudeFailure {
+    /// Neither the Keychain item nor `~/.claude/.credentials.json` holds a
+    /// usable token.
+    NoCredentials,
+    /// Read-only, and Claude Code's token has expired: Claude Code renews it
+    /// on its next request.
+    TokenExpired,
+    /// The opted-in renewal did not store a new token.
+    RenewalFailed,
+    Request {
+        http_status: u16,
+    },
+    /// A successful response without the weekly window.
+    Unrecognized,
+}
+
+impl ClaudeFailure {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::NoCredentials => "no_credentials",
+            Self::TokenExpired => "token_expired",
+            Self::RenewalFailed => "renewal_failed",
+            Self::Request { .. } => "request",
+            Self::Unrecognized => "unrecognized",
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::NoCredentials => "no Claude Code sign-in found",
+            Self::TokenExpired => {
+                "Claude Code's token has expired; waiting for Claude Code to renew it"
+            }
+            Self::RenewalFailed => "renewing Claude Code's token failed",
+            Self::Request { .. } => "the usage request failed",
+            Self::Unrecognized => "the usage response has no weekly window",
+        }
+    }
+
+    fn fields(self) -> BTreeMap<String, String> {
+        let mut fields = BTreeMap::from([("reason".to_string(), self.reason().to_string())]);
+        if let Self::Request { http_status } = self {
+            fields.insert("http_status".to_string(), http_status.to_string());
+        }
+        fields
+    }
+
+    /// An expired read-only token made no request, so the next tick rereads
+    /// the store and the label recovers within a minute of Claude Code
+    /// renewing it. Every other failure waits five minutes.
+    fn retry_at(self, now: u64) -> u64 {
+        match self {
+            Self::TokenExpired => now,
+            _ => now.saturating_add(ANTHROPIC_RETRY_SECONDS),
+        }
+    }
+}
+
+type LogLine = (&'static str, String, BTreeMap<String, String>);
+
+/// Latches the last Claude failure: a failure logs when it starts or changes
+/// class, and the next reading logs the recovery. Repeated ticks stay quiet.
+#[derive(Debug, Default)]
+struct ClaudeHealth {
+    failure: Option<ClaudeFailure>,
+}
+
+impl ClaudeHealth {
+    fn observe(&mut self, outcome: Result<(), ClaudeFailure>) -> Option<LogLine> {
+        let failure = outcome.err();
+        match (std::mem::replace(&mut self.failure, failure), failure) {
+            (previous, Some(failure)) if previous != Some(failure) => Some((
+                "warn",
+                format!(
+                    "[aiproviders] Claude quota unavailable: {}",
+                    failure.describe()
+                ),
+                failure.fields(),
+            )),
+            (Some(previous), None) => Some((
+                "info",
+                "[aiproviders] Claude quota recovered".to_string(),
+                previous.fields(),
+            )),
+            _ => None,
+        }
+    }
+}
+
+fn note_claude_outcome(
+    ctx: &Context,
+    health: &mut ClaudeHealth,
+    outcome: Result<(), ClaudeFailure>,
+) {
+    if let Some((level, message, fields)) = health.observe(outcome) {
+        ctx.log_fields(level, &message, fields);
+    }
 }
 
 impl StatusSegments {
@@ -288,23 +393,31 @@ async fn refresh_usage(
             };
             let (anthropic, openai) = tokio::join!(anthropic, openai);
 
+            let claude_outcome = anthropic
+                .as_ref()
+                .map(|fetched| fetched.as_ref().map(|_| ()).map_err(|failure| *failure));
             match anthropic {
-                Some(Some(usage)) => {
+                Some(Ok(usage)) => {
                     ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
                     let _ = write_json(&ctx.data_dir().join(ANTHROPIC_CACHE), &usage).await;
                     state.anthropic = Some(usage);
                 }
-                Some(None) => ANTHROPIC_RETRY_AT.store(
-                    now.saturating_add(ANTHROPIC_RETRY_SECONDS),
-                    Ordering::Relaxed,
-                ),
+                Some(Err(failure)) => {
+                    ANTHROPIC_RETRY_AT.store(failure.retry_at(now), Ordering::Relaxed)
+                }
                 None => {}
             }
             if let Some(usage) = openai {
                 let _ = write_json(&ctx.data_dir().join(OPENAI_CACHE), &usage).await;
                 state.openai = Some(usage);
             }
-            shared.write().await.state = state;
+            {
+                let mut runtime = shared.write().await;
+                runtime.state = state;
+                if let Some(outcome) = claude_outcome {
+                    note_claude_outcome(&ctx, &mut runtime.claude_health, outcome);
+                }
+            }
             publish_current_status(&ctx, &shared).await;
         })
         .await;
@@ -572,9 +685,10 @@ fn claude_token(credentials: &Value, now: u64, refresh_credentials: bool) -> Cla
     }
 }
 
-/// `None` for missing credentials, an expired read-only token, a failed
-/// renewal or a failed usage request.
-async fn fetch_anthropic_usage(now: u64, refresh_credentials: bool) -> Option<AnthropicUsage> {
+async fn fetch_anthropic_usage(
+    now: u64,
+    refresh_credentials: bool,
+) -> Result<AnthropicUsage, ClaudeFailure> {
     let token = claude_access_token(now, refresh_credentials).await?;
     let mut curl_config = format!(
         "header = \"Authorization: Bearer {token}\"\n\
@@ -589,23 +703,51 @@ async fn fetch_anthropic_usage(now: u64, refresh_credentials: bool) -> Option<An
             "header = \"x-organization-uuid: {organization}\"\n"
         ));
     }
-    let response = capture(
-        Path::new("/usr/bin/curl"),
-        &["-fsS", "--max-time", "5", "-K", "-", ANTHROPIC_USAGE_URL],
+    // No --fail: the trailing status line reports an HTTP error by number.
+    let mut command = Command::new("/usr/bin/curl");
+    command.args([
+        "-sS",
+        "--max-time",
+        "5",
+        "-w",
+        "\n%{http_code}",
+        "-K",
+        "-",
+        ANTHROPIC_USAGE_URL,
+    ]);
+    let output = process::capture(
+        &mut command,
         Some(curl_config.into_bytes()),
         COMMAND_TIMEOUT,
+        COMMAND_STDOUT_LIMIT,
+        COMMAND_STDERR_LIMIT,
     )
-    .await?;
-    parse_anthropic_usage(&response.stdout, now)
+    .await
+    .map_err(|_| ClaudeFailure::Request { http_status: 0 })?;
+    parse_usage_reply(&String::from_utf8_lossy(&output.stdout), now)
+}
+
+/// Splits curl's `\n%{http_code}` trailer from the body. Only a 200 is parsed;
+/// any other status, or `000` when no response arrived, is reported by number.
+fn parse_usage_reply(stdout: &str, now: u64) -> Result<AnthropicUsage, ClaudeFailure> {
+    let (body, status) = stdout.rsplit_once('\n').unwrap_or(("", stdout));
+    match status.trim().parse::<u16>().unwrap_or(0) {
+        200 => parse_anthropic_usage(body, now).ok_or(ClaudeFailure::Unrecognized),
+        http_status => Err(ClaudeFailure::Request { http_status }),
+    }
 }
 
 /// An expired read-only token is left for Claude Code to renew.
-async fn claude_access_token(now: u64, refresh_credentials: bool) -> Option<String> {
-    let mut credentials = load_claude_credentials().await?;
+async fn claude_access_token(now: u64, refresh_credentials: bool) -> Result<String, ClaudeFailure> {
+    let mut credentials = load_claude_credentials()
+        .await
+        .ok_or(ClaudeFailure::NoCredentials)?;
     match claude_token(&credentials.value, now, refresh_credentials) {
         ClaudeToken::Use => {}
-        ClaudeToken::Expired => return None,
-        ClaudeToken::Renew => refresh_claude_credentials(&mut credentials, now).await?,
+        ClaudeToken::Expired => return Err(ClaudeFailure::TokenExpired),
+        ClaudeToken::Renew => refresh_claude_credentials(&mut credentials, now)
+            .await
+            .ok_or(ClaudeFailure::RenewalFailed)?,
     }
     credentials
         .value
@@ -613,6 +755,7 @@ async fn claude_access_token(now: u64, refresh_credentials: bool) -> Option<Stri
         .and_then(Value::as_str)
         .filter(|token| safe_header_value(token))
         .map(str::to_string)
+        .ok_or(ClaudeFailure::NoCredentials)
 }
 
 async fn load_claude_credentials() -> Option<ClaudeCredentials> {
@@ -985,6 +1128,7 @@ impl FlashPlugin for AiProviders {
         *self.usage.write().await = UsageRuntime {
             state: cached,
             published: Published::new(),
+            claude_health: ClaudeHealth::default(),
         };
         publish_current_status(&ctx, &self.usage).await;
 
@@ -1306,6 +1450,104 @@ mod tests {
         );
     }
 
+    /// Regression: Claude Code's eight-hour token expired overnight while
+    /// Claude Code sat idle. The label aged out to a dash for hours without a
+    /// single log line, and the store was reread only every five minutes
+    /// although an expired token makes no request.
+    #[test]
+    fn an_expired_claude_token_is_logged_once_and_rechecked_every_tick() {
+        let mut harness = flash_plugin::testing::Harness::new("aiproviders");
+        let ctx = harness.context();
+        let mut health = ClaudeHealth::default();
+        note_claude_outcome(&ctx, &mut health, Err(ClaudeFailure::TokenExpired));
+        note_claude_outcome(&ctx, &mut health, Err(ClaudeFailure::TokenExpired));
+        note_claude_outcome(&ctx, &mut health, Ok(()));
+        note_claude_outcome(&ctx, &mut health, Ok(()));
+        let logs: Vec<Value> = harness
+            .drain()
+            .into_iter()
+            .filter(|frame| frame["method"] == "log")
+            .map(|frame| frame["params"].clone())
+            .collect();
+        assert_eq!(logs.len(), 2, "{logs:?}");
+        assert_eq!(logs[0]["level"], "warn");
+        assert_eq!(logs[0]["fields"]["reason"], "token_expired");
+        assert_eq!(logs[1]["level"], "info");
+        assert_eq!(logs[1]["fields"]["reason"], "token_expired");
+        assert!(
+            logs[1]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("recovered"))
+        );
+
+        assert_eq!(ClaudeFailure::TokenExpired.retry_at(1_000), 1_000);
+        for failure in [
+            ClaudeFailure::NoCredentials,
+            ClaudeFailure::RenewalFailed,
+            ClaudeFailure::Request { http_status: 429 },
+            ClaudeFailure::Unrecognized,
+        ] {
+            assert_eq!(failure.retry_at(1_000), 1_000 + ANTHROPIC_RETRY_SECONDS);
+        }
+    }
+
+    #[test]
+    fn claude_failures_relog_only_when_their_class_changes() {
+        let mut health = ClaudeHealth::default();
+        assert_eq!(health.observe(Ok(())), None, "a first reading is not news");
+        let (level, _, fields) = health
+            .observe(Err(ClaudeFailure::Request { http_status: 429 }))
+            .expect("a new failure logs");
+        assert_eq!(level, "warn");
+        assert_eq!(fields.get("reason").map(String::as_str), Some("request"));
+        assert_eq!(fields.get("http_status").map(String::as_str), Some("429"));
+        assert_eq!(
+            health.observe(Err(ClaudeFailure::Request { http_status: 429 })),
+            None
+        );
+        assert!(
+            health
+                .observe(Err(ClaudeFailure::Request { http_status: 0 }))
+                .is_some()
+        );
+        assert!(health.observe(Err(ClaudeFailure::Unrecognized)).is_some());
+        let (level, _, fields) = health.observe(Ok(())).expect("recovery logs");
+        assert_eq!(level, "info");
+        assert_eq!(
+            fields.get("reason").map(String::as_str),
+            Some("unrecognized")
+        );
+        assert_eq!(health.observe(Ok(())), None);
+    }
+
+    #[test]
+    fn usage_reply_reports_the_http_status_without_the_body() {
+        let body = r#"{"seven_day":{"utilization":47.2,"resets_at":"1970-01-06T00:00:00Z"}}"#;
+        assert_eq!(
+            parse_usage_reply(&format!("{body}\n200"), 0).map(|usage| usage.claude_week),
+            Ok(Some(WindowUsage::new(47.2, Some(5 * 86_400), 10_080)))
+        );
+        assert_eq!(
+            parse_usage_reply(
+                "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}\n429",
+                0
+            ),
+            Err(ClaudeFailure::Request { http_status: 429 })
+        );
+        assert_eq!(
+            parse_usage_reply("\n000", 0),
+            Err(ClaudeFailure::Request { http_status: 0 })
+        );
+        assert_eq!(
+            parse_usage_reply("", 0),
+            Err(ClaudeFailure::Request { http_status: 0 })
+        );
+        assert_eq!(
+            parse_usage_reply("{\"five_hour\":{\"utilization\":2.0}}\n200", 0),
+            Err(ClaudeFailure::Unrecognized)
+        );
+    }
+
     #[test]
     fn stale_quota_labels_become_a_dash() {
         let state = UsageState {
@@ -1337,6 +1579,7 @@ mod tests {
                 ..UsageState::default()
             },
             published: Published::new(),
+            claude_health: ClaudeHealth::default(),
         };
         let mut publish = |now| {
             runtime

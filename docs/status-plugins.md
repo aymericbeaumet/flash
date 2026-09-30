@@ -233,9 +233,15 @@ credential reads, until it exits.
 
 Claude Code's credentials are read-only by default. The plugin reads the
 `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and
-uses the stored access token until it expires. It then leaves the Claude label
-to age out to a dash, and rereads the store every five minutes until Claude
-Code has renewed the token. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
+uses the stored access token until it expires. Claude Code renews its
+eight-hour token only when it runs, so after a long idle stretch the Claude
+label ages out to a dash. An expired token makes no request, so the plugin
+rereads the store on every one-minute tick and the label recovers within a
+minute of Claude Code renewing it; every other failure retries after five
+minutes. A failed or absent Claude reading logs one content-free warning when
+it starts or changes class (`reason` is `no_credentials`, `token_expired`,
+`renewal_failed`, `unrecognized`, or `request` with its `http_status`), and one
+info line when a reading returns. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
 into renewing the token with Claude Code's OAuth client two minutes before
 expiry and writing the rotation back to Claude Code's store. Rotating another
 app's refresh token can sign that app out.
