@@ -23,7 +23,7 @@ template = "%A %-d %B"
 [widgets.agenda]
 anchor = "top_left"
 gap_y = 148 # 106 + the date's 38-point height + 4
-columns = 44
+columns = 75 # the calendar's width
 bg = "#2E3440B3"
 template = """
 #{flash.calendar}

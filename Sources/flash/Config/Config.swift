@@ -413,8 +413,12 @@ struct Config {
     var borderWidth: Double = 1
     var cornerRadius: Double = 8
     var padding: Double = 8
-    /// Widest a text popup's pager grows, in points.
-    var maxWidth: Double = 480
+    /// Narrowest a text popup's pager gets, in points: 50 columns of the
+    /// 13-point font with 10-point padding, room for the pager's prompt.
+    var minWidth: Double = 480
+    /// Widest a text popup's pager grows, in points: 80 columns, room for
+    /// the three-month calendar.
+    var maxWidth: Double = 750
     /// Gap between the pointer and a hover popup's top edge.
     var offset: Double = 8
   }
@@ -1194,6 +1198,7 @@ struct Config {
         "bg": popupStyle.background, "border": popupStyle.borderColor,
         "border_size": popupStyle.borderWidth, "corner_radius": popupStyle.cornerRadius,
         "fg": popupStyle.foreground, "max_width": popupStyle.maxWidth,
+        "min_width": popupStyle.minWidth,
         "offset": popupStyle.offset, "padding": popupStyle.padding,
         "popups": popups.mapValues { popup -> [String: Any] in
           switch popup {

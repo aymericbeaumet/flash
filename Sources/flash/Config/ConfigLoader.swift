@@ -1117,7 +1117,8 @@ enum ConfigLoader {
 
   /// The `[popup]` style keys; every other `[popup]` key is a named popup.
   private static let popupStyleKeys: Set<String> = [
-    "fg", "bg", "border", "border_size", "corner_radius", "padding", "max_width", "offset",
+    "fg", "bg", "border", "border_size", "corner_radius", "padding", "min_width", "max_width",
+    "offset",
   ]
   private static let textPopupKeys: Set<String> = ["text"]
   private static let terminalPopupKeys: Set<String> = [
@@ -1171,6 +1172,7 @@ enum ConfigLoader {
       ("border_size", \Config.PopupStyle.borderWidth, 0.0...12.0),
       ("corner_radius", \Config.PopupStyle.cornerRadius, 0.0...64.0),
       ("padding", \Config.PopupStyle.padding, 0.0...64.0),
+      ("min_width", \Config.PopupStyle.minWidth, 80.0...2_000.0),
       ("max_width", \Config.PopupStyle.maxWidth, 80.0...2_000.0),
       ("offset", \Config.PopupStyle.offset, 0.0...64.0),
     ] {

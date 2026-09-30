@@ -88,6 +88,36 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(emoji.rows, 1)
   }
 
+  func testTextPopupGrowsFromMinWidthToItsWidestLineAndWrapsPastMaxWidth() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let cell = TerminalView.cellSize(for: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    let style = Config.PopupStyle()
+    let inset = CGFloat(style.padding + style.borderWidth)
+    func width(_ columns: Int) -> CGFloat { CGFloat(columns) * cell.width + inset * 2 }
+    let minimum = Int((CGFloat(style.minWidth) - inset * 2) / cell.width)
+    let maximum = Int((CGFloat(style.maxWidth) - inset * 2) / cell.width)
+    let screen = CGRect(x: 0, y: 0, width: 1600, height: 900)
+
+    preview(controller, region: region(text: "Monday\nTue"), screen: screen)
+    XCTAssertEqual(controller.frame.width, width(minimum), "short text keeps min_width")
+    controller.refresh([region(text: String(repeating: "x", count: minimum + 10))])
+    XCTAssertEqual(controller.frame.width, width(minimum + 10), "a wider line widens it")
+    XCTAssertEqual(controller.frame.height, cell.height + inset * 2, "without wrapping")
+    controller.refresh([region(text: String(repeating: "x", count: 500))])
+    XCTAssertEqual(controller.frame.width, width(maximum))
+    XCTAssertEqual(
+      controller.frame.height, CGFloat((500 + maximum - 1) / maximum) * cell.height + inset * 2,
+      "longer lines wrap at max_width; the hover preview clips less's prompt row")
+
+    preview(
+      controller, region: region(text: "Monday"),
+      screen: CGRect(x: 0, y: 0, width: 200, height: 400))
+    XCTAssertLessThanOrEqual(controller.frame.width, 200, "the screen caps it too")
+    controller.dismiss()
+  }
+
   func testPopupLinkLabelsReachTerminalFramesWithoutControlInjection() throws {
     var linked = FlashStatusTextSegment(text: "Read", foreground: .defaultForeground)
     linked.link = "https://example.com/article"

@@ -15,6 +15,7 @@ final class StatusPopupConfigTests: XCTestCase {
       border_size = 2
       corner_radius = 9
       padding = 10
+      min_width = 300
       max_width = 420
       offset = 7
 
@@ -28,6 +29,7 @@ final class StatusPopupConfigTests: XCTestCase {
     XCTAssertEqual(config.popupStyle.borderWidth, 2)
     XCTAssertEqual(config.popupStyle.cornerRadius, 9)
     XCTAssertEqual(config.popupStyle.padding, 10)
+    XCTAssertEqual(config.popupStyle.minWidth, 300)
     XCTAssertEqual(config.popupStyle.maxWidth, 420)
     XCTAssertEqual(config.popupStyle.offset, 7)
     XCTAssertEqual(config.textPopups["date"]?.template, "#{flash.calendar}")
@@ -40,13 +42,16 @@ final class StatusPopupConfigTests: XCTestCase {
       fg = "colour178"
       bg = "242933"
       border_size = -1
+      min_width = 2001
       max_width = 20
       paddin = 4
       date = "#{flash.calendar}"
       """)
     XCTAssertEqual(config.popupStyle, Config.PopupStyle())
     let messages = config.diagnostics.map(\.message)
-    XCTAssertEqual(messages.count, 6, "\(messages)")
+    XCTAssertEqual(messages.count, 7, "\(messages)")
+    XCTAssertTrue(
+      messages.contains("popup.min_width must be a number between 80 and 2000 (points)"))
     XCTAssertTrue(messages.contains("unknown config key 'popup.paddin' — did you mean 'padding'?"))
     XCTAssertTrue(
       messages.contains {

@@ -644,19 +644,22 @@ enum FlashStatusBarRenderer {
   /// because every production caller sits on the controller's single serial
   /// queue.
   private static let dateFormatter = DateFormatter()
-  private static var calendarCache: (day: DateInterval, timeZone: TimeZone, text: String)?
+  private static var calendarCache: (valid: DateInterval, timeZone: TimeZone, text: String)?
 
+  /// One calendar per local day and timezone; a daylight-saving transition
+  /// inside the day ends it early, since the calendar shows the UTC offset.
   static func calendarText(now: Date, timeZone: TimeZone) -> String {
     if let cached = calendarCache, cached.timeZone == timeZone,
-      now >= cached.day.start, now < cached.day.end
+      now >= cached.valid.start, now < cached.valid.end
     {
       return cached.text
     }
     var calendar = Calendar(identifier: .iso8601)
     calendar.timeZone = timeZone
     guard let day = calendar.dateInterval(of: .day, for: now) else { return "" }
+    let end = min(day.end, timeZone.nextDaylightSavingTimeTransition(after: now) ?? day.end)
     let text = CalendarStatusDocument.render(now: now, timeZone: timeZone)
-    calendarCache = (day, timeZone, text)
+    calendarCache = (DateInterval(start: day.start, end: end), timeZone, text)
     return text
   }
 

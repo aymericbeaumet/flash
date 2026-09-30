@@ -156,7 +156,7 @@ Everything the bar can show is available. These values suit widgets:
 | `#{flash.plugin.power.state}` | `charging`, `discharging`, `charged` or `ac`. |
 | `#{flash.plugin.processes.top_cpu}`, `top_mem` | The busiest processes by CPU or resident memory, one row each. |
 | `#{flash.plugin.tmux.session}`, `window`, `pane` | The attached local tmux client's session, window and pane; empty without one. |
-| `#{flash.calendar}` | Today's date, ISO week, day of year and a three-month calendar. |
+| `#{flash.calendar}` | The 75-column [calendar](calendar.md): three months, the day's progress, time zone, DST and moon. |
 | `#{flash.source.<name>}` | The output of a [named source](status-format.md#jobs-sources-and-flash-styles). |
 | `#{flash.history.<name>}` | The last N numeric outputs of a source with `history = N`, oldest first. |
 | `#(command)` | A tmux shell job, re-run every widget `interval`. |

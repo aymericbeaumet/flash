@@ -47,14 +47,17 @@ size = "90%x85%"
 persistent = true
 ```
 
-The date popup shows the built-in [calendar](../../calendar.md): current and adjacent
-months, ISO weeks, date, quarter, and day-of-year information. It has no
-appointments or tasks. It uses the same pager as the metric popups.
+The date popup shows the built-in [calendar](../../calendar.md): the previous,
+current and next months side by side with ISO weeks, the day's progress through
+its week, month, quarter and year, and time-zone, daylight-saving and moon
+information. It has no appointments or tasks. It uses the same pager as the
+metric popups.
 
-The 480-point popup width fits 50 content columns at the standard font and
-padding. The pager reserves one footer row. Longer external values wrap, and
-taller content scrolls in the pager. Terminal popups use their `size`;
-`[popup] max_width` limits text popups.
+Text popups fit their widest line between `[popup] min_width` (480 points,
+50 content columns at the standard font and padding) and `max_width` (750
+points, 80 columns, room for the calendar). The pager reserves one footer row.
+Longer external values wrap, and taller content scrolls in the pager. Terminal
+popups use their `size`.
 
 Hover previews a popup. Either unbound mouse button pins it open; repeated clicks
 keep it pinned. Existing left-click actions and links win, with right-click or

@@ -381,9 +381,14 @@ final class StatusPopupController {
       let available = min(
         maximumColumns,
         max(1, Int((CGFloat(style.maxWidth) - inset * 2) / max(1, cell.width))))
+      // As wide as the widest line, from `min_width` (room for less's
+      // prompt, and for wider data after Command-R) up to `max_width` and the
+      // screen, where longer lines wrap.
       let grid = Self.documentGrid(
         text: text, availableColumns: available, maximumRows: max(1, maximumRows - 1))
-      columns = available
+      columns = min(
+        available,
+        max(grid.columns, Int((CGFloat(style.minWidth) - inset * 2) / max(1, cell.width))))
       rows = min(maximumRows, grid.rows + 1)
       clippedRows =
         Self.hidesPagerPromptRow(

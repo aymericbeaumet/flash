@@ -323,8 +323,11 @@ border = "#4C566A"
 border_size = 1
 corner_radius = 8
 padding = 8
-# Widest a text popup grows; its pager wraps longer lines.
-max_width = 480
+# A text popup is as wide as its widest line, between these two widths; the
+# pager wraps longer lines. At the 13-point font with padding = 10, 480 fits
+# 50 columns and 750 fits 80, room for the three-month calendar.
+min_width = 480
+max_width = 750
 # Gap between the pointer and a hover popup's top edge.
 offset = 8
 

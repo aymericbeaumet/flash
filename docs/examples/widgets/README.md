@@ -25,7 +25,7 @@ row is written out in the template, so each can be restyled on its own.
 
 ## `clock-agenda.toml`
 
-A 56-point clock, the date, this month's calendar (`#{flash.calendar}`) and
+A 56-point clock, the date, the three-month calendar (`#{flash.calendar}`) and
 today's remaining events, stacked in the top-left corner. A widget has one
 font size, so these are three widgets whose `gap_y` values stack them.
 

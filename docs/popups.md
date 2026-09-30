@@ -51,12 +51,14 @@ closest style key.
 | `border_size` | `1` | Border width, 0–12 points |
 | `corner_radius` | `8` | 0–64 points |
 | `padding` | `8` | Space around the terminal, 0–64 points |
-| `max_width` | `480` | Widest a text popup grows, 80–2000 points |
+| `min_width` | `480` | Narrowest a text popup gets, 80–2000 points |
+| `max_width` | `750` | Widest a text popup grows, 80–2000 points |
 | `offset` | `8` | Gap between the pointer and a hover popup, 0–64 points |
 
 Colours are `#RRGGBB` or `#RRGGBBAA`. Terminal text is opaque, so a translucent
-`fg` is mixed over `bg`. The standard 480-point width fits 50 content columns at
-the 13-point font with 10-point padding and a one-point border.
+`fg` is mixed over `bg`. At the 13-point font with 10-point padding and a
+one-point border, the 480-point `min_width` fits 50 content columns and the
+750-point `max_width` 80, enough for the three-month [calendar](calendar.md).
 
 ## Declaring popups
 
@@ -70,8 +72,10 @@ A text popup takes only `text`. Its body keeps its newlines and supports the
 whole status format: colours, bold, italics, underline, dim, reverse, links. It
 reads the values the bar already collects, so opening it starts no collector.
 `#[popup=inline:<percent-encoded-body>]` lets a dynamic row carry its own body
-instead of naming a popup. Text popups size to their content, up to `max_width`
-and the screen; long lines wrap and taller content scrolls in the pager.
+instead of naming a popup. A text popup is as wide as its widest line, from
+`min_width` up to `max_width` and the screen; longer lines wrap and taller
+content scrolls in the pager. The floor leaves room for the pager's `/` search
+prompt and for wider values after Command-R.
 
 A terminal popup takes:
 

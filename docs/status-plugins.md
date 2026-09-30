@@ -74,10 +74,10 @@ collection:
   cycles, temperature and adapter power. Only raw capacity fields are used;
   IOKit's percentage-valued `MaxCapacity` is not an mAh fallback.
 
-Standard detail layouts target 50 terminal columns. Long external names, paths
-and addresses wrap in the pager.
-Use `[popup] max_width = 480` for the standard 13-point font: it fits
-50 content columns with 10-point padding and a one-point border. The pager
+Standard detail layouts target 50 terminal columns, the default
+`[popup] min_width` of 480 points at the 13-point font with 10-point padding
+and a one-point border. A longer external name, path or address widens the
+popup up to `max_width` (750 points, 80 columns) and wraps past it. The pager
 reserves one footer row. Taller content scrolls in the pager. Smaller widths
 wrap more lines.
 See [popups](popups.md) for the presentation boundary.

@@ -12,9 +12,6 @@ template = """
 #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
 
-[popup]
-max_width = 480
-
 [popup.active-app]
 text = """
 #[fg=#EBCB8B]#{flash.active_app_name}#[default]
