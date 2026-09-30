@@ -1,4 +1,4 @@
-use flash_plugin::{Candidate, CommandRequest, Context, PerformResponse, RefreshGate, run};
+use flash_plugin::{Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, run};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,19 @@ const SOURCE_FIREFOX_HISTORY: &str = "firefox.history";
 const SOURCE_FIREFOX_BOOKMARKS: &str = "firefox.bookmarks";
 const SOURCE_CHROME_HISTORY: &str = "chrome.history";
 const SOURCE_CHROME_BOOKMARKS: &str = "chrome.bookmarks";
-const REFRESH_SECONDS: u64 = 300;
+/// Nothing polls. The catalog rebuilds at startup, when the flashlight opens,
+/// and when focus leaves a browser whose history it mirrors — at most once
+/// per this TTL; a due refresh whose store files are unchanged (see
+/// [`Inputs`]) costs a few `stat`s.
+const REFRESH_TTL: Duration = Duration::from_secs(60);
+/// Browsers whose profiles this plugin reads. Leaving one is when its
+/// history most likely changed.
+const HISTORY_BROWSERS: [&str; 4] = [
+    "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition",
+    "org.mozilla.nightly",
+    "com.google.Chrome",
+];
 const SLOW_REFRESH_MS: u128 = 1_000;
 
 /// Per-store row caps keep the combined catalog far below the host's
@@ -87,6 +99,33 @@ fn chrome_history_sql(cutoff_micros: i64) -> String {
 }
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+/// When the last refresh began, and the focused app's bundle id.
+static LAST_REFRESH: Mutex<Option<Instant>> = Mutex::new(None);
+static FOCUSED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Record a refresh beginning at `now` unless one began within the TTL.
+fn claim_refresh(last: &mut Option<Instant>, now: Instant) -> bool {
+    let due = last.is_none_or(|last| now.saturating_duration_since(last) >= REFRESH_TTL);
+    if due {
+        *last = Some(now);
+    }
+    due
+}
+
+/// Whether `event` should refresh the catalog: the flashlight opening, or
+/// focus leaving a history browser. Tracks the focused app in `focused`.
+fn triggers(focused: &mut Option<String>, event: &Event) -> bool {
+    match event.name.as_str() {
+        "core:session.opened" => true,
+        "core:focus.changed" => {
+            let previous = std::mem::replace(focused, event.bundle_id.clone());
+            previous.is_some_and(|previous| {
+                *focused != Some(previous.clone()) && HISTORY_BROWSERS.contains(&previous.as_str())
+            })
+        }
+        _ => false,
+    }
+}
 
 /// One page row read from a browser store, before candidate shaping.
 #[derive(Clone, Debug, PartialEq)]
@@ -119,11 +158,27 @@ impl FlashPlugin for History {
                 refresh_catalog(&retry_ctx).await;
             });
         }
-        drop(
-            ctx.interval(Duration::from_secs(REFRESH_SECONDS), |ctx| async move {
-                refresh_catalog(&ctx).await;
-            }),
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let triggered = triggers(
+            &mut FOCUSED.lock().unwrap_or_else(|e| e.into_inner()),
+            &event,
         );
+        if triggered
+            && claim_refresh(
+                &mut LAST_REFRESH.lock().unwrap_or_else(|e| e.into_inner()),
+                Instant::now(),
+            )
+        {
+            // Detached, so a rebuild never holds back the focus events
+            // behind it, and skipped while one is already in flight.
+            tokio::spawn(async move {
+                REFRESH_GATE
+                    .try_run(&ctx, |ctx, _running| refresh_cycle(ctx))
+                    .await;
+            });
+        }
     }
 }
 
@@ -132,51 +187,55 @@ impl FlashPlugin for History {
 /// snapshot).
 async fn refresh_catalog(ctx: &Context) -> bool {
     REFRESH_GATE
-        .run(ctx, |ctx, _running| async move {
-            let started_at = Instant::now();
-            let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-                ctx.publish(Vec::new());
-                log_refresh(&ctx, "empty", 0, started_at);
-                return true;
-            };
-            let places = newest_places_db(&home).await;
-            let chrome = chrome_profile(&home);
-            let inputs = Inputs::read(places.as_deref(), &chrome, SystemTime::now()).await;
-            let published = PUBLISHED_FROM.lock().ok().and_then(|slot| {
-                slot.as_ref()
-                    .filter(|(from, _)| *from == inputs)
-                    .map(|(_, count)| *count)
-            });
-            if let Some(count) = published {
-                // Nothing the catalog is built from changed: the host already
-                // holds this exact snapshot.
-                log_refresh(&ctx, "unchanged", count, started_at);
-                return true;
-            }
-            let firefox = firefox_rows(&ctx, places).await;
-            let chrome = chrome_rows(&ctx, &chrome).await;
-            let (Some(firefox), Some(chrome)) = (firefox, chrome) else {
-                // Transient store failure: don't publish — the host keeps
-                // its last-good catalog.
-                log_refresh(&ctx, "failed", 0, started_at);
-                return false;
-            };
-            let candidates = compose_candidates(firefox, chrome);
-            let count = candidates.len();
-            record_source_counts(&candidates);
-            ctx.publish(candidates);
-            if let Ok(mut slot) = PUBLISHED_FROM.lock() {
-                *slot = Some((inputs, count));
-            }
-            log_refresh(
-                &ctx,
-                if count == 0 { "empty" } else { "ok" },
-                count,
-                started_at,
-            );
-            true
-        })
+        .run(ctx, |ctx, _running| refresh_cycle(ctx))
         .await
+}
+
+/// One rebuild, run under the refresh gate.
+async fn refresh_cycle(ctx: Context) -> bool {
+    let started_at = Instant::now();
+    *LAST_REFRESH.lock().unwrap_or_else(|e| e.into_inner()) = Some(started_at);
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        ctx.publish(Vec::new());
+        log_refresh(&ctx, "empty", 0, started_at);
+        return true;
+    };
+    let places = newest_places_db(&home).await;
+    let chrome = chrome_profile(&home);
+    let inputs = Inputs::read(places.as_deref(), &chrome, SystemTime::now()).await;
+    let published = PUBLISHED_FROM.lock().ok().and_then(|slot| {
+        slot.as_ref()
+            .filter(|(from, _)| *from == inputs)
+            .map(|(_, count)| *count)
+    });
+    if let Some(count) = published {
+        // Nothing the catalog is built from changed: the host already
+        // holds this exact snapshot.
+        log_refresh(&ctx, "unchanged", count, started_at);
+        return true;
+    }
+    let firefox = firefox_rows(&ctx, places).await;
+    let chrome = chrome_rows(&ctx, &chrome).await;
+    let (Some(firefox), Some(chrome)) = (firefox, chrome) else {
+        // Transient store failure: don't publish — the host keeps
+        // its last-good catalog.
+        log_refresh(&ctx, "failed", 0, started_at);
+        return false;
+    };
+    let candidates = compose_candidates(firefox, chrome);
+    let count = candidates.len();
+    record_source_counts(&candidates);
+    ctx.publish(candidates);
+    if let Ok(mut slot) = PUBLISHED_FROM.lock() {
+        *slot = Some((inputs, count));
+    }
+    log_refresh(
+        &ctx,
+        if count == 0 { "empty" } else { "ok" },
+        count,
+        started_at,
+    );
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +676,48 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nothing polls: a flashlight open or leaving a browser refreshes at
+    /// most once per `REFRESH_TTL`, and the store fingerprint keeps a due
+    /// refresh cheap when nothing changed.
+    #[test]
+    fn events_refresh_at_most_once_per_ttl() {
+        let now = Instant::now();
+        let mut last = None;
+        assert!(claim_refresh(&mut last, now));
+        assert!(!claim_refresh(&mut last, now + Duration::from_secs(5)));
+        assert!(claim_refresh(&mut last, now + REFRESH_TTL));
+    }
+
+    #[test]
+    fn opening_the_flashlight_or_leaving_a_history_browser_triggers() {
+        let mut focused = None;
+        let event = |name: &str, bundle_id: Option<&str>| flash_plugin::Event {
+            name: name.into(),
+            bundle_id: bundle_id.map(Into::into),
+            ..flash_plugin::Event::default()
+        };
+        assert!(triggers(&mut focused, &event("core:session.opened", None)));
+        assert!(!triggers(
+            &mut focused,
+            &event("core:focus.changed", Some("org.mozilla.firefox"))
+        ));
+        assert!(
+            triggers(
+                &mut focused,
+                &event("core:focus.changed", Some("com.google.Chrome"))
+            ),
+            "Firefox wrote history while it was focused"
+        );
+        assert!(triggers(
+            &mut focused,
+            &event("core:focus.changed", Some("com.apple.Terminal"))
+        ));
+        assert!(!triggers(
+            &mut focused,
+            &event("core:focus.changed", Some("com.apple.Mail"))
+        ));
+    }
 
     fn row(url: &str, title: &str) -> UrlRow {
         UrlRow {

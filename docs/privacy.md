@@ -40,7 +40,7 @@ the others make their own requests or run the CLI tools named here.
 | Plugin | Destination | When | Default |
 | --- | --- | --- | --- |
 | `answers` | `www.ecb.europa.eu` (daily exchange rates) | At start, then every 6 hours | On |
-| `github` | GitHub, through your `gh` CLI | Every 10 minutes, only if `gh` is installed and signed in | On |
+| `github` | GitHub, through your `gh` CLI | At launch, then when the flashlight opens at most every 10 minutes, only if `gh` is installed and signed in | On |
 | `feed` | The URL you configure | Every `refresh_interval` | Off until `url` is set |
 | `aiproviders` | Anthropic's usage API with Claude Code's token; OpenAI through `codex app-server` | Every 60 seconds while the plugin runs | Starts only when your status bar shows an AI quota segment or you use a chat bang such as `!claude` |
 | `tmux` | Noninteractive SSH to hosts running tmux | Every few seconds | Off: only hosts listed in `[plugin.tmux] ssh_hosts` |
@@ -55,7 +55,7 @@ the others make their own requests or run the CLI tools named here.
 | `~/Library/Logs/Flash/` | Logs. They never contain keys typed in other apps. Commands Flash's command line cannot run are logged with their text; the `trace` level also logs every submitted command line and AX tree dumps. |
 | `~/Library/Application Support/Flash/command-history.json` | The last 200 entries you submitted in Flash's command line, including flashlight queries. |
 | `~/Library/Application Support/Flash/Plugins/clipboard/` | Clipboard history: the last 50 text items, up to 128 KiB each, readable only by you. Items that password managers mark as concealed, transient, or auto-generated are never recorded. |
-| `~/Library/Application Support/Flash/Plugins/history/` | Copies of Chrome's `History` and Firefox's `places.sqlite`, refreshed every 5 minutes. They only feed explicit searches such as `@firefox.history`, never default results. |
+| `~/Library/Application Support/Flash/Plugins/history/` | Copies of Chrome's `History` and Firefox's `places.sqlite`, refreshed when the flashlight opens or you leave the browser, at most once a minute and only when the originals changed. They only feed explicit searches such as `@firefox.history`, never default results. |
 | `~/Library/Application Support/Flash/` (other files) | Ranking data for search results and plugin caches, such as exchange rates. |
 
 `brew uninstall --cask --zap flash@nightly` removes all of it.

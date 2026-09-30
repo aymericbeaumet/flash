@@ -12,8 +12,9 @@ Browser history and bookmarks are per-browser and never join the default
 result pool: they reach the flashlight only through an explicit source filter
 or their bang. The bundled `history` plugin still runs by default, copying
 Firefox `places.sqlite` and Chrome `History` into its private cache (and
-reading Chrome `Bookmarks`) at launch and every five minutes; disable it with
-`[plugins] disabled = ["history"]`.
+reading Chrome `Bookmarks`) at launch, when the flashlight opens, and when you
+leave Firefox or Chrome — at most once a minute, and only when those stores
+changed; disable it with `[plugins] disabled = ["history"]`.
 
 ```text
 :flashlight @firefox.history rust
