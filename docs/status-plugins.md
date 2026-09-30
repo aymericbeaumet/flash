@@ -158,6 +158,13 @@ and the plugin registers its two-second sample with the host clock only while
 cleared, so showing it again never reads stale figures. Rows come from
 `host.process_table`, the plugin's one process model, so no subprocess runs.
 
+`#{flash.plugin.processes.focused_app_details}` follows the same rule. Focus
+changes only record which app is focused until the segment is observed; while
+it is, the plugin samples that app once a focus burst settles and every ten
+seconds for its CPU figure, which has no change event. The `!kill` process
+catalog has no cadence at all: it refreshes when an app launches or quits and
+when the flashlight opens.
+
 ## Refresh and failure invariants
 
 Each monitor performs an initial refresh and keeps its last-good state across
