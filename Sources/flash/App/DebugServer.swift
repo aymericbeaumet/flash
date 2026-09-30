@@ -6,11 +6,24 @@ final class DebugServer {
   let port: Int
   private(set) var listeningPort: UInt16?
   private let stateProvider: () -> [String: Any]
+  private let scheduler: PollScheduler
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
   private var listener: NWListener?
   private var logSinkID: UUID?
   private var logs: [[String: Any]] = []
   private var eventConnections: [UUID: NWConnection] = [:]
+  /// Queue-confined. The listener's outcome: nil while it is still binding.
+  private var readiness: ListenerReadiness?
+  /// Queue-confined callers of `whenListening` waiting for that outcome.
+  private var readinessWaiters: [(UInt16?) -> Void] = []
+  /// Queue-confined: whether the state refresh cadence is registered.
+  private var stateTimerRegistered = false
+  private var stopped = false
+
+  private enum ListenerReadiness {
+    case listening(UInt16)
+    case failed
+  }
   /// Last app-state snapshot — taken on the main thread, then confined to
   /// `queue`. The server serves this on `/api/state` and `/api/events` rather than
   /// calling `stateProvider` on its own queue (which raced the main thread, the
@@ -20,9 +33,13 @@ final class DebugServer {
   private var cachedState: [String: Any] = [:]
   private let maxLogs = 2_000
 
-  init(host: String, port: Int, stateProvider: @escaping () -> [String: Any]) {
+  init(
+    host: String, port: Int, scheduler: PollScheduler = .shared,
+    stateProvider: @escaping () -> [String: Any]
+  ) {
     self.host = host
     self.port = port
+    self.scheduler = scheduler
     self.stateProvider = stateProvider
   }
 
@@ -44,13 +61,19 @@ final class DebugServer {
         self?.handle(connection)
       }
       listener.stateUpdateHandler = { [weak self] state in
-        if case .ready = state {
+        switch state {
+        case .ready:
           let port = listener.port?.rawValue
           self?.listeningPort = port
           FlashLog.info("[debug] http inspector listening http://\(endpoint.host):\(port ?? 0)")
-        }
-        if case .failed(let error) = state {
+          self?.settleReadiness(port.map(ListenerReadiness.listening) ?? .failed)
+        case .failed(let error):
           FlashLog.warn("[debug] http inspector failed \(error)")
+          self?.settleReadiness(.failed)
+        case .cancelled:
+          self?.settleReadiness(.failed)
+        default:
+          break
         }
       }
       // Seed the cache on the main thread (start() runs on main) so the first
@@ -59,7 +82,6 @@ final class DebugServer {
       queue.async { [weak self] in self?.cachedState = initialState }
       listener.start(queue: queue)
       self.listener = listener
-      startStateTimer()
       // Follows `[debug] log_level`: the inspector shows what the log file
       // gets, and never forces lower-level messages on hot paths to be built.
       logSinkID = FlashLog.addSink(minLevel: nil) { [weak self] record in
@@ -67,6 +89,7 @@ final class DebugServer {
       }
     } catch {
       FlashLog.warn("[debug] could not start http inspector \(host):\(port): \(error)")
+      queue.async { [weak self] in self?.settleReadiness(.failed) }
     }
   }
 
@@ -75,13 +98,51 @@ final class DebugServer {
       FlashLog.removeSink(logSinkID)
     }
     logSinkID = nil
-    PollScheduler.shared.unregister(Self.pollClientID)
     listener?.cancel()
     listener = nil
-    for connection in eventConnections.values {
-      connection.cancel()
+    queue.async { [self] in
+      stopped = true
+      for connection in eventConnections.values {
+        connection.cancel()
+      }
+      eventConnections.removeAll()
+      updateStateTimer()
+      settleReadiness(.failed)
     }
-    eventConnections.removeAll()
+  }
+
+  /// Call `completion` on the main thread with the bound port once the
+  /// listener is ready, or with nil when it fails, is stopped, or is not
+  /// ready within `timeoutSeconds`. The listener's own state change answers;
+  /// nothing polls for the port.
+  func whenListening(timeoutSeconds: TimeInterval, _ completion: @escaping (UInt16?) -> Void) {
+    let deliver: (UInt16?) -> Void = { port in DispatchQueue.main.async { completion(port) } }
+    queue.async { [self] in
+      switch readiness {
+      case .listening(let port): return deliver(port)
+      case .failed: return deliver(nil)
+      case nil: break
+      }
+      readinessWaiters.append(deliver)
+      queue.asyncAfter(deadline: .now() + timeoutSeconds) { [self] in
+        guard readiness == nil, !readinessWaiters.isEmpty else { return }
+        FlashLog.warn("[debug] inspector did not start in time")
+        let waiters = readinessWaiters
+        readinessWaiters.removeAll()
+        for waiter in waiters { waiter(nil) }
+      }
+    }
+  }
+
+  /// Runs on `queue`. The latest outcome stands (a listener that fails or is
+  /// stopped after binding no longer serves); every waiter hears it once.
+  private func settleReadiness(_ outcome: ListenerReadiness) {
+    readiness = outcome
+    let port: UInt16?
+    if case .listening(let bound) = outcome { port = bound } else { port = nil }
+    let waiters = readinessWaiters
+    readinessWaiters.removeAll()
+    for waiter in waiters { waiter(port) }
   }
 
   /// Refresh the cache and push state to subscribers. Must be called on the main
@@ -123,15 +184,21 @@ final class DebugServer {
     }
   }
 
-  /// The inspector page is a debug surface with no change notification of its
-  /// own, so it refreshes on a cadence — registered with the shared clock like
-  /// everything else, and only while a browser is actually listening.
-  private func startStateTimer() {
-    PollScheduler.shared.register(
-      Self.pollClientID, everyMs: 1000, priority: .low, on: queue
-    ) { [weak self] in
-      guard let self, !self.eventConnections.isEmpty else { return }
-      self.refreshStateFromMain()
+  /// App changes (mode, focus, hints, plugins, configuration) push state as
+  /// they happen. Plugin CPU and memory figures have no change notification,
+  /// so an open inspector also refreshes once a second — registered with the
+  /// shared clock only while a browser holds an event stream, and released
+  /// with the last one. Runs on `queue`.
+  private func updateStateTimer() {
+    let wanted = !stopped && !eventConnections.isEmpty
+    guard wanted != stateTimerRegistered else { return }
+    stateTimerRegistered = wanted
+    guard wanted else {
+      scheduler.unregister(Self.pollClientID)
+      return
+    }
+    scheduler.register(Self.pollClientID, everyMs: 1000, priority: .low, on: queue) {
+      [weak self] in self?.refreshStateFromMain()
     }
   }
 
@@ -238,8 +305,10 @@ final class DebugServer {
   }
 
   private func startEvents(_ connection: NWConnection) {
+    guard !stopped else { return connection.cancel() }
     let id = UUID()
     eventConnections[id] = connection
+    updateStateTimer()
     let headers = """
       HTTP/1.1 200 OK\r
       Content-Type: text/event-stream\r
@@ -250,12 +319,29 @@ final class DebugServer {
     send(headers, connection: connection, close: false)
     sendEvent("state", object: cachedState, connection: connection)
     sendEvent("logs", object: ["logs": logs], connection: connection)
+    // Handlers run on `queue`, where the connection was started.
     connection.stateUpdateHandler = { [weak self] state in
-      if case .cancelled = state {
-        self?.queue.async {
-          self?.eventConnections.removeValue(forKey: id)
-        }
+      switch state {
+      case .cancelled:
+        guard let self else { return }
+        self.eventConnections.removeValue(forKey: id)
+        self.updateStateTimer()
+      case .failed:
+        connection.cancel()
+      default:
+        break
       }
+    }
+    awaitClose(connection)
+  }
+
+  /// An event-stream client sends nothing after its request, so the next
+  /// receive completes only when it goes away: that is the disconnect.
+  private func awaitClose(_ connection: NWConnection) {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) {
+      [weak self] _, _, isComplete, error in
+      guard !isComplete, error == nil else { return connection.cancel() }
+      self?.awaitClose(connection)
     }
   }
 

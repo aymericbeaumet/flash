@@ -389,6 +389,7 @@ extension AppDelegate {
         + "override=\(String(describing: captureOverride)) suspended=\(suspended) "
         + "visible=\(statusBarVisible) hints=\(hintSession.hints.count) in_flight=\(inFlight)")
     statusBarController?.updateModeLabel(text)
+    debugStateDidChange()
     overlay.inputMode = inputMode
     // Command entry paints its text and suggestions immediately after the mode
     // transition. Record the surface but don't lay out an empty command surface
@@ -1124,25 +1125,15 @@ extension AppDelegate {
       debugServer = server
       server.start()
     }
-    openDebugDashboardWhenReady(page, attempt: 0)
-  }
-
-  private func openDebugDashboardWhenReady(_ page: DebugServer.Page, attempt: Int) {
     guard let server = debugServer else { return }
-    if let port = server.listeningPort {
-      if let url = DebugServer.dashboardURL(host: server.host, port: port, page: page) {
-        NSWorkspace.shared.open(
-          url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-        FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")
-      }
-      return
-    }
-    guard attempt < 30 else {
-      FlashLog.warn("[debug] inspector did not start in time")
-      return
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-      self?.openDebugDashboardWhenReady(page, attempt: attempt + 1)
+    // The listener's ready state answers; 1.5 s bounds one that never binds.
+    server.whenListening(timeoutSeconds: 1.5) { [weak self, weak server] port in
+      guard let self, let server, self.debugServer === server, let port,
+        let url = DebugServer.dashboardURL(host: server.host, port: port, page: page)
+      else { return }
+      NSWorkspace.shared.open(
+        url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+      FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")
     }
   }
 

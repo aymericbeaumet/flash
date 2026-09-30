@@ -137,6 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let overlay else { return }
       overlay.hintKeyRoute = hintSession.keyRoute
       overlay.hintSessionCapture = hintSession.capture
+      if debugServer != nil, oldValue.hints.map(\.label) != hintSession.hints.map(\.label) {
+        debugStateDidChange()
+      }
       if oldValue.isActive != hintSession.isActive {
         refreshOverlayInputRouting()
         updateActiveWindowBorder(
@@ -172,6 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// then surfaced through `debugStateJSON`.
   var clipboardEntries: [ClipboardModalEntry] = []
   var pluginStateRefreshWork: DispatchWorkItem?
+  /// A pending inspector push; see `debugStateDidChange`.
+  var debugStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
   var commandLineCompletionSelectedIndex = 0
@@ -920,6 +925,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   ) {
     observedFocusedAppPID = app.processIdentifier
     refreshFocusDependentState(for: app)
+    debugStateDidChange()
     if emitFocusEvent {
       overlay.dismissEphemeralStatusBarPopup(reason: "focus_changed")
       pluginManager.emit(
@@ -1177,6 +1183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
+    debugStateRefreshWork?.cancel()
+    debugStateRefreshWork = nil
     clipboardMonitor?.stop()
     clipboardMonitor = nil
     powerSourceMonitor?.stop()

@@ -221,6 +221,90 @@ final class DebugServerTests: XCTestCase {
     XCTAssertEqual(endpoint.body, "not found")
   }
 
+  /// Nothing refreshes the inspector's state on a clock while no browser
+  /// holds an event stream; the cadence starts with the first stream and
+  /// stops with the last.
+  func testStateRefreshRunsOnlyWhileAnEventStreamIsOpen() throws {
+    let scheduler = PollScheduler()
+    let server = DebugServer(host: "localhost", port: 0, scheduler: scheduler) { ["ok": true] }
+    server.start()
+    defer { server.stop() }
+    let port = try waitForListeningPort(server)
+    XCTAssertEqual(registrations(scheduler), [])
+
+    let client = NWConnection(
+      host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    let streaming = expectation(description: "event stream open")
+    client.stateUpdateHandler = { state in
+      guard case .ready = state else { return }
+      let request = "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n"
+      client.send(content: request.data(using: .utf8), completion: .idempotent)
+      client.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, _ in
+        if String(decoding: data ?? Data(), as: UTF8.self).contains("text/event-stream") {
+          streaming.fulfill()
+        }
+      }
+    }
+    client.start(queue: DispatchQueue(label: "debug.tests.client"))
+    wait(for: [streaming], timeout: 10)
+    XCTAssertTrue(
+      waitFor { self.registrations(scheduler) == [DebugServer.pollClientID] },
+      "an open stream registers the refresh")
+
+    client.cancel()
+    XCTAssertTrue(
+      waitFor { self.registrations(scheduler).isEmpty }, "the last stream closing releases it")
+  }
+
+  func testWhenListeningAnswersFromTheListenerState() throws {
+    let server = DebugServer(host: "localhost", port: 0) { ["ok": true] }
+    server.start()
+    defer { server.stop() }
+    let ready = expectation(description: "ready")
+    server.whenListening(timeoutSeconds: 10) { port in
+      XCTAssertTrue(Thread.isMainThread)
+      XCTAssertNotNil(port)
+      XCTAssertEqual(port, server.listeningPort)
+      ready.fulfill()
+    }
+    wait(for: [ready], timeout: 10)
+
+    // A second listener on the same port fails to bind: it answers nil at
+    // once rather than at the deadline.
+    let port = try XCTUnwrap(server.listeningPort)
+    let clash = DebugServer(host: "localhost", port: Int(port)) { [:] }
+    clash.start()
+    defer { clash.stop() }
+    let failed = expectation(description: "bind failure reported")
+    let started = Date()
+    clash.whenListening(timeoutSeconds: 30) { port in
+      XCTAssertNil(port)
+      XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+      failed.fulfill()
+    }
+    wait(for: [failed], timeout: 15)
+  }
+
+  private func registrations(_ scheduler: PollScheduler) -> [String] {
+    let listed = DispatchSemaphore(value: 0)
+    var ids: [String] = []
+    scheduler.registeredIDs {
+      ids = $0
+      listed.signal()
+    }
+    listed.wait()
+    return ids
+  }
+
+  private func waitFor(_ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(10)
+    while !condition() {
+      guard Date() < deadline else { return false }
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+    return true
+  }
+
   /// Polls until the `NWListener` reaches `.ready` and publishes its port.
   /// The ceiling is generous so a loaded CI runner doesn't flake; the happy
   /// path returns within a few milliseconds.

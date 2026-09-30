@@ -72,6 +72,13 @@ launch-time inspector is disabled.
 | `/api/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
 | `/api/events` | server-sent `state`, `logs` and `log` events |
 
+The state snapshot follows the app's changes instead of a clock: mode, focus,
+hints, plugin state and configuration each push a fresh one (a burst within
+100 ms is one push). Plugin CPU and memory have no change notification, so
+while a browser holds `/api/events` the state is also refreshed once a
+second; the cadence is released with the last stream. Opening a page waits
+for the listener's ready state, not a retry loop.
+
 ## Stalls
 
 The keyboard tap, AX observers and all mode logic share the main thread, so a

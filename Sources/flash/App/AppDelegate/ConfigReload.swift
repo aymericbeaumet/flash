@@ -249,6 +249,21 @@ extension AppDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
   }
 
+  /// The inspector's state follows the app's own changes — mode, focus,
+  /// hints — instead of a clock, so `/api/state` and an open event stream are
+  /// current without polling. A burst collapses into one snapshot, and
+  /// nothing is taken while the inspector is off.
+  func debugStateDidChange() {
+    guard debugServer != nil, debugStateRefreshWork == nil else { return }
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.debugStateRefreshWork = nil
+      self.debugServer?.broadcastState()
+    }
+    debugStateRefreshWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
+  }
+
   func configureDebugServer(for cfg: Config) {
     guard cfg.debug.httpInspectorEnabled else {
       debugServer?.stop()
