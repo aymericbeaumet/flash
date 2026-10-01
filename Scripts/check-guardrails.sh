@@ -72,6 +72,33 @@ check_absent_except \
   '/WindowSnapshot\.swift:' \
   "${PROD_SWIFT[@]}"
 
+# Polling is a last resort and goes through PollScheduler, the one clock in
+# the process: a cadence registers, an irregular or re-arming deadline uses
+# `scheduleOnce` or `PollDeadline`. No other timer source exists in runtime
+# code, and nothing sleeps a task to schedule work. One-shot `asyncAfter`
+# stays legal only for a timeout bounding one operation, the fixed timing of
+# an interaction in progress, or a bounded fan-out of settle passes after one
+# event (docs/architecture.md lists them); anything that re-arms itself rides
+# the scheduler.
+RUNTIME_SWIFT=("${PROD_SWIFT[@]}" Sources/FlashTerminal)
+check_absent_except \
+  "recurring or deadline timers go through PollScheduler" \
+  "DispatchSource\\.makeTimerSource|DispatchSourceTimer|Timer\\.scheduledTimer|Timer\\.publish|[^[:alnum:]_.]Timer\\(|CFRunLoopTimerCreate|Task\\.sleep|afterDelay:" \
+  '^Sources/flash/App/PollScheduler\.swift:' \
+  "${RUNTIME_SWIFT[@]}"
+# Blocking sleeps only inside one bounded operation, never as a loop's clock:
+# - ActionDispatcher.swift: the spacing of one synthesized mouse gesture on
+#   the click queue (down/up hold, drag steps);
+# - PluginHostRPC.swift: the measurement window of one `host.process_metrics`
+#   call, on its own queue;
+# - TerminalSession.swift: the 1 ms back-off inside a bounded wait for one
+#   child's exit when the kqueue wait itself fails.
+check_absent_except \
+  "blocking sleeps stay inside one bounded operation" \
+  "Thread\\.sleep|usleep\\(|[^[:alnum:]_.]sleep\\(|nanosleep\\(" \
+  '^Sources/flash/App/ActionDispatcher\.swift:|^Sources/flash/App/Plugins/PluginHostRPC\.swift:|^Sources/FlashTerminal/TerminalSession\.swift:' \
+  "${RUNTIME_SWIFT[@]}"
+
 # Every production app AX element must carry a bounded messaging timeout, or a
 # wedged app beachballs Flash's main thread for the 6s system default. The
 # AXApp.make factory applies the timeout; nothing else may call the raw API.
@@ -151,6 +178,101 @@ if [[ -d Plugins ]]; then
     "retired protocol wire names must not reappear" \
     '"(sources\.snapshot|sources\.query|query\.evaluate|hints\.discover|candidate\.resolve|source\.action|command\.invoke|navigation\.restore|heartbeat|sources\.invalidated|status\.updated|flash\.log)"' \
     Sources/flash Plugins/_flash_plugin_rust
+
+  # Plugins never arm a timer or sleep to schedule work: cadences, deadlines
+  # and waits go through the host clock (`ctx.interval`, `ctx.after`,
+  # `ctx.wait`, `Settle`), each at an explicit priority. Timeouts bounding one
+  # awaited operation (`tokio::time::timeout`) stay legal. Test code (items
+  # under `#[cfg(test)]`, including test-only module files) is exempt, as is
+  # the SDK's wire probe, a test fixture that is never shipped or spawned.
+  if ! plugin_timer_report="$(python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path("Plugins")
+BANNED = re.compile(
+    r"\b(?:tokio::)?time::(?:sleep|sleep_until|interval|interval_at)\b"
+    r"|\bthread::sleep\b"
+    r"|use\s+tokio::time::\{[^}]*\b(?:sleep|sleep_until|interval|interval_at)\b"
+)
+SCHEDULING = re.compile(r"\.(?:interval|after|wait)\(|\bSettle::new\(")
+
+
+def strip_comments(text):
+    return re.sub(r"//[^\n]*", lambda m: " " * len(m.group(0)), text)
+
+
+def blank(text, start, end):
+    return text[:start] + re.sub(r"[^\n]", " ", text[start:end]) + text[end:]
+
+
+def matching(text, start, opening, closing):
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == opening:
+            depth += 1
+        elif text[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+def without_tests(path, text, test_files):
+    for attribute in reversed(list(re.finditer(r"#\[cfg\(test\)\]", text))):
+        rest = text[attribute.end():]
+        declaration = re.match(r"\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", rest)
+        if declaration:
+            base = path.parent if path.name in ("main.rs", "lib.rs", "mod.rs") else path.with_suffix("")
+            test_files.add(base / f"{declaration.group(1)}.rs")
+            test_files.add(base / declaration.group(1) / "mod.rs")
+            text = blank(text, attribute.start(), attribute.end() + declaration.end())
+            continue
+        semicolon = text.find(";", attribute.end())
+        brace = text.find("{", attribute.end())
+        if brace == -1 or (semicolon != -1 and semicolon < brace):
+            end = semicolon + 1
+        else:
+            end = matching(text, brace, "{", "}")
+        text = blank(text, attribute.start(), end)
+    return text
+
+
+sources = {}
+test_files = set()
+for path in sorted(ROOT.rglob("*.rs")):
+    parts = path.parts
+    if "target" in parts or path.is_relative_to(ROOT / "_flash_plugin_rust" / "probe"):
+        continue
+    sources[path] = without_tests(path, strip_comments(path.read_text()), test_files)
+
+failures = []
+for path, text in sources.items():
+    if path in test_files:
+        continue
+    for match in BANNED.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        failures.append(f"{path}:{line}: {match.group(0)} (use the host clock)")
+    if path.parts[1].startswith("_"):
+        continue
+    for match in SCHEDULING.finditer(text):
+        end = matching(text, match.end() - 1, "(", ")")
+        arguments = text[match.end():end - 1]
+        if match.group(0) == ".wait(" and not arguments.strip():
+            continue
+        if "PollPriority::" not in arguments:
+            line = text.count("\n", 0, match.start()) + 1
+            failures.append(f"{path}:{line}: {match.group(0)} without an explicit PollPriority")
+
+print("\n".join(failures))
+sys.exit(1 if failures else 0)
+PY
+)"; then
+    echo "GUARDRAIL FAILED: plugins schedule through the host clock at an explicit priority" >&2
+    echo "$plugin_timer_report" >&2
+    fail=1
+  fi
 
   check_absent \
     "candidate catalog gathering is SDK-owned; plugins cannot define candidate_query" \
