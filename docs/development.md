@@ -28,6 +28,16 @@ swift test
 ./Scripts/install.sh --dev
 ```
 
+`swift test` runs on the same desktop as the installed resident, and many tests
+drive real Flash windows that production code orders front. Drawn there, they
+covered the focused app: the resident then found its window with no visible
+region and showed no hints. `Tests/FlashTests/TestWindowHygiene.swift`,
+registered for every run by the `FlashTestsBootstrap` image constructor, makes
+every window the suite orders in fully transparent — WindowServer neither draws
+nor hit-tests it, and Flash ignores it as an occluder and as the window under
+the pointer — and fails any test that leaves a suite window with alpha above
+zero over a display. Keep test windows behind it; do not restore their alpha.
+
 Browser, native AppKit, and Electron integration suites are available separately:
 
 ```bash

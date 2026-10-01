@@ -113,11 +113,13 @@ let package = Package(
     .testTarget(
       name: "TerminalTests", dependencies: ["FlashTerminal", "CFlashTerminal"],
       swiftSettings: strictSwiftSettings),
+    // Image constructor that registers FlashTests' suite-wide observers.
+    .target(name: "FlashTestsBootstrap", path: "Tests/FlashTestsBootstrap"),
     .testTarget(
       name: "FlashTests",
       dependencies: [
         "flash", "FlashCore", "FlashProviders", "FlashTerminal",
-        "FlashIntegrationTestSupport", "FlashBrowserTestSupport",
+        "FlashIntegrationTestSupport", "FlashBrowserTestSupport", "FlashTestsBootstrap",
       ],
       path: "Tests/FlashTests",
       swiftSettings: strictSwiftSettings

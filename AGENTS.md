@@ -192,6 +192,8 @@ Surface requests that would violate these constraints before implementing them.
   events system-wide, without AX fallback. Keep guides in sync.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.
+- Test windows never cover the user's screen: `TestWindowHygiene` makes every
+  window the suite orders in transparent and fails a test that leaves one drawn.
 - Keep this guide actionable and concise; explanations belong in `docs/`.
   Browser help routes, runtime data, and the single-file UI build are documented
   in `docs/help.md`; rebuild the committed inspector resource after frontend edits.
