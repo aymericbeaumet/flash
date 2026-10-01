@@ -65,7 +65,9 @@ mappings.
   `tF`, remove the default `t` with `"t" = false` in the same table; `tf`
   then fires on its second key with no timeout.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
-  NORMAL. A hint click moves the pointer to the target and leaves it there;
+  NORMAL. Everything in a terminal emulator (an app a plugin declares in
+  `terminal_emulators`) is an input target, so a primary click on any hint
+  there — tmux pane, window and link hints included — enters INSERT. A hint click moves the pointer to the target and leaves it there;
   `m` (move) moves it without clicking. With `[hints] restore_pointer = true`,
   every committed click, drag or selection — hint or grid, and `mouse_repeat`
   — puts the pointer back where it was; `m` and `mouse_pointer` still move it.
@@ -543,7 +545,7 @@ INSERT is entered by:
 - a configured `enter_insert_mode` mapping;
 - a physical primary click while NORMAL is capturing;
 - a primary hint or mouse-grid click on an input target (the same rule for
-  `f` and `F`);
+  `f` and `F`): a text input, or anything in a declared terminal emulator;
 - `app_find` (`/`) or `tab_new` (`t`) once it reached the app.
 
 Other normal commands, focus changes and app activation preserve NORMAL.

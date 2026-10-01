@@ -32,8 +32,9 @@ public final class DeclaredApps: @unchecked Sendable {
 /// Apps that host terminal sessions (manifest `terminal_emulators`; the
 /// bundled `terminals` plugin lists the common ones). The host applies its
 /// terminal rules to exactly those apps: an unbound Command chord is refused
-/// rather than typed, pixel wheels are refused, and `only_terminals` plugin
-/// selectors match them.
+/// rather than typed, pixel wheels are refused, a primary hint or grid click
+/// anywhere in one enters INSERT, and `only_terminals` plugin selectors match
+/// them.
 public enum TerminalEmulators {
   public static let declared = DeclaredApps()
 

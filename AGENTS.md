@@ -75,8 +75,9 @@ tool, remove it rather than maintain both.
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
 9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
-   app clicks, primary hint and mouse-grid clicks on input targets, and the
-   typing intents `app_find` and `tab_new` once they reached the app (not after
+   app clicks, primary hint and mouse-grid clicks on input targets (every
+   target in a declared `terminal_emulators` app is one, tmux pane, window and
+   link hints included), and the typing intents `app_find` and `tab_new` once they reached the app (not after
    a failed source, an app without the action or a refused chord). Other
    commands, including tab switching and `focus_input`, preserve NORMAL; never add
    editable-focus follow-up or mode changes on app activation. Hint input intent

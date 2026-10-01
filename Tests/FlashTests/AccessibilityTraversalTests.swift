@@ -1,3 +1,5 @@
+import CoreGraphics
+import FlashCore
 import XCTest
 
 @testable import FlashProviders
@@ -151,5 +153,30 @@ final class HintPointCandidateTests: XCTestCase {
           "duplicate probe \(candidate)")
       }
     }
+  }
+
+  /// A terminal emulator's window is one typing surface: a primary hint click
+  /// anywhere in it hands the keyboard to the terminal, so every target the
+  /// walk finds there enters INSERT. Which apps are terminals is plugin data
+  /// (manifest `terminal_emulators`); other apps keep the per-role judgement.
+  func testTerminalEmulatorTargetsEnterInsertAndOtherAppsKeepTheirRoleJudgement() {
+    let targets = [
+      JumpTarget(
+        id: "content", frame: CGRect(x: 0, y: 0, width: 400, height: 300),
+        role: "AXTextArea", entersInsertMode: true, providerID: "ax"),
+      JumpTarget(
+        id: "tab", frame: CGRect(x: 0, y: 300, width: 80, height: 20),
+        role: "AXButton", providerID: "ax"),
+    ]
+    let isTerminal: (String) -> Bool = { $0 == "com.mitchellh.ghostty" }
+
+    let terminal = AccessibilityProvider.settlingInsertIntent(
+      targets, bundleIdentifier: "com.mitchellh.ghostty", isTerminalEmulator: isTerminal)
+    XCTAssertEqual(terminal.map(\.id), ["content", "tab"])
+    XCTAssertEqual(terminal.map(\.entersInsertMode), [true, true])
+
+    let editor = AccessibilityProvider.settlingInsertIntent(
+      targets, bundleIdentifier: "com.apple.TextEdit", isTerminalEmulator: isTerminal)
+    XCTAssertEqual(editor.map(\.entersInsertMode), [true, false])
   }
 }

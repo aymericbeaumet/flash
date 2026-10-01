@@ -28,9 +28,10 @@ public struct JumpTarget: @unchecked Sendable {
   public let resolveClickPoint: ((CGPoint) -> CGPoint?)?
   public let providerID: String
   /// Whether committing a click on this target should switch Flash into
-  /// insert mode. The owning provider decides: a typing surface (text
-  /// field) sets this true so the user lands ready to type; links, buttons,
-  /// and tmux pane selectors leave it false so keyboard navigation continues.
+  /// insert mode. The owning provider decides: a typing surface (a text
+  /// field, or any target in a terminal emulator, tmux panes and terminal
+  /// links included) sets this true so the user lands ready to type; links
+  /// and buttons elsewhere leave it false so keyboard navigation continues.
   public let entersInsertMode: Bool
   /// Source-declared salience for this target. The renderer currently paints
   /// `.important` and `.urgent` targets in the accent style; the commit path

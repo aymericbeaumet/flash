@@ -46,7 +46,8 @@ excluding dotted source identifiers such as `JumpTarget.entersInsertMode`.
 Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
 so the terminal can open it in a new context. Flash does not open the value
 itself.
-Pane hints stay in NORMAL mode and preserve the requested click modifiers.
+Pane, window and link hints preserve the requested click modifiers, and a
+primary click on one enters INSERT: the terminal owns the keyboard next.
 
 See [normal mode](normal-mode.md) for shortcuts and mode behavior, and
 [plugin configuration](plugin-cookbook.md) for extending the catalog.

@@ -1,10 +1,12 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 
 /// Whether a screen point lands in a text input, judged by the same rule that
-/// marks a discovered hint target as one (`JumpTarget.isTextInput`, and in
-/// UIKit content `IOSContent.canTakeKeyboardFocus`), so a grid click and a hint
-/// click enter INSERT under one rule.
+/// marks a discovered hint target as one (`JumpTarget.isTextInput`, in UIKit
+/// content `IOSContent.canTakeKeyboardFocus`, and anywhere in a declared
+/// terminal emulator), so a grid click and a hint click enter INSERT under one
+/// rule.
 public enum AXTextInputProbe {
   /// The deepest element under a point is often a text run inside the field
   /// (web editors expose AXStaticText children), so a few ancestors are checked.
@@ -20,6 +22,7 @@ public enum AXTextInputProbe {
       AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &hit)
         == .success, let element = hit
     else { return false }
+    if ownedByTerminalEmulator(element) { return true }
     AXUIElementSetMessagingTimeout(element, messagingTimeout)
     guard let input = textInput(fromElementUp: element, limit: ancestorLimit) else { return false }
     return IOSContent.canTakeKeyboardFocus(input) || !IOSContent.contains(input)
@@ -36,6 +39,15 @@ public enum AXTextInputProbe {
     path.prefix(ancestorLimit + 1).contains {
       JumpTarget.isTextInput(role: $0.role, subrole: $0.subrole)
     }
+  }
+
+  /// A terminal emulator's window is one typing surface, whatever AX reports
+  /// under the point (Alacritty reports nothing at all).
+  private static func ownedByTerminalEmulator(_ element: AXUIElement) -> Bool {
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(element, &pid) == .success else { return false }
+    return TerminalEmulators.contains(
+      NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
   }
 
   private static func textInput(fromElementUp start: AXUIElement, limit: Int) -> AXUIElement? {

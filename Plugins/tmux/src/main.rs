@@ -89,7 +89,6 @@ const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
 const SOURCE_WINDOWS: &str = "tmux.windows";
 const NAV_SCHEME: &str = "tmux";
 const PANE_TARGET_ROLE: &str = "tmux-pane";
-const TMUX_TARGET_ENTERS_INSERT_MODE: bool = false;
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 const ENV_PATH: &str = "/usr/bin/env";
@@ -2511,9 +2510,12 @@ fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
     })
 }
 
-// Ten positional args is on the high side, but `JumpTarget` itself is the
+// Nine positional args is on the high side, but `JumpTarget` itself is the
 // shape — collapsing this into a `BuildTargetArgs` struct would just rename
 // the same data without making the call sites clearer.
+//
+// Every tmux target is terminal content, so a primary click on any of them
+// hands the keyboard to the terminal and the host enters INSERT.
 #[allow(clippy::too_many_arguments)]
 fn build_target(
     target_id: &str,
@@ -2524,13 +2526,12 @@ fn build_target(
     role: &str,
     label: &str,
     pid: i64,
-    enters_insert_mode: bool,
     priority: Priority,
 ) -> JumpTarget {
     let target = JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
         .label(label)
-        .enters_insert_mode(enters_insert_mode)
+        .enters_insert_mode(true)
         .pid(pid)
         .priority(priority);
     if role == TERMINAL_LINK_ROLE && is_url(label) {
@@ -2677,9 +2678,8 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
         let chip_y = min_y + win_h - pad_y - (center_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-p{i}");
-        // A pane target delegates a plain click to the terminal. It stays in
-        // NORMAL after the click; only mouse-grid and physical mouse clicks
-        // express the separate "start typing" intent.
+        // A pane target delegates a plain click to the terminal, which then
+        // owns the keyboard: the commit enters INSERT.
         pane_targets.push(
             build_target(
                 &target_id,
@@ -2690,7 +2690,6 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
                 PANE_TARGET_ROLE,
                 &pane.id,
                 pid,
-                TMUX_TARGET_ENTERS_INSERT_MODE,
                 // Pane chips are the structural anchors of a tmux window, so the
                 // renderer paints them in the accent style. Link chips below are
                 // everyday clutter and stay in the default yellow.
@@ -2744,7 +2743,6 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
                     "tmux-window",
                     &span.label,
                     pid,
-                    TMUX_TARGET_ENTERS_INSERT_MODE,
                     Priority::High,
                 )
                 .context_id(context_id),
@@ -2767,8 +2765,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         let target_id = format!("tmux-{pid}-l{idx}");
         // Terminal links use a generic host-understood semantic role. The host
         // sends `f` as Shift-click and `F` as Command-Shift-click so Alacritty
-        // handles the link instead of forwarding a pane click to tmux. Link
-        // commits stay in NORMAL.
+        // handles the link instead of forwarding a pane click to tmux.
         targets.push(
             build_target(
                 &target_id,
@@ -2779,7 +2776,6 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
                 TERMINAL_LINK_ROLE,
                 &link.text,
                 pid,
-                TMUX_TARGET_ENTERS_INSERT_MODE,
                 Priority::Normal,
             )
             .context_id(link.context_id),
@@ -5491,7 +5487,7 @@ esac"#,
     }
 
     #[test]
-    fn tmux_panes_and_links_stay_normal_and_only_links_use_link_semantics() {
+    fn tmux_targets_enter_insert_and_only_links_use_link_semantics() {
         let pane = build_target(
             "pane",
             0.0,
@@ -5501,7 +5497,6 @@ esac"#,
             PANE_TARGET_ROLE,
             "%1",
             42,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
             Priority::Urgent,
         );
         let link = build_target(
@@ -5513,14 +5508,15 @@ esac"#,
             TERMINAL_LINK_ROLE,
             "example.com",
             42,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
             Priority::Normal,
         );
 
+        // Every tmux target is terminal content: a primary click on it hands
+        // the keyboard to the terminal, so the host enters INSERT.
         assert_eq!(pane.role.as_deref(), Some("tmux-pane"));
-        assert_eq!(pane.enters_insert_mode, Some(false));
+        assert_eq!(pane.enters_insert_mode, Some(true));
         assert_eq!(link.role.as_deref(), Some("FlashTerminalLink"));
-        assert_eq!(link.enters_insert_mode, Some(false));
+        assert_eq!(link.enters_insert_mode, Some(true));
     }
 
     #[test]
@@ -5539,7 +5535,6 @@ esac"#,
                 TERMINAL_LINK_ROLE,
                 label,
                 42,
-                TMUX_TARGET_ENTERS_INSERT_MODE,
                 Priority::Normal,
             );
             assert_eq!(target.url.as_deref(), is_url(label).then_some(label));

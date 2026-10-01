@@ -622,7 +622,8 @@ Section semantics:
 - **`terminal_emulators`** — bundle ids of apps this plugin declares as
   terminal emulators. No protocol identifies one, so the host learns them as
   data: across plugins the union gets the terminal rules (an unbound Command
-  chord is refused rather than typed, pixel wheels are refused) and matches
+  chord is refused rather than typed, pixel wheels are refused, and a primary
+  hint or grid click anywhere in one enters INSERT) and matches
   `only_terminals`. The bundled manifest-only `terminals` plugin declares the
   common emulators.
 - **`on_demand_hints`** — bundle ids of apps whose accessibility tree costs

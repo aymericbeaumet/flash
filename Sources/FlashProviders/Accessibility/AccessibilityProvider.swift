@@ -730,7 +730,21 @@ public final class AccessibilityProvider: FlashSource {
     // thread service multiple action-name reads concurrently.
     let survivors = resolvePendingActionChecks(state.pendingTargets)
     state.confirmedTargets.append(contentsOf: survivors)
-    return state.confirmedTargets
+    return Self.settlingInsertIntent(
+      state.confirmedTargets, bundleIdentifier: context.bundleIdentifier)
+  }
+
+  /// A terminal emulator's window is one typing surface: a primary click on
+  /// any of its targets hands the keyboard to the terminal, so they all enter
+  /// INSERT. Which apps are terminals is plugin data (manifest
+  /// `terminal_emulators`); every other app keeps the per-role judgement the
+  /// walk made.
+  static func settlingInsertIntent(
+    _ targets: [JumpTarget], bundleIdentifier: String,
+    isTerminalEmulator: (String) -> Bool = TerminalEmulators.contains
+  ) -> [JumpTarget] {
+    guard isTerminalEmulator(bundleIdentifier) else { return targets }
+    return targets.map { $0.entersInsertMode ? $0 : $0.enteringInsertMode(true) }
   }
 
   /// The frame (NSScreen coords) of the window a walk of `pid` covers — its

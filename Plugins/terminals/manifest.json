@@ -55,7 +55,7 @@
         "name": "terminals",
         "title": "Terminals",
         "summary": "Terminal emulators and their built-in pane shortcuts.",
-        "body": "# Terminals\n\nThis bundled manifest-only plugin declares which apps are terminal emulators (`terminal_emulators`). Flash applies its terminal rules only to them: a Command chord the emulator would type as text is refused, pixel wheels are refused, and plugins scoped `only_terminals` (tmux) match them. It also declares the chords emulators bind for built-in actions: `pane_next` / `pane_previous` send Cmd-] / Cmd-[ in Ghostty and iTerm2 when no tmux client hosts the focused terminal; tmux still owns its panes first. Add an emulator by declaring it in a plugin of your own.\n"
+        "body": "# Terminals\n\nThis bundled manifest-only plugin declares which apps are terminal emulators (`terminal_emulators`). Flash applies its terminal rules only to them: a Command chord the emulator would type as text is refused, pixel wheels are refused, a primary hint or grid click anywhere in one enters INSERT, and plugins scoped `only_terminals` (tmux) match them. It also declares the chords emulators bind for built-in actions: `pane_next` / `pane_previous` send Cmd-] / Cmd-[ in Ghostty and iTerm2 when no tmux client hosts the focused terminal; tmux still owns its panes first. Add an emulator by declaring it in a plugin of your own.\n"
       }
     ]
   }
