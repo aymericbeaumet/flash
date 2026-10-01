@@ -17,6 +17,10 @@ struct PreparedModel {
   /// every maintenance walk that reproduces the previous model unchanged, so a
   /// static focused app is re-walked seconds apart instead of every 1.3 s.
   var freshnessMs: Int
+  /// The walk found no visible region for the focused window: something
+  /// covered all of it, or nothing of it was on screen. Such a model is never
+  /// stored (`PreparedModelStore.store`).
+  let occluded: Bool
 
   var isEmptyReady: Bool { hints.isEmpty }
 }
@@ -26,8 +30,19 @@ struct PreparedModelStore {
   private var rebuilding: Set<pid_t> = []
   private var queuedAfterRebuild: Set<pid_t> = []
 
-  mutating func store(_ model: PreparedModel) {
+  /// Store a completed walk's model. An occluded one is not stored, and it
+  /// evicts the current model: whether the window is covered is window-list
+  /// state no AX event reports, so nothing would invalidate the empty model
+  /// once the covering window left, and a model walked before the window was
+  /// covered no longer describes the screen. The next activation walks.
+  @discardableResult
+  mutating func store(_ model: PreparedModel) -> Bool {
+    guard !model.occluded else {
+      models.removeValue(forKey: model.pid)
+      return false
+    }
     models[model.pid] = model
+    return true
   }
 
   mutating func discardModel(pid: pid_t) {

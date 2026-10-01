@@ -101,6 +101,46 @@ final class PreparedModelStoreTests: XCTestCase {
         now: now))
   }
 
+  /// The logged Firefox case: a test run's floating window covered the
+  /// focused window, the walk found no visible region and stored an empty
+  /// model that no AX event would ever invalidate once the window left. An
+  /// occluded walk is never cached, and the model it found is not served
+  /// either: what was walked before the window was covered no longer
+  /// describes the screen.
+  func testAWalkOfAFullyCoveredWindowIsNeverCachedAndEvictsTheCurrentModel() {
+    let now = DispatchTime(uptimeNanoseconds: 10_000_000_000)
+    var store = PreparedModelStore()
+    XCTAssertTrue(
+      store.store(
+        model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])))
+
+    XCTAssertFalse(
+      store.store(
+        model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [], occluded: true)))
+    XCTAssertNil(store.current(pid: 42))
+    XCTAssertNil(store.lookup(pid: 42, dirtyToken: 7, configRevision: 3, now: now))
+  }
+
+  /// The snapshot side of the same case: a floating window of another
+  /// process over the whole focused window leaves it no visible region, so
+  /// the walk is occluded. A fully transparent window covers nothing.
+  func testAFloatingWindowOverTheFocusedWindowLeavesItNoVisibleRegion() {
+    let window = CGRect(x: 0, y: 0, width: 2_048, height: 1_122)
+    let screen = CGRect(x: 0, y: 0, width: 2_048, height: 1_152)
+    func regions(coverAlpha: Double) -> [CGRect] {
+      let snapshot = WindowSnapshot.build(
+        entries: [
+          WindowSnapshot.Entry(pid: 64_238, layer: 3, nsBounds: screen, alpha: coverAlpha),
+          WindowSnapshot.Entry(pid: 42, layer: 0, nsBounds: window),
+        ],
+        focusedPid: 42)
+      return AppMonitor.discoveryVisibleRegions(
+        of: 42, in: snapshot, whenWindowListUnavailable: window)
+    }
+    XCTAssertEqual(regions(coverAlpha: 1), [])
+    XCTAssertEqual(regions(coverAlpha: 0), [window])
+  }
+
   func testDiscardModelKeepsRebuildGuard() {
     var store = PreparedModelStore()
     XCTAssertTrue(store.beginRebuild(pid: 3))
@@ -126,7 +166,8 @@ final class PreparedModelStoreTests: XCTestCase {
     token: UInt64,
     revision: UInt64,
     computedAt: DispatchTime,
-    targets: [JumpTarget]
+    targets: [JumpTarget],
+    occluded: Bool = false
   ) -> PreparedModel {
     let hints = targets.map { AssignedHint(target: $0, label: "a") }
     return PreparedModel(
@@ -137,7 +178,8 @@ final class PreparedModelStoreTests: XCTestCase {
       dirtyToken: token,
       configRevision: revision,
       fingerprint: AppMonitor.targetsFingerprint(targets),
-      freshnessMs: AppMonitor.modelFreshnessMs)
+      freshnessMs: AppMonitor.modelFreshnessMs,
+      occluded: occluded)
   }
 
   private func target(

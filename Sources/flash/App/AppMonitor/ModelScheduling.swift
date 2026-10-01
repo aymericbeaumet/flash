@@ -421,6 +421,25 @@ extension AppMonitor {
           }
         }
 
+        // An occluded walk read nothing: the focused window had no visible
+        // region. Whether it is covered is window-list state no AX event
+        // reports, so the result is neither cached (the store evicts the
+        // current model) nor counted — no maintenance, slow-walk backoff,
+        // empty-walk gate or readiness rewalk. The next activation recomputes
+        // the visible region and walks on demand.
+        if built.occluded {
+          self.preparedModels.store(built)
+          self.cancelMaintenance(pid: pid)
+          FlashLog.debug(
+            "[ax] model_refresh_occluded",
+            fields: [
+              "pid": "\(pid)", "bundle": context.bundleIdentifier, "reason": reason.logValue,
+            ])
+          completion?(nil)
+          waiter?(nil)
+          return
+        }
+
         let tokenStillMatches = (self.dirtyTokens[pid] ?? 0) == startToken
         let revisionStillMatches = self.configRevision == revision
         let stillFocused = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
@@ -439,8 +458,7 @@ extension AppMonitor {
         built.freshnessMs = Self.nextFreshnessMs(
           previous: self.preparedModels.current(pid: pid), built: built, reason: reason)
         let valid = tokenStillMatches && revisionStillMatches && stillFocused
-        if valid {
-          self.preparedModels.store(built)
+        if valid, self.preparedModels.store(built) {
           self.scheduleMaintenanceRefresh(for: built)
           if completion == nil, !degenerate {
             self.noteHealthyTargets(built.targets.count, pid: pid)

@@ -179,7 +179,9 @@ Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's
 normal-level window only while the window list lags an activation, so when that
 leaves it fully covered the regions are recomputed without those windows
-(`[discover] frontmost_window_covered`); floating layers still cover it. An
+(`[discover] frontmost_window_covered`); floating layers still cover it. A walk
+that leaves the window no visible region is never cached as a prepared model
+(see [prepared models](prepared-model.md#windows-that-are-covered)). An
 activation result that is empty, or collapsed below a tenth of the app's last
 trusted count, is degenerate, and a cached model judged the same way is a miss.
 A degenerate activation walk is walked once more and the fuller result is

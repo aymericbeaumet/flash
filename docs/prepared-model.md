@@ -53,6 +53,21 @@ termination, and shutdown revoke the applicable tickets. No timer is a second
 source of model validity: maintenance also rechecks focus, dirty token, and
 configuration before requesting a refresh.
 
+## Windows that are covered
+
+A walk first computes the focused window's visible region from the window
+list (`WindowSnapshot`). When nothing of the window is visible — another
+process's floating window, the Dock or a lock screen covers all of it — the
+walk is *occluded* and reads nothing. An occluded walk is never cached:
+whether the window is covered is window-list state that no AX event reports,
+so nothing would invalidate an empty model once the covering window left. It
+evicts the current model instead (that model no longer describes the screen)
+and arms no maintenance; nor does it count toward the slow-walk backoff, the
+empty-walk gate or a readiness rewalk. An activation that finds no model
+recomputes the visible region and walks on demand, so the same window list
+always gives the same hints, and a window still fully covered at activation
+stays silent.
+
 ## Trees that are not built yet
 
 Chromium and Flutter build their accessibility tree asynchronously after the

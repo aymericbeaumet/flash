@@ -513,6 +513,8 @@ extension AppMonitor {
     /// Targets the walk found before any activation filter, which is what a
     /// degenerate walk is judged by.
     var collectedTargets: Int = 0
+    /// The focused window had no visible region, so nothing was walked.
+    var occluded = false
   }
 
   private struct DiscoveryFrame {
@@ -542,7 +544,8 @@ extension AppMonitor {
       dirtyToken: dirtyToken,
       configRevision: configRevision,
       fingerprint: Self.targetsFingerprint(result.targets),
-      freshnessMs: Self.modelFreshnessMs)
+      freshnessMs: Self.modelFreshnessMs,
+      occluded: result.occluded)
   }
 
   static func targetsFingerprint(_ targets: [JumpTarget]) -> Int {
@@ -617,7 +620,7 @@ extension AppMonitor {
         finalizeEndedAt: frameEndedAt,
         assignStartedAt: frameEndedAt,
         assignEndedAt: frameEndedAt)
-      return DiscoveryResult(targets: [], hints: [], allowsFallback: false)
+      return DiscoveryResult(targets: [], hints: [], allowsFallback: false, occluded: true)
     }
     let collectStartedAt = DispatchTime.now()
     let collection = Self.collectFocusedTargets(
@@ -733,21 +736,24 @@ extension AppMonitor {
       onlyComputingVisibleRegionsFor: context.processID,
       ignoringPids: [getpid()],
       walkedWindowFrame: walked)
-    let visible: [CGRect]
-    if let regions = snapshot.visibleRegions[context.processID] {
-      visible = regions
-    } else if snapshot.entries.isEmpty {
-      // CGWindowList can fail transiently. Fall back to the activation-time
-      // screen union so the user still gets hints instead of a silent empty
-      // overlay; normal runs use the precise active-window visible regions.
-      visible = [context.frontWindowFrame]
-    } else {
-      visible = []
-    }
+    let visible = Self.discoveryVisibleRegions(
+      of: context.processID, in: snapshot, whenWindowListUnavailable: context.frontWindowFrame)
     let providerFrame = snapshot.activeWindowFrame ?? union(of: visible)
     return DiscoveryFrame(
       providerContext: clip(context, to: providerFrame),
       visibleRegions: visible)
+  }
+
+  /// The part of `pid`'s active window the walk may hint. Empty when it is
+  /// fully covered or not on screen: the walk is then `occluded`.
+  static func discoveryVisibleRegions(
+    of pid: pid_t, in snapshot: WindowSnapshot, whenWindowListUnavailable fallback: CGRect
+  ) -> [CGRect] {
+    if let regions = snapshot.visibleRegions[pid] { return regions }
+    // CGWindowList can fail transiently. Fall back to the activation-time
+    // screen union so the user still gets hints instead of a silent empty
+    // overlay; normal runs use the precise active-window visible regions.
+    return snapshot.entries.isEmpty ? [fallback] : []
   }
 
   struct FocusedTargetCollection {
