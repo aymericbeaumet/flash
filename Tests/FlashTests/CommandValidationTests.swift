@@ -7,9 +7,11 @@ final class CommandValidationTests: XCTestCase {
   func testInvalidBuiltinArgumentsCannotBecomePluginCalls() {
     XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "enter_terminal_mode", args: ["name": ""]))
     XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "leave_mode", args: ["unexpected": "1"]))
+    // A built-in action parses as itself; only unknown verbs become plugin calls.
+    XCTAssertEqual(URLEventHandler.parseOrPluginVerb(verb: "app_save", args: [:]), .save)
     XCTAssertEqual(
-      URLEventHandler.parseOrPluginVerb(verb: "app_save", args: [:]),
-      .pluginVerb(name: "app_save", args: [:]))
+      URLEventHandler.parseOrPluginVerb(verb: "spotify_pause", args: [:]),
+      .pluginVerb(name: "spotify_pause", args: [:]))
   }
 
   func testStraySubcommandsAndMalformedFlagsAreRejectedInMappings() {
