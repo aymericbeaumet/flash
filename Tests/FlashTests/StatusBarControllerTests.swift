@@ -102,6 +102,27 @@ final class StatusBarControllerTests: XCTestCase {
     }
   }
 
+  /// A clock boundary and a rotation are the visible change itself, so they
+  /// wake at `.high`; a job re-run or a throttled publish lands whenever its
+  /// command finishes, so it keeps `.normal` slack — unless a tighter
+  /// deadline would fall inside that slack and be dragged late with it.
+  func testEachWakeupCarriesTheSlackItsKindTolerates() {
+    typealias Controller = FlashStatusBarController
+    let job = Controller.Deadline(at: 10, priority: .normal)
+    let clock = Controller.Deadline(at: 10.05, priority: .high)
+    XCTAssertNil(Controller.nextWakeup([]))
+    XCTAssertNil(Controller.nextWakeup([Controller.Deadline(at: .infinity, priority: .high)]))
+    XCTAssertEqual(Controller.nextWakeup([job]), job)
+    XCTAssertEqual(
+      Controller.nextWakeup([job, clock]), Controller.Deadline(at: 10, priority: .high),
+      "a clock tick inside the job's slack tightens the shared wake-up")
+    XCTAssertEqual(
+      Controller.nextWakeup([job, Controller.Deadline(at: 10.5, priority: .high)]), job,
+      "a later clock tick gets its own wake-up")
+    XCTAssertEqual(
+      Controller.nextWakeup([clock, Controller.Deadline(at: 10.06, priority: .normal)]), clock)
+  }
+
   func testACalendarAloneWakesAtTheNextLocalMidnight() {
     let harness = Harness("#{flash.calendar}")
     defer { harness.controller.stop() }

@@ -68,7 +68,9 @@ struct PreparedModelScheduler {
     case readiness(step: Int, then: ModelRefreshReason)
   }
 
-  private enum Kind: Hashable, CaseIterable { case refresh, maintenance, readiness }
+  /// Which of an app's three wakes an arm belongs to. Each kind is one slot
+  /// per app, so a newer arm of the same kind supersedes the older one.
+  enum Kind: String, Hashable, CaseIterable { case refresh, maintenance, readiness }
   private struct Key: Hashable {
     let pid: pid_t
     let kind: Kind
@@ -81,6 +83,7 @@ struct PreparedModelScheduler {
 
   struct Arm: Equatable {
     let ticket: Ticket
+    let kind: Kind
     let deadline: UInt64
   }
 
@@ -204,7 +207,7 @@ struct PreparedModelScheduler {
       let entry = entries[key]
     else { return .stale }
     guard now >= entry.deadline else {
-      return .wait(Arm(ticket: ticket, deadline: entry.deadline))
+      return .wait(Arm(ticket: ticket, kind: key.kind, deadline: entry.deadline))
     }
     entries.removeValue(forKey: key)
     return .fire(entry.request)
@@ -246,6 +249,6 @@ struct PreparedModelScheduler {
     generation &+= 1
     let ticket = Ticket(pid: key.pid, generation: generation)
     entries[key] = Entry(ticket: ticket, deadline: deadline, request: request)
-    return Arm(ticket: ticket, deadline: deadline)
+    return Arm(ticket: ticket, kind: key.kind, deadline: deadline)
   }
 }

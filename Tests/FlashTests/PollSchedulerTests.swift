@@ -85,7 +85,7 @@ final class PollSchedulerTests: XCTestCase {
     ticked.assertForOverFulfill = false
     let queue = DispatchQueue(label: "poll.tests")
     for id in ["core:one", "core:two"] {
-      scheduler.register(id, everyMs: 50, on: queue) { ticked.fulfill() }
+      scheduler.register(id, everyMs: 50, priority: .normal, on: queue) { ticked.fulfill() }
     }
     wait(for: [ticked], timeout: 5)
 
@@ -176,9 +176,68 @@ final class PollSchedulerTests: XCTestCase {
     let again = expectation(description: "re-armed deadline fires once")
     again.expectedFulfillmentCount = 1
     again.assertForOverFulfill = true
-    scheduler.scheduleOnce("core:once", afterMs: 5_000, on: queue) { again.fulfill() }
-    scheduler.scheduleOnce("core:once", afterMs: 60, on: queue) { again.fulfill() }
+    scheduler.scheduleOnce("core:once", afterMs: 5_000, priority: .normal, on: queue) {
+      again.fulfill()
+    }
+    scheduler.scheduleOnce("core:once", afterMs: 60, priority: .normal, on: queue) {
+      again.fulfill()
+    }
     wait(for: [again], timeout: 5)
+  }
+
+  // MARK: - Re-armable deadlines
+
+  private func registeredIDs(_ scheduler: PollScheduler) -> [String] {
+    let listed = DispatchSemaphore(value: 0)
+    var ids: [String] = []
+    scheduler.registeredIDs {
+      ids = $0
+      listed.signal()
+    }
+    listed.wait()
+    return ids
+  }
+
+  /// A debounce re-arms one registration per event; only the last arming
+  /// runs, and it leaves nothing registered behind it.
+  func testAPollDeadlineRunsOnlyItsLatestArming() {
+    let scheduler = PollScheduler()
+    let queue = DispatchQueue(label: "poll.deadline.tests")
+    let deadline = PollDeadline("core:debounce", priority: .normal, on: queue, scheduler: scheduler)
+    let fired = expectation(description: "the latest arming runs once")
+    fired.assertForOverFulfill = true
+    var runs: [Int] = []
+    queue.sync {
+      for arming in 1...3 {
+        deadline.arm(afterMs: 40) {
+          runs.append(arming)
+          fired.fulfill()
+        }
+      }
+    }
+    wait(for: [fired], timeout: 5)
+    queue.sync { XCTAssertEqual(runs, [3]) }
+    XCTAssertEqual(registeredIDs(scheduler), [])
+    queue.sync { XCTAssertFalse(deadline.isArmed) }
+  }
+
+  /// Cancelling releases the registration, so a cancelled debounce costs no
+  /// wake-up; a fire already on its way to the queue is dropped as stale.
+  func testCancellingAPollDeadlineReleasesItsWakeup() {
+    let scheduler = PollScheduler()
+    let queue = DispatchQueue(label: "poll.deadline.cancel.tests")
+    let deadline = PollDeadline("core:grace", priority: .low, on: queue, scheduler: scheduler)
+    let dropped = expectation(description: "a cancelled deadline never runs")
+    dropped.isInverted = true
+    queue.sync { deadline.arm(afterMs: 5_000) { dropped.fulfill() } }
+    XCTAssertEqual(registeredIDs(scheduler), ["core:grace"])
+    queue.sync { deadline.cancel() }
+    XCTAssertEqual(registeredIDs(scheduler), [])
+
+    queue.sync { deadline.arm(afterMs: 0) { dropped.fulfill() } }
+    // Cancel from the handler queue while the zero-delay fire is in flight.
+    queue.async { deadline.cancel() }
+    wait(for: [dropped], timeout: 0.3)
   }
 
   // MARK: - Suspension
@@ -227,10 +286,10 @@ final class PollSchedulerTests: XCTestCase {
     let caughtUp = expectation(description: "the overdue deadline fires once after resuming")
     caughtUp.assertForOverFulfill = true
     var suspended = true
-    scheduler.register("core:held", everyMs: 50, on: queue) {
+    scheduler.register("core:held", everyMs: 50, priority: .low, on: queue) {
       if suspended { held.fulfill() } else { resumed.fulfill() }
     }
-    scheduler.scheduleOnce("core:held.once", afterMs: 60, on: queue) {
+    scheduler.scheduleOnce("core:held.once", afterMs: 60, priority: .low, on: queue) {
       if suspended { held.fulfill() } else { caughtUp.fulfill() }
     }
     wait(for: [held], timeout: 0.4)

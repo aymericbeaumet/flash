@@ -142,13 +142,16 @@ final class PluginManager {
   /// instead of the plugin silently not existing.
   private var loadFailureStatuses: [PluginStatus] = []
   private var pluginsByID: [String: PluginProcess] = [:]
-  /// Desktop widgets fully covered for at least `hiddenWidgetGrace`: they no
+  /// Desktop widgets fully covered for at least `hiddenWidgetGraceMs`: they no
   /// longer observe plugin segments. Queue-confined, as is `pendingHides`.
   private var hiddenWidgets: Set<String> = []
-  private var pendingHides: [String: DispatchWorkItem] = [:]
+  /// One grace deadline per covered widget on the shared clock. `.low`:
+  /// nobody can see a covered widget, and the grace only decides when its
+  /// plugins stop sampling for it.
+  private var pendingHides: [String: PollDeadline] = [:]
   /// How long a widget stays covered before its plugins stop sampling for it,
   /// so briefly covering the desktop does not respawn status plugins.
-  static let hiddenWidgetGrace: DispatchTimeInterval = .seconds(30)
+  static let hiddenWidgetGraceMs = 30_000
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
   /// Latest host-owned running-app snapshot, behind its own lock so each
   /// plugin's post-initialize `core:apps.changed` reads it from the plugin
@@ -516,7 +519,7 @@ final class PluginManager {
   }
 
   /// A desktop widget became visible or fully covered. A covered widget stops
-  /// observing its plugins' segments after `hiddenWidgetGrace`; one shown
+  /// observing its plugins' segments after `hiddenWidgetGraceMs`; one shown
   /// again observes them at once.
   func setWidgetVisible(name: String, _ visible: Bool) {
     queue.async { [weak self] in
@@ -526,13 +529,14 @@ final class PluginManager {
         if self.hiddenWidgets.remove(name) != nil { self.applyObservedStatus() }
         return
       }
-      let work = DispatchWorkItem { [weak self] in
+      let grace = PollDeadline(
+        "core:widget_hidden:\(name)", priority: .low, on: self.queue)
+      self.pendingHides[name] = grace
+      grace.arm(afterMs: Self.hiddenWidgetGraceMs) { [weak self] in
         guard let self else { return }
         self.pendingHides[name] = nil
         if self.hiddenWidgets.insert(name).inserted { self.applyObservedStatus() }
       }
-      self.pendingHides[name] = work
-      self.queue.asyncAfter(deadline: .now() + Self.hiddenWidgetGrace, execute: work)
     }
   }
 

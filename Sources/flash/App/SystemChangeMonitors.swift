@@ -47,38 +47,32 @@ final class HostEventSources {
 
 /// Collapses a burst of OS notifications into one signal: the first starts
 /// a window of `delayMs`, and the signal fires once when it closes, however
-/// many notifications arrived inside it. A bounded one-shot per burst.
+/// many notifications arrived inside it. A bounded one-shot per burst on the
+/// shared clock, at `.normal`: plugins re-read what changed, and nothing on
+/// screen is waiting on that exact instant.
 final class CoalescedSignal {
   private let queue: DispatchQueue
   private let delayMs: Int
   private let action: () -> Void
-  /// Queue-confined: the window open now, nil when none is.
-  private var pending: DispatchWorkItem?
+  /// Queue-confined: the window open now, if any.
+  private let window: PollDeadline
 
-  init(queue: DispatchQueue, delayMs: Int, action: @escaping () -> Void) {
+  init(id: String, queue: DispatchQueue, delayMs: Int, action: @escaping () -> Void) {
     self.queue = queue
     self.delayMs = delayMs
     self.action = action
+    window = PollDeadline(id, priority: .normal, on: queue)
   }
 
   func signal() {
     queue.async { [self] in
-      guard pending == nil else { return }
-      let work = DispatchWorkItem { [weak self] in
-        guard let self else { return }
-        self.pending = nil
-        self.action()
-      }
-      pending = work
-      queue.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
+      guard !window.isArmed else { return }
+      window.arm(afterMs: delayMs) { [weak self] in self?.action() }
     }
   }
 
   func cancel() {
-    queue.sync {
-      pending?.cancel()
-      pending = nil
-    }
+    queue.sync { window.cancel() }
   }
 }
 
@@ -109,7 +103,8 @@ final class NetworkChangeMonitor: HostEventSource {
   private var store: SCDynamicStore?
 
   init(onChange: @escaping () -> Void) {
-    signal = CoalescedSignal(queue: queue, delayMs: Self.coalesceMs, action: onChange)
+    signal = CoalescedSignal(
+      id: "core:network_changed", queue: queue, delayMs: Self.coalesceMs, action: onChange)
     relay.monitor = self
   }
 
@@ -177,6 +172,7 @@ final class VolumeChangeMonitor: HostEventSource {
   ) {
     self.center = center
     signal = CoalescedSignal(
+      id: "core:volumes_changed",
       queue: DispatchQueue(label: "flash.events.volumes", qos: .utility), delayMs: coalesceMs,
       action: onChange)
   }

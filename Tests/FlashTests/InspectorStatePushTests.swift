@@ -33,7 +33,7 @@ final class InspectorStatePushTests: XCTestCase {
     let server = DebugServer(
       host: delegate.config.debug.httpInspectorHost,
       port: delegate.config.debug.httpInspectorPort,
-      coalescingWindow: .milliseconds(20)
+      coalescingWindowMs: 20
     ) { [unowned self] in
       self.snapshots += 1
       return [:]

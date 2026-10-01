@@ -278,8 +278,12 @@ extension AppMonitor {
     FlashLog.debug(
       "[ax] observer_registration_retry pid=\(pid) refused=\(refused.count) "
         + "attempt=\(attempt + 1)")
-    axQueue.asyncAfter(
-      deadline: .now() + .milliseconds(Self.observerRegistrationRetryDelaysMs[attempt])
+    // The ladder rides the shared clock. `.normal`: until a retry lands the
+    // app's events go unobserved, so it may not drift by a whole second, but
+    // no surface is waiting on the exact instant.
+    pollScheduler.scheduleOnce(
+      "core:ax_observer_retry:\(pid)", afterMs: Self.observerRegistrationRetryDelaysMs[attempt],
+      priority: .normal, on: axQueue
     ) { [weak self] in
       self?.registerApplicationNotifications(refused, in: entry, attempt: attempt + 1)
     }

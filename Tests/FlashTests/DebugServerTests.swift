@@ -264,7 +264,7 @@ final class DebugServerTests: XCTestCase {
   /// fresh snapshot.
   func testChangesCoalesceIntoOneSnapshotPerWindowOnlyWhileObserved() {
     var snapshots = 0
-    let server = DebugServer(host: "localhost", port: 0, coalescingWindow: .milliseconds(20)) {
+    let server = DebugServer(host: "localhost", port: 0, coalescingWindowMs: 20) {
       snapshots += 1
       return [:]
     }
@@ -293,7 +293,7 @@ final class DebugServerTests: XCTestCase {
   /// or an explicit `?refresh=1` takes one fresh snapshot.
   func testStateRequestsSnapshotOnlyWhenStaleOrAskedTo() throws {
     var snapshots = 0
-    let server = DebugServer(host: "localhost", port: 0, coalescingWindow: .milliseconds(10)) {
+    let server = DebugServer(host: "localhost", port: 0, coalescingWindowMs: 10) {
       snapshots += 1
       return ["n": snapshots]
     }

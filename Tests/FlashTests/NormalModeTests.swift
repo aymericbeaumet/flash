@@ -780,6 +780,38 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(registered(), [])
   }
 
+  /// Debounce and readiness wakes re-arm themselves, so they ride the shared
+  /// clock too — one registration per app and kind — and cancelling the
+  /// app's refresh work releases them instead of leaving a stale wake-up.
+  func testRefreshAndReadinessWakesRideTheSharedClockAndLeaveItWhenCancelled() {
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let scheduler = PollScheduler()
+    let monitor = AppMonitor(registry: registry, config: .default, pollScheduler: scheduler)
+    func registered() -> [String] {
+      let listed = DispatchSemaphore(value: 0)
+      var ids: [String] = []
+      scheduler.registeredIDs {
+        ids = $0
+        listed.signal()
+      }
+      listed.wait()
+      return ids
+    }
+    monitor.scheduleModelRefresh(for: 45, reason: .focus)
+    monitor.armReadinessStep(pid: 45, step: 0, then: .focus)
+    monitor.scheduleModelRefresh(for: 46, reason: .focus)
+    XCTAssertEqual(
+      registered(),
+      [
+        "core:prepared_model_readiness:45", "core:prepared_model_refresh:45",
+        "core:prepared_model_refresh:46",
+      ])
+    monitor.cancelRefreshWork(for: 45)
+    XCTAssertEqual(registered(), ["core:prepared_model_refresh:46"])
+    monitor.cancelAllRefreshWork()
+    XCTAssertEqual(registered(), [])
+  }
+
   func testAXEventStormThresholdUsesEventRate() {
     XCTAssertTrue(
       AppMonitor.axEventRateIsStorm(

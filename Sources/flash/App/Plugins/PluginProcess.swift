@@ -109,7 +109,14 @@ final class PluginProcess {
   /// ever receives an unchanged set twice.
   private var deliveredStatusSegments: [String]?
   private var lifecycle = PluginLifecycle()
-  private var restartWork: DispatchWorkItem?
+  /// The crash-restart backoff (1–30 s) on the shared clock. `.low`: a
+  /// restart is background upkeep — catalogs survive it in the host store —
+  /// and a second of slack on a multi-second backoff changes nothing.
+  /// Queue-confined.
+  private lazy var restartDeadline = PollDeadline(
+    "core:plugin_restart:\(manifest.id):\(instanceTag)", priority: .low, on: queue)
+  /// Tells this instance's deadlines from a replacement's for the same id.
+  private var instanceTag: String { String(UInt(bitPattern: ObjectIdentifier(self).hashValue)) }
   /// Set by a user-initiated reload so the lifecycle teardown keeps the
   /// published status segments (see `stopOnQueue(preserveStatus:)`).
   private var preserveStatusOnTeardown = false
@@ -143,7 +150,10 @@ final class PluginProcess {
   /// clock, so a plugin that publishes or logs is never pinged.
   private var lastInboundFrameAt = DispatchTime.now()
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
-  private var reloadWork: DispatchWorkItem?
+  /// Trailing debounce for plugin file changes. `.normal`: someone just
+  /// rebuilt the plugin and is waiting for it to come back. Queue-confined.
+  private lazy var fileReloadDeadline = PollDeadline(
+    "core:plugin_reload:\(manifest.id):\(instanceTag)", priority: .normal, on: queue)
   private var lastError: String?
   private var lastLog: String?
   /// Mirrors `Config.Plugins.watchingEnabled`. When false, plugin file
@@ -323,9 +333,9 @@ final class PluginProcess {
       case .start(let generation):
         startOnQueue(generation: generation)
       case .retry(let generation, let delay):
-        let work = DispatchWorkItem { [weak self] in self?.applyLifecycle(.retry(generation)) }
-        restartWork = work
-        queue.asyncAfter(deadline: .now() + .seconds(delay), execute: work)
+        restartDeadline.arm(afterMs: delay * 1000) { [weak self] in
+          self?.applyLifecycle(.retry(generation))
+        }
       case .park:
         settleDeferredPerforms(as: .unhandled)
         if lifecycle.failures.count > Self.restartWindowAttempts {
@@ -384,10 +394,8 @@ final class PluginProcess {
     // be reentrant and could strand or double-complete work.
     let abandonedCallbacks = Self.takePendingCallbacks(&pending)
     pendingHostRequests.removeAll()
-    restartWork?.cancel()
-    restartWork = nil
-    reloadWork?.cancel()
-    reloadWork = nil
+    restartDeadline.cancel()
+    fileReloadDeadline.cancel()
     installer?.cancel()
     installer = nil
     PluginLivenessSweep.shared.leave(self)
@@ -1833,7 +1841,8 @@ final class PluginProcess {
     }
     for (name, everyMs) in decoded {
       PollScheduler.shared.register(
-        Self.pollClientID(pluginID: manifest.id, name: name), everyMs: everyMs, on: queue
+        Self.pollClientID(pluginID: manifest.id, name: name), everyMs: everyMs, priority: .normal,
+        on: queue
       ) { [weak self] in
         self?.deliverPollTickOnQueue(name: name)
       }
@@ -2015,8 +2024,7 @@ final class PluginProcess {
   }
 
   private func scheduleFileReload() {
-    reloadWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
+    fileReloadDeadline.arm(afterMs: 300) { [weak self] in
       guard let self, self.lifecycle.state != .stopped else { return }
       if let onFilesChanged = self.onFilesChanged {
         onFilesChanged()
@@ -2024,8 +2032,6 @@ final class PluginProcess {
         self.reload(reason: "plugin_files_changed")
       }
     }
-    reloadWork = work
-    queue.asyncAfter(deadline: .now() + .milliseconds(300), execute: work)
   }
 
   private static func elapsedMilliseconds(since start: DispatchTime) -> String {

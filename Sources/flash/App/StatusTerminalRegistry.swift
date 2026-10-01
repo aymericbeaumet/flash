@@ -83,7 +83,7 @@ final class StatusTerminalRegistry {
   /// The one restart mechanism: a persistent popup's process after it exits.
   private struct Restart {
     var backoff = TerminalRestartBackoff()
-    var pending: DispatchWorkItem?
+    var pending: PollDeadline?
   }
 
   /// A fresh popup lives for one showing; `less` pages on the alternate
@@ -473,7 +473,17 @@ final class StatusTerminalRegistry {
     }
     let session = entries[name]?.session
     let generation = inputGenerations[name]
-    let work = DispatchWorkItem { [weak self] in
+    // The backoff rides the shared clock. Its first step (0.1 s) follows a
+    // program the user just quit inside a popup they may still be looking
+    // at: `.high`. Later steps back off a crash loop nobody is waiting on:
+    // `.low`.
+    restart.pending?.cancel()
+    let deadline = PollDeadline(
+      "core:popup_restart:\(StatusFormatDocument.stableID(name))", priority: .low, on: .main)
+    restart.pending = deadline
+    restarts[name] = restart
+    deadline.arm(after: delay, priority: restart.backoff.attempt == 1 ? .high : .low) {
+      [weak self] in
       guard let self else { return }
       self.restarts[name]?.pending = nil
       guard let session, self.entries[name]?.session === session,
@@ -481,15 +491,12 @@ final class StatusTerminalRegistry {
       else { return }
       self.restartSession(name: name, resetBackoff: false)
     }
-    restart.pending = work
-    restarts[name] = restart
     FlashLog.info(
       "Status terminal restart scheduled",
       fields: [
         "popup_id": StatusFormatDocument.stableID(name),
         "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
       ], source: "core:StatusTerminalRegistry.restart")
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
 
   private static func logLifecycle(name: String, state: TerminalSessionState, pid: Int32?) {

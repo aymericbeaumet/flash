@@ -1512,23 +1512,38 @@ extension AppDelegate {
 
   /// Poll the general pasteboard until its change-count moves past `change`
   /// (our synthesized ⌘C landed) or `attempts` run out, then hand the string
-  /// to `completion`. Stays on the main queue so it composes with the rest of
-  /// normal-mode dispatch.
+  /// to `completion` on the main queue, so it composes with the rest of
+  /// normal-mode dispatch. macOS posts no pasteboard notification, so this
+  /// is a genuine poll: it rides the shared clock at `.system` — the yank is
+  /// waiting on each probe — under an id of its own, so a second yank never
+  /// replaces the first one's pending probe.
   private func pollPasteboard(
     after change: Int,
     attempts: Int,
+    completion: @escaping (String?) -> Void
+  ) {
+    pasteboardWaitSerial &+= 1
+    probePasteboard(
+      clientID: "core:pasteboard_wait:\(pasteboardWaitSerial)", after: change,
+      attempts: attempts, completion: completion)
+  }
+
+  private func probePasteboard(
+    clientID: String, after change: Int, attempts: Int,
     completion: @escaping (String?) -> Void
   ) {
     guard attempts > 0 else {
       completion(nil)
       return
     }
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15)) { [weak self] in
+    PollScheduler.shared.scheduleOnce(clientID, afterMs: 15, priority: .system, on: .main) {
+      [weak self] in
       let pasteboard = NSPasteboard.general
       if pasteboard.changeCount != change {
         completion(pasteboard.string(forType: .string))
       } else {
-        self?.pollPasteboard(after: change, attempts: attempts - 1, completion: completion)
+        self?.probePasteboard(
+          clientID: clientID, after: change, attempts: attempts - 1, completion: completion)
       }
     }
   }

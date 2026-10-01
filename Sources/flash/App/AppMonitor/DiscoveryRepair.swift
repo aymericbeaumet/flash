@@ -27,7 +27,7 @@ enum DegenerateRepair: Equatable {
 
 /// Waits between readiness probes for a runtime that builds its tree
 /// asynchronously (`AppTraits.buildsAccessibilityTreeAsynchronously`). Each
-/// wait is scheduled with `asyncAfter`, never slept, and a probe is a bounded
+/// wait is a `PollScheduler` deadline, never slept, and a probe is a bounded
 /// read (`AccessibilityReadiness`). The last step walks without probing, so
 /// the ladder always ends in one walk; its total (1.5 s) bounds how long a
 /// genuinely empty app keeps an activation waiting. The first step gives a

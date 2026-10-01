@@ -86,16 +86,12 @@ extension AppDelegate {
 
   /// One editor save produces a burst of vnode events (write, extend, attrib,
   /// rename of the temp file, …). Coalesce the burst into a single trailing
-  /// re-watch + reload instead of one synchronous reload per event.
+  /// re-watch + reload instead of one synchronous reload per event: each
+  /// event re-arms one deadline on the shared clock. `.normal`: the user just
+  /// saved and will look for the change, but a tenth of a second is
+  /// invisible beside the 150 ms settle.
   private func scheduleConfigReload() {
-    configReloadWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      self.configReloadWork = nil
-      self.watchConfigFile()
-    }
-    configReloadWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
+    configReload.arm(afterMs: 150) { [weak self] in self?.watchConfigFile() }
   }
 
   private func makeWatcher(
@@ -240,15 +236,15 @@ extension AppDelegate {
   /// the prompt is idle.
   func pluginStateDidChange() {
     debugStateDidChange()
-    pluginStateRefreshWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
+    // Each change re-arms one trailing deadline on the shared clock.
+    // `.normal`: plugin counts and sections are bar content, not a ticking
+    // value.
+    pluginStateRefresh.arm(afterMs: 100) { [weak self] in
       guard let self else { return }
       self.reconcileClipboardMonitor()
       self.reconcileHostEventSources()
       self.statusBarController?.refreshPluginSections()
     }
-    pluginStateRefreshWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
   }
 
   func selectInitialModeIfNeeded() {

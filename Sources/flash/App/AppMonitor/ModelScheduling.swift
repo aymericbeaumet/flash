@@ -27,9 +27,20 @@ extension AppMonitor {
     pollScheduler.unregister(Self.maintenanceClientID)
   }
 
+  /// Release `pid`'s debounce and readiness wakes (every app's when nil), so
+  /// cancelled refresh work costs no wake-up.
+  private func releaseRefreshWakes(pid: pid_t?) {
+    let released = refreshWakeClientIDs.filter { id in
+      pid.map { id.hasSuffix(":\($0)") } ?? true
+    }
+    refreshWakeClientIDs.subtract(released)
+    for id in released { pollScheduler.unregister(id) }
+  }
+
   func cancelRefreshWork(for pid: pid_t) {
     modelScheduler.reset(pid: pid)
     releaseMaintenanceWake(pid: pid)
+    releaseRefreshWakes(pid: pid)
     pendingModelCompletion.removeValue(forKey: pid)
     slowAutomaticModelRefreshPIDs.remove(pid)
     readinessRewalkBudget.removeValue(forKey: pid)
@@ -38,6 +49,7 @@ extension AppMonitor {
   func cancelAllRefreshWork() {
     modelScheduler.reset()
     releaseMaintenanceWake(pid: nil)
+    releaseRefreshWakes(pid: nil)
     pendingModelCompletion.removeAll()
     slowAutomaticModelRefreshPIDs.removeAll()
     readinessRewalkBudget.removeAll()
@@ -198,10 +210,34 @@ extension AppMonitor {
         + "empty_walks=\(EmptyBackgroundWalkGate.threshold) reason=volatile_provider")
   }
 
-  /// Debounce and readiness wakes are bounded one-shots on the main queue.
+  /// One registration per app and kind: a newer arm of the same slot
+  /// replaces the pending wake instead of stacking a stale one behind it.
+  static func refreshWakeClientID(_ arm: PreparedModelScheduler.Arm) -> String {
+    "core:prepared_model_\(arm.kind.rawValue):\(arm.ticket.pid)"
+  }
+
+  /// Milliseconds from now until an uptime deadline, rounded up so a wake
+  /// never lands before the deadline it serves.
+  static func delayMs(untilUptime deadline: UInt64) -> Int {
+    let now = DispatchTime.now().uptimeNanoseconds
+    return deadline > now ? Int((deadline - now + 999_999) / 1_000_000) : 0
+  }
+
+  /// Debounce and readiness wakes re-arm themselves — an event extends the
+  /// debounce, a readiness step arms the next — so they ride the shared clock
+  /// as deadline registrations, coalescing with every other wake-up and held
+  /// while the displays sleep or the session is locked. `.normal`: they warm
+  /// a model ahead of an activation nobody has asked for yet; an activation
+  /// that arrives first walks on demand instead of waiting for them.
   private func armRefreshTimer(_ arm: PreparedModelScheduler.Arm) {
-    DispatchQueue.main.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: arm.deadline)) {
-      [weak self] in self?.wakeRefreshTimer(arm, rearm: { $0.armRefreshTimer($1) })
+    let id = Self.refreshWakeClientID(arm)
+    refreshWakeClientIDs.insert(id)
+    pollScheduler.scheduleOnce(
+      id, afterMs: Self.delayMs(untilUptime: arm.deadline), priority: .normal, on: .main
+    ) { [weak self] in
+      guard let self else { return }
+      self.refreshWakeClientIDs.remove(id)
+      self.wakeRefreshTimer(arm, rearm: { $0.armRefreshTimer($1) })
     }
   }
 
@@ -216,11 +252,10 @@ extension AppMonitor {
   /// app's replaces it. `.normal`: its 100-ms slack stays inside the 250-ms
   /// maintenance lead, so a late wake still lands before the ceiling.
   private func armMaintenanceWake(_ arm: PreparedModelScheduler.Arm) {
-    let now = DispatchTime.now().uptimeNanoseconds
-    let delayMs = arm.deadline > now ? Int((arm.deadline - now + 999_999) / 1_000_000) : 0
     maintenanceWakePID = arm.ticket.pid
     pollScheduler.scheduleOnce(
-      Self.maintenanceClientID, afterMs: delayMs, priority: .normal, on: .main
+      Self.maintenanceClientID, afterMs: Self.delayMs(untilUptime: arm.deadline),
+      priority: .normal, on: .main
     ) { [weak self] in
       guard let self else { return }
       if self.maintenanceWakePID == arm.ticket.pid { self.maintenanceWakePID = nil }

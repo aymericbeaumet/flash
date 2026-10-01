@@ -301,18 +301,30 @@ extension AppMonitor {
         "repair=\(repairName) steps=\(steps) "
           + "waited_ms=\(Self.elapsedMilliseconds(since: startedAt))")
     }
+    activationRepairSerial &+= 1
+    let clientID = "core:activation_repair:\(activationRepairSerial)"
     switch repair {
     case .none: break
     case .retry(let afterMs):
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(afterMs)) {
+      armActivationRepairWake(clientID, afterMs: afterMs) {
         guard isCurrent() else { return keep() }
         walk(1)
       }
     case .readinessLadder(let delaysMs):
       climbActivationLadder(
-        context: context, delaysMs: delaysMs, step: 0, isCurrent: isCurrent, abandon: keep,
-        walk: walk)
+        context: context, delaysMs: delaysMs, step: 0, clientID: clientID,
+        isCurrent: isCurrent, abandon: keep, walk: walk)
     }
+  }
+
+  /// The repair waits for a tree the app is still building while the user
+  /// waits on the hints, so each probe is an input-adjacent wake: `.system`,
+  /// on the shared clock rather than a timer of its own.
+  private func armActivationRepairWake(
+    _ clientID: String, afterMs: Int, _ body: @escaping () -> Void
+  ) {
+    pollScheduler.scheduleOnce(
+      clientID, afterMs: afterMs, priority: .system, on: .main, handler: body)
   }
 
   private static func logRepairResult(pid: pid_t, first: Int, retried: Int?, detail: String) {
@@ -328,16 +340,16 @@ extension AppMonitor {
     noteHealthyTargets(count, pid: pid)
   }
 
-  /// One step of the activation's readiness ladder: wait (never sleep), then
-  /// probe the tree on the AX queue — walk when it is ready, climb otherwise,
-  /// and walk regardless at the last step. The activation going away (a
+  /// One step of the activation's readiness ladder: wait on the shared clock
+  /// (never sleep), then probe the tree on the AX queue — walk when it is
+  /// ready, climb otherwise, and walk regardless at the last step. The activation going away (a
   /// replacement, Escape, focus leaving the app) ends the climb.
   private func climbActivationLadder(
-    context: AppContext, delaysMs: [Int], step: Int, isCurrent: @escaping () -> Bool,
-    abandon: @escaping () -> Void, walk: @escaping (_ steps: Int) -> Void
+    context: AppContext, delaysMs: [Int], step: Int, clientID: String,
+    isCurrent: @escaping () -> Bool, abandon: @escaping () -> Void,
+    walk: @escaping (_ steps: Int) -> Void
   ) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delaysMs[step])) {
-      [weak self] in
+    armActivationRepairWake(clientID, afterMs: delaysMs[step]) { [weak self] in
       guard let self else { return }
       guard isCurrent() else { return abandon() }
       guard step < delaysMs.count - 1 else { return walk(step + 1) }
@@ -351,8 +363,8 @@ extension AppMonitor {
             walk(step + 1)
           } else {
             self.climbActivationLadder(
-              context: context, delaysMs: delaysMs, step: step + 1, isCurrent: isCurrent,
-              abandon: abandon, walk: walk)
+              context: context, delaysMs: delaysMs, step: step + 1, clientID: clientID,
+              isCurrent: isCurrent, abandon: abandon, walk: walk)
           }
         }
       }

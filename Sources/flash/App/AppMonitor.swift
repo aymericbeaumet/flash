@@ -141,11 +141,19 @@ final class AppMonitor {
     self.pollScheduler = pollScheduler
   }
 
-  /// The shared clock maintenance wakes ride; see `armMaintenanceWake`.
+  /// The shared clock every prepared-model wake rides: debounce, readiness
+  /// and maintenance (see `armRefreshTimer` and `armMaintenanceWake`).
   let pollScheduler: PollScheduler
   /// The pid whose maintenance wake is registered on `pollScheduler`. Main
   /// thread only.
   var maintenanceWakePID: pid_t?
+  /// Debounce and readiness wakes registered on `pollScheduler`, by client
+  /// id, so cancelling an app's refresh work releases them. Main thread only.
+  var refreshWakeClientIDs: Set<String> = []
+  /// Numbers each activation repair's wake on `pollScheduler`, so a newer
+  /// activation never replaces an older one's pending step (that step still
+  /// has to end its activation, if only by abandoning it). Main thread only.
+  var activationRepairSerial: UInt64 = 0
 
   // MARK: Prepared model state
   //

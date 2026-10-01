@@ -50,12 +50,12 @@ final class SystemChangeMonitorsTests: XCTestCase {
     let queue = DispatchQueue(label: "signal.tests")
     let fired = expectation(description: "one signal for the burst")
     fired.assertForOverFulfill = true
-    let signal = CoalescedSignal(queue: queue, delayMs: 50) { fired.fulfill() }
+    let signal = CoalescedSignal(id: "test:burst", queue: queue, delayMs: 50) { fired.fulfill() }
     for _ in 0..<20 { signal.signal() }
     wait(for: [fired], timeout: 5)
     // The window closed: the next change is a new signal.
     let again = expectation(description: "a later change signals again")
-    let later = CoalescedSignal(queue: queue, delayMs: 10) { again.fulfill() }
+    let later = CoalescedSignal(id: "test:later", queue: queue, delayMs: 10) { again.fulfill() }
     later.signal()
     wait(for: [again], timeout: 5)
   }
@@ -64,7 +64,7 @@ final class SystemChangeMonitorsTests: XCTestCase {
     let queue = DispatchQueue(label: "signal.cancel.tests")
     let dropped = expectation(description: "cancelled signal never fires")
     dropped.isInverted = true
-    let signal = CoalescedSignal(queue: queue, delayMs: 50) { dropped.fulfill() }
+    let signal = CoalescedSignal(id: "test:cancel", queue: queue, delayMs: 50) { dropped.fulfill() }
     signal.signal()
     signal.cancel()
     wait(for: [dropped], timeout: 0.3)

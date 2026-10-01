@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
   /// Trailing-edge coalescer for config file events (one reload per burst).
-  var configReloadWork: DispatchWorkItem?
+  let configReload = PollDeadline("core:config_reload", priority: .normal, on: .main)
   /// Bytes of the config file at the last applied reload; an event that
   /// leaves them unchanged (editor temp/rename dance, `touch`) is a no-op.
   var lastAppliedConfigFileContents: Data?
@@ -179,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var clipboardEntries: [ClipboardModalEntry] = [] {
     didSet { debugStateDidChange() }
   }
-  var pluginStateRefreshWork: DispatchWorkItem?
+  let pluginStateRefresh = PollDeadline("core:plugin_state_refresh", priority: .normal, on: .main)
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
   var commandLineCompletionSelectedIndex = 0
@@ -217,6 +217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var movementNavigationTargetKey: String?
   var movementCatalogSnapshot: (pid: pid_t, keys: Set<String>)?
   var ambientLocationRecordToken: UInt64 = 0
+  /// The pending ambient-location record or its retry; a newer focus
+  /// replaces it.
+  let ambientLocationRecord = PollDeadline(
+    "core:ambient_location", priority: .normal, on: .main)
   var movementLocationResolutionGeneration: UInt64 = 0
   var sourceItemResolutionGeneration: UInt64 = 0
   var appCurrent: pid_t?
@@ -261,6 +265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     didSet { if oldValue != aboutWindowVisible { refreshOverlayInputRouting() } }
   }
   var normalModePendingCommandToken: UInt64 = 0
+  /// Numbers each yank's pasteboard wait on the shared clock.
+  var pasteboardWaitSerial: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
   /// `core:network.changed` and `core:volumes.changed`, each observed only
@@ -1214,8 +1220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       NotificationCenter.default.removeObserver(resignKeyToken)
       self.resignKeyToken = nil
     }
-    pluginStateRefreshWork?.cancel()
-    pluginStateRefreshWork = nil
+    pluginStateRefresh.cancel()
     clipboardMonitor?.stop()
     clipboardMonitor = nil
     powerSourceMonitor?.stop()

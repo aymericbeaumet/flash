@@ -8,7 +8,13 @@ final class DebugServer {
   private let stateProvider: () -> [String: Any]
   /// How long the first change of a burst waits for the rest: every change
   /// inside the window joins one snapshot.
-  private let coalescingWindow: DispatchTimeInterval
+  private let coalescingWindowMs: Int
+  /// The pending coalesced publish, on the shared clock. `.normal`: a
+  /// diagnostic page refreshing a tenth of a second later is invisible, and
+  /// it coalesces with the app's other wake-ups. Main-thread confined.
+  private lazy var publishDeadline = PollDeadline(
+    "core:inspector_publish:\(UInt(bitPattern: ObjectIdentifier(self).hashValue))",
+    priority: .normal, on: .main)
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
   private var listener: NWListener?
   private var logSinkID: UUID?
@@ -53,12 +59,12 @@ final class DebugServer {
   }
 
   init(
-    host: String, port: Int, coalescingWindow: DispatchTimeInterval = .milliseconds(100),
+    host: String, port: Int, coalescingWindowMs: Int = 100,
     stateProvider: @escaping () -> [String: Any]
   ) {
     self.host = host
     self.port = port
-    self.coalescingWindow = coalescingWindow
+    self.coalescingWindowMs = coalescingWindowMs
     self.stateProvider = stateProvider
   }
 
@@ -113,6 +119,7 @@ final class DebugServer {
 
   func stop() {
     publication.stopped = true
+    publishDeadline.cancel()
     if let logSinkID {
       FlashLog.removeSink(logSinkID)
     }
@@ -166,7 +173,7 @@ final class DebugServer {
 
   /// The one entry for every app change the state reflects (main thread).
   /// With a browser on the event stream, the first change of a burst arms
-  /// one publish `coalescingWindow` later and the rest join it; with none,
+  /// one publish `coalescingWindowMs` later and the rest join it; with none,
   /// nothing is taken — the cache is only marked stale, and the next request
   /// or stream takes a fresh snapshot.
   func stateDidChange() {
@@ -191,7 +198,7 @@ final class DebugServer {
     guard publication.stale, publication.streams > 0, !publication.armed, !publication.stopped
     else { return }
     publication.armed = true
-    DispatchQueue.main.asyncAfter(deadline: .now() + coalescingWindow) { [weak self] in
+    publishDeadline.arm(afterMs: coalescingWindowMs) { [weak self] in
       guard let self else { return }
       self.publication.armed = false
       // The last stream may have closed meanwhile: the cache stays stale.

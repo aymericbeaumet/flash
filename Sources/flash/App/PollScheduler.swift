@@ -222,9 +222,10 @@ final class PollScheduler {
   }
 
   /// Register (or re-register) `id` at `everyMs`. The handler runs on `queue`
-  /// and must call nothing back into the scheduler synchronously.
+  /// and must call nothing back into the scheduler synchronously. There is no
+  /// default priority: every registration states how visible its lateness is.
   func register(
-    _ id: String, everyMs: Int, priority: Priority = .normal, on handlerQueue: DispatchQueue,
+    _ id: String, everyMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
     handler: @escaping () -> Void
   ) {
     let interval = max(Self.minimumIntervalMs, everyMs)
@@ -254,7 +255,7 @@ final class PollScheduler {
   /// clock: it re-registers its next deadline each time it fires. Re-arming
   /// an existing id always replaces the pending deadline.
   func scheduleOnce(
-    _ id: String, afterMs: Int, priority: Priority = .normal, on handlerQueue: DispatchQueue,
+    _ id: String, afterMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
     handler: @escaping () -> Void
   ) {
     queue.async { [weak self] in
@@ -331,5 +332,63 @@ final class PollScheduler {
     }
     armedForMs = nil
     rearm(now: now)
+  }
+}
+
+/// One re-armable deadline on the shared clock: a trailing debounce, a
+/// retry or restart backoff, a grace period. `arm` replaces whatever is
+/// pending — a fire already on its way to the handler queue is dropped as
+/// stale — and `cancel` drops it. Use it only from the queue its handler runs
+/// on; that confinement is what makes the generation check sound.
+final class PollDeadline {
+  let id: String
+  let priority: PollScheduler.Priority
+  private let queue: DispatchQueue
+  private let scheduler: PollScheduler
+  private var generation: UInt64 = 0
+  private(set) var isArmed = false
+
+  init(
+    _ id: String, priority: PollScheduler.Priority, on queue: DispatchQueue,
+    scheduler: PollScheduler = .shared
+  ) {
+    self.id = id
+    self.priority = priority
+    self.queue = queue
+    self.scheduler = scheduler
+  }
+
+  /// `priority` overrides the deadline's own for this arming, for a backoff
+  /// whose first step is visible and whose later ones are not.
+  func arm(
+    afterMs: Int, priority: PollScheduler.Priority? = nil, _ body: @escaping () -> Void
+  ) {
+    generation &+= 1
+    let armed = generation
+    isArmed = true
+    scheduler.scheduleOnce(id, afterMs: afterMs, priority: priority ?? self.priority, on: queue) {
+      [weak self] in
+      guard let self, self.generation == armed else { return }
+      self.isArmed = false
+      body()
+    }
+  }
+
+  func arm(
+    after interval: TimeInterval, priority: PollScheduler.Priority? = nil,
+    _ body: @escaping () -> Void
+  ) {
+    arm(afterMs: Int((max(0, interval) * 1000).rounded(.up)), priority: priority, body)
+  }
+
+  func cancel() {
+    generation &+= 1
+    guard isArmed else { return }
+    isArmed = false
+    scheduler.unregister(id)
+  }
+
+  deinit {
+    if isArmed { scheduler.unregister(id) }
   }
 }

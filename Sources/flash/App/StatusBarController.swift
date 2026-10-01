@@ -741,6 +741,14 @@ final class FlashStatusBarController {
   /// finest time unit shown and pending output — so the controller re-registers its next deadline on the
   /// shared clock each time one lands, rather than owning a timer. It is armed
   /// only while a visible surface requires something.
+  ///
+  /// Each deadline carries the slack its kind tolerates. A clock boundary and
+  /// a carousel rotation are the visible change itself — the second has to
+  /// turn on the second — so they are `.high`. A job or source re-run, the
+  /// placeholder for a job that has not answered and the throttled publish of
+  /// output that already arrived are `.normal`: their output lands whenever
+  /// the command finishes, so a tenth of a second is invisible, and the looser
+  /// slack lets them coalesce with the rest of the app's wake-ups.
   private func armTimer() {
     scheduler.unregister(Self.pollClientID)
     timerGeneration &+= 1
@@ -748,31 +756,60 @@ final class FlashStatusBarController {
     guard var schedule else { return }
     schedule.nextWakeup = nil
     defer { self.schedule = schedule }
-    var dates = requiredSources.compactMap { sourceRecords[$0]?.schedule.dueAt }
-    dates += requiredJobs.keys.compactMap { shellRecords[$0]?.schedule.dueAt }
-    dates += requiredJobs.keys.compactMap { key in
-      shellRecords[key]?.value == nil ? shellRecords[key]?.schedule.startedAt.map { $0 + 2 } : nil
+    var deadlines: [Deadline] = []
+    func add(_ dates: [TimeInterval], _ priority: PollScheduler.Priority) {
+      deadlines += dates.map { Deadline(at: $0, priority: priority) }
     }
-    dates += requiredSources.compactMap { sourceRecords[$0]?.cycle }
-      .filter(\.needsRotationTimer).map(\.nextRotationAt)
+    add(requiredSources.compactMap { sourceRecords[$0]?.schedule.dueAt }, .normal)
+    add(requiredJobs.keys.compactMap { shellRecords[$0]?.schedule.dueAt }, .normal)
+    add(
+      requiredJobs.keys.compactMap { key in
+        shellRecords[key]?.value == nil ? shellRecords[key]?.schedule.startedAt.map { $0 + 2 } : nil
+      }, .normal)
+    add(
+      requiredSources.compactMap { sourceRecords[$0]?.cycle }
+        .filter(\.needsRotationTimer).map(\.nextRotationAt), .high)
     // A carousel no active surface reads keeps its rotation state for when
     // one shows it again, but wakes nobody meanwhile.
-    dates += pluginCycles.filter { requiredPluginSegments.contains($0.key) }.values
-      .filter(\.needsRotationTimer).map(\.nextRotationAt)
-    if let clockDeadline = clockDeadline(now: clock()) { dates.append(clockDeadline) }
-    if let pendingJobPublish = schedule.pendingJobPublish { dates.append(pendingJobPublish) }
-    guard let next = dates.filter(\.isFinite).min() else { return }
-    schedule.nextWakeup = next
-    // The bar and unoccluded widgets are surfaces the user is looking at, so
-    // the slack is tight; the generation check still discards a fire that a
-    // newer plan superseded.
+    add(
+      pluginCycles.filter { requiredPluginSegments.contains($0.key) }.values
+        .filter(\.needsRotationTimer).map(\.nextRotationAt), .high)
+    if let clockDeadline = clockDeadline(now: clock()) { add([clockDeadline], .high) }
+    if let pendingJobPublish = schedule.pendingJobPublish { add([pendingJobPublish], .normal) }
+    guard let wakeup = Self.nextWakeup(deadlines) else { return }
+    schedule.nextWakeup = wakeup.at
+    // The generation check still discards a fire that a newer plan
+    // superseded.
     scheduler.scheduleOnce(
-      Self.pollClientID, afterMs: Int((max(0.001, next - clock()) * 1000).rounded()),
-      priority: .high, on: queue
+      Self.pollClientID, afterMs: Int((max(0.001, wakeup.at - clock()) * 1000).rounded()),
+      priority: wakeup.priority, on: queue
     ) { [weak self] in
       guard let self, self.timerGeneration == generation else { return }
       self.tick()
     }
+  }
+
+  struct Deadline: Equatable {
+    var at: TimeInterval
+    var priority: PollScheduler.Priority
+  }
+
+  /// The earliest deadline, at the tightest priority among the deadlines its
+  /// wake-up will serve: every one due before that wake-up's slack runs out.
+  /// A job re-run landing just ahead of a clock boundary therefore cannot
+  /// drag the boundary late, while a lone job keeps its looser slack.
+  static func nextWakeup(_ deadlines: [Deadline]) -> Deadline? {
+    let finite = deadlines.filter(\.at.isFinite)
+    guard let earliest = finite.min(by: { $0.at < $1.at }) else { return nil }
+    var priority = earliest.priority
+    while true {
+      let slack = Double(priority.leewayMs) / 1000
+      let tightest =
+        finite.filter { $0.at <= earliest.at + slack }.map(\.priority).min() ?? priority
+      guard tightest < priority else { break }
+      priority = tightest
+    }
+    return Deadline(at: earliest.at, priority: priority)
   }
 
   /// Internal (not private) so the controller tests can fire a due deadline

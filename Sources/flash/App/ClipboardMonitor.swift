@@ -47,11 +47,15 @@ final class ClipboardMonitor {
     self.lastChangeCount = pasteboard.changeCount
   }
 
+  /// `.normal`: nothing on screen waits on this watcher, so it never needs
+  /// `.high` precision, but a copy that lands late reaches the clipboard
+  /// history late — and someone can copy and open that history within a
+  /// second — so it keeps ordinary slack rather than background slack.
   func start(interval: TimeInterval = 0.5) {
     guard !registered else { return }
     registered = true
     scheduler.register(
-      Self.clientID, everyMs: Int(interval * 1000), on: queue
+      Self.clientID, everyMs: Int(interval * 1000), priority: .normal, on: queue
     ) { [weak self] in self?.poll() }
   }
 

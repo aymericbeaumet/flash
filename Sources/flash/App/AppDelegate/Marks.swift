@@ -216,10 +216,14 @@ extension AppDelegate {
     return true
   }
 
+  /// Record where focus landed once it settles. Each focus change re-arms
+  /// one deadline on the shared clock (the token still discards a resolution
+  /// already in flight). `.normal`: movement history is bookkeeping nobody
+  /// watches, but `ctrl-o` right after a switch should find it recorded.
   func scheduleAmbientLocationRecord(pid: pid_t, reason: String) {
     ambientLocationRecordToken &+= 1
     let token = ambientLocationRecordToken
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
+    ambientLocationRecord.arm(afterMs: 250) { [weak self] in
       guard let self, self.ambientLocationRecordToken == token else { return }
       guard let context = self.focusedIdentityContext(), context.processID == pid else { return }
       self.resolveAmbientLocation(
@@ -250,7 +254,7 @@ extension AppDelegate {
         source: source)
       guard retryAfterAppFallback, !recordedPreciseLocation else { return }
 
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(750)) { [weak self] in
+      self.ambientLocationRecord.arm(afterMs: 750) { [weak self] in
         guard let self, self.ambientLocationRecordToken == token else { return }
         guard
           let retryContext = self.focusedIdentityContext(),
