@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 import FlashCore
 
 /// Owns command/finder work from session opening through query publication and close.

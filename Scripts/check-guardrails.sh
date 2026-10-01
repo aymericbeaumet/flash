@@ -62,6 +62,18 @@ check_absent_except \
   'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
+# App knowledge is plugin data: what an app does for a Flash action is the
+# winning `action_bindings` entry, dispatched by ActionBindingDispatch. Virtual
+# key constants therefore appear only where Flash parses or names keys
+# (hotkey syntax, the keyboard layout, NORMAL's key names, Escape detection),
+# brackets UIKit modifiers, or applies the terminal rule — never as a chord an
+# action synthesizes.
+check_absent_except \
+  "no kVK_ chord synthesis for app actions outside the binding dispatcher" \
+  "kVK_" \
+  '/(HotkeySyntax|KeyboardLayout|UIKitApps|NormalModeTerminalChords)\.swift:|/NormalMode\.swift:[0-9]+:[[:space:]]*case kVK_|/AppDelegate\.swift:[0-9]+:.*== Int64\(kVK_Escape\)' \
+  "${PROD_SWIFT[@]}"
+
 # `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
 # main-thread Core Animation commit until SkyLight's 500 ms timeout, freezing
 # main with it. `WindowSnapshot.windowList` is the one door and always runs the
