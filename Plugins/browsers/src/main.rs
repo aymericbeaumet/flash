@@ -13,7 +13,6 @@ mod route;
 mod session_store;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,7 +20,8 @@ use applescript::{CHROMIUM, Dialect, ListedTab, SAFARI, TabIdentity, TabSlot};
 use firefox::StripPosition;
 use flash_plugin::{
     ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event, NavigateRequest,
-    PerformResponse, RefreshGate, RunningApplication, Settle, ax_notifications, run, run_osascript,
+    PerformResponse, PollPriority, RefreshGate, RunningApplication, Settle, ax_notifications, run,
+    run_osascript,
 };
 use route::TabRoute;
 use serde::{Deserialize, Serialize};
@@ -54,13 +54,16 @@ const SLOW_REFRESH: Duration = Duration::from_secs(1);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-/// Debounce latch: one pending coalesced event refresh at a time.
-static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+/// One pending coalesced event refresh at a time: the first event opens an
+/// `EVENT_DEBOUNCE` window and every event inside it joins the refresh.
+/// `Normal` on both: the tab catalog feeds the flashlight, which nobody
+/// watches refresh.
+static EVENT_BURST: Settle<()> = Settle::new(EVENT_DEBOUNCE, EVENT_DEBOUNCE, PollPriority::Normal);
 /// A refresh reads every running browser, so only events touching one
 /// schedule it: focus changes elsewhere cannot change a tab list.
 static BROWSER_EVENTS: AppWatch = AppWatch::new();
 /// Pending `core:ax.changed` burst from a focused browser.
-static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT, PollPriority::Normal);
 static REFRESH_LOG_STATE: LazyLock<Mutex<RefreshLogState>> =
     LazyLock::new(|| Mutex::new(RefreshLogState::default()));
 /// Each running browser's last listed rows behind the one published catalog.
@@ -468,22 +471,17 @@ fn ax_change_touches_browser(event: &Event) -> bool {
 
 /// Refresh once the browser's AX burst settles.
 fn schedule_ax_refresh(ctx: &Context, pid: i64) {
-    let ctx = ctx.clone();
-    AX_BURST.schedule(pid, move |_| async move {
-        refresh_locations(&ctx).await;
+    let refresh_ctx = ctx.clone();
+    AX_BURST.schedule(ctx, pid, move |_| async move {
+        refresh_locations(&refresh_ctx).await;
     });
 }
 
 /// Coalesce an event burst into one refresh `EVENT_DEBOUNCE` out.
 fn schedule_refresh(ctx: &Context) {
-    if REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let ctx = ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(EVENT_DEBOUNCE).await;
-        REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
-        refresh_locations(&ctx).await;
+    let refresh_ctx = ctx.clone();
+    EVENT_BURST.schedule(ctx, (), move |_| async move {
+        refresh_locations(&refresh_ctx).await;
     });
 }
 

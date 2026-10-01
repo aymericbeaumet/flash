@@ -60,10 +60,19 @@ pub(super) async fn serve_host<T>(
         tokio::select! {
             biased;
             done = &mut task => return (done.expect("task completes"), methods),
-            request = harness.next_host_request() => {
-                let (id, method, _) = request.expect("a host call within the harness deadline");
-                harness.reply_host(id, reply(&method));
-                methods.push(method);
+            frame = harness.next_frame() => {
+                let frame = frame.expect("a frame within the harness deadline");
+                if let (Some(id), Some(method)) = (frame["id"].as_u64(), frame["method"].as_str()) {
+                    harness.reply_host(id, reply(method));
+                    methods.push(method.to_string());
+                } else if frame["method"] == "poll" {
+                    // Play the host's clock: a waited-on deadline is due now.
+                    for (name, entry) in frame["params"]["registrations"].as_object().unwrap() {
+                        if entry.get("after").is_some() {
+                            drop(harness.deliver_poll_tick(name));
+                        }
+                    }
+                }
             }
         }
     }

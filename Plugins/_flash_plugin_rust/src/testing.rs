@@ -143,6 +143,22 @@ impl Harness {
         .flatten()
     }
 
+    /// Await the plugin's next outbound frame of any kind — a host RPC
+    /// request or a notification — after any read past by
+    /// [`next_host_request`](Harness::next_host_request). `None` when nothing
+    /// arrives within the harness deadline. A test playing the host answers
+    /// requests and, for a `poll` frame, delivers the ticks it is due.
+    pub async fn next_frame(&mut self) -> Option<Value> {
+        if !self.skipped.is_empty() {
+            return Some(self.skipped.remove(0));
+        }
+        tokio::time::timeout(HARNESS_DEADLINE, self.rx.recv())
+            .await
+            .ok()
+            .flatten()
+            .map(|frame| decode(&frame))
+    }
+
     /// Answer host RPC `id` the way the host would, waking the handler that
     /// awaits it. `false` when no call awaits that id.
     pub fn reply_host(&self, id: u64, result: Value) -> bool {

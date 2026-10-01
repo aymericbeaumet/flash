@@ -14,7 +14,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use flash_plugin::status::{bytes_iec, duration_uptime};
-use flash_plugin::{Context, Event, Markup, PollHandle, Preview, RefreshGate};
+use flash_plugin::{
+    Context, Deadline, Event, Markup, PollHandle, PollPriority, Preview, RefreshGate,
+};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
@@ -115,6 +117,8 @@ struct SamplerState {
     /// Registered on first observation and re-armed or cancelled in place
     /// after that, so toggling observation never leaks a registration.
     poll: Option<PollHandle>,
+    /// The pending sample after a focus change; the next change replaces it.
+    settle: Option<Deadline>,
 }
 
 /// Owns the focused-app segment: the tracked app, whether a surface shows the
@@ -155,9 +159,14 @@ impl FocusedSampler {
         match &state.poll {
             Some(poll) => poll.set_period(FOCUSED_POLL),
             None => {
-                state.poll = Some(ctx.interval(FOCUSED_POLL, move |ctx| async move {
-                    self.refresh(&ctx).await;
-                }));
+                // `Normal`: a ten-second refresh of figures on screen, where
+                // a tenth of a second of slack is invisible.
+                state.poll =
+                    Some(
+                        ctx.interval(FOCUSED_POLL, PollPriority::Normal, move |ctx| async move {
+                            self.refresh(&ctx).await;
+                        }),
+                    );
             }
         }
         drop(state);
@@ -166,37 +175,39 @@ impl FocusedSampler {
     }
 
     /// Track the newly focused app. While observed, show its placeholder and
-    /// sample it once the focus burst settles; the returned task is that
-    /// debounced sample.
-    pub(crate) fn focus_changed(
-        &'static self,
-        ctx: &Context,
-        event: &Event,
-    ) -> Option<JoinHandle<()>> {
+    /// sample it once the focus burst settles: each change re-arms one host
+    /// deadline, at `High` because the placeholder on screen is waiting for
+    /// it. True when that deadline was armed.
+    pub(crate) fn focus_changed(&'static self, ctx: &Context, event: &Event) -> bool {
         let mut state = self.lock();
+        if let Some(pending) = state.settle.take() {
+            pending.cancel();
+        }
         let Some(app) = FocusedApp::from_event(event) else {
             state.focus.clear();
             if state.focus.observed {
                 ctx.status([(SEGMENT, "")]);
             }
-            return None;
+            return false;
         };
         let sample = state.focus.replace(app);
         if !state.focus.observed {
-            return None;
+            return false;
         }
         ctx.status([(
             SEGMENT,
             focused_app_placeholder(&sample.app, "Collecting metrics…"),
         )]);
-        drop(state);
-        let ctx = ctx.clone();
-        Some(tokio::spawn(async move {
-            tokio::time::sleep(FOCUS_REFRESH_DEBOUNCE).await;
-            if self.lock().focus.publishable(&sample) {
-                self.refresh(&ctx).await;
-            }
-        }))
+        state.settle = Some(ctx.after(
+            FOCUS_REFRESH_DEBOUNCE,
+            PollPriority::High,
+            move |ctx| async move {
+                if self.lock().focus.publishable(&sample) {
+                    self.refresh(&ctx).await;
+                }
+            },
+        ));
+        true
     }
 
     /// Sample the focused app and publish its figures. A tick that raced a
@@ -517,11 +528,7 @@ Disk I/O      512 MiB read · 64 MiB written"
 
         // Unobserved: focus is tracked, but nothing registers, samples, or
         // publishes — including for other segments being observed.
-        assert!(
-            sampler
-                .focus_changed(&ctx, &focus(42, "com.example.Editor"))
-                .is_none()
-        );
+        assert!(!sampler.focus_changed(&ctx, &focus(42, "com.example.Editor")));
         assert!(sampler.observe(&ctx, &segments(&["top_cpu"])).is_none());
         sampler.refresh(&ctx).await;
         assert!(harness.drain().is_empty());
@@ -534,8 +541,8 @@ Disk I/O      512 MiB read · 64 MiB written"
         sample.await.unwrap();
         let frames = harness.drain();
         assert_eq!(
-            frames_with(&frames, "poll", "intervals"),
-            [json!({ "i0": 10.0 })]
+            frames_with(&frames, "poll", "registrations"),
+            [json!({ "i0": { "every": 10.0, "priority": "normal" } })]
         );
         let published = frames_with(&frames, "status", "segments");
         assert_eq!(published.len(), 2, "{published:?}");
@@ -547,29 +554,37 @@ Disk I/O      512 MiB read · 64 MiB written"
         );
 
         // A focus change while observed publishes the placeholder, then the
-        // settled sample.
-        let settled = sampler
-            .focus_changed(&ctx, &focus(7, "com.example.Other"))
-            .expect("debounced sample");
+        // settled sample once its host deadline lands; a second change
+        // inside the window replaces that deadline.
+        assert!(sampler.focus_changed(&ctx, &focus(8, "com.example.Passing")));
+        assert!(sampler.focus_changed(&ctx, &focus(7, "com.example.Other")));
+        let frames = harness.drain();
+        let polls = frames_with(&frames, "poll", "registrations");
+        assert_eq!(
+            polls.last(),
+            Some(&json!({
+                "i0": { "every": 10.0, "priority": "normal" },
+                "d2": { "after": 0.3, "priority": "high" },
+            })),
+            "{polls:?}"
+        );
+        assert!(harness.deliver_poll_tick("d1").is_none(), "replaced");
+        let settled = harness.deliver_poll_tick("d2").expect("debounced sample");
         reply_metrics(&mut harness, 7).await;
         settled.await.unwrap();
-        assert_eq!(frames_with(&harness.drain(), "status", "segments").len(), 2);
+        assert_eq!(frames_with(&harness.drain(), "status", "segments").len(), 1);
 
         // No longer observed: the cadence is cancelled, the segment cleared,
         // and a tick that raced the change does not sample.
         assert!(sampler.observe(&ctx, &segments(&[])).is_none());
         let frames = harness.drain();
-        assert_eq!(frames_with(&frames, "poll", "intervals"), [json!({})]);
+        assert_eq!(frames_with(&frames, "poll", "registrations"), [json!({})]);
         assert_eq!(
             frames_with(&frames, "status", "segments"),
             [json!({ SEGMENT: "" })]
         );
         sampler.refresh(&ctx).await;
-        assert!(
-            sampler
-                .focus_changed(&ctx, &focus(9, "com.example.Third"))
-                .is_none()
-        );
+        assert!(!sampler.focus_changed(&ctx, &focus(9, "com.example.Third")));
         assert!(harness.drain().is_empty());
 
         // Observing again re-arms the same registration.
@@ -579,8 +594,8 @@ Disk I/O      512 MiB read · 64 MiB written"
         reply_metrics(&mut harness, 9).await;
         sample.await.unwrap();
         assert_eq!(
-            frames_with(&harness.drain(), "poll", "intervals"),
-            [json!({ "i0": 10.0 })]
+            frames_with(&harness.drain(), "poll", "registrations"),
+            [json!({ "i0": { "every": 10.0, "priority": "normal" } })]
         );
     }
 }

@@ -29,8 +29,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use flash_plugin::process;
 use flash_plugin::status::duration_compact;
 use flash_plugin::{
-    Color, CommandRequest, Context, Event, Markup, ObservedCadences, PerformResponse, Published,
-    RefreshGate, run, run_osascript,
+    Color, CommandRequest, Context, Event, Markup, ObservedCadences, PerformResponse, PollPriority,
+    Published, RefreshGate, run, run_osascript,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1146,13 +1146,19 @@ impl FlashPlugin for AiProviders {
             });
         }
         let refresh_usage_state = Arc::clone(&self.usage);
-        self.cadences
-            .interval(&ctx, STATUS_PUBLISH_INTERVAL, move |ctx| {
+        // `Low`: a remote pull behind a one-minute cadence; a second of
+        // slack is invisible and lets it coalesce with everything else.
+        self.cadences.interval(
+            &ctx,
+            STATUS_PUBLISH_INTERVAL,
+            PollPriority::Low,
+            move |ctx| {
                 let usage = Arc::clone(&refresh_usage_state);
                 async move {
                     refresh_usage(&ctx, &usage, refresh_credentials).await;
                 }
-            });
+            },
+        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -1193,8 +1199,16 @@ impl FlashPlugin for AiProviders {
             .filter(|_| !query.is_empty())
             .and_then(autosend_script)
         {
-            tokio::time::sleep(AUTOSEND_DELAY).await;
-            let _ = run_osascript(&ctx, &script, Duration::from_secs(10)).await;
+            // The page needs a beat to load before Return reaches it: a host
+            // deadline, so the command answers at once instead of holding
+            // its perform open for the wait.
+            ctx.after(
+                AUTOSEND_DELAY,
+                PollPriority::Normal,
+                move |ctx| async move {
+                    let _ = run_osascript(&ctx, &script, Duration::from_secs(10)).await;
+                },
+            );
         }
         PerformResponse::ok()
     }

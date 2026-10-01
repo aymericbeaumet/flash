@@ -22,7 +22,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::status::bytes_iec;
-use flash_plugin::{Column, Context, Markup, PollHandle, Preview, RefreshGate, Table};
+use flash_plugin::{
+    Column, Context, Markup, PollHandle, PollPriority, Preview, RefreshGate, Table,
+};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
@@ -321,9 +323,14 @@ impl TopSampler {
             match (change.cadence, &state.poll) {
                 (Cadence::Arm, Some(poll)) => poll.set_period(TOP_POLL),
                 (Cadence::Arm, None) => {
-                    state.poll = Some(ctx.interval(TOP_POLL, move |ctx| async move {
-                        self.refresh(&ctx).await;
-                    }));
+                    // `High`: a two-second table someone has open ticks
+                    // visibly.
+                    state.poll =
+                        Some(
+                            ctx.interval(TOP_POLL, PollPriority::High, move |ctx| async move {
+                                self.refresh(&ctx).await;
+                            }),
+                        );
                 }
                 (Cadence::Disarm, Some(poll)) => poll.cancel(),
                 (Cadence::Disarm, None) | (Cadence::Keep, _) => {}
@@ -625,7 +632,7 @@ mod tests {
         frames
             .iter()
             .filter(|frame| frame["method"] == "poll")
-            .map(|frame| frame["params"]["intervals"].clone())
+            .map(|frame| frame["params"]["registrations"].clone())
             .collect()
     }
 
@@ -664,7 +671,10 @@ mod tests {
         reply_table(&mut harness, table.clone()).await;
         sample.await.unwrap();
         let frames = harness.drain();
-        assert_eq!(polls(&frames), [json!({ "i0": 2.0 })]);
+        assert_eq!(
+            polls(&frames),
+            [json!({ "i0": { "every": 2.0, "priority": "high" } })]
+        );
         assert_eq!(
             statuses(&frames),
             [json!({ "top_cpu": "firefox           40.0%\nXcode             12.0%" })]
@@ -697,7 +707,10 @@ mod tests {
         reply_table(&mut harness, table).await;
         sample.await.unwrap();
         let frames = harness.drain();
-        assert_eq!(polls(&frames), [json!({ "i0": 2.0 })]);
+        assert_eq!(
+            polls(&frames),
+            [json!({ "i0": { "every": 2.0, "priority": "high" } })]
+        );
         let published = statuses(&frames);
         assert_eq!(published.len(), 1, "{published:?}");
         let names: Vec<&str> = published[0]["top_mem"]

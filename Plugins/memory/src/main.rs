@@ -4,7 +4,7 @@ use std::time::Duration;
 use flash_plugin::status::{bytes_iec, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
     Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
-    Preview, Published, StatusValue, run, sys,
+    PollPriority, Preview, Published, StatusValue, run, sys,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -147,13 +147,16 @@ impl FlashPlugin for Memory {
 
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.refresh_gate);
-        self.cadences.interval(&ctx, REFRESH_INTERVAL, move |ctx| {
-            let state = Arc::clone(&state);
-            let gate = Arc::clone(&gate);
-            async move {
-                refresh_and_publish(&ctx, &state, &gate, GatePolicy::Wait).await;
-            }
-        });
+        // `High`: a one-second figure on screen; a tenth of a second of
+        // slack would make it tick visibly unevenly.
+        self.cadences
+            .interval(&ctx, REFRESH_INTERVAL, PollPriority::High, move |ctx| {
+                let state = Arc::clone(&state);
+                let gate = Arc::clone(&gate);
+                async move {
+                    refresh_and_publish(&ctx, &state, &gate, GatePolicy::Wait).await;
+                }
+            });
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {

@@ -4,7 +4,7 @@ use std::time::Duration;
 use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
     Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
-    Preview, Published, StatusValue, run, run_command, sys,
+    PollPriority, Preview, Published, StatusValue, run, run_command, sys,
 };
 use nix::time::{ClockId, clock_gettime};
 
@@ -186,23 +186,28 @@ impl FlashPlugin for Cpu {
 
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.cpu_gate);
-        self.cadences.interval(&ctx, CPU_SAMPLE_PERIOD, move |ctx| {
-            let state = Arc::clone(&state);
-            let gate = Arc::clone(&gate);
-            async move {
-                refresh_cpu(&ctx, &state, &gate).await;
-            }
-        });
+        // `High`: a one-second figure on screen; a tenth of a second of
+        // slack would make it tick visibly unevenly.
+        self.cadences
+            .interval(&ctx, CPU_SAMPLE_PERIOD, PollPriority::High, move |ctx| {
+                let state = Arc::clone(&state);
+                let gate = Arc::clone(&gate);
+                async move {
+                    refresh_cpu(&ctx, &state, &gate).await;
+                }
+            });
 
         let state = Arc::clone(&self.state);
         let gate = Arc::clone(&self.gpu_gate);
-        self.cadences.interval(&ctx, GPU_INTERVAL, move |ctx| {
-            let state = Arc::clone(&state);
-            let gate = Arc::clone(&gate);
-            async move {
-                refresh_gpu(&ctx, &state, &gate).await;
-            }
-        });
+        // `Normal`: a fifteen-second sample nobody watches tick.
+        self.cadences
+            .interval(&ctx, GPU_INTERVAL, PollPriority::Normal, move |ctx| {
+                let state = Arc::clone(&state);
+                let gate = Arc::clone(&gate);
+                async move {
+                    refresh_gpu(&ctx, &state, &gate).await;
+                }
+            });
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -264,7 +269,7 @@ async fn refresh_all(
     policy: GatePolicy,
 ) {
     let (cpu, gpu) = tokio::join!(
-        collect_cpu(state, cpu_gate, policy),
+        collect_cpu(ctx, state, cpu_gate, policy),
         collect_gpu(ctx, gpu_gate, policy)
     );
     apply_cpu_result(ctx, state, cpu);
@@ -277,7 +282,7 @@ async fn refresh_cpu(
     state: &Arc<Mutex<MonitorState>>,
     gate: &Arc<tokio::sync::Mutex<()>>,
 ) {
-    let result = collect_cpu(state, gate, GatePolicy::Wait).await;
+    let result = collect_cpu(ctx, state, gate, GatePolicy::Wait).await;
     apply_cpu_result(ctx, state, result);
     publish_if_changed(ctx, state);
 }
@@ -293,6 +298,7 @@ async fn refresh_gpu(
 }
 
 async fn collect_cpu(
+    ctx: &Context,
     state: &Arc<Mutex<MonitorState>>,
     gate: &Arc<tokio::sync::Mutex<()>>,
     policy: GatePolicy,
@@ -304,12 +310,13 @@ async fn collect_cpu(
     let previous = match baseline {
         Some(ticks) => ticks,
         None => {
-            // First sample: bracket one period so the initial publish carries a
-            // real figure instead of waiting for the next loop iteration.
+            // First sample: bracket one period, on the host's clock, so the
+            // initial publish carries a real figure instead of waiting for
+            // the next tick.
             let Ok(first) = sys::cpu_ticks() else {
                 return Collection::Failed;
             };
-            tokio::time::sleep(CPU_SAMPLE_PERIOD).await;
+            ctx.wait(CPU_SAMPLE_PERIOD, PollPriority::High).await;
             first
         }
     };

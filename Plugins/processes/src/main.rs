@@ -53,7 +53,7 @@ impl FlashPlugin for Processes {
             refresh_candidates(&ctx).await;
         }
         if event.name == "core:focus.changed" {
-            drop(FOCUSED.focus_changed(&ctx, &event));
+            FOCUSED.focus_changed(&ctx, &event);
         }
     }
 

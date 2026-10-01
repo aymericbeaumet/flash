@@ -7,7 +7,7 @@ use flash_plugin::status::{
 };
 use flash_plugin::{
     Color, CommandRequest, Context, Event, History, Markup, ObservedCadences, PerformResponse,
-    Preview, Published, RefreshGate, StatusValue, host_events, run, run_command,
+    PollPriority, Preview, Published, RefreshGate, StatusValue, host_events, run, run_command,
 };
 
 /// I/O counters have no change event, so they are sampled — only while a
@@ -216,9 +216,16 @@ impl FlashPlugin for Disks {
     async fn on_start(&self, ctx: Context) {
         warn_invalid_summary_mode(&ctx);
         refresh_disks(&ctx, true).await;
-        CADENCES.interval(&ctx, ACTIVITY_POLL, |ctx| async move {
-            refresh_disks(&ctx, false).await;
-        });
+        // `Normal`: rates on screen, but sampled every three seconds, where a
+        // tenth of a second of slack is invisible.
+        CADENCES.interval(
+            &ctx,
+            ACTIVITY_POLL,
+            PollPriority::Normal,
+            |ctx| async move {
+                refresh_disks(&ctx, false).await;
+            },
+        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {

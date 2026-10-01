@@ -23,7 +23,7 @@
     {
       "command": "caffeinate",
       "subcommand": "on",
-      "description": "Keep the Mac awake (optional minutes argument bounds it)"
+      "description": "Keep the Mac awake (an optional positive minutes argument bounds it)"
     },
     {
       "command": "caffeinate",

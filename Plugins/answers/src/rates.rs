@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use flash_plugin::{Context, PollHandle};
+use flash_plugin::{Context, PollHandle, PollPriority};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
@@ -119,7 +119,9 @@ pub(crate) async fn seed_and_refresh(ctx: Context, store: RatesStore) {
         }
     };
 
-    let registered = ctx.interval(REFRESH_INTERVAL, refresh.clone());
+    // `Low`: a remote pull every six hours (retried every fifteen minutes);
+    // nobody waits on the exact second.
+    let registered = ctx.interval(REFRESH_INTERVAL, PollPriority::Low, refresh.clone());
     drop(handle.set(registered));
     // Network availability must never hold calculator readiness hostage: a
     // first-run `1+1` should work even while the initial ECB request is in

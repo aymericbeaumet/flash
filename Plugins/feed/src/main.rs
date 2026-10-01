@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use flash_plugin::{Context, StatusValue, run};
+use flash_plugin::{Context, PollPriority, StatusValue, run};
 use reqwest::{Client, Url};
 use serde_json::Value;
 
@@ -145,7 +145,8 @@ impl FlashPlugin for Feed {
         // The authoritative first fetch happens now; the host drives every
         // one after it from the shared clock.
         refresh(ctx.clone()).await;
-        drop(ctx.interval(settings.refresh_interval, refresh));
+        // `Low`: a remote pull at the user's interval (minutes by default).
+        drop(ctx.interval(settings.refresh_interval, PollPriority::Low, refresh));
     }
 }
 

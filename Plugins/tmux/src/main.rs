@@ -71,8 +71,8 @@ use std::time::{Duration, Instant};
 
 use flash_plugin::{
     ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame, HintsRequest,
-    HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle, Priority,
-    Settle, TERMINAL_LINK_ROLE, ax_notifications, run,
+    HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle, PollPriority,
+    Priority, Settle, TERMINAL_LINK_ROLE, ax_notifications, run,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -3899,24 +3899,28 @@ const AX_REFRESH_NOTIFICATIONS: [&str; 2] = [
 const AX_SETTLE: Duration = Duration::from_millis(300);
 /// …or this long after it began, whichever comes first.
 const AX_MAX_WAIT: Duration = Duration::from_secs(10);
-static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
+/// `Normal`: it refreshes the catalog, which nobody watches refresh.
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT, PollPriority::Normal);
 /// Control-mode notifications and socket changes come in bursts (a new
 /// window posts several at once); one inventory read follows each burst,
 /// within a second even while notifications keep coming.
 const CHANGE_SETTLE: Duration = Duration::from_millis(100);
 const CHANGE_MAX_WAIT: Duration = Duration::from_secs(1);
-static CHANGE_BURST: Settle<()> = Settle::new(CHANGE_SETTLE, CHANGE_MAX_WAIT);
+/// `High`: the read redraws the session and window status segments, which
+/// the user is looking at as they switch.
+static CHANGE_BURST: Settle<()> = Settle::new(CHANGE_SETTLE, CHANGE_MAX_WAIT, PollPriority::High);
 
 fn schedule_change_refresh(plugin: &Tmux, ctx: &Context) {
     let plugin = plugin.clone();
-    let ctx = ctx.clone();
-    CHANGE_BURST.schedule((), move |_| async move {
-        refresh_candidate_locations(&plugin, &ctx).await;
+    let refresh_ctx = ctx.clone();
+    CHANGE_BURST.schedule(ctx, (), move |_| async move {
+        refresh_candidate_locations(&plugin, &refresh_ctx).await;
     });
 }
 
 /// Retry a transiently failing socket at its backoff deadline: one pending
-/// wake-up at most, and none once every socket answered.
+/// host deadline at most, and none once every socket answered. `Low`: a
+/// backoff of seconds nobody is waiting on.
 fn schedule_socket_retry(plugin: &Tmux, ctx: &Context, at: Instant) {
     {
         let mut pending = plugin
@@ -3929,9 +3933,8 @@ fn schedule_socket_retry(plugin: &Tmux, ctx: &Context, at: Instant) {
         *pending = Some(at);
     }
     let plugin = plugin.clone();
-    let ctx = ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await;
+    let delay = at.saturating_duration_since(Instant::now());
+    ctx.after(delay, PollPriority::Low, move |ctx| async move {
         {
             let mut pending = plugin
                 .socket_retry_arc
@@ -4032,8 +4035,11 @@ fn start_remote_candidate_poll(
     let failure_index = Arc::new(Mutex::new(initial_index));
     let handle: Arc<OnceLock<PollHandle>> = Arc::new(OnceLock::new());
     let slot = Arc::clone(&handle);
+    // `Low`: a remote pull over SSH, retried on a ladder; nothing on screen
+    // waits on its exact second.
     let registered = ctx.interval(
         Duration::from_secs(remote_poll_delay_secs(initial_index)),
+        PollPriority::Low,
         move |ctx| {
             let remote_configs = Arc::clone(&remote_configs);
             let ssh_hosts = Arc::clone(&ssh_hosts);
@@ -7300,7 +7306,7 @@ printf 'eof\n' >> "$dir/eof""#
                 ),
             )
             .await;
-        let harness = flash_plugin::testing::Harness::new("tmux");
+        let mut harness = flash_plugin::testing::Harness::new("tmux");
         let ctx = harness.context();
         let notified = Arc::new(AtomicU64::new(0));
         let changed: Arc<dyn Fn() + Send + Sync> = {
@@ -7322,6 +7328,24 @@ printf 'eof\n' >> "$dir/eof""#
                 ))
             },
         );
+        // The client that left at once backs off before reattaching, on the
+        // host's clock rather than a sleep: play the host and fire it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let backoff = loop {
+            if let Some(registrations) = harness.drain_poll_registrations() {
+                break registrations;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the backoff"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(
+            Value::Object(backoff.clone()),
+            json!({ "d0": { "after": 1.0, "priority": "low" } })
+        );
+        drop(harness.deliver_poll_tick("d0").expect("the backoff ends"));
         wait_for("the reattach", async || {
             read_or_empty(&fixture.0.join("pids")).await.lines().count() == 2
         })
@@ -7544,8 +7568,9 @@ impl FlashPlugin for Tmux {
                     return;
                 }
                 let plugin = self.clone();
-                AX_BURST.schedule(event.pid.unwrap_or_default(), move |_| async move {
-                    refresh_candidate_locations(&plugin, &ctx).await;
+                let refresh_ctx = ctx.clone();
+                AX_BURST.schedule(&ctx, event.pid.unwrap_or_default(), move |_| async move {
+                    refresh_candidate_locations(&plugin, &refresh_ctx).await;
                 });
             }
             _ => {}

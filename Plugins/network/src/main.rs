@@ -7,7 +7,7 @@ use flash_plugin::status::{
 };
 use flash_plugin::{
     Candidate, Color, CommandRequest, Context, Event, History, Markup, PerformResponse, PollHandle,
-    Preview, Published, RefreshGate, StatusValue, host_events, run, run_command, sys,
+    PollPriority, Preview, Published, RefreshGate, StatusValue, host_events, run, run_command, sys,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
@@ -348,9 +348,13 @@ fn observe_traffic(ctx: &Context, segments: &[String]) -> Option<JoinHandle<()>>
             match &state.traffic_poll {
                 Some(poll) => poll.set_period(TRAFFIC_POLL),
                 None => {
-                    state.traffic_poll = Some(ctx.interval(TRAFFIC_POLL, |ctx| async move {
-                        refresh_network(&ctx, TRAFFIC_TICK).await;
-                    }));
+                    // `High`: one-second rates on screen tick visibly.
+                    state.traffic_poll =
+                        Some(
+                            ctx.interval(TRAFFIC_POLL, PollPriority::High, |ctx| async move {
+                                refresh_network(&ctx, TRAFFIC_TICK).await;
+                            }),
+                        );
                 }
             }
         } else {
@@ -1319,7 +1323,7 @@ default fe80::%utun6 UGcIg utun6\n";
         frames
             .iter()
             .filter(|frame| frame["method"] == "poll")
-            .map(|frame| frame["params"]["intervals"].clone())
+            .map(|frame| frame["params"]["registrations"].clone())
             .collect()
     }
 
@@ -1342,7 +1346,10 @@ default fe80::%utun6 UGcIg utun6\n";
         // Showing the label arms the cadence and samples at once.
         let sample = observe_traffic(&ctx, &segments(&["address", "label"])).expect("sample");
         sample.await.unwrap();
-        assert_eq!(polls(&harness.drain()), [json!({ "i0": 1.0 })]);
+        assert_eq!(
+            polls(&harness.drain()),
+            [json!({ "i0": { "every": 1.0, "priority": "high" } })]
+        );
         assert!(
             state().previous.is_some(),
             "the first sample seeds the rate"

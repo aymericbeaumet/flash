@@ -38,12 +38,12 @@
 //! app activation.
 
 use flash_plugin::{
-    Candidate, Context, Event, PerformResponse, RefreshGate, Settle, ax_notifications, run,
+    Candidate, Context, Event, PerformResponse, PollPriority, RefreshGate, Settle,
+    ax_notifications, run,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -87,14 +87,20 @@ const _: () = assert!(APPS_PER_REFRESH_LIMIT * WINDOWS_PER_APP_LIMIT < 10_000);
 const MAX_TITLE_CHARS: usize = 256;
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-/// Debounce latch: one pending coalesced refresh at a time.
-static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
-/// Latch for the per-app refresh; `PENDING_PIDS` collects the apps named by
-/// focus events until it fires.
-static APP_REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
-static PENDING_PIDS: LazyLock<Mutex<BTreeSet<i64>>> = LazyLock::new(|| Mutex::new(BTreeSet::new()));
+/// One pending coalesced whole refresh: the first event opens a
+/// `FULL_REFRESH_DEBOUNCE` window the rest join. `Normal` on every settle
+/// here: the window catalog feeds the flashlight, which nobody watches
+/// refresh.
+static FULL_BURST: Settle<()> = Settle::new(
+    FULL_REFRESH_DEBOUNCE,
+    FULL_REFRESH_DEBOUNCE,
+    PollPriority::Normal,
+);
+/// The per-app refresh: focus events name their apps inside one
+/// `EVENT_DEBOUNCE` window.
+static FOCUS_BURST: Settle<i64> = Settle::new(EVENT_DEBOUNCE, EVENT_DEBOUNCE, PollPriority::Normal);
 /// Pending `core:ax.changed` burst and the apps it named.
-static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT, PollPriority::Normal);
 /// When the last whole sweep began.
 static LAST_SWEEP: Mutex<Option<Instant>> = Mutex::new(None);
 /// Last-good rows per app. A focus or AX event re-snapshots only its own app
@@ -168,45 +174,27 @@ impl FlashPlugin for Windows {
 }
 
 /// Coalesce event bursts: the first event schedules a refresh
-/// [`EVENT_DEBOUNCE`] out; followers piggyback on it.
+/// [`FULL_REFRESH_DEBOUNCE`] out; followers piggyback on it.
 fn schedule_refresh(ctx: &Context) {
-    if REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let ctx = ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(FULL_REFRESH_DEBOUNCE).await;
-        REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
-        refresh_catalog(&ctx).await;
+    let refresh_ctx = ctx.clone();
+    FULL_BURST.schedule(ctx, (), move |_| async move {
+        refresh_catalog(&refresh_ctx).await;
     });
 }
 
 /// Coalesce focus events into one pass over the apps they named.
 fn schedule_app_refresh(ctx: &Context, pid: i64) {
-    PENDING_PIDS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(pid);
-    if APP_REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let ctx = ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(EVENT_DEBOUNCE).await;
-        APP_REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
-        let pids: Vec<i64> =
-            std::mem::take(&mut *PENDING_PIDS.lock().unwrap_or_else(|e| e.into_inner()))
-                .into_iter()
-                .collect();
-        refresh_apps(&ctx, pids).await;
+    let refresh_ctx = ctx.clone();
+    FOCUS_BURST.schedule(ctx, pid, move |pids| async move {
+        refresh_apps(&refresh_ctx, pids.into_iter().collect()).await;
     });
 }
 
 /// Re-snapshot the app once its AX burst settles.
 fn schedule_ax_refresh(ctx: &Context, pid: i64) {
-    let ctx = ctx.clone();
-    AX_BURST.schedule(pid, move |pids| async move {
-        refresh_apps(&ctx, pids.into_iter().collect()).await;
+    let refresh_ctx = ctx.clone();
+    AX_BURST.schedule(ctx, pid, move |pids| async move {
+        refresh_apps(&refresh_ctx, pids.into_iter().collect()).await;
     });
 }
 
@@ -676,6 +664,20 @@ mod tests {
                 .on_event(harness.context(), ax_changed(notification))
                 .await;
         }
+        // The burst waits on one host deadline, never a sleep: play the host
+        // and fire it once the burst has been quiet for its settle.
+        let deadlines = harness
+            .drain_poll_registrations()
+            .expect("a settle deadline");
+        assert_eq!(deadlines.len(), 1, "{deadlines:?}");
+        let (name, entry) = deadlines.into_iter().next().unwrap();
+        assert_eq!(entry["priority"], "normal");
+        tokio::time::sleep(AX_SETTLE).await;
+        drop(
+            harness
+                .deliver_poll_tick(&name)
+                .expect("the settled burst refreshes"),
+        );
         let (id, method, params) = harness.next_host_request().await.expect("snapshot");
         assert_eq!(method, "host.ax_snapshot");
         assert_eq!(params["pid"], 42);

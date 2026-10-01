@@ -267,6 +267,20 @@ impl Context {
         }
     }
 
+    /// Resolve `delay` from now, on the host's clock: the awaitable form of
+    /// [`after`](Self::after), for a wait inside one piece of work — a retry
+    /// backoff, a measurement window, a beat for another app to react.
+    /// Dropping the future (a `select!` that took another branch) cancels the
+    /// registration. A registration the SDK refuses (logged) resolves at once.
+    pub async fn wait(&self, delay: Duration, priority: PollPriority) {
+        let (fired, landed) = tokio::sync::oneshot::channel();
+        let deadline = self.after(delay, priority, move |_| async move {
+            let _ = fired.send(());
+        });
+        let _cancel_on_drop = CancelOnDrop(deadline);
+        let _ = landed.await;
+    }
+
     /// Run the callback a host tick names: a deadline fires once and leaves
     /// the set (the host dropped it too, and ignores it if a later set still
     /// lists it), a cadence runs unless its previous run is still going. A
@@ -360,6 +374,16 @@ impl Deadline {
         if removed {
             self.ctx.set_registration(&self.name, None);
         }
+    }
+}
+
+/// Cancels a [`Context::wait`] deadline its future no longer awaits; a
+/// no-op once it fired.
+struct CancelOnDrop(Deadline);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
@@ -457,6 +481,48 @@ mod tests {
         deadline.cancel();
         assert_eq!(polls(&mut rx).last(), Some(&json!({})));
         assert!(ctx.deliver_poll_tick(deadline.name()).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_wait_resolves_on_its_tick_and_cancels_when_dropped() {
+        let (ctx, mut rx) = test_context_with_rx();
+        let waiter = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move { ctx.wait(Duration::from_secs(5), PollPriority::Low).await })
+        };
+        tokio::task::yield_now().await;
+        assert_eq!(
+            polls(&mut rx),
+            [json!({ "d0": { "after": 5.0, "priority": "low" } })]
+        );
+        assert!(
+            !waiter.is_finished(),
+            "nothing sleeps: only the tick resolves it"
+        );
+        ctx.deliver_poll_tick("d0").unwrap().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("the tick resolves the wait")
+            .unwrap();
+        assert!(
+            polls(&mut rx).is_empty(),
+            "a fired deadline needs no cancel"
+        );
+
+        // A wait abandoned before its tick (a select that took another
+        // branch) releases its registration.
+        let abandoned = ctx.wait(Duration::from_secs(5), PollPriority::Normal);
+        tokio::select! {
+            () = abandoned => panic!("resolved without a tick"),
+            () = tokio::task::yield_now() => {}
+        }
+        assert_eq!(
+            polls(&mut rx),
+            [
+                json!({ "d1": { "after": 5.0, "priority": "normal" } }),
+                json!({})
+            ]
+        );
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use flash_plugin::Context;
+use flash_plugin::{Context, PollPriority};
 use serde_json::{Value, json};
 
 use super::catalog::{collect, fill_from_store, focused_root};
@@ -98,7 +98,13 @@ pub(super) async fn confirm_fast_jump(
     name: &str,
     plan_len: usize,
 ) -> bool {
-    tokio::time::sleep(Duration::from_millis(120 + 40 * plan_len as u64)).await;
+    // A beat for the chord chain to land, on the host's clock: `High`, the
+    // user is waiting on the switch.
+    ctx.wait(
+        Duration::from_millis(120 + 40 * plan_len as u64),
+        PollPriority::High,
+    )
+    .await;
     let session = ax::session(pid);
     let _ax = session.lock().await;
     let strip = collect(ctx, pid).await;
@@ -149,7 +155,8 @@ pub(super) async fn activate_and_find_tab(
             return Some(tab.clone());
         }
     }
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    ctx.wait(Duration::from_millis(250), PollPriority::High)
+        .await;
     let strip = collect(ctx, pid).await;
     find_tab(&strip.tabs, url, name, UrlFallback::UnknownUrl).cloned()
 }
@@ -222,7 +229,8 @@ pub(super) async fn select_tab(ctx: &Context, pid: i64, tab: &Tab) -> bool {
             );
             continue;
         }
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        ctx.wait(Duration::from_millis(120), PollPriority::High)
+            .await;
         let strip = walk(ctx, pid).await.unwrap_or_default();
         match strip.tabs.iter().find(|fresh| same_tab(fresh, &current)) {
             Some(fresh) if fresh.selected => {

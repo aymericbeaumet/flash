@@ -31,7 +31,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use flash_plugin::Context;
+use flash_plugin::{Context, PollPriority};
 use regex::Regex;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::sync::watch;
@@ -377,8 +377,11 @@ pub(crate) async fn observe(
             continue;
         }
         let delay = RETRY_DELAYS_SECS[(failures - 1).min(RETRY_DELAYS_SECS.len() - 1)];
+        // The backoff waits on the host's clock: `Low`, a reattach nobody
+        // is waiting on. A new session to follow abandons the wait, which
+        // releases its deadline.
         tokio::select! {
-            () = tokio::time::sleep(Duration::from_secs(delay)) => {}
+            () = ctx.wait(Duration::from_secs(delay), PollPriority::Low) => {}
             // A new session to follow retries at once; a closed plan stops.
             closed = follow.changed() => if closed.is_err() { return; },
         }

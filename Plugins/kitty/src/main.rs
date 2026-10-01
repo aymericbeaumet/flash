@@ -43,7 +43,7 @@
 //! use; failure clears it.
 
 use flash_plugin::{
-    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, Settle,
+    Candidate, CommandRequest, Context, Event, PerformResponse, PollPriority, RefreshGate, Settle,
     ax_notifications, run, run_command,
 };
 use serde::{Deserialize, Serialize};
@@ -90,8 +90,11 @@ const _: () = assert!(TOTAL_ROWS_LIMIT < 10_000);
 const MAX_TITLE_CHARS: usize = 256;
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
-static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT);
+/// One pending coalesced event refresh: the first event opens an
+/// `EVENT_DEBOUNCE` window the rest join. `Normal` on both: the catalog
+/// feeds the flashlight, which nobody watches refresh.
+static EVENT_BURST: Settle<()> = Settle::new(EVENT_DEBOUNCE, EVENT_DEBOUNCE, PollPriority::Normal);
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT, PollPriority::Normal);
 /// Whether kitty was running at the last refresh. Absence publishes the
 /// authoritative empty catalog once, on the transition, instead of an empty
 /// publish plus a log frame on every refresh while kitty is not installed.
@@ -213,21 +216,16 @@ fn trigger(event: &Event) -> Option<Trigger> {
 }
 
 fn schedule_ax_refresh(ctx: &Context, pid: i64) {
-    let ctx = ctx.clone();
-    AX_BURST.schedule(pid, move |_| async move {
-        refresh_catalog(&ctx).await;
+    let refresh_ctx = ctx.clone();
+    AX_BURST.schedule(ctx, pid, move |_| async move {
+        refresh_catalog(&refresh_ctx).await;
     });
 }
 
 fn schedule_refresh(ctx: &Context) {
-    if REFRESH_SCHEDULED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let ctx = ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(EVENT_DEBOUNCE).await;
-        REFRESH_SCHEDULED.store(false, Ordering::SeqCst);
-        refresh_catalog(&ctx).await;
+    let refresh_ctx = ctx.clone();
+    EVENT_BURST.schedule(ctx, (), move |_| async move {
+        refresh_catalog(&refresh_ctx).await;
     });
 }
 
