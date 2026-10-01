@@ -325,26 +325,65 @@ final class PollSchedulerTests: XCTestCase {
 
   // MARK: - The plugin-facing registration
 
-  func testPluginPollRegistrationsDecodeSecondsAndRejectMalformedFrames() {
+  func testPluginPollRegistrationsDecodeKindPeriodAndPriority() {
     typealias Process = PluginProcess
     XCTAssertEqual(
-      Process.decodePollIntervals(["intervals": ["sample": 1, "discover": 30.5]]),
-      ["sample": 1000, "discover": 30_500])
+      Process.decodePollRegistrations([
+        "registrations": [
+          "sample": ["every": 1, "priority": "high"],
+          "discover": ["every": 30.5, "priority": "low"],
+          "settle": ["after": 0.3, "priority": "normal"],
+        ]
+      ]),
+      [
+        "sample": .init(kind: .every, ms: 1_000, priority: .high),
+        "discover": .init(kind: .every, ms: 30_500, priority: .low),
+        "settle": .init(kind: .after, ms: 300, priority: .normal),
+      ])
     // An empty set is how a plugin stops polling entirely.
-    XCTAssertEqual(Process.decodePollIntervals(["intervals": [String: Any]()]), [:])
+    XCTAssertEqual(Process.decodePollRegistrations(["registrations": [String: Any]()]), [:])
+    // The core-only priority never reaches a plugin registration.
+    XCTAssertNil(
+      Process.decodePollRegistrations([
+        "registrations": ["probe": ["every": 0.08, "priority": "system"]]
+      ]))
+    // A huge period is rejected, never trapped converting to milliseconds.
+    XCTAssertNil(
+      Process.decodePollRegistrations([
+        "registrations": ["d0": ["after": 1e300, "priority": "low"]]
+      ]))
+  }
 
-    // Rejected whole, so a typo cannot leave a collector running at a rate
-    // nobody asked for.
-    XCTAssertNil(Process.decodePollIntervals([:]))
-    XCTAssertNil(Process.decodePollIntervals(["intervals": "nope"]))
-    XCTAssertNil(Process.decodePollIntervals(["intervals": ["sample": "1"]]))
-    XCTAssertNil(Process.decodePollIntervals(["intervals": ["": 1]]))
-    // Below the floor a "poll" is a busy loop.
-    XCTAssertNil(Process.decodePollIntervals(["intervals": ["sample": 0.001]]))
-    XCTAssertNil(Process.decodePollIntervals(["intervals": ["sample": 0]]))
-    // The name rides inside the event name, so it stays unambiguous.
-    XCTAssertNil(Process.decodePollIntervals(["intervals": ["core:poll": 1]]))
-    XCTAssertNil(Process.decodePollIntervals(["intervals": ["Sample": 1]]))
+  func testPluginDeadlinesFireOnceAndAreReArmedOnlyByANewOrChangedEntry() {
+    typealias Process = PluginProcess
+    typealias Registration = PluginProcess.PollRegistration
+    let settle = Registration(kind: .after, ms: 300, priority: .normal)
+    let sample = Registration(kind: .every, ms: 1_000, priority: .high)
+    // A new set arms what is new or changed and releases what left.
+    var plan = Process.pollPlan(
+      current: [:], fired: [], next: ["d0": settle, "i0": sample])
+    XCTAssertEqual(plan.arm, ["d0": settle, "i0": sample])
+    XCTAssertEqual(plan.release, [])
+    // Repeating a pending deadline unchanged keeps it pending.
+    plan = Process.pollPlan(
+      current: ["d0": settle, "i0": sample], fired: [], next: ["d0": settle, "i0": sample])
+    XCTAssertEqual(plan.arm, [:])
+    // Repeating a deadline that already fired does not fire it again.
+    plan = Process.pollPlan(
+      current: ["d0": settle, "i0": sample], fired: ["d0"], next: ["d0": settle, "i0": sample])
+    XCTAssertEqual(plan.arm, [:])
+    XCTAssertEqual(plan.fired, ["d0"])
+    // A changed deadline arms afresh; a dropped one is released and forgotten.
+    let later = Registration(kind: .after, ms: 500, priority: .normal)
+    plan = Process.pollPlan(
+      current: ["d0": settle, "i0": sample], fired: ["d0"], next: ["d0": later])
+    XCTAssertEqual(plan.arm, ["d0": later])
+    XCTAssertEqual(plan.release, ["i0"])
+    XCTAssertEqual(plan.fired, [])
+    // A changed priority re-registers the cadence.
+    let lax = Registration(kind: .every, ms: 1_000, priority: .low)
+    plan = Process.pollPlan(current: ["i0": sample], fired: [], next: ["i0": lax])
+    XCTAssertEqual(plan.arm, ["i0": lax])
   }
 
   func testPollClientIDsAreNamespacedPerPluginAndTimer() {

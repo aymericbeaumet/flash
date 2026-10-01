@@ -81,10 +81,18 @@ final class PluginProcess {
   /// Runtime status-bar segments, merged under `lock` on every `status`
   /// notification so concurrent updates can never lose each other.
   private var statusSegments: [String: PluginStatusSegment] = [:]
-  /// Cadences this plugin asked the core to drive, keyed by the plugin's own
-  /// timer name. The plugin never arms a timer itself; `PollScheduler` ticks
-  /// it, so one shared wake-up serves every poller in the app.
-  private var pollIntervalsMs: [String: Int] = [:]
+  /// Cadences and deadlines this plugin asked the core to drive, keyed by the
+  /// plugin's own name. The plugin never arms a timer itself; `PollScheduler`
+  /// ticks it, so one shared wake-up serves every poller in the app. Guarded
+  /// by `lock`, as are the two fields below.
+  private var pollRegistrations: [String: PollRegistration] = [:]
+  /// Deadlines that fired and are still listed: repeating one unchanged in a
+  /// later set must not fire it again.
+  private var firedPollDeadlines: Set<String> = []
+  /// The arming each live registration's tick must carry, so a fire already
+  /// queued when its entry was replaced or dropped is discarded.
+  private var pollArmings: [String: UInt64] = [:]
+  private var pollArmingSerial: UInt64 = 0
   private var staleStatusSegments: Set<String> = []
   private var statusExpiryWork: DispatchWorkItem?
   private var startDate: Date?
@@ -1731,7 +1739,7 @@ final class PluginProcess {
     case "status":
       applyStatusSegments(params)
     case "poll":
-      applyPollIntervals(params)
+      applyPollRegistrations(params)
     case "log":
       let level = FlashLog.Level.parse(params["level"] as? String ?? "info") ?? .info
       let message = params["message"] as? String ?? ""
@@ -1819,37 +1827,96 @@ final class PluginProcess {
     notifyStatus()
   }
 
-  /// One `poll` notification: the plugin's complete set of cadences, keyed by
-  /// its own timer name and measured in seconds. An empty set cancels its
-  /// polling entirely; a malformed frame is rejected whole so a typo cannot
-  /// silently leave a collector running at the wrong rate.
-  func applyPollIntervals(_ params: [String: Any]) {
-    guard let decoded = Self.decodePollIntervals(params) else {
+  /// One registration of a `poll` set: a cadence (`every`) or a one-shot
+  /// deadline (`after`, from receipt), at the plugin-chosen priority.
+  struct PollRegistration: Equatable {
+    enum Kind: String {
+      case every
+      case after
+    }
+    var kind: Kind
+    var ms: Int
+    var priority: PollScheduler.Priority
+  }
+
+  /// What one new set changes: registrations to (re)arm, names to release,
+  /// and the fired deadlines it still lists unchanged.
+  struct PollPlan: Equatable {
+    var arm: [String: PollRegistration] = [:]
+    var release: [String] = []
+    var fired: Set<String> = []
+  }
+
+  /// A set is the plugin's whole answer. An entry identical to the current
+  /// one keeps running — a cadence stays on its grid, a pending deadline
+  /// stays pending, and a fired one is not fired again — while a new or
+  /// changed entry arms afresh and a dropped one is released.
+  static func pollPlan(
+    current: [String: PollRegistration], fired: Set<String>, next: [String: PollRegistration]
+  ) -> PollPlan {
+    var plan = PollPlan()
+    plan.release = current.keys.filter { next[$0] == nil }.sorted()
+    for (name, registration) in next {
+      if current[name] == registration {
+        if fired.contains(name) { plan.fired.insert(name) }
+      } else {
+        plan.arm[name] = registration
+      }
+    }
+    return plan
+  }
+
+  /// One `poll` notification: the plugin's complete set of cadences and
+  /// deadlines. An empty set cancels its polling entirely; a malformed or
+  /// over-bound frame is rejected whole so a typo cannot silently leave a
+  /// collector running at the wrong rate.
+  func applyPollRegistrations(_ params: [String: Any]) {
+    guard let decoded = Self.decodePollRegistrations(params) else {
       FlashLog.plugin(
         .warn, pluginID: manifest.id,
-        message: "[plugin] poll registration rejected: expected {name: seconds >= "
-          + "\(Double(PollScheduler.minimumIntervalMs) / 1000)}")
+        message: "[plugin] poll registration rejected: expected at most "
+          + "\(PluginProtocol.pollMaxRegistrations) {every|after: seconds, priority: "
+          + "\(PluginProtocol.pollPriorities.map(\.name).joined(separator: "|"))}")
       return
     }
     lock.lock()
-    let previous = pollIntervalsMs
-    pollIntervalsMs = decoded
+    let plan = Self.pollPlan(
+      current: pollRegistrations, fired: firedPollDeadlines, next: decoded)
+    pollRegistrations = decoded
+    firedPollDeadlines = plan.fired
+    for name in plan.release { pollArmings.removeValue(forKey: name) }
+    var armed: [(name: String, registration: PollRegistration, arming: UInt64)] = []
+    for (name, registration) in plan.arm {
+      pollArmingSerial &+= 1
+      pollArmings[name] = pollArmingSerial
+      armed.append((name, registration, pollArmingSerial))
+    }
     lock.unlock()
-    guard previous != decoded else { return }
-    for name in previous.keys where decoded[name] == nil {
+    for name in plan.release {
       PollScheduler.shared.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
     }
-    for (name, everyMs) in decoded {
-      PollScheduler.shared.register(
-        Self.pollClientID(pluginID: manifest.id, name: name), everyMs: everyMs, priority: .normal,
-        on: queue
-      ) { [weak self] in
-        self?.deliverPollTickOnQueue(name: name)
+    for (name, registration, arming) in armed {
+      let id = Self.pollClientID(pluginID: manifest.id, name: name)
+      let tick: () -> Void = { [weak self] in
+        self?.deliverPollTickOnQueue(name: name, arming: arming)
+      }
+      switch registration.kind {
+      case .every:
+        PollScheduler.shared.register(
+          id, everyMs: registration.ms, priority: registration.priority, on: queue, handler: tick)
+      case .after:
+        PollScheduler.shared.scheduleOnce(
+          id, afterMs: registration.ms, priority: registration.priority, on: queue, handler: tick)
       }
     }
+    guard !plan.arm.isEmpty || !plan.release.isEmpty else { return }
     FlashLog.plugin(
       .debug, pluginID: manifest.id,
-      message: "[plugin] poll registered timers=\(decoded.count)")
+      message: "[plugin] poll registered",
+      fields: [
+        "registrations": "\(decoded.count)", "armed": "\(plan.arm.count)",
+        "released": "\(plan.release.count)",
+      ])
   }
 
   /// Registration names ride inside the event name, so keep them to
@@ -1862,9 +1929,15 @@ final class PluginProcess {
   }
 
   /// A registration is the subscription, so a tick bypasses `listen` matching
-  /// — the plugin asked for exactly this by name.
-  private func deliverPollTickOnQueue(name: String) {
-    guard runtimeStateSnapshot() == .running else { return }
+  /// — the plugin asked for exactly this by name. A tick from an arming that
+  /// a newer set replaced or dropped is discarded; a deadline's tick marks it
+  /// fired, so repeating it unchanged never fires it twice.
+  private func deliverPollTickOnQueue(name: String, arming: UInt64) {
+    lock.lock()
+    let current = pollArmings[name] == arming
+    if current, pollRegistrations[name]?.kind == .after { firedPollDeadlines.insert(name) }
+    lock.unlock()
+    guard current, runtimeStateSnapshot() == .running else { return }
     // The registration name rides in the event name, so a tick needs no
     // payload shape of its own and stays greppable in the logs.
     deliverEventOnQueue(PluginEvent(name: "core:poll:\(name)", payload: [:], bundleID: nil))
@@ -1872,27 +1945,40 @@ final class PluginProcess {
 
   private func cancelPollRegistrations() {
     lock.lock()
-    let names = Array(pollIntervalsMs.keys)
-    pollIntervalsMs.removeAll()
+    let names = Array(pollRegistrations.keys)
+    pollRegistrations.removeAll()
+    firedPollDeadlines.removeAll()
+    pollArmings.removeAll()
     lock.unlock()
     for name in names {
       PollScheduler.shared.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
     }
   }
 
-  /// `nil` rejects the frame; an empty dictionary clears every cadence.
-  static func decodePollIntervals(_ params: [String: Any]) -> [String: Int]? {
-    guard let raw = params["intervals"] as? [String: Any] else { return nil }
-    var decoded: [String: Int] = [:]
+  /// `nil` rejects the frame; an empty dictionary clears every registration.
+  static func decodePollRegistrations(_ params: [String: Any]) -> [String: PollRegistration]? {
+    guard Set(params.keys) == ["registrations"],
+      let raw = params["registrations"] as? [String: Any],
+      raw.count <= PluginProtocol.pollMaxRegistrations
+    else { return nil }
+    var decoded: [String: PollRegistration] = [:]
     for (name, value) in raw {
-      let key = name.trimmed
-      guard !key.isEmpty, key.count <= 64,
-        key.unicodeScalars.allSatisfy({ Self.pollNameAllowed.contains($0) }),
-        let seconds = PluginJSON.number(value), seconds.isFinite
+      guard !name.isEmpty, name.utf8.count <= PluginProtocol.pollMaxNameBytes,
+        name.unicodeScalars.allSatisfy({ Self.pollNameAllowed.contains($0) }),
+        let entry = value as? [String: Any],
+        let priorityName = entry["priority"] as? String,
+        let priority = PluginProtocol.pollPriorities.first(where: { $0.name == priorityName })?
+          .scheduler
       else { return nil }
-      let everyMs = Int((seconds * 1000).rounded())
-      guard everyMs >= PollScheduler.minimumIntervalMs else { return nil }
-      decoded[key] = everyMs
+      let kinds = entry.keys.filter { $0 != "priority" }
+      guard kinds.count == 1, let kind = PollRegistration.Kind(rawValue: kinds[0]),
+        let seconds = PluginJSON.number(entry[kind.rawValue]),
+        seconds >= 0, seconds <= Double(PluginProtocol.pollMaxSeconds)
+      else { return nil }
+      let ms = Int((seconds * 1000).rounded())
+      // Below the floor a cadence is a busy loop; a deadline may be due now.
+      guard kind == .after || ms >= PollScheduler.minimumIntervalMs else { return nil }
+      decoded[name] = PollRegistration(kind: kind, ms: ms, priority: priority)
     }
     return decoded
   }

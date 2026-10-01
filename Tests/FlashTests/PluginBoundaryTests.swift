@@ -56,6 +56,26 @@ final class PluginBoundaryTests: XCTestCase {
     }
   }
 
+  /// The `poll` group pins what a registration set may be: the host decodes
+  /// exactly the sets the SDK may emit, and rejects the rest whole.
+  func testPollRegistrationSetsSatisfyTheSharedCorpus() throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let data = try Data(
+      contentsOf: root.appendingPathComponent(
+        "Plugins/_flash_plugin_rust/fixtures/wire-values.fixture"))
+    let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let cases = try XCTUnwrap(corpus["poll"] as? [[String: Any]])
+    XCTAssertFalse(cases.isEmpty)
+    for item in cases {
+      let value = try XCTUnwrap(item["value"] as? [String: Any])
+      let valid = try XCTUnwrap(item["valid"] as? Bool)
+      XCTAssertEqual(
+        PluginProcess.decodePollRegistrations(value) != nil, valid,
+        "poll: \(item["name"] ?? "")")
+    }
+  }
+
   /// The `status_observed` group pins what a `core:status.observed` payload
   /// may be; every payload the host builds must be one the SDK accepts.
   func testStatusObservedPayloadsTheHostBuildsSatisfyTheSharedCorpus() throws {

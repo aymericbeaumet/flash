@@ -149,6 +149,25 @@ impl Harness {
         self.context.resolve_host_call(id, result)
     }
 
+    /// Deliver the host's `core:poll:<name>` tick for a registration the
+    /// plugin made ([`Context::interval`] / [`Context::after`]); its name
+    /// is in the last `poll` frame. The returned task is the callback's run;
+    /// `None` when the tick runs nothing (cancelled, already fired, or a
+    /// cadence whose previous run is still going).
+    pub fn deliver_poll_tick(&self, name: &str) -> Option<JoinHandle<()>> {
+        self.context.deliver_poll_tick(name)
+    }
+
+    /// Drain and return the registration set of the most recent `poll`
+    /// frame; `None` when nothing was registered since the last drain.
+    pub fn drain_poll_registrations(&mut self) -> Option<serde_json::Map<String, Value>> {
+        self.drain()
+            .into_iter()
+            .rev()
+            .find(|frame| frame.get("method").and_then(Value::as_str) == Some("poll"))
+            .and_then(|frame| frame["params"]["registrations"].as_object().cloned())
+    }
+
     /// Drain and return the rows of the most recent `publish` notification;
     /// `None` when nothing was published since the last drain.
     pub fn drain_published_rows(&mut self) -> Option<Vec<Candidate>> {

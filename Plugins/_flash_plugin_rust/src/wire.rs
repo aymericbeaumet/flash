@@ -179,6 +179,53 @@ fn valid_target(target: &Value) -> bool {
     true
 }
 
+/// Whether `params` is a `poll` registration set the host accepts: exactly
+/// `registrations`, at most `poll.max_registrations` names of
+/// `[a-z0-9_-]{1,max_name_bytes}`, each exactly one of `every` (seconds,
+/// floored at `min_every_ms`) or `after` (seconds, from zero) up to
+/// `max_seconds`, and a plugin `priority`. Mirrors the host's decoder; the
+/// shared corpus pins both.
+pub(crate) fn valid_poll(params: &Value) -> bool {
+    use crate::poll::{MAX_NAME_BYTES, MAX_REGISTRATIONS, MAX_SECONDS, MIN_EVERY, PollPriority};
+    let Some(registrations) = params.get("registrations").and_then(Value::as_object) else {
+        return false;
+    };
+    if !only_keys(params, &["registrations"]) || registrations.len() > MAX_REGISTRATIONS {
+        return false;
+    }
+    registrations.iter().all(|(name, entry)| {
+        let valid_name = !name.is_empty()
+            && name.len() <= MAX_NAME_BYTES
+            && name
+                .bytes()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'));
+        let priority = entry.get("priority").and_then(Value::as_str);
+        let valid_priority = PollPriority::ALL
+            .iter()
+            .any(|known| Some(known.wire()) == priority);
+        let kinds: Vec<&str> = ["every", "after"]
+            .into_iter()
+            .filter(|kind| present(entry, kind).is_some())
+            .collect();
+        let [kind] = kinds.as_slice() else {
+            return false;
+        };
+        let seconds = entry
+            .get(*kind)
+            .filter(|value| value.is_number())
+            .and_then(Value::as_f64);
+        let floor = if *kind == "every" {
+            MIN_EVERY.as_secs_f64()
+        } else {
+            0.0
+        };
+        valid_name
+            && valid_priority
+            && only_keys(entry, &[kind, "priority"])
+            && seconds.is_some_and(|seconds| seconds >= floor && seconds <= MAX_SECONDS as f64)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +278,18 @@ mod tests {
                 case["name"]
             );
         }
+        // `poll` registration sets: the host decodes exactly these, so the
+        // SDK may emit nothing else.
+        let polls = fixture["poll"].as_array().unwrap();
+        assert!(!polls.is_empty());
+        for case in polls {
+            assert_eq!(
+                valid_poll(&case["value"]),
+                case["valid"].as_bool().unwrap(),
+                "poll: {}",
+                case["name"]
+            );
+        }
         for case in fixture["encoded_rows"].as_array().unwrap() {
             let encoded = serde_json::to_vec(&case["value"]).unwrap();
             assert_eq!(
@@ -238,6 +297,21 @@ mod tests {
                 case["encoded_bytes"].as_u64().unwrap() as usize
             );
         }
+    }
+
+    #[test]
+    fn poll_bounds_match_the_shared_protocol_contract() {
+        use crate::poll::{
+            MAX_NAME_BYTES, MAX_REGISTRATIONS, MAX_SECONDS, MIN_EVERY, PollPriority,
+        };
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let poll = &contract["poll"];
+        let priorities: Vec<&str> = PollPriority::ALL.iter().map(|p| p.wire()).collect();
+        assert_eq!(poll["priorities"], serde_json::json!(priorities));
+        assert_eq!(poll["min_every_ms"], MIN_EVERY.as_millis() as u64);
+        assert_eq!(poll["max_seconds"], MAX_SECONDS);
+        assert_eq!(poll["max_registrations"], MAX_REGISTRATIONS as u64);
+        assert_eq!(poll["max_name_bytes"], MAX_NAME_BYTES as u64);
     }
 
     #[test]

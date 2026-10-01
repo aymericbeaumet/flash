@@ -25,7 +25,7 @@
     "plugin_to_host_notifications": {
       "publish": "{rows} — full-replacement catalog; host-owned store; empty rows = authoritative empty; transient failure = don't publish (host keeps last-good)",
       "status": "{segments: {name: value}} — manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
-      "poll": "{intervals: {name: seconds >= 0.05}} — full-replacement set of cadences the host should drive for this plugin; empty clears. Plugins must not arm their own timers: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Malformed frames are rejected whole.",
+      "poll": "{registrations: {name: {every: seconds, priority} | {after: seconds, priority}}} — full-replacement set of the cadences (`every`) and one-shot deadlines (`after`, measured from receipt) the host should drive for this plugin; empty clears. Plugins must not arm their own timers or sleep to schedule work: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. A deadline fires once; repeating it unchanged in a later set neither re-arms nor re-fires it, and a changed or new name arms it afresh. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Bounds live in the `poll` section; a malformed or over-bound frame is rejected whole.",
       "log": "{level, message, fields, trace?} — content-free; trace names the interaction of the request being served"
     },
     "plugin_to_host_rpcs": {
@@ -103,6 +103,18 @@
       "AXRowExpanded",
       "AXRowCollapsed"
     ]
+  },
+  "poll": {
+    "$comment": "Bounds of a `poll` registration set. priority sets the slack the shared clock may add to a wake-up so unrelated ones coalesce (high 25 ms: a value on screen the user watches change; normal 100 ms: ordinary sampling and settles; low 1 s: background upkeep, remote pulls, retries). The core-only `system` priority is not available to plugins. every is floored at min_every_ms; every and after are capped at max_seconds; a set holds at most max_registrations names of 1..max_name_bytes characters from [a-z0-9_-].",
+    "priorities": [
+      "high",
+      "normal",
+      "low"
+    ],
+    "min_every_ms": 50,
+    "max_seconds": 86400,
+    "max_registrations": 64,
+    "max_name_bytes": 64
   },
   "perform_kinds": [
     "resolve",

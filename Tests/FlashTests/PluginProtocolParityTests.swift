@@ -114,6 +114,18 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(limits["host_inbound_bytes"] as? Int, PluginProtocol.maxInboundBytes)
   }
 
+  func testPollBoundsMatchSpec() throws {
+    let poll = try XCTUnwrap(try spec()["poll"] as? [String: Any])
+    XCTAssertEqual(
+      poll["priorities"] as? [String], PluginProtocol.pollPriorities.map(\.name),
+      "plugins get every priority but the core-only system one")
+    XCTAssertFalse(PluginProtocol.pollPriorities.contains { $0.scheduler == .system })
+    XCTAssertEqual(poll["min_every_ms"] as? Int, PollScheduler.minimumIntervalMs)
+    XCTAssertEqual(poll["max_seconds"] as? Int, PluginProtocol.pollMaxSeconds)
+    XCTAssertEqual(poll["max_registrations"] as? Int, PluginProtocol.pollMaxRegistrations)
+    XCTAssertEqual(poll["max_name_bytes"] as? Int, PluginProtocol.pollMaxNameBytes)
+  }
+
   func testCapabilityRegistryMatchesSpec() throws {
     let capabilities = try XCTUnwrap(try spec()["capabilities"] as? [String])
     XCTAssertEqual(

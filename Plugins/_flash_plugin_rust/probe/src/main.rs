@@ -5,22 +5,40 @@
 //! through `flash_plugin::testing::WireHarness`. Test fixture only: never
 //! shipped or spawned by the host.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use flash_plugin::{
     ActionRequest, Candidate, CommandRequest, Context, EvaluateRequest, EvaluateResponse, Event,
-    Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, QueryAnswer,
-    SearchRequest, SearchResponse, TERMINAL_LINK_ROLE, run,
+    Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, PollPriority,
+    QueryAnswer, SearchRequest, SearchResponse, TERMINAL_LINK_ROLE, run,
 };
 
 const SOURCE: &str = "probe.items";
 const TARGET_PID: i64 = 4242;
 
 struct Probe {
-    last_event: Mutex<String>,
+    /// The last event, or host tick, the probe observed. Shared with the
+    /// cadence and deadline callbacks, which outlive the command that
+    /// registered them.
+    last_event: Arc<Mutex<String>>,
+}
+
+fn poll_priority(name: &str) -> Option<PollPriority> {
+    match name {
+        "high" => Some(PollPriority::High),
+        "normal" => Some(PollPriority::Normal),
+        "low" => Some(PollPriority::Low),
+        _ => None,
+    }
+}
+
+fn record(state: &Mutex<String>, value: String) {
+    *state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
 }
 
 flash_plugin::plugin!(Probe);
@@ -212,6 +230,31 @@ impl FlashPlugin for Probe {
                 ctx.status([(arg(args, 0), arg(args, 1))]);
                 PerformResponse::ok()
             }
+            // Host-driven wake-ups: `interval <ms> <priority>` and
+            // `after <ms> <priority>` register with the host and record the
+            // name of each tick they run.
+            "interval" | "after" => {
+                let Some(priority) = poll_priority(&arg(args, 1)) else {
+                    return PerformResponse::fail("usage: interval|after <ms> high|normal|low");
+                };
+                let period = Duration::from_millis(int_arg(args, 0, 0).max(0) as u64);
+                let state = Arc::clone(&self.last_event);
+                let name = if command.subcommand == "interval" {
+                    ctx.interval(period, priority, move |_| {
+                        let state = Arc::clone(&state);
+                        async move { record(&state, "tick".to_string()) }
+                    })
+                    .name()
+                    .to_string()
+                } else {
+                    ctx.after(period, priority, move |_| async move {
+                        record(&state, "fired".to_string())
+                    })
+                    .name()
+                    .to_string()
+                };
+                PerformResponse::ok().message(name)
+            }
             "publish-extra" => {
                 let mut rows = catalog(&ctx);
                 rows.push(Candidate::new(SOURCE, "delta"));
@@ -235,7 +278,7 @@ impl FlashPlugin for Probe {
 
 fn probe() -> Probe {
     Probe {
-        last_event: Mutex::new(String::new()),
+        last_event: Arc::new(Mutex::new(String::new())),
     }
 }
 
@@ -522,6 +565,63 @@ mod tests {
         }}))
         .await;
         await_event_state(&mut wire, 103, "core:apps.changed").await;
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// A cadence and a deadline register with the host — kind, period and
+    /// priority in one full-replacement set — and run only on its ticks: the
+    /// deadline once, leaving the set, the cadence on every tick. A
+    /// registration outside the protocol's bounds never reaches the host.
+    #[tokio::test]
+    async fn host_ticks_drive_cadences_and_deadlines() {
+        let mut wire = serve(json!({})).await;
+        wire.recv_notification("publish").await;
+        wire.send(command(600, "after", &["300", "high"])).await;
+        assert_eq!(
+            wire.recv_notification("poll").await,
+            json!({ "registrations": { "d0": { "after": 0.3, "priority": "high" } } })
+        );
+        assert_eq!(wire.recv_response(600).await["message"], "d0");
+        wire.send(command(601, "interval", &["1000", "low"])).await;
+        assert_eq!(
+            wire.recv_notification("poll").await,
+            json!({ "registrations": {
+                "d0": { "after": 0.3, "priority": "high" },
+                "i1": { "every": 1.0, "priority": "low" },
+            }})
+        );
+        assert_eq!(wire.recv_response(601).await["message"], "i1");
+
+        wire.send(
+            json!({ "method": "event", "params": { "name": "core:poll:d0", "payload": {} } }),
+        )
+        .await;
+        await_event_state(&mut wire, 610, "fired").await;
+        wire.send(
+            json!({ "method": "event", "params": { "name": "core:poll:i1", "payload": {} } }),
+        )
+        .await;
+        await_event_state(&mut wire, 710, "tick").await;
+        // The fired deadline left the set: the next change republishes the
+        // cadence alone, and a sub-floor cadence is refused with a warning.
+        wire.send(command(800, "interval", &["10", "normal"])).await;
+        let warning = wire.recv_notification("log").await;
+        assert_eq!(warning["level"], "warn");
+        assert!(warning["message"].as_str().unwrap().contains("busy loop"));
+        assert_eq!(wire.recv_response(800).await["ok"], true);
+        wire.send(command(801, "after", &["0", "normal"])).await;
+        assert_eq!(
+            wire.recv_notification("poll").await,
+            json!({ "registrations": {
+                "i1": { "every": 1.0, "priority": "low" },
+                "d3": { "after": 0.0, "priority": "normal" },
+            }})
+        );
+        assert_eq!(
+            wire.recv_response(801).await,
+            json!({ "ok": true, "message": "d3" })
+        );
         wire.close_stdin().await;
         wire.finished().await;
     }

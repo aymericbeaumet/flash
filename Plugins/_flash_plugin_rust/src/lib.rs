@@ -12,6 +12,7 @@ mod emit;
 mod events;
 mod framing;
 mod observed;
+mod poll;
 pub mod process;
 mod runtime;
 mod settle;
@@ -27,12 +28,12 @@ mod wire;
 /// then write `impl FlashPlugin for MyPlugin { … }`.
 pub use flash_plugin_macros::plugin;
 
-pub use context::PollHandle;
 pub use context::{
     AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate, applescript_quote,
     run_command, run_command_with_slow_threshold, run_osascript, shorten, spawn_managed,
 };
 pub use observed::ObservedCadences;
+pub use poll::{Deadline, PollHandle, PollPriority};
 pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{Plugin, run};
 pub use settle::Settle;

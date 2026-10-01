@@ -1,5 +1,5 @@
 {
-  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, AX-change and status-observation event payloads, and encoded byte accounting",
+  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, AX-change and status-observation event payloads, poll registration sets, and encoded byte accounting",
   "protocol_version": [
     {
       "name": "current",
@@ -629,6 +629,168 @@
         }
       ],
       "encoded_bytes": 33
+    }
+  ],
+  "poll": [
+    {
+      "name": "empty-clears",
+      "value": {"registrations": {}},
+      "valid": true
+    },
+    {
+      "name": "cadence",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "high"}}},
+      "valid": true
+    },
+    {
+      "name": "deadline",
+      "value": {"registrations": {"d3": {"after": 0.3, "priority": "normal"}}},
+      "valid": true
+    },
+    {
+      "name": "due-now-deadline",
+      "value": {"registrations": {"d0": {"after": 0, "priority": "low"}}},
+      "valid": true
+    },
+    {
+      "name": "cadence-at-the-floor",
+      "value": {"registrations": {"i0": {"every": 0.05, "priority": "normal"}}},
+      "valid": true
+    },
+    {
+      "name": "both-at-the-ceiling",
+      "value": {"registrations": {"i0": {"every": 86400, "priority": "low"}, "d1": {"after": 86400, "priority": "low"}}},
+      "valid": true
+    },
+    {
+      "name": "names-use-the-event-alphabet",
+      "value": {"registrations": {"sample_1-a": {"every": 2, "priority": "normal"}}},
+      "valid": true
+    },
+    {
+      "name": "registration-bound",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "low"}, "i1": {"every": 1, "priority": "low"}, "i2": {"every": 1, "priority": "low"}, "i3": {"every": 1, "priority": "low"}, "i4": {"every": 1, "priority": "low"}, "i5": {"every": 1, "priority": "low"}, "i6": {"every": 1, "priority": "low"}, "i7": {"every": 1, "priority": "low"}, "i8": {"every": 1, "priority": "low"}, "i9": {"every": 1, "priority": "low"}, "i10": {"every": 1, "priority": "low"}, "i11": {"every": 1, "priority": "low"}, "i12": {"every": 1, "priority": "low"}, "i13": {"every": 1, "priority": "low"}, "i14": {"every": 1, "priority": "low"}, "i15": {"every": 1, "priority": "low"}, "i16": {"every": 1, "priority": "low"}, "i17": {"every": 1, "priority": "low"}, "i18": {"every": 1, "priority": "low"}, "i19": {"every": 1, "priority": "low"}, "i20": {"every": 1, "priority": "low"}, "i21": {"every": 1, "priority": "low"}, "i22": {"every": 1, "priority": "low"}, "i23": {"every": 1, "priority": "low"}, "i24": {"every": 1, "priority": "low"}, "i25": {"every": 1, "priority": "low"}, "i26": {"every": 1, "priority": "low"}, "i27": {"every": 1, "priority": "low"}, "i28": {"every": 1, "priority": "low"}, "i29": {"every": 1, "priority": "low"}, "i30": {"every": 1, "priority": "low"}, "i31": {"every": 1, "priority": "low"}, "i32": {"every": 1, "priority": "low"}, "i33": {"every": 1, "priority": "low"}, "i34": {"every": 1, "priority": "low"}, "i35": {"every": 1, "priority": "low"}, "i36": {"every": 1, "priority": "low"}, "i37": {"every": 1, "priority": "low"}, "i38": {"every": 1, "priority": "low"}, "i39": {"every": 1, "priority": "low"}, "i40": {"every": 1, "priority": "low"}, "i41": {"every": 1, "priority": "low"}, "i42": {"every": 1, "priority": "low"}, "i43": {"every": 1, "priority": "low"}, "i44": {"every": 1, "priority": "low"}, "i45": {"every": 1, "priority": "low"}, "i46": {"every": 1, "priority": "low"}, "i47": {"every": 1, "priority": "low"}, "i48": {"every": 1, "priority": "low"}, "i49": {"every": 1, "priority": "low"}, "i50": {"every": 1, "priority": "low"}, "i51": {"every": 1, "priority": "low"}, "i52": {"every": 1, "priority": "low"}, "i53": {"every": 1, "priority": "low"}, "i54": {"every": 1, "priority": "low"}, "i55": {"every": 1, "priority": "low"}, "i56": {"every": 1, "priority": "low"}, "i57": {"every": 1, "priority": "low"}, "i58": {"every": 1, "priority": "low"}, "i59": {"every": 1, "priority": "low"}, "i60": {"every": 1, "priority": "low"}, "i61": {"every": 1, "priority": "low"}, "i62": {"every": 1, "priority": "low"}, "i63": {"every": 1, "priority": "low"}}},
+      "valid": true
+    },
+    {
+      "name": "missing-registrations",
+      "value": {},
+      "valid": false
+    },
+    {
+      "name": "retired-intervals-map",
+      "value": {"intervals": {"i0": 1}},
+      "valid": false
+    },
+    {
+      "name": "unknown-top-level-key",
+      "value": {"registrations": {}, "extra": 1},
+      "valid": false
+    },
+    {
+      "name": "registrations-not-an-object",
+      "value": {"registrations": []},
+      "valid": false
+    },
+    {
+      "name": "bare-seconds",
+      "value": {"registrations": {"i0": 1}},
+      "valid": false
+    },
+    {
+      "name": "missing-priority",
+      "value": {"registrations": {"i0": {"every": 1}}},
+      "valid": false
+    },
+    {
+      "name": "system-priority-is-core-only",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "system"}}},
+      "valid": false
+    },
+    {
+      "name": "candidate-priority-is-not-a-poll-priority",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "urgent"}}},
+      "valid": false
+    },
+    {
+      "name": "priority-not-a-string",
+      "value": {"registrations": {"i0": {"every": 1, "priority": 1}}},
+      "valid": false
+    },
+    {
+      "name": "both-kinds",
+      "value": {"registrations": {"i0": {"every": 1, "after": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "neither-kind",
+      "value": {"registrations": {"i0": {"priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "unknown-entry-key",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "low", "jitter": 0.1}}},
+      "valid": false
+    },
+    {
+      "name": "cadence-below-the-floor",
+      "value": {"registrations": {"i0": {"every": 0.001, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "zero-cadence",
+      "value": {"registrations": {"i0": {"every": 0, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "negative-deadline",
+      "value": {"registrations": {"d0": {"after": -1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "cadence-above-the-ceiling",
+      "value": {"registrations": {"i0": {"every": 86401, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "deadline-above-the-ceiling",
+      "value": {"registrations": {"d0": {"after": 1e+300, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "string-seconds",
+      "value": {"registrations": {"i0": {"every": "1", "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "boolean-seconds",
+      "value": {"registrations": {"i0": {"every": true, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "uppercase-name",
+      "value": {"registrations": {"Sample": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "name-with-the-event-separator",
+      "value": {"registrations": {"core:poll": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "empty-name",
+      "value": {"registrations": {"": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "name-too-long",
+      "value": {"registrations": {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "over-the-registration-bound",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "low"}, "i1": {"every": 1, "priority": "low"}, "i2": {"every": 1, "priority": "low"}, "i3": {"every": 1, "priority": "low"}, "i4": {"every": 1, "priority": "low"}, "i5": {"every": 1, "priority": "low"}, "i6": {"every": 1, "priority": "low"}, "i7": {"every": 1, "priority": "low"}, "i8": {"every": 1, "priority": "low"}, "i9": {"every": 1, "priority": "low"}, "i10": {"every": 1, "priority": "low"}, "i11": {"every": 1, "priority": "low"}, "i12": {"every": 1, "priority": "low"}, "i13": {"every": 1, "priority": "low"}, "i14": {"every": 1, "priority": "low"}, "i15": {"every": 1, "priority": "low"}, "i16": {"every": 1, "priority": "low"}, "i17": {"every": 1, "priority": "low"}, "i18": {"every": 1, "priority": "low"}, "i19": {"every": 1, "priority": "low"}, "i20": {"every": 1, "priority": "low"}, "i21": {"every": 1, "priority": "low"}, "i22": {"every": 1, "priority": "low"}, "i23": {"every": 1, "priority": "low"}, "i24": {"every": 1, "priority": "low"}, "i25": {"every": 1, "priority": "low"}, "i26": {"every": 1, "priority": "low"}, "i27": {"every": 1, "priority": "low"}, "i28": {"every": 1, "priority": "low"}, "i29": {"every": 1, "priority": "low"}, "i30": {"every": 1, "priority": "low"}, "i31": {"every": 1, "priority": "low"}, "i32": {"every": 1, "priority": "low"}, "i33": {"every": 1, "priority": "low"}, "i34": {"every": 1, "priority": "low"}, "i35": {"every": 1, "priority": "low"}, "i36": {"every": 1, "priority": "low"}, "i37": {"every": 1, "priority": "low"}, "i38": {"every": 1, "priority": "low"}, "i39": {"every": 1, "priority": "low"}, "i40": {"every": 1, "priority": "low"}, "i41": {"every": 1, "priority": "low"}, "i42": {"every": 1, "priority": "low"}, "i43": {"every": 1, "priority": "low"}, "i44": {"every": 1, "priority": "low"}, "i45": {"every": 1, "priority": "low"}, "i46": {"every": 1, "priority": "low"}, "i47": {"every": 1, "priority": "low"}, "i48": {"every": 1, "priority": "low"}, "i49": {"every": 1, "priority": "low"}, "i50": {"every": 1, "priority": "low"}, "i51": {"every": 1, "priority": "low"}, "i52": {"every": 1, "priority": "low"}, "i53": {"every": 1, "priority": "low"}, "i54": {"every": 1, "priority": "low"}, "i55": {"every": 1, "priority": "low"}, "i56": {"every": 1, "priority": "low"}, "i57": {"every": 1, "priority": "low"}, "i58": {"every": 1, "priority": "low"}, "i59": {"every": 1, "priority": "low"}, "i60": {"every": 1, "priority": "low"}, "i61": {"every": 1, "priority": "low"}, "i62": {"every": 1, "priority": "low"}, "i63": {"every": 1, "priority": "low"}, "i64": {"every": 1, "priority": "low"}}},
+      "valid": false
     }
   ]
 }

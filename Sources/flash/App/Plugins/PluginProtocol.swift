@@ -55,6 +55,26 @@ enum PluginProtocol {
   static let maxFetchResponseBytes = 1_048_576
   static let fetchTimeoutMs = 8_000
 
+  // MARK: - Poll registrations
+
+  /// A priority a plugin may name in a `poll` registration, and the slack it
+  /// maps to on the shared clock. The core-only `system` is not one of them.
+  struct PollPriority: Equatable {
+    let name: String
+    let scheduler: PollScheduler.Priority
+  }
+
+  static let pollPriorities = [
+    PollPriority(name: "high", scheduler: .high),
+    PollPriority(name: "normal", scheduler: .normal),
+    PollPriority(name: "low", scheduler: .low),
+  ]
+  /// Ceiling on `every` and `after`, in seconds; it also keeps the
+  /// millisecond conversion far from overflow.
+  static let pollMaxSeconds = 86_400
+  static let pollMaxRegistrations = 64
+  static let pollMaxNameBytes = 64
+
   // MARK: - Transport admission (per child)
 
   static let maxPendingRequests = 64

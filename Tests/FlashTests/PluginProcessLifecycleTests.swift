@@ -654,6 +654,74 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(store.rows(for: "publisher").map(\.title), ["One", "Two"])
   }
 
+  // MARK: 6b. Poll registrations over the wire
+
+  /// A plugin's deadline rides the shared clock and ticks once, even when
+  /// the plugin repeats the unchanged set after the tick; its cadence stays
+  /// registered at the priority it named; an over-bound set is rejected
+  /// whole; and stopping the plugin releases every registration.
+  func testPluginDeadlinesTickOnceAndEveryRegistrationLeavesWithThePlugin() throws {
+    let set =
+      #"{"method":"poll","params":{"registrations":{"d0":{"after":0.05,"priority":"high"},"#
+      + #""i0":{"every":3600,"priority":"low"}}}}"#
+    var tooMany = (0...PluginProtocol.pollMaxRegistrations).map {
+      #""x\#($0)":{"every":1,"priority":"low"}"#
+    }.joined(separator: ",")
+    tooMany = #"{"method":"poll","params":{"registrations":{"# + tooMany + "}}}"
+    let fixture = try PluginFixtureKit.make(
+      id: "pollfix",
+      manifest: PluginFixtureKit.manifest(id: "pollfix"),
+      script: """
+        #!/bin/sh
+        D="$FLASH_PLUGIN_DATA_DIR"
+        while IFS= read -r line; do
+          id=$(printf '%s' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+          case "$line" in
+          *'"method":"initialize"'*)
+            \(PluginFixtureKit.initializeOK)
+            printf '%s\\n' '\(set)'
+            ;;
+          *'core:poll:d0'*)
+            printf 'tick\\n' >> "$D/ticks"
+            printf '%s\\n' '\(set)'
+            printf '%s\\n' '\(tooMany)'
+            printf '{"method":"status","params":{"segments":{"state":"ticked"}}}\\n'
+            ;;
+          esac
+        done
+        exit 0
+        """)
+    defer { fixture.cleanup() }
+    func registered() -> [String] {
+      let listed = DispatchSemaphore(value: 0)
+      var ids: [String] = []
+      PollScheduler.shared.registeredIDs {
+        ids = $0.filter { $0.hasPrefix("plugin:pollfix:") }
+        listed.signal()
+      }
+      listed.wait()
+      return ids
+    }
+    func ticks() -> Int {
+      let text = try? String(
+        contentsOf: fixture.dataDir.appendingPathComponent("ticks"), encoding: .utf8)
+      return text?.split(separator: "\n").count ?? 0
+    }
+    let process = try makeProcess(fixture)
+    process.start()
+    waitUntilTrue("the deadline ticked") {
+      process.statusBarInfo().statusSegments["state"] == .text("ticked")
+    }
+    // The fired deadline is dropped from the clock; repeating it unchanged
+    // did not re-arm it, and the over-bound set changed nothing.
+    waitUntilTrue("only the cadence stays registered") { registered() == ["plugin:pollfix:i0"] }
+    settleRunLoop(0.3)
+    XCTAssertEqual(ticks(), 1)
+    XCTAssertEqual(registered(), ["plugin:pollfix:i0"])
+    process.stopAndWait(reason: "test")
+    XCTAssertEqual(registered(), [])
+  }
+
   // MARK: 7. Status segments over the wire
 
   func testStatusSegmentBurstsMergeDeclaredOnlyAndClearOnTeardown() throws {

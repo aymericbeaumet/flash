@@ -4,7 +4,8 @@ use std::future::Future;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::context::{Context, PollHandle};
+use crate::context::Context;
+use crate::poll::{PollHandle, PollPriority};
 
 /// Host cadences ([`Context::interval`]) that tick only while a status
 /// surface shows one of this plugin's segments, as `core:status.observed`
@@ -50,12 +51,14 @@ impl ObservedCadences {
     }
 
     /// Register a host cadence that ticks only while a segment is observed.
-    pub fn interval<F, Fut>(&self, ctx: &Context, period: Duration, tick: F)
+    /// A sampler behind a segment someone is looking at is usually
+    /// [`PollPriority::High`].
+    pub fn interval<F, Fut>(&self, ctx: &Context, period: Duration, priority: PollPriority, tick: F)
     where
         F: FnMut(Context) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let handle = ctx.interval(period, tick);
+        let handle = ctx.interval(period, priority, tick);
         let mut state = self.lock();
         if state.observed == Some(false) {
             handle.cancel();
@@ -104,7 +107,12 @@ mod tests {
         let mut harness = Harness::new("observed");
         let ctx = harness.context();
         let cadences = ObservedCadences::default();
-        cadences.interval(&ctx, Duration::from_secs(1), |_| async {});
+        cadences.interval(
+            &ctx,
+            Duration::from_secs(1),
+            PollPriority::High,
+            |_| async {},
+        );
         assert!(cadences.observed(), "unknown until the host reports");
         assert!(
             !cadences.observe(&segments(&["summary"])),
@@ -118,21 +126,26 @@ mod tests {
             "re-armed: refresh now"
         );
         assert!(!cadences.observe(&[]));
-        cadences.interval(&ctx, Duration::from_secs(15), |_| async {});
+        cadences.interval(
+            &ctx,
+            Duration::from_secs(15),
+            PollPriority::Normal,
+            |_| async {},
+        );
         let polls: Vec<String> = harness
             .drain()
             .into_iter()
             .filter(|frame| frame["method"] == "poll")
-            .map(|frame| frame["params"]["intervals"].to_string())
+            .map(|frame| frame["params"]["registrations"].to_string())
             .collect();
         assert_eq!(
             polls,
             [
-                r#"{"i0":1.0}"#,
+                r#"{"i0":{"every":1.0,"priority":"high"}}"#,
                 "{}",
-                r#"{"i0":1.0}"#,
+                r#"{"i0":{"every":1.0,"priority":"high"}}"#,
                 "{}",
-                r#"{"i1":15.0}"#,
+                r#"{"i1":{"every":15.0,"priority":"normal"}}"#,
                 "{}",
             ],
             "only transitions reach the host; unobserved registrations stay cancelled"

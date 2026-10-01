@@ -1,6 +1,7 @@
 //! The per-process [`Context`] handed to every plugin callback: the
 //! `publish`/`status`/`log` emitters, the typed host RPC client, config
-//! accessors, interval timers, sandboxed data dirs — plus the audited
+//! accessors, host-driven cadences and deadlines (see `poll`), sandboxed data
+//! dirs — plus the audited
 //! subprocess helpers [`run_command`] / [`run_osascript`].
 
 use std::collections::{BTreeMap, HashMap};
@@ -12,9 +13,10 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 
 use crate::emit::Emitter;
+use crate::poll::PollRegistry;
 use crate::process::{self, ManagedChild, ManagedChildError};
 use crate::status::{PreviewTooLarge, StatusSegment, StatusValue};
 use crate::types::{Candidate, Event, PerformResponse, RunningApplication};
@@ -65,63 +67,7 @@ pub struct Context {
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
     running_applications: Arc<Mutex<Vec<RunningApplication>>>,
-    poll: Arc<PollRegistry>,
-}
-
-/// Cadences this plugin has asked the host to drive. Plugins never arm their
-/// own timers: `interval` registers a period with the core, which folds every
-/// registration in the app onto one clock and sends a `core:poll:<name>` event
-/// when each is due. The broadcast fans those ticks out to the waiting tasks;
-/// a receiver that lags because its callback is still running simply misses
-/// ticks, which is the backpressure we want from an overrunning collector.
-pub(crate) struct PollRegistry {
-    intervals: Mutex<BTreeMap<String, f64>>,
-    ticks: broadcast::Sender<String>,
-    counter: AtomicU64,
-}
-
-/// A live cadence registration. Dropping it changes nothing — the callback
-/// keeps running — but it lets a poller whose useful rate varies (a retry
-/// backoff, an idle backend) move its own deadline instead of registering at
-/// its fastest rate and discarding most ticks.
-pub struct PollHandle {
-    name: String,
-    ctx: Context,
-}
-
-impl PollHandle {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Re-register at a new cadence, effective from the host's next plan.
-    pub fn set_period(&self, period: Duration) {
-        self.ctx.repoll(&self.name, Some(period));
-    }
-
-    /// Stop the cadence. The callback stays alive but never ticks again.
-    pub fn cancel(&self) {
-        self.ctx.repoll(&self.name, None);
-    }
-}
-
-impl PollRegistry {
-    fn new() -> Self {
-        Self {
-            intervals: Mutex::new(BTreeMap::new()),
-            ticks: broadcast::channel(64).0,
-            counter: AtomicU64::new(0),
-        }
-    }
-
-    /// Names are host-validated (`[a-z0-9_-]`), and the host carries them in
-    /// the event name, so keep them boring and unique.
-    fn register(&self, period: Duration) -> (String, BTreeMap<String, f64>) {
-        let name = format!("i{}", self.counter.fetch_add(1, Ordering::Relaxed));
-        let mut intervals = self.intervals.lock().expect("poll registry");
-        intervals.insert(name.clone(), period.as_secs_f64());
-        (name, intervals.clone())
-    }
+    pub(crate) poll: Arc<PollRegistry>,
 }
 
 /// Serializes refresh producers and snapshots running applications only after
@@ -698,78 +644,6 @@ impl Context {
             .unwrap_or_default()
     }
 
-    /// Run one background refresh at a fixed cadence.
-    ///
-    /// This does **not** arm a timer in the plugin. It registers `period` with
-    /// the host, which drives every poller in Flash — core watchers included —
-    /// from a single clock, and ticks this callback when the registration is
-    /// due. The first tick waits for `period`; callers perform their
-    /// authoritative initial refresh in `on_start`. The callback is awaited
-    /// before the next tick is accepted, so one cadence can never overlap
-    /// itself; ticks that arrive meanwhile are dropped rather than queued.
-    ///
-    /// Reach for this only when nothing else can tell you the value changed.
-    /// An event (`on_event`) is always preferable, and the host exposes one
-    /// for every source it can observe.
-    pub fn interval<F, Fut>(&self, period: Duration, mut callback: F) -> PollHandle
-    where
-        F: FnMut(Context) -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let (name, intervals) = self.poll.register(period);
-        self.emit.notify("poll", json!({ "intervals": intervals }));
-        let mut ticks = self.poll.ticks.subscribe();
-        let ctx = self.clone();
-        let handle = PollHandle {
-            name: name.clone(),
-            ctx: self.clone(),
-        };
-        drop(tokio::spawn(async move {
-            loop {
-                match ticks.recv().await {
-                    Ok(fired) if fired == name => {
-                        callback(ctx.clone()).await;
-                        // The host cannot see that this callback was still
-                        // running — a tick is a one-way frame — so the skip
-                        // happens here: anything that arrived while it ran is
-                        // a stale deadline, and running the collector
-                        // back-to-back to catch up is exactly the pile-up a
-                        // shared clock exists to prevent.
-                        while ticks.try_recv().is_ok() {}
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }));
-        handle
-    }
-
-    /// Fan a host tick out to the tasks waiting on that registration.
-    pub(crate) fn deliver_poll_tick(&self, name: &str) {
-        drop(self.poll.ticks.send(name.to_string()));
-    }
-
-    /// Replace or remove one registration and republish the complete set, so
-    /// the host's view is always the plugin's whole answer rather than a diff
-    /// it has to reconcile.
-    fn repoll(&self, name: &str, period: Option<Duration>) {
-        let intervals = {
-            let mut intervals = self.poll.intervals.lock().expect("poll registry");
-            match period {
-                Some(period) => {
-                    intervals.insert(name.to_string(), period.as_secs_f64());
-                }
-                None => {
-                    intervals.remove(name);
-                }
-            }
-            intervals.clone()
-        };
-        self.emit.notify("poll", json!({ "intervals": intervals }));
-    }
-
     pub(crate) async fn prepare_dirs(&self) {
         if self.data_dir.is_none() {
             return;
@@ -1182,6 +1056,7 @@ pub(crate) fn test_context() -> Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::poll::PollPriority;
 
     fn app_event(name: &str, bundle: &str) -> Event {
         Event {
@@ -1719,7 +1594,7 @@ mod tests {
         let (started_tx, mut started_rx) = tokio::sync::mpsc::channel(4);
         let (finished_tx, mut finished_rx) = tokio::sync::mpsc::channel(4);
         let release = Arc::new(tokio::sync::Semaphore::new(0));
-        ctx.interval(period, {
+        let handle = ctx.interval(period, PollPriority::High, {
             let release = release.clone();
             move |_| {
                 let started_tx = started_tx.clone();
@@ -1738,10 +1613,11 @@ mod tests {
         let frames = drain_frames(&mut rx);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0]["method"], json!("poll"));
-        let intervals = frames[0]["params"]["intervals"].as_object().unwrap();
-        assert_eq!(intervals.len(), 1);
-        let name = intervals.keys().next().unwrap().clone();
-        assert_eq!(intervals[&name], json!(period.as_secs_f64()));
+        let name = handle.name().to_string();
+        assert_eq!(
+            frames[0]["params"]["registrations"],
+            json!({ name.clone(): { "every": 0.05, "priority": "high" } })
+        );
 
         tokio::time::timeout(Duration::from_secs(5), async {
             // Nothing runs until the host says so.
@@ -1752,35 +1628,29 @@ mod tests {
                 "a callback ran without a host tick"
             );
 
-            ctx.deliver_poll_tick(&name);
+            let first = ctx.deliver_poll_tick(&name).expect("first tick runs");
             started_rx.recv().await.expect("first tick starts");
 
             // Ticks arriving while the callback is still running are dropped,
             // not queued behind it.
             for _ in 0..4 {
-                ctx.deliver_poll_tick(&name);
+                assert!(ctx.deliver_poll_tick(&name).is_none());
             }
-            assert!(
-                tokio::time::timeout(period, started_rx.recv())
-                    .await
-                    .is_err(),
-                "a second callback started while the first was blocked"
-            );
-
             release.add_permits(1);
             finished_rx.recv().await.expect("first callback finishes");
+            first.await.unwrap();
 
             // A tick for another registration is ignored.
-            ctx.deliver_poll_tick("someone-else");
-            assert!(
-                tokio::time::timeout(period, started_rx.recv())
-                    .await
-                    .is_err(),
-                "a foreign registration's tick ran this callback"
-            );
+            assert!(ctx.deliver_poll_tick("someone-else").is_none());
 
-            ctx.deliver_poll_tick(&name);
+            // A cancelled cadence ignores a tick that raced the cancel, and
+            // re-arms with its callback intact.
+            handle.cancel();
+            assert!(ctx.deliver_poll_tick(&name).is_none());
+            handle.set_period(period);
+            ctx.deliver_poll_tick(&name).expect("re-armed tick runs");
             started_rx.recv().await.expect("next tick starts");
+            release.add_permits(1);
         })
         .await
         .expect("interval observations complete within the test deadline");
