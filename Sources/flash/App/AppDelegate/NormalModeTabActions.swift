@@ -15,10 +15,17 @@ extension AppDelegate {
     }
   }
 
-  /// Runs `name` in the focused app `repeatCount` times.
-  func performSourceAction(_ name: SourceActionName, repeatCount: Int = 1) {
+  /// Runs `name` in the focused app `repeatCount` times; `completion` runs
+  /// once with how the run ended.
+  func performSourceAction(
+    _ name: SourceActionName,
+    repeatCount: Int = 1,
+    completion: @escaping (NormalModeActionOutcome) -> Void = { _ in }
+  ) {
     let plugins = pluginManager
-    runSourceAction(name.action, label: name.rawValue, repeatCount: repeatCount) { context in
+    runSourceAction(
+      name.action, label: name.rawValue, repeatCount: repeatCount, completion: completion
+    ) { context in
       SourceActionFallback.resolve(
         name,
         declared: plugins.actionKeystroke(
@@ -30,11 +37,13 @@ extension AppDelegate {
     _ action: SourceAction,
     label: String,
     repeatCount: Int = 1,
+    completion: @escaping (NormalModeActionOutcome) -> Void = { _ in },
     fallback: @escaping (AppContext) -> SourceActionFallback
   ) {
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(label)")
       applyModeOverlay()
+      completion(.noTarget)
       return
     }
     let count = normalizedRepeatCount(repeatCount)
@@ -42,6 +51,7 @@ extension AppDelegate {
     func attempt(_ remaining: Int) {
       guard remaining > 0 else {
         scheduleNormalModeRecapture()
+        completion(.performed)
         return
       }
       registry.perform(action, in: context) { [weak self] result in
@@ -61,9 +71,11 @@ extension AppDelegate {
               + "source=\(result.source ?? "?") bundle=\(context.bundleIdentifier) "
               + "reason=\(result.failureReason ?? "none")")
           self.scheduleNormalModeRecapture()
+          completion(.failed)
         case .unhandled:
           self.performSourceActionFallback(
-            fallback(context), label: label, context: context, repeatCount: remaining)
+            fallback(context), label: label, context: context, repeatCount: remaining,
+            completion: completion)
         }
       }
     }
@@ -75,19 +87,23 @@ extension AppDelegate {
     _ fallback: SourceActionFallback,
     label: String,
     context: AppContext,
-    repeatCount: Int
+    repeatCount: Int,
+    completion: @escaping (NormalModeActionOutcome) -> Void
   ) {
     switch fallback {
     case .chord(let key, let flags):
-      sendNormalModeKey(key, flags: flags, repeatCount: repeatCount)
+      sendNormalModeKey(key, flags: flags, repeatCount: repeatCount, completion: completion)
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
+      completion(.performed)
     case .scrollEdge(let kind):
       scrollViaScroller(kind, context: context, repeats: repeatCount)
+      completion(.performed)
     case .none:
       FlashLog.debug(
         "[normal_mode] \(label) has no action in bundle=\(context.bundleIdentifier)")
       applyModeOverlay()
+      completion(.unavailable)
     }
   }
 }

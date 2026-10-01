@@ -113,3 +113,43 @@ enum NormalModePointerPolicy {
     mode == .normal && !hasHints
   }
 }
+
+/// How a NORMAL action ended in the focused app.
+enum NormalModeActionOutcome: Equatable {
+  /// A source performed the action in the context it owns.
+  case performed
+  /// The action's chord was posted to the focused app.
+  case chordSent
+  /// A source claimed the action and could not complete it.
+  case failed
+  /// The focused app has no such action.
+  case unavailable
+  /// There was no app to act in.
+  case noTarget
+  /// A terminal would have typed the chord as text, so it was not sent.
+  case refused
+}
+
+/// Which NORMAL actions are INSERT intents. Opening Find (`app_find`) and a
+/// new tab (`tab_new`) ask to type next — into the find field, the new tab's
+/// address bar or shell — so once the action reached the app Flash enters
+/// INSERT. When nothing happened NORMAL stays, and every other action keeps
+/// NORMAL whatever it did.
+enum NormalModeActionInsertPolicy {
+  static func insertReason(
+    for command: URLCommand,
+    outcome: NormalModeActionOutcome
+  ) -> InsertModeTransitionReason? {
+    switch outcome {
+    case .performed, .chordSent:
+      break
+    case .failed, .unavailable, .noTarget, .refused:
+      return nil
+    }
+    switch command {
+    case .find: return .appFind
+    case .tabNew: return .tabNew
+    default: return nil
+    }
+  }
+}

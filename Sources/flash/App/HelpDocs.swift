@@ -255,8 +255,9 @@ enum HelpDocs {
 
       In NORMAL, `f` opens hints, `F` opens the grid, `:` opens commands and
       `?` opens your mappings. Unmapped keys are captured. Use your INSERT
-      shortcut to type again; clicking or selecting an input also enters INSERT.
-      NORMAL otherwise stays active as you switch apps and tabs.
+      shortcut to type again; clicking or selecting an input, `/` (Find) and
+      `t` (new tab) also enter INSERT. NORMAL otherwise stays active as you
+      switch apps and tabs.
 
       Next: [hints](/docs/hints), [grid](/docs/mouse-grid),
       [NORMAL mode](/docs/normal-mode), [flashlight](/docs/flashlight),

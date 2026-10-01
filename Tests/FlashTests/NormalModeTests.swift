@@ -1274,6 +1274,51 @@ final class NormalModeTests: XCTestCase {
     }
   }
 
+  /// `/` (`app_find`) and `t` (`tab_new`) are INSERT intents: typing goes to
+  /// the find field or the new tab once the action reached the app.
+  func testFindAndNewTabEnterInsertOnceTheActionReachedTheApp() {
+    let reached: [NormalModeActionOutcome] = [.performed, .chordSent]
+    for outcome in reached {
+      XCTAssertEqual(
+        NormalModeActionInsertPolicy.insertReason(for: .find, outcome: outcome), .appFind,
+        "\(outcome)")
+      XCTAssertEqual(
+        NormalModeActionInsertPolicy.insertReason(for: .tabNew, outcome: outcome), .tabNew,
+        "\(outcome)")
+    }
+  }
+
+  /// Nothing happened in the app, so NORMAL stays: a claiming source failed,
+  /// the app has no such action (Notes' Cmd-T opens Fonts), there was no app,
+  /// or a terminal would have typed the chord as text.
+  func testFindAndNewTabKeepNormalWhenNothingReachedTheApp() {
+    let missed: [NormalModeActionOutcome] = [.failed, .unavailable, .noTarget, .refused]
+    for outcome in missed {
+      XCTAssertNil(
+        NormalModeActionInsertPolicy.insertReason(for: .find, outcome: outcome), "\(outcome)")
+      XCTAssertNil(
+        NormalModeActionInsertPolicy.insertReason(for: .tabNew, outcome: outcome), "\(outcome)")
+    }
+  }
+
+  /// Every other action keeps NORMAL, whatever it did in the app.
+  func testOtherActionsNeverEnterInsertFromTheirOutcome() {
+    let commands: [URLCommand] = [
+      .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect(index: 2), .tabClose, .tabReopen,
+      .tabMovePrev, .tabMoveNext, .historyBack, .historyForward, .focusInput, .undo, .redo,
+    ]
+    let outcomes: [NormalModeActionOutcome] = [
+      .performed, .chordSent, .failed, .unavailable, .noTarget, .refused,
+    ]
+    for command in commands {
+      for outcome in outcomes {
+        XCTAssertNil(
+          NormalModeActionInsertPolicy.insertReason(for: command, outcome: outcome),
+          "\(command) \(outcome)")
+      }
+    }
+  }
+
   func testGridClicksFollowTheHintRule() {
     // `F` enters INSERT exactly when `f` would on the same element.
     for action in [JumpAction.leftClick, .doubleClick, .tripleClick, .rightClick, .middleClick] {

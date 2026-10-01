@@ -15,7 +15,9 @@ mappings.
   `scroll_smooth_ms` to spread each scroll over that many milliseconds.
 - `gg` / `G` go to the top/bottom.
 - `u` undoes and `ctrl+r` redoes. Bare `d`, `j` and `k` are unbound.
-- `y` copies immediately, `p` pastes and `/` opens Find.
+- `y` copies immediately and `p` pastes.
+- `/` opens Find (`app_find`, Cmd-F) and enters INSERT, so typing goes to the
+  find field.
 - `x` closes the current tab (`tab_close`); `X` reopens the last closed one
   (`tab_reopen`). Inside tmux `x` closes the tmux window after tmux's own
   confirmation. `X` acts in browsers and editors; tmux, terminals and Finder
@@ -32,6 +34,8 @@ mappings.
 - `t` opens a tab (`tab_new`): a tmux window inside tmux, Cmd-N in editors
   whose Cmd-T searches symbols, nothing in Notes, TextEdit, Pages and Mail,
   whose Cmd-T opens the Fonts panel, and Cmd-T elsewhere, terminals included.
+  Once a tab opened, Flash enters INSERT so typing goes to its address bar or
+  shell; where nothing opened, NORMAL stays.
 - `g1`–`g9` select a tab by position (`tab_select`): a tmux window by ordinal,
   a browser tab through the browsers plugin, a native tab strip through
   Accessibility, else Cmd-1…Cmd-9. These actions preserve NORMAL.
@@ -253,7 +257,11 @@ and is already at its live bottom. Another terminal scrolls 1,000 lines as a
 line wheel, like the four vertical bindings.
 
 NORMAL is persistent by default; `enter_normal_mode` takes no persistence
-option. Opening Find, creating or switching tabs, and `focus_input` preserve
+option. Opening Find (`/`) and a new tab (`t`) are the two actions that ask to
+type next: once the action reached the app (a source performed it or its chord
+was sent) Flash enters INSERT, once however large the count. A claiming source
+that failed, an app without the action, a missing app or a chord a terminal
+would refuse leave NORMAL in place. Switching tabs and `focus_input` preserve
 NORMAL even when the app focuses an editable field. Accessibility focus
 notifications never change the mode. A primary `f` hint click enters INSERT
 only when its selected target is an input; other hint targets keep NORMAL.
@@ -514,7 +522,8 @@ INSERT is entered by:
 - a configured `enter_insert_mode` mapping;
 - a physical primary click while NORMAL is capturing;
 - a primary hint or mouse-grid click on an input target (the same rule for
-  `f` and `F`).
+  `f` and `F`);
+- `app_find` (`/`) or `tab_new` (`t`) once it reached the app.
 
 Other normal commands, focus changes and app activation preserve NORMAL.
 Moving the pointer, dragging, or selecting with the grid does not request INSERT.

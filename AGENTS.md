@@ -75,8 +75,10 @@ tool, remove it rather than maintain both.
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
 9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
-   app clicks, or primary hint and mouse-grid clicks on input targets. Other
-   commands, including tabs, Find and `focus_input`, preserve NORMAL; never add
+   app clicks, primary hint and mouse-grid clicks on input targets, and the
+   typing intents `app_find` and `tab_new` once they reached the app (not after
+   a failed source, an app without the action or a refused chord). Other
+   commands, including tab switching and `focus_input`, preserve NORMAL; never add
    editable-focus follow-up or mode changes on app activation. Hint input intent
    comes from target metadata, not whichever field is focused after the click.
    Unmapped NORMAL keys and chords are swallowed, and synthesized input must

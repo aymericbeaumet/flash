@@ -8,6 +8,8 @@ enum InsertModeTransitionReason: Equatable {
   case normalModeInput
   case pointerClick
   case hintCommit
+  case appFind
+  case tabNew
 
   var logValue: String {
     switch self {
@@ -19,6 +21,10 @@ enum InsertModeTransitionReason: Equatable {
       return "pointer_click"
     case .hintCommit:
       return "hint_commit"
+    case .appFind:
+      return "app_find"
+    case .tabNew:
+      return "tab_new"
     }
   }
 }

@@ -45,13 +45,14 @@ extension NormalModeDispatcher {
 
         - `u` undoes; `ctrl-r` redoes.
         - `y` copies the selection; `p` pastes.
-        - `/` opens Find; `x` closes the current tab and `X` reopens the last
-          closed one.
+        - `/` opens Find and enters INSERT; `x` closes the current tab and `X`
+          reopens the last closed one.
         - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
           to repeat (`[aaaa` / `]aaaa`).
         - `[t` / `]t` switch to the previous/next tab; keep pressing `t` to
           repeat while staying in NORMAL.
-        - `t` opens a tab and `g1`–`g9` select one; NORMAL stays.
+        - `t` opens a tab and enters INSERT; `g1`–`g9` select one and NORMAL
+          stays.
         - `r` reloads and `R` hard-reloads where the app has a reload
           (browsers, tmux).
         - `ctrl-o` / `ctrl-i` traverse Flash's movement history.

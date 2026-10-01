@@ -110,7 +110,8 @@ Control-Space for completion.
 ```
 
 While NORMAL is active, keys that are not mapped are captured instead of typed.
-Press ⌘⌃I, click into a text field, or pick an input with `f` to type again.
+Press ⌘⌃I, click into a text field, pick an input with `f`, or open Find
+(`/`) or a new tab (`t`) to type again.
 NORMAL stays active across app and tab switches. See
 [normal mode](docs/normal-mode.md) for every binding.
 

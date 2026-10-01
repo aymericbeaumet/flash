@@ -939,7 +939,10 @@ extension AppDelegate {
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
         flags: .maskCommand,
-        repeatCount: repeatCount)
+        repeatCount: repeatCount
+      ) { [weak self] outcome in
+        self?.enterInsertIfIntended(by: .find, outcome: outcome)
+      }
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .enterCommand(let input, let restoreMode):
@@ -1022,7 +1025,9 @@ extension AppDelegate {
         self?.performMappedCommand(.quitApp(force: force))
       }
     case .tabNew:
-      performSourceAction(.tabNew, repeatCount: repeatCount)
+      performSourceAction(.tabNew, repeatCount: repeatCount) { [weak self] outcome in
+        self?.enterInsertIfIntended(by: .tabNew, outcome: outcome)
+      }
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showMappings:
@@ -1221,14 +1226,19 @@ extension AppDelegate {
   static let normalModeAXActionQueue = DispatchQueue(
     label: "flash.normal.ax_action", qos: .userInteractive)
 
+  /// Posts `key` to the focused app `repeatCount` times. `completion` runs
+  /// once with the outcome: after the last chord was posted, or at once when
+  /// there was no app or a terminal would have typed the chord.
   func sendNormalModeKey(
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
-    repeatCount: Int = 1
+    repeatCount: Int = 1,
+    completion: @escaping (NormalModeActionOutcome) -> Void = { _ in }
   ) {
     guard let target = normalModeKeyDispatchTarget() else {
       FlashLog.debug("[normal_mode] no target app for key \(key)")
       applyModeOverlay()
+      completion(.noTarget)
       return
     }
     if commandChordTypesText(key: key, flags: flags, bundleIdentifier: target.bundleIdentifier) {
@@ -1236,6 +1246,7 @@ extension AppDelegate {
         "[normal_mode] suppress unbound terminal command chord key=\(key) "
           + "flags=\(flags.rawValue) bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
+      completion(.refused)
       return
     }
     let count = normalizedRepeatCount(repeatCount)
@@ -1262,7 +1273,20 @@ extension AppDelegate {
     let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)
     DispatchQueue.main.asyncAfter(deadline: .now() + finalDelay) { [weak self] in
       self?.scheduleNormalModeRecapture()
+      completion(.chordSent)
     }
+  }
+
+  /// Ends `command` once it reached `outcome`: an INSERT intent that reached
+  /// the app hands typing to it. Only from NORMAL — a mode the user chose
+  /// meanwhile wins.
+  func enterInsertIfIntended(by command: URLCommand, outcome: NormalModeActionOutcome) {
+    guard flashMode == .normal,
+      let reason = NormalModeActionInsertPolicy.insertReason(for: command, outcome: outcome)
+    else { return }
+    FlashLog.debug(
+      "[mode] insert_intent action=\(command.diagnosticDescription) outcome=\(outcome)")
+    enterInsertMode(reason: reason)
   }
 
   /// The command field owns keyboard focus while the picker is open. Return it
