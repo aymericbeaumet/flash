@@ -208,7 +208,9 @@ and `#[range]` click region, plus the visible text of a popup span that no link
 or range covers. A hint acts at the centre of its region's visible text, the
 bounds the wash hugs, so it does what a physical click there does: a popup
 wrapping several links gets one hint per link and none on the space between
-them. A metric or clock value changing in place crossfades over
+them. Click and move hints (`f`, `mf`) label the same regions at the same
+points: a click follows a link or range, while a move, like a click on
+popup-only text, puts the pointer on the text and opens the popup it hovers. A metric or clock value changing in place crossfades over
 100 ms, short enough that a 1 Hz metric reads as a snap rather than a
 smear. A carousel article change is one vertical push over 450 ms: the old
 line moves a full line height up and fades out while the next rises the same

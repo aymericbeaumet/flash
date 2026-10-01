@@ -118,8 +118,8 @@ extension AppDelegate {
         )
         return
       }
-      // Left-click hints (`f`) also label the status bar's interactive spans,
-      // but only on the active window's screen.
+      // Click and move hints (`f`, `mf`) also label the status bar's
+      // interactive spans, but only on the active window's screen.
       let statusBarHints = Self.statusBarHintTargets(
         for: command, screens: self.overlay.statusBarInteractionsByScreen,
         activeWindowFrame: context.frontWindowFrame)
@@ -211,15 +211,16 @@ extension AppDelegate {
 
   /// Hint targets for the interactive spans of the Flash status bar on the
   /// active window's screen (`OverlayPanel.statusBarHintRegions`), each with
-  /// the popup a pointer on it opens. Only left-click sessions get them.
-  /// Empty when the bar is hidden or the active window is on a screen without
-  /// a bar.
+  /// the popup a pointer on it opens. Click and move sessions get the same
+  /// targets — only the commit differs (`statusBarHintCommit`); other sessions
+  /// get none. Empty when the bar is hidden or the active window is on a screen
+  /// without a bar.
   static func statusBarHintTargets(
     for command: MouseCommand, screens: [StatusBarScreenInteractions],
     activeWindowFrame windowFrame: CGRect
   ) -> [(target: JumpTarget, popup: StatusBarPopupRegion?)] {
     switch command {
-    case .click(.leftClick, _): break
+    case .click(.leftClick, _), .move: break
     default: return []
     }
     guard !screens.isEmpty, !windowFrame.isNull else { return [] }
@@ -266,6 +267,21 @@ extension AppDelegate {
         )
       }
     }
+  }
+
+  /// What committing a status-bar hint does: what the pointer would do there.
+  enum StatusBarHintCommit: Equatable {
+    /// Follow the link or range action the hint carried.
+    case follow(URL)
+    /// Move the pointer onto the span's text, opening the popup it hovers.
+    case hover
+  }
+
+  /// A primary click follows a link or range; a move, or a click on
+  /// popup-only text, hovers.
+  static func statusBarHintCommit(command: MouseCommand, url: URL?) -> StatusBarHintCommit {
+    if case .click(.leftClick, _) = command, let url { return .follow(url) }
+    return .hover
   }
 
   /// `mouse_target --scope=screen`: hints across the front-most surface of

@@ -167,3 +167,54 @@ extension CapturedStatusBarHintTests {
     XCTAssertEqual(actions, ["bat-prefs"])
   }
 }
+
+extension CapturedStatusBarHintTests {
+  /// `f` and `mf` label the same status-bar spans at the same points; only the
+  /// commit differs. A move used to get no status-bar hints at all.
+  func testClickAndMoveHintsTargetTheSameStatusBarSpans() throws {
+    let screen = CGRect(x: 0, y: 0, width: 1_000, height: 800)
+    let cld = CGRect(x: 100, y: 776, width: 100, height: 24)
+    let cdx = CGRect(x: 210, y: 776, width: 100, height: 24)
+    let cpu = CGRect(x: 400, y: 776, width: 60, height: 24)
+    let claude = try XCTUnwrap(URL(string: "https://claude.ai/new#settings/usage"))
+    let codex = try XCTUnwrap(URL(string: "https://chatgpt.com/settings/usage?tab=overview"))
+    let links = [(rect: cld, url: claude), (rect: cdx, url: codex)]
+    let popups = [
+      StatusBarPopupRegion(
+        rect: CGRect(x: 100, y: 776, width: 210, height: 24), name: "ai-usage", content: "usage"),
+      StatusBarPopupRegion(rect: cpu, name: "cpu", content: "CPU"),
+    ]
+    let interactions = StatusBarScreenInteractions(
+      screenFrame: screen, links: links, popups: popups,
+      hints: OverlayPanel.statusBarHintRegions(links: links, popups: popups) { span in
+        // Glyphs fill each span except the space between the two links.
+        span.minX >= 200 && span.maxX <= 210 ? nil : span
+      })
+    let window = CGRect(x: 0, y: 0, width: 800, height: 700)
+
+    func targets(_ command: MouseCommand) -> [JumpTarget] {
+      AppDelegate.statusBarHintTargets(
+        for: command, screens: [interactions], activeWindowFrame: window
+      ).map(\.target)
+    }
+    let click = targets(.click(.leftClick, modifiers: []))
+    let move = targets(.move)
+    XCTAssertEqual(click.count, 3)
+    XCTAssertEqual(click.map(\.id), move.map(\.id))
+    XCTAssertEqual(click.map(\.frame), move.map(\.frame))
+    XCTAssertEqual(click.map(\.role), move.map(\.role))
+    XCTAssertEqual(click.map(\.url), move.map(\.url))
+    XCTAssertEqual(
+      click.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) },
+      [CGPoint(x: 150, y: 788), CGPoint(x: 260, y: 788), CGPoint(x: 430, y: 788)])
+    XCTAssertTrue(targets(.click(.rightClick, modifiers: [])).isEmpty)
+
+    XCTAssertEqual(
+      AppDelegate.statusBarHintCommit(command: .click(.leftClick, modifiers: []), url: claude),
+      .follow(claude))
+    XCTAssertEqual(AppDelegate.statusBarHintCommit(command: .move, url: claude), .hover)
+    XCTAssertEqual(
+      AppDelegate.statusBarHintCommit(command: .click(.leftClick, modifiers: []), url: nil),
+      .hover)
+  }
+}

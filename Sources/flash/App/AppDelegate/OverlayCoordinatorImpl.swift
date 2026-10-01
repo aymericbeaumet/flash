@@ -273,21 +273,23 @@ extension AppDelegate {
     }
   }
 
-  /// A status-bar hint acts at the centre of its span's visible text. A link
-  /// opens from the URL the hint carried, without moving the pointer into the
-  /// menu-bar band; popup-only text moves the pointer onto it and opens the
-  /// popup.
+  /// A status-bar hint acts at the centre of its span's visible text, the
+  /// same spot for every session; only the action differs
+  /// (`statusBarHintCommit`). A followed link opens from the URL the hint
+  /// carried, without moving the pointer into the menu-bar band.
   private func commitStatusBarHint(_ hint: AssignedHint) {
     let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
     let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
-    let url = hint.target.url.flatMap { URL(string: $0) }
+    let commit = Self.statusBarHintCommit(
+      command: hintSession.command, url: hint.target.url.flatMap { URL(string: $0) })
     overlay.hide()
     clearHintSessionState(preservingStatusBarSnapshot: true)
     activationLifecycle.invalidate()
     applyModeOverlay()
-    if let url {
+    switch commit {
+    case .follow(let url):
       overlay.activateStatusBarLink(url)
-    } else {
+    case .hover:
       _ = ActionDispatcher.moveCursor(to: point)
       if let popup { overlay.showStatusBarPopup(popup, at: point, preservingContent: true) }
     }
