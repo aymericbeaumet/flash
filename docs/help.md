@@ -49,7 +49,7 @@ the browser commands needs it, or at launch with
 | --- | --- |
 | `/` | Help homepage |
 | `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
-| `/mappings`, `/commands` | Effective mappings; command catalog. `?q=<text>` starts the list filtered |
+| `/mappings`, `/commands` | Effective mappings and how each action resolves in the focused app; command catalog. `?q=<text>` starts the list filtered |
 | `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
 | `/state`, `/logs`, `/clipboard` | Runtime, logs and clipboard pages |
 | `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |

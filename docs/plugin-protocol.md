@@ -475,8 +475,8 @@ read-denied, network and exec open), with its full output persisted for
 forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
-`mappings`, `help`, `action_keystrokes`, `terminal_emulators`,
-`on_demand_hints`, and `verbs` whose every entry declares a keystroke (the bundled `defaults` and `terminals` plugins are the
+`mappings`, `help`, `action_bindings`, `terminal_emulators` and
+`on_demand_hints` (the bundled `defaults` and `terminals` plugins are the
 exemplars). Anything process-bound is
 rejected. Loading is strict — unknown top-level or nested keys and malformed
 known fields are rejected outright, and new manifest surface only ever
@@ -513,12 +513,12 @@ or stale host", never ambiguity.
   "hints": { "fallback_on_empty": true },
   "navigation": ["example"],
   "status": ["state"],
-  "verbs": [
-    { "name": "example_save", "keystrokes": { "": "cmd+s" } }
-  ],
-  "action_keystrokes": {
+  "verbs": [{ "name": "example_sync", "description": "Sync now" }],
+  "action_bindings": {
     "tab_next": { "": "cmd+shift+]" },
-    "app_reload_force": { "": "cmd+shift+r", "com.apple.Safari": "cmd+option+r" }
+    "clipboard_copy": { "": ["cmd+a", "cmd+c"] },
+    "window_new": { "": { "menu": ["File", "New Window"] } },
+    "app_print": { "": false }
   },
   "mappings": [
     {
@@ -568,26 +568,57 @@ Section semantics:
 - **`navigation`** — durable route schemes restorable from movement history,
   dispatched as `perform {kind: "navigate"}`.
 - **`status`** — status-bar segment names fed by the `status` notification.
-- **`verbs`** — CLI/mapping verbs; `keystrokes` lets the host handle fixed
-  keystroke verbs without any plugin RPC.
-- **`action_keystrokes`** — the chords an app binds for Flash's built-in
-  source actions: action name → bundle id → chord, where the bundle id `""`
-  covers every app the root selector matches and the chord `""` declares
-  that the app has no shortcut for the action, so the host sends nothing
-  rather than its own convention. The host sends the chord when no source
-  performs the action in the focused app; an app's own entry beats a
-  plugin-wide one, then selector specificity and `priority` decide. Without a
-  declaration the host's platform convention applies where the action has one
-  (see [source actions](normal-mode.md#source-actions)). Names are
-  `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_new`,
-  `tab_close`, `tab_reopen`, `tab_move_next`, `tab_move_previous`,
-  `pane_next`, `pane_previous`, `pane_split_vertical`,
+- **`verbs`** — CLI/mapping verbs a plugin process serves through
+  `perform {kind: "command"}`. A verb may not reuse one of Flash's own verb
+  names: what an app does for those belongs in `action_bindings`.
+- **`action_bindings`** — what each app does for Flash's actions: action
+  name → bundle id → binding. The bundle id `""` covers every app the root
+  selector matches. A binding is one of:
+  - `"cmd+t"` — a chord;
+  - `["cmd+k", "cmd+w"]` — chords sent in order, `[mode]
+    send_key_interval_ms` apart;
+  - `{ "menu": ["File", "New Tab"] }` — the menu-bar item at that title path
+    (menu, then item, then any submenu item), pressed through Accessibility
+    off the main thread; a missing or disabled item fails the action with no
+    fallback;
+  - `false` — the app has no such action: nothing happens.
+
+  `tab_select` bindings may name the tab with `{index}` (`"cmd+{index}"`,
+  `{ "menu": ["Window", "Tab {index}"] }`); a chord that doesn't exist for
+  the index (`cmd+10`) sends nothing. Validation is strict: an unknown action,
+  an unparseable or empty chord (`""` is not "none", write `false`), an empty
+  array, `true`, a menu path shorter than two titles, an object other than
+  `{"menu": [...]}`, or `{index}` outside `tab_select` rejects the manifest.
+
+  **Resolution.** An action first goes to the sources that perform it in the
+  focused app (manifest `actions`, the built-in Accessibility tab strip); a
+  source that claims it and fails stops there. Otherwise one binding wins,
+  by a pure, deterministic ranking: an entry for the app's bundle id beats
+  any plugin-wide `""` entry; then a plugin whose root selector
+  (`only_bundle_ids`, `only_terminals`) matches the app beats an unscoped one
+  (a plugin whose selector doesn't match contributes nothing); then the higher
+  manifest `priority`; then the plugin id, alphabetically first. With no
+  binding nothing happens, except that `resource_next` / `resource_previous`
+  and `scroll_top` / `scroll_bottom` fall back to Flash's own scrolling and
+  `window_close` tries the window's close button before its binding. In a
+  terminal emulator a chord the emulator would type as text is refused,
+  unless a plugin binds that chord for that emulator specifically (its
+  bundle id or a matching selector); a menu press is never refused. The
+  inspector's Mappings page shows the resolution for the focused app.
+
+  Actions: `tab_select`, `tab_next`, `tab_previous`, `tab_first`,
+  `tab_last`, `tab_new`, `tab_close`, `tab_reopen`, `tab_move_next`,
+  `tab_move_previous`, `pane_next`, `pane_previous`, `pane_split_vertical`,
   `pane_split_horizontal`, `pane_close`, `app_reload`, `app_reload_force`,
   `resource_archive`, `resource_next`, `resource_previous`, `scroll_top`,
-  `scroll_bottom`, `history_back` and `history_forward`; an unknown name or
-  unparseable chord rejects the manifest.
-  Manifest-only plugins may declare it. App knowledge lives here, never in
-  the host.
+  `scroll_bottom`, `history_back`, `history_forward`, `app_undo`,
+  `app_redo`, `app_find`, `app_save`, `app_print`, `document_open`,
+  `window_new`, `window_close`, `clipboard_copy`, `clipboard_cut` and
+  `clipboard_paste`. Every one except `app_reload_force` is also a valid
+  manifest `actions` name. The bundled `defaults` plugin declares the macOS
+  conventions as `""` bindings; disabling it leaves those actions unbound.
+  Manifest-only plugins may declare `action_bindings`. App knowledge lives
+  here, never in the host.
 - **`terminal_emulators`** — bundle ids of apps this plugin declares as
   terminal emulators. No protocol identifies one, so the host learns them as
   data: across plugins the union gets the terminal rules (an unbound Command
@@ -603,7 +634,7 @@ Section semantics:
   `normal`); `command` is an argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
   when its final key is pressed again, as in config. Map keys to high-level
-  actions; an app's own chord for one belongs in `action_keystrokes`, and no
+  actions; an app's own chord for one belongs in `action_bindings`, and no
   bundled mapping uses `send_key`. Terminal mappings are local to a focused
   popup. Every global mapping registration is suspended while that view
   owns input; only winning INSERT-active `enter_normal_mode` bindings are

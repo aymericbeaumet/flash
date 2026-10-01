@@ -30,7 +30,7 @@ plugins.
    completed from a file the browser keeps on disk. Refreshes fan out per
    browser and publish on change; manifest `actions` go through `on_action`
    with the performed / unhandled / error trichotomy, what the plugin leaves
-   unhandled falls back to its `action_keystrokes` chords, and every row's
+   unhandled falls back to its `action_bindings`, and every row's
    `navigation_url` route restores through `on_navigate`.
 5. **Query evaluator with background refresh — `Plugins/answers`
    (~1270 LOC).** Three synchronous, CPU-only answer engines (calculator,
@@ -45,6 +45,35 @@ Protocol conformance lives in the SDK workspace:
 `wire`/`runtime` test suites pin the framing and lifecycle behaviour, and the
 `probe` workspace member exercises them end to end over real stdio.
 `./Scripts/test-plugins.sh --lane all` is the one-command gate.
+
+## Overriding what an app does for an action
+
+No code needed: a manifest-only plugin (no `exec`) declares
+`action_bindings`, and its entries win over the `defaults` conventions for the
+apps it names. Say an app opens a tab with Cmd-Shift-N, closes one with a
+two-chord sequence, has a menu item for a new window and no print at all:
+
+```json
+{
+  "id": "example-app",
+  "name": "Example App",
+  "version": "0.1.0",
+  "description": "What Example App does for Flash's actions",
+  "action_bindings": {
+    "tab_new": { "com.example.app": "cmd+shift+n" },
+    "tab_close": { "com.example.app": ["cmd+k", "cmd+w"] },
+    "window_new": { "com.example.app": { "menu": ["File", "New Window"] } },
+    "app_print": { "com.example.app": false }
+  }
+}
+```
+
+Drop it in a directory, list it as `file:<path>` in `[plugins] third_party`,
+and `t` in that app now sends Cmd-Shift-N. A bundle-id entry beats any
+plugin-wide `""` entry; to cover a family of apps with `""` instead, scope the
+plugin with `only_bundle_ids` (or `only_terminals`) and, between plugins that
+both match, raise `priority`. The inspector's Mappings page ("How actions
+resolve in <App>") shows which binding won and which plugin declared it.
 
 ## The loop
 

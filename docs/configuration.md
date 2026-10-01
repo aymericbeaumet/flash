@@ -206,10 +206,13 @@ spelled another way (`cmd+shift+]` and `cmd+shift+}`). `true` and
 `{ command = false }` are rejected.
 
 NORMAL persists across commands and focus changes. Its unmapped keys are swallowed.
-Map keys to high-level actions such as `tab_new` or `app_reload`: each resolves in
-the focused app's context, through a source, the chord a plugin declares for that
-app or the macOS convention, and does nothing where the app lacks it (see
-[source actions](normal-mode.md#source-actions)). No default maps a key to
+Map keys to high-level actions such as `tab_new`, `app_undo` or `app_reload`:
+each resolves in the focused app's context, through a source or the binding a
+plugin declares for that app (`action_bindings`; the bundled `defaults` plugin
+carries the macOS conventions), and does nothing where the app lacks it (see
+[source actions](normal-mode.md#source-actions)). To change what an app does
+for an action, declare a binding in a plugin rather than a `send_key` mapping
+(see the [plugin cookbook](plugin-cookbook.md)). No default maps a key to
 `send_key`; it remains an escape hatch for a chord no action covers. INSERT entry
 rules and complete defaults live in [normal mode](normal-mode.md).
 

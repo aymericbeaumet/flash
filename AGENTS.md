@@ -184,11 +184,12 @@ Surface requests that would violate these constraints before implementing them.
 - NORMAL defaults and bundled plugin mappings bind keys to high-level actions,
   never to raw chords: none uses `send_key`, which stays a user escape hatch
   (a test enforces it). An action resolves in the focused app's context: a
-  source that owns it (tmux, browsers, the AX tab strip), else the chord or
-  explicit none a plugin declares in `action_keystrokes`, else the platform
-  convention in `SourceActionFallback`, else nothing; terminals never receive
-  a chord they would type. App knowledge is manifest data, never host
-  conditionals. Vertical scroll bindings send configurable line-based wheel
+  source that owns it (tmux, browsers, the AX tab strip), else the winning
+  plugin `action_bindings` entry (chord, sequence, menu item or `false`),
+  else nothing; terminals never receive a chord they would type. App action
+  knowledge — conventions included — is plugin `action_bindings` data
+  (`defaults` carries the macOS ones), never host chords or conditionals; a
+  guardrail rejects `kVK_` chord synthesis outside the binding dispatcher. Vertical scroll bindings send configurable line-based wheel
   events system-wide, without AX fallback. Keep guides in sync.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.

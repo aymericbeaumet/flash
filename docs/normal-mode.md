@@ -184,30 +184,49 @@ each direction.
 
 ## Source actions
 
-Tab, pane, reload, archive, back/forward and `gg` / `G` verbs are high-level
-source actions, and no default or bundled mapping sends a raw chord instead
-(`send_key` remains an explicit escape hatch). Each action runs one policy that
-knows no app by name:
+Every verb that asks the focused app to do something is a high-level source
+action: tabs, panes, reload, archive, back/forward, `gg` / `G`, and the app's
+generic commands — `app_undo`, `app_redo`, `app_find`, `app_save`,
+`app_print`, `document_open`, `window_new`, `window_close`,
+`clipboard_copy`, `clipboard_cut` and `clipboard_paste`, which back `u`,
+`ctrl+r`, `/`, `:w`, `:print`, `:e`, `:new`, `:q`, `:copy`, `:cut`, `:paste`,
+the yank fallback when no Accessibility selection is exposed, and the paste
+that delivers a flashlight answer. No default or bundled mapping sends a raw
+chord instead (`send_key` remains an explicit escape hatch). Each action runs
+one policy that knows no app and no chord:
 
 1. a source that performs it in the focused app: tmux for the windows and
    panes of the tmux client hosting the focused terminal, the browsers plugin,
    the Accessibility tab strip for `tab_select`;
-2. else the chord a plugin manifest declares for the action in that app
-   (`action_keystrokes`, see [plugin protocol](plugin-protocol.md)), or
-   nothing when it declares the app has none;
-3. else the platform convention `SourceActionFallback` owns: Cmd-Shift-[ /
-   Cmd-Shift-] switch tabs, Cmd-T opens one, Cmd-W closes it, Cmd-1…Cmd-9
-   select one (Cmd-1 is also the first tab), Cmd-[ / Cmd-] go back/forward,
-   `resource_next` / `resource_previous` scroll, and `gg` / `G` use the
-   focused-window scroller;
-4. else nothing. Reload, reopen, the last tab, tab moves, panes and archiving
-   have no convention: their chords mean different things across apps.
+2. for `window_close`, the focused window's close button (Flash's own step);
+3. else the binding a plugin declares for the action in that app
+   (`action_bindings`, see [plugin protocol](plugin-protocol.md)): a chord, a
+   chord sequence, a menu-bar item pressed through Accessibility, or `false`
+   for an app without the action;
+4. else Flash's own scrolling for `resource_next` / `resource_previous`
+   (wheel lines) and `scroll_top` / `scroll_bottom` (the focused-window
+   scroller);
+5. else nothing.
 
-A source that claims an action and fails reports `.failed`, and no chord
-follows it. App knowledge lives in manifest data (the `browsers`, `defaults`,
-`terminals` and `vscode` plugins), never in host conditionals. A terminal
-treats a Command chord a plugin declares for it as bound, like the chords
-every emulator binds; any other Command chord is refused (see below).
+The macOS conventions — Cmd-Shift-[ / Cmd-Shift-] switch tabs, Cmd-T opens
+one, Cmd-W closes it, Cmd-1…Cmd-9 select one, Cmd-[ / Cmd-] go back/forward,
+Cmd-Z / Cmd-Shift-Z, Cmd-F, Cmd-S, Cmd-P, Cmd-O, Cmd-N, Cmd-C / Cmd-X /
+Cmd-V — are `""` bindings of the bundled `defaults` plugin, which also
+carries the apps that differ (editors, Messages, Xcode, Notes and friends).
+Browsers, VS Code and terminals override them in their own plugins. With
+`[plugins] disabled = ["defaults"]` those actions do nothing. Reload, reopen,
+the last tab, tab moves, panes and archiving have no shared binding: their
+chords mean different things across apps, so they act only where a source or
+an app-specific binding knows the app. The inspector's Mappings page lists how
+each action resolves in the focused app.
+
+A source that claims an action and fails reports `.failed`, and no binding
+follows it; a menu item that is missing or disabled fails the same way. App
+knowledge lives in manifest data (the `browsers`, `defaults`, `terminals` and
+`vscode` plugins), never in host conditionals. A terminal treats a Command
+chord a plugin binds for that emulator as bound, like the chords every
+emulator binds; any other Command chord is refused (see below), while a menu
+press is always allowed.
 
 ## Shared mode exit
 
@@ -235,8 +254,10 @@ plain-text path and writes the chord's base character, so an unbound `cmd+g`
 types a literal `g` into the shell, hardware or synthetic. In a terminal
 Flash therefore refuses to synthesize any Command chord outside the set every
 emulator binds (copy, paste, close, new tab, new window, quit, find, the tab
-digits, and Shift-bracket tab traversal); the bare bracket chords are added
-only for the emulators whose splits live on them. A refused mapping does
+digits, and Shift-bracket tab traversal); a chord a plugin binds for that
+emulator specifically, such as the bare brackets of the emulators whose splits
+live on them, is added. A plugin-wide binding for every app never is, so
+`app_save` does nothing in a terminal rather than type an `s`. A refused mapping does
 nothing and NORMAL stays.
 
 The four vertical scroll bindings synthesize line-based mouse-wheel events

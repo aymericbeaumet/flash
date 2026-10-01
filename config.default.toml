@@ -157,8 +157,9 @@ important_hint_border = ""
 
 [plugins]
 # Official bundled plugins are enabled unless listed in `disabled`.
-# Disable `defaults` for a raw host-only experience without built-in
-# plugin-layer defaults such as app_save/app_print/document_open/window_new.
+# Disable `defaults` for a raw host-only experience: it carries the macOS
+# conventions apps share for Flash's actions (Cmd-T new tab, Cmd-Z undo,
+# Cmd-S save, Cmd-C copy…), so without it those actions do nothing.
 disabled = []
 
 # Third-party plugins are loaded only when listed here.
@@ -564,8 +565,9 @@ leader = "\\"
 # Defaults map keys to high-level actions, never to raw key chords: each action
 # resolves in the focused app's context. A source performs it where it owns
 # the context (tmux windows inside a terminal, browser tabs); otherwise the app
-# gets the chord a plugin declares for it (action_keystrokes), else the macOS
-# convention (Cmd-Shift-[ / ] switch tabs, Cmd-T opens one, Cmd-W closes it,
+# gets the binding a plugin declares for it (action_bindings: a chord, a chord
+# sequence or a menu item), such as the bundled `defaults` plugin's macOS
+# conventions (Cmd-Shift-[ / ] switch tabs, Cmd-T opens one, Cmd-W closes it,
 # Cmd-1…Cmd-9 select one), and an app without the action gets nothing.
 # Reload and reopen have no shared chord, so they act only where a source or a
 # plugin knows the app: reload in browsers and tmux, reopen in browsers and
