@@ -47,10 +47,10 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   public static let tabReorder = FlashSourceCapabilities(rawValue: 1 << 9)
   /// Source handles `X` (`tab_reopen`: reopen the most recently closed tab).
   /// No bundled source claims it; browsers and editors declare their ⌘⇧T
-  /// through `action_keystrokes`, and tmux has no closed-window history.
+  /// through `action_bindings`, and tmux has no closed-window history.
   public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
   /// Source handles `r` / `R` (`app_reload`). Browsers declare their native
-  /// refresh chords through `action_keystrokes`; terminal-backed sources opt
+  /// refresh chords through `action_bindings`; terminal-backed sources opt
   /// in when they have a real refresh primitive (tmux refreshes its client).
   public static let reload = FlashSourceCapabilities(rawValue: 1 << 11)
   /// Source handles `e` (`resource_archive`) for the currently focused
@@ -79,8 +79,12 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   public static let paneClosing = FlashSourceCapabilities(rawValue: 1 << 17)
   /// Source handles `H` / `L` (`history_back` / `history_forward`): the
   /// focused app's own back/forward navigation. No bundled source claims it;
-  /// apps bind it through `action_keystrokes`, and the host owns Cmd-[ / Cmd-].
+  /// apps bind it through `action_bindings` (Cmd-[ / Cmd-] in `defaults`).
   public static let historyNavigation = FlashSourceCapabilities(rawValue: 1 << 18)
+  /// Source handles the focused app's generic commands: undo, redo, find,
+  /// save, print, open, new and close window, and the clipboard. No bundled
+  /// source claims them; apps bind them through `action_bindings`.
+  public static let appCommands = FlashSourceCapabilities(rawValue: 1 << 19)
 
   /// Human-readable list of the flags this set carries, for trace logs.
   /// Order is stable so log lines diff cleanly between runs.
@@ -105,6 +109,7 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
     if contains(.paneSplitting) { names.append("paneSplitting") }
     if contains(.paneClosing) { names.append("paneClosing") }
     if contains(.historyNavigation) { names.append("historyNavigation") }
+    if contains(.appCommands) { names.append("appCommands") }
     return names.isEmpty ? "none" : names.joined(separator: "|")
   }
 }
@@ -352,6 +357,17 @@ public enum SourceAction: Sendable, Equatable {
   case scrollBottom
   case historyBack
   case historyForward
+  case undo
+  case redo
+  case find
+  case save
+  case print
+  case documentOpen
+  case windowNew
+  case windowClose
+  case clipboardCopy
+  case clipboardCut
+  case clipboardPaste
 
   /// Capability flag a source must advertise to be considered for this action.
   public var requiredCapability: FlashSourceCapabilities {
@@ -370,6 +386,18 @@ public enum SourceAction: Sendable, Equatable {
     case .resourceNext, .resourcePrevious: return .resourceNavigation
     case .scrollTop, .scrollBottom: return .scrollExtremes
     case .historyBack, .historyForward: return .historyNavigation
+    case .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
+      .clipboardCopy, .clipboardCut, .clipboardPaste:
+      return .appCommands
+    }
+  }
+
+  /// The name users map and plugins bind (`action_bindings`): the wire name,
+  /// except that a forced reload is its own `app_reload_force`.
+  public var name: SourceActionName {
+    switch self {
+    case .reload(let force): return force ? .appReloadForce : .appReload
+    default: return SourceActionName(rawValue: wireName)!
     }
   }
 
@@ -399,6 +427,17 @@ public enum SourceAction: Sendable, Equatable {
     case .scrollBottom: return "scroll_bottom"
     case .historyBack: return "history_back"
     case .historyForward: return "history_forward"
+    case .undo: return "app_undo"
+    case .redo: return "app_redo"
+    case .find: return "app_find"
+    case .save: return "app_save"
+    case .print: return "app_print"
+    case .documentOpen: return "document_open"
+    case .windowNew: return "window_new"
+    case .windowClose: return "window_close"
+    case .clipboardCopy: return "clipboard_copy"
+    case .clipboardCut: return "clipboard_cut"
+    case .clipboardPaste: return "clipboard_paste"
     }
   }
 
@@ -411,6 +450,8 @@ public enum SourceAction: Sendable, Equatable {
       .tabClose, .tabMovePrev, .tabMoveNext, .tabReopen, .paneNext, .panePrev,
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
       .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom, .historyBack, .historyForward,
+      .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
+      .clipboardCopy, .clipboardCut, .clipboardPaste,
     ].map { ($0.wireName, $0) })
 
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
@@ -424,10 +465,11 @@ public enum SourceAction: Sendable, Equatable {
   }
 }
 
-/// A normal-mode action a source may perform, named as users map it. The
-/// name is also a key of a plugin manifest's `action_keystrokes` table: the
-/// chord the host sends in an app when no source performs the action there.
+/// An action Flash asks the focused app to perform, named as users map it.
+/// The name is also a key of a plugin manifest's `action_bindings` table:
+/// what the host does in an app when no source performs the action there.
 public enum SourceActionName: String, CaseIterable, Sendable {
+  case tabSelect = "tab_select"
   case tabNext = "tab_next"
   case tabPrevious = "tab_previous"
   case tabFirst = "tab_first"
@@ -451,34 +493,17 @@ public enum SourceActionName: String, CaseIterable, Sendable {
   case scrollBottom = "scroll_bottom"
   case historyBack = "history_back"
   case historyForward = "history_forward"
-
-  public var action: SourceAction {
-    switch self {
-    case .tabNext: return .tabNext
-    case .tabPrevious: return .tabPrev
-    case .tabFirst: return .tabFirst
-    case .tabLast: return .tabLast
-    case .tabNew: return .tabNew
-    case .tabClose: return .tabClose
-    case .tabReopen: return .tabReopen
-    case .tabMoveNext: return .tabMoveNext
-    case .tabMovePrevious: return .tabMovePrev
-    case .paneNext: return .paneNext
-    case .panePrevious: return .panePrev
-    case .paneSplitVertical: return .paneSplitVertical
-    case .paneSplitHorizontal: return .paneSplitHorizontal
-    case .paneClose: return .paneClose
-    case .appReload: return .reload(force: false)
-    case .appReloadForce: return .reload(force: true)
-    case .resourceArchive: return .archive
-    case .resourceNext: return .resourceNext
-    case .resourcePrevious: return .resourcePrevious
-    case .scrollTop: return .scrollTop
-    case .scrollBottom: return .scrollBottom
-    case .historyBack: return .historyBack
-    case .historyForward: return .historyForward
-    }
-  }
+  case appUndo = "app_undo"
+  case appRedo = "app_redo"
+  case appFind = "app_find"
+  case appSave = "app_save"
+  case appPrint = "app_print"
+  case documentOpen = "document_open"
+  case windowNew = "window_new"
+  case windowClose = "window_close"
+  case clipboardCopy = "clipboard_copy"
+  case clipboardCut = "clipboard_cut"
+  case clipboardPaste = "clipboard_paste"
 }
 
 public struct SourceActionResult: Sendable {

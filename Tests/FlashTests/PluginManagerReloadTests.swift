@@ -125,13 +125,13 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(fixture.spawnCount(), 1)
   }
 
-  // MARK: - action keystrokes
+  // MARK: - action bindings
 
-  /// A bundle's own chord beats a plugin-wide one across plugins; a declared
-  /// chord marks the emulator as binding it.
-  func testActionKeystrokesResolvePerAppFromManifestOnlyPlugins() throws {
+  /// A bundle's own binding beats a plugin-wide one across plugins; an
+  /// app-specific chord marks the emulator as binding it.
+  func testActionBindingsResolvePerAppFromManifestOnlyPlugins() throws {
     let base = FileManager.default.temporaryDirectory
-      .appendingPathComponent("flash-mgr-keystrokes-\(UUID().uuidString)")
+      .appendingPathComponent("flash-mgr-bindings-\(UUID().uuidString)")
     let root = base.appendingPathComponent("wide")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -142,7 +142,7 @@ final class PluginManagerReloadTests: XCTestCase {
       "version": "1.0.0",
       "description": "Plugin-wide chords",
       "only_bundle_ids": ["com.example.app", "com.apple.MobileSMS"],
-      "action_keystrokes": { "tab_next": { "": "cmd+option+right" } }
+      "action_bindings": { "tab_next": { "": "cmd+option+right" } }
     }
     """.write(
       to: root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
@@ -152,34 +152,38 @@ final class PluginManagerReloadTests: XCTestCase {
     config.plugins.disabled.subtract(["defaults", "terminals"])
     manager.start(config: config)
 
-    func chord(_ action: SourceActionName, _ bundle: String) -> ActionKeystroke? {
-      manager.actionKeystroke(action, in: PluginSelectorContext(bundleID: bundle))
+    func chord(_ action: SourceActionName, _ bundle: String) -> ActionBinding? {
+      manager.actionBinding(action, in: PluginSelectorContext(bundleID: bundle))
     }
-    func parsed(_ hotkey: String) throws -> ActionKeystroke {
-      .chord(try XCTUnwrap(HotkeySyntax.parse(hotkey: hotkey)))
+    func parsed(_ hotkey: String) throws -> ActionBinding {
+      .chords([try XCTUnwrap(HotkeySyntax.parse(hotkey: hotkey))])
     }
     waitUntilTrue("manifests published") { chord(.tabNext, "com.example.app") != nil }
     XCTAssertEqual(chord(.tabNext, "com.example.app"), try parsed("cmd+option+right"))
     XCTAssertEqual(
       chord(.tabNext, "com.apple.MobileSMS"), try parsed("ctrl+tab"),
       "Messages' own entry in defaults beats the other plugin's plugin-wide chord")
-    XCTAssertNil(chord(.tabNext, "com.example.elsewhere"))
+    XCTAssertEqual(
+      chord(.tabNext, "com.example.elsewhere"), try parsed("cmd+shift+]"),
+      "outside its selector, the defaults convention applies")
     XCTAssertNil(chord(.tabLast, "com.example.app"))
     XCTAssertEqual(
       chord(.historyBack, "com.todesktop.230313mzl4w4u92"), try parsed("ctrl+-"),
       "editors go back with their own chord, not the outdenting Cmd-[")
     XCTAssertEqual(chord(.historyForward, "com.apple.dt.Xcode"), try parsed("ctrl+cmd+right"))
     XCTAssertEqual(
-      chord(.historyBack, "com.apple.Notes"), .unbound, "apps without history send nothing")
-    XCTAssertNil(chord(.historyBack, "com.apple.Safari"), "the host's Cmd-[ applies")
+      chord(.historyBack, "com.apple.Notes"), ActionBinding.unbound,
+      "apps without history send nothing")
+    XCTAssertEqual(
+      chord(.historyBack, "com.apple.Safari"), try parsed("cmd+["), "the defaults convention")
 
     let bracket = try XCTUnwrap(HotkeySyntax.parse(hotkey: "cmd+]"))
     XCTAssertTrue(
-      manager.declaresActionKeystroke(
+      manager.declaresActionBinding(
         key: bracket.keyCode, flags: bracket.eventFlags,
         in: PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
     XCTAssertFalse(
-      manager.declaresActionKeystroke(
+      manager.declaresActionBinding(
         key: bracket.keyCode, flags: bracket.eventFlags,
         in: PluginSelectorContext(bundleID: "org.alacritty")))
     XCTAssertTrue(

@@ -33,6 +33,30 @@ extension NormalModeDispatcher {
     case doctor
   }
 
+  /// The `:`-commands that are verbs: `:w` is `app_save`, `:copy` is
+  /// `clipboard_copy`, `:q` is `window_close`… so each resolves like its
+  /// mapping does.
+  static func verb(for command: CommandLineCommand) -> URLCommand? {
+    switch command {
+    case .quit(let force): return .quitApp(force: force)
+    case .save: return .save
+    case .saveAndQuit(let force): return .saveAndQuit(force: force)
+    case .print: return .print
+    case .open: return .documentOpen
+    case .newWindow: return .windowNew
+    case .newTab: return .tabNew
+    case .close: return .tabClose
+    case .closeWindow: return .windowClose
+    case .find: return .find
+    case .undo: return .undo
+    case .redo: return .redo
+    case .copy: return .clipboardCopy
+    case .cut: return .clipboardCut
+    case .paste: return .clipboardPaste
+    case .plugins, .mappings, .help, .logs, .commands, .about, .doctor: return nil
+    }
+  }
+
   enum PluginsSubcommand: Equatable {
     /// Bare `:plugins` — show the modal status view.
     case modal
@@ -339,7 +363,7 @@ extension NormalModeDispatcher {
       names: ["p[rint]"], description: "Print the focused document", bangPolicy: .rejected
     ) { _ in .print },
     CommandLineSpec(
-      names: ["e[dit]"], description: "Open the flashlight candidate finder", bangPolicy: .rejected
+      names: ["e[dit]"], description: "Open a document in the focused app", bangPolicy: .rejected
     ) { _ in .open },
     CommandLineSpec(names: ["new"], description: "Open a new window", bangPolicy: .rejected) { _ in
       .newWindow

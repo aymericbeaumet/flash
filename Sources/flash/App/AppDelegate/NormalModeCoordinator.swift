@@ -12,7 +12,7 @@ struct ClipboardModalEntry: Decodable {
   let value: String
 }
 
-private struct NormalModeKeyDispatchTarget {
+struct NormalModeKeyDispatchTarget {
   let processID: pid_t
   let bundleIdentifier: String
 }
@@ -907,8 +907,6 @@ extension AppDelegate {
       enterTerminalMode(named: name)
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
-    case .reload(let force):
-      performSourceAction(force ? .appReloadForce : .appReload, repeatCount: repeatCount)
     case .sendKey(_, let keyCode, let flagsRawValue):
       sendNormalModeKey(
         keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)
@@ -917,32 +915,12 @@ extension AppDelegate {
         (key: $0.0, flags: CGEventFlags(rawValue: $0.1))
       }
       sendNormalModeKeySequence(sequence, repeatCount: repeatCount)
-    case .undo:
-      sendNormalModeKey(
-        CGKeyCode(kVK_ANSI_Z),
-        flags: .maskCommand,
-        repeatCount: repeatCount)
-    case .redo:
-      sendNormalModeKey(
-        CGKeyCode(kVK_ANSI_Z),
-        flags: [.maskCommand, .maskShift],
-        repeatCount: repeatCount)
-    case .archive:
-      performSourceAction(.resourceArchive, repeatCount: repeatCount)
-    case .resourceNext:
-      performSourceAction(.resourceNext, repeatCount: repeatCount)
-    case .resourcePrevious:
-      performSourceAction(.resourcePrevious, repeatCount: repeatCount)
-    case .tabClose:
-      performSourceAction(.tabClose, repeatCount: repeatCount)
-    case .find:
-      sendNormalModeKey(
-        CGKeyCode(kVK_ANSI_F),
-        flags: .maskCommand,
-        repeatCount: repeatCount
-      ) { [weak self] outcome in
-        self?.enterInsertIfIntended(by: .find, outcome: outcome)
-      }
+    case .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious, .tabClose, .find,
+      .tabNext, .tabPrev, .tabFirst, .tabLast, .tabMovePrev, .tabMoveNext, .paneNext, .panePrev,
+      .paneSplitVertical, .paneSplitHorizontal, .paneClose, .tabReopen, .historyBack,
+      .historyForward, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
+      .clipboardCopy, .clipboardCut, .clipboardPaste:
+      performAppAction(command, repeatCount: repeatCount)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .enterCommand(let input, let restoreMode):
@@ -979,36 +957,8 @@ extension AppDelegate {
       yankSelection(into: register)
     case .paste(let register):
       pasteRegister(register, repeatCount: repeatCount)
-    case .tabNext:
-      performSourceAction(.tabNext, repeatCount: repeatCount)
-    case .tabPrev:
-      performSourceAction(.tabPrevious, repeatCount: repeatCount)
-    case .tabFirst:
-      performSourceAction(.tabFirst)
-    case .tabLast:
-      performSourceAction(.tabLast)
     case .tabSelect(let explicitIndex):
       tabSelectInNormalMode(index: explicitIndex ?? repeatCount)
-    case .tabMovePrev:
-      performSourceAction(.tabMovePrevious, repeatCount: repeatCount)
-    case .tabMoveNext:
-      performSourceAction(.tabMoveNext, repeatCount: repeatCount)
-    case .paneNext:
-      performSourceAction(.paneNext, repeatCount: repeatCount)
-    case .panePrev:
-      performSourceAction(.panePrevious, repeatCount: repeatCount)
-    case .paneSplitVertical:
-      performSourceAction(.paneSplitVertical, repeatCount: repeatCount)
-    case .paneSplitHorizontal:
-      performSourceAction(.paneSplitHorizontal, repeatCount: repeatCount)
-    case .paneClose:
-      performSourceAction(.paneClose, repeatCount: repeatCount)
-    case .tabReopen:
-      performSourceAction(.tabReopen, repeatCount: repeatCount)
-    case .historyBack:
-      performSourceAction(.historyBack, repeatCount: repeatCount)
-    case .historyForward:
-      performSourceAction(.historyForward, repeatCount: repeatCount)
     case .movementBack:
       navigateMovementHistory(direction: .back)
     case .movementForward:
@@ -1020,14 +970,14 @@ extension AppDelegate {
     case .quitApp(let force):
       quitNormalModeTargetApp(force: force)
     case .saveAndQuit(let force):
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_S), flags: .maskCommand, repeatCount: repeatCount)
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
-        self?.performMappedCommand(.quitApp(force: force))
-      }
-    case .tabNew:
-      performSourceAction(.tabNew, repeatCount: repeatCount) { [weak self] outcome in
-        self?.enterInsertIfIntended(by: .tabNew, outcome: outcome)
-      }
+      performSourceAction(
+        .save,
+        completion: { [weak self] outcome in
+          guard outcome != .noTarget else { return }
+          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
+            self?.performMappedCommand(.quitApp(force: force))
+          }
+        })
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showMappings:
@@ -1039,6 +989,28 @@ extension AppDelegate {
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
       .pluginVerb:
       handleURLCommand(command)
+    }
+  }
+
+  /// A verb that asks the focused app to perform an action: sources, then
+  /// the Flash-owned primitive (`window_close`'s close button), then the
+  /// app's binding. Find and a new tab hand typing to the app once they
+  /// reached it.
+  private func performAppAction(_ command: URLCommand, repeatCount: Int) {
+    guard let action = command.sourceAction else { return }
+    let primitive: ((AppContext, @escaping (Bool) -> Void) -> Void)? =
+      action == .windowClose
+      ? { context, done in
+        let pid = context.processID
+        Self.normalModeAXActionQueue.async {
+          let closed = NormalModeDispatcher.closeFocusedWindow(pid: pid)
+          DispatchQueue.main.async { done(closed) }
+        }
+      } : nil
+    performSourceAction(
+      action, repeatCount: command.sourceActionRepeats ? repeatCount : 1, primitive: primitive
+    ) { [weak self] outcome in
+      self?.enterInsertIfIntended(by: command, outcome: outcome)
     }
   }
 
@@ -1195,31 +1167,6 @@ extension AppDelegate {
     applyModeOverlay()
   }
 
-  /// `:q` — close the focused app's focused OS window (its red close button),
-  /// leaving the app and its other windows running. Distinct from `x`/`tab_close`
-  /// (a tab / tmux window) and `:qa` (quits the whole app). Falls back to ⌘W when
-  /// the window has no AX close button (borderless/custom windows).
-  func closeFocusedWindowInNormalMode() {
-    guard let context = normalModeDispatchContext() else {
-      FlashLog.debug("[normal_mode] no target app for :q (close window)")
-      applyModeOverlay()
-      return
-    }
-    FlashLog.debug(
-      "[normal_mode] close window pid=\(context.processID) bundle=\(context.bundleIdentifier)")
-    let pid = context.processID
-    Self.normalModeAXActionQueue.async { [weak self] in
-      let closed = NormalModeDispatcher.closeFocusedWindow(pid: pid)
-      DispatchQueue.main.async {
-        guard let self else { return }
-        if !closed {
-          self.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand)
-        }
-        self.applyModeOverlay()
-      }
-    }
-  }
-
   /// Quick AX reads and presses for NORMAL verbs (`y`, `:q`). They are IPC
   /// into the target app, so never on the main run loop; a queue of their own
   /// keeps them from waiting behind a hint walk on `axQueue`.
@@ -1235,43 +1182,50 @@ extension AppDelegate {
     repeatCount: Int = 1,
     completion: @escaping (NormalModeActionOutcome) -> Void = { _ in }
   ) {
-    guard let target = normalModeKeyDispatchTarget() else {
-      FlashLog.debug("[normal_mode] no target app for key \(key)")
-      applyModeOverlay()
-      completion(.noTarget)
-      return
-    }
-    if commandChordTypesText(key: key, flags: flags, bundleIdentifier: target.bundleIdentifier) {
-      FlashLog.debug(
-        "[normal_mode] suppress unbound terminal command chord key=\(key) "
-          + "flags=\(flags.rawValue) bundle=\(target.bundleIdentifier)")
-      applyModeOverlay()
-      completion(.refused)
+    sendNormalModeKeySequence(
+      [(key, flags)], repeatCount: repeatCount, completion: completion)
+  }
+
+  /// Posts `chords` in order to `target`, the whole sequence `repeatCount`
+  /// times, spaced by `[mode] send_key_interval_ms`. `completion` runs once,
+  /// after the last chord. The caller has applied the terminal rule.
+  func postNormalModeChords(
+    _ chords: [ActionChord],
+    to target: NormalModeKeyDispatchTarget,
+    repeatCount: Int = 1,
+    completion: @escaping (NormalModeActionOutcome) -> Void = { _ in }
+  ) {
+    guard !chords.isEmpty else {
+      scheduleNormalModeRecapture()
+      completion(.chordSent)
       return
     }
     let count = normalizedRepeatCount(repeatCount)
-    let activationDelayMs =
-      activateNormalModeKeyTargetIfNeeded(
-        target.processID, flags: flags)
+    let interval = FlashTunables.sendKeyIntervalMs
+    var offsetMs =
+      activateNormalModeKeyTargetIfNeeded(target.processID, chords: chords)
       ? Self.normalModeKeyTargetActivationDelayMs : 0
     let trace = Trace.current
-    for index in 0..<count {
-      let delay = DispatchTimeInterval.milliseconds(activationDelayMs + index * 35)
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-        // Note the synthesized chord so a `postToPid` event that loops back
-        // through the Carbon dispatcher can't re-trigger our own hotkey for
-        // the same combo (e.g. a `⌘⇧]` tab-traversal chord).
-        self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-        Trace.run(in: trace) {
-          FlashLog.debug(
-            "[normal_mode] send_key",
-            fields: ["pid": "\(target.processID)", "repeat": "\(index + 1)"])
-          NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
+    for repeatIndex in 0..<count {
+      for chord in chords {
+        let delay = DispatchTimeInterval.milliseconds(offsetMs)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+          // Note the synthesized chord so a `postToPid` event that loops back
+          // through the Carbon dispatcher can't re-trigger our own hotkey for
+          // the same combo (e.g. a `⌘⇧]` tab-traversal chord).
+          self?.mappings.noteSyntheticKey(virtualKey: UInt32(chord.key), flags: chord.flags)
+          Trace.run(in: trace) {
+            FlashLog.debug(
+              "[normal_mode] send_key",
+              fields: ["pid": "\(target.processID)", "repeat": "\(repeatIndex + 1)"])
+            NormalModeDispatcher.sendKey(
+              virtualKey: chord.key, flags: chord.flags, to: target.processID)
+          }
         }
+        offsetMs += interval
       }
     }
-    let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)
-    DispatchQueue.main.asyncAfter(deadline: .now() + finalDelay) { [weak self] in
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(offsetMs)) { [weak self] in
       self?.scheduleNormalModeRecapture()
       completion(.chordSent)
     }
@@ -1308,31 +1262,32 @@ extension AppDelegate {
       guard let self, self.normalModePendingCommandToken == token,
         !target.isTerminated, target.isActive
       else { return }
-      if viaClipboard {
-        NormalModeDispatcher.copy(text)
-        self.mappings.noteSyntheticKey(virtualKey: UInt32(kVK_ANSI_V), flags: .maskCommand)
-        NormalModeDispatcher.sendKey(
-          virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand, to: pid)
-      } else {
+      guard viaClipboard else {
         // Emoji (and other short glyphs): type the Unicode directly so inserting
         // it doesn't clobber the user's clipboard.
         NormalModeDispatcher.insertUnicode(text, to: pid)
+        self.scheduleNormalModeRecapture()
+        return
       }
-      self.scheduleNormalModeRecapture()
+      NormalModeDispatcher.copy(text)
+      // The receiving app's own paste: its `clipboard_paste`.
+      guard let context = self.monitor.makeContext(for: target) else { return }
+      self.performSourceAction(
+        .clipboardPaste, context: context,
+        keyTarget: NormalModeKeyDispatchTarget(
+          processID: pid, bundleIdentifier: context.bundleIdentifier))
     }
   }
 
   private func sendNormalModeKeySequence(
     _ keys: [(CGKeyCode, CGEventFlags)],
-    repeatCount: Int = 1
+    repeatCount: Int = 1,
+    completion: @escaping (NormalModeActionOutcome) -> Void = { _ in }
   ) {
     guard let target = normalModeKeyDispatchTarget() else {
       FlashLog.debug("[normal_mode] no target app for key sequence")
       applyModeOverlay()
-      return
-    }
-    guard !keys.isEmpty else {
-      scheduleNormalModeRecapture()
+      completion(.noTarget)
       return
     }
     // One unbound chord would type its character, so the whole sequence is
@@ -1344,42 +1299,21 @@ extension AppDelegate {
         "[normal_mode] suppress unbound terminal command chord key=\(unsafe.0) "
           + "flags=\(unsafe.1.rawValue) bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
+      completion(.refused)
       return
     }
-    let count = normalizedRepeatCount(repeatCount)
-    var offsetMs =
-      activateNormalModeKeyTargetIfNeeded(target.processID, keys: keys)
-      ? Self.normalModeKeyTargetActivationDelayMs : 0
-    for _ in 0..<count {
-      for (key, flags) in keys {
-        let delay = DispatchTimeInterval.milliseconds(offsetMs)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-          self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-          NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
-        }
-        offsetMs += 35
-      }
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(offsetMs + 30)) { [weak self] in
-      self?.scheduleNormalModeRecapture()
-    }
+    postNormalModeChords(
+      keys.map { ActionChord(key: $0.0, flags: $0.1) }, to: target, repeatCount: repeatCount,
+      completion: completion)
   }
 
   @discardableResult
   private func activateNormalModeKeyTargetIfNeeded(
     _ processID: pid_t,
-    flags: CGEventFlags
+    chords: [ActionChord]
   ) -> Bool {
-    guard Self.normalModeKeyDispatchNeedsTargetActivation(flags: flags) else { return false }
-    return activateNormalModeKeyTarget(processID)
-  }
-
-  @discardableResult
-  private func activateNormalModeKeyTargetIfNeeded(
-    _ processID: pid_t,
-    keys: [(CGKeyCode, CGEventFlags)]
-  ) -> Bool {
-    guard keys.contains(where: { Self.normalModeKeyDispatchNeedsTargetActivation(flags: $0.1) })
+    guard
+      chords.contains(where: { Self.normalModeKeyDispatchNeedsTargetActivation(flags: $0.flags) })
     else { return false }
     return activateNormalModeKeyTarget(processID)
   }
@@ -1396,7 +1330,7 @@ extension AppDelegate {
     return true
   }
 
-  private func normalModeKeyDispatchTarget() -> NormalModeKeyDispatchTarget? {
+  func normalModeKeyDispatchTarget() -> NormalModeKeyDispatchTarget? {
     let hasVisibleNonOverlayKeyWindow =
       NSApp.keyWindow.map {
         $0 !== overlay && $0.isVisible
@@ -1442,7 +1376,7 @@ extension AppDelegate {
   /// character instead of running a shortcut. Shift-bracket is the macOS
   /// standard tab traversal and every emulator binds it, as it binds
   /// `terminalBoundCommandChords`; any other Command chord is safe only where
-  /// a plugin declares it as one of that emulator's action keystrokes (split
+  /// a plugin binds it for that emulator in `action_bindings` (split
   /// traversal on the bare brackets, for one). `isDeclared` is asked last.
   static func commandChordTypesTextInTerminal(
     key: CGKeyCode,
@@ -1467,7 +1401,7 @@ extension AppDelegate {
   ) -> Bool {
     guard TerminalEmulators.contains(bundleIdentifier) else { return false }
     return Self.commandChordTypesTextInTerminal(key: key, flags: flags) {
-      pluginManager.declaresActionKeystroke(
+      pluginManager.declaresActionBinding(
         key: key, flags: flags.intersection(Self.normalModeKeyModifierMask),
         in: PluginSelectorContext(bundleID: bundleIdentifier))
     }
@@ -1485,11 +1419,11 @@ extension AppDelegate {
     let pid = context.processID
     Self.normalModeAXActionQueue.async { [weak self] in
       let text = NormalModeDispatcher.selectedText(pid: pid)
-      DispatchQueue.main.async { self?.finishYankSelection(axText: text, pid: pid, into: register) }
+      DispatchQueue.main.async { self?.finishYankSelection(axText: text, into: register) }
     }
   }
 
-  private func finishYankSelection(axText: String?, pid: pid_t, into register: String?) {
+  private func finishYankSelection(axText: String?, into register: String?) {
     if let text = axText {
       registers.write(text, register: register)
       FlashLog.debug(
@@ -1497,11 +1431,19 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    // No AX selection exposed (web content, terminals): fall back to ⌘C and
-    // read the pasteboard once its change-count ticks.
+    // No AX selection exposed (web content, terminals): fall back to the
+    // app's `clipboard_copy` and read the pasteboard once its change-count
+    // ticks.
     let beforeChange = NSPasteboard.general.changeCount
-    mappings.noteSyntheticKey(virtualKey: UInt32(kVK_ANSI_C), flags: .maskCommand)
-    NormalModeDispatcher.sendKey(virtualKey: CGKeyCode(kVK_ANSI_C), flags: .maskCommand, to: pid)
+    performSourceAction(
+      .clipboardCopy,
+      completion: { [weak self] outcome in
+        guard outcome == .chordSent || outcome == .performed else { return }
+        self?.awaitYankedText(after: beforeChange, into: register)
+      })
+  }
+
+  private func awaitYankedText(after beforeChange: Int, into register: String?) {
     pollPasteboard(after: beforeChange, attempts: 20) { [weak self] text in
       guard let self else { return }
       if let text, !text.isEmpty {
@@ -1509,7 +1451,7 @@ extension AppDelegate {
         FlashLog.debug(
           "[normal_mode] yank clipboard len=\(text.count) register=\(register ?? "*clipboard*")")
       } else {
-        FlashLog.debug("[normal_mode] yank ⌘C produced no selection")
+        FlashLog.debug("[normal_mode] yank clipboard_copy produced no selection")
       }
       self.scheduleNormalModeRecapture()
     }

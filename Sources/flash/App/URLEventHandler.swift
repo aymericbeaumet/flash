@@ -118,6 +118,17 @@ enum URLCommand: Hashable {
   case quitApp(force: Bool)
   case saveAndQuit(force: Bool)
   case tabNew
+  /// The focused app's save, print, open-document, new-window and
+  /// close-window commands and its clipboard, each resolved like every app
+  /// action: a source, then the app's `action_bindings`.
+  case save
+  case print
+  case documentOpen
+  case windowNew
+  case windowClose
+  case clipboardCopy
+  case clipboardCut
+  case clipboardPaste
   case showAlert(AlertCommand)
   case dismissAlert
   case showUsage(topic: String?)
@@ -137,6 +148,58 @@ enum URLCommand: Hashable {
   /// may shortcut directly for inline-keystrokes verbs, or fan
   /// out to the owning plugin's command `perform`).
   case pluginVerb(name: String, args: [String: String])
+}
+
+extension URLCommand {
+  /// The action this verb asks the focused app to perform, resolved through
+  /// the sources and then the app's `action_bindings`; nil for verbs Flash
+  /// performs itself. `tab_select` (counted) and `scroll_top`/`scroll_bottom`
+  /// (Flash scrolling first) reach their actions on their own paths.
+  var sourceAction: SourceAction? {
+    switch self {
+    case .reload(let force): return .reload(force: force)
+    case .undo: return .undo
+    case .redo: return .redo
+    case .find: return .find
+    case .archive: return .archive
+    case .resourceNext: return .resourceNext
+    case .resourcePrevious: return .resourcePrevious
+    case .tabNext: return .tabNext
+    case .tabPrev: return .tabPrev
+    case .tabFirst: return .tabFirst
+    case .tabLast: return .tabLast
+    case .tabNew: return .tabNew
+    case .tabClose: return .tabClose
+    case .tabReopen: return .tabReopen
+    case .tabMovePrev: return .tabMovePrev
+    case .tabMoveNext: return .tabMoveNext
+    case .paneNext: return .paneNext
+    case .panePrev: return .panePrev
+    case .paneSplitVertical: return .paneSplitVertical
+    case .paneSplitHorizontal: return .paneSplitHorizontal
+    case .paneClose: return .paneClose
+    case .historyBack: return .historyBack
+    case .historyForward: return .historyForward
+    case .save: return .save
+    case .print: return .print
+    case .documentOpen: return .documentOpen
+    case .windowNew: return .windowNew
+    case .windowClose: return .windowClose
+    case .clipboardCopy: return .clipboardCopy
+    case .clipboardCut: return .clipboardCut
+    case .clipboardPaste: return .clipboardPaste
+    default: return nil
+    }
+  }
+
+  /// Whether a NORMAL count repeats the action; the first and last tab are
+  /// one place however often they are asked for.
+  var sourceActionRepeats: Bool {
+    switch self {
+    case .tabFirst, .tabLast: return false
+    default: return true
+    }
+  }
 }
 
 struct AlertCommand: Hashable {
@@ -434,6 +497,12 @@ final class URLEventHandler: NSObject {
     commands[verb]?.command(arguments: args)
   }
 
+  /// Whether `verb` names one of Flash's own verbs, which a plugin verb of
+  /// the same name could never shadow.
+  static func isBuiltInVerb(_ verb: String) -> Bool {
+    commands[verb] != nil
+  }
+
   /// Same as ``parse(verb:args:)`` but, on a built-in miss for an
   /// identifier-shape verb, returns a ``URLCommand/pluginVerb(name:args:)``
   /// so the dispatch path can hand the call to ``PluginManager``. Used by
@@ -673,6 +742,22 @@ final class URLEventHandler: NSObject {
       [.flag("force")], parse: { a in .saveAndQuit(force: a.bool("force")) }),
 
     "tab_new": .init(parse: { _ in .tabNew }),
+
+    "app_save": .init(parse: { _ in .save }),
+
+    "app_print": .init(parse: { _ in .print }),
+
+    "document_open": .init(parse: { _ in .documentOpen }),
+
+    "window_new": .init(parse: { _ in .windowNew }),
+
+    "window_close": .init(parse: { _ in .windowClose }),
+
+    "clipboard_copy": .init(parse: { _ in .clipboardCopy }),
+
+    "clipboard_cut": .init(parse: { _ in .clipboardCut }),
+
+    "clipboard_paste": .init(parse: { _ in .clipboardPaste }),
 
     "alert_show": .init(
       [

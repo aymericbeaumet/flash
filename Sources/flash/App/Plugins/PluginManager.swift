@@ -33,30 +33,16 @@ final class PluginManager {
     let registration: PluginCommandRegistration
   }
 
-  /// A resolved plugin-verb target: the owning plugin, the
-  /// command/subcommand folded from the manifest, and an optional
-  /// per-bundle keystroke table (which lets the host synthesize the key
-  /// directly when it matches the focused bundle, skipping the plugin RPC).
+  /// A resolved plugin-verb target: the owning plugin and the
+  /// command/subcommand folded from the manifest.
   private struct VerbTarget {
     let plugin: PluginProcess
     let command: String
     let subcommand: String
-    let keystrokes: [String: String]
     let selector: PluginSelectorStack
 
     func specificity(in context: PluginSelectorContext) -> Int? {
       selector.specificity(in: context)
-    }
-
-    /// Hotkey string to synthesize for `bundleID`, or `nil` when the verb has
-    /// no keystroke shortcut for it. The empty-key entry (`""`) acts as the
-    /// catch-all default, mirroring the manifest convention.
-    func keystroke(forBundleID bundleID: String?) -> String? {
-      if let bundleID, let exact = keystrokes[bundleID], !exact.isEmpty {
-        return exact
-      }
-      let fallback = keystrokes[""] ?? ""
-      return fallback.isEmpty ? nil : fallback
     }
   }
 
@@ -115,7 +101,7 @@ final class PluginManager {
     var shebangCandidateIndex: [ShebangCandidateTarget] = []
     var wildcardShebangTargets: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
-    var actionKeystrokes = ActionKeystrokeIndex()
+    var actionBindings = ActionBindingIndex()
     var helpTopics: [HelpTopic] = []
   }
 
@@ -240,7 +226,7 @@ final class PluginManager {
     var shebangCandidates: [ShebangCandidateTarget] = []
     var wildcardShebangs: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
-    var actionKeystrokes = ActionKeystrokeIndex()
+    var actionBindings = ActionBindingIndex()
     var terminalEmulators: Set<String> = []
     var onDemandHintApps: Set<String> = []
     var helpTopics: [HelpTopic] = []
@@ -308,14 +294,13 @@ final class PluginManager {
             plugin: plugin,
             command: command,
             subcommand: subcommand,
-            keystrokes: registration.keystrokes,
             selector: rootSelector))
       }
 
       terminalEmulators.formUnion(manifest.terminalEmulators)
       onDemandHintApps.formUnion(manifest.onDemandHints)
 
-      actionKeystrokes.add(manifest)
+      actionBindings.add(manifest)
 
       for registration in manifest.mappings {
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(registration.key) else {
@@ -367,7 +352,7 @@ final class PluginManager {
       shebangCandidateIndex: shebangCandidates,
       wildcardShebangTargets: wildcardShebangs,
       verbIndex: verbIndex,
-      actionKeystrokes: actionKeystrokes,
+      actionBindings: actionBindings,
       helpTopics: helpTopics)
     // Declared before the snapshot is visible, so every selector resolved
     // against it already sees these apps as terminals.
@@ -782,58 +767,46 @@ final class PluginManager {
       .map(\.registration)
   }
 
-  /// The chord a plugin declares for `action` in the focused app, sent when
-  /// no source performs the action there; `.unbound` when a plugin declares
-  /// that the app has no shortcut for it.
-  func actionKeystroke(
-    _ action: SourceActionName, in context: PluginSelectorContext
-  ) -> ActionKeystroke? {
-    readHotSnapshot().actionKeystrokes.keystroke(action, in: context)
+  /// What the focused app does for `action` when no source performs it
+  /// there (`action_bindings`), or nil when no plugin binds it.
+  func actionBinding(
+    _ action: SourceActionName, index: Int? = nil, in context: PluginSelectorContext
+  ) -> ActionBinding? {
+    readHotSnapshot().actionBindings.binding(action, index: index, in: context)
   }
 
-  /// Whether some plugin declares `chord` as an action keystroke of the
-  /// focused app: the app binds it, so synthesizing it runs a shortcut.
-  func declaresActionKeystroke(
+  /// Every action a plugin binds in the focused app, with its winner.
+  func actionBindingResolutions(
+    in context: PluginSelectorContext
+  ) -> [(SourceActionName, ActionBindingIndex.Resolution)] {
+    readHotSnapshot().actionBindings.resolutions(in: context)
+  }
+
+  /// Whether some plugin binds `chord` for the focused app itself: the app
+  /// runs it as a shortcut, so synthesizing it never types text.
+  func declaresActionBinding(
     key: CGKeyCode, flags: CGEventFlags, in context: PluginSelectorContext
   ) -> Bool {
-    readHotSnapshot().actionKeystrokes.declares(key: key, flags: flags, in: context)
+    readHotSnapshot().actionBindings.declares(key: key, flags: flags, in: context)
   }
 
-  /// Dispatch a plugin verb. Returns true when a plugin claims the verb (and
-  /// the dispatch was issued — either as a synthesized keystroke or as an
-  /// asynchronous plugin command). The `keystrokes` shortcut path runs
-  /// synchronously and reports `(true, focusedPID, nil, nil)` via `onResult`;
-  /// the RPC path follows the command-perform contract, with `args` flattened
-  /// into `key=value` positional tokens so plugins can parse them off the
-  /// request args without a special map decoder.
+  /// Dispatch a plugin verb. Returns true when a plugin claims the verb and
+  /// the asynchronous plugin command was issued. It follows the
+  /// command-perform contract, with `args` flattened into `key=value`
+  /// positional tokens so plugins can parse them off the request args
+  /// without a special map decoder.
   @discardableResult
   func invokeVerb(
     name: String,
     args: [String: String],
     in context: PluginSelectorContext = PluginSelectorContext(),
-    focusedPID: pid_t? = nil,
     onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
-    let lcName = name.lowercased()
     let target = Self.bestTarget(
-      readHotSnapshot().verbIndex[lcName] ?? [],
+      readHotSnapshot().verbIndex[name.lowercased()] ?? [],
       in: context,
       specificity: { $0.specificity(in: $1) })
     guard let target else { return false }
-    if let keystroke = target.keystroke(forBundleID: context.bundleID),
-      let pid = focusedPID,
-      let parsed = HotkeySyntax.parse(hotkey: keystroke)
-    {
-      let ok = NormalModeDispatcher.sendKey(
-        virtualKey: parsed.keyCode,
-        flags: parsed.eventFlags,
-        to: pid)
-      FlashLog.debug(
-        "[plugin_verb] keystroke name=\(lcName) keys=\(keystroke) "
-          + "pid=\(pid) bundle=\(context.bundleID ?? "nil") ok=\(ok)")
-      onResult?(ok, pid, nil, nil)
-      return true
-    }
     let positional = args.keys.sorted().map { key in "\(key)=\(args[key] ?? "")" }
     let raw = positional.isEmpty ? name : "\(name) " + positional.joined(separator: " ")
     performCommand(

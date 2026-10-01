@@ -451,9 +451,7 @@ final class PluginSystemTests: XCTestCase {
         "name": "Manifest only",
         "version": "1.0.0",
         "description": "fixture",
-        "verbs": [
-          { "name": "noop", "keystrokes": { "": "cmd+s" } }
-        ]
+        "action_bindings": { "app_save": { "": "cmd+s" } }
       }
       """)
     let root = FileManager.default.temporaryDirectory
@@ -668,7 +666,7 @@ final class PluginSystemTests: XCTestCase {
       try activation(#", "exec": ["/usr/bin/true"], "navigation": ["act"]"#), .onDemand)
     // Manifest-only: no exec at all.
     XCTAssertEqual(
-      try activation(#", "verbs": [{"name": "v", "keystrokes": {"": "cmd+s"}}]"#),
+      try activation(#", "action_bindings": {"app_save": {"": "cmd+s"}}"#),
       .manifestOnly)
   }
 
@@ -991,34 +989,36 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.mappings[2].scope, .terminal)
   }
 
-  func testManifestDecodesActionKeystrokesAndRejectsUnknownActionsOrChords() throws {
+  func testManifestDecodesActionBindingsAndRejectsUnknownActionsOrChords() throws {
     let valid = try temporaryPluginRoot(
       manifest: """
         {
           "id": "chords",
           "name": "Chords",
           "version": "1.0.0",
-          "description": "Action keystrokes",
+          "description": "Action bindings",
           "only_bundle_ids": ["com.example.browser", "com.example.other"],
-          "action_keystrokes": {
+          "action_bindings": {
             "tab_next": { "": "cmd+shift+]" },
             "app_reload_force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" },
-            "history_back": { "com.example.other": "" }
+            "history_back": { "com.example.other": false }
           }
         }
         """)
     defer { try? FileManager.default.removeItem(at: valid) }
     let manifest = try PluginManifest.load(from: valid)
-    XCTAssertEqual(manifest.activation, .manifestOnly, "action keystrokes need no process")
-    XCTAssertEqual(manifest.actionKeystrokes[.tabNext], ["": "cmd+shift+]"])
-    XCTAssertEqual(manifest.actionKeystrokes[.appReloadForce]?["com.example.other"], "cmd+option+r")
+    XCTAssertEqual(manifest.activation, .manifestOnly, "action bindings need no process")
+    XCTAssertEqual(manifest.actionBindings[.tabNext], ["": .chords(["cmd+shift+]"])])
     XCTAssertEqual(
-      manifest.actionKeystrokes[.historyBack], ["com.example.other": ""],
-      "an empty chord declares that the app has no shortcut")
+      manifest.actionBindings[.appReloadForce]?["com.example.other"], .chords(["cmd+option+r"]))
+    XCTAssertEqual(
+      manifest.actionBindings[.historyBack], ["com.example.other": ActionBindingSpec.unbound],
+      "false declares that the app has no such action")
 
     for (fragment, message) in [
       (#""tab_sideways": { "": "cmd+k" }"#, "unknown action: tab_sideways"),
-      (#""tab_next": { "": "cmd+shift+nope" }"#, "is not a chord"),
+      (#""tab_next": { "": "cmd+shift+nope" }"#, "not a chord"),
+      (#""tab_next": { "": "" }"#, "use false for none"),
     ] {
       let root = try temporaryPluginRoot(
         manifest: """
@@ -1026,8 +1026,8 @@ final class PluginSystemTests: XCTestCase {
             "id": "badchords",
             "name": "Bad chords",
             "version": "1.0.0",
-            "description": "Invalid action keystrokes",
-            "action_keystrokes": { \(fragment) }
+            "description": "Invalid action bindings",
+            "action_bindings": { \(fragment) }
           }
           """)
       defer { try? FileManager.default.removeItem(at: root) }
@@ -1058,54 +1058,65 @@ final class PluginSystemTests: XCTestCase {
       }
     }
     XCTAssertEqual(SourceAction.byWireName["tab_previous"], .tabPrev)
-    XCTAssertEqual(SourceAction.byWireName.count, 23, "one entry per action")
+    XCTAssertEqual(SourceAction.byWireName.count, 34, "one entry per action")
+    XCTAssertEqual(
+      Set(SourceAction.byWireName.values.map(\.name.rawValue)).union(["app_reload_force"]),
+      Set(SourceActionName.allCases.map(\.rawValue)), "every bindable action is claimable")
   }
 
-  /// App shortcuts are plugin data: the browsers plugin owns the
-  /// browser chords (Safari's own hard reload included), `defaults` Messages'
-  /// conversation chord, `terminals` the emulators' split traversal.
-  func testOfficialManifestsOwnEveryAppSpecificChord() throws {
+  /// App knowledge is plugin data: the browsers plugin owns the browser
+  /// chords (Safari's own hard reload included), `defaults` the shared
+  /// conventions and the apps that differ, `terminals` the emulators' split
+  /// traversal.
+  func testOfficialManifestsOwnEveryAppSpecificBinding() throws {
     func manifest(_ id: String) throws -> PluginManifest {
       try PluginManifest.load(
         from: try XCTUnwrap(officialPluginRoots().first { $0.lastPathComponent == id }))
     }
     let browsers = try manifest("browsers")
-    XCTAssertEqual(browsers.actionKeystrokes[.tabNext]?[""], "cmd+shift+]")
-    XCTAssertEqual(browsers.actionKeystrokes[.scrollBottom]?[""], "cmd+down")
-    XCTAssertEqual(browsers.actionKeystrokes[.appReloadForce]?["com.apple.Safari"], "cmd+option+r")
-    XCTAssertTrue(browsers.onlyBundleIDs.contains("org.mozilla.nightly"))
-    XCTAssertEqual(browsers.actionKeystrokes[.tabMoveNext]?[""], "ctrl+shift+pagedown")
-    let defaults = try manifest("defaults")
-    XCTAssertEqual(defaults.actionKeystrokes[.tabNext]?["com.apple.MobileSMS"], "ctrl+tab")
-    let cursor = "com.todesktop.230313mzl4w4u92"
-    XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?[cursor], "ctrl+-")
-    XCTAssertEqual(defaults.actionKeystrokes[.historyForward]?[cursor], "ctrl+shift+-")
-    XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?["com.apple.dt.Xcode"], "ctrl+cmd+left")
-    XCTAssertEqual(defaults.actionKeystrokes[.historyBack]?["com.apple.Notes"], "")
-    XCTAssertNil(defaults.actionKeystrokes[.historyBack]?[""], "Cmd-[ is the host's convention")
-    XCTAssertEqual(defaults.actionKeystrokes[.tabNew]?[cursor], "cmd+n")
-    XCTAssertEqual(defaults.actionKeystrokes[.tabReopen]?[cursor], "cmd+shift+t")
+    XCTAssertEqual(browsers.actionBindings[.tabNext]?[""], .chords(["cmd+shift+]"]))
+    XCTAssertEqual(browsers.actionBindings[.scrollBottom]?[""], .chords(["cmd+down"]))
     XCTAssertEqual(
-      defaults.actionKeystrokes[.tabNew]?["com.apple.Notes"], "",
+      browsers.actionBindings[.appReloadForce]?["com.apple.Safari"], .chords(["cmd+option+r"]))
+    XCTAssertTrue(browsers.onlyBundleIDs.contains("org.mozilla.nightly"))
+    XCTAssertEqual(browsers.actionBindings[.tabMoveNext]?[""], .chords(["ctrl+shift+pagedown"]))
+    let defaults = try manifest("defaults")
+    XCTAssertEqual(defaults.verbs, [], "app commands are actions, not verbs")
+    XCTAssertEqual(defaults.actionBindings[.tabNext]?["com.apple.MobileSMS"], .chords(["ctrl+tab"]))
+    let cursor = "com.todesktop.230313mzl4w4u92"
+    XCTAssertEqual(defaults.actionBindings[.historyBack]?[cursor], .chords(["ctrl+-"]))
+    XCTAssertEqual(defaults.actionBindings[.historyForward]?[cursor], .chords(["ctrl+shift+-"]))
+    XCTAssertEqual(
+      defaults.actionBindings[.historyBack]?["com.apple.dt.Xcode"], .chords(["ctrl+cmd+left"]))
+    XCTAssertEqual(
+      defaults.actionBindings[.historyBack]?["com.apple.Notes"], ActionBindingSpec.unbound)
+    XCTAssertEqual(defaults.actionBindings[.historyBack]?[""], .chords(["cmd+["]))
+    XCTAssertEqual(defaults.actionBindings[.tabNew]?[cursor], .chords(["cmd+n"]))
+    XCTAssertEqual(defaults.actionBindings[.tabReopen]?[cursor], .chords(["cmd+shift+t"]))
+    XCTAssertEqual(
+      defaults.actionBindings[.tabNew]?["com.apple.Notes"], ActionBindingSpec.unbound,
       "Cmd-T opens the Fonts panel, not a tab")
-    XCTAssertNil(defaults.actionKeystrokes[.tabNew]?[""], "Cmd-T is the host's convention")
+    XCTAssertEqual(defaults.actionBindings[.tabNew]?[""], .chords(["cmd+t"]))
+    XCTAssertEqual(defaults.actionBindings[.tabSelect]?[""], .chords(["cmd+{index}"]))
     let vscode = try manifest("vscode")
-    XCTAssertEqual(vscode.actionKeystrokes[.tabNew]?[""], "cmd+n")
-    XCTAssertEqual(vscode.actionKeystrokes[.tabReopen]?[""], "cmd+shift+t")
-    XCTAssertEqual(vscode.actionKeystrokes[.historyBack]?[""], "ctrl+-")
-    XCTAssertEqual(vscode.actionKeystrokes[.historyForward]?[""], "ctrl+shift+-")
+    XCTAssertEqual(vscode.actionBindings[.tabNew]?[""], .chords(["cmd+n"]))
+    XCTAssertEqual(vscode.actionBindings[.tabReopen]?[""], .chords(["cmd+shift+t"]))
+    XCTAssertEqual(vscode.actionBindings[.historyBack]?[""], .chords(["ctrl+-"]))
+    XCTAssertEqual(vscode.actionBindings[.historyForward]?[""], .chords(["ctrl+shift+-"]))
     XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])
     XCTAssertEqual(defaults.mappings, [], "Messages' tab chord is action data, not a mapping")
     let terminals = try manifest("terminals")
     XCTAssertEqual(terminals.activation, .manifestOnly)
     XCTAssertTrue(
       Set(terminals.terminalEmulators).isSuperset(of: ["org.alacritty", "com.mitchellh.ghostty"]))
-    XCTAssertEqual(terminals.actionKeystrokes[.paneNext]?["com.mitchellh.ghostty"], "cmd+]")
+    XCTAssertEqual(
+      terminals.actionBindings[.paneNext]?["com.mitchellh.ghostty"], .chords(["cmd+]"]))
     for emulator in terminals.terminalEmulators {
       XCTAssertEqual(
-        terminals.actionKeystrokes[.historyBack]?[emulator], "",
+        terminals.actionBindings[.historyBack]?[emulator], ActionBindingSpec.unbound,
         "\(emulator)'s Cmd-[ is a split chord, not back")
-      XCTAssertEqual(terminals.actionKeystrokes[.historyForward]?[emulator], "")
+      XCTAssertEqual(
+        terminals.actionBindings[.historyForward]?[emulator], ActionBindingSpec.unbound)
     }
   }
 
@@ -1236,7 +1247,7 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testManifestOnlyPluginRequiresKeystrokeVerbs() throws {
+  func testManifestOnlyPluginCannotDeclareVerbs() throws {
     let root = try temporaryPluginRoot(
       manifest: """
         {
@@ -1246,7 +1257,7 @@ final class PluginSystemTests: XCTestCase {
           "description": "fixture",
           "install": "true",
           "verbs": [
-            { "name": "needs_rpc", "description": "no keystroke" }
+            { "name": "needs_rpc", "description": "served by a process" }
           ]
         }
         """)
@@ -1254,7 +1265,7 @@ final class PluginSystemTests: XCTestCase {
 
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
-        String(describing: error).contains("requires verb needs_rpc to declare a default"))
+        String(describing: error).contains("without exec cannot declare verbs"), "\(error)")
     }
   }
 
@@ -1267,10 +1278,8 @@ final class PluginSystemTests: XCTestCase {
             "name": "Reserved",
             "version": "1.0.0",
             "description": "fixture",
-            "install": "true",
-            "verbs": [
-              { "name": "\(name)", "keystrokes": { "": "cmd+s" } }
-            ]
+            "exec": ["/usr/bin/true"],
+            "verbs": [{ "name": "\(name)" }]
           }
           """)
       defer { try? FileManager.default.removeItem(at: root) }
@@ -1644,20 +1653,33 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testDefaultsManifestIsManifestOnlyWithKeystrokeVerbs() throws {
+  func testDefaultsManifestIsManifestOnlyAppKnowledge() throws {
     let root = try XCTUnwrap(
       try officialPluginRoots().first { $0.lastPathComponent == "defaults" })
     let defaults = try PluginManifest.load(from: root)
-    // Manifest-only: no process, no binary — every verb resolves through
-    // the host's keystroke path.
+    // Manifest-only: no process, no binary — only data the host serves.
     XCTAssertNil(defaults.exec)
     XCTAssertEqual(defaults.activation, .manifestOnly)
-    XCTAssertEqual(
-      Set(defaults.verbs.map(\.name)),
-      ["app_save", "app_print", "document_open", "window_new"])
-    XCTAssertTrue(
-      defaults.verbs.allSatisfy { !($0.keystrokes[""] ?? "").isEmpty },
-      "manifest-only verbs must carry a default keystroke")
+    XCTAssertEqual(defaults.verbs, [])
+    for name in ["app_save", "app_print", "document_open", "window_new"] {
+      let action = try XCTUnwrap(SourceActionName(rawValue: name))
+      XCTAssertNotNil(defaults.actionBindings[action]?[""], name)
+    }
+  }
+
+  /// A plugin verb named like one of Flash's own would never be reached.
+  func testPluginVerbsCannotShadowFlashVerbs() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "shadow", "name": "Shadow", "version": "1.0.0", "description": "fixture",
+          "exec": ["/usr/bin/true"], "verbs": [{ "name": "app_save" }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue("\(error)".contains("one of Flash's own verbs"), "\(error)")
+    }
   }
 
   func testOfficialPluginInstallScriptsAvoidGlobalInstallTargets() throws {

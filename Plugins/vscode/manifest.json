@@ -11,7 +11,7 @@
     "com.microsoft.VSCode"
   ],
   "priority": 20,
-  "action_keystrokes": {
+  "action_bindings": {
     "tab_new": {
       "": "cmd+n"
     },

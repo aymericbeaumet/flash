@@ -895,7 +895,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
         "name": "Manifest only",
         "version": "1.0.0",
         "description": "fixture",
-        "verbs": [{ "name": "noop", "keystrokes": { "": "cmd+s" } }]
+        "action_bindings": { "app_save": { "": "cmd+s" } }
       }
       """
     let fixture = try PluginFixtureKit.make(

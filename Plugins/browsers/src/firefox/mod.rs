@@ -247,7 +247,7 @@ pub async fn restore(ctx: &Context, route: &TabRoute) -> PerformResponse {
 /// another window, and a press that does not stick is an error, so the host
 /// never falls back to a ⌘<digit> that could switch the wrong tab. Every
 /// other action is `unhandled`: Firefox's own chords (manifest
-/// `action_keystrokes`, the core's ⌘W) create, close and move tabs.
+/// `action_bindings`, `defaults`' ⌘W) create, close and move tabs.
 pub async fn perform_action(ctx: &Context, pid: i64, action: &ActionRequest) -> PerformResponse {
     if action.name != "tab_select" {
         return PerformResponse::unhandled();

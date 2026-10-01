@@ -1384,6 +1384,14 @@ extension URLCommand {
     case .saveAndQuit(let force):
       return force ? verb("app_save_and_quit", [flag("force")]) : verb("app_save_and_quit")
     case .tabNew: return verb("tab_new")
+    case .save: return verb("app_save")
+    case .print: return verb("app_print")
+    case .documentOpen: return verb("document_open")
+    case .windowNew: return verb("window_new")
+    case .windowClose: return verb("window_close")
+    case .clipboardCopy: return verb("clipboard_copy")
+    case .clipboardCut: return verb("clipboard_cut")
+    case .clipboardPaste: return verb("clipboard_paste")
     case .showAlert(let alert): return verb("alert_show", alert.argTokens)
     case .dismissAlert: return verb("alert_dismiss")
     case .showUsage(let topic):

@@ -1368,36 +1368,9 @@ extension AppDelegate {
 
   private func performCommandLineCommand(_ command: NormalModeDispatcher.CommandLineCommand) {
     switch command {
-    case .quit(let force):
-      performMappedCommand(.quitApp(force: force))
-    case .save:
-      handleURLCommand(.pluginVerb(name: "app_save", args: [:]))
-    case .saveAndQuit(let force):
-      performMappedCommand(.saveAndQuit(force: force))
-    case .print:
-      handleURLCommand(.pluginVerb(name: "app_print", args: [:]))
-    case .open:
-      handleURLCommand(.pluginVerb(name: "document_open", args: [:]))
-    case .newWindow:
-      handleURLCommand(.pluginVerb(name: "window_new", args: [:]))
-    case .newTab:
-      performMappedCommand(.tabNew)
-    case .close:
-      performMappedCommand(.tabClose)
-    case .closeWindow:
-      closeFocusedWindowInNormalMode()
-    case .find:
-      performMappedCommand(.find)
-    case .undo:
-      performMappedCommand(.undo)
-    case .redo:
-      performMappedCommand(.redo)
-    case .copy:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
-    case .cut:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_X), flags: .maskCommand)
-    case .paste:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
+    case .quit, .save, .saveAndQuit, .print, .open, .newWindow, .newTab, .close, .closeWindow,
+      .find, .undo, .redo, .copy, .cut, .paste:
+      if let verb = NormalModeDispatcher.verb(for: command) { performMappedCommand(verb) }
     case .plugins(let sub):
       runPluginsSubcommand(sub)
     case .mappings:

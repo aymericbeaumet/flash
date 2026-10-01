@@ -178,6 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
   let registers = RegisterStore()
+  /// Presses the menu items `action_bindings` name (`{"menu": [...]}`).
+  var menuPathPresser: MenuPathPresser = AXMenuPathPresser()
   let finder = CandidateFinderSession()
   /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
   /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
@@ -570,7 +572,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .paneNext, .panePrev, .paneSplitVertical, .paneSplitHorizontal, .paneClose,
       .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
-      .quitApp, .saveAndQuit, .tabNew,
+      .quitApp, .saveAndQuit, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
+      .clipboardCopy, .clipboardCut, .clipboardPaste,
       .sendKey, .sendKeys:
       performMappedCommand(cmd)
     case .showAlert(let alert):
@@ -632,14 +635,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // `core:focus.changed` etc. carry the focused-app pid/bundle id, but
       // verb dispatch is opportunistic and the verb may fire while normal
       // mode has retained a target across a focus blip — prefer that
-      // target when present so e.g. `app_save` saves the file the user
-      // was last looking at, not the app Flash happens to overlay.
+      // target when present so the verb acts on the app the user was last
+      // looking at, not the app Flash happens to overlay.
       let target = normalModeContext() ?? currentNonFlashContext()
       let dispatched = pluginManager.invokeVerb(
         name: name,
         args: args,
-        in: pluginSelectorContext(for: target),
-        focusedPID: target?.processID
+        in: pluginSelectorContext(for: target)
       ) { [weak self] ok, pid, stdout, navigationURL in
         guard ok else {
           self?.warnCommandFailure(cmd.diagnosticDescription)

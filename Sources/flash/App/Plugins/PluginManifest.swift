@@ -304,38 +304,30 @@ struct PluginBangs: Decodable, Equatable {
 }
 
 /// One verb a plugin registers. `name` is the verb users type in mappings or
-/// pass to `flash <name> [k=v]...`. When `keystrokes` is populated, the host
-/// short-circuits the round-trip and synthesizes the per-bundle keystroke
-/// directly — keeps `app_save`-class verbs latency-flat. Otherwise the host
-/// dispatches `perform {kind: "command"}` with the configured `subcommand`
-/// (defaulting to `name`).
+/// pass to `flash <name> [k=v]...`; the host dispatches
+/// `perform {kind: "command"}` with the configured `subcommand` (defaulting
+/// to `name`). What an app does for one of Flash's own actions belongs in
+/// `action_bindings`, never in a verb.
 struct PluginVerbRegistration: Decodable, Equatable {
   var name: String
   var command: String
   var subcommand: String
   var description: String
-  /// Per-bundle keystroke table consumed before any RPC dispatch. Map entries
-  /// use bundle id → "cmd+s"-style hotkey. The empty string key (`""`) is the
-  /// default applied when no bundle-specific entry matches; missing entirely
-  /// means "no fallback, fall through to RPC".
-  var keystrokes: [String: String]
 
   init(
     name: String,
     command: String = "",
     subcommand: String = "",
-    description: String = "",
-    keystrokes: [String: String] = [:]
+    description: String = ""
   ) {
     self.name = name
     self.command = command
     self.subcommand = subcommand
     self.description = description
-    self.keystrokes = keystrokes
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case name, command, subcommand, description, keystrokes
+    case name, command, subcommand, description
   }
 
   init(from decoder: Decoder) throws {
@@ -344,8 +336,6 @@ struct PluginVerbRegistration: Decodable, Equatable {
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.subcommand = try c.decodeIfPresent(String.self, forKey: .subcommand) ?? ""
     self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
-    self.keystrokes =
-      try c.decodeIfPresent([String: String].self, forKey: .keystrokes) ?? [:]
   }
 }
 
@@ -356,23 +346,6 @@ struct PluginVerbRegistration: Decodable, Equatable {
 /// mapping at the same declared priority. `command` is an argv array
 /// matching the mapping syntax: `["flash", "<verb>", "k=v" ...]` for
 /// in-process verbs, anything else for argv exec.
-/// One `action_keystrokes` value: the chord an app binds for a built-in
-/// action, or `unbound` (`""`) when the app has none, so the host sends
-/// nothing there instead of its own convention.
-enum ActionKeystroke: Hashable {
-  case chord(ParsedHotkey)
-  case unbound
-
-  init?(manifestValue value: String) {
-    if value.isEmpty {
-      self = .unbound
-      return
-    }
-    guard let chord = HotkeySyntax.parse(hotkey: value) else { return nil }
-    self = .chord(chord)
-  }
-}
-
 struct PluginMappingRegistration: Decodable, Hashable {
   var key: String
   var mode: String
@@ -603,12 +576,12 @@ struct PluginManifest: Decodable, Equatable {
   /// `perform {kind: "navigate"}`.
   var navigation: [String]
   var verbs: [PluginVerbRegistration]
-  /// Chords for built-in actions, per app: action name → bundle id (`""` for
-  /// every app the plugin's selector matches) → chord, or `""` for an app
-  /// that has no shortcut for the action. The host sends the chord when no
-  /// source performs the action in that app, so an app's own shortcuts live
-  /// in the plugin that knows the app, never in the host.
-  var actionKeystrokes: [SourceActionName: [String: String]]
+  /// What each app does for Flash's actions: action name → bundle id (`""`
+  /// for every app the plugin's selector matches) → binding. The host
+  /// dispatches the binding when no source performs the action in that app,
+  /// so app knowledge lives in the plugin that knows the app, never in the
+  /// host.
+  var actionBindings: [SourceActionName: [String: ActionBindingSpec]]
   /// Bundle ids of apps this plugin declares as terminal emulators; the
   /// union across plugins is `TerminalEmulators`.
   var terminalEmulators: [String]
@@ -728,7 +701,7 @@ struct PluginManifest: Decodable, Equatable {
     case actions
     case sources
     case navigation, verbs
-    case actionKeystrokes = "action_keystrokes"
+    case actionBindings = "action_bindings"
     case terminalEmulators = "terminal_emulators"
     case onDemandHints = "on_demand_hints"
   }
@@ -747,7 +720,7 @@ struct PluginManifest: Decodable, Equatable {
     bangsBlock: PluginBangs? = nil,
     navigation: [String] = [],
     verbs: [PluginVerbRegistration] = [],
-    actionKeystrokes: [SourceActionName: [String: String]] = [:],
+    actionBindings: [SourceActionName: [String: ActionBindingSpec]] = [:],
     terminalEmulators: [String] = [],
     onDemandHints: [String] = [],
     priority: Int = 25,
@@ -774,7 +747,7 @@ struct PluginManifest: Decodable, Equatable {
     self.bangsBlock = bangsBlock
     self.navigation = navigation
     self.verbs = verbs
-    self.actionKeystrokes = actionKeystrokes
+    self.actionBindings = actionBindings
     self.terminalEmulators = Self.uniqueTrimmed(terminalEmulators)
     self.onDemandHints = Self.uniqueTrimmed(onDemandHints)
     self.priority = priority
@@ -807,12 +780,13 @@ struct PluginManifest: Decodable, Equatable {
     self.bangsBlock = try c.decodeIfPresent(PluginBangs.self, forKey: .bangs)
     self.navigation = try c.decodeIfPresent([String].self, forKey: .navigation) ?? []
     self.verbs = try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .verbs) ?? []
-    let keystrokes =
-      try c.decodeIfPresent([String: [String: String]].self, forKey: .actionKeystrokes) ?? [:]
-    self.actionKeystrokes = try keystrokes.reduce(into: [:]) { table, entry in
+    let bindings =
+      try c.decodeIfPresent(
+        [String: [String: ActionBindingSpec]].self, forKey: .actionBindings) ?? [:]
+    self.actionBindings = try bindings.reduce(into: [:]) { table, entry in
       guard let name = SourceActionName(rawValue: entry.key) else {
         throw PluginError.failure(
-          "manifest.json action_keystrokes names an unknown action: \(entry.key)")
+          "manifest.json action_bindings names an unknown action: \(entry.key)")
       }
       table[name] = entry.value
     }
@@ -997,11 +971,12 @@ struct PluginManifest: Decodable, Equatable {
     for action in actions where SourceAction.byWireName[action] == nil {
       throw PluginError.failure("manifest.json actions names an unknown action: \(action)")
     }
-    for (name, chords) in actionKeystrokes {
-      for (bundle, chord) in chords where ActionKeystroke(manifestValue: chord) == nil {
-        throw PluginError.failure(
-          "manifest.json action_keystrokes \(name.rawValue) for \"\(bundle)\" is not a chord: "
-            + chord)
+    for (name, bindings) in actionBindings {
+      for (bundle, binding) in bindings {
+        if let error = binding.validationError(for: name) {
+          throw PluginError.failure(
+            "manifest.json action_bindings \(name.rawValue) for \"\(bundle)\": \(error)")
+        }
       }
     }
     if let sandbox {
@@ -1020,15 +995,15 @@ struct PluginManifest: Decodable, Equatable {
     } else {
       // Manifest-only plugin: no child process ever runs, so any surface
       // that would need RPC into (or events delivered to) the plugin is
-      // invalid. Mappings, help topics, action keystrokes, app declarations
-      // (terminal emulators, on-demand hints), and verbs whose every dispatch
-      // resolves to a host-synthesized keystroke are the complete allowed
+      // invalid. Mappings, help topics, action bindings and app declarations
+      // (terminal emulators, on-demand hints) are the complete allowed
       // surface.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),
         ("hints", hints != nil),
         ("query", query != nil),
         ("commands", !commands.isEmpty),
+        ("verbs", !verbs.isEmpty),
         ("status", !status.isEmpty),
         ("bangs", bangsBlock != nil),
         ("navigation", !navigation.isEmpty),
@@ -1041,11 +1016,6 @@ struct PluginManifest: Decodable, Equatable {
       if let field = processBound.first(where: { $0.1 })?.0 {
         throw PluginError.failure(
           "manifest.json without exec cannot declare \(field) — it requires a plugin process")
-      }
-      for verb in verbs where (verb.keystrokes[""] ?? "").trimmed.isEmpty {
-        throw PluginError.failure(
-          "manifest.json without exec requires verb \(verb.name) to declare a default"
-            + " keystroke")
       }
     }
     let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
@@ -1063,6 +1033,11 @@ struct PluginManifest: Decodable, Equatable {
       // verb of the same name could never be reached.
       if let reason = FlashQuery.reservationMessage(verb.name) {
         throw PluginError.failure("plugin verb \(verb.name) is reserved: \(reason)")
+      }
+      if URLEventHandler.isBuiltInVerb(verb.name.lowercased()) {
+        throw PluginError.failure(
+          "plugin verb \(verb.name) is one of Flash's own verbs; bind what an app does "
+            + "for it in action_bindings")
       }
     }
     for command in commands {

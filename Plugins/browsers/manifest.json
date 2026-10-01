@@ -100,7 +100,7 @@
     "tab_move_previous",
     "tab_move_next"
   ],
-  "action_keystrokes": {
+  "action_bindings": {
     "tab_next": {
       "": "cmd+shift+]"
     },

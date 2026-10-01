@@ -19,7 +19,7 @@ pub struct Dialect {
     select_nth: &'static str,
     /// Whether scripting can reorder tabs. Chromium's `move` recreates the
     /// moved tab as a blank one, so its moves use the native
-    /// ctrl+shift+pageup/pagedown chords instead (`action_keystrokes`).
+    /// ctrl+shift+pageup/pagedown chords instead (`action_bindings`).
     scripts_tab_moves: bool,
 }
 

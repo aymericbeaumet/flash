@@ -2,7 +2,7 @@
   "id": "terminals",
   "name": "Terminals",
   "version": "0.1.0",
-  "description": "Declares the terminal emulators Flash applies its terminal rules to, and the shortcuts they bind for built-in pane actions where no tmux client hosts the focused terminal.",
+  "description": "Declares the terminal emulators Flash applies its terminal rules to, the split shortcuts they bind for pane actions where no tmux client hosts the focused terminal, and that they have no back/forward history.",
   "terminal_emulators": [
     "org.alacritty",
     "io.alacritty",
@@ -15,7 +15,7 @@
     "co.zeit.hyperterm",
     "co.zeit.hyper"
   ],
-  "action_keystrokes": {
+  "action_bindings": {
     "pane_next": {
       "com.mitchellh.ghostty": "cmd+]",
       "com.googlecode.iterm2": "cmd+]"
@@ -25,28 +25,28 @@
       "com.googlecode.iterm2": "cmd+["
     },
     "history_back": {
-      "org.alacritty": "",
-      "io.alacritty": "",
-      "com.apple.Terminal": "",
-      "com.mitchellh.ghostty": "",
-      "com.googlecode.iterm2": "",
-      "net.kovidgoyal.kitty": "",
-      "com.github.wez.wezterm": "",
-      "dev.warp.Warp-Stable": "",
-      "co.zeit.hyperterm": "",
-      "co.zeit.hyper": ""
+      "org.alacritty": false,
+      "io.alacritty": false,
+      "com.apple.Terminal": false,
+      "com.mitchellh.ghostty": false,
+      "com.googlecode.iterm2": false,
+      "net.kovidgoyal.kitty": false,
+      "com.github.wez.wezterm": false,
+      "dev.warp.Warp-Stable": false,
+      "co.zeit.hyperterm": false,
+      "co.zeit.hyper": false
     },
     "history_forward": {
-      "org.alacritty": "",
-      "io.alacritty": "",
-      "com.apple.Terminal": "",
-      "com.mitchellh.ghostty": "",
-      "com.googlecode.iterm2": "",
-      "net.kovidgoyal.kitty": "",
-      "com.github.wez.wezterm": "",
-      "dev.warp.Warp-Stable": "",
-      "co.zeit.hyperterm": "",
-      "co.zeit.hyper": ""
+      "org.alacritty": false,
+      "io.alacritty": false,
+      "com.apple.Terminal": false,
+      "com.mitchellh.ghostty": false,
+      "com.googlecode.iterm2": false,
+      "net.kovidgoyal.kitty": false,
+      "com.github.wez.wezterm": false,
+      "dev.warp.Warp-Stable": false,
+      "co.zeit.hyperterm": false,
+      "co.zeit.hyper": false
     }
   },
   "help": {
