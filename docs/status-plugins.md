@@ -51,12 +51,11 @@ read kernel counters through the SDK's `flash_plugin::sys` module (the unsafe
 FFI lives in the SDK, never in a plugin) instead of forking a CLI per sample;
 `disks` runs `ioreg` every three seconds, reducing its scheduled subprocesses
 by two-thirds compared with one-second polling; `cpu` uses it only for GPU
-metadata and caches the logical CPU count. CPU is the only
-fixed-period loop: it subtracts the sample duration before sleeping, and its
-first sample brackets one period so the initial publish carries a real figure.
-The other monitors use the SDK interval primitive, whose delay begins after the
-awaited callback completes, so their cadence is nominal rather than a wall-
-clock guarantee.
+metadata and caches the logical CPU count. Every monitor samples on a host
+cadence (`ctx.interval`), and a tick that lands while the previous sample still
+runs is skipped rather than queued. CPU's first sample brackets one period —
+a host deadline it awaits (`ctx.wait`), not a sleep — so the initial publish
+carries a real figure.
 
 The monitors are status-bound, so the host runs them only while a surface shows
 one of their segments — except once a command such as `:cpu` has started one,
@@ -92,12 +91,48 @@ See [popups](popups.md) for the presentation boundary.
 Keep the ownership boundaries intact:
 
 - Register sampling cadences with the host (`ctx.interval`) instead of arming a
-  timer: one clock drives every monitor, so their wake-ups coalesce.
+  timer, at the priority the [scheduling](#scheduling) table gives: one clock drives every
+  monitor, so their wake-ups coalesce.
 - `system` owns destructive and session-level system actions, not telemetry.
 - `caffeinate` alone owns sleep-assertion lifecycle.
 - Core owns date/time rendering; `answers` provides timezone lookup.
 - Weather remains separate because it requires an explicit network/location
   policy.
+
+## Scheduling
+
+No plugin arms a timer or sleeps to schedule work. Every cadence, deadline and
+wait is registered with the host clock at an explicit priority (see
+[runtime ownership](architecture.md)): `high` for a value on screen that the
+user watches change, `normal` for ordinary sampling and settles, `low` for
+remote pulls, retries and backoffs. Cadences behind a segment register only
+while a surface shows it.
+
+| Plugin · registration | Cadence or deadline | Priority | Why |
+| --- | --- | --- | --- |
+| `cpu` · CPU sample | 1 s while observed | high | A one-second figure ticks visibly |
+| `cpu` · first-sample bracket | One 1 s wait per process | high | The first figure on screen waits on it |
+| `cpu` · GPU sample | 15 s while observed | normal | Nobody watches it tick |
+| `memory` · sample | 1 s while observed | high | A one-second figure ticks visibly |
+| `network` · traffic | 1 s while a traffic segment is shown | high | One-second rates tick visibly |
+| `disks` · I/O activity | 3 s while observed | normal | A tenth of a second is invisible at three seconds |
+| `processes` · top tables | 2 s while `top_cpu`/`top_mem` is shown | high | A table someone has open |
+| `processes` · focused app | 10 s while `focused_app_details` is shown | normal | A tenth of a second is invisible at ten seconds |
+| `processes` · focus settle | 300 ms after a focus change | high | The placeholder on screen waits on it |
+| `tmux` · inventory settle | 100 ms quiet, 1 s at most, after a control-mode change | high | It redraws the session and window segments |
+| `tmux` · window-title settle | 300 ms quiet, 10 s at most | normal | Catalog only |
+| `tmux` · socket retry | 5, 15, 60 s backoff | low | A retry nobody waits on |
+| `tmux` · observer reattach | 1, 5, 15, 60 s backoff | low | A retry nobody waits on |
+| `tmux` · remote hosts | 5 s, retried 15–60 s | low | A remote pull over SSH |
+| `aiproviders` · usage | 60 s while observed | low | A remote pull |
+| `aiproviders` · autosend | 2.5 s after opening a prompt | normal | The page needs a beat to load |
+| `answers` · ECB rates | 6 h, retried every 15 min | low | A remote pull |
+| `feed` · articles | `refresh_interval` (300 s default) | low | A remote pull |
+| `browsers`, `kitty`, `windows` · settles | 300 ms–1 s windows, AX bursts up to 10 s | normal | Catalogs nobody watches refresh |
+| `browsers` · Firefox tab selection beats | 120–250 ms inside one selection | high | The user waits on the switch |
+
+`caffeinate` registers nothing: a timed assertion is bounded by
+`caffeinate -t` itself and ends on the process's exit event.
 
 ## Raw numeric segments
 

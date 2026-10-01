@@ -134,14 +134,19 @@ Surface requests that would violate these constraints before implementing them.
 - Polling is a last resort and goes through `PollScheduler`, the one clock in
   the process; never arm a `DispatchSourceTimer`, a `tokio` sleep loop, or a
   `Timer` for a recurring job in core or plugin code. Use `register` for a fixed
-  cadence and `scheduleOnce` when the next wake-up is an irregular deadline.
-  Plugins register over the wire with `poll` (the Rust SDK's `ctx.interval`) and
-  are ticked with `core:poll:<name>`. Pick the priority that matches how visible
-  lateness is — slack is what lets wake-ups coalesce — and scope every
+  cadence and `scheduleOnce` (or `PollDeadline`) when the next wake-up is an
+  irregular or re-arming deadline — debounces, retries and backoffs included.
+  Plugins register over the wire with `poll` (the Rust SDK's `ctx.interval`,
+  `ctx.after`, `ctx.wait` and `Settle`) and are ticked with `core:poll:<name>`;
+  they never sleep to schedule work. Every registration names its priority —
+  `system` (core input-adjacent probes only), `high`, `normal`, `low` — matching
+  how visible lateness is: slack is what lets wake-ups coalesce. Scope every
   registration to when it can observe anything (a subscriber present, the
   pointer in the band, a browser listening), saying so where it is armed.
   Polls pause while displays sleep or the session is locked; the scheduler
   owns that gate and resumes with one catch-up tick, so clients never check it.
+  The guardrail script enforces both sides; see `docs/architecture.md` for the
+  one-shots that may stay plain `asyncAfter`.
 - Keep native controls outside the custom layer-hosting drawing view. AppKit owns
   their backing layers; transient recycling may replace only Flash's subtree.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,

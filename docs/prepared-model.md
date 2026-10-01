@@ -32,8 +32,12 @@ coalesces with the process's other wake-ups and is held while the displays
 sleep or the session is locked. Only the frontmost app's model is stored, so
 one registration serves, and a cancelled maintenance releases it. Its
 `.normal` priority allows 100 ms of slack, inside the 250-ms lead, so a late
-wake still starts before the ceiling. Debounce and readiness wakes stay
-bounded one-shots on the main queue. The lead allows eligible
+wake still starts before the ceiling. Debounce and readiness wakes re-arm
+themselves too — later events extend a debounce, each readiness step arms the
+next — so they ride the same clock at `.normal`, one registration per app and
+kind (`core:prepared_model_refresh:<pid>`, `core:prepared_model_readiness:<pid>`)
+that cancelling the app's refresh work releases; an activation that arrives
+first walks on demand rather than waiting on them. The lead allows eligible
 cheap walks to finish before the current model expires. A newer completed
 model replaces the prior maintenance ticket even when its dirty token and
 configuration revision are unchanged.
@@ -69,8 +73,9 @@ reads, is ready. The probe runs on the AX queue (Gecko inside
 `GeckoAccessibility.withTree`) and never decides the hints; it only decides
 when the one walk that follows is worth doing. Waits between probes follow
 `ReadinessLadder`: 50, 100, 200, 400 ms, then a final 750 ms after which the
-walk runs regardless, 1.5 s at most. Every wait is an `asyncAfter` re-dispatch; nothing sleeps on
-the main thread or the AX queue.
+walk runs regardless, 1.5 s at most. Every wait is a deadline on the shared
+`PollScheduler` (`.system` while an activation waits on it, `.normal` for a
+background ladder); nothing sleeps on the main thread or the AX queue.
 
 - **Focus.** A focus change wakes a Chromium or Flutter app at once, then,
   for any runtime above, replaces the focus walk with a readiness ladder whose

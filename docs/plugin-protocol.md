@@ -355,19 +355,31 @@ Notifications:
   lines are dropped, no lines clears, and a malformed object is rejected whole
   with a content-free warning. Undeclared names are ignored. Segments are live
   state: cleared on any teardown (unlike catalogs).
-- `poll` — `{"intervals": {"<name>": <seconds>}}`, the plugin's complete set of
-  cadences it wants the host to drive; an empty set stops its polling. Plugins
-  must not arm their own timers. The host folds every registration in the app
-  onto one clock (see the architecture guide) and delivers
-  `event {"name": "core:poll:<name>"}` when one is due, bypassing manifest
-  `listen` because the registration *is* the subscription. Names are
-  `[a-z0-9_-]`, the floor is 0.05 s, and a malformed frame is rejected whole.
-  Ticks are one-way and unacknowledged, so a plugin whose previous callback is
-  still running drops the ticks it missed rather than running back-to-back to
-  catch up. No tick is delivered while the displays sleep, the session is
-  locked or switched out, or the system is going to sleep; when that ends, a
-  cadence that fell due meanwhile ticks once. Reach for a cadence only when no
-  event can tell you the value changed.
+- `poll` — `{"registrations": {"<name>": {"every": <seconds>, "priority": <p>}
+  | {"after": <seconds>, "priority": <p>}}}`, the plugin's complete set of
+  cadences (`every`) and one-shot deadlines (`after`, measured from receipt)
+  it wants the host to drive; an empty set stops its polling. Plugins must not
+  arm their own timers or sleep to schedule work. The host folds every
+  registration in the app onto one clock (see the architecture guide) and
+  delivers `event {"name": "core:poll:<name>"}` when one is due, bypassing
+  manifest `listen` because the registration *is* the subscription. A
+  deadline fires once and leaves the host's clock; repeating it unchanged in a
+  later set neither re-arms nor re-fires it, while a new or changed entry arms
+  afresh, so give each arming its own name (the Rust SDK does). `priority` is
+  how late a wake-up may land, the slack that lets unrelated wake-ups
+  coalesce: `high` (25 ms) for a value on screen that the user watches change,
+  `normal` (100 ms) for ordinary sampling, settles and refreshes, `low` (1 s)
+  for background upkeep, remote pulls, retries and backoffs; the host's
+  `system` priority is core-only. Names are `[a-z0-9_-]{1,64}`; `every` is
+  floored at 0.05 s, both are capped at 86400 s, and a set holds at most 64
+  registrations (`protocol.json` `poll`). A malformed or over-bound frame is
+  rejected whole and the previous set keeps running. Ticks are one-way and
+  unacknowledged, so a plugin whose previous callback is still running drops
+  the ticks it missed rather than running back-to-back to catch up. No tick is
+  delivered while the displays sleep, the session is locked or switched out,
+  or the system is going to sleep; when that ends, a registration that fell
+  due meanwhile ticks once. Every registration ends with the plugin process.
+  Reach for a cadence only when no event can tell you the value changed.
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
   elapsed ms, method names — never query text, candidate data, clipboard
   content, config values, or event payloads).

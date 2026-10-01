@@ -254,15 +254,18 @@ An idle resident reacts to events; what remains periodic is ahead-of-time
 work whose source has no change notification, and all of it rides the one
 `PollScheduler` clock (see [runtime ownership](architecture.md)):
 
-| Wake-up | When it exists | Cadence |
-| --- | --- | --- |
-| Status time | A visible surface shows time | The next boundary of the finest unit shown: second, minute or day |
-| Status jobs and named sources | A visible surface reads them | Their configured `interval` |
-| Plugin cadences (`poll`) | A plugin registered one | The plugin's period |
-| Clipboard watcher | A plugin subscribes to `core:clipboard.changed` | 0.5 s (no pasteboard notification exists) |
-| Menu-bar reveal probe | The pointer is in the top band | 80 ms, `system` priority (no reveal notification exists) |
-| Plugin liveness sweep | A plugin runs | 30 s, `low` priority; pings only a plugin silent for 60 s |
-| Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input |
+| Wake-up | When it exists | Cadence | Priority |
+| --- | --- | --- | --- |
+| Status time and carousel rotations | A visible surface shows time or a carousel | The next boundary of the finest unit shown: second, minute or day; each rotation | high |
+| Status jobs and named sources | A visible surface reads them | Their configured `interval` | normal (high when a clock tick falls inside its slack) |
+| Plugin cadences and deadlines (`poll`) | A plugin registered one | The plugin's period or deadline | The plugin's: high, normal or low ([table](status-plugins.md#scheduling)) |
+| Clipboard watcher | A plugin subscribes to `core:clipboard.changed` | 0.5 s (no pasteboard notification exists) | normal |
+| Menu-bar reveal probe | The pointer is in the top band | 80 ms (no reveal notification exists) | system |
+| Plugin liveness sweep | A plugin runs | 30 s; pings only a plugin silent for 60 s | low |
+| Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input | normal |
+| Prepared-model debounce and readiness | AX events or a focus change since the last walk | 80 ms after the last event; 50–750 ms readiness steps | normal |
+| Restart backoffs | A plugin crashed, or a persistent popup's program exited | Plugin 1–30 s; popup 0.1 s, then 1–30 s | low (a popup's first step high) |
+| Event debounces and coalescers | A config, plugin-file, application-directory, network or volume change | 100–500 ms after it | normal |
 
 Bundled plugins register cadences only for values no event reports, and only
 while something can see them: `cpu`, `memory`, `disks`, `processes` and
@@ -276,6 +279,10 @@ terminal catalogs the `core:ax.changed` notifications that can change them;
 none of those polls. The [HTTP inspector](observability.md#http-inspector)
 has no cadence either: its state is pushed on the changes it shows.
 
+Priority is the slack a wake-up tolerates: 5 ms (`system`), 25 ms (`high`),
+100 ms (`normal`) or 1 s (`low`). The looser it is, the more often the kernel
+folds it into an interrupt it was already taking, so idle cost falls with it;
+a wake-up shared by several registrations takes the tightest of their slacks.
 Every one of them is held while the displays sleep, the session is locked or
 switched out, or the system sleeps, and resumes with one catch-up tick.
 Waiting for a child process ends on its kernel exit event, never a sleep loop,

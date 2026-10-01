@@ -82,16 +82,21 @@ Handed to every handler; cheap to clone. Key surface:
   notifications that can change what you read (`AXTitleChanged`,
   `AXWindowCreated`, …) and never a keystroke's `AXValueChanged`. A
   `static Settle<K>` coalesces a burst of such events into one refresh:
-  `schedule(key, refresh)` runs `refresh` with every key the burst named
-  (the apps whose windows changed) once it has been quiet for its settle
-  period, or at its ceiling when it never is, and costs nothing between
-  bursts (the windows, kitty, browsers and tmux plugins).
+  `Settle::new(settle, max_wait, priority)` and `schedule(&ctx, key,
+  refresh)` run `refresh` with every key the burst named (the apps whose
+  windows changed) once it has been quiet for its settle period, or at its
+  ceiling when it never is. The wait is one host deadline at `priority`,
+  re-armed for the remainder when later events extended the burst, and it
+  costs nothing between bursts (the windows, kitty, browsers and tmux
+  plugins). With `settle == max_wait` it is a plain window: the first event
+  opens it and the rest join one refresh.
   `core:status.observed` carries
   `Event::segments`: the complete set of this plugin's status segments a
   surface shows, possibly empty (the protocol's
   [status observation](plugin-protocol.md#status-observation)). Listen for it
   to scope work that only feeds a segment to the time it is shown:
-  `ObservedCadences` registers `interval`s that tick only while a segment is
+  `ObservedCadences::interval(&ctx, period, priority, tick)` registers
+  cadences that tick only while a segment is
   observed — `observe(segments)` cancels or re-arms them and returns true
   when they were just re-armed, so you sample at once; `observed()` tells a
   command to sample first, since nothing sampled meanwhile (the cpu, memory,
@@ -141,18 +146,33 @@ Handed to every handler; cheap to clone. Key surface:
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.
-- Cadences: `ctx.interval(period, callback)` does **not** start a timer in the
-  plugin. It registers `period` with the host, which drives every poller in
-  Flash — core watchers included — from one clock, and ticks the callback when
-  the registration is due. The returned `PollHandle` can `set_period` (a retry
-  backoff, an idle backend) or `cancel`; dropping it leaves the cadence
-  running. A cancelled handle re-arms with `set_period`, so keep one handle to
-  toggle a cadence with observation instead of registering a new one each
-  time: the processes plugin arms its top-N sample when `core:status.observed`
-  first lists `top_cpu` or `top_mem`, cancels it when neither is listed, and
-  clears the table nobody shows. A callback that overruns its period simply
-  misses ticks, and no tick arrives while the displays sleep or the session is
-  locked (one catch-up tick follows). Prefer `on_event`: the host exposes an event for every source
+- Host clock: a plugin never arms a timer or sleeps to schedule work.
+  `ctx.interval(period, priority, callback)` registers a cadence with the
+  host, which drives every poller in Flash — core watchers included — from one
+  clock, and runs the callback when it is due; `ctx.after(delay, priority,
+  callback)` registers a one-shot deadline (a debounce, a backoff, an expiry)
+  and returns a `Deadline` you can `cancel`; `ctx.wait(delay, priority).await`
+  is the awaitable form, for a wait inside one piece of work (a retry
+  backoff in a loop, a measurement window, a beat for another app to react),
+  and dropping it releases its deadline. Every registration republishes the
+  plugin's whole `poll` set. `PollPriority` is how late the host may deliver:
+  `High` (25 ms) for a value on screen that the user watches change, `Normal`
+  (100 ms) for ordinary sampling, settles and refreshes, `Low` (1 s) for
+  remote pulls, retries and backoffs; pick the loosest one nobody would
+  notice, since slack is what lets wake-ups coalesce. A period outside the
+  protocol bounds (a cadence under 50 ms, anything over a day, a 65th
+  registration) is refused with a warning before it reaches the host. The
+  `PollHandle` an `interval` returns can `set_period` (a retry backoff, an
+  idle backend) or `cancel`; dropping it leaves the cadence running. A
+  cancelled handle re-arms with `set_period`, so keep one handle to toggle a
+  cadence with observation instead of registering a new one each time: the
+  processes plugin arms its top-N sample when `core:status.observed` first
+  lists `top_cpu` or `top_mem`, cancels it when neither is listed, and clears
+  the table nobody shows. A callback that overruns its period simply misses
+  ticks, and no tick arrives while the displays sleep or the session is
+  locked (one catch-up tick follows). Tests play the host with
+  `Harness::drain_poll_registrations` and `Harness::deliver_poll_tick`.
+  Prefer `on_event`: the host exposes an event for every source
   it can observe (`flash_plugin::host_events` names them all; for example
   `NETWORK_CHANGED` for interface, address and route changes and
   `VOLUMES_CHANGED` for mounts), and a cadence is the answer only when nothing
@@ -172,8 +192,8 @@ Handed to every handler; cheap to clone. Key surface:
   subprocesses and host calls it awaits, and the request answers `deadline
   exceeded`. Bound inner waits below that budget to answer partially instead
   (the vscode plugin gives `host.ax_snapshot` a `deadline_ms`).
-- Timers: `interval(period, cb)` — non-overlapping ticks; plugins may also
-  `tokio::spawn` freely.
+- Timers: none of your own — `interval`, `after` and `wait` above, all on
+  the host clock; plugins may `tokio::spawn` freely.
 
 ## Async rules (enforced)
 
@@ -186,7 +206,11 @@ progress without multiplying resident worker threads across every plugin
 process. One blocking syscall stalls every in-flight operation. Blocking I/O is banned
 outright by each crate's
 `clippy.toml` (`std::fs::*`, `std::process::Command`) with no `#[allow]`
-escape: use `tokio::fs`, `tokio::process`, `tokio::time`. The SDK builds the
+escape: use `tokio::fs`, `tokio::process`, and `tokio::time::timeout` to
+bound one awaited operation. Scheduling is the host's: `tokio::time::sleep`,
+`sleep_until` and `interval` are rejected by `Scripts/check-guardrails.sh`
+outside test code, along with any `interval`/`after`/`wait`/`Settle::new`
+call that does not name its `PollPriority`. The SDK builds the
 runtime in `run()` — never build your own. Do async startup work in
 `on_start` (it runs after the initialize reply, so nothing you do there can
 slow the handshake); resolve lazily with `tokio::sync::OnceCell` when

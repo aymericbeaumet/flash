@@ -98,13 +98,34 @@ plugins register there instead of arming their own, so twenty pollers cost one
 wake-up rather than twenty; deadlines snap to a multiple of each interval so
 clients sharing a period also share a tick, a client whose previous run has not
 returned is skipped rather than queued, and the timer stops entirely when
-nothing is registered. A registration is either a fixed cadence or a one-shot
-deadline, which is how a client whose wake-ups are irregular still rides the
-shared clock: the status controller re-registers its next deadline — the
-earliest of the user's per-source intervals, cycle rotations, each status
-surface's clock and pending output — each time one lands, for the bar and
-desktop widgets alike. Plugins register over the wire with `poll` and are ticked with a
+nothing is registered. A registration is either a fixed cadence (`register`) or
+a one-shot deadline (`scheduleOnce`), which is how a client whose wake-ups are
+irregular still rides the shared clock: the status controller re-registers its
+next deadline — the earliest of the user's per-source intervals, cycle
+rotations, each status surface's clock and pending output — each time one
+lands, for the bar and desktop widgets alike. `PollDeadline` wraps one
+re-armable deadline for a queue-confined owner: a trailing debounce re-arms it
+per event, a backoff per attempt, and a fire already on its way is dropped once
+it is re-armed or cancelled. Plugins register over the wire with `poll` —
+cadences and deadlines, each at its own priority — and are ticked with a
 `core:poll:<name>` event.
+
+Everything that re-arms itself rides the clock: prepared-model debounce,
+readiness and maintenance wakes, the activation readiness ladder, the yank's
+pasteboard wait, AX observer registration retries, plugin and popup restart
+backoffs, the config, plugin-file, plugin-state, application-directory and
+ambient-location debounces, the network and volume change coalescers, the
+catalog notify throttle, the inspector's publish window and a covered widget's
+grace. A plain one-shot `asyncAfter` remains only where no clock is involved:
+a timeout bounding one operation (request and perform deadlines, the kill
+escalation of a stopped child, the first-paint budget, a focus hand-off), the
+fixed timing of an interaction in progress (synthesized key, scroll and click
+spacing, sequence and hover-dwell timeouts, recapture and caret re-arm turns,
+toast and click-feedback expiry, a popup's first frame, terminal frame pacing)
+and a bounded fan-out of settle passes after one event (screen-change
+recovery, window-border reconciliation, the Accessibility-grant re-check).
+`Scripts/check-guardrails.sh` rejects any other timer source, and blocking
+sleeps outside the three single operations it names.
 
 Nothing a poll produces can be seen while the displays sleep, the session is
 switched out, the login window (a locked screen) or screen saver is in front,
@@ -117,17 +138,42 @@ repeating ones return to their grid. The scheduler's clock counts time spent
 asleep (`CLOCK_MONOTONIC`), so a wake finds those deadlines overdue rather than
 each waiting out its interval again. Clients never check the gate themselves.
 
-Each registration carries a priority, which sets how much slack its wake-up
-allows: `system` for input-adjacent probes whose lateness is visible, `high`
-for surfaces on screen, `normal` for ordinary sampling, `low` for background
-upkeep. Generous slack is what lets the kernel slide a tick onto an interrupt
-it was already taking, and the tightest priority riding a wake-up sets it, so a
-lax client can never loosen a demanding one. Registrations are also scoped to
-when they can observe anything at all: the pasteboard watcher runs only while a
-plugin subscribes to `clipboard.changed`, and the menu-bar reveal probe only
-while the pointer is in the band. Main-thread stalls need no poll at all: the
-run loop reports each busy stretch itself, and the HTTP inspector pushes its
-state on the changes it shows.
+Each registration carries a priority — there is no default — which sets how
+much slack its wake-up allows: `system` (5 ms) for input-adjacent probes whose
+lateness is visible, `high` (25 ms) for a value on screen that the user
+watches change, `normal` (100 ms) for ordinary sampling, settles and
+refreshes, `low` (1 s) for background upkeep, remote pulls, retries and
+backoffs. Generous slack is what lets the kernel slide a tick onto an
+interrupt it was already taking, and the tightest priority riding a wake-up
+sets it, so a lax client can never loosen a demanding one. Plugins choose
+among `high`, `normal` and `low`; `system` is core-only.
+
+| Owner · registration | Cadence or deadline | Priority | Why |
+| --- | --- | --- | --- |
+| Status controller · `core:status_bar` | Next clock boundary or carousel rotation | high | The change on screen is the deadline |
+| Status controller · `core:status_bar` | Job or source re-run, placeholder, throttled publish | normal | Output lands when the command ends; tightened to high when a clock deadline falls inside its slack |
+| Menu-bar reveal probe · `core:menu_bar_reveal` | 80 ms while the pointer is in the band | system | Lowering the bar late hides the native menu |
+| Activation repair · `core:activation_repair:<n>` | Readiness ladder 50–750 ms, or one 150 ms retry | system | The user is waiting on the hints |
+| Yank · `core:pasteboard_wait:<n>` | 15 ms probes, at most 20 | system | The yank waits on each probe |
+| Popup restart · `core:popup_restart:<id>` | 0.1 s first step, then 1–30 s | high, then low | A quit popup is on screen; a crash loop is not |
+| Prepared model · `core:prepared_model_refresh:<pid>`, `…_readiness:<pid>` | 80 ms debounce; readiness ladder | normal | Warms a model ahead of an activation nobody asked for yet |
+| Prepared model · `core:prepared_model_maintenance` | Before the 1.5–30 s freshness ceiling | normal | Slack stays inside the 250 ms lead |
+| Clipboard watcher · `core:clipboard` | 0.5 s while a plugin subscribes | normal | No pasteboard notification; a late copy reaches history late |
+| AX observer retry · `core:ax_observer_retry:<pid>` | 60 ms–3 s ladder | normal | Events go unobserved until it lands |
+| Debounces · `core:config_reload`, `core:plugin_state_refresh`, `core:app_directories`, `core:ambient_location`, `core:plugin_reload:<id>:<n>` | 100–750 ms after the last event | normal | Someone is about to look, nobody is watching the instant |
+| Change coalescers · `core:network_changed`, `core:volumes_changed` | 500 ms window | normal | Plugins re-read what changed |
+| Catalog notify · `core:catalog_notify:<id>` | At most once a second | normal | An open flashlight re-reads the store on it |
+| Inspector publish · `core:inspector_publish:<id>` | 100 ms window while a stream is open | normal | A diagnostic page |
+| Plugin restart · `core:plugin_restart:<id>:<n>` | 1–30 s backoff | low | Catalogs survive a restart |
+| Liveness sweep · `core:plugin_liveness` | 30 s while a plugin runs | low | Background upkeep |
+| Covered widget · `core:widget_hidden:<name>` | 30 s grace | low | Nobody can see a covered widget |
+| Plugin cadences and deadlines · `plugin:<id>:<name>` | Plugin-chosen | Plugin-chosen: high, normal or low | See the [status plugins](status-plugins.md#scheduling) table |
+
+Registrations are also scoped to when they can observe anything at all: the
+pasteboard watcher runs only while a plugin subscribes to `clipboard.changed`,
+and the menu-bar reveal probe only while the pointer is in the band. Main-thread
+stalls need no poll at all: the run loop reports each busy stretch itself, and
+the HTTP inspector pushes its state on the changes it shows.
 
 Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's
@@ -142,8 +188,9 @@ runtime that builds it asynchronously (Chromium, Flutter, Gecko) climbs a
 readiness ladder instead: after 50, 100, 200 and 400 ms a bounded probe
 (`AccessibilityReadiness`: a web area with content, or more than a
 decorated window) decides whether the tree is there, and the one extra walk
-runs as soon as it is, or after a final 750 ms. The waits are `asyncAfter`
-re-dispatches, never sleeps, and the activation going away ends the climb.
+runs as soon as it is, or after a final 750 ms. The waits are `system`
+deadlines on the shared clock, never sleeps, and the activation going away
+ends the climb.
 When a volatile provider (tmux) declined and the app's own tree has never
 produced targets, the empty walk is the answer and is not repeated. Empty
 endings stay silent in the UI and are logged (`[latency] hints_empty`).
