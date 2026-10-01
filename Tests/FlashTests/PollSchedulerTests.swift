@@ -55,6 +55,22 @@ final class PollSchedulerTests: XCTestCase {
     XCTAssertEqual(plan.nextWakeupMs, 4_000)
   }
 
+  /// Arming reads the registrations as they stand: one already due — a
+  /// zero-delay deadline, or anything that fell due while the scheduler was
+  /// held — wakes the timer now instead of waiting for the next deadline.
+  func testTheTimerIsArmedForTheEarliestDeadlineEvenWhenItIsAlreadyDue() {
+    XCTAssertNil(PollScheduler.wakeup(clients: []))
+    let wakeup = PollScheduler.wakeup(clients: [
+      PollScheduler.ClientState(
+        id: "overdue", intervalMs: 1, nextAtMs: 900, busy: false, priority: .low, repeats: false),
+      PollScheduler.ClientState(
+        id: "probe", intervalMs: 80, nextAtMs: 900, busy: false, priority: .system),
+      client("later", every: 1000, at: 2_000),
+    ])
+    XCTAssertEqual(wakeup?.atMs, 900)
+    XCTAssertEqual(wakeup?.leewayMs, PollScheduler.Priority.system.leewayMs)
+  }
+
   func testNothingRegisteredMeansNoTimerAtAll() {
     let plan = PollScheduler.plan(nowMs: 1_000, clients: [])
     XCTAssertTrue(plan.fire.isEmpty)
@@ -208,18 +224,34 @@ final class PollSchedulerTests: XCTestCase {
     held.isInverted = true
     let resumed = expectation(description: "the catch-up tick fires after resuming")
     resumed.assertForOverFulfill = false
+    let caughtUp = expectation(description: "the overdue deadline fires once after resuming")
+    caughtUp.assertForOverFulfill = true
     var suspended = true
     scheduler.register("core:held", everyMs: 50, on: queue) {
       if suspended { held.fulfill() } else { resumed.fulfill() }
     }
     scheduler.scheduleOnce("core:held.once", afterMs: 60, on: queue) {
-      if suspended { held.fulfill() }
+      if suspended { held.fulfill() } else { caughtUp.fulfill() }
     }
     wait(for: [held], timeout: 0.4)
     queue.sync { suspended = false }
     scheduler.setSuspended(false, reason: .screens)
-    wait(for: [resumed], timeout: 5)
+    // Both overdue registrations run in the catch-up tick.
+    wait(for: [resumed, caughtUp], timeout: 5)
     scheduler.unregister("core:held")
+  }
+
+  /// A deadline that is already due when it is registered — a zero delay, or
+  /// an uptime deadline that passed while its arm was computed — fires at
+  /// once rather than never.
+  func testADeadlineAlreadyDueAtRegistrationFiresAtOnce() {
+    let scheduler = PollScheduler()
+    let queue = DispatchQueue(label: "poll.due.tests")
+    let fired = expectation(description: "a zero-delay deadline fires")
+    scheduler.scheduleOnce("core:due", afterMs: 0, priority: .normal, on: queue) {
+      fired.fulfill()
+    }
+    wait(for: [fired], timeout: 2)
   }
 
   func testTheSharedClockCountsTimeSpentAsleep() {

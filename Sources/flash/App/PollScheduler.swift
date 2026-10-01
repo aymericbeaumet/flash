@@ -169,6 +169,19 @@ final class PollScheduler {
     return plan
   }
 
+  /// When the timer must next fire, from the registrations as they stand:
+  /// the earliest deadline, even one already due — a zero-delay deadline, or
+  /// whatever fell due while the scheduler was held — at the tightest slack
+  /// among the clients sharing it. `plan` decides what a fire does; this
+  /// decides when it happens.
+  static func wakeup(clients: [ClientState]) -> (atMs: Int, leewayMs: Int)? {
+    guard let at = clients.map(\.nextAtMs).min() else { return nil }
+    let leeway =
+      clients.filter { $0.nextAtMs == at }.map(\.priority.leewayMs).min()
+      ?? Priority.normal.leewayMs
+    return (at, leeway)
+  }
+
   private struct Client {
     var state: ClientState
     var queue: DispatchQueue
@@ -273,20 +286,20 @@ final class PollScheduler {
   }
 
   private func rearm(now: Int) {
-    let plan = Self.plan(nowMs: now, clients: clients.values.map(\.state))
-    guard !gate.isSuspended, let wakeup = plan.nextWakeupMs else {
+    guard !gate.isSuspended, let wakeup = Self.wakeup(clients: clients.values.map(\.state))
+    else {
       timer?.cancel()
       timer = nil
       armedForMs = nil
       return
     }
-    guard armedForMs != wakeup || timer == nil else { return }
-    armedForMs = wakeup
+    guard armedForMs != wakeup.atMs || timer == nil else { return }
+    armedForMs = wakeup.atMs
     timer?.cancel()
     let timer = DispatchSource.makeTimerSource(queue: queue)
     timer.schedule(
-      deadline: .now() + .milliseconds(max(0, wakeup - now)),
-      leeway: .milliseconds(plan.leewayMs))
+      deadline: .now() + .milliseconds(max(0, wakeup.atMs - now)),
+      leeway: .milliseconds(wakeup.leewayMs))
     timer.setEventHandler { [weak self] in self?.fire() }
     self.timer = timer
     timer.resume()
