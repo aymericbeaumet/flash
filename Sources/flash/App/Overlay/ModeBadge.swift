@@ -354,7 +354,8 @@ extension OverlayPanel {
       let hits = surface.interactionRects(
         panelFrame: panelFrame, popupTexts: statusBarPopupTexts,
         popupDocuments: statusBarPopupDocuments)
-      interactions.append(.init(screenFrame: screen, links: hits.links, popups: hits.popups))
+      interactions.append(
+        .init(screenFrame: screen, links: hits.links, popups: hits.popups, hints: hits.hints))
     }
     configure(
       primaryStatusBarSurface, screen: mainFrame, scale: snapshot.mainScale, notch: mainNotch)

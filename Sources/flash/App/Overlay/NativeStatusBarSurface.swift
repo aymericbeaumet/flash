@@ -496,11 +496,17 @@ final class NativeStatusBarSurface {
     panelFrame: CGRect, popupTexts: [String: String],
     popupDocuments: [String: [FlashStatusTextSegment]]
   )
-    -> (links: [(rect: CGRect, url: URL)], popups: [StatusBarPopupRegion])
+    -> (
+      links: [(rect: CGRect, url: URL)], popups: [StatusBarPopupRegion],
+      hints: [StatusBarHintRegion]
+    )
   {
     let bar = backgroundLayer.frame
     func rect(_ frame: CGRect) -> CGRect {
       frame.offsetBy(dx: panelFrame.minX + bar.minX, dy: panelFrame.minY + bar.minY)
+    }
+    func local(_ frame: CGRect) -> CGRect {
+      frame.offsetBy(dx: -(panelFrame.minX + bar.minX), dy: -(panelFrame.minY + bar.minY))
     }
     var links: [(rect: CGRect, url: URL)] = []
     var popups: [StatusBarPopupRegion] = []
@@ -532,9 +538,7 @@ final class NativeStatusBarSurface {
     }
     // A popup hangs from the text its wash hugs, not from its outer spaces.
     for index in popups.indices {
-      let local = popups[index].rect.offsetBy(
-        dx: -(panelFrame.minX + bar.minX), dy: -(panelFrame.minY + bar.minY))
-      popups[index].textBounds = hoverTextBounds(in: local).map(rect)
+      popups[index].textBounds = hoverTextBounds(in: local(popups[index].rect)).map(rect)
     }
     // Only ranges closed by the native layout are actionable; unclosed ranges
     // and cell metadata left behind by clipping cannot create an extra hit area.
@@ -557,6 +561,9 @@ final class NativeStatusBarSurface {
       }
       links += fragments
     }
-    return (links, popups)
+    let hints = OverlayPanel.statusBarHintRegions(links: links, popups: popups) {
+      hoverTextBounds(in: local($0)).map(rect)
+    }
+    return (links, popups, hints)
   }
 }

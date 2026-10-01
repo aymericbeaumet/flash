@@ -43,15 +43,29 @@ enum StatusBarHintAction: Equatable {
   case hover(StatusBarPopupRegion)
 }
 
+/// One place on the bar a hint stands for: a `#[link]` or `#[range]` run, or
+/// the part of a popup span no such run covers.
 struct StatusBarHintRegion: Equatable {
+  /// The interactive span, across the bar's height.
   var rect: CGRect
+  /// The span's visible text, the bounds the hover wash hugs. The hint's chip
+  /// and its click point sit on it.
+  var textBounds: CGRect
   var action: StatusBarHintAction
+  /// The popup a pointer on this span opens, if any.
+  var popup: StatusBarPopupRegion?
+
+  /// Where committing the hint acts: the centre of its visible text.
+  var point: CGPoint { CGPoint(x: textBounds.midX, y: textBounds.midY) }
 }
 
 struct StatusBarScreenInteractions {
   var screenFrame: CGRect
   var links: [(rect: CGRect, url: URL)]
   var popups: [StatusBarPopupRegion]
+  /// The bar's hint regions (`OverlayPanel.statusBarHintRegions`), measured
+  /// with the same layout as `links` and `popups`.
+  var hints: [StatusBarHintRegion] = []
 }
 
 /// The status bar's click surface: one window per screen spanning the menu-bar
@@ -375,29 +389,63 @@ extension OverlayPanel {
       panelFrame: panelFrame)
   }
 
-  /// Hintable status spans ordered from left to right. Popup-only spans move
-  /// the pointer so their hover surface opens; a popup covering the same glyph
-  /// span as a link reuses the link's click hint instead of drawing a duplicate.
+  /// Hintable status spans ordered from left to right: the bar's actual
+  /// interactive regions, so committing a hint does what a physical click
+  /// there does. Every `#[link]` / `#[range]` run is one click region. A popup
+  /// span contributes only its visible text that no such run covers — a popup
+  /// wrapping several links (`Cld … Cdx …`) adds nothing between them, where a
+  /// click would open nothing. `textBounds` maps a span to its visible text
+  /// (the hover wash bounds); a span without visible text gets no hint.
   static func statusBarHintRegions(
     links: [(rect: CGRect, url: URL)],
-    popups: [StatusBarPopupRegion]
+    popups: [StatusBarPopupRegion],
+    textBounds: (CGRect) -> CGRect?
   ) -> [StatusBarHintRegion] {
-    func sameSpan(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-      abs(lhs.minX - rhs.minX) < 0.5
-        && abs(lhs.maxX - rhs.maxX) < 0.5
-        && abs(lhs.minY - rhs.minY) < 0.5
-        && abs(lhs.maxY - rhs.maxY) < 0.5
+    func popup(at point: CGPoint) -> StatusBarPopupRegion? {
+      popups.first { $0.rect.contains(point) }
     }
+    var regions: [StatusBarHintRegion] = []
+    for link in links {
+      guard let text = textBounds(link.rect) else { continue }
+      let point = CGPoint(x: text.midX, y: text.midY)
+      regions.append(
+        StatusBarHintRegion(
+          rect: link.rect, textBounds: text, action: .click(link.url), popup: popup(at: point)))
+    }
+    for popup in popups {
+      for piece in uncoveredSpans(of: popup.rect, by: links.map(\.rect)) {
+        guard let text = textBounds(piece) else { continue }
+        regions.append(
+          StatusBarHintRegion(rect: piece, textBounds: text, action: .hover(popup), popup: popup))
+      }
+    }
+    return regions.sorted {
+      if abs($0.textBounds.minX - $1.textBounds.minX) >= 0.5 {
+        return $0.textBounds.minX < $1.textBounds.minX
+      }
+      return $0.textBounds.minY < $1.textBounds.minY
+    }
+  }
 
-    let clickRegions = links.map { StatusBarHintRegion(rect: $0.rect, action: .click($0.url)) }
-    let hoverRegions = popups.compactMap { popup -> StatusBarHintRegion? in
-      guard !links.contains(where: { sameSpan($0.rect, popup.rect) }) else { return nil }
-      return StatusBarHintRegion(rect: popup.rect, action: .hover(popup))
+  /// The horizontal pieces of `span` that none of `covers` overlaps.
+  static func uncoveredSpans(of span: CGRect, by covers: [CGRect]) -> [CGRect] {
+    let overlapping =
+      covers
+      .filter { $0.minY < span.maxY && $0.maxY > span.minY }
+      .sorted { $0.minX < $1.minX }
+    var pieces: [CGRect] = []
+    var cursor = span.minX
+    func piece(to end: CGFloat) {
+      guard end - cursor >= 0.5 else { return }
+      pieces.append(CGRect(x: cursor, y: span.minY, width: end - cursor, height: span.height))
     }
-    return (clickRegions + hoverRegions).sorted {
-      if abs($0.rect.minX - $1.rect.minX) >= 0.5 { return $0.rect.minX < $1.rect.minX }
-      return $0.rect.minY < $1.rect.minY
+    for cover in overlapping where cover.maxX > cursor {
+      piece(to: min(cover.minX, span.maxX))
+      cursor = max(cursor, cover.maxX)
+      if cursor >= span.maxX { break }
     }
+    piece(to: span.maxX)
+    return pieces
   }
 
   /// Screen-space rects + targets for the `#[link=…]` runs in one rendered

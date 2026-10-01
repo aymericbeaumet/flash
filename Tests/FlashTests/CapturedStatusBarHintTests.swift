@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -85,8 +86,14 @@ final class CapturedStatusBarHintTests: XCTestCase {
     let original = StatusBarPopupRegion(
       rect: CGRect(x: 100, y: 700, width: 200, height: 24), name: "article",
       content: "Original", document: [segment])
-    let hints = OverlayPanel.statusBarHintRegions(links: [], popups: [original])
-    XCTAssertEqual(hints, [StatusBarHintRegion(rect: original.rect, action: .hover(original))])
+    let hints = OverlayPanel.statusBarHintRegions(links: [], popups: [original]) { $0 }
+    XCTAssertEqual(
+      hints,
+      [
+        StatusBarHintRegion(
+          rect: original.rect, textBounds: original.rect, action: .hover(original),
+          popup: original)
+      ])
   }
 
   func testPopupSnapshotKeepsCapturedContentUntilLeavingItsAnchor() {

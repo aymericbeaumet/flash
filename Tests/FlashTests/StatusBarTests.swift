@@ -321,25 +321,71 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(regions[0].rect.height, 40, accuracy: 0.001)
   }
 
-  func testStatusBarHintRegionsIncludePopupOnlySegmentsAndPreferClicksOnOverlap() {
-    let hoverRect = CGRect(x: 10, y: 760, width: 30, height: 24)
-    let clickRect = CGRect(x: 60, y: 760, width: 40, height: 24)
-    let url = URL(string: "https://example.com")!
+  /// The user's AI-usage segment: one popup wrapping two links,
+  /// `Cld 91%↻6d Cdx 26%↻6d`. Each link is a hint at the centre of its own
+  /// text; the popup's centre falls on the space between them, where a click
+  /// opens nothing, so the popup adds no hint of its own.
+  func testStatusBarHintRegionsTargetLinksInsideAPopupNotThePopupCentre() throws {
+    let cld = CGRect(x: 100, y: 760, width: 100, height: 24)
+    let cdx = CGRect(x: 210, y: 760, width: 100, height: 24)
+    let span = CGRect(x: 100, y: 760, width: 210, height: 24)
+    let claude = try XCTUnwrap(URL(string: "https://claude.ai/new#settings/usage"))
+    let codex = try XCTUnwrap(URL(string: "https://chatgpt.com/settings/usage?tab=overview"))
+    let popup = StatusBarPopupRegion(rect: span, name: "ai-usage", content: "usage")
 
     let regions = OverlayPanel.statusBarHintRegions(
-      links: [(rect: clickRect, url: url)],
-      popups: [
-        StatusBarPopupRegion(rect: hoverRect, name: "memory", content: "Memory details"),
-        StatusBarPopupRegion(rect: clickRect, name: "article", content: "Article preview"),
-      ])
+      links: [(rect: cld, url: claude), (rect: cdx, url: codex)], popups: [popup],
+      textBounds: Self.glyphs(in: [cld.insetBy(dx: 0, dy: 4), cdx.insetBy(dx: 0, dy: 4)]))
 
-    XCTAssertEqual(regions.count, 2)
+    XCTAssertEqual(regions.map(\.action), [.click(claude), .click(codex)])
+    XCTAssertEqual(regions.map(\.point), [CGPoint(x: 150, y: 772), CGPoint(x: 260, y: 772)])
+    XCTAssertEqual(regions.map(\.popup), [popup, popup])
+    XCTAssertFalse(regions.contains { (200..<210).contains($0.point.x) })
+  }
+
+  /// A popup-only span is one hover hint on its text; a popup partly covered by
+  /// a link keeps a hint on the text the link leaves uncovered.
+  func testStatusBarHintRegionsKeepPopupTextNoLinkCovers() throws {
+    let cpu = CGRect(x: 10, y: 760, width: 40, height: 24)
+    let memory = CGRect(x: 60, y: 760, width: 80, height: 24)
+    let memoryLink = CGRect(x: 100, y: 760, width: 40, height: 24)
+    let url = try XCTUnwrap(URL(string: "https://example.com"))
+    let cpuPopup = StatusBarPopupRegion(rect: cpu, name: "cpu", content: "CPU details")
+    let memoryPopup = StatusBarPopupRegion(rect: memory, name: "memory", content: "Memory")
+
+    let regions = OverlayPanel.statusBarHintRegions(
+      links: [(rect: memoryLink, url: url)], popups: [cpuPopup, memoryPopup],
+      textBounds: Self.glyphs(in: [
+        CGRect(x: 20, y: 764, width: 20, height: 16), CGRect(x: 60, y: 764, width: 30, height: 16),
+        CGRect(x: 100, y: 764, width: 30, height: 16),
+      ]))
+
     XCTAssertEqual(
-      regions[0],
-      StatusBarHintRegion(
-        rect: hoverRect,
-        action: .hover(.init(rect: hoverRect, name: "memory", content: "Memory details"))))
-    XCTAssertEqual(regions[1], StatusBarHintRegion(rect: clickRect, action: .click(url)))
+      regions,
+      [
+        StatusBarHintRegion(
+          rect: cpu, textBounds: CGRect(x: 20, y: 764, width: 20, height: 16),
+          action: .hover(cpuPopup), popup: cpuPopup),
+        StatusBarHintRegion(
+          rect: CGRect(x: 60, y: 760, width: 40, height: 24),
+          textBounds: CGRect(x: 60, y: 764, width: 30, height: 16),
+          action: .hover(memoryPopup), popup: memoryPopup),
+        StatusBarHintRegion(
+          rect: memoryLink, textBounds: CGRect(x: 100, y: 764, width: 30, height: 16),
+          action: .click(url), popup: memoryPopup),
+      ])
+  }
+
+  /// Visible text bounds of a span over fixed glyph rects, the way the bar's
+  /// hover wash measures them.
+  static func glyphs(in glyphs: [CGRect]) -> (CGRect) -> CGRect? {
+    { span in
+      let bounds = glyphs.reduce(CGRect.null) { union, glyph in
+        let overlap = glyph.intersection(span)
+        return overlap.isEmpty ? union : union.union(overlap)
+      }
+      return bounds.isNull ? nil : bounds
+    }
   }
 
   func testAnimatedSpansRenderHiddenInBaseAndFullInEffectRuns() {

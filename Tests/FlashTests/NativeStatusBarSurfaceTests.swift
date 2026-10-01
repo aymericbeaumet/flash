@@ -141,6 +141,43 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       surface.hoverHighlight.frame.maxX, surface.runFrames[label].maxX + 5, accuracy: 0.001)
   }
 
+  /// The user's AI-usage segment, rendered: each link's hint sits at the
+  /// centre of its own text (the bounds its hover wash hugs), and the popup
+  /// wrapping both adds no hint on the space between them.
+  func testStatusHintsTargetEachLinkInAPopupAtItsWashedText() throws {
+    let claude = "https://claude.ai/new#settings/usage"
+    let codex = "https://chatgpt.com/settings/usage?tab=overview"
+    let surface = render(
+      "#[popup=ai-usage]#[link=\(claude)]Cld 91%↻6d#[nolink] "
+        + "#[link=\(codex)]Cdx 26%↻6d#[nolink]#[nopopup] #[popup=cpu]CPU 3%#[nopopup]",
+      columns: 50)
+    let hits = surface.interactionRects(
+      panelFrame: .zero, popupTexts: ["ai-usage": "usage", "cpu": "CPU"], popupDocuments: [:])
+    let popup = try XCTUnwrap(hits.popups.first { $0.name == "ai-usage" })
+    XCTAssertEqual(hits.hints.count, 3)
+    for (hint, url) in zip(hits.hints.prefix(2), [claude, codex]) {
+      let link = try XCTUnwrap(hits.links.first { $0.url.absoluteString == url })
+      XCTAssertEqual(hint.action, .click(link.url))
+      XCTAssertEqual(hint.popup?.name, "ai-usage")
+      surface.setHoverHighlight(link.rect)
+      let wash = surface.hoverHighlight.frame.insetBy(
+        dx: NativeStatusBarSurface.hoverWashHorizontalPadding, dy: 0)
+      XCTAssertEqual(hint.point.x, wash.midX, accuracy: 0.001)
+      XCTAssertTrue(link.rect.contains(hint.point))
+    }
+    let gap = hits.hints[1].rect.minX - hits.hints[0].rect.maxX
+    XCTAssertEqual(gap, surface.cellWidth, accuracy: 0.001)
+    XCTAssertFalse(
+      hits.hints.contains {
+        $0.point.x > hits.hints[0].rect.maxX && $0.point.x < hits.hints[1].rect.minX
+      })
+    XCTAssertNotEqual(hits.hints[0].point.x, popup.rect.midX, accuracy: 1)
+    // A popup-only span is still one hint, on its text.
+    let cpu = try XCTUnwrap(hits.popups.first { $0.name == "cpu" })
+    XCTAssertEqual(hits.hints[2].action, .hover(cpu))
+    XCTAssertEqual(hits.hints[2].textBounds, cpu.textBounds)
+  }
+
   func testWideHoverWashRemainsSubtle() {
     let title = String(repeating: "a", count: NativeStatusBarSurface.wideHoverCells + 1)
     let surface = render(title, columns: 40)

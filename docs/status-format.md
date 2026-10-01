@@ -203,7 +203,12 @@ outer separator spaces while preserving the span's click and popup targets.
 A whole-row popup does not wash the row while the pointer sits on one of its
 links, and a span wide enough to cover most of a lane is dimmed further.
 Status updates refresh the wash under a stationary pointer using the new
-layout. A metric or clock value changing in place crossfades over
+layout. Hints on the bar label its interactive regions: every `#[link]` run
+and `#[range]` click region, plus the visible text of a popup span that no link
+or range covers. A hint acts at the centre of its region's visible text, the
+bounds the wash hugs, so it does what a physical click there does: a popup
+wrapping several links gets one hint per link and none on the space between
+them. A metric or clock value changing in place crossfades over
 100 ms, short enough that a 1 Hz metric reads as a snap rather than a
 smear. A carousel article change is one vertical push over 450 ms: the old
 line moves a full line height up and fades out while the next rises the same

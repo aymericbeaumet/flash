@@ -204,7 +204,7 @@ extension OverlayPanel {
       let chipGlobal: CGRect
       if isMouseGridHint && !isMouseGridFinalChip {
         chipGlobal = targetFrame
-      } else if isMouseGridHint || hint.target.providerID == "statusbar" {
+      } else if isMouseGridHint || hint.target.providerID == AppDelegate.statusBarProviderID {
         chipGlobal = Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       } else {
         chipGlobal = placement.chipFrame(

@@ -240,27 +240,8 @@ extension AppDelegate {
 
   private func commit(hint: AssignedHint, clickModifiers held: ClickModifiers) {
     guard !activationLifecycle.inFlight else { return }
-    if hint.target.providerID == "statusbar", let raw = hint.target.url,
-      let url = URL(string: raw)
-    {
-      overlay.hide()
-      clearHintSessionState(preservingStatusBarSnapshot: true)
-      activationLifecycle.invalidate()
-      applyModeOverlay()
-      overlay.activateStatusBarLink(url)
-      overlay.releaseStatusBarHintSnapshot()
-      return
-    }
-    if hint.target.role == AppDelegate.statusBarHoverHintRole {
-      let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
-      let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
-      overlay.hide()
-      clearHintSessionState(preservingStatusBarSnapshot: true)
-      activationLifecycle.invalidate()
-      applyModeOverlay()
-      _ = ActionDispatcher.moveCursor(to: point)
-      if let popup { overlay.showStatusBarPopup(popup, at: point, preservingContent: true) }
-      overlay.releaseStatusBarHintSnapshot()
+    if hint.target.providerID == AppDelegate.statusBarProviderID {
+      commitStatusBarHint(hint)
       return
     }
     let preferredPoint = Self.hintCommitPoint(
@@ -290,6 +271,27 @@ extension AppDelegate {
         owner.performTargetClick(hint: hint, at: points[0], clickModifiers: held)
       }
     }
+  }
+
+  /// A status-bar hint acts at the centre of its span's visible text. A link
+  /// opens from the URL the hint carried, without moving the pointer into the
+  /// menu-bar band; popup-only text moves the pointer onto it and opens the
+  /// popup.
+  private func commitStatusBarHint(_ hint: AssignedHint) {
+    let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
+    let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
+    let url = hint.target.url.flatMap { URL(string: $0) }
+    overlay.hide()
+    clearHintSessionState(preservingStatusBarSnapshot: true)
+    activationLifecycle.invalidate()
+    applyModeOverlay()
+    if let url {
+      overlay.activateStatusBarLink(url)
+    } else {
+      _ = ActionDispatcher.moveCursor(to: point)
+      if let popup { overlay.showStatusBarPopup(popup, at: point, preservingContent: true) }
+    }
+    overlay.releaseStatusBarHintSnapshot()
   }
 
   /// A resolved click on a discovered target. `--multi` keeps the session up
