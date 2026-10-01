@@ -750,20 +750,7 @@ final class SourceRegistry {
     let trace = Trace.current
     let env = environment
     let allSources = sources
-    var sourceSnapshot: [FlashSource] = []
-    for source in allSources {
-      let hasCap = source.capabilities.contains(capability)
-      let supports = source.supports(context)
-      if hasCap, supports {
-        sourceSnapshot.append(source)
-      }
-    }
-    sourceSnapshot.sort { lhs, rhs in
-      let lhsPriority = lhs.priority(in: context)
-      let rhsPriority = rhs.priority(in: context)
-      if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
-      return lhs.identifier < rhs.identifier
-    }
+    let sourceSnapshot = Self.actionChain(allSources, capability: capability, context: context)
     guard !sourceSnapshot.isEmpty else {
       FlashLog.trace(
         "[source_action] action=\(capability.traceDescription) considered=\(allSources.count) "
@@ -810,6 +797,29 @@ final class SourceRegistry {
       }
     }
     attempt(0)
+  }
+
+  /// The sources that get to try an action needing `capability` in
+  /// `context`, in dispatch order: highest contextual priority first, then
+  /// by identifier.
+  private static func actionChain(
+    _ sources: [FlashSource], capability: FlashSourceCapabilities, context: AppContext
+  ) -> [FlashSource] {
+    sources
+      .filter { $0.capabilities.contains(capability) && $0.supports(context) }
+      .sorted { lhs, rhs in
+        let lhsPriority = lhs.priority(in: context)
+        let rhsPriority = rhs.priority(in: context)
+        if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+        return lhs.identifier < rhs.identifier
+      }
+  }
+
+  /// The identifiers of the sources that would get first try at `action`
+  /// in `context`, in order; a read for diagnostics that performs nothing.
+  func claimants(of action: SourceAction, in context: AppContext) -> [String] {
+    Self.actionChain(sources, capability: action.requiredCapability, context: context)
+      .map(\.identifier)
   }
 
   private static func elapsedMs(since startNs: UInt64) -> Int {

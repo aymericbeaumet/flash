@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 
 /// The HTTP inspector's app state: what `/api/state` and the `/api/events`
 /// stream carry, and the changes that push it. The inspector has no clock;
@@ -89,8 +90,17 @@ extension AppDelegate {
     let app = NSWorkspace.shared.frontmostApplication
     let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
     let mappingApp = currentNonFlashRunningApplication() ?? app
-    let effectiveMappings = effectiveMode(
-      for: PluginSelectorContext(bundleID: mappingApp?.bundleIdentifier))
+    let mappingContext = PluginSelectorContext(bundleID: mappingApp?.bundleIdentifier)
+    let effectiveMappings = effectiveMode(for: mappingContext)
+    // Before launch wiring (tests) there is no monitor or registry to ask.
+    let registry: SourceRegistry? = self.registry
+    let appContext = mappingApp.flatMap { app in monitor.flatMap { $0.makeContext(for: app) } }
+    let actionRows = Self.actionResolutionRows(
+      resolutions: pluginManager.actionBindingResolutions(in: mappingContext)
+    ) { action in
+      guard let registry, let appContext else { return [] }
+      return registry.claimants(of: action, in: appContext)
+    }
     let bundleInfo = Bundle.main.infoDictionary ?? [:]
     let secureInput = secureInputObserved
     let statuses = pluginManager.pluginStatuses()
@@ -148,6 +158,7 @@ extension AppDelegate {
         "normal_leader": config.mode.normalLeader ?? "",
         "rows": NormalModeDispatcher.mappingsJSON(mode: config.mode),
         "effective_rows": NormalModeDispatcher.mappingsJSON(mode: effectiveMappings),
+        "actions": actionRows,
         "bundle_id": mappingApp?.bundleIdentifier as Any? ?? NSNull(),
         "localized_name": mappingApp?.localizedName as Any? ?? NSNull(),
       ] as [String: Any],
@@ -191,6 +202,53 @@ extension AppDelegate {
       },
       "plugins": statuses.map(\.jsonObject),
     ]
+  }
+}
+
+extension AppDelegate {
+  /// One row per action for the focused app, in the order dispatch tries
+  /// them: `claimed_by` lists the sources (and Flash's own step) that get
+  /// first try, then `binding` is what runs otherwise and `source` who
+  /// declared it — a plugin id, `flash` for Flash's own scrolling, or null
+  /// when nothing happens.
+  static func actionResolutionRows(
+    resolutions: [(SourceActionName, ActionBindingIndex.Resolution)],
+    claimants: (SourceAction) -> [String]
+  ) -> [[String: Any]] {
+    let byName = Dictionary(resolutions, uniquingKeysWith: { first, _ in first })
+    return SourceActionName.allCases.map { name in
+      let action =
+        name == .appReloadForce ? .reload(force: true) : SourceAction.byWireName[name.rawValue]
+      var claimedBy =
+        action.map(claimants)?.map {
+          "source:" + ($0.hasPrefix("plugin:") ? String($0.dropFirst("plugin:".count)) : $0)
+        } ?? []
+      if name == .windowClose { claimedBy.append("flash:close_button") }
+      var binding: Any = NSNull()
+      var source: Any = NSNull()
+      if let resolution = byName[name] {
+        binding = resolution.spec.display
+        source = resolution.pluginID
+      } else if let flashOwned = SourceActionFallback.flashOwned[name] {
+        binding = flashOwned.inspectorDescription
+        source = "flash"
+      }
+      return [
+        "action": name.rawValue, "binding": binding, "source": source, "claimed_by": claimedBy,
+      ]
+    }
+  }
+}
+
+extension SourceActionFallback {
+  /// Flash's own step as the inspector names it.
+  fileprivate var inspectorDescription: String {
+    switch self {
+    case .scroll(let kind): return "scroll \(kind)"
+    case .scrollEdge(let kind): return "scroll to \(kind)"
+    case .binding(let binding): return "\(binding)"
+    case .none: return "none"
+    }
   }
 }
 

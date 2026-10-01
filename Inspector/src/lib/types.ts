@@ -65,10 +65,22 @@ export interface MappingRow {
   action: string;
 }
 
+/** How one action resolves in the focused app, in dispatch order. */
+export interface ActionResolution {
+  action: string;
+  /** Sources (and Flash's own step) that get first try: `source:<id>`, `flash:<step>`. */
+  claimed_by: string[];
+  /** What runs otherwise: `cmd+t`, `cmd+k, cmd+w`, `menu File › New Tab`, `none`, or null for nothing. */
+  binding: string | null;
+  /** Who declared the binding: a plugin id, `flash` for Flash's own scrolling. */
+  source: string | null;
+}
+
 export interface MappingsState {
   normal_leader: string;
   rows: MappingRow[];
   effective_rows?: MappingRow[];
+  actions?: ActionResolution[];
   bundle_id?: string | null;
   localized_name?: string | null;
 }

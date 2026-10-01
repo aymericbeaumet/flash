@@ -11,6 +11,8 @@
   const scopeOrder: Record<string, number> = { all: 0, normal: 1, insert: 2 };
   const filtered = $derived(rows.filter((row) => (!scope || row.scope === scope) && `${row.key} ${row.action} ${row.scope}`.toLowerCase().includes(query.trim().toLowerCase())).sort((a, b) => (scopeOrder[a.scope] ?? 9) - (scopeOrder[b.scope] ?? 9) || a.key.localeCompare(b.key)));
   const categories = $derived([...new Set(filtered.map((row) => row.scope))]);
+  const appName = $derived(mappings.localized_name ?? mappings.bundle_id ?? "the current application");
+  const actions = $derived((mappings.actions ?? []).filter((row) => `${row.action} ${row.binding ?? ""} ${row.source ?? ""} ${row.claimed_by.join(" ")}`.toLowerCase().includes(query.trim().toLowerCase())));
 </script>
 
 <div class="page"><div class="page-heading"><p class="eyebrow">Your Flash</p><h1>A key for every move.</h1><p>Explore your live mappings. Find the key you need, see exactly what it does, and make it your own.</p></div>
@@ -18,7 +20,9 @@
   <div class="surface mapping-list"><div class="toolbar"><input type="search" aria-label="Search mappings by key, action or scope" placeholder="Find a key, action, or scope…" bind:value={query} /><select bind:value={scope} aria-label="Filter mappings by mode"><option value="">All modes</option>{#each scopes as item}<option value={item}>{item}</option>{/each}</select><div class="segmented" aria-label="Mapping source"><button class:active={view === "effective"} aria-pressed={view === "effective"} onclick={() => { view = "effective"; scope = ""; }}>Effective</button><button class:active={view === "configured"} aria-pressed={view === "configured"} onclick={() => { view = "configured"; scope = ""; }}>Configured</button></div><span class="count">{filtered.length} of {rows.length}</span></div>
     {#each categories as category}<section class="mapping-group"><div class="group-label"><span class="badge" class:neutral={category !== "normal"}>{category}</span><p>{category === "all" ? "Available across modes" : category === "normal" ? "Navigate and act while NORMAL is active" : category === "insert" ? "Available while typing in INSERT" : "Mappings for this context"}</p><span>{filtered.filter((row) => row.scope === category).length} bindings</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Key sequence</th><th>Action</th></tr></thead><tbody>{#each filtered.filter((row) => row.scope === category) as row}<tr><td><kbd>{row.key}</kbd></td><td><code>{row.action}</code></td></tr>{/each}</tbody></table></div></section>{/each}
     {#if !filtered.length}<div class="empty"><strong>No mappings match</strong>Try a different key or action, or select all modes.</div>{/if}
-  </div><p class="mapping-tip">Changes to your TOML file appear here after reload. <a href="/docs/config">Learn how to customize mappings →</a></p>
+  </div>
+  {#if mappings.actions?.length}<div class="surface mapping-list action-resolution"><div class="group-label"><span class="badge neutral">actions</span><strong class="resolution-title">How actions resolve in {appName}</strong><p>A source that performs the action wins; otherwise the plugin binding runs.</p><span>{actions.length} actions</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Action</th><th>Tried first</th><th>Binding</th><th>Declared by</th></tr></thead><tbody>{#each actions as row}<tr><td><code>{row.action}</code></td><td>{#if row.claimed_by.length}<code>{row.claimed_by.join(" → ")}</code>{:else}<span class="muted">—</span>{/if}</td><td>{#if row.binding}<kbd>{row.binding}</kbd>{:else}<span class="muted">nothing</span>{/if}</td><td>{#if row.source}<code>{row.source}</code>{:else}<span class="muted">—</span>{/if}</td></tr>{/each}</tbody></table></div></div>{/if}
+  <p class="mapping-tip">Changes to your TOML file appear here after reload. <a href="/docs/config">Learn how to customize mappings →</a></p>
 </div>
 
 <style>
@@ -41,6 +45,9 @@
   .data-table td { padding-top: 11px; padding-bottom: 11px; }
   .data-table code { color: #6b7666; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .mapping-tip { color: var(--muted); font-size: 11px; margin-top: 20px; }
+  .action-resolution { margin-top: 24px; }
+  .resolution-title { font-size: 12px; font-weight: 550; white-space: nowrap; }
+  .muted { color: var(--muted); font-size: 11px; }
   @media (max-width: 1100px) { .mapping-context { flex-wrap: wrap; } .mapping-context > div { min-width: 230px; } .leader { margin-left: 37px; } .key-column { width: 150px; } }
   @media (max-width: 600px) { .group-label p { display: none; } .mapping-context { padding: 17px; } .key-column { width: 110px; } .toolbar input { flex-basis: 100%; } .mapping-context > div { min-width: 160px; } }
   @media print {
