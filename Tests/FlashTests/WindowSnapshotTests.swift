@@ -218,6 +218,24 @@ final class WindowSnapshotTests: XCTestCase {
         ignoringPids: [99]))
   }
 
+  /// A fully transparent window is click-through, so a physical click is
+  /// never routed to it: the logged case was a test run's transparent
+  /// floating panel over the whole screen taking the click meant for Firefox.
+  func testTopInteractionEntryAtPointSkipsFullyTransparentWindows() {
+    let transparentPanel = WindowSnapshot.Entry(
+      pid: 64_238,
+      layer: Int(CGWindowLevelForKey(.floatingWindow)),
+      nsBounds: CGRect(x: 0, y: 0, width: 2_048, height: 1_152),
+      alpha: 0)
+    let browser = WindowSnapshot.Entry(
+      pid: 42, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 2_048, height: 1_122))
+
+    XCTAssertEqual(
+      WindowSnapshot.topInteractionEntry(
+        at: CGPoint(x: 1_635, y: 1_100), entries: [transparentPanel, browser])?.pid,
+      42)
+  }
+
   func testCGWindowInfoEntriesConvertToNSScreenCoordinates() {
     let info: [[String: Any]] = [
       [

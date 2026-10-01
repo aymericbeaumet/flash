@@ -325,13 +325,15 @@ struct WindowSnapshot {
   /// past the parent edge (screen-edge tabs) still counts as anchored.
   static let anchoredCardContainmentSlop: CGFloat = 8
 
+  /// The window a click at `point` lands on. A fully transparent window is
+  /// click-through, so it is never that window.
   static func topInteractionEntry(
     at point: CGPoint,
     entries: [Entry],
     ignoringPids: Set<pid_t> = []
   ) -> Entry? {
     entries.first {
-      isInteractionSurfaceLayer($0.layer)
+      isInteractionSurfaceLayer($0.layer) && $0.occludes
         && $0.pid > 0
         && !ignoringPids.contains($0.pid)
         && $0.nsBounds.contains(point)
