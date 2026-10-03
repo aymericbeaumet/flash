@@ -109,11 +109,11 @@ final class PollScheduler {
   }
 
   /// Milliseconds on a clock that keeps counting while the system sleeps
-  /// (`CLOCK_MONOTONIC`, unlike `DispatchTime`'s uptime): a wake finds every
+  /// (`CLOCK_MONOTONIC_RAW`, unlike `DispatchTime`'s uptime): a wake finds every
   /// deadline that passed during the sleep overdue, so they run in the one
   /// catch-up tick instead of each waiting out its full interval again.
   static func continuousNowMs() -> Int {
-    Int(clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1_000_000)
+    Int(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1_000_000)
   }
 
   struct ClientState: Equatable {

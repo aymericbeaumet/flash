@@ -313,14 +313,14 @@ final class PollSchedulerTests: XCTestCase {
     wait(for: [fired], timeout: 2)
   }
 
-  func testTheSharedClockCountsTimeSpentAsleep() {
-    // Deadlines ride a clock that keeps running through system sleep, so a
-    // wake finds every deadline that passed meanwhile overdue.
-    let uptime = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-    let continuous = clock_gettime_nsec_np(CLOCK_MONOTONIC)
+  func testTheSharedClockUsesTheContinuousMonotonicClock() {
+    // Compare readings of the same timebase; distinct macOS clocks need not
+    // have comparable origins or adjustment histories.
+    let before = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1_000_000
     let now = PollScheduler.continuousNowMs()
-    XCTAssertGreaterThanOrEqual(now, Int(continuous / 1_000_000))
-    XCTAssertGreaterThanOrEqual(continuous, uptime)
+    let after = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1_000_000
+    XCTAssertGreaterThanOrEqual(now, Int(before))
+    XCTAssertLessThanOrEqual(now, Int(after))
   }
 
   // MARK: - The plugin-facing registration

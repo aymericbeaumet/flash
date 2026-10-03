@@ -105,6 +105,11 @@ final class StatusBarHoverTests: XCTestCase {
     defer { panel.hideStatusBarClickWindows() }
     let region = StatusBarPopupRegion(
       rect: CGRect(x: 100, y: 800, width: 200, height: 25), name: "article", content: "Preview")
+    let screen = CGRect(x: 0, y: 0, width: 900, height: 900)
+    let snapshot = OverlayPanel.ScreenSnapshot(
+      screens: [(scale: 1, frame: screen, visibleFrame: screen, notch: nil)],
+      unionFrame: screen, mainFrame: screen, mainScale: 1, mainVisibleFrame: screen,
+      nativeStatusBarFallbackHeight: 0)
     let controller = panel.statusPopupController
     var focusTransitions = 0
     let focused = expectation(description: "pager file is ready for input focus")
@@ -116,7 +121,7 @@ final class StatusBarHoverTests: XCTestCase {
       region,
       visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
-    panel.activateStatusBarPopup(region, at: .zero)
+    panel.activateStatusBarPopup(region, at: .zero, screenSnapshot: snapshot)
     wait(for: [focused], timeout: 3)
     XCTAssertEqual(focusTransitions, 1)
     panel.syncStatusBarClickWindows(

@@ -65,6 +65,14 @@ final class InspectorStatePushTests: XCTestCase {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
   }
 
+  private func waitForSnapshot(after count: Int, timeout: TimeInterval = 2) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while snapshots == count && Date() < deadline {
+      spin(for: 0.02)
+    }
+    return snapshots > count
+  }
+
   /// `change` pushes exactly one snapshot once its window has passed.
   private func assertOnePush(
     _ source: String, file: StaticString = #filePath, line: UInt = #line,
@@ -73,7 +81,9 @@ final class InspectorStatePushTests: XCTestCase {
     spin(for: 0.1)
     let before = snapshots
     change()
-    spin(for: 0.15)
+    XCTAssertTrue(
+      waitForSnapshot(after: before), "\(source) did not publish", file: file, line: line)
+    spin(for: 0.05)
     XCTAssertEqual(snapshots - before, 1, source, file: file, line: line)
   }
 

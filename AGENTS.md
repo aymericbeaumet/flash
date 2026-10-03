@@ -162,6 +162,8 @@ Surface requests that would violate these constraints before implementing them.
   pointer in the band, a browser listening), saying so where it is armed.
   Polls pause while displays sleep or the session is locked; the scheduler
   owns that gate and resumes with one catch-up tick, so clients never check it.
+  Use `CLOCK_MONOTONIC_RAW` for sleep-inclusive deadlines; compare readings
+  of the same clock in tests, as macOS clock epochs may differ.
   The guardrail script enforces both sides; see `docs/architecture.md` for the
   one-shots that may stay plain `asyncAfter`.
 - Keep native controls outside the custom layer-hosting drawing view. AppKit owns
