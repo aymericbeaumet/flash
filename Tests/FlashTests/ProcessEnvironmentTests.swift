@@ -79,9 +79,14 @@ final class ProcessEnvironmentTests: XCTestCase {
   // MARK: live resolution (integration)
 
   func testResolveLoginShellEnvironmentReturnsPath() throws {
-    // /bin/sh is always present; a login sh dumps at least PATH.
+    // Keep runner-specific login files out of this shell integration test.
+    let home = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-login-sh-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
     let resolved = FlashProcessEnvironment.resolveLoginShellEnvironment(
-      shellPath: "/bin/sh", timeout: 5)
+      shellPath: "/bin/sh", timeout: 10,
+      environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"])
     let env = try XCTUnwrap(resolved)
     XCTAssertNotNil(env["PATH"])
   }
