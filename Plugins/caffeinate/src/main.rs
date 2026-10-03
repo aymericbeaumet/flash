@@ -148,12 +148,16 @@ fn parse_minutes(args: &[String]) -> Result<Option<u64>, ()> {
         .transpose()
 }
 
-/// Display and idle sleep prevented, for `seconds` if bounded. `-w` ties the
-/// assertion to this plugin: should the plugin die without reaping it (a
-/// crash, a SIGKILL past the shutdown grace), caffeinate exits with it
-/// instead of keeping the Mac awake with no owner.
+/// Every sleep the tool can hold off, for `seconds` if bounded: display (`-d`),
+/// idle system (`-i`), disk (`-m`), system (`-s`, honoured on AC only) and a
+/// user-active declaration (`-u`). `-di` alone left the disk free to spin down
+/// and the system free to sleep on AC, so "awake" was not what it claimed.
+///
+/// `-w` ties the assertion to this plugin: should the plugin die without
+/// reaping it (a crash, a SIGKILL past the shutdown grace), caffeinate exits
+/// with it instead of keeping the Mac awake with no owner.
 fn caffeinate_args(plugin_pid: u32, seconds: Option<u64>) -> Vec<String> {
-    let mut args = vec!["-di".to_string(), "-w".to_string(), plugin_pid.to_string()];
+    let mut args = vec!["-dimsu".to_string(), "-w".to_string(), plugin_pid.to_string()];
     if let Some(seconds) = seconds {
         args.push("-t".to_string());
         args.push(seconds.to_string());
@@ -439,10 +443,10 @@ mod tests {
 
     #[test]
     fn the_assertion_is_tied_to_the_plugin_and_bounded_by_minutes() {
-        assert_eq!(caffeinate_args(42, None), ["-di", "-w", "42"]);
+        assert_eq!(caffeinate_args(42, None), ["-dimsu", "-w", "42"]);
         assert_eq!(
             caffeinate_args(42, Some(300)),
-            ["-di", "-w", "42", "-t", "300"]
+            ["-dimsu", "-w", "42", "-t", "300"]
         );
         assert_eq!(parse_minutes(&[]), Ok(None));
         assert_eq!(parse_minutes(&["5".to_string()]), Ok(Some(5)));

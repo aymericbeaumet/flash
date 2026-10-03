@@ -36,6 +36,26 @@
       "description": "Toggle the caffeinate assertion"
     }
   ],
+  "verbs": [
+    {
+      "name": "caffeinate_toggle",
+      "command": "caffeinate",
+      "subcommand": "toggle",
+      "description": "Toggle the caffeinate assertion"
+    },
+    {
+      "name": "caffeinate_on",
+      "command": "caffeinate",
+      "subcommand": "on",
+      "description": "Keep the Mac awake (an optional positive minutes argument bounds it)"
+    },
+    {
+      "name": "caffeinate_off",
+      "command": "caffeinate",
+      "subcommand": "off",
+      "description": "Release the caffeinate assertion"
+    }
+  ],
   "status": [
     "state"
   ]
