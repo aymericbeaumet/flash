@@ -2,7 +2,7 @@
   "id": "power",
   "name": "Power",
   "version": "0.1.0",
-  "description": "Publish one-second battery snapshots with periodically refreshed health details; summary_mode=full restores the estimate inline.",
+  "description": "Publish battery snapshots on power-source changes with TTL-bounded health details; summary_mode=full restores the estimate inline.",
   "sandbox": {
     "exec": [
       "/usr/bin/pmset",
@@ -29,7 +29,10 @@
   ],
   "status": [
     "summary",
-    "details"
+    "label",
+    "details",
+    "percent",
+    "state"
   ],
   "listen": [
     "core:power.changed"

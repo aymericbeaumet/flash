@@ -24,13 +24,16 @@ export interface PluginInfo {
   /** resident | on_demand | manifest_only */
   activation?: string;
   pid?: number | null;
-  uptime_ms?: number | null;
+  /** When the running process started; the page derives its uptime. */
+  started_at_unix_ms?: number | null;
   source_count?: number;
   command_count?: number;
   restart_count?: number;
   last_error?: string | null;
   last_log?: string | null;
-  cpu_percent?: number | null;
+  /** Cumulative CPU time, sampled with the snapshot (`snapshot_at_unix_ms`). */
+  cpu_time_ms?: number | null;
+  /** Resident memory, sampled with the snapshot. */
   memory_bytes?: number | null;
   only_bundle_ids?: string[];
   priority?: number;
@@ -62,9 +65,24 @@ export interface MappingRow {
   action: string;
 }
 
+/** How one action resolves in the focused app, in dispatch order. */
+export interface ActionResolution {
+  action: string;
+  /** Sources (and Flash's own step) that get first try: `source:<id>`, `flash:<step>`. */
+  claimed_by: string[];
+  /** What runs otherwise: `cmd+t`, `cmd+k, cmd+w`, `menu File › New Tab`, `none`, or null for nothing. */
+  binding: string | null;
+  /** Who declared the binding: a plugin id, `flash` for Flash's own scrolling. */
+  source: string | null;
+}
+
 export interface MappingsState {
   normal_leader: string;
   rows: MappingRow[];
+  effective_rows?: MappingRow[];
+  actions?: ActionResolution[];
+  bundle_id?: string | null;
+  localized_name?: string | null;
 }
 
 export interface ClipboardEntry {
@@ -84,8 +102,23 @@ export interface DocTopic {
 }
 
 export interface InspectorState {
+  /** When Flash took this snapshot: it pushes one on each change. */
+  snapshot_at_unix_ms?: number;
+  runtime?: {
+    version?: string;
+    build?: string;
+    pid?: number;
+    /** When the resident started; the page derives its uptime. */
+    started_at_unix_ms?: number;
+    accessibility_trusted?: boolean;
+    keyboard_capture_active?: boolean;
+    secure_input?: boolean;
+    advanced_mode?: boolean;
+    config_path?: string;
+    config_error?: string | null;
+  };
   mode?: string;
-  overlay?: string;
+  overlay?: string | null;
   focused_app?: FocusedApp;
   config?: Record<string, unknown>;
   plugins?: PluginInfo[];

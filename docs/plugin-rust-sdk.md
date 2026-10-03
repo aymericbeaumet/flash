@@ -20,7 +20,7 @@ working `:<id> ping` command, requiring zero manual edits to reach green.
 ## Authoring shape
 
 ```rust
-use flash_plugin::{run, CommandRequest, Context, PerformResponse};
+use flash_plugin::{CommandRequest, Context, PerformResponse, run};
 
 struct MyPlugin;
 
@@ -52,7 +52,9 @@ resolve/command/action/navigate all arrive as the single `perform` method —
 the SDK routes kinds to your handlers, and every one of them answers with the
 `PerformResponse` trichotomy: `ok()` (+ `.target_pid()` / `.navigation_url()`
 / `.message()`), `unhandled()` ("not my context" — the host may fall back),
-or `fail(msg)` ("mine, but it broke" — the host must not fall back).
+or `fail(msg)` ("mine, but it broke" — the host must not fall back). Tests read
+a built response back with `is_ok()` / `is_unhandled()` / `error_message()` /
+`toast_message()`.
 
 ## Context
 
@@ -70,10 +72,55 @@ Handed to every handler; cheap to clone. Key surface:
   `[plugin.<id>]` table.
 - Events: `running_applications()` is the host-maintained app snapshot (fed
   by `core:apps.changed`, delivered right after initialize). `RefreshGate`
-  serializes refresh producers against it.
-- Status text: `escape_status_text(value)` doubles literal `#` characters in
-  externally sourced text before insertion into a rich status value. Do not
-  apply it to intentional `#[…]` markup.
+  serializes refresh producers against it. A `static AppWatch` answers whether an event
+  can change what the plugin reads from its apps — focus into, within or out
+  of one, one launching or quitting, their running instances changing, a
+  flashlight session opening — so an app-scripting plugin refreshes on those
+  alone (the browsers plugin). `core:ax.changed` carries
+  `Event::notification`, one of `flash_plugin::ax_notifications`; match it
+  with `Event::is_ax_change(&[…])` so a refresh follows only the
+  notifications that can change what you read (`AXTitleChanged`,
+  `AXWindowCreated`, …) and never a keystroke's `AXValueChanged`. A
+  `static Settle<K>` coalesces a burst of such events into one refresh:
+  `Settle::new(settle, max_wait, priority)` and `schedule(&ctx, key,
+  refresh)` run `refresh` with every key the burst named (the apps whose
+  windows changed) once it has been quiet for its settle period, or at its
+  ceiling when it never is. The wait is one host deadline at `priority`,
+  re-armed for the remainder when later events extended the burst, and it
+  costs nothing between bursts (the windows, kitty, browsers and tmux
+  plugins). With `settle == max_wait` it is a plain window: the first event
+  opens it and the rest join one refresh.
+  `core:status.observed` carries
+  `Event::segments`: the complete set of this plugin's status segments a
+  surface shows, possibly empty (the protocol's
+  [status observation](plugin-protocol.md#status-observation)). Listen for it
+  to scope work that only feeds a segment to the time it is shown:
+  `ObservedCadences::interval(&ctx, period, priority, tick)` registers
+  cadences that tick only while a segment is
+  observed — `observe(segments)` cancels or re-arms them and returns true
+  when they were just re-armed, so you sample at once; `observed()` tells a
+  command to sample first, since nothing sampled meanwhile (the cpu, memory,
+  disks and aiproviders plugins).
+- Status values: `status(segments)` takes anything `Into<StatusSegment>` —
+  a plain string is ready-made markup, build `StatusValue::text(visible)`
+  and attach a hover document with `.with_preview(Preview)`, or publish a
+  host-rotated `StatusCarousel::new(lines, cycle).with_prefix(label)` whose
+  lines each carry their own preview (the feed plugin). `Markup::text`
+  is the only entry for externally sourced text (it doubles literal `#`);
+  `Markup::raw` inserts intentional markup, `Markup::colored`/`styled`
+  wrap content in a `Style` (`Color::TITLE`, `MUTED`, `ACCENT`, `ALERT`,
+  `WARN`, `INBOUND`, `OUTBOUND`, or any palette/RGB value), `Markup::link`
+  escapes marker delimiters in URLs, and `Markup::plain` strips markers for
+  command replies. `Preview` is a line builder — `title`, `note`, `section`,
+  `row(label, value)` (label padded to 14 visible characters, muted),
+  `blank`, `table(Table)`, `raw` — or `Preview::from_markup` for a
+  preformatted body; `render`/`render_plain` produce the document. The
+  `status` module also carries the shared formatters (`bytes_iec`,
+  `bytes_iec_compact`, `rate_iec`, `rate_cells4`, `percent2`,
+  `sparkline_percent`, `sparkline_scaled`, `sparkline_padded`,
+  `duration_hours_minutes`, `duration_compact`, `duration_uptime`,
+  `progress_bar`), the `Published<T>` publish-if-changed gate, and the
+  bounded `History<N>` sample window.
 - Subprocess: `run_command(&ctx, argv, timeout)` and `run_osascript` —
   bounded capture (4 MiB stdout / 256 KiB stderr caps, process-group kill on
   timeout), cwd = data dir, scrubbed env with the plugin `bin/` on PATH.
@@ -90,7 +137,8 @@ Handed to every handler; cheap to clone. Key surface:
   the result object carries `{"ok": false, "error": ...}` sentinels for
   capability NAKs, timeouts, and host death. Typed wrappers exist for the
   full `host.*` surface (`fetch`, `open_url`, `open_app`, `activate_app`,
-  `normal_mode_target`, `wifi_ssid(request_authorization)`, `clipboard_write`, `notify`,
+  `normal_mode_target` (pid, bundle id and the focused window's id),
+  `wifi_ssid(request_authorization)`, `clipboard_write`, `notify`,
   `storage_get`/`set`, `post_media_key`, `process_table` / `process_metrics`,
   `signal`, `post_keys`,
   `post_global_key`, `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`,
@@ -98,12 +146,54 @@ Handed to every handler; cheap to clone. Key surface:
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.
+- Host clock: a plugin never arms a timer or sleeps to schedule work.
+  `ctx.interval(period, priority, callback)` registers a cadence with the
+  host, which drives every poller in Flash — core watchers included — from one
+  clock, and runs the callback when it is due; `ctx.after(delay, priority,
+  callback)` registers a one-shot deadline (a debounce, a backoff, an expiry)
+  and returns a `Deadline` you can `cancel`; `ctx.wait(delay, priority).await`
+  is the awaitable form, for a wait inside one piece of work (a retry
+  backoff in a loop, a measurement window, a beat for another app to react),
+  and dropping it releases its deadline. Every registration republishes the
+  plugin's whole `poll` set. `PollPriority` is how late the host may deliver:
+  `High` (25 ms) for a value on screen that the user watches change, `Normal`
+  (100 ms) for ordinary sampling, settles and refreshes, `Low` (1 s) for
+  remote pulls, retries and backoffs; pick the loosest one nobody would
+  notice, since slack is what lets wake-ups coalesce. A period outside the
+  protocol bounds (a cadence under 50 ms, anything over a day, a 65th
+  registration) is refused with a warning before it reaches the host. The
+  `PollHandle` an `interval` returns can `set_period` (a retry backoff, an
+  idle backend) or `cancel`; dropping it leaves the cadence running. A
+  cancelled handle re-arms with `set_period`, so keep one handle to toggle a
+  cadence with observation instead of registering a new one each time: the
+  processes plugin arms its top-N sample when `core:status.observed` first
+  lists `top_cpu` or `top_mem`, cancels it when neither is listed, and clears
+  the table nobody shows. A callback that overruns its period simply misses
+  ticks, and no tick arrives while the displays sleep or the session is
+  locked (one catch-up tick follows). Tests play the host with
+  `Harness::drain_poll_registrations` and `Harness::deliver_poll_tick`.
+  Prefer `on_event`: the host exposes an event for every source
+  it can observe (`flash_plugin::host_events` names them all; for example
+  `NETWORK_CHANGED` for interface, address and route changes and
+  `VOLUMES_CHANGED` for mounts), and a cadence is the answer only when nothing
+  else can tell you the value changed.
 - Telemetry: `log` / `log_fields` ride the wire as `log` notifications
-  (content-free); `status(segments)` feeds `#{plugin:<id>.<segment>}`.
-  `inline_status_popup(visible, body)` wraps a visible value with a correctly
-  percent-encoded rich hover body for publishing both atomically.
-- Timers: `interval(period, cb)` — non-overlapping ticks; plugins may also
-  `tokio::spawn` freely.
+  (content-free); a line logged while serving a request carries that
+  request's `trace` id automatically (tasks the handler spawns itself don't); `status(segments)` feeds `#{flash.plugin.<id>.<segment>}`.
+  A preview travels inside the segment string as a percent-encoded
+  `#[popup=inline:…]` marker, so the visible text and its hover document
+  publish atomically. The host rejects an encoded body above 16384 bytes
+  (`MAX_INLINE_PREVIEW_ENCODED_BYTES`); `StatusValue::render` reports that
+  as `PreviewTooLarge`, and `status` then logs a content-free warning
+  (segment name and encoded size only) and publishes the visible text alone
+  rather than losing the segment.
+- Deadlines: an `on_search` / `on_hints` handler still running a tenth of the
+  request's `deadline_ms` (at most 50 ms) before it is dropped, with the
+  subprocesses and host calls it awaits, and the request answers `deadline
+  exceeded`. Bound inner waits below that budget to answer partially instead
+  (the vscode plugin gives `host.ax_snapshot` a `deadline_ms`).
+- Timers: none of your own — `interval`, `after` and `wait` above, all on
+  the host clock; plugins may `tokio::spawn` freely.
 
 ## Async rules (enforced)
 
@@ -116,12 +206,50 @@ progress without multiplying resident worker threads across every plugin
 process. One blocking syscall stalls every in-flight operation. Blocking I/O is banned
 outright by each crate's
 `clippy.toml` (`std::fs::*`, `std::process::Command`) with no `#[allow]`
-escape: use `tokio::fs`, `tokio::process`, `tokio::time`. The SDK builds the
+escape: use `tokio::fs`, `tokio::process`, and `tokio::time::timeout` to
+bound one awaited operation. Scheduling is the host's: `tokio::time::sleep`,
+`sleep_until` and `interval` are rejected by `Scripts/check-guardrails.sh`
+outside test code, along with any `interval`/`after`/`wait`/`Settle::new`
+call that does not name its `PollPriority`. The SDK builds the
 runtime in `run()` — never build your own. Do async startup work in
 `on_start` (it runs after the initialize reply, so nothing you do there can
 slow the handshake); resolve lazily with `tokio::sync::OnceCell` when
 needed. A synchronous `evaluate` body over 10 ms is a bug — the host warns
 at 40 ms round-trip against the 50 ms deadline.
+
+The runtime owns finite admission queues, pinned in `protocol.json`:
+
+- Input collects at most 10 MiB before a newline. Oversized records are
+  discarded through the next newline; EOF discards partial JSON and shuts down.
+- At most 16 request handlers retain at most 32 MiB of encoded input between
+  them. Excess requests receive `plugin request capacity exceeded`; ping and
+  host-RPC response intake continue. Cancellation releases pending host calls;
+  at most 64 host calls may await a response.
+- Output holds at most 64 frames and 16 MiB, including the frame currently
+  being written. Async responses wait for capacity before allocating their
+  encoded buffer. Synchronous notifications may be dropped with a content-free
+  diagnostic. Reader-owned control replies never wait for stdout: if their
+  queue is exhausted the transport closes so the host can recover.
+- Ordinary events have a 256-frame/16-MiB backlog. Under overload, each of
+  `apps.changed`, `focus.changed`, `window.focus.changed`, `ax.changed`,
+  `clipboard.changed`, `config.changed`, `power.changed`, `network.changed`,
+  `volumes.changed`, `space.changed`, and `status.observed` (all prefixed
+  `core:`; `protocol.json` `host_events.replacement`) retains one latest
+  replacement slot per coalescing key — the event name, plus the app and
+  notification for `ax.changed` — each bounded by the frame cap, at most 256
+  keys at once. Intermediate replacements can coalesce; the final value,
+  including an empty app list or an empty observed set, reaches the
+  serialized event handler. This avoids blocking the stdin reader while a
+  handler awaits a host RPC.
+
+EOF cancels request/event workers and gives shutdown callbacks plus output
+draining one shared 750-ms deadline. Handlers must still avoid blocking the
+executor. Wire PIDs are positive signed 32-bit integers; booleans and floating
+JSON numbers never stand in for integer identifiers. Perform failures emit
+only their failure outcome, even when success-only builder methods were chained.
+Optional wire fields accept null as absent. Hint targets require a nonempty
+`id`, the canonical nested frame, finite frame edges, and declared fields only.
+Perform navigation URLs must be absolute; invalid builder values become errors.
 
 ## Testing
 
@@ -146,16 +274,32 @@ mod tests {
 
 `Harness::with_config` injects a `[plugin.<id>]` settings object; `drain()`
 returns every emitted frame decoded to JSON (publishes, status, logs);
-`drain_published_rows()` shortcuts to the last catalog;
-`set_running_applications` seeds the app snapshot. Add tokio to
-`[dev-dependencies]` for async tests.
+`drain_published_rows()` shortcuts to the last catalog; `drain_status()`
+returns each status notification's rendered segment map in order;
+`set_running_applications` seeds the app snapshot. Script the host side of
+an RPC with `next_host_request()`, which yields `(id, method, params)` of the
+plugin's next `host.*` call, and `reply_host(id, result)`, which wakes the
+awaiting handler with that result — spawn the handler as a task first so the
+test can answer while it waits. Add tokio to `[dev-dependencies]` for async
+tests.
 
-Use the harness for handler-level behavior, a plugin-local
-`Plugins/<id>/specs/*.json` scenario for full subprocess/wire behavior, and a
-shared `Plugins/_flash_plugin_specs/regressions/*.json` scenario only when the
-host/Rust SDK protocol contract itself is involved.
+`flash_plugin::testing::WireHarness` runs the real serve loop over in-memory
+NDJSON streams, so a test speaks to the plugin exactly as the host does:
+`WireHarness::new(plugin)` (or `with_config`), `send(json!({…}))`, `recv()`
+for the next frame, `recv_response(id)` / `recv_notification(method)` to skip
+past unrelated frames, `close_stdin()` for the EOF shutdown signal, and
+`finished()` to await the loop and collect what it still wrote (shutdown logs
+included). Use `Harness` for plugin behaviour and `WireHarness` only where
+framing, request routing or shutdown ordering is what the test is about: the
+SDK's own runtime tests and the probe crate (`Plugins/_flash_plugin_rust/probe`)
+hold the protocol conformance suite, so a plugin crate rarely needs one.
 
-If a plugin will not load, run `:plugins doctor`. It checks manifest loading,
+The SDK and the host XCTest suites consume the shared malformed and boundary
+corpus at `Plugins/_flash_plugin_rust/fixtures/wire-values.fixture`;
+`Plugins/_flash_plugin_rust/protocol.json` pins the constants both assert
+against.
+
+If a plugin will not load, run `:doctor`. It checks manifest loading,
 runtime state, executable resolution, and whether the generated Seatbelt
 profile compiles. Use `:plugins reload` after correcting the problem or to
 restart a process parked by its restart budget.
@@ -166,11 +310,13 @@ restart a process parked by its restart budget.
 ./Scripts/build-plugins.sh dev <id>   # build + sign + stage just this plugin
 ```
 
-The staged `mv -f` lands as a rename; the host's file watcher restarts only
-that plugin (~300 ms debounce) while the other plugins keep their published
-catalogs. If watching is disabled, run `:plugins reload`.
+The staged `mv -f` lands as a rename in the plugin root; the host watches only
+that root directory (`manifest.json` and the binary live there — source edits
+under `src/` change nothing the host loads) and restarts only that plugin
+(~300 ms debounce) while the other plugins keep their published catalogs. If
+watching is disabled, run `:plugins reload`.
 `CARGO_TARGET_DIR=build/plugin-target cargo test --manifest-path
 Plugins/<id>/Cargo.toml` needs no built binaries at all (always set
-`CARGO_TARGET_DIR` for manual cargo runs — a bare run creates a watched
-`Plugins/<id>/target/`). Debug any plugin by running its binary in a
+`CARGO_TARGET_DIR` for manual cargo runs so no `Plugins/<id>/target/` tree
+appears in the checkout). Debug any plugin by running its binary in a
 terminal and typing NDJSON at it — no host required.

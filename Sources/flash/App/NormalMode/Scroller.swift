@@ -3,13 +3,8 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 
-/// Normal-mode scrolling: page-instant, half-page wheel synthesis,
-/// arrow-key fallback. Walks the focused-app AX tree to find scroll
-/// bars / `kAXVerticalScrollBar` / scrolled page panes and uses
-/// kAXValue setters where the AX surface allows it.
-///
-/// Split out of NormalMode.swift; same public surface, no behaviour
-/// change.
+/// Vertical steps post line-based wheel events at the cursor. Horizontal and
+/// document-edge scrolling retain their focused-window Accessibility fallbacks.
 extension NormalModeDispatcher {
   @discardableResult
   static func scroll(
@@ -18,21 +13,18 @@ extension NormalModeDispatcher {
     bundleID: String = "",
     windowFrame: CGRect? = nil
   ) -> Bool {
-    // Hermetic policy: never emit a character keystroke as part of a
-    // scroll command. The user's `h` / `j` / `k` / `l` mappings in
-    // normal mode must not surface as typed text in the focused app —
-    // not in vim, not in a shell prompt, nowhere. We try AX
-    // scroll-bar value, then a synthesised scroll wheel (which is a
-    // separate `CGEvent` type and never inserts a glyph), then AX
-    // actions (`AXScroll*`). The earlier fallback to arrow / page /
-    // letter keys was the leak path.
+    if let lines = scrollLineDelta(for: kind) {
+      return synthesizeLineScroll(lines: lines)
+    }
     let pageTarget = windowFrame.flatMap { pageScrollTarget(pid: pid, visibleIn: $0) }
     if let pageTarget {
       if scrollPageInstantly(kind, element: pageTarget.element) {
         FlashLog.debug("[normal_mode] scroll method=page_ax_edge kind=\(kind) bundle=\(bundleID)")
         return true
       }
-      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: pageTarget.frame) {
+      if synthesizeScrollWheel(
+        kind, bundleID: bundleID, windowFrame: windowFrame, pageFrame: pageTarget.frame)
+      {
         FlashLog.debug("[normal_mode] scroll method=page_wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
@@ -44,18 +36,25 @@ extension NormalModeDispatcher {
         FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind) bundle=\(bundleID)")
         return true
       }
+      // A terminal refuses the huge pixel delta below; its edge is a bounded
+      // line scroll, delivered like ctrl-u / ctrl-d.
+      if pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundleID),
+        let lines = edgeLineDelta(for: kind), synthesizeLineScroll(lines: lines, spread: false)
+      {
+        FlashLog.debug("[normal_mode] scroll method=edge_lines kind=\(kind) bundle=\(bundleID)")
+        return true
+      }
       // Wheel fallback for gg/G: a single huge delta sends apps that
       // honour wheel-delta proportionally (Firefox, most web/Electron
-      // apps) all the way to the edge. Terminals in tmux mouse mode
-      // typically step one line per wheel "click" so this only nudges
-      // them — full top/bottom inside tmux needs the tmux plugin to
-      // claim scroll_top/scroll_bottom (see follow-up roadmap).
-      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
+      // apps) all the way to the edge. Terminals never reach it — the
+      // wheel is refused there — so `gg`/`G` inside tmux is the tmux
+      // plugin's `scroll_top`/`scroll_bottom` source action instead.
+      if synthesizeScrollWheel(kind, bundleID: bundleID, windowFrame: windowFrame, pageFrame: nil) {
         FlashLog.debug("[normal_mode] scroll method=edge_wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
     default:
-      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
+      if synthesizeScrollWheel(kind, bundleID: bundleID, windowFrame: windowFrame, pageFrame: nil) {
         FlashLog.debug("[normal_mode] scroll method=wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
@@ -180,11 +179,7 @@ extension NormalModeDispatcher {
       return ["AXScrollLeftByPage", "AXScrollLeft"]
     case .right:
       return ["AXScrollRightByPage", "AXScrollRight"]
-    case .up, .halfPageUp:
-      return ["AXScrollUpByPage", "AXScrollUp"]
-    case .down, .halfPageDown:
-      return ["AXScrollDownByPage", "AXScrollDown"]
-    case .top, .bottom:
+    case .up, .down, .halfPageUp, .halfPageDown, .top, .bottom:
       return []
     }
   }
@@ -245,16 +240,8 @@ extension NormalModeDispatcher {
       return ScrollIntent(axis: .horizontal, deltaFraction: -0.08, edge: nil)
     case .right:
       return ScrollIntent(axis: .horizontal, deltaFraction: 0.08, edge: nil)
-    case .up:
-      return ScrollIntent(axis: .vertical, deltaFraction: -0.08, edge: nil)
-    case .down:
-      return ScrollIntent(axis: .vertical, deltaFraction: 0.08, edge: nil)
-    case .halfPageUp:
-      return ScrollIntent(
-        axis: .vertical, deltaFraction: -FlashTunables.scrollPageFraction, edge: nil)
-    case .halfPageDown:
-      return ScrollIntent(
-        axis: .vertical, deltaFraction: FlashTunables.scrollPageFraction, edge: nil)
+    case .up, .down, .halfPageUp, .halfPageDown:
+      return nil
     case .top:
       return ScrollIntent(axis: .vertical, deltaFraction: nil, edge: .minimum)
     case .bottom:
@@ -262,15 +249,82 @@ extension NormalModeDispatcher {
     }
   }
 
+  /// Horizontal/edge fallbacks retain their terminal AX behavior. Explicit
+  /// vertical line scrolling goes directly through the terminal's mouse handling.
+  static func pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: String) -> Bool {
+    TerminalEmulators.contains(bundleIdentifier)
+  }
+
+  /// Injection seam: production posts to the HID tap.
+  static var wheelEventPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+
+  static func scrollLineDelta(for kind: ScrollKind, repeatCount: Int = 1) -> Int32? {
+    let lines: Int32
+    switch kind {
+    case .up: lines = FlashTunables.scrollStepLines
+    case .down: lines = -FlashTunables.scrollStepLines
+    case .halfPageUp: lines = FlashTunables.scrollPageLines
+    case .halfPageDown: lines = -FlashTunables.scrollPageLines
+    case .left, .right, .top, .bottom: return nil
+    }
+    return lines * Int32(RepeatCount.clamp(repeatCount))
+  }
+
+  /// Lines one `gg` / `G` scrolls where only line scrolling is safe: past
+  /// either end of any realistic scrollback, bounded so a program that
+  /// tracks the mouse receives a finite burst of wheel reports.
+  static let edgeScrollLines: Int32 = 1_000
+
+  static func edgeLineDelta(for kind: ScrollKind) -> Int32? {
+    switch kind {
+    case .top: return edgeScrollLines
+    case .bottom: return -edgeScrollLines
+    case .up, .down, .halfPageUp, .halfPageDown, .left, .right: return nil
+    }
+  }
+
+  /// A vertical step as line wheel events at the cursor. With
+  /// `[mode] scroll_smooth_ms` set, `spread` splits it over that duration on
+  /// the click queue, and every line scroll — spread or not, like a terminal
+  /// `gg` / `G` — first drops what a previous smooth scroll has left.
+  @discardableResult
+  static func synthesizeLineScroll(lines: Int32, spread: Bool = true) -> Bool {
+    let smoothMs = FlashTunables.scrollSmoothMs
+    guard smoothMs > 0 else { return postLineScroll(lines: lines) }
+    ActionDispatcher.postWheelSteps(
+      SmoothScroll.steps(lines: lines, durationMs: spread ? smoothMs : 0)
+    ) { postLineScroll(lines: $0) }
+    return true
+  }
+
+  @discardableResult
+  private static func postLineScroll(lines: Int32) -> Bool {
+    let source = CGEventSource(stateID: .combinedSessionState)
+    guard
+      let event = CGEvent(
+        scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
+        wheel1: lines, wheel2: 0, wheel3: 0)
+    else { return false }
+    event.flags = []
+    if let cursor = CGEvent(source: nil)?.location { event.location = cursor }
+    event.setIntegerValueField(
+      .eventSourceUserData, value: ActionDispatcher.syntheticMouseEventTag)
+    wheelEventPoster(event)
+    return true
+  }
+
   private static func synthesizeScrollWheel(
     _ kind: ScrollKind,
+    bundleID: String,
     windowFrame: CGRect?,
     pageFrame: CGRect?
   ) -> Bool {
+    if pixelWheelSynthesisIsUnsafeInTerminal(bundleIdentifier: bundleID) {
+      FlashLog.debug("[normal_mode] suppress terminal wheel kind=\(kind) bundle=\(bundleID)")
+      return false
+    }
     guard let windowFrame, !windowFrame.isNull, windowFrame.width > 0, windowFrame.height > 0,
-      let delta = scrollWheelDelta(
-        for: kind,
-        viewportSize: (pageFrame ?? windowFrame).size)
+      let delta = pixelScrollWheelDelta(for: kind)
     else {
       return false
     }
@@ -291,7 +345,7 @@ extension NormalModeDispatcher {
     event.location = CGPoint(x: point.x, y: screenH - point.y)
     event.setIntegerValueField(
       .eventSourceUserData, value: ActionDispatcher.syntheticMouseEventTag)
-    event.post(tap: .cghidEventTap)
+    wheelEventPoster(event)
     return true
   }
 
@@ -315,24 +369,14 @@ extension NormalModeDispatcher {
     return CGPoint(x: x, y: y)
   }
 
-  static func scrollWheelDelta(
-    for kind: ScrollKind,
-    viewportSize: CGSize
-  ) -> (vertical: Int32, horizontal: Int32)? {
-    let verticalPage = Int32(max(1, (viewportSize.height / 2).rounded()))
+  static func pixelScrollWheelDelta(for kind: ScrollKind) -> (vertical: Int32, horizontal: Int32)? {
     switch kind {
     case .left:
       return (vertical: 0, horizontal: scrollStepPixels)
     case .right:
       return (vertical: 0, horizontal: -scrollStepPixels)
-    case .up:
-      return (vertical: scrollStepPixels, horizontal: 0)
-    case .down:
-      return (vertical: -scrollStepPixels, horizontal: 0)
-    case .halfPageUp:
-      return (vertical: verticalPage, horizontal: 0)
-    case .halfPageDown:
-      return (vertical: -verticalPage, horizontal: 0)
+    case .up, .down, .halfPageUp, .halfPageDown:
+      return nil
     case .top:
       // Huge positive delta — apps that honour wheel delta proportionally
       // (Firefox, Slack's Electron view, most web apps) jump to the top
@@ -352,10 +396,7 @@ extension NormalModeDispatcher {
   private static let extremeWheelDelta: Int32 = 1_000_000
 
   static func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
   private static func scrollBar(axis: Axis, pid: pid_t) -> AXUIElement? {
     let app = AXApp.make(pid: pid)

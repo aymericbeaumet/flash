@@ -42,7 +42,10 @@ extension AppMonitor {
       forName: NSWorkspace.activeSpaceDidChangeNotification,
       object: nil, queue: .main
     ) { [weak self] _ in
-      self?.onFocusedEnvironmentChanged(reason: "space")
+      // Window managers re-tile on a Space switch: switch Gecko's
+      // accessibility mode off before they move anything.
+      GeckoAccessibility.spaceChanged()
+      self?.onFocusedEnvironmentChanged(reason: .space)
     }
     workspaceObservers = [activate, terminate, launch, activeSpace]
 
@@ -50,7 +53,7 @@ extension AppMonitor {
       forName: NSApplication.didChangeScreenParametersNotification,
       object: nil, queue: .main
     ) { [weak self] _ in
-      self?.onFocusedEnvironmentChanged(reason: "screen")
+      self?.onFocusedEnvironmentChanged(reason: .screen)
     }
     localObservers = [screen]
   }
@@ -58,6 +61,8 @@ extension AppMonitor {
   func onFocusedAppChanged(to app: NSRunningApplication) {
     let pid = app.processIdentifier
     guard pid > 0 else { return }
+    // Gecko keeps the tree Flash woke only while its app is focused.
+    GeckoAccessibility.focusChanged(to: pid)
     // Bump this pid's dirty token — any prepared model from before the
     // focus came back is now suspect (the app may have repainted, the
     // window may have moved). Discarding via token bump is cheaper than
@@ -71,16 +76,26 @@ extension AppMonitor {
     } else {
       refreshFocusedWindowObservation(for: pid)
     }
-    scheduleModelRefresh(for: pid, reason: "focus")
+    // Chromium and Flutter build their tree asynchronously after the wake,
+    // and may have dropped it while in the background: send it now, before
+    // anything walks, so the tree is building while the focus walk waits for
+    // it. Only apps whose runtime needs it get the flags (`maybeWake`).
+    maybeWakeChromiumAccessibility(for: app)
+    modelScheduler.cancelReadiness(exceptPID: pid)
+    readinessRewalkBudget.removeValue(forKey: pid)
+    scheduleFocusModelRefresh(for: pid, bundleIdentifier: app.bundleIdentifier)
     focusedElementMayHaveChanged?(pid)
   }
 
   private func onAppTerminated(pid: pid_t) {
+    GeckoAccessibility.appTerminated(pid: pid)
     teardownObserver(for: pid)
     preparedModels.remove(pid: pid)
     dirtyTokens.removeValue(forKey: pid)
     axEventStormingPIDs.remove(pid)
     axEventStormCounts.removeValue(forKey: pid)
+    healthyTargetCounts.removeValue(forKey: pid)
+    backgroundWalkGate.forget(pid: pid)
     cancelRefreshWork(for: pid)
   }
 
@@ -94,7 +109,7 @@ extension AppMonitor {
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
     if Self.notificationShouldSchedulePreparedModelRefresh(notification), !eventStorming {
-      scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
+      scheduleModelRefresh(for: pid, reason: .axEvent(notification))
     }
     if Self.notificationMayChangeObservedWindow(notification) {
       refreshFocusedWindowObservation(for: pid)
@@ -116,7 +131,7 @@ extension AppMonitor {
       guard let self, pid > 0 else { return }
       self.dirtyTokens[pid, default: 0] &+= 1
       self.invalidatePreparedModel(for: pid)
-      self.scheduleModelRefresh(for: pid, reason: reason)
+      self.scheduleModelRefresh(for: pid, reason: .userAction(reason))
       FlashLog.debug("[ax] model_invalidated pid=\(pid) reason=\(reason)")
     }
   }
@@ -169,7 +184,7 @@ extension AppMonitor {
     axEventStormingPIDs = stormingPIDs
   }
 
-  private func onFocusedEnvironmentChanged(reason: String) {
+  private func onFocusedEnvironmentChanged(reason: ModelRefreshReason) {
     guard let app = NSWorkspace.shared.frontmostApplication else { return }
     let pid = app.processIdentifier
     guard pid > 0 else { return }
@@ -205,16 +220,11 @@ extension AppMonitor {
 
     let appEl = AXApp.make(pid: pid)
     let ctx = ObserverContext(monitor: self, pid: pid)
-    let refcon = Unmanaged.passUnretained(ctx).toOpaque()
 
     let notifications = Self.observedNotifications(
       forBundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
 
-    CFRunLoopAddSource(
-      CFRunLoopGetMain(),
-      AXObserverGetRunLoopSource(observer),
-      .commonModes
-    )
+    AXObserverThread.shared.add(AXObserverGetRunLoopSource(observer))
 
     // Store the entry before the registrations land so a second focus
     // change can't double-install; a notification registered before its
@@ -228,15 +238,54 @@ extension AppMonitor {
     // after the app launches, exactly when it's busiest (cold start,
     // Notes' initial iCloud sync). N registrations inline here was a
     // multi-second main-thread stall waiting to happen; axQueue already
-    // hosts the walk's AX IPC. `ctx` is captured strongly so the refcon
-    // stays valid even if teardown drops the entry mid-registration —
-    // stragglers then die with the observer's port on release.
-    axQueue.async { [weak self, ctx, entry = observers[pid]!] in
-      _ = ctx
-      for n in notifications {
-        _ = AXObserverAddNotification(observer, appEl, n as CFString, refcon)
-      }
-      self?.replaceFocusedWindowObservation(in: entry)
+    // hosts the walk's AX IPC. The entry, and with it the context the refcon
+    // points at, is captured strongly so the refcon stays valid even if
+    // teardown drops the entry mid-registration — stragglers then die with
+    // the observer's port on release.
+    axQueue.async { [weak self, entry = observers[pid]!] in
+      self?.registerApplicationNotifications(notifications, in: entry, attempt: 0)
+    }
+  }
+
+  /// Delays before re-registering what an app refused because it was not
+  /// ready — `kAXErrorCannotComplete`, typically on the first focus of an app
+  /// that is still launching. Nothing else retries: the entry exists, so later
+  /// focus changes only refresh the window, and the app stayed unobserved for
+  /// its whole life — no move, close or minimize ever reached the border.
+  static let observerRegistrationRetryDelaysMs = [60, 150, 400, 1_000, 3_000]
+
+  /// Register `notifications` on the application element, then (re)resolve the
+  /// focused window, retrying the refused ones on a bounded ladder. `entry`
+  /// holds the context the refcon points at, so capturing it keeps that alive.
+  /// Runs on `axQueue`.
+  private func registerApplicationNotifications(
+    _ notifications: [String], in entry: ObserverEntry, attempt: Int
+  ) {
+    guard !entry.isTornDown else { return }
+    let refcon = Unmanaged.passUnretained(entry.context).toOpaque()
+    let refused = notifications.filter {
+      AXObserverAddNotification(entry.observer, entry.appElement, $0 as CFString, refcon)
+        == .cannotComplete
+    }
+    replaceFocusedWindowObservation(in: entry)
+    guard !refused.isEmpty else { return }
+    let pid = entry.context.pid
+    guard attempt < Self.observerRegistrationRetryDelaysMs.count else {
+      FlashLog.warn(
+        "[ax] observer_registration_gave_up pid=\(pid) refused=\(refused.count)")
+      return
+    }
+    FlashLog.debug(
+      "[ax] observer_registration_retry pid=\(pid) refused=\(refused.count) "
+        + "attempt=\(attempt + 1)")
+    // The ladder rides the shared clock. `.normal`: until a retry lands the
+    // app's events go unobserved, so it may not drift by a whole second, but
+    // no surface is waiting on the exact instant.
+    pollScheduler.scheduleOnce(
+      "core:ax_observer_retry:\(pid)", afterMs: Self.observerRegistrationRetryDelaysMs[attempt],
+      priority: .normal, on: axQueue
+    ) { [weak self] in
+      self?.registerApplicationNotifications(refused, in: entry, attempt: attempt + 1)
     }
   }
 
@@ -288,12 +337,9 @@ extension AppMonitor {
     // IPC — usually against an already-dead process here — so they follow
     // on axQueue, off the input path. `entry` is captured strongly, which
     // keeps observer/element/refcon alive until the removals finish.
-    CFRunLoopRemoveSource(
-      CFRunLoopGetMain(),
-      AXObserverGetRunLoopSource(entry.observer),
-      .commonModes
-    )
+    AXObserverThread.shared.remove(AXObserverGetRunLoopSource(entry.observer))
     axQueue.async {
+      entry.isTornDown = true
       if let window = entry.focusedWindow {
         for n in Self.focusedWindowObservedNotifications {
           _ = AXObserverRemoveNotification(entry.observer, window, n as CFString)

@@ -6,10 +6,15 @@ import Foundation
 /// during config application; reads are scalar loads from various queues,
 /// which is benign for these advisory knobs.
 enum FlashTunables {
-  /// `[mode] scroll_step` — pixels per h/j/k/l (and ctrl+e/y) step.
+  /// `[mode] scroll_step` — pixels per horizontal h/l step.
   static var scrollStepPixels: Int32 = 60
-  /// `[mode] scroll_page_fraction` — d/u fraction of the scroll range.
-  static var scrollPageFraction: Double = 0.5
+  /// `[mode] scroll_step_lines` — wheel lines per ctrl+e/y step.
+  static var scrollStepLines: Int32 = 3
+  /// `[mode] scroll_page_lines` — wheel lines per ctrl+d/u step.
+  static var scrollPageLines: Int32 = 20
+  /// `[mode] scroll_smooth_ms` — spread of one vertical line scroll; 0 is
+  /// instant.
+  static var scrollSmoothMs: Int = 0
   /// `[mode] click_hold_ms` — synthesized mouse-down→up hold.
   static var clickHoldMs: Int = 18
   /// `[mode] send_key_interval_ms` — spacing between send_key chords.
@@ -24,17 +29,23 @@ enum FlashTunables {
   /// reply is immediate by contract; this absorbs interpreter startup).
   static var pluginStartupTimeoutSeconds: Int = 5
   /// `[flashlight] live_query_timeout_ms` — per-keystroke deadline for
-  /// `live: true` plugin sources (`search` and `hints`). Never joins the
-  /// first paint, so raising it cannot regress the flashlight open.
+  /// `live: true` plugin sources (`search`). Never joins the first paint, so
+  /// raising it cannot regress the flashlight open.
   static var flashlightLiveQueryTimeoutMs: Int = 1000
+  /// Deadline for a plugin `hints` reply during activation. Not configurable:
+  /// the wait blocks the AX queue ahead of the prepared model, so it is a
+  /// latency ceiling rather than a tuning knob.
+  static let hintProviderTimeoutMs = PluginProtocol.hintsDeadlineMs
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
   /// `[statusbar] notch_margin` — points kept clear beside a notch.
-  static var statusBarNotchMargin: Double = 0
+  static var statusBarNotchMargin: Double = 6
 
   static func apply(_ config: Config) {
     scrollStepPixels = Int32(config.mode.scrollStep)
-    scrollPageFraction = config.mode.scrollPageFraction
+    scrollStepLines = Int32(config.mode.scrollStepLines)
+    scrollPageLines = Int32(config.mode.scrollPageLines)
+    scrollSmoothMs = config.mode.scrollSmoothMs
     clickHoldMs = config.mode.clickHoldMs
     sendKeyIntervalMs = config.mode.sendKeyIntervalMs
     alertDuration = config.overlay.alertDuration

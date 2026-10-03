@@ -68,7 +68,7 @@ function html() {
         <input aria-label="Electron Input" data-flash-target="input" data-role="AXTextField" value="">
       </label>
       <select aria-label="Electron Select" data-flash-target="select" data-role="AXPopUpButton">
-        <option>First</option>
+        <option selected data-flash-target="selected-option" data-role="AXMenuItem">First</option>
         <option>Second</option>
       </select>
     </div>
@@ -83,7 +83,12 @@ function html() {
 
 function collectExpectedTargets() {
   return Array.from(document.querySelectorAll("[data-flash-target]")).map((node) => {
-    const rect = node.getBoundingClientRect();
+    // Chromium exposes the selected option as a child of a collapsed select,
+    // while the option itself has no DOM layout box.
+    const boundsNode = node instanceof HTMLOptionElement && node.selected
+      ? node.closest("select") || node
+      : node;
+    const rect = boundsNode.getBoundingClientRect();
     return {
       id: node.getAttribute("data-flash-target"),
       label: node.getAttribute("aria-label") || node.textContent.trim(),

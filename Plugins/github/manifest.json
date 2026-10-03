@@ -9,6 +9,9 @@
   "capabilities": [
     "subprocess"
   ],
+  "listen": [
+    "core:session.opened"
+  ],
   "sources": [
     {
       "name": "github.repos",

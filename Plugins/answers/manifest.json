@@ -1,0 +1,21 @@
+{
+  "id": "answers",
+  "name": "Answers",
+  "version": "0.1.0",
+  "description": "Inline flashlight answers: calculator with currency rates, color conversions and time zones",
+  "exec": [
+    "./flash-plugin-answers"
+  ],
+  "capabilities": [
+    "network_fetch"
+  ],
+  "fetch_urls": [
+    "https://www.ecb.europa.eu/"
+  ],
+  "sandbox": {},
+  "query": {
+    "prefixes": [
+      "="
+    ]
+  }
+}

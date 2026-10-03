@@ -2,16 +2,67 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// Insert-mode active-window border ("we're focused here"). The frame
-/// is supplied by `AppDelegate` from `AppMonitor`'s focused-window
-/// frame and re-painted whenever AX fires a window-move/resize.
+struct ActiveWindowBorderStyle: Equatable {
+  var color: CGColor
+  var lineWidth: CGFloat
+  var glow: Bool
+}
+
+/// Active-window border ("we're focused here"). The frame is supplied by
+/// `AppDelegate` from `AppMonitor`'s focused-window frame and re-painted
+/// whenever AX fires a window-move/resize. The colour is not supplied: it is
+/// derived from `modeSurface.style`, the same value the status-bar pill is painted
+/// from, and re-derived whenever that changes, so the border and the pill can
+/// never show different modes.
 extension OverlayPanel {
-  func setActiveWindowBorder(
-    around targetFrame: CGRect?,
-    color: CGColor = OverlayPanel.nordFrost2CG,
-    lineWidth: CGFloat = 2,
-    glow: Bool = false
-  ) {
+  /// Border stroke style per badge style: a thin green stroke in normal, a thin
+  /// purple one in command (the mode-badge accents), and a thicker,
+  /// softly-glowing blue one in insert. Normal and command share insert's outer
+  /// edge — only insert grows inward (see `activeWindowBorderLocalRect`).
+  static func activeWindowBorderStyle(
+    for badgeStyle: OverlayModeBadgeStyle,
+    sizeOverride: Double = 0,
+    colorOverride: CGColor? = nil
+  ) -> ActiveWindowBorderStyle {
+    var style: ActiveWindowBorderStyle
+    switch badgeStyle {
+    case .normal: style = .init(color: nordAuroraGreenCG, lineWidth: 1, glow: false)
+    case .insert: style = .init(color: nordFrost2CG, lineWidth: 2, glow: true)
+    case .command: style = .init(color: nordAuroraPurpleCG, lineWidth: 1, glow: false)
+    }
+    // `[overlay] window_border_size` / `window_border_color` apply across
+    // every mode; the defaults (0 / nil) keep the per-mode identity above.
+    if sizeOverride > 0 { style.lineWidth = sizeOverride }
+    if let colorOverride { style.color = colorOverride }
+    return style
+  }
+
+  /// The style for the badge currently shown, with `[overlay]` overrides.
+  var activeWindowBorderStyle: ActiveWindowBorderStyle {
+    let colorOverride =
+      overlayConfig.windowBorderColor.isEmpty
+      ? nil : nsColor(fromHex: overlayConfig.windowBorderColor)?.cgColor
+    return Self.activeWindowBorderStyle(
+      for: modeSurface.style, sizeOverride: overlayConfig.windowBorderSize,
+      colorOverride: colorOverride)
+  }
+
+  /// Record the status bar bands just painted (screen coordinates; empty
+  /// while the bar is hidden) and re-stroke a shown border that must now
+  /// clear a different band.
+  func setStatusBarPaintedBands(_ bands: [CGRect]) {
+    guard bands != statusBarPaintedBands else { return }
+    statusBarPaintedBands = bands
+    restyleActiveWindowBorder()
+  }
+
+  /// Re-stroke a shown border after the badge style or border config changed.
+  func restyleActiveWindowBorder() {
+    guard let activeWindowBorderFrame else { return }
+    setActiveWindowBorder(around: activeWindowBorderFrame)
+  }
+
+  func setActiveWindowBorder(around targetFrame: CGRect?) {
     activeWindowBorderToken &+= 1
 
     CATransaction.begin()
@@ -19,6 +70,7 @@ extension OverlayPanel {
     defer { CATransaction.commit() }
 
     guard let targetFrame, !targetFrame.isNull, targetFrame.width > 0, targetFrame.height > 0 else {
+      activeWindowBorderFrame = nil
       activeWindowBorderLayer.path = nil
       var sublayers = contentLayer.sublayers ?? []
       sublayers.removeAll { $0 === activeWindowBorderLayer }
@@ -27,9 +79,13 @@ extension OverlayPanel {
       return
     }
 
+    activeWindowBorderFrame = targetFrame
+    let style = activeWindowBorderStyle
+    let color = style.color
+    let lineWidth = style.lineWidth
     let panelFrame = ensurePanelFrame()
     let local = Self.activeWindowBorderLocalRect(
-      targetFrame: targetFrame,
+      targetFrame: Self.activeWindowBorderTarget(targetFrame, clearing: statusBarPaintedBands),
       panelFrame: panelFrame,
       lineWidth: lineWidth)
     // Snap to the pixel grid of the screen the window is actually on. Using the
@@ -46,7 +102,7 @@ extension OverlayPanel {
     activeWindowBorderLayer.lineWidth = lineWidth
     // Soft, static glow (insert mode): a zero-offset shadow tinted with the
     // stroke color makes the border read as gently lit, without animating.
-    if glow {
+    if style.glow {
       activeWindowBorderLayer.shadowColor = color
       activeWindowBorderLayer.shadowOffset = .zero
       activeWindowBorderLayer.shadowRadius = 2
@@ -76,7 +132,7 @@ extension OverlayPanel {
   /// contract: Flash's interactive/transient UI must always remain fully above
   /// the window-focus chrome.
   func appendActiveWindowBorderLayerIfNeeded(to sublayers: inout [CALayer]) {
-    guard activeWindowBorderLayer.path != nil else { return }
+    guard activeWindowBorderFrame != nil else { return }
     sublayers.removeAll { $0 === activeWindowBorderLayer }
     sublayers.insert(activeWindowBorderLayer, at: 0)
   }
@@ -103,6 +159,22 @@ extension OverlayPanel {
       y: targetFrame.minY - panelFrame.minY + inset,
       width: max(0, targetFrame.width - inset * 2),
       height: max(0, targetFrame.height - inset * 2))
+  }
+
+  /// The part of a window the border outlines: its frame, cut off at the
+  /// bottom of any status bar band it runs under, so the stroke (drawn inside
+  /// the outline) is never covered by the bar painted above it. A window flush
+  /// with a band's bottom edge, or clear of it, is outlined whole; one wholly
+  /// under a band has nothing left to outline.
+  static func activeWindowBorderTarget(_ frame: CGRect, clearing bands: [CGRect]) -> CGRect {
+    var target = frame
+    for band in bands
+    where band.minX < target.maxX && band.maxX > target.minX && band.minY < target.maxY
+      && band.maxY > target.minY
+    {
+      target.size.height = max(0, band.minY - target.minY)
+    }
+    return target
   }
 
   /// Backing scale of the screen the window sits on (by center, then by largest

@@ -2,7 +2,7 @@
   "id": "disks",
   "name": "Disks",
   "version": "0.1.0",
-  "description": "Publish one-second disk activity with periodically refreshed capacity and structured hover details; summary_mode=full restores telemetry inline.",
+  "description": "Publish three-second disk activity with capacity and free space re-read on every mount change and every 30 seconds, transfer totals, and structured hover details; summary_mode=full restores telemetry inline.",
   "sandbox": {
     "exec": [
       "/bin/df",
@@ -26,6 +26,16 @@
   ],
   "status": [
     "summary",
-    "details"
+    "label",
+    "details",
+    "percent",
+    "read_bps",
+    "write_bps",
+    "read",
+    "write"
+  ],
+  "listen": [
+    "core:status.observed",
+    "core:volumes.changed"
   ]
 }

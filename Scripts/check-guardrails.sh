@@ -62,6 +62,55 @@ check_absent_except \
   'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
+# App knowledge is plugin data: what an app does for a Flash action is the
+# winning `action_bindings` entry, dispatched by ActionBindingDispatch. Virtual
+# key constants therefore appear only where Flash parses or names keys
+# (hotkey syntax, the keyboard layout, NORMAL's key names, Escape detection),
+# brackets UIKit modifiers, or applies the terminal rule — never as a chord an
+# action synthesizes.
+check_absent_except \
+  "no kVK_ chord synthesis for app actions outside the binding dispatcher" \
+  "kVK_" \
+  '/(HotkeySyntax|KeyboardLayout|UIKitApps|NormalModeTerminalChords)\.swift:|/NormalMode\.swift:[0-9]+:[[:space:]]*case kVK_|/AppDelegate\.swift:[0-9]+:.*== Int64\(kVK_Escape\)' \
+  "${PROD_SWIFT[@]}"
+
+# `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
+# main-thread Core Animation commit until SkyLight's 500 ms timeout, freezing
+# main with it. `WindowSnapshot.windowList` is the one door and always runs the
+# read on main.
+check_absent_except \
+  "window-list reads go through WindowSnapshot.windowList (main thread only)" \
+  "CGWindowListCopyWindowInfo\\(" \
+  '/WindowSnapshot\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+# Polling is a last resort and goes through PollScheduler, the one clock in
+# the process: a cadence registers, an irregular or re-arming deadline uses
+# `scheduleOnce` or `PollDeadline`. No other timer source exists in runtime
+# code, and nothing sleeps a task to schedule work. One-shot `asyncAfter`
+# stays legal only for a timeout bounding one operation, the fixed timing of
+# an interaction in progress, or a bounded fan-out of settle passes after one
+# event (docs/architecture.md lists them); anything that re-arms itself rides
+# the scheduler.
+RUNTIME_SWIFT=("${PROD_SWIFT[@]}" Sources/FlashTerminal)
+check_absent_except \
+  "recurring or deadline timers go through PollScheduler" \
+  "DispatchSource\\.makeTimerSource|DispatchSourceTimer|Timer\\.scheduledTimer|Timer\\.publish|[^[:alnum:]_.]Timer\\(|CFRunLoopTimerCreate|Task\\.sleep|afterDelay:" \
+  '^Sources/flash/App/PollScheduler\.swift:' \
+  "${RUNTIME_SWIFT[@]}"
+# Blocking sleeps only inside one bounded operation, never as a loop's clock:
+# - ActionDispatcher.swift: the spacing of one synthesized mouse gesture on
+#   the click queue (down/up hold, drag steps);
+# - PluginHostRPC.swift: the measurement window of one `host.process_metrics`
+#   call, on its own queue;
+# - TerminalSession.swift: the 1 ms back-off inside a bounded wait for one
+#   child's exit when the kqueue wait itself fails.
+check_absent_except \
+  "blocking sleeps stay inside one bounded operation" \
+  "Thread\\.sleep|usleep\\(|[^[:alnum:]_.]sleep\\(|nanosleep\\(" \
+  '^Sources/flash/App/ActionDispatcher\.swift:|^Sources/flash/App/Plugins/PluginHostRPC\.swift:|^Sources/FlashTerminal/TerminalSession\.swift:' \
+  "${RUNTIME_SWIFT[@]}"
+
 # Every production app AX element must carry a bounded messaging timeout, or a
 # wedged app beachballs Flash's main thread for the 6s system default. The
 # AXApp.make factory applies the timeout; nothing else may call the raw API.
@@ -91,6 +140,33 @@ check_absent_except \
   '^Sources/flash/App/StatusItemController\.swift:|NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
 
+# Hard rule 1 names every UI surface; each draws in one of these windows. A new
+# NSWindow/NSPanel subclass is a new surface and needs the rule amended first.
+check_absent_except \
+  "NSWindow/NSPanel subclasses are limited to the sanctioned surfaces" \
+  "class [A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*(NSPanel|NSWindow)([^[:alnum:]_]|$)" \
+  'class (OverlayPanel|StatusBarWindow|StatusBarClickPanel|StatusPopupPanel|AboutWindow|WidgetWindow)[[:space:]]*:' \
+  "${PROD_SWIFT[@]}"
+
+# Desktop widgets alone sit at desktop level (above the wallpaper, below the
+# Finder's icons and every app window), and only in their own window.
+check_absent_except \
+  "desktop window levels belong to WidgetWindow" \
+  "CGWindowLevelForKey\\(\\.desktop|kCGDesktop" \
+  '/WidgetWindow\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+# Widgets are click-through and never take focus.
+widget_window=Sources/flash/App/Overlay/WidgetWindow.swift
+if [[ ! -f "$widget_window" ]] || ! search_paths -q 'ignoresMouseEvents = true' "$widget_window"; then
+  echo "GUARDRAIL FAILED: $widget_window must set ignoresMouseEvents = true" >&2
+  fail=1
+fi
+check_absent \
+  "widget windows never take mouse input or key/main focus" \
+  "ignoresMouseEvents = false|canBecomeKey: Bool \\{ true|canBecomeMain: Bool \\{ true" \
+  "$widget_window"
+
 check_absent \
   "the help_show verb is routed to the alert toast instead of the help overlay" \
   "case \\.showUsage:.*alertPanel\\.show" \
@@ -114,6 +190,101 @@ if [[ -d Plugins ]]; then
     "retired protocol wire names must not reappear" \
     '"(sources\.snapshot|sources\.query|query\.evaluate|hints\.discover|candidate\.resolve|source\.action|command\.invoke|navigation\.restore|heartbeat|sources\.invalidated|status\.updated|flash\.log)"' \
     Sources/flash Plugins/_flash_plugin_rust
+
+  # Plugins never arm a timer or sleep to schedule work: cadences, deadlines
+  # and waits go through the host clock (`ctx.interval`, `ctx.after`,
+  # `ctx.wait`, `Settle`), each at an explicit priority. Timeouts bounding one
+  # awaited operation (`tokio::time::timeout`) stay legal. Test code (items
+  # under `#[cfg(test)]`, including test-only module files) is exempt, as is
+  # the SDK's wire probe, a test fixture that is never shipped or spawned.
+  if ! plugin_timer_report="$(python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path("Plugins")
+BANNED = re.compile(
+    r"\b(?:tokio::)?time::(?:sleep|sleep_until|interval|interval_at)\b"
+    r"|\bthread::sleep\b"
+    r"|use\s+tokio::time::\{[^}]*\b(?:sleep|sleep_until|interval|interval_at)\b"
+)
+SCHEDULING = re.compile(r"\.(?:interval|after|wait)\(|\bSettle::new\(")
+
+
+def strip_comments(text):
+    return re.sub(r"//[^\n]*", lambda m: " " * len(m.group(0)), text)
+
+
+def blank(text, start, end):
+    return text[:start] + re.sub(r"[^\n]", " ", text[start:end]) + text[end:]
+
+
+def matching(text, start, opening, closing):
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == opening:
+            depth += 1
+        elif text[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+def without_tests(path, text, test_files):
+    for attribute in reversed(list(re.finditer(r"#\[cfg\(test\)\]", text))):
+        rest = text[attribute.end():]
+        declaration = re.match(r"\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", rest)
+        if declaration:
+            base = path.parent if path.name in ("main.rs", "lib.rs", "mod.rs") else path.with_suffix("")
+            test_files.add(base / f"{declaration.group(1)}.rs")
+            test_files.add(base / declaration.group(1) / "mod.rs")
+            text = blank(text, attribute.start(), attribute.end() + declaration.end())
+            continue
+        semicolon = text.find(";", attribute.end())
+        brace = text.find("{", attribute.end())
+        if brace == -1 or (semicolon != -1 and semicolon < brace):
+            end = semicolon + 1
+        else:
+            end = matching(text, brace, "{", "}")
+        text = blank(text, attribute.start(), end)
+    return text
+
+
+sources = {}
+test_files = set()
+for path in sorted(ROOT.rglob("*.rs")):
+    parts = path.parts
+    if "target" in parts or path.is_relative_to(ROOT / "_flash_plugin_rust" / "probe"):
+        continue
+    sources[path] = without_tests(path, strip_comments(path.read_text()), test_files)
+
+failures = []
+for path, text in sources.items():
+    if path in test_files:
+        continue
+    for match in BANNED.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        failures.append(f"{path}:{line}: {match.group(0)} (use the host clock)")
+    if path.parts[1].startswith("_"):
+        continue
+    for match in SCHEDULING.finditer(text):
+        end = matching(text, match.end() - 1, "(", ")")
+        arguments = text[match.end():end - 1]
+        if match.group(0) == ".wait(" and not arguments.strip():
+            continue
+        if "PollPriority::" not in arguments:
+            line = text.count("\n", 0, match.start()) + 1
+            failures.append(f"{path}:{line}: {match.group(0)} without an explicit PollPriority")
+
+print("\n".join(failures))
+sys.exit(1 if failures else 0)
+PY
+)"; then
+    echo "GUARDRAIL FAILED: plugins schedule through the host clock at an explicit priority" >&2
+    echo "$plugin_timer_report" >&2
+    fail=1
+  fi
 
   check_absent \
     "candidate catalog gathering is SDK-owned; plugins cannot define candidate_query" \
@@ -190,6 +361,13 @@ if [[ -d Plugins ]]; then
     "plugin installs must stay localized to FLASH_PLUGIN_DATA_DIR" \
     "sudo|brew install|npm install -g|deno install -g|/usr/local/bin|\\$HOME/\\.local/bin|~/\\.local/bin" \
     Plugins
+fi
+
+if tracked="$(git ls-files -- 'Tests/BrowserSnapshots/snapshots/collected-*' 'Tests/BrowserSnapshots/allowlists/collected-*')" &&
+  [[ -n "$tracked" ]]; then
+  echo "GUARDRAIL FAILED: collected browser captures are personal browsing data and must stay untracked" >&2
+  echo "$tracked" >&2
+  fail=1
 fi
 
 if [[ $fail -ne 0 ]]; then

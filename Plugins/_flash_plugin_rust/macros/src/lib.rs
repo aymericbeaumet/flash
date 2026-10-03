@@ -8,7 +8,7 @@
 //! sources require `on_start`, `live: true` sources require `on_search`, a
 //! `query` evaluator requires the synchronous `evaluate` hook, `hints`
 //! requires `on_hints`, and the perform surfaces map one handler per kind —
-//! `commands`/`bangs`/RPC-dispatched `verbs` require `on_command`, `actions`
+//! `commands`/`bangs`/`verbs` require `on_command`, `actions`
 //! requires `on_action`, `navigation` requires `on_navigate`. `on_resolve`
 //! stays optional: a plugin whose rows carry only host-executed effects never
 //! needs it.
@@ -240,8 +240,7 @@ fn manifest_has_hints(manifest: &Value) -> bool {
 }
 
 /// Whether the manifest declares a surface dispatched as
-/// `perform {kind: "command"}`: `:`-commands, bangs, or verbs without a
-/// host-handled fixed keystroke.
+/// `perform {kind: "command"}`: `:`-commands, bangs, or verbs.
 fn manifest_has_command_surface(manifest: &Value) -> bool {
     let commands = manifest
         .get("commands")
@@ -254,12 +253,12 @@ fn manifest_has_command_surface(manifest: &Value) -> bool {
         .and_then(Value::as_array)
         .map(|items| !items.is_empty())
         .unwrap_or(false);
-    let rpc_verbs = manifest
+    let verbs = manifest
         .get("verbs")
         .and_then(Value::as_array)
-        .map(|verbs| verbs.iter().any(|verb| verb.get("keystrokes").is_none()))
+        .map(|verbs| !verbs.is_empty())
         .unwrap_or(false);
-    commands || bangs || rpc_verbs
+    commands || bangs || verbs
 }
 
 fn manifest_has_actions(manifest: &Value) -> bool {
@@ -452,20 +451,19 @@ mod tests {
     }
 
     #[test]
-    fn command_surface_spans_commands_bangs_and_rpc_verbs() {
+    fn command_surface_spans_commands_bangs_and_verbs() {
         assert!(manifest_has_command_surface(&json!({
             "commands": [{ "command": "x" }]
         })));
         assert!(manifest_has_command_surface(&json!({
             "bangs": { "command": "x", "items": [{ "token": "y" }] }
         })));
-        // A verb without a fixed keystroke needs plugin RPC dispatch; one
-        // with a keystroke is handled entirely host-side.
         assert!(manifest_has_command_surface(&json!({
             "verbs": [{ "name": "set_mark" }]
         })));
+        // What an app does for Flash's own actions is host-served data.
         assert!(!manifest_has_command_surface(&json!({
-            "verbs": [{ "name": "save", "keystrokes": { "": "cmd+s" } }]
+            "action_bindings": { "app_save": { "": "cmd+s" } }
         })));
         assert!(!manifest_has_command_surface(&json!({ "commands": [] })));
         assert!(!manifest_has_command_surface(&json!({})));

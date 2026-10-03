@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import FlashCore
 
 /// Hot-reload pipeline for `flash.toml`. The file watcher fires
@@ -41,7 +42,6 @@ extension AppDelegate {
   func watchConfigFile() {
     teardownConfigWatchers()
     let candidates = ConfigLoader.candidatePaths(
-      arguments: CommandLine.arguments,
       environment: ProcessInfo.processInfo.environment)
     var watchedDirs = Set<String>()
     for url in candidates {
@@ -51,6 +51,15 @@ extension AppDelegate {
         attachWatcher(forPath: dir)
       }
     }
+    // Re-arming the watchers above is always needed (the inode may have been
+    // replaced); re-applying the config is not when its bytes are unchanged.
+    let contents = try? Data(
+      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
+    if let lastAppliedConfigFileContents, contents == lastAppliedConfigFileContents {
+      FlashLog.trace("[config] reload_skipped reason=unchanged")
+      return
+    }
+    lastAppliedConfigFileContents = contents
     reloadConfig()
   }
 
@@ -70,12 +79,19 @@ extension AppDelegate {
     let mask: DispatchSource.FileSystemEvent =
       [.write, .delete, .rename, .extend]
     let source = makeWatcher(fd: fd, eventMask: mask) { [weak self] _ in
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) {
-        [weak self] in
-        self?.watchConfigFile()
-      }
+      self?.scheduleConfigReload()
     }
     configSources.append(source)
+  }
+
+  /// One editor save produces a burst of vnode events (write, extend, attrib,
+  /// rename of the temp file, …). Coalesce the burst into a single trailing
+  /// re-watch + reload instead of one synchronous reload per event: each
+  /// event re-arms one deadline on the shared clock. `.normal`: the user just
+  /// saved and will look for the change, but a tenth of a second is
+  /// invisible beside the 150 ms settle.
+  private func scheduleConfigReload() {
+    configReload.arm(afterMs: 150) { [weak self] in self?.watchConfigFile() }
   }
 
   private func makeWatcher(
@@ -98,13 +114,18 @@ extension AppDelegate {
   /// then publish to overlay + monitor under their internal locks. Every
   /// future activation snapshots the new config at the start of its walk.
   private func reloadConfig() {
+    MainThreadActivity.note("config_reload")
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
-    DispatchQueue.global(qos: .userInitiated).async {
+    // Popups whose command could not start retry once it lands.
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       FlashProcessEnvironment.shared.refresh()
+      DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
     }
     let cfg = ConfigLoader.load()
+    if hintSession.isActive || activationInFlight { cancelOverlay() }
+    let previousAutostart = config.app.autostart
     // Rebuild the frecency store only when its tuning actually changed —
     // reconstruction reloads the on-disk snapshot, which is fine but not
     // worth doing on every unrelated reload.
@@ -138,20 +159,30 @@ extension AppDelegate {
     // config on every load — the TOML file is the single source of truth
     // for both (defaults: visible + autostart).
     statusItemController.apply(enabled: cfg.app.menuBarIcon)
-    AutoLaunch.reconcile(enabled: cfg.app.autostart)
+    // SMAppService status/register is an XPC round trip; reconcile once at
+    // startup and afterwards only when the setting changes.
+    if !autoLaunchReconciled || cfg.app.autostart != previousAutostart {
+      autoLaunchReconciled = true
+      AutoLaunch.reconcile(enabled: cfg.app.autostart)
+    }
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
-    overlay.statusBarPopupStyle = cfg.statusBar.popupStyle
+    overlay.popupStyle = cfg.popupStyle
     overlay.modeLabels = cfg.mode.labels
-    overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
+    overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
-    overlay.normalModePassthroughKeyCodes = cfg.mode.normalPassthroughKeyCodes
-    overlay.normalModePassthroughModifiers = cfg.mode.normalPassthroughModifiers
+    // Rebuilt on every load: the setting may have changed, and so may the
+    // installed layouts an explicit input-source ID names.
+    keyboardLayoutMonitor.apply(setting: KeyboardLayout.Setting(cfg.app.keyboardLayout) ?? .auto)
     statusBarController?.updateTemplate(
       cfg.statusBar.template,
-      popupTemplates: cfg.statusBar.popups,
+      popupTemplates: cfg.textPopups,
+      sources: cfg.statusBar.sources,
+      terminalPopupNames: cfg.terminalPopupNames,
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
-    registry.updateOpenConfig(cfg.open)
+    statusBarController?.setBar(enabled: cfg.statusBar.enabled)
+    statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
+    registry.updateFlashlightConfig(cfg.flashlight)
     pluginManager.updateConfig(cfg)
     pluginManager.emit(
       PluginEvent(
@@ -161,26 +192,31 @@ extension AppDelegate {
     configureDebugServer(for: cfg)
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
-    registry.refreshRunningApplications()
+    registry.scheduleRunningApplicationsRefresh()
     monitor.updateConfig(cfg)
     // The status bar's visibility is an explicit, standalone config switch —
     // it is NOT derived from advanced mode. `[statusbar] enabled` alone
     // decides whether the bar (and its reserved screen space) appears.
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
-    applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
+    NativeMenuBarAutoHide.reconcile(hidden: statusBarVisible)
+    windowLayoutManager.setDeclaredLayouts(cfg.mode.declaredWindowLayouts)
     windowLayoutManager.screenParametersDidChange(
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
       forceRecovery: false)
-    if statusBarVisible {
+    windowLayoutManager.setPlacementRules(cfg.windowRules)
+    // The status controller runs for the bar and for desktop widgets alike.
+    if statusBarVisible || !cfg.enabledWidgets.isEmpty {
       statusBarController?.start()
     } else {
       statusBarController?.stop()
-      overlay.setStatusRightText("")
     }
-    // Advanced mode is on iff an `enter_normal_mode` binding exists. Turning it
-    // off drops to a non-capturing insert; the reducer re-renders either way.
+    widgetController?.apply(
+      widgets: cfg.enabledWidgets, statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: cfg.statusBar.monitor, screenCapture: cfg.overlay.screenCapture)
+    // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
+    // off disables capture; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
     applyModeOverlay()
     // Recompute the effective mappings (config defaults + plugin mappings)
@@ -190,105 +226,26 @@ extension AppDelegate {
     invalidateEffectiveMappings()
     refreshEffectiveMappings(
       for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    reloadTerminalPopupConfiguration()
   }
 
   /// Plugins emit a state notification on every log line, lifecycle
-  /// transition, and publish. Coalesce a burst into a single status/debug refresh. Candidate
+  /// transition, and publish. Coalesce a burst into a single status refresh;
+  /// the inspector coalesces its own push. Candidate
   /// surfaces deliberately do not re-render from plugin-state churn; their
   /// typed-query update points are explicit so rows do not reshuffle while
   /// the prompt is idle.
   func pluginStateDidChange() {
-    pluginStateRefreshWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
+    debugStateDidChange()
+    // Each change re-arms one trailing deadline on the shared clock.
+    // `.normal`: plugin counts and sections are bar content, not a ticking
+    // value.
+    pluginStateRefresh.arm(afterMs: 100) { [weak self] in
       guard let self else { return }
+      self.reconcileClipboardMonitor()
+      self.reconcileHostEventSources()
       self.statusBarController?.refreshPluginSections()
-      self.debugServer?.broadcastState()
     }
-    pluginStateRefreshWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
-  }
-
-  func configureDebugServer(for cfg: Config) {
-    guard cfg.debug.httpInspectorEnabled else {
-      debugServer?.stop()
-      debugServer = nil
-      return
-    }
-    let host = cfg.debug.httpInspectorHost
-    let port = cfg.debug.httpInspectorPort
-    if debugServer?.host == host, debugServer?.port == port {
-      debugServer?.broadcastState()
-      return
-    }
-    debugServer?.stop()
-    let server = DebugServer(
-      host: host,
-      port: port,
-      stateProvider: { [weak self] in self?.debugStateJSON() ?? [:] })
-    debugServer = server
-    server.start()
-  }
-
-  func debugStateJSON() -> [String: Any] {
-    let configJSON: Any
-    if let data = config.resolvedConfigJSON.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data)
-    {
-      configJSON = object
-    } else {
-      configJSON = config.resolvedConfigJSON
-    }
-    let app = NSWorkspace.shared.frontmostApplication
-    let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
-    let statuses = pluginManager.pluginStatuses()
-    var commands = NormalModeDispatcher.coreCommandCatalog()
-    for status in statuses {
-      for command in status.commands {
-        commands.append([
-          "name": ":\(command.command) \(command.subcommand)",
-          "syntax": ":\(command.command) \(command.subcommand)",
-          "command": command.command,
-          "subcommand": command.subcommand,
-          "description": command.description,
-          "source": status.id,
-          "source_kind": "plugin",
-        ])
-      }
-    }
-    // Docs are Markdown in `HelpTopic.body`; the inspector's Docs tab renders
-    // them (and `:help [topic]` deep-links there). Ship the raw Markdown so the
-    // browser owns rendering, collapsibles, and topic navigation.
-    let docs = HelpDocs.allTopics(
-      config: config,
-      showModes: modeBadgeEnabled,
-      pluginTopics: pluginManager.pluginHelpTopics()
-    ).map { topic -> [String: Any] in
-      [
-        "name": topic.name,
-        "title": topic.title,
-        "summary": topic.summary,
-        "body": topic.body,
-        "aliases": topic.aliases,
-      ]
-    }
-    return [
-      "config": configJSON,
-      "commands": commands,
-      "clipboard": clipboardEntries.map { ["preview": $0.preview, "value": $0.value] },
-      "docs": docs,
-      "mappings": [
-        "normal_leader": config.mode.normalLeader ?? "",
-        "rows": NormalModeDispatcher.mappingsJSON(config: config),
-      ] as [String: Any],
-      "focused_app": [
-        "bundle_id": app?.bundleIdentifier ?? NSNull(),
-        "localized_name": app?.localizedName ?? NSNull(),
-        "pid": focusedPID,
-      ],
-      "mode": "\(flashMode)",
-      "overlay": String(describing: overlay?.inputMode),
-      "plugins": statuses.map(\.jsonObject),
-    ]
   }
 
   func selectInitialModeIfNeeded() {
@@ -297,56 +254,16 @@ extension AppDelegate {
     dispatchMode(.startup(advancedEnabled: hasNormalModeBinding(config)))
   }
 
-  func applySystemStatusBarSpaceReservation(enabled: Bool) {
-    let current = NSApp.presentationOptions
-    let updated = Self.systemStatusBarSpaceReservationPresentationOptions(
-      current: current,
-      enabled: enabled)
-    let changed = updated != current
-    if changed {
-      NSApp.presentationOptions = updated
-    }
-    FlashLog.debug("[statusbar] system_menu_bar_reservation enabled=\(enabled) changed=\(changed)")
-  }
-
-  static func systemStatusBarSpaceReservationPresentationOptions(
-    current: NSApplication.PresentationOptions,
-    enabled: Bool
-  ) -> NSApplication.PresentationOptions {
-    var options = current
-    if enabled {
-      options.remove(.autoHideMenuBar)
-    }
-    return options
-  }
-
   private func showConfigErrorAlertIfNeeded(for cfg: Config) {
     guard let message = cfg.loadingErrorAlertMessage else {
-      lastConfigErrorAlertMessage = nil
-      if configErrorAlertVisible {
-        configErrorAlertVisible = false
-        overlay.dismissAlert()
+      if let shown = shownConfigError {
+        shownConfigError = nil
+        overlay.dismissToast(token: shown.toastToken)
       }
       return
     }
-    guard message != lastConfigErrorAlertMessage else { return }
-    lastConfigErrorAlertMessage = message
-    configErrorAlertVisible = true
+    guard message != shownConfigError?.message else { return }
     overlay.displayAlert(message, duration: 8, style: .error)
-  }
-
-  func logPermissionState() {
-    let trusted = AXIsProcessTrusted()
-    // Seed the activation-path cache so the very first ctrl+space
-    // doesn't pay the AX IPC cost just to discover the user already
-    // granted permission at some prior session.
-    if trusted { cachedAccessibilityTrusted = true }
-    if !trusted {
-      FlashLog.warn(
-        "[ax] accessibility permission not granted. "
-          + "Grant it in System Settings → Privacy & Security → Accessibility "
-          + "for /Applications/Flash.app."
-      )
-    }
+    shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
 }

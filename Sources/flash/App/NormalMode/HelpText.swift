@@ -23,52 +23,92 @@ extension NormalModeDispatcher {
 
         Normal mode captures keyboard input through Flash's sanctioned session
         tap, with the overlay panel as its no-permission fallback. Configured
-        modified mappings use Carbon hotkeys. By default, Escape and an unmapped
-        Command, Control, Shift, or Option shortcut enter INSERT and continue
-        natively. Set `mode.normal.passthrough_keys = []` or
-        `mode.normal.passthrough_modifiers = []` to disable either fallback.
+        modified mappings use Carbon hotkeys. Unmapped keys and chords are
+        swallowed; only explicit mappings act.
 
         ## Core Motion
 
-        - `h` / `j` / `k` / `l` scroll left, down, up, and right.
-        - `ctrl-d` / `ctrl-u` scroll by half a page.
+        - `h` / `l` scroll left/right.
+        - `ctrl-e` / `ctrl-y` wheel down/up by `mode.scroll_step_lines` (default 3).
+        - `ctrl-d` / `ctrl-u` wheel down/up by `mode.scroll_page_lines` (default 20).
+        - Vertical wheel events act at the mouse cursor in every app, including terminals.
+          `mode.scroll_smooth_ms` spreads each step over that many milliseconds.
         - `gg` scrolls to the top.
         - `G` scrolls to the bottom.
-        - Counts prefix actions: `10u`, `2[t`, and similar forms repeat the action.
+        - Counts prefix actions: `10u`, `2[a`, and similar forms repeat the action.
 
-        ## Tabs And Windows
+        ## Editing And Navigation
 
-        - `[t` / `]t` moves to the previous or next tab.
-        - `[h` / `]h` walks the focused target's page history.
+        Keys map to high-level actions that resolve in the focused app: tmux
+        windows inside tmux, browser tabs, native tabs, and nothing where the
+        app lacks the action. No default sends a raw key chord.
+
+        - `u` undoes; `ctrl-r` redoes.
+        - `y` copies the selection; `p` pastes.
+        - `/` opens Find and enters INSERT; `x` closes the current tab and `X`
+          reopens the last closed one.
         - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
           to repeat (`[aaaa` / `]aaaa`).
-        - `g1` ... `g9` select a numbered tab when the focused source supports it.
-        - In browsers this maps to tab selection.
-        - `n` opens a new window with Cmd-N.
-        - `t` opens a browser tab or tmux window when the focused source supports it.
-        - `r` reloads browsers or refreshes the focused tmux client.
-        - `e` archives the focused resource when a website source supports it.
+        - `[t` / `]t` switch to the previous/next tab; keep pressing `t` to
+          repeat while staying in NORMAL.
+        - `t` opens a tab and enters INSERT; `g1`–`g9` select one and NORMAL
+          stays.
+        - `r` reloads and `R` hard-reloads where the app has a reload
+          (browsers, tmux).
+        - `ctrl-o` / `ctrl-i` traverse Flash's movement history.
+        - `H` / `L` go back/forward in the app (Cmd-[ / Cmd-], or the app's
+          own chord; nothing in terminals and apps without history).
+        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, archive,
+          find-match, URL-copy and mark shortcuts are opt-in.
 
         ## Mouse Targets
 
-        - `f` clicks a target in its current context (plain click; terminal links add Shift).
-        - `F` sends Command-Shift-click to open a target in a new context.
-        - `ctrl-f` starts mouse grid mode for a precise screen position.
-        - `ctrl-shift-f` starts the grid and sends Command-Shift-click at the final point.
-        - `sf` right-clicks a discovered target.
-        - `Df` double-clicks a discovered target.
-        - `mf` moves the cursor to a discovered target.
-        - `sF` / `DF` right-click or double-click with mouse grid mode.
-        - `mF` moves the cursor with mouse grid mode.
+        - `f` clicks a discovered target (plain click; terminal links add Shift).
+        - `F` starts the mouse grid and clicks a precise screen position.
+        - `sf` / `sF` right-click a target or a grid position.
+        - `df` / `dF` double-click a target or a grid position.
+        - `mf` / `mF` move the cursor to a target or a grid position.
+        - A click leaves the pointer on its target; `hints.restore_pointer`
+          puts it back after every committed click, drag or selection.
+        - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
+          items) and `mouse_notifications` hint surfaces outside the window;
+          bind them to use them.
+        - `mouse_button --state=down|up|toggle` holds a button at the pointer,
+          so moves (`mf`, `mF`, `mouse_pointer`) drag; Escape, `leave_mode`
+          or `--state=up` releases it.
+
+        ## Mouse Grid
+
+        The screen splits like the left half of your keyboard: 4 rows × 5
+        keys of the `hints.keys` layout (`12345` / `qwert` / `asdfg` / `zxcvb`
+        on QWERTY). Press the key where you want to go, then again inside that
+        cell; the last step clicks.
+
+        - `space` zooms into the centre; `return` clicks the centre now.
+        - `backspace` undoes the last grid key; `cmd-backspace` or
+          `alt-backspace` starts over.
+        - Arrows slide the region by its own size.
+        - `tab` / `shift-tab` move to the next / previous display.
+        - `` ` `` toggles cursor-follow; `escape` cancels.
+        - `mouse_grid --bisect` keeps a half with `h`/`j`/`k`/`l` or a
+          quadrant with `y`/`u`/`b`/`n`.
+        - Modifiers held on the final hint key ride the click, so `f` then
+          Command-Shift-`<hint>` is a Command-Shift click with no binding of its own.
+        - Triple click ships unbound: `tf` would stall the bare `t`. Bind it yourself.
 
         ## Command Line
 
-        `:` opens command-line mode. Use `:help` for the topic index,
-        `:help plugins` for plugin docs, and `:mappings` for the resolved
-        mapping table. `:flashlight <query>` searches source candidates;
+        `:` opens the command line in NORMAL. You can also bind
+        `enter_command_mode` to a shortcut of your choice. Use `:help` for
+        the browser help homepage, `:help plugins` for plugin docs, and
+        `?` or `:mappings` for the live mapping reference.
+        `:flashlight <query>` searches source candidates;
         `:open <args>` forwards verbatim to `open` (URLs, files, `-a App`).
 
-        ## Active Mappings
+        ## Configured mappings
+
+        These are the base mappings from your configuration. The [live mapping
+        reference](/mappings) includes plugin overrides for the focused app.
 
         ```text
         \(helpText(config: config, showModes: showModes))
@@ -79,21 +119,24 @@ extension NormalModeDispatcher {
   static func helpText(config: Config, showModes: Bool) -> String {
     let normal = groupedKeys(config.mode.mappings(for: .normal))
     let insert = groupedKeys(config.mode.mappings(for: .insert))
-    let commands = Array(Set(normal.keys).union(insert.keys))
+    let terminal = groupedKeys(config.mode.effectiveTerminalMappings)
+    let commands = Array(Set(normal.keys).union(insert.keys).union(terminal.keys))
       .sorted { lhs, rhs in
         lhs.diagnosticDescription.localizedCaseInsensitiveCompare(rhs.diagnosticDescription)
           == .orderedAscending
       }
-    let rows = commands.map { command -> (String, String, String) in
+    let rows = commands.map { command -> (String, String, String, String) in
       (
         command.diagnosticDescription,
         joined(normal[command] ?? []),
-        joined(insert[command] ?? [])
+        joined(insert[command] ?? []),
+        joined(terminal[command] ?? [])
       )
     }
 
     let actionWidth = max("ACTION".count, rows.map(\.0.count).max() ?? 0)
     let normalWidth = max("NORMAL".count, rows.map(\.1.count).max() ?? 0)
+    let insertWidth = max("INSERT".count, rows.map(\.2.count).max() ?? 0)
     let commandLineVisible =
       !(normal[.flashCommand(.commandMode)] ?? []).isEmpty
       || !(insert[.flashCommand(.commandMode)] ?? []).isEmpty
@@ -121,12 +164,12 @@ extension NormalModeDispatcher {
     lines.append(
       padded("ACTION", width: actionWidth)
         + "  " + padded("NORMAL", width: normalWidth)
-        + "  INSERT")
+        + "  " + padded("INSERT", width: insertWidth) + "  TERMINAL")
     for row in rows where !row.1.isEmpty || !row.2.isEmpty || showModes {
       lines.append(
         padded(row.0, width: actionWidth)
           + "  " + padded(row.1, width: normalWidth)
-          + "  " + row.2)
+          + "  " + padded(row.2, width: insertWidth) + "  " + row.3)
     }
     lines.append("")
     lines.append("Counts: N{mapping}, e.g. 10u or 3]t")
@@ -139,6 +182,8 @@ extension NormalModeDispatcher {
       mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
+      + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
+      + mappingRows(scope: "command", mappings: config.mode.command)
     let scopeWidth = max("SCOPE".count, rows.map(\.scope.count).max() ?? 0)
     let keyWidth = max("KEY".count, rows.map(\.key.count).max() ?? 0)
     var lines = [
@@ -167,12 +212,13 @@ extension NormalModeDispatcher {
   }
 
   /// The configured mappings as structured rows for the inspector's Mappings
-  /// tab — the same `all`/`normal`/`insert` data `mappingsText` renders, minus
-  /// the Markdown table formatting.
-  static func mappingsJSON(config: Config) -> [[String: String]] {
-    (mappingRows(scope: "all", mappings: config.mode.all)
-      + mappingRows(scope: "normal", mappings: config.mode.normal)
-      + mappingRows(scope: "insert", mappings: config.mode.insert))
+  /// tab — the same scope data `mappingsText` renders, minus Markdown formatting.
+  static func mappingsJSON(mode: Config.Mode) -> [[String: String]] {
+    (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
+      + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
+      + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))
+      + mappingRows(scope: "terminal", mappings: mode.effectiveTerminalMappings)
+      + mappingRows(scope: "command", mappings: Config.Mode.resolveMappings(mode.command)))
       .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
   }
 
@@ -276,15 +322,16 @@ extension NormalModeDispatcher {
     for line in commandLineHelpLines {
       lines.append(line)
     }
-    lines.append("Command mode exits with Esc, ctrl-c, or empty backspace.")
+    lines.append("Command mode exits with the leave_mode mapping, Esc, ctrl-c, or empty backspace.")
   }
 
   private static var commandLineHelpLines: [String] {
     var lines = commandLineSpecs.map { $0.helpLine }
+    lines.append(contentsOf: popupCommandSyntax.values.sorted())
     lines.append(":help [topic]")
     lines.append(":open <args>")
     lines.append(":flashlight <query>")
-    lines.append(":plugins list / :plugins ls / :plugins reload / :plugins doctor")
+    lines.append(":plugins / :plugins reload")
     return lines
   }
 

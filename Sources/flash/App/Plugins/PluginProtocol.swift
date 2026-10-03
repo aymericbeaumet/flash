@@ -1,7 +1,7 @@
 import Foundation
 
 /// The host's copy of the plugin wire-protocol constants. The single source
-/// of truth is `Plugins/_flash_plugin_specs/protocol.json`;
+/// of truth is `Plugins/_flash_plugin_rust/protocol.json`;
 /// `PluginProtocolParityTests` reads that file and asserts every value here
 /// equals it, so a drift fails the build instead of shipping a skewed host.
 enum PluginProtocol {
@@ -17,9 +17,12 @@ enum PluginProtocol {
   static let startupDeadlineMs = 5_000
   /// Per-keystroke `evaluate`.
   static let queryDeadlineMs = 50
-  /// `search` + `hints` (late replies dropped, non-fatal). Config
+  /// `search` (late replies dropped, non-fatal). Config
   /// `[flashlight] live_query_timeout_ms` tunes the live value.
   static let liveDeadlineMs = 1_000
+  /// Activation `hints` pull. Blocks the AX queue ahead of the prepared
+  /// model, so it is a fixed latency ceiling rather than a config knob.
+  static let hintsDeadlineMs = 500
   /// All four `perform` kinds; a manifest `commands[].timeout_ms` overrides
   /// per entry.
   static let performDeadlineMs = 10_000
@@ -52,6 +55,95 @@ enum PluginProtocol {
   static let maxFetchResponseBytes = 1_048_576
   static let fetchTimeoutMs = 8_000
 
+  // MARK: - Poll registrations
+
+  /// A priority a plugin may name in a `poll` registration, and the slack it
+  /// maps to on the shared clock. The core-only `system` is not one of them.
+  struct PollPriority: Equatable {
+    let name: String
+    let scheduler: PollScheduler.Priority
+  }
+
+  static let pollPriorities = [
+    PollPriority(name: "high", scheduler: .high),
+    PollPriority(name: "normal", scheduler: .normal),
+    PollPriority(name: "low", scheduler: .low),
+  ]
+  /// Ceiling on `every` and `after`, in seconds; it also keeps the
+  /// millisecond conversion far from overflow.
+  static let pollMaxSeconds = 86_400
+  static let pollMaxRegistrations = 64
+  static let pollMaxNameBytes = 64
+
+  // MARK: - Transport admission (per child)
+
+  static let maxPendingRequests = 64
+  static let maxHostRPCs = 64
+  static let maxOutboundFrames = 256
+  static let maxOutboundBytes = 20 * 1_024 * 1_024
+  static let maxInboundFrames = 256
+  static let maxInboundBytes = 20 * 1_024 * 1_024
+
+  // MARK: - Host events
+
+  /// An AX notification of an observed app; payload `{pid, notification,
+  /// bundle_id?}`.
+  static let axChangedEvent = "core:ax.changed"
+  /// Network interfaces, addresses, routes or DNS changed; payload `{}`.
+  static let networkChangedEvent = "core:network.changed"
+  /// A volume mounted, unmounted or was renamed; payload `{}`.
+  static let volumesChangedEvent = "core:volumes.changed"
+
+  /// Every `core:*` event the host delivers, in contract order.
+  static let hostEvents = [
+    "core:flash.started",
+    "core:apps.changed",
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed",
+    "core:window.focus.changed",
+    axChangedEvent,
+    "core:clipboard.changed",
+    "core:config.changed",
+    "core:power.changed",
+    networkChangedEvent,
+    volumesChangedEvent,
+    "core:space.changed",
+    "core:status.observed",
+    "core:session.opened",
+  ]
+
+  /// State signals whose latest value supersedes every earlier one, in
+  /// contract order (`host_events.replacement`).
+  static let replacementEvents = [
+    "core:apps.changed",
+    "core:focus.changed",
+    "core:window.focus.changed",
+    axChangedEvent,
+    "core:clipboard.changed",
+    "core:config.changed",
+    "core:power.changed",
+    networkChangedEvent,
+    volumesChangedEvent,
+    "core:space.changed",
+    "core:status.observed",
+  ]
+  private static let replacementEventNames = Set(replacementEvents)
+
+  /// Which earlier unsent event `name` supersedes; nil when it supersedes
+  /// none. A replacement event's key is its name, except that
+  /// `core:ax.changed` reports one fact per app and notification, so its key
+  /// adds the payload `pid` and `notification`: a keystroke's value change
+  /// never replaces a pending title change, and no app's event replaces
+  /// another's.
+  static func coalescingKey(eventName name: String, payload: [String: Any]) -> String? {
+    guard replacementEventNames.contains(name) else { return nil }
+    guard name == axChangedEvent else { return name }
+    let pid = PluginJSON.pid(payload["pid"]).map(String.init) ?? ""
+    let notification = payload["notification"] as? String ?? ""
+    return "\(name)\u{0}\(pid)\u{0}\(notification)"
+  }
+
   // MARK: - Perform
 
   /// The four `perform` kinds, the universal action vocabulary.
@@ -69,6 +161,10 @@ enum PluginProtocol {
   static let hostClosedError = "host closed stdin"
   static let hostCallTimeoutError = "host call timed out"
   static let frameOverflowError = "response exceeded outbound frame limit"
+  static let requestCapacityError = "plugin request capacity exceeded"
+  static let hostCallCapacityError = "host call capacity exceeded"
+  /// A plugin's read-only handler ran out of the request's `deadline_ms`.
+  static let deadlineExceededError = "deadline exceeded"
   static func capabilityDeniedError(_ capability: String) -> String {
     "missing \(capability) capability"
   }

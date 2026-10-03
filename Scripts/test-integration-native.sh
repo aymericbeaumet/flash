@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
+./Scripts/build-ghostty.sh --dev
 
 SETUP_ONLY=0
 RUN_ARGS=()
@@ -104,6 +105,12 @@ bundle_app() {
 </dict>
 </plist>
 EOF
+
+  if [[ "$product" == "$ORACLE_PRODUCT" ]]; then
+    /usr/libexec/PlistBuddy -c \
+      "Add :NSAppleEventsUsageDescription string The Flash native oracle sends commands to the installed Flash resident to verify hint clicks and input modes." \
+      "$staging_app/Contents/Info.plist"
+  fi
 
   echo "==> Codesigning $app_name.app"
   codesign --force --deep --sign "$SIGN_IDENTITY" --identifier "$bundle_id" "$staging_app" >/dev/null

@@ -5,38 +5,207 @@ Plugins publish text and rich marker values through `Context.status`; the host
 accepts only names declared by the plugin manifest, updates a plugin's segment
 set atomically, and coalesces notifications before rendering. Hovering never
 runs plugin work: inline popup content arrives in the same status value, and a
-live update re-hit-tests the stationary pointer and replaces the existing popup
-in place.
+live update re-hit-tests the stationary pointer and refreshes a hovered pager
+in place. Focused pagers hold their content stable until reopening or Command-R.
+
+Planned resident-plugin reloads preserve each last status segment for at most
+10 seconds while replacement values arrive. Republishing replaces it immediately;
+an explicit empty value clears it. Stop, error, removal, and configuration
+replacement clear immediately. This avoids blinking during a normal hot reload
+without keeping failed telemetry indefinitely. Development builds stage binaries
+outside watched plugin directories and replace only changed code or signing
+identity; rebuilding unchanged plugins must not trigger resident reloads.
+Ordinary status updates render in place with only a 100 ms crossfade: only
+`#[cyc]` content opts into the upward carousel transition, and a pooled layer
+reused for an ordinary metric must clear that transition first. Carousels are a
+host primitive: a plugin publishes a `StatusCarousel` (lines plus a cycle) and
+Flash owns the rotation, exactly as it does for `#{cycle:}` script sources.
 
 ## System-monitor ownership
 
 The local system-monitor suite is deliberately split by resource. Each plugin
-owns exactly `summary` and `details`; the summary embeds the details with
-`inline_status_popup`, while the standalone details segment supports custom
-templates. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
+owns `summary` and `details`; every summary carries its preview through
+`StatusValue::with_preview`, while the standalone details segment supports custom
+templates. Each also publishes a popup-free `label` for a named popup: yellow section
+name plus a grey metric. CPU/MEM/DSK percentages use two digits plus `%`, capped at 99;
+battery charge can reach 100%, and detailed reports retain the actual values.
+NET uses four cells for aggregate download + upload on the default-route
+interface (`1.2M`, ` 12K`), in decimal
+bytes per second. Counting the default route avoids double-counting VPN traffic.
+The labels contain no links or inline popups, so surrounding template bindings
+own clicks and hover. [Raw numeric segments](#raw-numeric-segments) carry the
+same figures without markup. The maintained configuration shows `details` in PTY pagers;
+no third-party monitoring application is required. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
 
 | Plugin | Nominal fast path | Slower path | Additional surface |
 | --- | --- | --- | --- |
-| `cpu` | CPU sample every second, compensating for `iostat` collection time | GPU metadata every 15 seconds | `:cpu [refresh]` |
-| `memory` | Memory composition every second | — | `:memory [refresh]` |
-| `disks` | I/O counters every second | Mounted-volume capacity every 30 seconds | `:disks [refresh]` |
-| `network` | Default-interface traffic every second | Interface, route, address, and SSID discovery every 30 seconds | `:network [refresh]`, `network.addresses` |
-| `power` | Battery/power snapshot every second | Battery health every 30 seconds and on `core:power.changed` | `:power [refresh]` |
+| `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU metadata every 15 seconds (`ioreg`) | `:cpu [refresh]` |
+| `memory` | Memory composition every second (`host_statistics64` + `sysctl`, in-process) | — | `:memory [refresh]` |
+| `disks` | I/O counters every three seconds (`ioreg`) | Mounted volumes re-read on `core:volumes.changed`; free space every 30 seconds (`df`) | `:disks [refresh]` |
+| `network` | Default-interface traffic every second while a traffic segment is shown (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route, address, and SSID discovery at start and on `core:network.changed`; no poll | `:network [refresh]`, `network.addresses` |
+| `power` | Battery/power snapshot on `core:power.changed` (IOKit power-source notification); no poll | Health collected during refreshes with a 30-second TTL; explicit `refresh` forces it | `:power [refresh]` |
 
-Every monitor retains 20 fast samples for its chart. CPU is the only fixed-
-period loop: it subtracts the blocking sample duration before sleeping. The
-other monitors use the SDK interval primitive, whose delay begins after the
-awaited callback completes, so their cadence is nominal rather than a wall-
-clock guarantee.
+Every monitor retains 20 fast samples for its chart. The one-second samplers
+read kernel counters through the SDK's `flash_plugin::sys` module (the unsafe
+FFI lives in the SDK, never in a plugin) instead of forking a CLI per sample;
+`disks` runs `ioreg` every three seconds, reducing its scheduled subprocesses
+by two-thirds compared with one-second polling; `cpu` uses it only for GPU
+metadata and caches the logical CPU count. Every monitor samples on a host
+cadence (`ctx.interval`), and a tick that lands while the previous sample still
+runs is skipped rather than queued. CPU's first sample brackets one period —
+a host deadline it awaits (`ctx.wait`), not a sleep — so the initial publish
+carries a real figure.
+
+The monitors are status-bound, so the host runs them only while a surface shows
+one of their segments — except once a command such as `:cpu` has started one,
+when it keeps running unobserved. Their cadences therefore also follow
+`core:status.observed`: cancelled while none of the plugin's segments is shown,
+re-armed with an immediate sample as soon as one is. Unobserved, a bare `:cpu`,
+`:memory` or `:disks` samples before it answers.
+
+Details add context using the same snapshots and histories, without additional
+collection:
+
+- CPU shows recent average/peak usage and load per logical CPU, with the
+  1/5/15-minute load windows identified.
+- Memory shows free, wired and compressed bytes as shares of physical memory,
+  plus unused swap. Its used count includes cached and reclaimable pages; it
+  is not a memory-pressure measurement.
+- Disks show read/write totals since device reset and each visible volume's
+  used, total and free space. Volume names and mount paths occupy separate rows.
+- Network shows receive/send totals for the current default-route interface,
+  plus recent peaks. An interface change cannot retain another interface's totals.
+- Battery shows design and full-charge capacities in mAh alongside health,
+  cycles, temperature and adapter power. Only raw capacity fields are used;
+  IOKit's percentage-valued `MaxCapacity` is not an mAh fallback.
+
+Standard detail layouts target 50 terminal columns, the default
+`[popup] min_width` of 480 points at the 13-point font with 10-point padding
+and a one-point border. A longer external name, path or address widens the
+popup up to `max_width` (750 points, 80 columns) and wraps past it. The pager
+reserves one footer row. Taller content scrolls in the pager. Smaller widths
+wrap more lines.
+See [popups](popups.md) for the presentation boundary.
 
 Keep the ownership boundaries intact:
 
+- Register sampling cadences with the host (`ctx.interval`) instead of arming a
+  timer, at the priority the [scheduling](#scheduling) table gives: one clock drives every
+  monitor, so their wake-ups coalesce.
 - `system` owns destructive and session-level system actions, not telemetry.
 - `caffeinate` alone owns sleep-assertion lifecycle.
-- Core owns date/time rendering; `timezones` provides timezone lookup.
+- Core owns date/time rendering; `answers` provides timezone lookup.
 - Weather remains separate because it requires an explicit network/location
   policy.
+
+## Scheduling
+
+No plugin arms a timer or sleeps to schedule work. Every cadence, deadline and
+wait is registered with the host clock at an explicit priority (see
+[runtime ownership](architecture.md)): `high` for a value on screen that the
+user watches change, `normal` for ordinary sampling and settles, `low` for
+remote pulls, retries and backoffs. Cadences behind a segment register only
+while a surface shows it.
+
+| Plugin · registration | Cadence or deadline | Priority | Why |
+| --- | --- | --- | --- |
+| `cpu` · CPU sample | 1 s while observed | high | A one-second figure ticks visibly |
+| `cpu` · first-sample bracket | One 1 s wait per process | high | The first figure on screen waits on it |
+| `cpu` · GPU sample | 15 s while observed | normal | Nobody watches it tick |
+| `memory` · sample | 1 s while observed | high | A one-second figure ticks visibly |
+| `network` · traffic | 1 s while a traffic segment is shown | high | One-second rates tick visibly |
+| `disks` · I/O activity | 3 s while observed | normal | A tenth of a second is invisible at three seconds |
+| `processes` · top tables | 2 s while `top_cpu`/`top_mem` is shown | high | A table someone has open |
+| `processes` · focused app | 10 s while `focused_app_details` is shown | normal | A tenth of a second is invisible at ten seconds |
+| `processes` · focus settle | 300 ms after a focus change | high | The placeholder on screen waits on it |
+| `tmux` · inventory settle | 100 ms quiet, 1 s at most, after a control-mode change | high | It redraws the session and window segments |
+| `tmux` · window-title settle | 300 ms quiet, 10 s at most | normal | Catalog only |
+| `tmux` · socket retry | 5, 15, 60 s backoff | low | A retry nobody waits on |
+| `tmux` · observer reattach | 1, 5, 15, 60 s backoff | low | A retry nobody waits on |
+| `tmux` · remote hosts | 5 s, retried 15–60 s | low | A remote pull over SSH |
+| `aiproviders` · usage | 60 s while observed | low | A remote pull |
+| `aiproviders` · autosend | 2.5 s after opening a prompt | normal | The page needs a beat to load |
+| `answers` · ECB rates | 6 h, retried every 15 min | low | A remote pull |
+| `feed` · articles | `refresh_interval` (300 s default) | low | A remote pull |
+| `browsers`, `kitty`, `windows` · settles | 300 ms–1 s windows, AX bursts up to 10 s | normal | Catalogs nobody watches refresh |
+| `browsers` · Firefox tab selection beats | 120–250 ms inside one selection | high | The user waits on the switch |
+
+`caffeinate` registers nothing: a timed assertion is bounded by
+`caffeinate -t` itself and ends on the process's exit event.
+
+## Raw numeric segments
+
+Alongside the styled labels, each monitor publishes plain values without
+markup, so templates, numeric format markers and widgets can scale, chart or
+compare them. They reuse the samples and discovery results above and add no
+collection, timer or subprocess. They travel in the same publish-if-changed
+frame as the styled segments, so an unchanged frame stays off the wire.
+
+| Segment | Value | Example |
+| --- | --- | --- |
+| `#{flash.plugin.cpu.percent}` | Total CPU, integer 0–100 | `23` |
+| `#{flash.plugin.cpu.history}` | Retained CPU totals, integers, oldest first | `12 18 23` |
+| `#{flash.plugin.cpu.load}` | One-minute load average, two decimals | `3.47` |
+| `#{flash.plugin.cpu.uptime}` | Time since boot, sleep included, two units | `3d 4h` |
+| `#{flash.plugin.memory.percent}` | Used memory, integer 0–100 | `68` |
+| `#{flash.plugin.memory.history}` | Retained memory percentages, oldest first | `67 68 68` |
+| `#{flash.plugin.disks.percent}` | Startup-volume usage, integer 0–100 | `57` |
+| `#{flash.plugin.disks.read_bps}`, `write_bps` | Aggregate disk rates, whole bytes/s | `1572864` |
+| `#{flash.plugin.disks.read}`, `write` | The same rates in binary units | `1.5 MiB/s` |
+| `#{flash.plugin.network.down_bps}`, `up_bps` | Default-route rates, whole bytes/s | `48213` |
+| `#{flash.plugin.network.down_history}`, `up_history` | Retained rates, whole bytes/s, oldest first | `0 1536 48213` |
+| `#{flash.plugin.network.address}` | First IPv4 address of the default-route interface | `192.168.1.20` |
+| `#{flash.plugin.power.percent}` | Battery charge, integer 0–100 | `73` |
+| `#{flash.plugin.power.state}` | `charging`, `discharging`, `charged` or `ac` | `charging` |
+
+Histories hold the same 20 samples as the charts and are space-separated.
+Percentages round to the nearest integer and reach 100; the 99 cap belongs to
+the fixed-width labels. An empty value clears the segment, because unknown is
+not zero: a desktop without a battery clears `power.percent`, and a rate
+before its second sample or after its stale window clears with its history,
+while an idle disk or link publishes `0`. `power.state` prefers the battery's
+own reading; `ac` covers a desktop and a battery held on the adapter without
+charging. `network.address` follows discovery (at start and on each
+`core:network.changed`) and stays empty for an IPv6-only default route.
+`cpu.uptime` is one `CLOCK_MONOTONIC` read per CPU sample through the `nix` crate, which `network` already uses for
+`getifaddrs`; Darwin derives that clock from `kern.boottime`, so it counts
+sleep, as `uptime(1)` does.
+
+## Top processes
+
+The `processes` plugin publishes conky's `${top}` tables as two status
+segments, one row per process, busiest first:
+
+| Segment | Rows ranked by | Value column |
+| --- | --- | --- |
+| `#{flash.plugin.processes.top_cpu}` | CPU, as a share of one core averaged over the last sample period | `12.5%` |
+| `#{flash.plugin.processes.top_mem}` | Resident memory | `1.2 GiB` |
+
+Each row is a name column 15 cells wide (longer names end in `…`) and a
+right-aligned value; ties rank by name, then pid, so equal figures never
+shuffle rows. The value is a multi-line table, so it reads best in a desktop
+widget or a named popup; the bar joins its lines.
+
+```toml
+[plugin.processes]
+top_count = 5 # rows per table, an integer from 1 to 20
+```
+
+An invalid `top_count` logs a warning and uses 5. Sampling is scoped to
+observation: the host reports which of the plugin's segments a surface shows
+(`core:status.observed`, see the [protocol](plugin-protocol.md#status-observation)),
+and the plugin registers its two-second sample with the host clock only while
+`top_cpu` or `top_mem` is among them. A table that stops being shown is
+cleared, so showing it again never reads stale figures. Rows come from
+`host.process_table`, the plugin's one process model, so no subprocess runs.
+
+`#{flash.plugin.processes.focused_app_details}` follows the same rule. Focus
+changes only record which app is focused until the segment is observed; while
+it is, the plugin samples that app once a focus burst settles and every ten
+seconds for its CPU figure, which has no change event. The `!kill` process
+catalog has no cadence at all: it refreshes when an app launches or quits and
+when the flashlight opens.
 
 ## Refresh and failure invariants
 
@@ -60,14 +229,16 @@ snapshot matters.
 Keep high-frequency measurement separate from discovery and health work.
 Independent collectors that become due together—CPU/GPU, disk I/O/capacity,
 and power/health—run concurrently so their timeouts do not stack.
+Power events refresh the charge and source immediately while respecting the
+health TTL, so a burst of notifications does not repeatedly spawn `ioreg`.
 
 ## Markup and sandbox boundary
 
-Externally sourced labels must pass through `escape_status_text` before they
-enter a rich status value. Do not escape intentional `#[...]` markup. When the
-host tokenizes and truncates a value, `FlashStatusBarMarkup.serialize` must
-re-escape literal hashes while preserving marker tokens; its output is lexed
-again. Variable and alias syntax inside a plugin-published value is literal
+Externally sourced labels enter a rich status value only through
+`Markup::text`, which doubles literal hashes; intentional `#[...]` markup uses
+`Markup::raw` and is never escaped. The shared format/style compiler preserves escaped literal hashes across
+expansion. Rendering, fitting, interactions, and terminal serialization consume
+typed styled runs; do not reinterpret literal text as markup in a later pass. Variable and alias syntax inside a plugin-published value is literal
 text, not template syntax.
 
 The monitor suite stays helperless and deny-default. It may use unprivileged
@@ -77,25 +248,126 @@ control, CPU/GPU frequency, and S.M.A.R.T. health therefore remain out of
 scope; battery temperature reported by the power APIs is ordinary health data.
 
 `network` intentionally has no broad `network` capability. Route discovery
-uses `/usr/sbin/netstat -rn -f inet[6]`, traffic uses `netstat -bI`, and local
-addresses use `getifaddrs`. Do not replace route discovery with `/sbin/route`,
+uses `/usr/sbin/netstat -rn -f inet[6]`, traffic uses in-process interface counters,
+and local addresses use `getifaddrs`. Do not replace route discovery with `/sbin/route`,
 which requires a broad system-socket grant. SSID reads go through the narrow
-`wifi_info` host capability: background polling is passive, and only the
-explicit `:network refresh` action may request Location authorization.
+`wifi_info` host capability: event-driven discovery reads passively, and only
+the explicit `:network refresh` action may request Location authorization.
 
 ## Adjacent AI usage status
 
 `aiproviders` is adjacent to, not part of, the local system-monitor suite. It
-owns one unified `summary`/`details` pair: Fable is nested under Claude, and the
-separate `codex_bengalfox` rate-limit bucket is presented as Astra beneath
-OpenAI. “Astra” is a local presentation alias, not app-server schema
-terminology. Grok remains a launcher only; do not add quota polling that reads
-or mutates unsupported credential stores.
+publishes `claude_label` and `codex_label`. Cld/Cdx labels show the remaining
+weekly quota with an unpadded percentage capped at 99, followed by `↻` and the
+time until the weekly window resets (for example `53%↻5d`). It reads only
+those weekly windows from the provider responses and leaves session and
+model-specific quotas out. Grok remains a launcher only; do not add quota polling that reads or mutates
+unsupported credential stores.
 
-The plugin republishes a sanitized last-good cache at startup, refreshes
-Anthropic usage at a ten-minute TTL and OpenAI usage at a two-minute TTL, and
-rerenders relative reset labels once per minute. Popup hover and status layout
-must remain pure reads of that state.
+For every quota window, and tokens and cost by day and model, show
+[tokscale](https://github.com/junhoyeo/tokscale)'s TUI in a popup under the
+labels, as the [example status strip](examples/statusbar/flash.toml) does;
+install it yourself, for example with `npm i -g tokscale`. Flash does not
+rebuild those views.
+
+The plugin republishes a sanitized last-good cache at startup. One timer runs
+each minute to rerender relative labels and check the independent fetch TTLs: ten minutes
+for Anthropic and two minutes for OpenAI. Only changed rendered segments publish.
+Quota labels show an unpadded dash once the cache is older than twice the provider
+TTL. Status layout is a pure read of that state and performs no authentication
+or API calls. The plugin is status-bound, so it is resident only while the bar
+or a popup shows one of its segments. A chat-launcher bang such as `!claude` still starts
+it on demand; the quota timer, including its credential reads, runs only while
+`core:status.observed` lists a quota segment, and resumes with an immediate
+refresh when one is shown again.
+
+Claude Code's credentials are read-only by default. The plugin reads the
+`Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and
+uses the stored access token until it expires. Claude Code renews its
+eight-hour token only when it runs, so after a long idle stretch the Claude
+label ages out to a dash. An expired token makes no request, so the plugin
+rereads the store on every one-minute tick and the label recovers within a
+minute of Claude Code renewing it; every other failure retries after five
+minutes. A failed or absent Claude reading logs one content-free warning when
+it starts or changes class (`reason` is `no_credentials`, `token_expired`,
+`renewal_failed`, `unrecognized`, or `request` with its `http_status`), and one
+info line when a reading returns. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
+into renewing the token with Claude Code's OAuth client two minutes before
+expiry and writing the rotation back to Claude Code's store. Rotating another
+app's refresh token can sign that app out.
+
+An opted-in refresh preserves the complete credential document. Keychain writes
+use hex-encoded password data on `security -i` stdin, followed by read-back
+verification. Never pass credential JSON to a trailing `security ... -w` on stdin:
+that option prompts on the terminal and can save an empty password. Secrets must
+remain off subprocess argv and diagnostic output. An already empty credential
+requires signing in again through Claude Code.
+
+## Feed headlines
+
+`feed` owns the `summary` and `label` segments, selected with
+`#{flash.plugin.feed.summary}` and `#{flash.plugin.feed.label}`. Set
+`[plugin.feed] url` to an RSS feed URL;
+without one, the plugin makes no network requests. `refresh_interval` defaults
+to 300 seconds and `cycle_interval` to 30 seconds. The plugin publishes every
+article in the window as one host-rotated carousel; Flash rotates it, keeps the
+visible headline until its scheduled rotation across refreshes, and slides the
+title, domain, and outbound arrow together through the full bar height while
+the label stays still as the carousel's prefix. The refresh cadence, driven by
+the host clock, is the plugin's only timer: an article that leaves the window
+drops out at the next refresh.
+Other metrics update without this transition, including when pooled layers are reused.
+
+Only items with a valid publication date within the rolling last 24 hours
+participate, newest first. Missing dates and future dates are excluded.
+A failed refresh still expires old items; a transient network
+or parse failure retains the remaining last-good items, while a successful
+empty feed clears the segment.
+
+Only the linked title shrinks, ending in an ellipsis while reserving the domain
+and outbound arrow. The feed stays before the notch or, without one, before
+the actual centre component; its arrow and click target remain visible. RSS item links
+open the feed's article page; an Atom `link rel="via"` extension supplies the
+original article link when present. For AGGR, this means the title opens the
+archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`
+for this feed; the default label is `FEED`. Each carousel line owns its
+preview, so the title, domain, and arrow share one popup region.
+
+`label` carries the same rotating headlines with the same still prefix and
+cadence, but no outbound arrow and no inline preview, and its title and domain
+form one link to the feed item rather than three separate targets. Binding
+`label` instead of `summary` hands hover to the surrounding template, so a
+configuration can wrap it in its own `#[popup=…]` and point that popup at any
+command it likes — a feed reader, a script, anything. The plugin does
+not decide what hovering a headline shows; the configuration does. The still
+prefix stays outside the item link, so a template link wrapping the segment
+addresses the feed itself: clicking the prefix opens the feed, clicking the
+headline or its domain opens that item.
+
+```toml
+# A popup the configuration owns end to end.
+[statusbar]
+template = "#[align=left]#[popup=feed]#[link=https://example.com]#{flash.plugin.feed.label}#[nolink]#[nopopup]"
+
+[popup.feed]
+command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]
+persistent = true
+cwd = "."
+```
+
+Hovering the article title, domain, or arrow opens a terminal-rendered preview of its opening
+lines from `content:encoded`, falling back to `description`. Paragraph breaks,
+headings, lists, quotations, emphasis, and code retain their structure. The
+excerpt is bounded to 12 logical lines and 900 visible characters; longer
+articles end with an ellipsis. Option-click any of its links to pin the
+preview; normal clicks preserve each link destination.
+
+For AGGR, the feed's article body is also the content of its Markdown export.
+The plugin prepares the excerpt during the background feed refresh; hovering
+opens an owned `less` process over that cached excerpt, without fetching or
+starting another collector. The registry removes the pager and its private
+snapshot on dismissal. External text is escaped before adding styles, and
+truncation preserves complete style markers. URL marker values are escaped separately.
 
 ## Validation
 

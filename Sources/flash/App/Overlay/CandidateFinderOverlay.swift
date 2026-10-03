@@ -8,30 +8,6 @@ import QuartzCore
 /// cheaper for plain text but expensive for emoji searches because CoreText
 /// had to resolve fallback fonts across the whole list on every keystroke.
 extension OverlayPanel {
-  func displayCandidateFinder(query: String, items: [CandidateDisplayItem]) {
-    FlashLog.trace(
-      "[overlay] display_candidate_finder query_length=\(query.count) items=\(items.count)")
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer {
-      CATransaction.commit()
-      captureKeyboardInput()
-    }
-
-    candidateFinderQuery = query
-    inputMode = .candidateFinder
-    hideCommandTextField()
-    commandLineText = query
-    commandLineCursorIndex = query.count
-    // No source-locked prefix: flashlight searches every candidate
-    // source uniformly, so labelling the prompt with one ("Applications>")
-    // misrepresents what's actually being filtered.
-    commandPromptPrefix = ""
-    commandPromptVisible = true
-    setCandidateFinderResults(items: items, emptyText: "no matching app")
-    updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
-  }
-
   func clearCandidateFinderResults() {
     candidateFinderResultsVisible = false
     candidateFinderResultsMeasurementText = ""

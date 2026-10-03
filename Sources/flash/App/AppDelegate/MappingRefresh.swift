@@ -10,12 +10,17 @@ extension AppDelegate {
   /// changed, so an ordinary app switch doesn't churn global-hotkey
   /// registrations.
   func refreshEffectiveMappings(for bundleID: String?) {
+    MainThreadActivity.note("effective_mappings")
     let effective = effectiveMode(
       for: pluginSelectorContext(fallbackBundleID: bundleID))
     overlay?.normalModeMappings = effective.compiledNormal
     if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
+      terminalInputMappings?.replaceMappings(
+        effective.compiledTerminal,
+        timeoutMs: config.mode.sequenceTimeoutMs)
       mappings.apply(mode: effective)
       lastAppliedMappingMode = effective
+      debugStateDidChange()
     }
   }
 
@@ -26,19 +31,29 @@ extension AppDelegate {
     lastAppliedMappingMode = nil
   }
 
+  /// Selectors only need a bundle id. A caller that already knows the
+  /// frontmost app passes it as `fallbackBundleID` and skips the WindowServer
+  /// snapshot behind `currentNonFlashContext()`; Flash's own bundle still
+  /// resolves through the non-Flash context so the About window or a terminal
+  /// popup never becomes the selector target.
   func pluginSelectorContext(
     for context: AppContext? = nil,
     fallbackBundleID: String? = nil
   ) -> PluginSelectorContext {
-    let resolved = context ?? currentNonFlashContext()
-    return PluginSelectorContext(bundleID: resolved?.bundleIdentifier ?? fallbackBundleID)
+    if let context { return PluginSelectorContext(bundleID: context.bundleIdentifier) }
+    if let fallbackBundleID, fallbackBundleID != Bundle.main.bundleIdentifier {
+      return PluginSelectorContext(bundleID: fallbackBundleID)
+    }
+    return PluginSelectorContext(
+      bundleID: currentNonFlashRunningApplication()?.bundleIdentifier ?? fallbackBundleID)
   }
 
-  private func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {
+  func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {
     let key = context.cacheKey
     if let cached = effectiveMappingCache[key] { return cached }
     let pluginMappings = pluginManager.mappings(in: context)
-    let effective = EffectiveMappings.merge(base: config.mode, plugin: pluginMappings)
+    let effective = EffectiveMappings.merge(
+      base: config.mode, plugin: pluginMappings, bundleID: context.bundleID)
     effectiveMappingCache[key] = effective
     return effective
   }
@@ -46,5 +61,6 @@ extension AppDelegate {
   private func mappingModeChanged(from old: Config.Mode?, to new: Config.Mode) -> Bool {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
+      || old.command != new.command || old.terminal != new.terminal
   }
 }

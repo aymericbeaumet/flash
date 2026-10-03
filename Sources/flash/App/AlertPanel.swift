@@ -2,19 +2,25 @@ import AppKit
 import QuartzCore
 
 extension OverlayPanel {
-  struct AlertStyle {
+  struct AlertStyle: Equatable {
     let fillColor: NSColor
     let strokeColor: NSColor
     let textColor: NSColor
+    /// Whether the toast survives a transient overlay teardown (an app switch,
+    /// a mode change, a dismiss observer). An error has to stay long enough to
+    /// be read; an informational toast gets out of the way.
+    let outlivesTeardown: Bool
 
     static let standard = AlertStyle(
       fillColor: NSColor.black.withAlphaComponent(0.75),
       strokeColor: .white,
-      textColor: .white)
+      textColor: .white,
+      outlivesTeardown: false)
     static let error = AlertStyle(
       fillColor: NSColor.systemRed.withAlphaComponent(0.92),
       strokeColor: NSColor.white.withAlphaComponent(0.95),
-      textColor: .white)
+      textColor: .white,
+      outlivesTeardown: true)
 
     static func from(_ style: AlertCommand.Style) -> AlertStyle {
       switch style {
@@ -39,22 +45,10 @@ extension OverlayPanel {
     style: AlertStyle = .standard
   ) {
     let duration = duration ?? Self.alertDisplayDuration
-    transientDisplayToken &+= 1
-    let myToken = transientDisplayToken
-
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer {
-      CATransaction.commit()
-      refreshWindowLevelForCurrentContent()
-      orderFrontRegardless()
-    }
-
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let frame = snapshot.unionFrame
     let screenFrame = snapshot.mainFrame ?? frame
     applyPanelFrame(frame)
-    recycleAll()
 
     let padding = Self.alertTextSize / 2
     let maxTextWidth = max(
@@ -70,7 +64,7 @@ extension OverlayPanel {
       width: boxSize.width,
       height: boxSize.height)
 
-    let label = dequeueLabelLayer()
+    let label = makeLabelLayer()
     label.string = message
     label.font = NSFont.systemFont(ofSize: Self.alertTextSize)
     label.fontSize = Self.alertTextSize
@@ -84,7 +78,7 @@ extension OverlayPanel {
       width: textSize.width + Self.alertTextGutter,
       height: textSize.height)
 
-    let box = dequeueHintLayer()
+    let box = makeChipLayer()
     box.frame = boxFrame
     box.colors = nil
     box.backgroundColor = style.fillColor.cgColor
@@ -94,24 +88,13 @@ extension OverlayPanel {
     box.masksToBounds = true
     box.contentsScale = snapshot.mainScale
     box.sublayers = [label]
-
-    var sublayers: [CALayer] = [box]
-    appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
-    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
-    contentLayer.sublayers = sublayers
-    transientContentVisible = true
-    hintLayers.append(box)
-    labelLayers.append(label)
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-      guard let self, self.transientDisplayToken == myToken else { return }
-      self.hide()
-    }
+    presentToast(
+      box, durationMs: Int((duration * 1000).rounded()),
+      outlivesTeardown: style.outlivesTeardown)
   }
 
   func dismissAlert() {
-    transientDisplayToken &+= 1
-    hide()
+    dismissToast()
   }
 
   private static func alertTextSize(for message: String, maxWidth: CGFloat) -> CGSize {

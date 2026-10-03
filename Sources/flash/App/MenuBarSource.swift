@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import FlashCore
+import FlashProviders
 
 /// `@menus` — the frontmost app's menu-bar items as a live flashlight source
 /// (Shortcat / Paletro parity: run any app command without memorizing its
@@ -105,6 +106,19 @@ final class MenuBarSource: FlashSource {
   ) -> Candidate? { nil }
   func documentURL(in context: AppContext) -> String? { nil }
 
+  /// The app's menu-bar titles in bar order, the Apple menu first: the
+  /// children of its `AXMenuBar`. Shared by `@menus` and `mouse_menubar`.
+  static func menuBarItems(of app: AXUIElement) -> [AXUIElement] {
+    var menuBarRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &menuBarRaw)
+        == .success,
+      let menuBarValue = menuBarRaw,
+      CFGetTypeID(menuBarValue) == AXUIElementGetTypeID()
+    else { return [] }
+    return AXAttribute.children(menuBarValue as! AXUIElement)
+  }
+
   /// BFS the app's menu bar: top-level AXMenuBarItems (Apple menu skipped)
   /// down through nested AXMenus, collecting enabled, titled leaf items with
   /// their `File › Export…` path as the candidate title.
@@ -112,15 +126,6 @@ final class MenuBarSource: FlashSource {
     pid: pid_t
   ) -> ([Candidate], [String: AXUIElement]) {
     let app = AXApp.make(pid: pid)
-    var menuBarRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &menuBarRaw)
-        == .success,
-      let menuBarValue = menuBarRaw,
-      CFGetTypeID(menuBarValue) == AXUIElementGetTypeID()
-    else { return ([], [:]) }
-    let menuBar = menuBarValue as! AXUIElement
-
     var candidates: [Candidate] = []
     var elements: [String: AXUIElement] = [:]
     var visited = 0
@@ -202,7 +207,7 @@ final class MenuBarSource: FlashSource {
     }
 
     // Skip the Apple menu (first bar item) — its items are system-global.
-    let barItems = children(of: menuBar).dropFirst()
+    let barItems = menuBarItems(of: app).dropFirst()
     for barItem in barItems {
       guard let barTitle = title(of: barItem) else { continue }
       descend(barItem, path: [barTitle], depth: 1)

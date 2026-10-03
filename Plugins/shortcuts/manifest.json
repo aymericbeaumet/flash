@@ -20,7 +20,9 @@
     }
   ],
   "listen": [
-    "core:config.*"
+    "core:config.*",
+    "core:focus.changed",
+    "core:session.opened"
   ],
   "sources": [
     {

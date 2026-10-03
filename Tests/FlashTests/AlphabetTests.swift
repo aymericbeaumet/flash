@@ -202,6 +202,48 @@ final class AlphabetTests: XCTestCase {
     }
   }
 
+  /// The letter rows and hands hint selectors use are derived from each
+  /// layout's physical 4×10 matrix; they must stay byte-identical to the
+  /// literal rows and hands they replaced, so every hint alphabet is unchanged.
+  func testPhysicalLayoutsDeriveTheLetterRowsAndHands() throws {
+    let rowMap: [TestRow: Alphabet.Row] = [
+      .toprow: .toprow, .homerow: .homerow, .bottomrow: .bottomrow,
+    ]
+    XCTAssertEqual(Set(Alphabet.layouts.keys), Set(layouts.keys))
+    for (name, expected) in layouts {
+      let layout = try XCTUnwrap(Alphabet.layouts[name])
+      XCTAssertEqual(layout.physical.count, 4, name)
+      XCTAssertTrue(layout.physical.allSatisfy { $0.count == 10 }, name)
+      for (testRow, row) in rowMap {
+        XCTAssertEqual(layout.rows[row], expected.rows[testRow], "\(name) \(row)")
+      }
+      XCTAssertEqual(layout.leftHand, expected.leftHand, name)
+      XCTAssertEqual(layout.keyScores, expected.scores, name)
+    }
+  }
+
+  func testGridKeysAreTheLeftHandBlockOfEachLayout() {
+    XCTAssertEqual(
+      Alphabet.gridKeys(layoutName: "qwerty").map { String($0) },
+      ["12345", "qwert", "asdfg", "zxcvb"])
+    XCTAssertEqual(
+      Alphabet.gridKeys(layoutName: "colemak").map { String($0) },
+      ["12345", "qwfpg", "arstd", "zxcvb"])
+    XCTAssertEqual(
+      Alphabet.gridKeys(layoutName: "dvorak").map { String($0) },
+      ["12345", "',.py", "aoeui", ";qjkx"])
+  }
+
+  func testLiteralKeysHaveNoLayoutSoTheGridIsQwerty() {
+    let literal = Alphabet.resolve("asdfjkl")
+    XCTAssertNil(literal.layoutName)
+    XCTAssertEqual(
+      Alphabet.gridKeys(layoutName: literal.layoutName),
+      Alphabet.gridKeys(layoutName: "qwerty"))
+    XCTAssertEqual(
+      Alphabet.gridKeys(layoutName: "klingon"), Alphabet.gridKeys(layoutName: "qwerty"))
+  }
+
   func testResolvedLayoutExposesCorrectHandSetForAlternation() {
     XCTAssertTrue(Alphabet.resolve("<qwerty_homerow>").leftHand.contains("a"))
     XCTAssertFalse(Alphabet.resolve("<qwerty_homerow>").leftHand.contains("j"))

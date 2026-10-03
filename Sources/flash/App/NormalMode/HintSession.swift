@@ -8,95 +8,131 @@ import Foundation
 /// (`hintSession = HintSession()`), so a newly added field can't leak across
 /// activations by being forgotten in a hand-maintained reset list — the bug the
 /// old `clearHintSessionState()` comment warned about.
-///
-/// `pendingAction` is deliberately NOT here: the mouse-grid commit reads it
-/// *after* the session reset, so it must outlive the reset and stays a separate
-/// field on `AppDelegate`.
 struct HintSession {
+  /// Where the hints came from: discovered targets, or the mouse grid's cells.
+  enum Surface { case targets, grid }
+
+  /// The verb that opened the session — button, click count, the preset
+  /// modifiers, and the session shape (move, drag, select, multi, adjust,
+  /// search). Magic modifiers held on the final hint key are unioned with the
+  /// preset ones at commit.
+  var command: MouseCommand = .click(.leftClick, modifiers: [])
+  var surface: Surface = .targets
   var hints: [AssignedHint] = []
   var prefix: String = ""
-  var commitBehavior: AppDelegate.HintCommitBehavior = .click
-  /// Modifiers requested by the command that opened the hints. These are
-  /// unioned with any magic modifiers held on the final hint key.
-  var presetClickModifiers: ClickModifiers = []
   var sourceAppPID: pid_t?
-  var mouseGridRegion: MouseGrid.Region?
-  var mouseGridDepth: Int = 0
-  /// Two-phase gestures (`--drag`): the point the first commit selected,
-  /// nil while the session is still choosing it. Cleared with the session,
-  /// so Escape mid-gesture can't leak a grab point into the next activation.
-  var dragSourcePoint: CGPoint?
-  /// The full-extent grid region captured at activation, so a grid drag can
-  /// restart the destination phase from the top instead of the drilled-down
-  /// cell the source phase ended on.
-  var mouseGridInitialRegion: MouseGrid.Region?
-  /// `--adjust` sub-state: the matched hint whose click point is being
-  /// refined, and the current point the commit key will click.
-  var adjustingHint: AssignedHint?
-  var adjustPoint: CGPoint?
-  /// Pointer mode (`mouse_pointer`): freestyle cursor control session with
-  /// autorepeat acceleration bookkeeping and the drag-toggle button state.
-  var pointerModeActive = false
-  var pointerDragActive = false
-  var pointerMoveStreak = 0
-  var pointerLastMoveAt: Date?
-  /// `--search` (seek & click): the typed filter, the current selection
-  /// index into the filtered set, and the unfiltered master hint set so
-  /// backspace can widen again.
-  var searchActive = false
-  var searchQuery = ""
-  var searchSelectionIndex = 0
-  var searchAllHints: [AssignedHint] = []
-}
+  /// How this session's keys arrive, fixed when it starts
+  /// (`KeyboardCaptureTap.sessionCapture`).
+  var capture = KeyboardCaptureTap.SessionCapture.tap
+  /// Armed when the activation starts, spent by its first display.
+  var latencyProbe: HintLatencyProbe?
+  var statusBarPopupSnapshots: [String: StatusBarPopupRegion] = [:]
+  /// Where the mouse grid is and how it got there; nil outside the grid.
+  var grid: MouseGrid.Navigation?
+  /// The grid's key layout, fixed for the session.
+  var gridShape = MouseGrid.Shape.keyboard([])
+  /// Whether the pointer follows the grid region (`` ` `` toggles it).
+  var gridCursorFollows = false
+  /// Label → index into `hints` for the displayed grid step, so a key finds
+  /// its cell without scanning.
+  var gridCellIndex: [Character: Int] = [:]
 
-/// The activation generation-token machine: the async-cancellation core that
-/// keeps a stale AX discovery walk from rendering hints over the wrong app after
-/// a newer activation, commit, or cancel has taken over. Was three scalars
-/// (`activationGen`, `activationInFlight`, `activationInFlightGeneration`)
-/// mutated inline across ~7 sites; expressing the operations as named methods
-/// makes the "which walk wins" rule one tested unit that can't be half-applied.
-struct ActivationLifecycle: Equatable {
-  /// Monotonic token; every `begin`/`supersede`/`invalidate` bumps it. A walk's
-  /// result renders only while `isCurrent(itsToken)`.
-  var generation: UInt64 = 0
-  /// True while an AX discovery walk (or a commit's click dispatch) is
-  /// outstanding; gates re-entry.
-  var inFlight: Bool = false
-  /// The generation captured when the outstanding walk began, so its completion
-  /// can open the gate even if a newer walk has already superseded it.
-  var inFlightGeneration: UInt64?
-
-  /// Start a new walk; returns its generation token.
-  mutating func begin() -> UInt64 {
-    generation &+= 1
-    inFlight = true
-    inFlightGeneration = generation
-    return generation
+  /// The first point of a two-phase gesture (`--drag`, `--select`).
+  struct Anchor {
+    var point: CGPoint
+    /// The hint it came from; nil when a grid cell chose it.
+    var hint: AssignedHint?
+    /// The grid step the point was chosen from, restored when Backspace
+    /// undoes the anchor; nil for target hints.
+    var grid: MouseGrid.Navigation? = nil
   }
 
-  /// Bump the generation so any outstanding walk's result is ignored, without
-  /// clearing `inFlight` (that walk's completion still runs to clean up).
-  mutating func supersede() {
-    generation &+= 1
+  /// `--search` (seek & click): the typed filter, the selection index into
+  /// the filtered set, and the unfiltered set so backspace can widen again.
+  struct Search {
+    var query = ""
+    var selectionIndex = 0
+    var allHints: [AssignedHint] = []
   }
 
-  /// The walk that owns `token` finished: open the gate iff it is still the
-  /// outstanding one (a newer `begin()` may have taken over in the meantime).
-  mutating func complete(token: UInt64) {
-    guard inFlightGeneration == token else { return }
-    inFlight = false
-    inFlightGeneration = nil
+  /// `mouse_pointer`: autorepeat acceleration bookkeeping. The button its
+  /// drag toggle holds is `ActionDispatcher`'s, shared with `mouse_button`.
+  struct Pointer {
+    var moveStreak = 0
+    var lastMoveAt: Date?
   }
 
-  /// Fully cancel: bump the generation and open the gate.
-  mutating func invalidate() {
-    generation &+= 1
-    inFlight = false
-    inFlightGeneration = nil
+  /// What keys do in this session. The phases exclude one another — a session
+  /// types labels, filters by text, refines a matched point, or steers the
+  /// pointer — so they are one value, never a set of flags.
+  enum Phase {
+    /// Typing hint labels; `anchor` once a two-phase gesture chose its first
+    /// point.
+    case labels(anchor: Anchor?)
+    case search(Search)
+    /// `--adjust`: the matched hint and the point the commit key clicks.
+    case adjusting(hint: AssignedHint, point: CGPoint)
+    case pointer(Pointer)
   }
 
-  /// Whether a result tagged `token` is still the current walk's.
-  func isCurrent(_ token: UInt64) -> Bool {
-    generation == token
+  var phase = Phase.labels(anchor: nil)
+
+  /// How the overlay routes keys; a projection of `phase`, with label typing
+  /// on the grid surface going to the grid.
+  var keyRoute: HintKeyRoute {
+    switch phase {
+    case .labels:
+      guard surface == .grid else { return .labels }
+      return .grid(gridShape, cursorFollows: gridCursorFollows)
+    case .search: return .search
+    case .adjusting: return .adjustment
+    case .pointer: return .pointer
+    }
+  }
+
+  var anchor: Anchor? {
+    if case .labels(let anchor) = phase { return anchor }
+    return nil
+  }
+
+  var search: Search? {
+    if case .search(let search) = phase { return search }
+    return nil
+  }
+
+  var pointer: Pointer? {
+    if case .pointer(let pointer) = phase { return pointer }
+    return nil
+  }
+
+  /// Search, adjustment and pointer phases own the keyboard even with no hint
+  /// on screen; typing labels needs hints.
+  var isActive: Bool {
+    if case .labels = phase { return !hints.isEmpty }
+    return true
+  }
+
+  /// Phase 1 of a grid drag or selection: keep the point with the step it
+  /// was chosen from, and restart the grid on the whole display so the second
+  /// point can land anywhere.
+  mutating func anchorGrid(at point: CGPoint) {
+    guard let navigation = grid else { return }
+    phase = .labels(anchor: Anchor(point: point, hint: nil, grid: navigation))
+    grid = navigation.restarted
+  }
+
+  /// Backspace in the grid: undo the last grid keystroke, or, with nothing
+  /// left to undo in a gesture's second phase, drop the anchor and return to
+  /// the step it was chosen from. False when there is nothing to undo.
+  mutating func gridBack() -> Bool {
+    guard var navigation = grid else { return false }
+    if navigation.back() {
+      grid = navigation
+      return true
+    }
+    guard case .labels(let anchor?) = phase, let source = anchor.grid else { return false }
+    phase = .labels(anchor: nil)
+    grid = source
+    return true
   }
 }

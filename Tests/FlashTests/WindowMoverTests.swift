@@ -4,6 +4,27 @@ import XCTest
 @testable import flash
 
 final class WindowMoverTests: XCTestCase {
+  /// The bar band a one-display snapshot measures for `screenFrame`.
+  private func band(screenFrame: CGRect, visibleFrame: CGRect, measured: CGFloat) -> CGFloat {
+    OverlayPanel.makeScreenSnapshot(
+      screens: [(scale: 2, frame: screenFrame, visibleFrame: visibleFrame, notch: nil)],
+      nativeStatusBarFallbackHeight: measured
+    ).statusBarHeight(forScreenFrame: screenFrame)
+  }
+
+  func testScreenRecoveryLadderReachesASlowReconnect() {
+    let delays = WindowLayoutManager.defaultScreenRecoveryDelaysMs
+    XCTAssertEqual(delays.sorted(), delays, "passes have to run in order")
+    XCTAssertEqual(Set(delays).count, delays.count, "a repeated delay wastes a pass")
+    // AppKit reports the change before NSScreen settles, so the first pass is
+    // immediate ...
+    XCTAssertLessThanOrEqual(delays.first ?? .max, 100)
+    // ... and apps keep relocating their windows for seconds after a display
+    // reconnects or wakes. Stopping at 1.5s left those moves uncorrected,
+    // which is what made a restore need a manual redo.
+    XCTAssertGreaterThanOrEqual(delays.last ?? 0, 3_000)
+  }
+
   func testDefaultRecoveryIncludesLateSettlingPass() {
     XCTAssertGreaterThanOrEqual(
       WindowLayoutManager.defaultScreenRecoveryDelaysMs.last ?? 0,
@@ -18,9 +39,7 @@ final class WindowMoverTests: XCTestCase {
       WindowMover.usableFrame(
         screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
         visibleFrame: visibleFrame,
-        statusBarReservesSpace: false,
-        fontSize: 13,
-        fallbackNativeStatusBarHeight: 22),
+        statusBarHeight: nil),
       visibleFrame)
   }
 
@@ -28,9 +47,9 @@ final class WindowMoverTests: XCTestCase {
     let frame = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
       visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), measured: 22))
 
     XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 1440, height: 878))
   }
@@ -39,9 +58,9 @@ final class WindowMoverTests: XCTestCase {
     let frame = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
       visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 30)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080), measured: 30))
 
     XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 1920, height: 1050))
   }
@@ -50,9 +69,9 @@ final class WindowMoverTests: XCTestCase {
     let frame = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079), measured: 22))
 
     XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 1728, height: 1079))
   }
@@ -61,9 +80,9 @@ final class WindowMoverTests: XCTestCase {
     let usable = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
       visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), measured: 22))
 
     XCTAssertEqual(
       WindowMover.rectFor(position: .maximized, in: usable),
@@ -100,15 +119,15 @@ final class WindowMoverTests: XCTestCase {
     let source = WindowMover.usableFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
       visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), measured: 22))
     let destination = WindowMover.usableFrame(
       screenFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800),
       visibleFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800),
-      statusBarReservesSpace: true,
-      fontSize: 13,
-      fallbackNativeStatusBarHeight: 22)
+      statusBarHeight: band(
+        screenFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800),
+        visibleFrame: CGRect(x: 1440, y: 0, width: 1000, height: 800), measured: 22))
     let frame = CGRect(x: 0, y: 0, width: 720, height: 878)
 
     XCTAssertEqual(
@@ -375,6 +394,93 @@ final class WindowMoverTests: XCTestCase {
         in: usable))
   }
 
+  func testPlacementIsExactToThePointWhileSlotRecognitionToleratesRounding() {
+    let slot = CGRect(x: 0, y: 0, width: 1728, height: 1084)
+    let onePointTall = CGRect(x: 0, y: 0, width: 1728, height: 1085)
+
+    XCTAssertEqual(WindowMover.position(matching: onePointTall, in: slot), .maximized)
+    XCTAssertFalse(
+      WindowMover.framesMatchPlacement(onePointTall, slot),
+      "a restore that calls this done leaves the point the next window_move closes")
+    XCTAssertTrue(
+      WindowMover.framesMatchPlacement(
+        CGRect(x: 219, y: 120, width: 1610, height: 880),
+        CGRect(x: 218.98, y: 119.65, width: 1610.04, height: 879.7)),
+      "whole-point rounding of a fractional target has landed")
+  }
+
+  func testLayoutsLandOnWholePointsAndNeighbouringSlotsShareAnEdge() {
+    // An odd-width display: the halves meet on one whole-point edge.
+    let odd = CGRect(x: 0, y: 0, width: 1727, height: 1085)
+    let left = WindowMover.rectFor(position: .leftHalf, in: odd)
+    let right = WindowMover.rectFor(position: .rightHalf, in: odd)
+    XCTAssertEqual(left.maxX, right.minX)
+    XCTAssertEqual(left.width + right.width, odd.width)
+    let top = WindowMover.rectFor(position: .topHalf, in: odd)
+    let bottom = WindowMover.rectFor(position: .bottomHalf, in: odd)
+    XCTAssertEqual(bottom.maxY, top.minY)
+    XCTAssertEqual(top.height + bottom.height, odd.height)
+    // alt+z on the 1920×1050 home display: whole points, same share of it.
+    let centred = WindowLayout.proportional(
+      ProportionalWindowFrame(
+        xPercent: 10.6925, yPercent: 10.6925, widthPercent: 78.615, heightPercent: 78.615))
+    let home = CGRect(x: 0, y: 0, width: 1920, height: 1050)
+    let frame = WindowMover.rectFor(layout: centred, in: home)
+    XCTAssertEqual(frame, CGRect(x: 205, y: 112, width: 1510, height: 826))
+    XCTAssertEqual(frame.minY - home.minY, home.maxY - frame.maxY, "centred vertically")
+    for rect in [left, right, top, bottom, frame] {
+      XCTAssertEqual(rect, rect.integral, "\(rect)")
+    }
+  }
+
+  func testDeclaredProportionalLayoutIsRecognizedWithoutBeingTracked() {
+    let centred = WindowLayout.proportional(
+      ProportionalWindowFrame(
+        xPercent: 10.6925, yPercent: 10.6925, widthPercent: 78.615, heightPercent: 78.615))
+    let usable = CGRect(x: 0, y: 0, width: 2048, height: 1122)
+    let frame = WindowMover.rectFor(layout: centred, in: usable)
+    // After a restart nothing is tracked: only the config's mappings know it.
+    XCTAssertNil(WindowMover.semanticLayout(matching: frame, in: usable, existing: nil))
+    XCTAssertEqual(
+      WindowMover.semanticLayout(matching: frame, in: usable, existing: nil, declared: [centred]),
+      centred)
+    // A named slot still wins, and a free-form frame matches nothing.
+    XCTAssertEqual(
+      WindowMover.semanticLayout(
+        matching: usable, in: usable, existing: nil, declared: [centred]),
+      .position(.maximized))
+    XCTAssertNil(
+      WindowMover.semanticLayout(
+        matching: CGRect(x: 100, y: 100, width: 900, height: 700), in: usable, existing: nil,
+        declared: [centred]))
+  }
+
+  func testEachRecoveryPassSettlesTheNativeBandBeforeSnapshottingSlots() {
+    let screen = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 2048, height: 1152),
+      usableFrame: CGRect(x: 0, y: 0, width: 2048, height: 1122))
+    var events: [String] = []
+    let manager = WindowLayoutManager(
+      screenRecoveryDelaysMs: [0, 1],
+      screenLayouts: { _, _ in
+        events.append("slots")
+        return [screen]
+      })
+    let recovered = expectation(description: "every pass ran")
+    recovered.expectedFulfillmentCount = 2
+
+    manager.screenParametersDidChange(screens: [screen])
+    manager.screenParametersDidChange(
+      statusBarReservesSpace: true,
+      statusBarMonitor: .primary,
+      beforeRecoveryPass: { events.append("settle") },
+      afterRecoveryPass: { _ in recovered.fulfill() })
+
+    wait(for: [recovered], timeout: 1)
+    XCTAssertEqual(events, ["slots", "settle", "slots", "settle", "slots"])
+  }
+
   func testScreenLookupUsesLargestOverlapWhenWindowCentreIsOffScreen() {
     let primary = WindowScreenLayout(
       id: 1,
@@ -439,11 +545,11 @@ final class WindowMoverTests: XCTestCase {
     manager.screenParametersDidChange(screens: [initial])
     manager.screenParametersDidChange(
       statusBarReservesSpace: true,
-      statusBarMonitor: .primary
-    ) { screens in
-      XCTAssertEqual(screens, [settled])
-      recovered.fulfill()
-    }
+      statusBarMonitor: .primary,
+      afterRecoveryPass: { screens in
+        XCTAssertEqual(screens, [settled])
+        recovered.fulfill()
+      })
 
     wait(for: [recovered], timeout: 1)
     XCTAssertTrue(snapshots.isEmpty)
@@ -475,11 +581,11 @@ final class WindowMoverTests: XCTestCase {
     manager.screenParametersDidChange(
       statusBarReservesSpace: true,
       statusBarMonitor: .primary,
-      forceRecovery: false
-    ) { screens in
-      XCTAssertEqual(screens, [primary, secondaryWithoutBar])
-      recovered.fulfill()
-    }
+      forceRecovery: false,
+      afterRecoveryPass: { screens in
+        XCTAssertEqual(screens, [primary, secondaryWithoutBar])
+        recovered.fulfill()
+      })
 
     wait(for: [recovered], timeout: 1)
   }
@@ -489,36 +595,31 @@ final class WindowMoverTests: XCTestCase {
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: true,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: false,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: false,
         isSettable: true,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: nil,
         isSettable: true,
-        bundleIdentifier: "com.apple.TextEdit"))
+        engine: nil))
     XCTAssertFalse(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: true,
-        bundleIdentifier: "org.mozilla.firefox"))
-    XCTAssertFalse(
+        engine: .gecko))
+    XCTAssertTrue(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
         currentValue: true,
         isSettable: true,
-        bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
-    XCTAssertFalse(
-      WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
-        currentValue: true,
-        isSettable: true,
-        bundleIdentifier: "org.mozilla.nightly"))
+        engine: .chromium))
   }
 }

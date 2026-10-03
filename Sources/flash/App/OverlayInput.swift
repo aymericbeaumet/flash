@@ -4,18 +4,115 @@ enum OverlayKeyAction: Equatable {
   case cancel
   case backspace
   case commit(String, ClickModifiers)
-  /// `<space>` — commit the mouse grid's centre cell (the coordinator
-  /// resolves this to a center commit in mouse-grid mode and to a cancel
-  /// otherwise).
-  case commitCenter(ClickModifiers)
   case ignore
 }
 
 enum OverlayInputMode: Equatable {
+  /// INSERT or disabled with nothing of Flash's on screen: keys belong to the
+  /// focused app, and only mapped chords reach Flash.
+  case passive
+  /// A hint session (or its discovery walk) owns every key, in any base mode.
   case hints
   case normal
   case commandLine
-  case candidateFinder
+}
+
+/// Which interpreter owns keys while a hint session is up: label typing, the
+/// mouse grid, or the one sub-state the session is in. A projection of
+/// `HintSession`, pushed by the coordinator whenever the session changes.
+enum HintKeyRoute: Equatable {
+  case labels
+  /// The mouse grid's keys, and whether the pointer follows its region.
+  case grid(MouseGrid.Shape, cursorFollows: Bool)
+  case search
+  case adjustment
+  case pointer
+
+  /// Pointer mode and a cursor-following grid steer the cursor, so it stays
+  /// visible; every other route hides it behind the labels.
+  var showsCursor: Bool {
+    switch self {
+    case .pointer: return true
+    case .grid(_, let cursorFollows): return cursorFollows
+    case .labels, .search, .adjustment: return false
+    }
+  }
+}
+
+/// One keystroke of the mouse grid.
+enum MouseGridKeyCommand: Equatable {
+  /// A cell's key, with the modifiers that ride a click it commits.
+  case cell(Character, ClickModifiers)
+  /// Bisect's h/j/k/l: keep that half.
+  case half(MouseGrid.Direction, ClickModifiers)
+  /// Space: zoom into the centre pseudo-cell (or click its centre).
+  case centre(ClickModifiers)
+  /// Return: click the centre of the current region.
+  case commitHere(ClickModifiers)
+  /// Backspace: undo the last grid keystroke.
+  case back
+  /// Cmd- or Opt-Backspace: back to the whole display.
+  case reset
+  /// Arrows: slide the region by its own size.
+  case move(MouseGrid.Direction)
+  /// Tab / Shift-Tab: the next / previous display.
+  case screen(Int)
+  /// `` ` ``: toggle cursor-follow.
+  case toggleFollow
+  case cancel
+}
+
+enum MouseGridInputInterpreter {
+  /// Key → grid command. `typed` is the key's character with Shift removed
+  /// (see `OverlayPanel.gridTypedCharacters`); cells match by character, so
+  /// remapped keyboards keep working. Escape, keys outside the grid and
+  /// Command/Control/Option chords outside `magicModifiers` cancel.
+  static func command(
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    typed: String?,
+    shape: MouseGrid.Shape,
+    magicModifiers: ClickModifiers
+  ) -> MouseGridKeyCommand {
+    let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let strict = flags.intersection([.command, .control, .option])
+    switch keyCode {
+    case 53:  // escape
+      return .cancel
+    case 51:  // delete
+      if !strict.isDisjoint(with: [.command, .option]) { return .reset }
+      return strict.isEmpty ? .back : .cancel
+    default:
+      break
+    }
+    guard magicModifiers.isSuperset(of: ClickModifiers(eventFlags: strict)) else {
+      return .cancel
+    }
+    // Shift always rides the click, as on target hints.
+    let click = ClickModifiers(eventFlags: flags, allowed: magicModifiers.union(.shift))
+    switch keyCode {
+    case 36, 76: return .commitHere(click)  // return / keypad enter
+    case 49: return .centre(click)  // space
+    case 48: return .screen(flags.contains(.shift) ? -1 : 1)  // tab
+    case 123: return .move(.left)
+    case 124: return .move(.right)
+    case 125: return .move(.down)
+    case 126: return .move(.up)
+    default: break
+    }
+    guard let key = typed?.lowercased().first else { return .cancel }
+    if key == "`" { return .toggleFollow }
+    if shape == .bisect {
+      switch key {
+      case "h": return .half(.left, click)
+      case "j": return .half(.down, click)
+      case "k": return .half(.up, click)
+      case "l": return .half(.right, click)
+      default: break
+      }
+    }
+    return shape.keys.contains { $0.contains(key) } ? .cell(key, click) : .cancel
+  }
 }
 
 /// One keystroke inside the `--adjust` sub-state: after a hint label matches,
@@ -246,6 +343,7 @@ enum OverlayInputInterpreter {
   ) -> OverlayKeyAction {
     switch keyCode {
     case 53,  // escape
+      49,  // space
       123, 124, 125, 126:  // arrow_left/right/down/up
       return .cancel
     default:
@@ -269,30 +367,15 @@ enum OverlayInputInterpreter {
     }
 
     // Click-pass-through: always allow shift to ride the click, even when
-    // it has been stripped from `magicModifiers` for input-disambiguation
-    // reasons (the auto-strip in `Config.removeAmbiguousShiftMagicModifier`
-    // fires when the alphabet contains non-letters like the default
-    // `qwerty_toprow` digits, so `shift+1` doesn't fight with `!`). Shift
-    // on the synthesized mouse event isn't ambiguous with anything — it
-    // simply becomes a shift+click — so the disambiguation rule that
-    // makes sense at key-input time would break `f`+shift+hint at click
-    // time. Strict modifiers (cmd/ctrl/option) still respect
-    // `magicModifiers` so the cancel gate above remains the source of
-    // truth for unknown chords.
+    // `Config.effectiveMagicModifiers` dropped it because a literal
+    // `hints.keys` holds a non-letter such as `;` (a shifted `;` types `:`).
+    // Shift on the synthesized mouse event isn't ambiguous with anything — it
+    // simply becomes a shift+click — so the disambiguation rule that makes
+    // sense at key-input time would break `f`+shift+hint at click time.
+    // Strict modifiers (cmd/ctrl/option) still respect `magicModifiers` so
+    // the cancel gate above remains the source of truth for unknown chords.
     let clickAllowed = magicModifiers.union(.shift)
     let clickModifiers = ClickModifiers(eventFlags: independentModifiers, allowed: clickAllowed)
-
-    // `<space>` is the fixed "centre of the grid" key. In mouse-grid mode
-    // the coordinator commits the middle cell (always present — the grid
-    // is an odd-N square) so the region centre is one keystroke away
-    // whatever letter the layout assigned there; outside mouse-grid mode
-    // it falls back to a cancel, preserving the universal
-    // arrows/space/escape "abort the overlay" gesture. Routed through the
-    // same magic-modifier gate above so a stray `cmd+space` can't slip
-    // past as a center commit.
-    if keyCode == 49 {  // space
-      return .commitCenter(clickModifiers)
-    }
 
     guard let chars = charactersIgnoringModifiers, !chars.isEmpty else {
       return .ignore
@@ -322,13 +405,10 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine {
+      if coordinator?.overlayDidHandleMapping(event) == true { return true }
       if handleCommandLineEditingShortcut(event) { return true }
       return super.performKeyEquivalent(with: event)
     }
-    if inputMode == .candidateFinder {
-      return handleCandidateFinderKeyEvent(event)
-    }
-
     if coordinator?.overlayDidHandleMapping(event) == true {
       return true
     }
@@ -370,17 +450,19 @@ extension OverlayPanel {
           + "timeout_ms=\(normalModeSequenceTimeoutMs)")
       normalModeRepeatAnchor = nil
     }
+    let keys = keyCharacters(for: event)
     let transition = NormalModeInterpreter.interpret(
       pending: normalModePending,
       repeatAnchor: normalModeRepeatAnchor,
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
-      characters: event.characters,
-      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      characters: keys.characters,
+      charactersIgnoringModifiers: keys.ignoringModifiers,
       mappings: normalModeMappings)
     FlashLog.trace(
-      "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
-        + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
+      // No key codes or characters: NORMAL swallows whatever the user types,
+      // and the log must never record keystrokes (hard constraint 2).
+      "[input] normal pending_before=\(pendingBeforeTimeout) "
         + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
         + "repeat=\(transition.repeatCount) repeat_anchor=\(transition.repeatAnchor ?? "nil")")
     normalModePending = transition.pending
@@ -423,13 +505,33 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine { return false }
-    if inputMode == .candidateFinder {
-      return handleCandidateFinderKeyEvent(event)
-    }
 
-    // The `--search` sub-state owns every key while active — same rule as the
-    // pointer and adjustment sub-states below (all mutually exclusive).
-    if searchModeActive {
+    // Labels, the grid, pointer and adjustment read keys by position on the
+    // reference layout; search matches visible text, so it keeps what was
+    // actually typed.
+    let keys = keyCharacters(for: event)
+    // A sub-state owns every key while active — including chords that would
+    // otherwise hit the Carbon mapping registry, so a stray mapping can't fire
+    // mid-session.
+    switch hintKeyRoute {
+    case .labels:
+      break
+    case .grid(let shape, _):
+      // Mappings keep their precedence (a mapped chord can replace the grid),
+      // then the grid owns every other key.
+      if coordinator.overlayDidHandleMapping(event) { return true }
+      let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      let shiftHeld = flags.contains(.shift)
+      let typed = Self.gridTypedCharacters(
+        shiftHeld: shiftHeld,
+        unshifted: keys.unshifted,
+        ignoringModifiers: keys.ignoringModifiers)
+      coordinator.overlayDidGrid(
+        MouseGridInputInterpreter.command(
+          keyCode: event.keyCode, modifierFlags: flags, typed: typed, shape: shape,
+          magicModifiers: magicModifiers))
+      return true
+    case .search:
       if let command = HintSearchInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -442,28 +544,19 @@ extension OverlayPanel {
         coordinator.overlayDidSearch(command, clickModifiers: clickModifiers)
       }
       return true
-    }
-
-    // Pointer mode owns every key while active — same total-ownership rule as
-    // the adjustment sub-state below.
-    if pointerModeActive {
+    case .pointer:
       if let command = PointerModeInterpreter.command(
         keyCode: event.keyCode,
-        charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+        charactersIgnoringModifiers: keys.ignoringModifiers,
         modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
       {
         coordinator.overlayDidPointer(command)
       }
       return true
-    }
-
-    // The `--adjust` sub-state owns every key once a hint has matched —
-    // including chords that would otherwise hit the Carbon mapping registry —
-    // so a stray mapping can't fire mid-adjustment.
-    if adjustmentActive {
+    case .adjustment:
       if let command = HintAdjustmentInterpreter.command(
         keyCode: event.keyCode,
-        charactersIgnoringModifiers: event.charactersIgnoringModifiers)
+        charactersIgnoringModifiers: keys.ignoringModifiers)
       {
         let clickAllowed = magicModifiers.union(.shift)
         let clickModifiers = ClickModifiers(
@@ -479,18 +572,15 @@ extension OverlayPanel {
     }
 
     // Hardcoded dismissal keys. Not configurable on purpose: arrows /
-    // escape are common "abort what I was about to do" signals in every
-    // macOS app, and matching that intuition keeps the overlay out of
-    // the user's way. `<space>` joins them as a cancel *except* in
-    // mouse-grid mode, where it commits the grid's centre cell — the
-    // coordinator makes that call (see `overlayDidCommitCenter`) since
-    // only it knows the active commit behaviour. Scrolling is handled
-    // separately by a global event monitor (see
-    // OverlayPanel.installScrollMonitor).
+    // escape / space are common "abort what I was about to do" signals in
+    // every macOS app, and matching that intuition keeps the overlay out of
+    // the user's way. The mouse grid gives them meanings of its own through
+    // its own route above. Scrolling is handled separately by a global event
+    // monitor (see OverlayPanel.installScrollMonitor).
     switch OverlayInputInterpreter.action(
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
-      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      charactersIgnoringModifiers: keys.ignoringModifiers,
       magicModifiers: magicModifiers)
     {
     case .cancel:
@@ -502,54 +592,39 @@ extension OverlayPanel {
     case .commit(let chars, let clickModifiers):
       coordinator.overlayDidCommit(prefix: chars, clickModifiers: clickModifiers)
       return true
-    case .commitCenter(let clickModifiers):
-      if !coordinator.overlayDidCommitCenter(clickModifiers: clickModifiers) {
-        coordinator.overlayDidCancel()
-      }
-      return true
     case .ignore:
       return swallowIgnored
     }
   }
 
+  /// How the interpreters read `event`: its own characters, or those of
+  /// `[app] keyboard_layout`'s reference layout (one table lookup).
+  func keyCharacters(for event: NSEvent) -> KeyCharacters {
+    KeyCharacters.read(
+      layout: keyboardLayout, keyCode: event.keyCode, modifierFlags: event.modifierFlags,
+      characters: event.characters, ignoringModifiers: event.charactersIgnoringModifiers,
+      unshifted: { event.characters(byApplyingModifiers: []) })
+  }
+
+  /// The character a grid key selects. With Shift held the event's
+  /// characters are shifted (Shift-1 is `!`), so the key is re-read without
+  /// modifiers and Shift only rides the click. Without Shift the event's own
+  /// characters stand: synthesized events (the native oracle posts key code 0
+  /// with a unicode string) carry text a key-code translation would lose.
+  static func gridTypedCharacters(
+    shiftHeld: Bool, unshifted: String?, ignoringModifiers: String?
+  ) -> String? {
+    guard shiftHeld, let unshifted, !unshifted.isEmpty else { return ignoringModifiers }
+    return unshifted
+  }
+
   private func handleNormalModeKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator else { return false }
     if coordinator.overlayDidHandleMapping(event) { return true }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let passthroughFlags = KeyModifier.parseList(normalModePassthroughModifiers).modifiers.reduce(
-      into: NSEvent.ModifierFlags()
-    ) { flags, modifier in
-      flags.insert(modifier.nsEventFlag)
-    }
-    let rawFlags = Self.cgEventFlags(from: modifiers)
-    let recognized = NormalModeInterpreter.recognizesPhysicalKey(
-      pending: normalModePending,
-      repeatAnchor: normalModeRepeatAnchor,
-      virtualKey: UInt32(event.keyCode),
-      modifierFlags: rawFlags,
-      mappings: normalModeMappings)
-    let isPassthroughKey = normalModePassthroughKeyCodes.contains(UInt32(event.keyCode))
-    let usesPassthroughModifier = !modifiers.intersection(passthroughFlags).isEmpty
-    if isPassthroughKey || usesPassthroughModifier, !recognized {
-      // The session tap normally leaves the original event in the native event
-      // stream. This path is only the no-tap key-window fallback, so the
-      // coordinator replays the keypress to the focused pid before entering INSERT.
-      coordinator.overlayDidPassthroughNormalModeKey(event)
-      return true
-    }
-    // With passthrough disabled, anything unclaimed is interpreted or consumed
-    // by `NormalModeInterpreter`, keeping NORMAL hermetic.
+    // Anything unclaimed is interpreted or consumed by `NormalModeInterpreter`,
+    // keeping NORMAL hermetic.
     processNormalModeKey(event)
     return true
-  }
-
-  private static func cgEventFlags(from modifiers: NSEvent.ModifierFlags) -> CGEventFlags {
-    var flags: CGEventFlags = []
-    if modifiers.contains(.command) { flags.insert(.maskCommand) }
-    if modifiers.contains(.control) { flags.insert(.maskControl) }
-    if modifiers.contains(.option) { flags.insert(.maskAlternate) }
-    if modifiers.contains(.shift) { flags.insert(.maskShift) }
-    return flags
   }
 
   /// Handles `⌘a` / `⌘c` / `⌘x` / `⌘v` / `⌘z` / `⌘⇧z` while the
@@ -615,65 +690,6 @@ extension OverlayPanel {
     default:
       return false
     }
-    return true
-  }
-
-  @discardableResult
-  private func handleCandidateFinderKeyEvent(_ event: NSEvent) -> Bool {
-    guard let coordinator = coordinator else { return false }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let ignoredChar =
-      NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
-      .lowercased().first
-    if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      candidateFinderQuery = ""
-      FlashLog.trace("[input] candidate_finder cancel key=\(event.keyCode)")
-      coordinator.overlayDidCancelCandidateFinder()
-      return true
-    }
-    if modifiers.contains(.control) {
-      switch ignoredChar {
-      case "n":
-        // Best match is at the TOP of the panel and ranks descend downward.
-        // Ctrl-N (emacs "next") moves visually downward → next-worse match →
-        // higher index → delta +1. Same logic for the arrows below.
-        coordinator.overlayDidMoveCandidateFinderSelection(1)
-        return true
-      case "p":
-        coordinator.overlayDidMoveCandidateFinderSelection(-1)
-        return true
-      default:
-        return true
-      }
-    }
-
-    switch event.keyCode {
-    case 36, 76:  // return / keypad enter
-      coordinator.overlayDidSubmitCandidateFinder()
-      return true
-    case 51:  // delete
-      if !candidateFinderQuery.isEmpty {
-        candidateFinderQuery.removeLast()
-        coordinator.overlayDidUpdateCandidateFinderQuery(candidateFinderQuery)
-      }
-      return true
-    case 125:  // down
-      coordinator.overlayDidMoveCandidateFinderSelection(1)
-      return true
-    case 126:  // up
-      coordinator.overlayDidMoveCandidateFinderSelection(-1)
-      return true
-    default:
-      break
-    }
-
-    if !modifiers.intersection([.command, .control, .option]).isEmpty {
-      return true
-    }
-    guard let chars = event.characters, !chars.isEmpty else { return true }
-    candidateFinderQuery.append(contentsOf: chars.filter { !$0.isNewline })
-    FlashLog.trace("[input] candidate_finder length=\(candidateFinderQuery.count)")
-    coordinator.overlayDidUpdateCandidateFinderQuery(candidateFinderQuery)
     return true
   }
 }

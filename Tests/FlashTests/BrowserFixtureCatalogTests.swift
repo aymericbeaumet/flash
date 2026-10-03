@@ -22,10 +22,11 @@ final class BrowserFixtureCatalogTests: XCTestCase {
     XCTAssertEqual(byCategory["forum-thread"]?.count, 1)
     XCTAssertEqual(byCategory["developer-code"]?.count, 1)
     XCTAssertEqual(byCategory["commerce-listing"]?.count, 1)
-    // Collected fixtures are real-world page captures and are kept
-    // 1:1 with the snapshots/ files.
-    let collected = byCategory["collected-regression"] ?? []
-    XCTAssertGreaterThanOrEqual(collected.count, 20)
+    // Collected fixtures are local, gitignored captures of real browsing;
+    // the committed manifest must never list them.
+    let manifest = try String(
+      contentsOf: fixturesDir.appendingPathComponent("manifest.json"), encoding: .utf8)
+    XCTAssertFalse(manifest.contains("collected-"))
 
     for fixture in catalog.fixtures {
       let path =

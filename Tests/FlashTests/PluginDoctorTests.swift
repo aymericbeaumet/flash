@@ -6,9 +6,9 @@ final class PluginDoctorTests: XCTestCase {
   private func status(id: String, root: String, state: String = "running") -> PluginStatus {
     PluginStatus(
       id: id, name: id, version: "0.1.0", description: "", origin: "official",
-      root: root, state: state, activation: "resident", pid: nil, uptimeMs: nil,
+      root: root, state: state, activation: "resident", pid: nil, startedAtUnixMs: nil,
       sourceCount: 0, commandCount: 0, restartCount: 0, lastError: nil,
-      lastLog: nil, cpuPercent: nil, memoryBytes: nil, onlyBundleIDs: [],
+      lastLog: nil, cpuTimeMs: nil, memoryBytes: nil, onlyBundleIDs: [],
       priority: 25, commands: [], statusSegments: [:])
   }
 

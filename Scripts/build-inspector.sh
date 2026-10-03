@@ -28,7 +28,11 @@ else
 fi
 
 if [[ "$PKG" == "pnpm" ]]; then
-  PNPM_CONFIG_UPDATE_NOTIFIER=false "$PKG" install
+  # The committed lockfile is authoritative, as in CI; regenerate it
+  # deliberately with a plain `pnpm install` after changing package.json.
+  install_args=()
+  [[ -f pnpm-lock.yaml ]] && install_args+=(--frozen-lockfile)
+  PNPM_CONFIG_UPDATE_NOTIFIER=false "$PKG" install ${install_args[@]+"${install_args[@]}"}
 else
   "$PKG" install
 fi

@@ -1,0 +1,52 @@
+# Merge these sections into flash.toml; no companion files are required.
+[statusbar]
+enabled = true
+# The bar is one line: the template's newlines are dropped, so each lane can
+# sit on its own lines.
+template = """
+#[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
+#[align=absolute-centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
+#[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+#[popup=ai-usage]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
+#[fg=colour245] · #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup] #[popup=memory]#{flash.plugin.memory.label}#[nopopup] #[popup=disks]#{flash.plugin.disks.label}#[nopopup] #[popup=network]#{flash.plugin.network.label}#[nopopup] #[popup=battery]#{flash.plugin.power.label}#[nopopup]
+#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
+"""
+
+[popup.active-app]
+text = """
+#[fg=#EBCB8B]#{flash.active_app_name}#[default]
+#{flash.plugin.processes.focused_app_details}
+"""
+
+# AI usage from tokscale's own TUI (https://github.com/junhoyeo/tokscale),
+# which you install yourself, e.g. `npm i -g tokscale`: tokens and cost by day
+# and model, quotas under Usage. It stays resident, so hovering shows it at
+# once; set tokscale's `autoRefreshEnabled` to keep it current.
+[popup.ai-usage]
+command = ["tokscale"]
+size = "140x40"
+persistent = true
+
+[popup.cpu]
+text = "#{flash.plugin.cpu.details}"
+
+[popup.memory]
+text = "#{flash.plugin.memory.details}"
+
+[popup.disks]
+text = "#{flash.plugin.disks.details}"
+
+[popup.network]
+text = "#{flash.plugin.network.details}"
+
+[popup.battery]
+text = "#{flash.plugin.power.details}"
+
+[popup.date]
+text = "#{flash.calendar}"
+
+[plugin.feed]
+label = "AGGR"
+url = "https://aggr.aymericbeaumet.com/rss.xml"
+refresh_interval = 300
+cycle_interval = 30

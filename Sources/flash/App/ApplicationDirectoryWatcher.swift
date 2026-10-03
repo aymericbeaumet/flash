@@ -17,10 +17,12 @@ import Foundation
 /// must be safe to run off the main thread.
 final class ApplicationDirectoryWatcher {
   private let queue = DispatchQueue(label: "com.flash.app.application-watcher")
-  private let debounce: DispatchTimeInterval
+  private let debounceMs: Int
   private let onChange: () -> Void
   private var sources: [DispatchSourceFileSystemObject] = []
-  private var pendingWork: DispatchWorkItem?
+  /// `.normal`: an installed app should be searchable by the time the user
+  /// opens the flashlight, but nothing on screen waits on the rescan.
+  private lazy var pending = PollDeadline("core:app_directories", priority: .normal, on: queue)
 
   /// - Parameters:
   ///   - paths: directories to watch. Non-existent paths are skipped.
@@ -30,10 +32,10 @@ final class ApplicationDirectoryWatcher {
   ///     debounce window elapses.
   init(
     paths: [String],
-    debounce: DispatchTimeInterval = .milliseconds(300),
+    debounceMs: Int = 300,
     onChange: @escaping () -> Void
   ) {
-    self.debounce = debounce
+    self.debounceMs = debounceMs
     self.onChange = onChange
     for path in paths {
       attach(path: path)
@@ -41,7 +43,6 @@ final class ApplicationDirectoryWatcher {
   }
 
   deinit {
-    pendingWork?.cancel()
     for source in sources { source.cancel() }
   }
 
@@ -60,14 +61,9 @@ final class ApplicationDirectoryWatcher {
     sources.append(source)
   }
 
-  /// Debounce on the serial queue: each event cancels the prior pending
-  /// rescan and re-arms it, so a burst collapses to one `onChange`.
+  /// Debounce on the serial queue: each event re-arms one deadline on the
+  /// shared clock, so a burst collapses to one `onChange`.
   private func scheduleChange() {
-    pendingWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      self?.onChange()
-    }
-    pendingWork = work
-    queue.asyncAfter(deadline: .now() + debounce, execute: work)
+    pending.arm(afterMs: debounceMs) { [weak self] in self?.onChange() }
   }
 }

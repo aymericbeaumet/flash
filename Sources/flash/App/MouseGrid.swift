@@ -1,227 +1,325 @@
 import AppKit
 import FlashCore
 
+/// The mouse grid's geometry: pure functions from a region and a key shape to
+/// cells, plus the `Navigation` value a grid session steps through.
+/// Coordinates are global NSScreen points (bottom-left origin, +y up), so row 0
+/// is the top of a region.
 enum MouseGrid {
-  struct Grid: Equatable {
-    var columns: Int
-    var rows: Int
+  enum Shape: Equatable {
+    /// Rows of keys, top row first. Every step of the grid tiles its region
+    /// with this matrix, so a cell's position always matches its key's.
+    case keyboard([[Character]])
+    /// `--bisect`: y/u/b/n keep a quadrant; h/j/k/l keep a half.
+    case bisect
 
-    var cellCount: Int { columns * rows }
+    static let bisectKeys: [[Character]] = [["y", "u"], ["b", "n"]]
 
-    /// Row-major index of the grid's centre cell. For the odd-N square
-    /// grids this enum produces it's the exact middle cell; `<space>` in
-    /// mouse-grid mode commits it so the centre of the current region is
-    /// always one fixed keystroke away, whatever letter the layout
-    /// happened to assign there.
-    var centerCellIndex: Int { (rows / 2) * columns + (columns / 2) }
-  }
-
-  struct Region: Equatable {
-    var frame: CGRect
-    var grid: Grid?
-
-    init(frame: CGRect, grid: Grid? = nil) {
-      self.frame = frame
-      self.grid = grid
-    }
-  }
-
-  /// Region edge below which we commit instead of subdividing further.
-  /// At very small regions a further subdivision would produce
-  /// sub-pixel cells the user can't realistically aim at; bail with
-  /// the most recent click point instead.
-  static let minimumTerminalSize: CGFloat = 18
-  /// Compile-time fallback when no config object is available (tests,
-  /// fixtures). Production callers thread `Config.hints.mouseGridSteps`.
-  static let defaultSteps = 3
-
-  static func initialRegion(
-    context: AppContext?,
-    screens: [NSScreen],
-    fallback: CGRect
-  ) -> Region {
-    // Root `F`'s grid on the whole *screen* the focused window sits on, not the
-    // window itself: the grid aims the pointer, so it must reach every corner of
-    // the active display — toolbars, the desktop, neighbouring windows — not be
-    // boxed into the front app's frame.
-    if let context, !context.frontWindowFrame.isNull,
-      context.frontWindowFrame.width > 0,
-      context.frontWindowFrame.height > 0,
-      let screen = screenContaining(context.frontWindowFrame, in: screens)
-    {
-      return Region(frame: screen.visibleFrame)
-    }
-    var union: CGRect = .null
-    for screen in screens {
-      union = union.union(screen.visibleFrame)
-    }
-    return Region(frame: union.isNull ? fallback : union)
-  }
-
-  /// The screen the window predominantly occupies (largest frame overlap), or
-  /// nil when the window lands on no known screen. `frame` and `NSScreen.frame`
-  /// share the global bottom-left Cocoa space (`AppContext.frontWindowFrame` is
-  /// stored as `nsBounds`), so the comparison is direct.
-  static func screenContaining(_ frame: CGRect, in screens: [NSScreen]) -> NSScreen? {
-    var best: NSScreen?
-    var bestArea: CGFloat = 0
-    for screen in screens {
-      let overlap = screen.frame.intersection(frame)
-      let area = overlap.isNull ? 0 : overlap.width * overlap.height
-      if area > bestArea {
-        bestArea = area
-        best = screen
+    var keys: [[Character]] {
+      switch self {
+      case .keyboard(let keys): return keys
+      case .bisect: return Self.bisectKeys
       }
     }
-    return best
+
+    var rows: Int { keys.count }
+    var columns: Int { keys.first?.count ?? 0 }
   }
 
-  static func preparedRegion(
-    _ region: Region,
-    alphabet: [Character],
-    steps: Int = defaultSteps
-  ) -> Region {
-    guard alphabet.count >= 4 else { return region }
-    if let grid = region.grid, grid.cellCount <= alphabet.count {
-      return region
-    }
-    return Region(
-      frame: region.frame,
-      grid: fixedGrid(for: region.frame, alphabet: alphabet, steps: steps))
+  enum Direction: Equatable {
+    case left, right, up, down
   }
 
-  /// Role on intermediate-depth targets — gap-free cell tile, click commits
-  /// the cell centre, the chip's translucent backdrop gives the page tint.
+  /// Cells at or below this edge are too small to subdivide usefully, so the
+  /// selection that reaches them clicks.
+  static let minimumTerminalSize: CGFloat = 18
+
+  /// A cell whose selection drills into it: a gap-free tile with a translucent
+  /// tint and a centred label chip.
   static let cellRole = "FlashMouseGridCell"
-  /// Role on the final visible depth — compact chip cluster centered on the
-  /// past rectangle, no translucent backdrop, click commits the chip's own
-  /// centre. The renderer keys off this role to swap layouts.
+  /// A cell whose selection clicks its centre, drawn as a tile.
+  static let finalCellRole = "FlashMouseGridFinalCell"
+  /// A cell whose selection clicks, when cells are smaller than a chip: the
+  /// chips form a glued cluster centred on (and covering) the region, and
+  /// each click lands on its chip's centre. The renderer keys off this role.
   static let finalChipRole = "FlashMouseGridFinalChip"
 
-  static func hints(
-    in region: Region,
-    depth: Int,
-    alphabet: [Character],
-    steps: Int = defaultSteps,
-    finalChipSize: CGSize? = nil
-  ) -> [AssignedHint] {
-    let labels = alphabet.map(String.init)
-    guard labels.count >= 4 else { return [] }
-    let prepared = preparedRegion(region, alphabet: alphabet, steps: steps)
-    guard let grid = prepared.grid, grid.cellCount <= labels.count else { return [] }
-
-    if isFinalDisplayDepth(depth, steps: steps), let finalChipSize {
-      return finalStepHints(
-        in: prepared.frame,
-        depth: depth,
-        grid: grid,
-        labels: labels,
-        chipSize: finalChipSize)
-    }
-
-    let frame = prepared.frame
-    let cellWidth = frame.width / CGFloat(grid.columns)
-    let cellHeight = frame.height / CGFloat(grid.rows)
-    var out: [AssignedHint] = []
-    out.reserveCapacity(grid.cellCount)
-
-    var index = 0
-    for row in 0..<grid.rows {
-      for column in 0..<grid.columns {
-        let x = frame.minX + CGFloat(column) * cellWidth
-        let y = frame.maxY - CGFloat(row + 1) * cellHeight
-        let frame = CGRect(x: x, y: y, width: cellWidth, height: cellHeight)
-        let target = JumpTarget(
-          id: "mouse_grid:\(depth):\(index)",
-          frame: frame,
-          role: cellRole,
-          providerID: "mouse_grid")
-        out.append(AssignedHint(target: target, label: labels[index]))
-        index += 1
-      }
-    }
-    return out
+  static func cellSize(of region: CGRect, shape: Shape) -> CGSize {
+    guard shape.rows > 0, shape.columns > 0 else { return .zero }
+    return CGSize(
+      width: region.width / CGFloat(shape.columns),
+      height: region.height / CGFloat(shape.rows))
   }
 
-  /// Final-step layout: lay the N×N hint chips out in their own tight
-  /// cluster centered on the past rectangle's midpoint, so neighbouring
-  /// chips never overlap even when the past rectangle has shrunk well
-  /// below the chip size. Click points become each chip's own centre —
-  /// what you see is what you commit.
-  private static func finalStepHints(
-    in pastRect: CGRect,
+  /// The cell at `row` (0 = top) and `column` (0 = left) of `region`.
+  static func cellFrame(in region: CGRect, row: Int, column: Int, shape: Shape) -> CGRect {
+    let size = cellSize(of: region, shape: shape)
+    return CGRect(
+      x: region.minX + CGFloat(column) * size.width,
+      y: region.maxY - CGFloat(row + 1) * size.height,
+      width: size.width,
+      height: size.height)
+  }
+
+  /// Every cell of `region`, row-major from the top-left.
+  static func cellFrames(of region: CGRect, shape: Shape) -> [CGRect] {
+    var frames: [CGRect] = []
+    frames.reserveCapacity(shape.rows * shape.columns)
+    for row in 0..<shape.rows {
+      for column in 0..<shape.columns {
+        frames.append(cellFrame(in: region, row: row, column: column, shape: shape))
+      }
+    }
+    return frames
+  }
+
+  /// The cell containing `point`, which is first clamped into `region`.
+  static func cellFrame(containing point: CGPoint, in region: CGRect, shape: Shape) -> CGRect {
+    let size = cellSize(of: region, shape: shape)
+    guard size.width > 0, size.height > 0 else { return region }
+    let column = Int(((point.x - region.minX) / size.width).rounded(.down))
+    let row = Int(((region.maxY - point.y) / size.height).rounded(.down))
+    return cellFrame(
+      in: region,
+      row: min(max(row, 0), shape.rows - 1),
+      column: min(max(column, 0), shape.columns - 1),
+      shape: shape)
+  }
+
+  /// A pseudo-cell of one cell's size centred on the region. Selecting it
+  /// (Space) keeps the region centre fixed, so repeating it converges on the
+  /// dead centre whatever key the layout puts there.
+  static func centreCell(of region: CGRect, shape: Shape) -> CGRect {
+    let size = cellSize(of: region, shape: shape)
+    return CGRect(
+      x: region.midX - size.width / 2,
+      y: region.midY - size.height / 2,
+      width: size.width,
+      height: size.height)
+  }
+
+  /// Bisect's h/j/k/l: the half of `region` on the `direction` side.
+  static func half(of region: CGRect, _ direction: Direction) -> CGRect {
+    switch direction {
+    case .left:
+      return CGRect(x: region.minX, y: region.minY, width: region.width / 2, height: region.height)
+    case .right:
+      return CGRect(
+        x: region.midX, y: region.minY, width: region.width / 2, height: region.height)
+    case .up:
+      return CGRect(
+        x: region.minX, y: region.midY, width: region.width, height: region.height / 2)
+    case .down:
+      return CGRect(x: region.minX, y: region.minY, width: region.width, height: region.height / 2)
+    }
+  }
+
+  /// Whether selecting a cell of `region`, shown at `depth`, clicks instead of
+  /// drilling: on the last configured step, or once cells reach the size
+  /// floor. Bisect ignores the step count (see `keepCommits`).
+  static func selectionCommits(region: CGRect, depth: Int, steps: Int, shape: Shape) -> Bool {
+    let cell = cellSize(of: region, shape: shape)
+    switch shape {
+    case .keyboard:
+      return depth + 1 >= steps || min(cell.width, cell.height) <= minimumTerminalSize
+    case .bisect:
+      return keepCommits(CGRect(origin: .zero, size: cell))
+    }
+  }
+
+  /// Bisect clicks once the region it keeps is at the size floor on both
+  /// sides, so a run of halves along one axis never clicks early.
+  static func keepCommits(_ kept: CGRect) -> Bool {
+    max(kept.width, kept.height) <= minimumTerminalSize
+  }
+
+  /// The hints for one grid step. Cells are tiles, row-major and labelled from
+  /// the shape's keys. When the selection clicks and cells are smaller than a
+  /// chip, the chips form a glued cluster instead, each slot at least one chip
+  /// and one cell in size, so it covers the region without overlapping.
+  static func hints(
+    region: CGRect,
     depth: Int,
-    grid: Grid,
-    labels: [String],
+    shape: Shape,
+    steps: Int,
     chipSize: CGSize
   ) -> [AssignedHint] {
-    // Glued grid: the final step has chips touch edge-to-edge with no
-    // gap (and no overlap). The cluster reads as one continuous block,
-    // which is the user signal that this is the *last* step of the
-    // mouse-grid drill-down — nothing more to subdivide.
-    let gap: CGFloat = 0
-    let clusterWidth =
-      CGFloat(grid.columns) * chipSize.width
-      + CGFloat(max(0, grid.columns - 1)) * gap
-    let clusterHeight =
-      CGFloat(grid.rows) * chipSize.height
-      + CGFloat(max(0, grid.rows - 1)) * gap
-    let originX = pastRect.midX - clusterWidth / 2
-    let originY = pastRect.midY - clusterHeight / 2
-
+    let keys = shape.keys
+    guard shape.rows > 0, shape.columns > 0, keys.allSatisfy({ $0.count == shape.columns })
+    else { return [] }
+    let cell = cellSize(of: region, shape: shape)
+    let commits = selectionCommits(region: region, depth: depth, steps: steps, shape: shape)
+    let cluster = commits && (cell.width < chipSize.width || cell.height < chipSize.height)
+    let slotRegion: CGRect
+    if cluster {
+      let slot = CGSize(
+        width: max(chipSize.width, cell.width), height: max(chipSize.height, cell.height))
+      let width = slot.width * CGFloat(shape.columns)
+      let height = slot.height * CGFloat(shape.rows)
+      slotRegion = CGRect(
+        x: region.midX - width / 2, y: region.midY - height / 2, width: width, height: height)
+    } else {
+      slotRegion = region
+    }
+    let role = cluster ? finalChipRole : commits ? finalCellRole : cellRole
     var out: [AssignedHint] = []
-    out.reserveCapacity(grid.cellCount)
-    var index = 0
-    for row in 0..<grid.rows {
-      for column in 0..<grid.columns {
-        let chipX = originX + CGFloat(column) * (chipSize.width + gap)
-        // NSScreen coords: row 0 is the top, so the chip's minY counts
-        // down from the cluster's top — same convention the cell-tile
-        // path uses (`frame.maxY - (row+1)*cellHeight`).
-        let chipY =
-          originY + clusterHeight
-          - CGFloat(row + 1) * chipSize.height
-          - CGFloat(row) * gap
-        let frame = CGRect(x: chipX, y: chipY, width: chipSize.width, height: chipSize.height)
+    out.reserveCapacity(shape.rows * shape.columns)
+    for (row, rowKeys) in keys.enumerated() {
+      for (column, key) in rowKeys.enumerated() {
         let target = JumpTarget(
-          id: "mouse_grid:\(depth):\(index)",
-          frame: frame,
-          role: finalChipRole,
+          id: "mouse_grid:\(depth):\(row * shape.columns + column)",
+          frame: cellFrame(in: slotRegion, row: row, column: column, shape: shape),
+          role: role,
           providerID: "mouse_grid")
-        out.append(AssignedHint(target: target, label: labels[index]))
-        index += 1
+        out.append(AssignedHint(target: target, label: String(key)))
       }
     }
     return out
   }
 
-  static func shouldCommit(region: Region, depth: Int, steps: Int = defaultSteps) -> Bool {
-    depth >= steps
-      || min(region.frame.width, region.frame.height) <= minimumTerminalSize
-  }
-
-  static func isFinalDisplayDepth(_ depth: Int, steps: Int = defaultSteps) -> Bool {
-    depth >= steps - 1
-  }
-
-  /// Compute the per-step grid shape: always a square NxN with N odd.
-  /// N is the largest odd integer satisfying `N*N <= alphabet.count`,
-  /// so 25-letter alphabets (qwerty homerow + toprow) get 5x5 (= 25
-  /// cells), 49-letter alphabets get 7x7, etc. Aspect-matching the
-  /// grid to the screen is intentionally dropped: square cells let
-  /// the user predict the centre cell on each axis (always present
-  /// because N is odd), and the same shape works on vertical monitors.
-  ///
-  /// `frame` and `steps` are kept in the signature for API stability
-  /// (and so the configured step count still controls precision via
-  /// recursion depth), but they no longer feed the grid shape.
-  static func fixedGrid(for frame: CGRect, alphabet: [Character], steps: Int) -> Grid {
-    let target = alphabet.count
-    guard target >= 9 else { return Grid(columns: 2, rows: 2) }
-    var n = 3
-    while (n + 2) * (n + 2) <= target {
-      n += 2
+  /// The grid's starting area: the usable frame (below Flash's status bar) of
+  /// the front window's screen, else the pointer's, else the primary's.
+  static func initialRegion(
+    context: AppContext?,
+    layouts: [WindowScreenLayout],
+    pointer: CGPoint?
+  ) -> (root: CGRect, screenIndex: Int)? {
+    guard !layouts.isEmpty else { return nil }
+    let index: Int
+    if let window = context?.frontWindowFrame, !window.isNull, !window.isEmpty,
+      layouts.contains(where: { $0.frame.intersects(window) })
+    {
+      index = WindowMover.screenIndex(forFrame: window, screens: layouts)
+    } else if let pointer,
+      let pointerIndex = layouts.firstIndex(where: { $0.frame.contains(pointer) })
+    {
+      index = pointerIndex
+    } else {
+      index = layouts.firstIndex { $0.frame.origin == .zero } ?? 0
     }
-    return Grid(columns: n, rows: n)
+    return (layouts[index].usableFrame, index)
+  }
+
+  /// Where a grid session is, and every earlier position so Backspace can undo
+  /// any grid keystroke. Pure: the coordinator applies it to the overlay.
+  struct Navigation: Equatable {
+    struct Step: Equatable {
+      var region: CGRect
+      var depth: Int
+    }
+
+    /// One undoable position: the display and the step on it.
+    struct Position: Equatable {
+      var root: CGRect
+      var screenIndex: Int
+      var current: Step
+    }
+
+    /// The usable frame of the display the grid is on.
+    private(set) var root: CGRect
+    /// Index of that display in `NSScreen.screens` order.
+    private(set) var screenIndex: Int
+    private(set) var current: Step
+    /// Earlier positions, oldest first.
+    private(set) var history: [Position] = []
+    /// Where the pointer was before cursor-follow first moved it, so a cancel
+    /// can put it back. Nil while the pointer has not been moved.
+    var pointerOrigin: CGPoint?
+
+    init(root: CGRect, screenIndex: Int, pointerOrigin: CGPoint? = nil) {
+      self.root = root
+      self.screenIndex = screenIndex
+      self.current = Step(region: root, depth: 0)
+      self.pointerOrigin = pointerOrigin
+    }
+
+    /// The same display from its full extent with no history: the second
+    /// phase of a drag or selection.
+    var restarted: Navigation {
+      Navigation(root: root, screenIndex: screenIndex, pointerOrigin: pointerOrigin)
+    }
+
+    private var position: Position {
+      Position(root: root, screenIndex: screenIndex, current: current)
+    }
+
+    private mutating func push() {
+      history.append(position)
+    }
+
+    /// Zoom into `region` (a cell, a centre pseudo-cell, a bisect half).
+    mutating func drill(into region: CGRect) {
+      push()
+      current = Step(region: region, depth: current.depth + 1)
+    }
+
+    /// Space: zoom into the centre pseudo-cell.
+    mutating func centre(shape: Shape) {
+      drill(into: MouseGrid.centreCell(of: current.region, shape: shape))
+    }
+
+    /// Slide the region by its own size, clamped inside the display. False,
+    /// with nothing recorded, when it is already at that edge.
+    @discardableResult
+    mutating func move(_ direction: Direction) -> Bool {
+      var region = current.region
+      switch direction {
+      case .left: region.origin.x -= region.width
+      case .right: region.origin.x += region.width
+      case .up: region.origin.y += region.height
+      case .down: region.origin.y -= region.height
+      }
+      region.origin.x = min(
+        max(region.origin.x, root.minX), max(root.minX, root.maxX - region.width))
+      region.origin.y = min(
+        max(region.origin.y, root.minY), max(root.minY, root.maxY - region.height))
+      guard region != current.region else { return false }
+      push()
+      current.region = region
+      return true
+    }
+
+    /// Tab / Shift-Tab: the whole of the next / previous display. `roots` are
+    /// the displays' usable frames in `NSScreen.screens` order. False with a
+    /// single display.
+    @discardableResult
+    mutating func switchScreen(_ delta: Int, roots: [CGRect]) -> Bool {
+      guard roots.count > 1 else { return false }
+      let index = ((screenIndex + delta) % roots.count + roots.count) % roots.count
+      push()
+      root = roots[index]
+      screenIndex = index
+      current = Step(region: root, depth: 0)
+      return true
+    }
+
+    /// Undo the last grid keystroke of any kind. False when nothing is left.
+    @discardableResult
+    mutating func back() -> Bool {
+      guard let previous = history.popLast() else { return false }
+      root = previous.root
+      screenIndex = previous.screenIndex
+      current = previous.current
+      return true
+    }
+
+    /// Back to the whole display, forgetting every step.
+    mutating func reset() {
+      current = Step(region: root, depth: 0)
+      history = []
+    }
+
+    /// `--zoom-to-depth`: drill up to `depth` times into the cell under
+    /// `point`, stopping while one selection still remains to be made.
+    mutating func zoom(toward point: CGPoint, depth: Int, shape: Shape, steps: Int) {
+      for _ in 0..<max(0, depth) {
+        let region = current.region
+        guard
+          !MouseGrid.selectionCommits(
+            region: region, depth: current.depth, steps: steps, shape: shape)
+        else { return }
+        drill(into: MouseGrid.cellFrame(containing: point, in: region, shape: shape))
+      }
+    }
   }
 }

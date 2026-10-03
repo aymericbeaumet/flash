@@ -35,6 +35,11 @@ dev app settled at a 126.54 MiB median physical footprint for Flash plus its
 33 resident children across five measurements (127.01 MiB maximum), remaining
 inside the existing 130 MiB budget.
 
+Those figures predate status-bound activation. The status-only monitors
+(`cpu`, `memory`, `disks`, `power`, `caffeinate`, `feed`, `aiproviders`) now
+spawn only while the enabled status bar shows one of their segments, so with
+the bar off (the default) none of them runs until its command does.
+
 Use these regression budgets when changing the runtime or an official plugin:
 
 | Metric | Budget |
@@ -43,10 +48,15 @@ Use these regression budgets when changing the runtime or an official plugin:
 | idle ping round trip, p95 | 5 ms |
 | synchronous query evaluator round trip | 50 ms protocol deadline |
 | catalog decode/store | warn at 50 ms |
-| queued outbound transport | 256 frames / 20 MiB |
+| host queued outbound transport | 256 frames / 20 MiB |
+| host queued raw input / decoded frames | 256 entries / 20 MiB each |
+| host outstanding requests / host RPCs | 64 / 64 |
+| plugin outbound transport | 64 frames / 16 MiB |
 | full installed steady-state footprint | 130 MiB physical |
 
-These are regression tripwires, not protocol promises. Hardware, signing,
+The transport and outstanding-call limits are enforced admission caps, mirrored
+in the shared protocol specification. The timing and footprint budgets are
+regression tripwires. Hardware, signing,
 seatbelt compilation, TCC state, and debug versus release builds all affect
 absolute startup numbers.
 
@@ -57,10 +67,16 @@ Build the native-architecture binaries, then run the report-only benchmark:
 ```bash
 ./Scripts/benchmark-plugins.py --build --samples 5
 ./Scripts/benchmark-plugins.py --samples 10 --json > plugin-benchmark.json
-./Scripts/benchmark-plugins.py --plugin firefox --plugin safari --samples 20
+./Scripts/benchmark-plugins.py --plugin browsers --samples 20
 ```
 
-It launches each official executable from a clean data directory, measures
+`Scripts/measure-footprint.sh [sample-seconds] [log-window-minutes]` is the
+whole-system counterpart: it samples the running resident and every child
+(CPU, idle wakeups, memory, descriptors, threads) and summarises watchdog
+stalls, tap re-enables, and log lines per minute over the window. It is
+read-only and expects one installed Flash to be running.
+
+The plugin benchmark launches each official executable from a clean data directory, measures
 the protocol initialize round trip, lets post-initialize startup settle,
 measures an idle ping, samples RSS/thread count, then
 shuts the child down through stdin EOF. It does not enforce thresholds in CI;
@@ -75,18 +91,58 @@ least 50 ms.
 
 ## Hot-path rules
 
-- Plugin stdout decoding and stdin writes stay off the lifecycle queue.
-  Writes are FIFO and bounded; a stalled child is restarted instead of
-  freezing every lifecycle operation.
-- The shared SDK uses one current-thread Tokio executor per child. Events keep
-  wire order and interval callbacks do not overlap themselves; startup and
+- Plugin stdout framing, JSON parsing, catalog publication decoding, and stdin
+  writes stay off the lifecycle queue. Input and output queues are bounded;
+  a stalled or flooding child is restarted instead of
+  freezing every lifecycle operation. An unsent replacement event is
+  superseded by the next one with its coalescing key, so a burst of state
+  signals such as `core:ax.changed` never exhausts a briefly stalled child's
+  outbound budget (see [event coalescing](plugin-protocol.md#event-coalescing)). Deadlines include time spent awaiting
+  queue admission, and teardown invalidates work from the old child generation.
+  Stderr drains on its pipe callback without scheduling lifecycle work.
+- Third-party installation drains stdout/stderr concurrently on its own job
+  queue; output retention is capped at 4 MiB / 256 KiB. Stop/reload never waits
+  on an install script, and its process group receives bounded TERM/KILL
+  escalation even when a descendant keeps an output pipe open. Replacements
+  wait asynchronously for the preceding install to release the same root.
+- The shared SDK uses one current-thread Tokio executor per child. Accepted
+  events keep wire order, with pending application snapshots coalesced to the
+  newest state; interval callbacks do not overlap themselves. Startup and
   request callbacks may overlap and must coordinate shared refresh state.
   Async I/O and `spawn_blocking` retain concurrency without multiplying idle
   worker threads.
 - Full catalog replacements that are semantically unchanged do not advance
   the store generation, timestamp, or subscriber notifications.
 - Browser refreshes are single-flight, publish only changed rows, and log
-  state transitions or rate-limited warnings instead of every poll.
+  state transitions or rate-limited warnings instead of every refresh.
+- Catalog plugins do not poll the apps they mirror. `browsers`, `windows`
+  and `kitty` refresh on app lifecycle and focus events and on the
+  `core:ax.changed` notifications that can change their rows, ignoring the
+  rest — every keystroke's `AXValueChanged` among them: `windows` on a window
+  retitled, created or destroyed; `kitty` on those plus its window focus
+  moving; `browsers` on a window retitled or created (web content posts
+  element creation and destruction on every DOM update). Relevant bursts —
+  a shell retitling around each command, a closing window's subtree — refresh
+  once quiet for 300 ms, and at most ten seconds after they began. The host
+  observes an app's AX only once it has been focused; changes it cannot see
+  catch up when focus or the flashlight next touches the app.
+- `tmux` never re-reads its local servers on a timer. Each server a user's
+  client is attached to is followed by one control-mode client (`no-output`,
+  `ignore-size`; it never starts a server or applies `update-environment`),
+  and one inventory read follows each burst of the notifications that can
+  change it — sessions and windows created, closed, renamed (automatic-rename
+  included) or selected, panes selected, added or closed, clients attaching,
+  switching or detaching — settled for 100 ms, at most a second after the
+  burst began. What tmux never notifies — a window's working directory, its
+  command once automatic-rename is off, which client was used last — is
+  re-read on focus changes, app termination and flashlight opens. A client
+  attaching to a server nobody is attached to reaches no observer, so while
+  such a server runs, settled window retitles and creations
+  (`core:ax.changed`) refresh too; a kqueue watch on the `tmux-$UID` socket
+  directory catches servers starting or exiting. A socket whose probe fails
+  transiently is retried once per backoff step (5, 15, then 60 s). Remote
+  hosts in `ssh_hosts`, which no local notification reaches, keep a
+  five-second refresh.
 - Debug plugin logs remain available in the log file but do not invalidate
   status/inspector snapshots.
 - The NDJSON frame collector scans appended bytes once and compacts the

@@ -83,6 +83,9 @@ pub struct JumpTarget {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Opaque identity of the live source context containing this target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,6 +104,7 @@ impl JumpTarget {
             role: None,
             label: None,
             url: None,
+            context_id: None,
             pid: None,
             enters_insert_mode: None,
             priority: None,
@@ -119,6 +123,11 @@ impl JumpTarget {
 
     pub fn url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    pub fn context_id(mut self, context_id: impl Into<String>) -> Self {
+        self.context_id = Some(context_id.into());
         self
     }
 
@@ -250,6 +259,101 @@ pub mod candidate_metadata {
     pub const FINISHES_COMMAND: &str = "finishes_command";
     pub const CURRENT_LOCATION: &str = "current_location";
     pub const PRIORITY: &str = "priority";
+}
+
+/// Every AX notification `core:ax.changed` reports in
+/// [`Event::notification`] (`protocol.json` `host_events.ax_notifications`):
+/// the host forwards each of these, for every app it observes.
+pub mod ax_notifications {
+    pub const FOCUSED_UI_ELEMENT_CHANGED: &str = "AXFocusedUIElementChanged";
+    pub const FOCUSED_WINDOW_CHANGED: &str = "AXFocusedWindowChanged";
+    pub const MAIN_WINDOW_CHANGED: &str = "AXMainWindowChanged";
+    pub const LAYOUT_CHANGED: &str = "AXLayoutChanged";
+    pub const SELECTED_CHILDREN_CHANGED: &str = "AXSelectedChildrenChanged";
+    pub const SELECTED_ROWS_CHANGED: &str = "AXSelectedRowsChanged";
+    /// An element's value changed — each keystroke into a text field.
+    pub const VALUE_CHANGED: &str = "AXValueChanged";
+    pub const WINDOW_RESIZED: &str = "AXWindowResized";
+    pub const WINDOW_MOVED: &str = "AXWindowMoved";
+    pub const WINDOW_CREATED: &str = "AXWindowCreated";
+    pub const WINDOW_MINIATURIZED: &str = "AXWindowMiniaturized";
+    pub const WINDOW_DEMINIATURIZED: &str = "AXWindowDeminiaturized";
+    pub const APPLICATION_HIDDEN: &str = "AXApplicationHidden";
+    pub const APPLICATION_SHOWN: &str = "AXApplicationShown";
+    /// An element's title changed: a window retitled by a tab switch,
+    /// navigation or a terminal command.
+    pub const TITLE_CHANGED: &str = "AXTitleChanged";
+    pub const CREATED: &str = "AXCreated";
+    /// An element — possibly a window — was destroyed.
+    pub const UI_ELEMENT_DESTROYED: &str = "AXUIElementDestroyed";
+    pub const ROW_EXPANDED: &str = "AXRowExpanded";
+    pub const ROW_COLLAPSED: &str = "AXRowCollapsed";
+
+    /// In `protocol.json` order.
+    pub const ALL: [&str; 19] = [
+        FOCUSED_UI_ELEMENT_CHANGED,
+        FOCUSED_WINDOW_CHANGED,
+        MAIN_WINDOW_CHANGED,
+        LAYOUT_CHANGED,
+        SELECTED_CHILDREN_CHANGED,
+        SELECTED_ROWS_CHANGED,
+        VALUE_CHANGED,
+        WINDOW_RESIZED,
+        WINDOW_MOVED,
+        WINDOW_CREATED,
+        WINDOW_MINIATURIZED,
+        WINDOW_DEMINIATURIZED,
+        APPLICATION_HIDDEN,
+        APPLICATION_SHOWN,
+        TITLE_CHANGED,
+        CREATED,
+        UI_ELEMENT_DESTROYED,
+        ROW_EXPANDED,
+        ROW_COLLAPSED,
+    ];
+}
+
+/// Every host event name (`protocol.json` `host_events.names`), for `listen`
+/// manifests and `on_event` matches without re-typing the literals.
+/// `NETWORK_CHANGED` and `VOLUMES_CHANGED` are payload-free, coalesced
+/// signals: re-read the state you show when one arrives instead of polling.
+pub mod host_events {
+    pub const FLASH_STARTED: &str = "core:flash.started";
+    pub const APPS_CHANGED: &str = "core:apps.changed";
+    pub const APPS_LAUNCHED: &str = "core:apps.launched";
+    pub const APPS_TERMINATED: &str = "core:apps.terminated";
+    pub const FOCUS_CHANGED: &str = "core:focus.changed";
+    pub const WINDOW_FOCUS_CHANGED: &str = "core:window.focus.changed";
+    pub const AX_CHANGED: &str = "core:ax.changed";
+    pub const CLIPBOARD_CHANGED: &str = "core:clipboard.changed";
+    pub const CONFIG_CHANGED: &str = "core:config.changed";
+    pub const POWER_CHANGED: &str = "core:power.changed";
+    /// Network interfaces, addresses, routes or DNS changed.
+    pub const NETWORK_CHANGED: &str = "core:network.changed";
+    /// A volume mounted, unmounted or was renamed.
+    pub const VOLUMES_CHANGED: &str = "core:volumes.changed";
+    pub const SPACE_CHANGED: &str = "core:space.changed";
+    pub const STATUS_OBSERVED: &str = "core:status.observed";
+    pub const SESSION_OPENED: &str = "core:session.opened";
+
+    /// In `protocol.json` order.
+    pub const ALL: [&str; 15] = [
+        FLASH_STARTED,
+        APPS_CHANGED,
+        APPS_LAUNCHED,
+        APPS_TERMINATED,
+        FOCUS_CHANGED,
+        WINDOW_FOCUS_CHANGED,
+        AX_CHANGED,
+        CLIPBOARD_CHANGED,
+        CONFIG_CHANGED,
+        POWER_CHANGED,
+        NETWORK_CHANGED,
+        VOLUMES_CHANGED,
+        SPACE_CHANGED,
+        STATUS_OBSERVED,
+        SESSION_OPENED,
+    ];
 }
 
 impl Candidate {
@@ -482,7 +586,7 @@ impl std::fmt::Display for Candidate {
 pub struct RunningApplication {
     #[serde(default)]
     pub bundle_id: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::wire::deserialize_pid")]
     pub pid: i64,
     #[serde(default)]
     pub localized_name: String,
@@ -499,6 +603,32 @@ pub struct Event {
     pub pid: Option<i64>,
     pub front_window_frame: Option<Frame>,
     pub text: Option<String>,
+    /// `core:ax.changed`: the AX notification the app posted, one of
+    /// [`ax_notifications::ALL`] (`AXTitleChanged`, `AXValueChanged`, …).
+    /// Always present on that event, with [`pid`](Event::pid). Match on it
+    /// to skip changes that cannot affect what you read — a keystroke posts
+    /// `AXValueChanged` — instead of debouncing every notification alike.
+    pub notification: Option<String>,
+    /// `core:status.observed`: the complete set of this plugin's status
+    /// segments (manifest names, no `flash.plugin.<id>.` prefix) that a
+    /// status surface currently shows. Always present on that event, unique
+    /// and possibly empty — empty means nothing is observed. Order carries
+    /// no meaning.
+    pub segments: Option<Vec<String>>,
+}
+
+impl Event {
+    /// Whether this is a `core:ax.changed` reporting one of `notifications`
+    /// ([`ax_notifications`]): the changes that can affect what the caller
+    /// reads, so it can ignore the rest — every keystroke's value change
+    /// among them — instead of debouncing them all.
+    pub fn is_ax_change(&self, notifications: &[&str]) -> bool {
+        self.name == host_events::AX_CHANGED
+            && self
+                .notification
+                .as_deref()
+                .is_some_and(|notification| notifications.contains(&notification))
+    }
 }
 
 /// A `perform {kind: "command"}` request: the matched `:`-command or verb, its
@@ -529,7 +659,7 @@ impl CommandRequest {
 pub struct HintsRequest {
     #[serde(default)]
     pub bundle_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
@@ -540,7 +670,7 @@ pub struct HintsRequest {
 pub struct ActionContext {
     #[serde(default)]
     pub bundle_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
@@ -684,7 +814,7 @@ impl PerformResponse {
             ok: false,
             unhandled: false,
             // The response law: ok:false always carries a non-empty error.
-            error: Some(if message.is_empty() {
+            error: Some(if message.trim().is_empty() {
                 "perform failed".to_string()
             } else {
                 message
@@ -729,11 +859,32 @@ impl PerformResponse {
         self.error.as_deref()
     }
 
+    /// The toast text, when one was attached with `message`.
+    pub fn toast_message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
     pub(crate) fn to_value(&self) -> Value {
         if self.unhandled {
             // The one sanctioned errorless ok:false — subsetting keeps the
             // wire shape canonical whatever builders were chained.
             return serde_json::json!({ "ok": false, "unhandled": true });
+        }
+        if !self.ok {
+            return serde_json::json!({ "ok": false, "error": self.error });
+        }
+        if self
+            .target_pid
+            .is_some_and(|pid| !(1..=i64::from(i32::MAX)).contains(&pid))
+        {
+            return serde_json::json!({ "ok": false, "error": "invalid perform target_pid" });
+        }
+        if self
+            .navigation_url
+            .as_deref()
+            .is_some_and(|url| !crate::wire::absolute_url(url))
+        {
+            return serde_json::json!({ "ok": false, "error": "invalid perform navigation_url" });
         }
         serde_json::to_value(self).unwrap_or_else(|_| {
             serde_json::json!({ "ok": false, "error": "perform response could not be encoded" })
@@ -792,6 +943,84 @@ impl HintsResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ax_changes_match_only_the_listed_notifications() {
+        let ax = |notification: &str| Event {
+            name: host_events::AX_CHANGED.into(),
+            pid: Some(7),
+            notification: Some(notification.into()),
+            ..Event::default()
+        };
+        let relevant = [ax_notifications::TITLE_CHANGED];
+        assert!(ax(ax_notifications::TITLE_CHANGED).is_ax_change(&relevant));
+        assert!(!ax(ax_notifications::VALUE_CHANGED).is_ax_change(&relevant));
+        let focus = Event {
+            name: host_events::FOCUS_CHANGED.into(),
+            notification: Some(ax_notifications::TITLE_CHANGED.into()),
+            ..Event::default()
+        };
+        assert!(!focus.is_ax_change(&relevant));
+    }
+
+    #[test]
+    fn hint_context_is_omitted_when_unknown_and_preserved_when_set() {
+        let target = JumpTarget::new("target", Frame::new(1.0, 2.0, 3.0, 4.0));
+        assert!(
+            serde_json::to_value(&target)
+                .unwrap()
+                .get("context_id")
+                .is_none()
+        );
+        let target = target.context_id("server/session/window/pane");
+        let value = serde_json::to_value(&target).unwrap();
+        assert_eq!(value["context_id"], "server/session/window/pane");
+        assert!(crate::wire::valid_result(
+            "hints",
+            &json!({"ok": true, "targets": [value]})
+        ));
+    }
+
+    #[test]
+    fn failure_builders_cannot_emit_success_fields() {
+        assert_eq!(
+            PerformResponse::fail("broken")
+                .target_pid(7)
+                .message("done")
+                .to_value(),
+            json!({ "ok": false, "error": "broken" })
+        );
+    }
+
+    #[test]
+    fn perform_builders_always_emit_valid_wire_outcomes() {
+        for response in [
+            PerformResponse::fail(" \t\n"),
+            PerformResponse::ok().navigation_url("relative/path"),
+        ] {
+            assert!(crate::wire::valid_result("perform", &response.to_value()));
+            assert_eq!(response.to_value()["ok"], false);
+        }
+    }
+
+    #[test]
+    fn optional_request_pids_accept_null_but_reject_invalid_values() {
+        for value in [json!({}), json!({"pid": null})] {
+            assert_eq!(
+                serde_json::from_value::<HintsRequest>(value.clone())
+                    .unwrap()
+                    .pid,
+                None
+            );
+            assert_eq!(
+                serde_json::from_value::<ActionContext>(value).unwrap().pid,
+                None
+            );
+        }
+        for pid in [json!(true), json!(0), json!(1.0), json!(2147483648_u64)] {
+            assert!(serde_json::from_value::<HintsRequest>(json!({"pid": pid})).is_err());
+        }
+    }
 
     #[test]
     fn rows_serialize_with_first_class_source_and_lean_optionals() {

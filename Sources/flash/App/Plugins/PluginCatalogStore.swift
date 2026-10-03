@@ -28,6 +28,8 @@ final class PluginCatalogStore {
   /// `notifyInterval` — lossless, because consumers re-read the store, which
   /// is already current when the trailing tick lands.
   var onCatalogsChanged: (() -> Void)?
+  /// One pending notify per store, by instance.
+  private let notifyClientID = "core:catalog_notify:\(UUID().uuidString)"
 
   func publish(pluginID: String, rows: [Candidate], encodedBytes: Int) {
     lock.lock()
@@ -111,7 +113,13 @@ final class PluginCatalogStore {
     }
     notifyScheduled = true
     lock.unlock()
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+    // The throttle's trailing edge rides the shared clock. `.normal`: an open
+    // flashlight re-reads the store on it at most once a second, so a tenth
+    // of a second is invisible, and with the flashlight closed it only
+    // updates movement history.
+    PollScheduler.shared.scheduleOnce(
+      notifyClientID, afterMs: Int((delay * 1000).rounded(.up)), priority: .normal, on: .main
+    ) { [weak self] in
       guard let self else { return }
       self.lock.lock()
       self.notifyScheduled = false

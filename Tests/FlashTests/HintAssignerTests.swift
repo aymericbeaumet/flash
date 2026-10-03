@@ -1,3 +1,5 @@
+import CoreGraphics
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -194,6 +196,61 @@ final class HintAssignerTests: XCTestCase {
 
   func testEmpty() {
     XCTAssertTrue(HintAssigner.generateLabels(count: 0, alphabet: alphabet).isEmpty)
+  }
+
+  /// `--multi` discovers again after every click: a target that is still
+  /// there keeps its label, so the next one the user reads stays valid.
+  func testReassignmentKeepsLabelsOfTargetsThatPersist() {
+    let before = HintAssigner.assign(
+      targets: ["Save", "Open", "Close", "Help"].map(button), alphabet: alphabet)
+    XCTAssertEqual(before.map(\.label), ["a", "r", "s", "t"])
+
+    // The click closed "Open" and revealed "Undo" ahead of the others.
+    let after = HintAssigner.assign(
+      targets: ["Undo", "Save", "Close", "Help"].map(button), alphabet: alphabet,
+      preserving: before)
+    XCTAssertEqual(
+      Dictionary(uniqueKeysWithValues: after.map { ($0.target.accessibilityLabel!, $0.label) }),
+      ["Save": "a", "Close": "s", "Help": "t", "Undo": "r"])
+  }
+
+  func testReassignmentStaysPrefixFreeWhenTheLabelSetChanges() {
+    let before = HintAssigner.assign(targets: (0..<9).map { button("b\($0)") }, alphabet: alphabet)
+    XCTAssertEqual(before.prefix(7).map(\.label), ["a", "r", "s", "t", "n", "e", "i"])
+    // Thirty targets leave room for four single letters only: `n`, `e` and
+    // `i` now start two-letter labels, so their targets get fresh ones.
+    let after = HintAssigner.assign(
+      targets: (0..<30).map { button("b\($0)") }, alphabet: alphabet, preserving: before)
+    let labels = after.map(\.label)
+    XCTAssertEqual(Set(labels), Set(HintAssigner.generateLabels(count: 30, alphabet: alphabet)))
+    for (i, a) in labels.enumerated() {
+      for (j, b) in labels.enumerated() where i != j {
+        XCTAssertFalse(a.hasPrefix(b), "label \(a) starts with label \(b)")
+      }
+    }
+    XCTAssertEqual(Array(labels.prefix(4)), ["a", "r", "s", "t"])
+    XCTAssertTrue(labels[4...6].allSatisfy { $0.count == 2 }, "\(labels[4...6])")
+  }
+
+  func testReassignmentMatchesTargetsByWhatTheyAreNotTheirWalkID() {
+    let before = HintAssigner.assign(
+      targets: [button("Save", id: "ax-1-r-1"), button("Save", x: 200, id: "ax-1-r-2")],
+      alphabet: alphabet)
+    // New walk ids, same controls; the second button moved.
+    let after = HintAssigner.assign(
+      targets: [button("Save", x: 300, id: "ax-1-r-9"), button("Save", id: "ax-1-r-7")],
+      alphabet: alphabet, preserving: before)
+    XCTAssertEqual(after.map(\.label), ["r", "a"])
+  }
+
+  private func button(_ label: String) -> JumpTarget {
+    button(label, x: 0, id: label)
+  }
+
+  private func button(_ label: String, x: CGFloat = 0, id: String) -> JumpTarget {
+    JumpTarget(
+      id: id, frame: CGRect(x: x, y: 10, width: 80, height: 24), role: "AXButton",
+      accessibilityLabel: label, providerID: "accessibility")
   }
 
   private func check(count: Int) {

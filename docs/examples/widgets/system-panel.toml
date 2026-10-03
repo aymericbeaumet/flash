@@ -1,0 +1,49 @@
+# A conky-style system panel: CPU, memory and disk meters with sparklines,
+# disk and network rates, uptime, load and the busiest processes. Every figure
+# comes from the bundled monitor plugins; the panel runs no command.
+# See README.md in this directory to add it to flash.toml.
+#
+# Each gauge row is a label, a 16-cell meter, the figure and a sparkline on a
+# fixed 0-100 scale; each rate row is the rate in kB/s and a sparkline scaled
+# to its own peak. Write %% for a percent sign, and %%%% inside a #{?...}
+# branch, which is expanded once more.
+
+[plugin.processes]
+top_count = 5 # rows in each process table, 1-20
+
+[widgets.system]
+anchor = "top_right"
+columns = 48
+bg = "#2E3440CC"
+border = "#4C566A"
+border_size = 1
+template = """
+#[fg=#EBCB8B bold]#{host_short}#[default]\
+#[align=right fg=#81A1C1]up #{flash.plugin.cpu.uptime}  load #{flash.plugin.cpu.load}
+#[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
+#[fg=#88C0D0]CPU#[default] \
+#[meter=16 fg=#A3BE8C bg=#3B4252]#{flash.plugin.cpu.percent}#[nometer default] \
+#{p-3:flash.plugin.cpu.percent}%% \
+#[fg=#81A1C1 spark=0/100]#{flash.plugin.cpu.history}#[nospark default]
+#[fg=#88C0D0]MEM#[default] \
+#[meter=16 fg=#A3BE8C bg=#3B4252]#{flash.plugin.memory.percent}#[nometer default] \
+#{p-3:flash.plugin.memory.percent}%% \
+#[fg=#81A1C1 spark=0/100]#{flash.plugin.memory.history}#[nospark default]
+#[fg=#88C0D0]DSK#[default] \
+#[meter=16 fg=#A3BE8C bg=#3B4252]#{flash.plugin.disks.percent}#[nometer default] \
+#{p-3:flash.plugin.disks.percent}%%
+#{?flash.plugin.power.percent,#[fg=#88C0D0]BAT#[default] \
+#[meter=16 fg=#A3BE8C bg=#3B4252]#{flash.plugin.power.percent}#[nometer default] \
+#{p-3:flash.plugin.power.percent}%%%% #{flash.plugin.power.state},#[fg=#4C566A]BAT none}
+#[fg=#88C0D0]I/O#[default] R #{flash.plugin.disks.read}  W #{flash.plugin.disks.write}
+#[fg=#88C0D0]NET#[default] ↓ #{p-7:#{e|/|f|1:#{flash.plugin.network.down_bps},1000}} kB/s \
+#[fg=#81A1C1 spark]#{flash.plugin.network.down_history}#[nospark default]
+#[fg=#88C0D0]   #[default] ↑ #{p-7:#{e|/|f|1:#{flash.plugin.network.up_bps},1000}} kB/s \
+#[fg=#81A1C1 spark]#{flash.plugin.network.up_history}#[nospark default]
+#[fg=#88C0D0]IP #[default] #{flash.plugin.network.address}
+#[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
+#[fg=#88C0D0]TOP CPU#[default]
+#{flash.plugin.processes.top_cpu}
+#[fg=#88C0D0]TOP MEM#[default]
+#{flash.plugin.processes.top_mem}
+"""

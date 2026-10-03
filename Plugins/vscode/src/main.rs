@@ -30,16 +30,20 @@
 //! (bottom-left origin), the exact space `JumpTarget.frame` expects, so no
 //! conversion happens here.
 
-use flash_plugin::{run, Context, Frame, HintsRequest, HintsResponse, JumpTarget};
+use flash_plugin::{Context, Frame, HintsRequest, HintsResponse, JumpTarget, run};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 /// Broker walk bound. VS Code trees are deep; the broker's own default cap
-/// is 3000 — stay under it and under the 2 s generic RPC deadline.
+/// is 3000 — stay under it.
 const MAX_SNAPSHOT_NODES: usize = 2_000;
-const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(1_500);
+/// The host waits 500 ms for hints and the SDK drops the handler 50 ms
+/// before that: the broker stops walking at 300 ms and answers with the
+/// shallowest nodes it reached, leaving the reply time to travel back.
+const SNAPSHOT_DEADLINE_MS: u64 = 300;
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(400);
 /// Hint budget: more chips than this is unreadable anyway.
 const MAX_TARGETS: usize = 200;
 /// Size gate: smaller is decoration, larger is a container mislabeled as a
@@ -110,6 +114,7 @@ impl FlashPlugin for Vscode {
                     // (and rejected by the mapping), only its subtree is cut.
                     "prune_roles": ["AXTextArea", "AXTextField"],
                     "max_nodes": MAX_SNAPSHOT_NODES,
+                    "deadline_ms": SNAPSHOT_DEADLINE_MS,
                     "geometry": true,
                 }),
                 SNAPSHOT_TIMEOUT,
@@ -355,9 +360,11 @@ mod tests {
             .unwrap();
         assert_eq!(link.role.as_deref(), Some("AXLink"));
         assert!(targets.iter().all(|target| target.pid == Some(55)));
-        assert!(targets
-            .iter()
-            .all(|target| target.id.starts_with("vscode-55-")));
+        assert!(
+            targets
+                .iter()
+                .all(|target| target.id.starts_with("vscode-55-"))
+        );
     }
 
     #[test]
@@ -399,9 +406,11 @@ mod tests {
     #[test]
     fn missing_window_frame_admits_all_size_gated_targets() {
         let targets = targets_from_nodes(&fixture_nodes(), 55, None);
-        assert!(targets
-            .iter()
-            .any(|target| target.label.as_deref() == Some("Other display")));
+        assert!(
+            targets
+                .iter()
+                .any(|target| target.label.as_deref() == Some("Other display"))
+        );
     }
 
     #[test]

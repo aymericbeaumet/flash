@@ -1,0 +1,136 @@
+import Foundation
+import XCTest
+
+@testable import flash
+
+final class FlashLogTests: XCTestCase {
+  private func temporaryDirectory() throws -> URL {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-log-tests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    return directory
+  }
+
+  private func record(_ id: Int) -> Data { Data("{\"id\":\(id)}\n".utf8) }
+
+  private func identifiers(in files: [URL]) throws -> [Int] {
+    try files.flatMap { file in
+      try Data(contentsOf: file).split(separator: 10).map { line in
+        let object = try JSONSerialization.jsonObject(with: Data(line)) as? [String: Int]
+        return try XCTUnwrap(object?["id"])
+      }
+    }
+  }
+
+  func testXCTestDisablesDefaultFileOutputAndKeepsInMemorySinks() {
+    XCTAssertNil(FlashLog.defaultLogFileURL)
+    let emitted = expectation(description: "isolated in-memory log")
+    let sink = FlashLog.addSink { record in
+      guard record.source == "core:FlashLogTests" else { return }
+      XCTAssertEqual(record.message, "isolated log test")
+      emitted.fulfill()
+    }
+    defer { FlashLog.removeSink(sink) }
+    FlashLog.info("isolated log test", source: "core:FlashLogTests")
+    wait(for: [emitted], timeout: 1)
+  }
+
+  func testSuppressedLevelLeavesMessageUnevaluated() {
+    FlashLog.setLevel(.info)
+    var evaluated = false
+    func message() -> String {
+      evaluated = true
+      return "never formatted"
+    }
+    FlashLog.trace(message())
+    FlashLog.debug(message())
+    XCTAssertFalse(evaluated)
+    FlashLog.warn(message())
+    XCTAssertTrue(evaluated)
+    FlashLog.flush()
+  }
+
+  func testSuppressedLevelLeavesFieldsUnevaluated() {
+    FlashLog.setLevel(.info)
+    var evaluated = false
+    func fields() -> [String: String] {
+      evaluated = true
+      return ["k": "v"]
+    }
+    FlashLog.debug("never formatted", fields: fields())
+    XCTAssertFalse(evaluated)
+    FlashLog.flush()
+  }
+
+  /// A sink following the configured level doesn't turn lower levels on,
+  /// so an open inspector never forces trace messages to be built.
+  func testASinkFollowingTheConfiguredLevelKeepsLowerLevelsOff() {
+    FlashLog.setLevel(.info)
+    var received: [String] = []
+    let sink = FlashLog.addSink(minLevel: nil) { received.append($0.message) }
+    defer { FlashLog.removeSink(sink) }
+    XCTAssertFalse(FlashLog.wouldEmit(.debug))
+    var evaluated = false
+    func message() -> String {
+      evaluated = true
+      return "debug"
+    }
+    FlashLog.debug(message())
+    XCTAssertFalse(evaluated)
+    FlashLog.info("info reaches the sink")
+    XCTAssertEqual(received, ["info reaches the sink"])
+    FlashLog.flush()
+  }
+
+  func testDefaultSourceNamesTheCallSite() {
+    let emitted = expectation(description: "call-site source")
+    let sink = FlashLog.addSink { record in
+      guard record.message == "call-site source" else { return }
+      XCTAssertEqual(
+        record.source, "core:FlashLogTests.swift.testDefaultSourceNamesTheCallSite()")
+      emitted.fulfill()
+    }
+    defer { FlashLog.removeSink(sink) }
+    FlashLog.info("call-site source")
+    wait(for: [emitted], timeout: 1)
+  }
+
+  func testJSONLineIsNewlineTerminatedAndSorted() throws {
+    let record = FlashLog.Record(
+      level: .info, source: "core:test", message: "m", fields: ["k": "v"], pid: 7,
+      timeUnixMs: 42)
+    let line = FlashLog.jsonLineData(record)
+    XCTAssertEqual(line.last, 0x0A)
+    let object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: line.dropLast()) as? [String: Any])
+    XCTAssertEqual(object["message"] as? String, "m")
+    XCTAssertEqual((object["fields"] as? [String: String])?["k"], "v")
+    XCTAssertTrue(String(decoding: line, as: UTF8.self).hasPrefix("{\"fields\""))
+  }
+
+  func testQueuedRecordsSurviveRepeatedRotation() throws {
+    let directory = try temporaryDirectory()
+    let writer = FlashLogFileWriter(
+      url: directory.appendingPathComponent("flash.log"),
+      rotationByteLimit: 80, rotationKeep: 100)
+    for id in 0..<200 { writer.append(record(id)) }
+    writer.flush()
+    let files = try FileManager.default.contentsOfDirectory(
+      at: directory, includingPropertiesForKeys: nil)
+    XCTAssertGreaterThan(files.count, 2)
+    XCTAssertEqual(try identifiers(in: files).sorted(), Array(0..<200))
+  }
+
+  func testIndependentConcurrentWritersAppendWithoutOverwriting() throws {
+    let directory = try temporaryDirectory()
+    let url = directory.appendingPathComponent("flash.log")
+    try record(-1).write(to: url)
+    let writers = (0..<4).map { _ in FlashLogFileWriter(url: url) }
+    DispatchQueue.concurrentPerform(iterations: 400) { id in
+      writers[id % writers.count].append(record(id))
+    }
+    for writer in writers { writer.flush() }
+    XCTAssertEqual(try identifiers(in: [url]).sorted(), Array(-1..<400))
+  }
+}

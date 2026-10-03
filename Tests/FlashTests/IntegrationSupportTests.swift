@@ -88,6 +88,36 @@ final class IntegrationSupportTests: XCTestCase {
     XCTAssertNotNil(decoded[1].durationMs)
   }
 
+  func testHintBenchmarkArguments() throws {
+    XCTAssertNil(try ResidentHintBenchmark.parse(["--fixture-app", "/x"]))
+    let bench = try XCTUnwrap(ResidentHintBenchmark.parse(["--bench=30"]))
+    XCTAssertEqual(bench.runs, 30)
+    XCTAssertEqual(bench.trigger, .key)
+    let cli = try XCTUnwrap(
+      ResidentHintBenchmark.parse(["--bench-trigger=cli", "--bench=5", "--jobs", "2"]))
+    XCTAssertEqual(cli.runs, 5)
+    XCTAssertEqual(cli.trigger, .cli)
+    for invalid in ["--bench=0", "--bench=x", "--bench-trigger=mouse"] {
+      XCTAssertThrowsError(try ResidentHintBenchmark.parse([invalid]), invalid)
+    }
+    XCTAssertTrue(ResidentHintBenchmark.owns("--bench=3"))
+    XCTAssertTrue(ResidentHintBenchmark.owns("--bench-trigger=key"))
+    XCTAssertFalse(ResidentHintBenchmark.owns("--bench"))
+  }
+
+  func testHintBenchmarkReadsTheResidentsState() {
+    XCTAssertTrue(
+      ResidentHintBenchmark.hintsVisible(["activation_in_flight": false, "hints": [["label": "a"]]])
+    )
+    XCTAssertFalse(
+      ResidentHintBenchmark.hintsVisible(["activation_in_flight": true, "hints": [["label": "a"]]]))
+    XCTAssertFalse(
+      ResidentHintBenchmark.hintsVisible(["activation_in_flight": false, "hints": []]))
+    XCTAssertTrue(
+      ResidentHintBenchmark.hintsDismissed(["activation_in_flight": false, "hints": []]))
+    XCTAssertFalse(ResidentHintBenchmark.hintsDismissed([:]))
+  }
+
   private func target(
     id: String,
     label: String?,

@@ -18,7 +18,7 @@ export default defineConfig(({ mode }) => {
       reportCompressedSize: false,
       // A `--dev` install wants a fast, readable bundle; a release install
       // wants the optimized one. Both still inline to a single file.
-      minify: dev ? false : "esbuild",
+      minify: dev ? false : "oxc",
       sourcemap: dev,
     },
   };

@@ -20,11 +20,18 @@
   ],
   "status": [
     "summary",
-    "details"
+    "label",
+    "details",
+    "percent",
+    "history",
+    "load",
+    "uptime"
+  ],
+  "listen": [
+    "core:status.observed"
   ],
   "sandbox": {
     "exec": [
-      "/usr/sbin/iostat",
       "/usr/sbin/ioreg"
     ]
   }

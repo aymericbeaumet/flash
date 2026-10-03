@@ -19,6 +19,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
+./Scripts/build-ghostty.sh --dev
 
 SETUP_ONLY=0
 RUN_ARGS=()

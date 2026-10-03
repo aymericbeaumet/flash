@@ -9,6 +9,18 @@ struct PreparedModel {
   let computedAt: DispatchTime
   let dirtyToken: UInt64
   let configRevision: UInt64
+  /// Geometry/role digest of `targets`; equal digests across consecutive
+  /// maintenance walks are the evidence that lets the freshness ceiling grow.
+  let fingerprint: Int
+  /// How long this model may be served without a refresh. Starts at
+  /// `AppMonitor.modelFreshnessMs` and doubles (to `modelFreshnessMaxMs`) for
+  /// every maintenance walk that reproduces the previous model unchanged, so a
+  /// static focused app is re-walked seconds apart instead of every 1.3 s.
+  var freshnessMs: Int
+  /// The walk found no visible region for the focused window: something
+  /// covered all of it, or nothing of it was on screen. Such a model is never
+  /// stored (`PreparedModelStore.store`).
+  let occluded: Bool
 
   var isEmptyReady: Bool { hints.isEmpty }
 }
@@ -18,8 +30,19 @@ struct PreparedModelStore {
   private var rebuilding: Set<pid_t> = []
   private var queuedAfterRebuild: Set<pid_t> = []
 
-  mutating func store(_ model: PreparedModel) {
+  /// Store a completed walk's model. An occluded one is not stored, and it
+  /// evicts the current model: whether the window is covered is window-list
+  /// state no AX event reports, so nothing would invalidate the empty model
+  /// once the covering window left, and a model walked before the window was
+  /// covered no longer describes the screen. The next activation walks.
+  @discardableResult
+  mutating func store(_ model: PreparedModel) -> Bool {
+    guard !model.occluded else {
+      models.removeValue(forKey: model.pid)
+      return false
+    }
     models[model.pid] = model
+    return true
   }
 
   mutating func discardModel(pid: pid_t) {
@@ -38,19 +61,22 @@ struct PreparedModelStore {
     queuedAfterRebuild.removeAll()
   }
 
+  func current(pid: pid_t) -> PreparedModel? {
+    models[pid]
+  }
+
   func lookup(
     pid: pid_t,
     dirtyToken: UInt64,
     configRevision: UInt64,
-    now: DispatchTime,
-    freshnessMs: Int
+    now: DispatchTime
   ) -> PreparedModel? {
     guard let model = models[pid] else { return nil }
     guard model.dirtyToken == dirtyToken else { return nil }
     guard model.configRevision == configRevision else { return nil }
     let ageNs = now.uptimeNanoseconds - model.computedAt.uptimeNanoseconds
     let ageMs = Double(ageNs) / 1_000_000
-    guard ageMs <= Double(freshnessMs) else { return nil }
+    guard ageMs <= Double(model.freshnessMs) else { return nil }
     return model
   }
 

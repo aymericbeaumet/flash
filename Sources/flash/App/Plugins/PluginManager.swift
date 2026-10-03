@@ -33,30 +33,16 @@ final class PluginManager {
     let registration: PluginCommandRegistration
   }
 
-  /// A resolved plugin-verb target: the owning plugin, the
-  /// command/subcommand folded from the manifest, and an optional
-  /// per-bundle keystroke table (which lets the host synthesize the key
-  /// directly when it matches the focused bundle, skipping the plugin RPC).
+  /// A resolved plugin-verb target: the owning plugin and the
+  /// command/subcommand folded from the manifest.
   private struct VerbTarget {
     let plugin: PluginProcess
     let command: String
     let subcommand: String
-    let keystrokes: [String: String]
     let selector: PluginSelectorStack
 
     func specificity(in context: PluginSelectorContext) -> Int? {
       selector.specificity(in: context)
-    }
-
-    /// Hotkey string to synthesize for `bundleID`, or `nil` when the verb has
-    /// no keystroke shortcut for it. The empty-key entry (`""`) acts as the
-    /// catch-all default, mirroring the manifest convention.
-    func keystroke(forBundleID bundleID: String?) -> String? {
-      if let bundleID, let exact = keystrokes[bundleID], !exact.isEmpty {
-        return exact
-      }
-      let fallback = keystrokes[""] ?? ""
-      return fallback.isEmpty ? nil : fallback
     }
   }
 
@@ -115,6 +101,7 @@ final class PluginManager {
     var shebangCandidateIndex: [ShebangCandidateTarget] = []
     var wildcardShebangTargets: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
+    var actionBindings = ActionBindingIndex()
     var helpTopics: [HelpTopic] = []
   }
 
@@ -129,6 +116,8 @@ final class PluginManager {
   /// superseded config (or after `stop()`) must not clobber newer state.
   private let generationLock = NSLock()
   private var configGeneration = 0
+  private var latestConfig: Config?
+  private var requestedRestarts: Set<String> = []
   private let baseDataDir: URL
   private let repository: PluginRepository
   /// The host-owned push catalog store every plugin's validated `publish`
@@ -139,6 +128,16 @@ final class PluginManager {
   /// instead of the plugin silently not existing.
   private var loadFailureStatuses: [PluginStatus] = []
   private var pluginsByID: [String: PluginProcess] = [:]
+  /// Desktop widgets fully covered for at least `hiddenWidgetGraceMs`: they no
+  /// longer observe plugin segments. Queue-confined, as is `pendingHides`.
+  private var hiddenWidgets: Set<String> = []
+  /// One grace deadline per covered widget on the shared clock. `.low`:
+  /// nobody can see a covered widget, and the grace only decides when its
+  /// plugins stop sampling for it.
+  private var pendingHides: [String: PollDeadline] = [:]
+  /// How long a widget stays covered before its plugins stop sampling for it,
+  /// so briefly covering the desktop does not respawn status plugins.
+  static let hiddenWidgetGraceMs = 30_000
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
   /// Latest host-owned running-app snapshot, behind its own lock so each
   /// plugin's post-initialize `core:apps.changed` reads it from the plugin
@@ -159,7 +158,8 @@ final class PluginManager {
   }
   /// See `PluginHostRPC.onNormalModeTargetRequested`; forwarded so
   /// AppDelegate wiring stays on the manager.
-  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)? {
+  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String, windowID: CGWindowID?)?)?
+  {
     get { hostRPC.onNormalModeTargetRequested }
     set { hostRPC.onNormalModeTargetRequested = newValue }
   }
@@ -226,6 +226,9 @@ final class PluginManager {
     var shebangCandidates: [ShebangCandidateTarget] = []
     var wildcardShebangs: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
+    var actionBindings = ActionBindingIndex()
+    var terminalEmulators: Set<String> = []
+    var onDemandHintApps: Set<String> = []
     var helpTopics: [HelpTopic] = []
     var order = 0
     for plugin in plugins {
@@ -291,9 +294,13 @@ final class PluginManager {
             plugin: plugin,
             command: command,
             subcommand: subcommand,
-            keystrokes: registration.keystrokes,
             selector: rootSelector))
       }
+
+      terminalEmulators.formUnion(manifest.terminalEmulators)
+      onDemandHintApps.formUnion(manifest.onDemandHints)
+
+      actionBindings.add(manifest)
 
       for registration in manifest.mappings {
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(registration.key) else {
@@ -313,7 +320,9 @@ final class PluginManager {
             selector: PluginSelectorStack([manifest.selector, registration.selector]),
             priority: registration.priority ?? manifest.priority,
             scope: registration.scope,
-            mapping: ModeMapping(key: canonical, action: action)))
+            mapping: ModeMapping(
+              key: canonical, action: action,
+              repeatsOnFinalKey: registration.repeatsOnFinalKey)))
       }
 
       // Topic names collide on a first-wins basis with the host's topics
@@ -331,7 +340,7 @@ final class PluginManager {
     }
 
     let snapshot = HotSnapshot(
-      sourceAdapters: Array(sourceAdaptersByID.values),
+      sourceAdapters: sourceAdaptersByID.keys.sorted().compactMap { sourceAdaptersByID[$0] },
       plugins: plugins,
       loadFailureStatuses: loadFailureStatuses,
       mappingIndex: mappingIndex,
@@ -343,17 +352,15 @@ final class PluginManager {
       shebangCandidateIndex: shebangCandidates,
       wildcardShebangTargets: wildcardShebangs,
       verbIndex: verbIndex,
+      actionBindings: actionBindings,
       helpTopics: helpTopics)
+    // Declared before the snapshot is visible, so every selector resolved
+    // against it already sees these apps as terminals.
+    TerminalEmulators.declared.declare(terminalEmulators)
+    OnDemandHintApps.declared.declare(onDemandHintApps)
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
     hotSnapshotLock.unlock()
-  }
-
-  private func bumpGeneration() -> Int {
-    generationLock.lock()
-    defer { generationLock.unlock() }
-    configGeneration += 1
-    return configGeneration
   }
 
   private func isCurrentGeneration(_ generation: Int) -> Bool {
@@ -375,7 +382,11 @@ final class PluginManager {
     // resurrect plugins after shutdown, and clear the change callback before
     // the store empties — a post-stop tick must not reach a dead consumer
     // (the old lost-callback bug).
-    _ = bumpGeneration()
+    generationLock.lock()
+    configGeneration += 1
+    latestConfig = nil
+    requestedRestarts.removeAll()
+    generationLock.unlock()
     catalogStore.onCatalogsChanged = nil
     let plugins = queue.sync { () -> [PluginProcess] in
       let snapshot = Array(pluginsByID.values)
@@ -406,52 +417,157 @@ final class PluginManager {
     return latestRunningApplicationsSnapshot
   }
 
+  /// Touched only on `eventQueue`.
+  private var lastEmittedRunningApplicationsSignature: [String]?
+
+  /// What identifies a running-apps list: each app's pid and bundle id.
+  static func runningApplicationsSignature(_ applications: [[String: Any]]) -> [String] {
+    applications.map { "\($0["pid"] as? Int ?? 0):\($0["bundle_id"] as? String ?? "")" }.sorted()
+  }
+
   func cacheRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
     runningApplicationsLock.lock()
     latestRunningApplicationsSnapshot = applications
     runningApplicationsLock.unlock()
   }
 
-  func emitRunningApplicationsChanged(reason: String, applications: [[String: Any]]) {
-    cacheRunningApplicationsSnapshot(applications)
-    emit(
-      PluginEvent(
-        name: "core:apps.changed",
-        payload: [
-          "reason": reason,
-          "running_applications": applications,
-        ],
-        bundleID: nil))
+  /// Enumerating the running apps and encoding the full list is work for
+  /// `eventQueue`, not the focus change on main that triggers it. The event
+  /// fires only when the set of running apps changed: a focus change asks for
+  /// it too, and resending an identical list made listeners re-walk every
+  /// app on each Cmd-Tab.
+  func emitRunningApplicationsChanged(
+    reason: String, snapshot: @escaping () -> [[String: Any]]
+  ) {
+    eventQueue.async { [weak self] in
+      guard let self else { return }
+      let applications = snapshot()
+      self.cacheRunningApplicationsSnapshot(applications)
+      let signature = Self.runningApplicationsSignature(applications)
+      guard signature != self.lastEmittedRunningApplicationsSignature else { return }
+      self.lastEmittedRunningApplicationsSignature = signature
+      self.emitOnEventQueue(
+        PluginEvent(
+          name: "core:apps.changed",
+          payload: [
+            "reason": reason,
+            "running_applications": applications,
+          ],
+          bundleID: nil))
+    }
   }
 
   func updateConfig(_ config: Config) {
-    let generation = bumpGeneration()
-    // Materialize third-party checkouts (network, a 60 s git timeout per
-    // call) BEFORE entering the manager queue — the serial materialize queue
-    // preserves config ordering; the generation guard drops a reload whose
-    // config was superseded while it fetched.
+    reconcile(config: config)
+  }
+
+  private func configurationSnapshot() -> (Config, Int)? {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    return latestConfig.map { ($0, configGeneration) }
+  }
+
+  private func reconcile(
+    config: Config, restartIDs: Set<String> = [], expectedGeneration: Int? = nil
+  ) {
+    generationLock.lock()
+    if let expectedGeneration, expectedGeneration != configGeneration {
+      generationLock.unlock()
+      return
+    }
+    latestConfig = config
+    requestedRestarts.formUnion(restartIDs)
+    configGeneration += 1
+    let generation = configGeneration
+    generationLock.unlock()
+    // Network materialization never occupies the manager or input queues.
+    // Pending restart IDs survive superseded reloads, so simultaneous binary
+    // changes cannot silently lose all but the final plugin's restart.
     materializeQueue.async { [weak self] in
       guard let self, self.isCurrentGeneration(generation) else { return }
       var thirdParty: [(root: URL, origin: PluginOrigin)] = []
       for ref in config.plugins.thirdParty {
-        if let materialized = self.repository.materialize(ref) {
-          thirdParty.append(materialized)
-        }
+        if let materialized = self.repository.materialize(ref) { thirdParty.append(materialized) }
       }
       self.queue.async {
-        guard self.isCurrentGeneration(generation) else { return }
-        self.reloadDesiredPlugins(config: config, thirdParty: thirdParty)
+        self.generationLock.lock()
+        guard self.configGeneration == generation else {
+          self.generationLock.unlock()
+          return
+        }
+        let restartIDs = self.requestedRestarts
+        self.requestedRestarts.removeAll()
+        self.generationLock.unlock()
+        self.reloadDesiredPlugins(config: config, thirdParty: thirdParty, restartIDs: restartIDs)
       }
     }
   }
 
+  /// A desktop widget became visible or fully covered. A covered widget stops
+  /// observing its plugins' segments after `hiddenWidgetGraceMs`; one shown
+  /// again observes them at once.
+  func setWidgetVisible(name: String, _ visible: Bool) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.pendingHides.removeValue(forKey: name)?.cancel()
+      guard !visible else {
+        if self.hiddenWidgets.remove(name) != nil { self.applyObservedStatus() }
+        return
+      }
+      let grace = PollDeadline(
+        "core:widget_hidden:\(name)", priority: .low, on: self.queue)
+      self.pendingHides[name] = grace
+      grace.arm(afterMs: Self.hiddenWidgetGraceMs) { [weak self] in
+        guard let self else { return }
+        self.pendingHides[name] = nil
+        if self.hiddenWidgets.insert(name).inserted { self.applyObservedStatus() }
+      }
+    }
+  }
+
+  /// Re-derive which segments the running plugins' surfaces show, without
+  /// reloading any plugin.
+  private func applyObservedStatus() {
+    guard let (config, _) = configurationSnapshot() else { return }
+    let observed = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
+    for (id, plugin) in pluginsByID {
+      // The segments first, as on reload: a plugin that becomes observed
+      // spawns now and must hear the new set after its initialize.
+      plugin.setObservedStatusSegments(observed[id] ?? [])
+      plugin.setStatusObserved(observed[id] != nil)
+    }
+  }
+
+  private func reloadDefinition(_ plugin: PluginProcess) {
+    queue.async { [weak self, weak plugin] in
+      guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin,
+        let (config, generation) = self.configurationSnapshot()
+      else { return }
+      self.reconcile(
+        config: config, restartIDs: [plugin.identifier], expectedGeneration: generation)
+    }
+  }
+
+  /// Events leave the caller at once: with no listener nothing happens, and
+  /// otherwise encoding (a full running-app list, clipboard text) and fan-out
+  /// run on `eventQueue`, whose serial order keeps delivery in emit order.
   func emit(_ event: PluginEvent) {
-    // sendEvent filters by listen pattern off-queue and hops to each
-    // plugin's own queue, so fan-out from the snapshot is safe anywhere.
+    guard hasListener(for: event.name) else { return }
+    eventQueue.async { [weak self] in self?.emitOnEventQueue(event) }
+  }
+
+  /// sendEvent filters by listen pattern and hops to each plugin's own queue.
+  /// The frame is identical for every listener, so it is encoded once here.
+  private func emitOnEventQueue(_ event: PluginEvent) {
+    guard hasListener(for: event.name) else { return }
+    var event = event
+    event.encodedFrame = PluginProcess.encodedEventFrame(event)
     for plugin in readHotSnapshot().plugins {
       plugin.sendEvent(event)
     }
   }
+
+  private let eventQueue = DispatchQueue(label: "flash.plugins.events", qos: .userInitiated)
 
   /// Returns true when a plugin owns `(command, subcommand)` and the
   /// invocation was dispatched (synchronous ownership check). The plugin
@@ -482,7 +598,9 @@ final class PluginManager {
       in: context,
       specificity: { $0.specificity(in: $1) })
     {
-      resolved = (target, subcommand, args)
+      // The registration matched case-insensitively; the plugin gets the
+      // name it registered, not the typed case (`:processes Refresh`).
+      resolved = (target, key.subcommand, args)
     } else if let target = Self.bestTarget(
       snapshot.wildcardCommandIndex[lcCommand] ?? [],
       in: context,
@@ -495,7 +613,7 @@ final class PluginManager {
     guard let resolved else { return false }
     performCommand(
       plugin: resolved.target.plugin,
-      command: command,
+      command: lcCommand,
       subcommand: resolved.subcommand,
       args: resolved.args,
       raw: raw,
@@ -616,8 +734,8 @@ final class PluginManager {
   ///     gated against the focused app. Used by plugins with a small fixed
   ///     set of bangs (aiproviders: chatgpt/claude/…).
   ///   * **Published dynamic bangs** — kind="bang" rows the plugin keeps in
-  ///     its pushed catalog (searchengines: ~100 DDG bangs generated from
-  ///     `bangs.tsv` at build time). Those are *not* returned here; they
+  ///     its pushed catalog (reference: the DDG bang rows embedded from
+  ///     `bangs.tsv`). Those are *not* returned here; they
   ///     reach the flashlight pool through the catalog store and are
   ///     combined with the static rows in
   ///     `NormalModeCoordinator.bangListCandidates`.
@@ -628,15 +746,6 @@ final class PluginManager {
     readHotSnapshot().shebangCandidateIndex
       .filter { $0.selector.matches(context) }
       .map(\.candidate)
-  }
-
-  private static func cgEventFlags(carbon: UInt32) -> CGEventFlags {
-    var flags: CGEventFlags = []
-    if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
-    if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
-    if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
-    if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
-    return flags
   }
 
   /// Command registrations available for completion in the active-window
@@ -658,41 +767,46 @@ final class PluginManager {
       .map(\.registration)
   }
 
-  /// Dispatch a plugin verb. Returns true when a plugin claims the verb (and
-  /// the dispatch was issued — either as a synthesized keystroke or as an
-  /// asynchronous plugin command). The `keystrokes` shortcut path runs
-  /// synchronously and reports `(true, focusedPID, nil, nil)` via `onResult`;
-  /// the RPC path follows the command-perform contract, with `args` flattened
-  /// into `key=value` positional tokens so plugins can parse them off the
-  /// request args without a special map decoder.
+  /// What the focused app does for `action` when no source performs it
+  /// there (`action_bindings`), or nil when no plugin binds it.
+  func actionBinding(
+    _ action: SourceActionName, index: Int? = nil, in context: PluginSelectorContext
+  ) -> ActionBinding? {
+    readHotSnapshot().actionBindings.binding(action, index: index, in: context)
+  }
+
+  /// Every action a plugin binds in the focused app, with its winner.
+  func actionBindingResolutions(
+    in context: PluginSelectorContext
+  ) -> [(SourceActionName, ActionBindingIndex.Resolution)] {
+    readHotSnapshot().actionBindings.resolutions(in: context)
+  }
+
+  /// Whether some plugin binds `chord` for the focused app itself: the app
+  /// runs it as a shortcut, so synthesizing it never types text.
+  func declaresActionBinding(
+    key: CGKeyCode, flags: CGEventFlags, in context: PluginSelectorContext
+  ) -> Bool {
+    readHotSnapshot().actionBindings.declares(key: key, flags: flags, in: context)
+  }
+
+  /// Dispatch a plugin verb. Returns true when a plugin claims the verb and
+  /// the asynchronous plugin command was issued. It follows the
+  /// command-perform contract, with `args` flattened into `key=value`
+  /// positional tokens so plugins can parse them off the request args
+  /// without a special map decoder.
   @discardableResult
   func invokeVerb(
     name: String,
     args: [String: String],
     in context: PluginSelectorContext = PluginSelectorContext(),
-    focusedPID: pid_t? = nil,
     onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
-    let lcName = name.lowercased()
     let target = Self.bestTarget(
-      readHotSnapshot().verbIndex[lcName] ?? [],
+      readHotSnapshot().verbIndex[name.lowercased()] ?? [],
       in: context,
       specificity: { $0.specificity(in: $1) })
     guard let target else { return false }
-    if let keystroke = target.keystroke(forBundleID: context.bundleID),
-      let pid = focusedPID,
-      let parsed = HotkeySyntax.parse(hotkey: keystroke)
-    {
-      let ok = NormalModeDispatcher.sendKey(
-        virtualKey: CGKeyCode(parsed.virtualKey),
-        flags: Self.cgEventFlags(carbon: parsed.modifiers),
-        to: pid)
-      FlashLog.debug(
-        "[plugin_verb] keystroke name=\(lcName) keys=\(keystroke) "
-          + "pid=\(pid) bundle=\(context.bundleID ?? "nil") ok=\(ok)")
-      onResult?(ok, pid, nil, nil)
-      return true
-    }
     let positional = args.keys.sorted().map { key in "\(key)=\(args[key] ?? "")" }
     let raw = positional.isEmpty ? name : "\(name) " + positional.joined(separator: " ")
     performCommand(
@@ -746,7 +860,7 @@ final class PluginManager {
   }
 
   private func reloadDesiredPlugins(
-    config: Config, thirdParty: [(root: URL, origin: PluginOrigin)]
+    config: Config, thirdParty: [(root: URL, origin: PluginOrigin)], restartIDs: Set<String> = []
   ) {
     var desired: [(root: URL, origin: PluginOrigin)] = PluginRepository.officialPluginRoots().map {
       ($0, .official)
@@ -755,6 +869,13 @@ final class PluginManager {
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
+    // Only configured widgets can be covered; a removed one forgets it.
+    let enabledWidgets = Set(config.enabledWidgets.keys)
+    hiddenWidgets.formIntersection(enabledWidgets)
+    for name in pendingHides.keys where !enabledWidgets.contains(name) {
+      pendingHides.removeValue(forKey: name)?.cancel()
+    }
+    let observedStatus = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     for item in desired {
       do {
         let manifest = try PluginManifest.load(from: item.root)
@@ -772,26 +893,42 @@ final class PluginManager {
         }
         nextIDs.insert(manifest.id)
         let settings = config.plugins.settings[manifest.id] ?? [:]
+        let observedSegments = observedStatus[manifest.id]
+        let statusObserved = observedSegments != nil
         let existing = pluginsByID[manifest.id]
         if existing?.root == item.root, existing?.manifest == manifest,
-          existing?.settings == settings
+          existing?.settings == settings, existing?.watchesFiles == config.plugins.watchingEnabled
         {
+          // The segments first: a status-bound plugin that becomes observed
+          // spawns now and must hear the new set after its initialize.
+          existing?.setObservedStatusSegments(observedSegments ?? [])
+          existing?.setStatusObserved(statusObserved)
+          if restartIDs.contains(manifest.id) { existing?.reload(reason: "definition_reload") }
           continue
         }
         existing?.stopAndWait(reason: "config_reload")
+        if let existing, existing.manifest != manifest || existing.root != item.root {
+          catalogStore.drop(pluginID: existing.identifier)
+        }
         let plugin = PluginProcess(
           root: item.root,
           manifest: manifest,
           origin: item.origin,
           baseDataDir: baseDataDir,
           watchFiles: config.plugins.watchingEnabled,
-          settings: settings)
+          settings: settings,
+          statusObserved: statusObserved,
+          observedStatusSegments: observedSegments ?? [])
         plugin.catalogStore = catalogStore
         plugin.runningApplicationsProvider = { [weak self] in
           self?.runningApplicationsSnapshotValue() ?? []
         }
         plugin.onStatusChanged = { [weak self] in
           self?.notifyStateChanged()
+        }
+        plugin.onFilesChanged = { [weak self, weak plugin] in
+          guard let plugin else { return }
+          self?.reloadDefinition(plugin)
         }
         // Capture immutable authorization with the process. A host RPC arrives
         // on PluginProcess.queue; consulting PluginManager.queue synchronously
@@ -814,6 +951,15 @@ final class PluginManager {
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin, store: catalogStore)
         plugin.start()
       } catch {
+        if let existing = pluginsByID.values.first(where: { $0.root == item.root }),
+          !config.plugins.disabled.contains(existing.identifier)
+        {
+          // A malformed edit is not a new definition. Keep the validated
+          // process, its authorization and catalog together until corrected.
+          nextIDs.insert(existing.identifier)
+          existing.reportDefinitionError(String(describing: error))
+          continue
+        }
         FlashLog.warn(
           "[plugins] failed to load \(item.root.path): \(error)",
           fields: [
@@ -834,13 +980,13 @@ final class PluginManager {
             state: PluginRuntimeState.failed.rawValue,
             activation: "",
             pid: nil,
-            uptimeMs: nil,
+            startedAtUnixMs: nil,
             sourceCount: 0,
             commandCount: 0,
             restartCount: 0,
             lastError: String(describing: error),
             lastLog: nil,
-            cpuPercent: nil,
+            cpuTimeMs: nil,
             memoryBytes: nil,
             onlyBundleIDs: [],
             priority: 0,
@@ -867,14 +1013,11 @@ final class PluginManager {
   /// manager queue.
   @discardableResult
   func reloadAll() -> [String] {
-    let plugins = readHotSnapshot().plugins
-    queue.async {
-      for plugin in plugins {
-        plugin.reload(reason: "plugins_reload")
-      }
+    let ids = readHotSnapshot().plugins.map(\.identifier)
+    if let (config, generation) = configurationSnapshot() {
+      reconcile(config: config, restartIDs: Set(ids), expectedGeneration: generation)
     }
-    notifyStateChanged()
-    return plugins.map(\.identifier)
+    return ids
   }
 
   private func notifyStateChanged() {
@@ -892,9 +1035,43 @@ extension PluginManager {
     body: """
       # Plugins
 
+      Plugins add flashlight catalogs, inline answers, actions, hints,
+      status values and their own help. Open [Plugins](/plugins) to inspect
+      this installation's processes, health, errors and capabilities;
+      [Commands](/commands) lists the commands they contribute.
+
+      ## Enable and configure
+
+      Bundled plugins are enabled unless excluded. Plugin-specific settings
+      live in `[plugin.<id>]`; use the plugin's guide for its accepted keys.
+
+      ```toml
+      [plugins]
+      disabled = ["feed"]
+      third_party = ["file:./my-plugin"]
+
+      [plugin.processes]
+      top_count = 5
+      ```
+
+      Third-party GitHub references must pin a full commit:
+      `github:owner/repository@<40-character-commit>`. Review a plugin before
+      enabling it. Its [permissions and data access](/docs/privacy) depend
+      on the manifest and any tools it runs. A stopped on-demand plugin is
+      not necessarily failing; it starts when a matching command needs it.
+
+      `:plugins reload` reloads all plugins. Configuration and watched plugin
+      directory changes also reconcile the running set.
+
+      ## Build an extension
+
       Plugins are managed child processes owned by Flash, speaking NDJSON
       (one JSON object per newline-terminated line) on stdin/stdout —
-      protocol v1, documented in `docs/plugin-protocol.md`. Each plugin is a
+      protocol v1, documented in the
+      [protocol reference](\(HelpDocs.repositoryRoot)/docs/plugin-protocol.md).
+      Start with the [cookbook](\(HelpDocs.repositoryRoot)/docs/plugin-cookbook.md)
+      or [Rust SDK](\(HelpDocs.repositoryRoot)/docs/plugin-rust-sdk.md).
+      Each plugin is a
       directory with a `manifest.json` declaring what it serves: `sources`
       (push-published flashlight catalogs), `query` (inline answers),
       `hints`, `status` segments, `listen` event patterns, `commands`
@@ -924,7 +1101,7 @@ extension PluginManager {
       Catalogs are push-based: the plugin sends a `publish` notification
       whenever its rows change and the host serves the flashlight from its
       own store. Status segments arrive via the `status` notification and
-      render as `#{plugin:<id>.<segment>}` in `[statusbar].template`.
+      render as `#{flash.plugin.<id>.<segment>}` in `[statusbar].template`.
       Structured logs go through the `log` notification and are recorded
       with `source = "plugin:<id>"`. Sensitive host surfaces (clipboard,
       accessibility, network, notifications, …) are default-deny and must be

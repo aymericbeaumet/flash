@@ -13,6 +13,9 @@ private struct Args {
   var expectedPath: String = "/tmp/flash-electron-expected.json"
   var statePath: String = "/tmp/flash-electron-state.json"
   var timingsPath: String?
+  /// `--bench=N [--bench-trigger=key|cli]`: time the installed resident's
+  /// hint activations on the fixture (`Scripts/benchmark-hints.sh`).
+  var bench: ResidentHintBenchmark?
 }
 
 private struct ElectronExpectedPayload: Decodable {
@@ -65,11 +68,14 @@ private func parseArgs() -> Args {
       args.statePath = iter.next() ?? args.statePath
     case "--timings":
       args.timingsPath = iter.next()
+    case let arg where ResidentHintBenchmark.owns(arg):
+      continue
     case "--help", "-h":
       print(
         """
         flash-electron-oracle [--fixture-dir <path>] [--electron-app <path>]
                               [--expected-file <path>] [--state-file <path>]
+                              [--bench=<runs> [--bench-trigger=key|cli]]
 
         Launches the pinned Electron fixture, compares its expected DOM targets
         against Flash's AX provider output, and verifies a host click updates
@@ -80,6 +86,12 @@ private func parseArgs() -> Args {
       fputs("Unknown argument: \(arg)\n", stderr)
       exit(2)
     }
+  }
+  do {
+    args.bench = try ResidentHintBenchmark.parse(Array(CommandLine.arguments.dropFirst()))
+  } catch {
+    fputs("\(error)\n", stderr)
+    exit(2)
   }
   return args
 }
@@ -278,6 +290,13 @@ do {
   let expected = try timer.measure("electron_expected_wait") {
     try waitForExpectedTargets(path: args.expectedPath, timeout: 12)
   }
+
+  if let bench = args.bench {
+    try bench.run(activate: { app.activate() }, log: recorder.info)
+    recorder.info("PASS electron hint benchmark")
+    terminateElectronFixture(process: process, app: app)
+    exit(0)
+  }
   let targets = waitForTargets(
     app: app,
     provider: provider,
@@ -294,6 +313,12 @@ do {
     recorder.fail("disabled Electron button was hinted")
   } else {
     recorder.pass("disabled Electron button is not hinted")
+  }
+
+  if targets.contains(where: { $0.role == "AXMenuItem" && $0.accessibilityLabel == "Second" }) {
+    recorder.fail("unselected Electron option was hinted while the select was collapsed")
+  } else {
+    recorder.pass("unselected Electron option is not hinted while the select is collapsed")
   }
 
   if let primary = targets.first(where: { $0.accessibilityLabel == "Electron Primary" }),

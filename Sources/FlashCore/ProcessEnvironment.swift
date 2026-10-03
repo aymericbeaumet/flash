@@ -8,8 +8,8 @@ import Foundation
 /// and plugins, which expect the same tooling the user sees in their terminal.
 ///
 /// The fix is the VS Code model: resolve the login-shell environment *once* at
-/// launch (and again on config reload) by spawning `$SHELL -l -c 'export -p'`,
-/// parse it, cache it, and apply it to every child process. The status bar
+/// launch (and again on config reload) by spawning `$SHELL -l` to print it with
+/// `env -0`, parse it, cache it, and apply it to every child process. The status bar
 /// re-renders every second — paying a login-shell spawn on every render would
 /// be absurd, so the cost is amortized to one spawn per launch/reload.
 ///
@@ -38,7 +38,7 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
   }
 
   /// Re-resolve the login-shell environment. Call once at launch and again on
-  /// config reload. Spawns `$SHELL -l -c 'export -p'` a single time; on any
+  /// config reload. Spawns one `$SHELL -l` that prints it; on any
   /// failure (missing shell, timeout, empty output) the previous cache is kept
   /// untouched. Returns the environment now in effect.
   ///
@@ -99,20 +99,31 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     return copy
   }
 
-  /// Spawn `shellPath -l -c 'export -p'` and parse the result. Returns `nil`
-  /// when the shell can't be run, exits non-zero, times out, or yields nothing
-  /// parseable, so callers fall back to the previous cache.
+  /// Printed right before the environment, so whatever a login file writes to
+  /// stdout is told apart from it.
+  public static let environmentMarker = "__FLASH_ENVIRONMENT__"
+
+  /// Spawn `shellPath -l` to print its environment and parse the result.
+  /// Returns `nil` when the shell can't be run, exits non-zero, times out, or
+  /// yields nothing parseable, so callers fall back to the previous cache.
+  /// `environment` replaces the inherited one, for tests.
   public static func resolveLoginShellEnvironment(
     shellPath: String?,
-    timeout: TimeInterval = 5
+    timeout: TimeInterval = 5,
+    environment: [String: String]? = nil
   ) -> [String: String]? {
     let shell = shellPath?.isEmpty == false ? shellPath! : "/bin/sh"
     let process = Process()
     process.executableURL = URL(fileURLWithPath: shell)
-    // `export -p` is POSIX and emits a re-importable dump across sh/bash/zsh.
-    // `-l` runs the login rc chain (`.zprofile`/`.profile`/…) where `PATH`
-    // mutations like `eval "$(mise activate …)"` live.
-    process.arguments = ["-l", "-c", "export -p"]
+    if let environment { process.environment = environment }
+    // `-l` runs the login chain (`.zprofile`/`.profile`/…) where `PATH`
+    // mutations such as mise's shims live. `env -0` prints every exported
+    // variable NUL-separated and unquoted in any shell; `export -p` does not
+    // (zsh prints its tied `PATH` as `export -T PATH path=( … )`). macOS's
+    // `env` has taken `-0` since shell_cmds-240; macOS 14 ships 302.
+    process.arguments = [
+      "-l", "-c", "/usr/bin/printf '\\000\(environmentMarker)\\000'; exec /usr/bin/env -0",
+    ]
     let out = Pipe()
     let err = Pipe()
     process.standardOutput = out
@@ -152,125 +163,33 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     _ = try? err.fileHandleForReading.readToEnd()
 
     guard process.terminationStatus == 0 else { return nil }
-    let text = String(decoding: data, as: UTF8.self)
-    let parsed = parse(exportOutput: text)
+    let parsed = parse(environmentOutput: data)
     return parsed.isEmpty ? nil : parsed
   }
 
   // MARK: - Parsing
 
-  /// Parse the output of `export -p` (POSIX `sh`/`zsh`) or `declare -x`
-  /// (`bash`) into key/value pairs.
-  ///
-  /// Handles the three quoting styles the common shells emit:
-  ///   - `export KEY=value`            (unquoted, zsh simple values)
-  ///   - `export KEY='value'`          (single-quoted, sh/zsh)
-  ///   - `declare -x KEY="value"`      (double-quoted with `\` escapes, bash)
-  ///   - `export KEY=$'va\tlue'`       (ANSI-C quoting for control chars)
-  ///
-  /// A value containing a raw newline would span multiple output lines; such a
-  /// value is truncated at the newline rather than corrupting the vars that
-  /// follow, because a continuation line never looks like a fresh assignment.
-  public static func parse(exportOutput: String) -> [String: String] {
+  /// Parse the login shell's output: `KEY=VALUE` entries separated by NUL
+  /// after the marker, values taken verbatim (newlines and `=` included).
+  /// Anything before the marker is login-file noise; output without the marker
+  /// yields nothing.
+  public static func parse(environmentOutput data: Data) -> [String: String] {
+    let fields = data.split(separator: 0, omittingEmptySubsequences: false)
+    guard let marker = fields.firstIndex(where: { $0.elementsEqual(environmentMarker.utf8) })
+    else { return [:] }
     var result: [String: String] = [:]
-    for rawLine in exportOutput.split(separator: "\n", omittingEmptySubsequences: false) {
-      var line = Substring(rawLine)
-      for prefix in ["export ", "declare -x ", "typeset -x "] where line.hasPrefix(prefix) {
-        line = line.dropFirst(prefix.count)
-        break
-      }
-      guard let eq = line.firstIndex(of: "=") else { continue }
-      let key = String(line[line.startIndex..<eq])
+    for field in fields[(marker + 1)...] {
+      guard let eq = field.firstIndex(of: UInt8(ascii: "=")) else { continue }
+      let key = String(decoding: field[field.startIndex..<eq], as: UTF8.self)
       guard isValidEnvironmentName(key) else { continue }
-      let rawValue = String(line[line.index(after: eq)...])
-      result[key] = unquote(rawValue)
+      result[key] = String(decoding: field[(eq + 1)...], as: UTF8.self)
     }
     return result
   }
 
-  /// `true` when `name` is a POSIX environment variable name. Filters out
-  /// continuation lines of multi-line values, which never form a valid name.
+  /// `true` when `name` is a POSIX environment variable name.
   static func isValidEnvironmentName(_ name: String) -> Bool {
     guard let first = name.first, first == "_" || first.isLetter else { return false }
     return name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
-  }
-
-  /// Strip shell quoting from a single assignment's value.
-  static func unquote(_ raw: String) -> String {
-    guard let first = raw.first else { return raw }
-
-    // ANSI-C quoting: $'...'
-    if raw.hasPrefix("$'"), raw.hasSuffix("'"), raw.count >= 3 {
-      let inner = raw.dropFirst(2).dropLast()
-      return unescapeANSIC(String(inner))
-    }
-
-    // Single quotes: literal, except the `'\''` close-escape-reopen sequence.
-    if first == "'", raw.hasSuffix("'"), raw.count >= 2 {
-      let inner = raw.dropFirst().dropLast()
-      return inner.replacingOccurrences(of: "'\\''", with: "'")
-    }
-
-    // Double quotes: bash escapes `"`, `\`, `$`, and backtick with a backslash.
-    if first == "\"", raw.hasSuffix("\""), raw.count >= 2 {
-      let inner = raw.dropFirst().dropLast()
-      return unescapeDoubleQuoted(String(inner))
-    }
-
-    return raw
-  }
-
-  private static func unescapeDoubleQuoted(_ value: String) -> String {
-    var out = ""
-    out.reserveCapacity(value.count)
-    var iterator = value.makeIterator()
-    while let ch = iterator.next() {
-      guard ch == "\\" else {
-        out.append(ch)
-        continue
-      }
-      guard let next = iterator.next() else {
-        out.append("\\")
-        break
-      }
-      switch next {
-      case "\"", "\\", "$", "`":
-        out.append(next)
-      default:
-        // Bash only escapes the four metacharacters inside double quotes;
-        // anything else keeps the literal backslash.
-        out.append("\\")
-        out.append(next)
-      }
-    }
-    return out
-  }
-
-  private static func unescapeANSIC(_ value: String) -> String {
-    var out = ""
-    out.reserveCapacity(value.count)
-    var iterator = value.makeIterator()
-    while let ch = iterator.next() {
-      guard ch == "\\" else {
-        out.append(ch)
-        continue
-      }
-      guard let next = iterator.next() else {
-        out.append("\\")
-        break
-      }
-      switch next {
-      case "n": out.append("\n")
-      case "t": out.append("\t")
-      case "r": out.append("\r")
-      case "\\": out.append("\\")
-      case "'": out.append("'")
-      case "\"": out.append("\"")
-      default:
-        out.append("\\")
-        out.append(next)
-      }
-    }
-    return out
   }
 }

@@ -52,7 +52,7 @@ extension AppMonitor {
     excludingBundleIdentifier ignoredBundleIdentifier: String
   ) -> AppContext? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
     guard
       let entry = WindowSnapshot.topInteractionEntry(
@@ -74,7 +74,8 @@ extension AppMonitor {
       processID: context.processID,
       runningApp: context.runningApp,
       frontWindowFrame: frame.isNull ? context.frontWindowFrame : frame,
-      allScreensFrame: context.allScreensFrame
+      allScreensFrame: context.allScreensFrame,
+      walkRoot: context.walkRoot
     )
   }
 
@@ -85,10 +86,7 @@ extension AppMonitor {
   }
 
   func primaryScreenHeight() -> CGFloat {
-    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-      return primary.frame.height
-    }
-    return NSScreen.main?.frame.height ?? 1080
+    ScreenSpace.primaryHeight
   }
 
   /// Push runtime config that should take effect on the next activation.
@@ -127,10 +125,16 @@ extension AppMonitor {
   }
 
   private func topWindowFrame(for pid: pid_t) -> CGRect? {
+    Self.topWindowFrame(for: pid, primaryH: primaryScreenHeight())
+  }
+
+  /// Thread-safe (pure WindowServer + `WindowSnapshot`) so callers can resolve
+  /// geometry on `geometryQueue`; `primaryH` is read on main beforehand.
+  static func topWindowFrame(for pid: pid_t, primaryH: CGFloat) -> CGRect? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
-    let entries = WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+    let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
     // Match `WindowSnapshot.build`: a layer-0 card anchored over the app's main
     // window (Firefox tab-hover preview) shouldn't become the front window frame.
     let layer0App = entries.filter { $0.layer == 0 && $0.pid == pid && $0.pid != getpid() }
@@ -145,11 +149,16 @@ extension AppMonitor {
   }
 
   private func topApplicationWindowFrame(for pid: pid_t) -> CGRect? {
+    Self.topApplicationWindowFrame(for: pid, primaryH: primaryScreenHeight())
+  }
+
+  /// Thread-safe counterpart of `appWindowContext(for:)`'s frame lookup.
+  static func topApplicationWindowFrame(for pid: pid_t, primaryH: CGFloat) -> CGRect? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
     return WindowSnapshot.topApplicationWindowFrame(
-      entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()),
+      entries: WindowSnapshot.entries(from: info, primaryH: primaryH),
       focusedPid: pid)
   }
 
@@ -157,7 +166,7 @@ extension AppMonitor {
     excludingBundleIdentifier ignoredBundleIdentifier: String
   ) -> AppContext? {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
 
     for entry in WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()) {

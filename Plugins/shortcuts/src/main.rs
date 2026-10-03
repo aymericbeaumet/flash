@@ -1,18 +1,82 @@
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use flash_plugin::{
-    applescript_quote, run, run_osascript, Candidate, CommandRequest, Context, Event,
-    PerformResponse, RefreshGate,
+    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, applescript_quote,
+    run, run_osascript,
 };
 
 const SOURCE_ENTRIES: &str = "shortcuts.entries";
 const SHORTCUTS_BUNDLE_ID: &str = "com.apple.shortcuts";
-const POLL_SECONDS: u64 = 300;
+/// Nothing polls. Opening the flashlight, leaving the Shortcuts app and a
+/// configuration change relist the shortcuts — but listing launches the
+/// faceless Shortcuts Events service, so a trigger first compares the
+/// Shortcuts database's size and modification time with the last listing's
+/// and skips an unchanged one. When the database cannot be read, a trigger
+/// relists once the listing is this old instead.
+const FALLBACK_TTL: Duration = Duration::from_secs(300);
+/// The Shortcuts library and its write-ahead log, under `$HOME`.
+const DATABASE_FILES: [&str; 2] = [
+    "Library/Shortcuts/Shortcuts.sqlite",
+    "Library/Shortcuts/Shortcuts.sqlite-wal",
+];
 const SLOW_REFRESH_MS: u128 = 1_000;
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static LAST_PUBLISHED: LazyLock<Mutex<Option<Vec<String>>>> = LazyLock::new(|| Mutex::new(None));
+static LAST_LISTED: Mutex<Option<Listed>> = Mutex::new(None);
+static FOCUSED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Each database file's length and modification time; `None` when unreadable.
+type Stamp = [Option<(u64, SystemTime)>; DATABASE_FILES.len()];
+
+/// A successful listing: when it began and the database it read.
+#[derive(Clone, Copy)]
+struct Listed {
+    at: Instant,
+    stamp: Stamp,
+}
+
+async fn database_stamp() -> Stamp {
+    let mut stamp: Stamp = [None; DATABASE_FILES.len()];
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return stamp;
+    };
+    for (slot, file) in stamp.iter_mut().zip(DATABASE_FILES) {
+        *slot = tokio::fs::metadata(home.join(file))
+            .await
+            .ok()
+            .and_then(|metadata| Some((metadata.len(), metadata.modified().ok()?)));
+    }
+    stamp
+}
+
+/// Whether a trigger should relist, given the last listing and the database
+/// as it stands at `now`.
+fn refresh_due(last: Option<&Listed>, stamp: &Stamp, now: Instant) -> bool {
+    let Some(last) = last else {
+        return true;
+    };
+    if stamp.iter().any(Option::is_some) {
+        last.stamp != *stamp
+    } else {
+        now.saturating_duration_since(last.at) >= FALLBACK_TTL
+    }
+}
+
+/// Whether `event` should relist: the flashlight opening, or focus leaving
+/// the Shortcuts app. Tracks the focused app in `focused`.
+fn triggers(focused: &mut Option<String>, event: &Event) -> bool {
+    match event.name.as_str() {
+        "core:session.opened" => true,
+        "core:focus.changed" => {
+            let previous = std::mem::replace(focused, event.bundle_id.clone());
+            previous.as_deref() == Some(SHORTCUTS_BUNDLE_ID) && *focused != previous
+        }
+        _ => false,
+    }
+}
 
 const LIST_SCRIPT: &str = r#"
 tell application "Shortcuts Events"
@@ -48,16 +112,30 @@ impl FlashPlugin for Shortcuts {
                 refresh_candidates(&retry_ctx).await;
             });
         }
-        drop(
-            ctx.interval(Duration::from_secs(POLL_SECONDS), |ctx| async move {
-                refresh_candidates(&ctx).await;
-            }),
-        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
         if event.name == "core:config.changed" {
             refresh_candidates(&ctx).await;
+            return;
+        }
+        if triggers(
+            &mut FOCUSED.lock().unwrap_or_else(|e| e.into_inner()),
+            &event,
+        ) {
+            // Detached, so a listing never holds back the focus events
+            // behind it, and skipped while one is already in flight.
+            tokio::spawn(async move {
+                REFRESH_GATE
+                    .try_run(&ctx, |ctx, _running| async move {
+                        let stamp = database_stamp().await;
+                        let last = *LAST_LISTED.lock().unwrap_or_else(|e| e.into_inner());
+                        if refresh_due(last.as_ref(), &stamp, Instant::now()) {
+                            list(&ctx, stamp).await;
+                        }
+                    })
+                    .await;
+            });
         }
     }
 
@@ -73,30 +151,41 @@ impl FlashPlugin for Shortcuts {
 async fn refresh_candidates(ctx: &Context) -> bool {
     REFRESH_GATE
         .run(ctx, |ctx, _running| async move {
-            let started_at = Instant::now();
-            let result = run_osascript(&ctx, LIST_SCRIPT, Duration::from_secs(30)).await;
-            if !result.ok {
-                ctx.log(
-                    "warn",
-                    &format!("[shortcuts] list failed: {}", result.stderr.trim()),
-                );
-                log_refresh(&ctx, "failed", 0, started_at);
-                return false;
-            }
-
-            let names = names_from_output(&result.stdout);
-            if replace_if_changed(&mut last_published(), &names) {
-                ctx.publish(candidates_from_names(&names));
-            }
-            log_refresh(
-                &ctx,
-                if names.is_empty() { "empty" } else { "ok" },
-                names.len(),
-                started_at,
-            );
-            true
+            let stamp = database_stamp().await;
+            list(&ctx, stamp).await
         })
         .await
+}
+
+/// List every shortcut and publish the rows when they changed; `stamp` is
+/// the database this listing reads, recorded on success. Run under the gate.
+async fn list(ctx: &Context, stamp: Stamp) -> bool {
+    let started_at = Instant::now();
+    let result = run_osascript(ctx, LIST_SCRIPT, Duration::from_secs(30)).await;
+    if !result.ok {
+        ctx.log(
+            "warn",
+            &format!("[shortcuts] list failed: {}", result.stderr.trim()),
+        );
+        log_refresh(ctx, "failed", 0, started_at);
+        return false;
+    }
+    *LAST_LISTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Listed {
+        at: started_at,
+        stamp,
+    });
+
+    let names = names_from_output(&result.stdout);
+    if replace_if_changed(&mut last_published(), &names) {
+        ctx.publish(candidates_from_names(&names));
+    }
+    log_refresh(
+        ctx,
+        if names.is_empty() { "empty" } else { "ok" },
+        names.len(),
+        started_at,
+    );
+    true
 }
 
 fn last_published() -> std::sync::MutexGuard<'static, Option<Vec<String>>> {
@@ -235,6 +324,59 @@ mod tests {
     fn run_script_quotes_the_shortcut_name() {
         let script = run_script("Ship \"release\" \\ archive");
         assert!(script.contains("run shortcut named \"Ship \\\"release\\\" \\\\ archive\""));
+    }
+
+    /// Nothing polls: a trigger relists only when the Shortcuts database
+    /// changed since the last listing, or — when it cannot be read — once
+    /// the listing is `FALLBACK_TTL` old.
+    #[test]
+    fn an_unchanged_database_skips_the_listing() {
+        let now = Instant::now();
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let stamp: Stamp = [Some((10, at)), Some((20, at))];
+        assert!(refresh_due(None, &stamp, now), "never listed");
+        let listed = Listed { at: now, stamp };
+        assert!(
+            !refresh_due(Some(&listed), &stamp, now + 2 * FALLBACK_TTL),
+            "unchanged, however old"
+        );
+        let changed: Stamp = [Some((10, at)), Some((24, at))];
+        assert!(refresh_due(Some(&listed), &changed, now));
+
+        let unknown: Stamp = [None, None];
+        let listed = Listed {
+            at: now,
+            stamp: unknown,
+        };
+        assert!(!refresh_due(
+            Some(&listed),
+            &unknown,
+            now + Duration::from_secs(5)
+        ));
+        assert!(refresh_due(Some(&listed), &unknown, now + FALLBACK_TTL));
+    }
+
+    #[test]
+    fn opening_the_flashlight_or_leaving_shortcuts_triggers() {
+        let mut focused = None;
+        let event = |name: &str, bundle_id: Option<&str>| Event {
+            name: name.into(),
+            bundle_id: bundle_id.map(Into::into),
+            ..Event::default()
+        };
+        assert!(triggers(&mut focused, &event("core:session.opened", None)));
+        assert!(!triggers(
+            &mut focused,
+            &event("core:focus.changed", Some(SHORTCUTS_BUNDLE_ID))
+        ));
+        assert!(triggers(
+            &mut focused,
+            &event("core:focus.changed", Some("com.apple.Terminal"))
+        ));
+        assert!(!triggers(
+            &mut focused,
+            &event("core:focus.changed", Some("com.apple.Mail"))
+        ));
     }
 
     #[test]

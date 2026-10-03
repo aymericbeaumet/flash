@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import FlashBrowserTestSupport
 import FlashCore
+import FlashIntegrationTestSupport
 import FlashProviders
 import Foundation
 
@@ -55,6 +56,9 @@ struct Args {
   var diagnose: Bool
   var jobs: Int
   var browserAppPath: String
+  /// `--bench=N [--bench-trigger=key|cli]`: time the installed resident's
+  /// hint activations on one fixture page (`Scripts/benchmark-hints.sh`).
+  var bench: ResidentHintBenchmark?
 }
 
 private func defaultFixturesDirectory() -> URL {
@@ -116,6 +120,8 @@ private func parseArgs() -> Args {
       updateAllowList = true
     case "--diagnose":
       diagnose = true
+    case let arg where ResidentHintBenchmark.owns(arg):
+      continue
     case "--help", "-h":
       log(
         """
@@ -136,6 +142,11 @@ private func parseArgs() -> Args {
           --diagnose           For every unsuppressed vimiumOnly divergence,
                                 dump Firefox's raw (unfiltered) AX elements near
                                 the missed rect. Forces --jobs 1.
+          --bench=<runs>       Instead of comparing, time the installed Flash
+                                resident's hint activations on the first
+                                selected fixture, shown in a visible Firefox.
+          --bench-trigger=key|cli
+                                f in NORMAL (default) or flash mouse_target.
         """)
       exit(0)
     default:
@@ -143,13 +154,45 @@ private func parseArgs() -> Args {
       exit(2)
     }
   }
+  let bench: ResidentHintBenchmark?
+  do {
+    bench = try ResidentHintBenchmark.parse(Array(CommandLine.arguments.dropFirst()))
+  } catch {
+    logErr("\(error)")
+    exit(2)
+  }
   return Args(
     fixturesDirectory: fixturesDirectory,
     fixtureNames: fixtureNames,
     updateAllowList: updateAllowList,
     diagnose: diagnose,
     jobs: diagnose ? 1 : jobs,
-    browserAppPath: browserAppPath)
+    browserAppPath: browserAppPath,
+    bench: bench)
+}
+
+/// `--bench`: one fixture in a visible, frontmost Firefox, driven through
+/// the installed resident's hint activations.
+private func runBenchmark(_ bench: ResidentHintBenchmark, fixture: BrowserFixture) -> Never {
+  do {
+    let server = try FixtureServer(
+      html: try fixture.html(fixturesDirectory: args.fixturesDirectory))
+    defer { server.stop() }
+    let profile = try BrowserTestProfile.prepareWorkerProfile(workerID: 0)
+    let firefox = try FirefoxHarness.launchWithProfile(
+      appPath: args.browserAppPath, profilePath: profile.path, url: server.url)
+    defer { firefox.terminate() }
+    log("Benchmarking \(fixture.displayName) in Firefox pid \(firefox.processIdentifier)")
+    // Let the page load and its accessibility tree build before the first run.
+    firefox.activate()
+    Thread.sleep(forTimeInterval: 3)
+    try bench.run(activate: { firefox.activate() }, log: log)
+    log("\(Colour.green)\(Colour.bold)PASS\(Colour.reset) — browser hint benchmark")
+  } catch {
+    logErr("\(Colour.red)benchmark failed: \(error)\(Colour.reset)")
+    exit(2)
+  }
+  exit(0)
 }
 
 // MARK: - Preflight
@@ -706,6 +749,10 @@ do {
 } catch {
   logErr("\(Colour.red)\(error)\(Colour.reset)")
   exit(2)
+}
+
+if let bench = args.bench, let fixture = fixtures.first {
+  runBenchmark(bench, fixture: fixture)
 }
 
 let jobs = min(max(1, args.jobs), max(1, fixtures.count))

@@ -388,18 +388,18 @@ public enum FirefoxHarness {
   /// in production.
   ///
   /// `frontWindowFrame` is the per-node visibility pre-clip inside
-  /// `discover`. We deliberately make it effectively unbounded rather
-  /// than the screen frame: the oracle launches Firefox *offscreen*
-  /// (windows parked at ~(-9999,-9999) so they never cover the user's
-  /// desktop or steal focus), which puts every AX node's NSScreen-space
-  /// frame far outside the real screen rect. A screen-sized pre-clip
-  /// would reject all of them and Flash would see zero targets. The
-  /// real, coordinate-correct clipping happens downstream against the
-  /// fiducial-derived `pageScreenRect` (see `VimiumOracle.capture`'s
-  /// `visibleRegions: [pageRect]` and the per-fixture `pageFlash`
-  /// filter), which lives in the same offscreen-shifted space as the
-  /// nodes — so an unbounded pre-clip only lets nodes through to that
-  /// authoritative filter, it doesn't change which targets survive.
+  /// `discover`. It starts effectively unbounded rather than the screen
+  /// frame: the oracle launches Firefox *offscreen* (windows parked at
+  /// ~(-9999,-9999) so they never cover the user's desktop or steal
+  /// focus), which puts every AX node's NSScreen-space frame far outside
+  /// the real screen rect. A screen-sized pre-clip would reject all of
+  /// them and Flash would see zero targets. `VimiumOracle.capture` walks
+  /// with it narrowed to the Firefox window (`clippedToWalkedWindow`),
+  /// the clip the resident uses, so the walk's offscreen pruning sees
+  /// production geometry. The authoritative filter stays downstream,
+  /// against the fiducial-derived `pageScreenRect` (`visibleRegions:
+  /// [pageRect]` and the per-fixture `pageFlash` filter), in the same
+  /// offscreen-shifted space as the nodes.
   public static func makeContext(for app: NSRunningApplication) -> AppContext {
     let screen =
       NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame
@@ -412,6 +412,26 @@ public enum FirefoxHarness {
       frontWindowFrame: unbounded,
       allScreensFrame: screen
     )
+  }
+
+  /// `context` clipped to the window its walk covers, the clip the resident
+  /// gives a walk (`AppMonitor` clips to the walked window's frame), so the
+  /// walk's offscreen pruning meets the geometry it meets in use. The window
+  /// sits in the same offscreen-shifted space as its nodes. Unchanged when
+  /// the window cannot be read.
+  public static func clippedToWalkedWindow(_ context: AppContext) -> AppContext {
+    guard
+      let window = AccessibilityProvider.walkedWindowFrame(
+        pid: context.processID, bundleIdentifier: context.bundleIdentifier,
+        screenH: primaryScreenHeight())
+    else { return context }
+    return AppContext(
+      bundleIdentifier: context.bundleIdentifier,
+      processID: context.processID,
+      runningApp: context.runningApp,
+      frontWindowFrame: window,
+      allScreensFrame: context.allScreensFrame,
+      walkRoot: context.walkRoot)
   }
 
   private static func primaryScreenHeight() -> CGFloat {

@@ -22,15 +22,13 @@ extension OverlayPanel {
     let refreshesPresentedSurface = Self.commandLineCanRefreshInPlace(
       inputMode: inputMode,
       commandPromptVisible: commandPromptVisible,
-      modeBadgeVisible: modeBadgeVisible,
-      modeBadgeStyle: modeBadgeStyle,
+      surfaceStyle: modeSurface.style,
       panelVisible: isVisible)
     FlashLog.trace(
       "[overlay] display_command_line text=\(text) cursor=\(cursorIndex ?? text.count) "
         + "suggestions=\(suggestions?.count ?? 0) "
         + "underline=\(underlineRange.map(NSStringFromRange) ?? "nil")"
         + (underlineInvalid ? " invalid=true" : ""))
-    inputMode = .commandLine
     setCommandTextFieldText(
       text, cursorIndex: cursorIndex ?? text.count, underlineRange: underlineRange,
       underlineInvalid: underlineInvalid)
@@ -44,19 +42,17 @@ extension OverlayPanel {
     if refreshesPresentedSurface {
       refreshCommandLineContentInPlace()
     } else {
-      updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
+      renderModeSurface()
     }
   }
 
   static func commandLineCanRefreshInPlace(
     inputMode: OverlayInputMode,
     commandPromptVisible: Bool,
-    modeBadgeVisible: Bool,
-    modeBadgeStyle: OverlayModeBadgeStyle,
+    surfaceStyle: OverlayModeBadgeStyle,
     panelVisible: Bool
   ) -> Bool {
-    inputMode == .commandLine && commandPromptVisible && modeBadgeVisible
-      && modeBadgeStyle == .command && panelVisible
+    inputMode == .commandLine && commandPromptVisible && surfaceStyle == .command && panelVisible
   }
 
   func configureCommandPrompt(panelFrame: CGRect) {
@@ -80,10 +76,8 @@ extension OverlayPanel {
     let visible = snapshot.mainVisibleFrame
     let screenFrame = snapshot.mainFrame ?? visible
     let statusFrame = Self.statusBarFrame(
-      screenFrame: screenFrame,
-      visibleFrame: visible,
-      panelFrame: panelFrame,
-      fontSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)))
+      screenFrame: screenFrame, height: snapshot.statusBarHeight(forScreenFrame: screenFrame),
+      panelFrame: panelFrame)
     let scale = snapshot.mainScale
     let frame = Self.commandPromptFrame(
       visibleFrame: visible,
@@ -114,13 +108,11 @@ extension OverlayPanel {
       // The `:` now lives at the head of the editable buffer, so the
       // field owns the whole string (colon included) and no longer
       // needs a leading inset to clear a pinned prompt glyph.
-      commandCaretLayer.isHidden = true
       configureCommandTextField(
         promptFrame: commandPromptLayer.frame,
         font: labelFont,
         fontSize: fontSize)
     } else {
-      commandCaretLayer.isHidden = true
       hideCommandTextField()
     }
     let labelY = max(0, (commandPromptLayer.frame.height - fontSize - 2) / 2)

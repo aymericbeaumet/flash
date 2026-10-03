@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, run_osascript, Candidate, CommandRequest, Context, PerformResponse,
+    Candidate, CommandRequest, Context, PerformResponse, run, run_command, run_osascript,
 };
 use serde_json::Value;
 
@@ -9,8 +9,7 @@ const SOURCE_LABEL: &str = "system.actions";
 
 const LOCK_KEY_CODE: i64 = 12; // kVK_ANSI_Q
 
-const DARK_TOGGLE: &str =
-    "tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode";
+const DARK_TOGGLE: &str = "tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode";
 
 #[derive(Clone, Copy, Debug)]
 struct SystemAction {
@@ -264,8 +263,10 @@ mod tests {
 
     #[test]
     fn caffeinate_actions_live_only_in_the_dedicated_plugin() {
-        assert!(!ACTIONS
-            .iter()
-            .any(|action| matches!(action.subcommand, "caffeinate" | "decaffeinate")));
+        assert!(
+            !ACTIONS
+                .iter()
+                .any(|action| matches!(action.subcommand, "caffeinate" | "decaffeinate"))
+        );
     }
 }

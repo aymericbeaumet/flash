@@ -1,0 +1,36 @@
+{
+  "id": "reference",
+  "name": "Reference",
+  "version": "0.1.0",
+  "description": "Static lookup catalogs: emoji glyphs, HTTP status codes and search-engine bangs",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-reference"
+  ],
+  "bangs": {
+    "command": "searchengines",
+    "items": [
+      {
+        "token": "*",
+        "description": "DuckDuckGo bang: !<bang> <query>"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "name": "emojis.glyphs",
+      "priority": "normal"
+    },
+    {
+      "name": "httpstatus.codes",
+      "priority": "low"
+    },
+    {
+      "name": "searchengines.bangs",
+      "priority": "normal"
+    }
+  ],
+  "capabilities": [
+    "open"
+  ]
+}

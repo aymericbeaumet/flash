@@ -14,7 +14,9 @@
   "listen": [
     "core:apps.changed",
     "core:window.focus.changed",
-    "core:focus.changed"
+    "core:focus.changed",
+    "core:ax.changed",
+    "core:session.opened"
   ],
   "sources": [
     {

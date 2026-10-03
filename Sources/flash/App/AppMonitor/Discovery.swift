@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import FlashCore
+import FlashProviders
 
 /// Activation discovery pipeline. Activation-time providers run first; when a
 /// dynamically scoped provider explicitly declines with an empty result, Flash
@@ -11,10 +12,15 @@ extension AppMonitor {
   /// Activation hot path. Dynamically scoped uncached providers (tmux) get the
   /// first chance to claim the context. Their explicit empty-result fallback
   /// can then use the prepared AX model without merging provider results.
+  /// `completion` receives the hints and how they were obtained
+  /// (`DiscoveryOutcome`). `isCurrent` tells a repair that is still waiting
+  /// on the app whether the activation it serves is still wanted; once it is
+  /// not, the repair stops and completes with what it has.
   func discoverAsync(
     context: AppContext,
     targetFilter: ((JumpTarget) -> Bool)? = nil,
-    completion: @escaping ([AssignedHint]) -> Void
+    isCurrent: @escaping () -> Bool = { true },
+    completion: @escaping (_ hints: [AssignedHint], _ outcome: DiscoveryOutcome) -> Void
   ) {
     let pid = context.processID
     let startedAt = DispatchTime.now()
@@ -22,6 +28,7 @@ extension AppMonitor {
     func complete(
       path: String,
       hints: [AssignedHint],
+      retried: Bool = false,
       extra: [String: String] = [:]
     ) {
       if FlashLog.wouldEmit(.debug) {
@@ -30,6 +37,7 @@ extension AppMonitor {
           "pid": "\(pid)",
           "bundle": context.bundleIdentifier,
           "hints": "\(hints.count)",
+          "retried": "\(retried)",
           "target_filter": "\(hasTargetFilter)",
           "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
         ]
@@ -38,7 +46,7 @@ extension AppMonitor {
         }
         FlashLog.debug("[discover] complete", fields: fields)
       }
-      completion(hints)
+      completion(hints, DiscoveryOutcome(path: path, retried: retried))
     }
 
     let plan = registry.hintProviderPlan(for: context)
@@ -62,13 +70,26 @@ extension AppMonitor {
       installObserver(for: pid)
     }
 
-    func discoverPreparedFallback() {
+    func discoverPreparedFallback(afterVolatileDecline: Bool) {
       guard !plan.preparedProviders.isEmpty else {
         complete(path: "activation_no_fallback", hints: [])
         return
       }
 
-      if let model = lookupPreparedModel(for: pid) {
+      // An empty prepared model is not an answer, it is a stale miss: it is
+      // what a refresh that ran before the app had an AX tree leaves behind,
+      // and serving it means the user presses `f` and gets no hints at all
+      // while the status bar's own hints still appear. Measured on Slack: 5 of
+      // 39 activations returned zero targets in 0.13 ms from this cache, while
+      // a refresh on the same window finds about 92. Fall through and refresh.
+      // A degenerate one is the same kind of miss: a Chromium or Firefox tree
+      // caught mid-build once gave 1 target for a view that had 98.
+      if let model = lookupPreparedModel(for: pid),
+        !Self.discoveryLooksDegenerate(
+          targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
+      {
+        noteHealthyTargets(model.targets.count, pid: pid)
+        noteActivationFoundTargets(pid: pid, bundleIdentifier: context.bundleIdentifier)
         if let targetFilter {
           let cfg = snapshotConfig()
           let targets = model.targets.filter(targetFilter)
@@ -88,18 +109,21 @@ extension AppMonitor {
         return
       }
 
-      runModelRefresh(
-        pid: pid,
-        reason: "activation"
-      ) { [weak self] model in
+      refreshForActivation(
+        context: context, afterVolatileDecline: afterVolatileDecline, isCurrent: isCurrent
+      ) { [weak self] model, retried in
         guard let self else { return }
         if let model {
+          if !model.targets.isEmpty {
+            self.noteActivationFoundTargets(pid: pid, bundleIdentifier: context.bundleIdentifier)
+          }
           if let targetFilter {
             let cfg = self.snapshotConfig()
             let targets = model.targets.filter(targetFilter)
             complete(
               path: "prepared_model_refresh_filter",
               hints: self.assignTargets(targets, cfg: cfg),
+              retried: retried,
               extra: [
                 "model_targets": "\(model.targets.count)",
                 "targets": "\(targets.count)",
@@ -108,22 +132,26 @@ extension AppMonitor {
             complete(
               path: "prepared_model_refresh",
               hints: model.hints,
+              retried: retried,
               extra: ["targets": "\(model.targets.count)"])
           }
         } else {
-          self.runActivationDiscovery(
-            context: context,
-            providers: plan.preparedProviders,
-            targetFilter: targetFilter
-          ) { result in
-            complete(path: "activation_refresh_miss", hints: result.hints)
+          self.walkForActivation(
+            context: context, providers: plan.preparedProviders, targetFilter: targetFilter,
+            afterVolatileDecline: afterVolatileDecline, repaired: retried, isCurrent: isCurrent
+          ) { [weak self] result, retried in
+            if result.collectedTargets > 0 {
+              self?.noteActivationFoundTargets(
+                pid: pid, bundleIdentifier: context.bundleIdentifier)
+            }
+            complete(path: "activation_refresh_miss", hints: result.hints, retried: retried)
           }
         }
       }
     }
 
     guard !plan.uncachedProviders.isEmpty else {
-      discoverPreparedFallback()
+      discoverPreparedFallback(afterVolatileDecline: false)
       return
     }
     runActivationDiscovery(
@@ -132,9 +160,213 @@ extension AppMonitor {
       targetFilter: targetFilter
     ) { result in
       if result.allowsFallback {
-        discoverPreparedFallback()
+        discoverPreparedFallback(
+          afterVolatileDecline: plan.uncachedProviders.contains { $0.resultsAreVolatile })
       } else {
         complete(path: "activation_uncached", hints: result.hints)
+      }
+    }
+  }
+
+  /// A walk to distrust: empty, or collapsed below a tenth of the last trusted
+  /// result for the same app — a Chromium or Firefox tree caught mid-build, or
+  /// a window read during an activation. Small apps (under 20 targets) are
+  /// never judged by ratio.
+  static func discoveryLooksDegenerate(targets: Int, lastHealthy: Int?) -> Bool {
+    if targets == 0 { return true }
+    guard let lastHealthy, lastHealthy >= 20 else { return false }
+    return targets * 10 < lastHealthy
+  }
+
+  func noteHealthyTargets(_ count: Int, pid: pid_t) {
+    guard count > 0 else { return }
+    healthyTargetCounts[pid] = count
+  }
+
+  /// An activation found targets in the app's own tree: whatever gated its
+  /// background walks no longer holds.
+  private func noteActivationFoundTargets(pid: pid_t, bundleIdentifier: String) {
+    guard backgroundWalkGate.noteActivationTargets(pid: pid) else { return }
+    FlashLog.debug(
+      "[ax] model_refresh_ungated pid=\(pid) bundle=\(bundleIdentifier) reason=activation_targets")
+  }
+
+  /// The activation refresh, with one repair (`DegenerateRepair`): a
+  /// degenerate result is walked once more — after a short settle, or once a
+  /// runtime that builds its tree asynchronously reports it ready — and the
+  /// fuller of the two is served. Never more than one extra walk, so an app
+  /// that is genuinely empty ends silently. `completion` gets a nil model when
+  /// no valid one came back (the caller then walks directly), and whether a
+  /// repair walk ran.
+  private func refreshForActivation(
+    context: AppContext, afterVolatileDecline: Bool, isCurrent: @escaping () -> Bool,
+    completion: @escaping (_ model: PreparedModel?, _ retried: Bool) -> Void
+  ) {
+    let pid = context.processID
+    runModelRefresh(pid: pid, reason: .activation) { [weak self] first in
+      guard let self else { return }
+      guard let first else { return completion(nil, false) }
+      let lastHealthy = self.healthyTargetCounts[pid]
+      guard Self.discoveryLooksDegenerate(targets: first.targets.count, lastHealthy: lastHealthy)
+      else {
+        self.noteHealthyTargets(first.targets.count, pid: pid)
+        return completion(first, false)
+      }
+      self.repairDegenerateActivationWalk(
+        context: context, targets: first.targets.count, afterVolatileDecline: afterVolatileDecline,
+        isCurrent: isCurrent, keep: { completion(first, false) }
+      ) { [weak self] detail in
+        self?.runModelRefresh(pid: pid, reason: .activationRetry) { [weak self] retried in
+          guard let self else { return }
+          Self.logRepairResult(
+            pid: pid, first: first.targets.count, retried: retried?.targets.count, detail: detail)
+          // A repair walk whose model came back invalid — the tree changed
+          // while it was read, which is what a tree being built does, or the
+          // app lost the front — hands the activation a direct walk instead
+          // of the degenerate first result.
+          guard let retried else { return completion(nil, true) }
+          let best = retried.targets.count >= first.targets.count ? retried : first
+          self.noteRepairedTargets(best.targets.count, pid: pid, lastHealthy: lastHealthy)
+          completion(best, true)
+        }
+      }
+    }
+  }
+
+  /// A walk served straight to the activation, without a prepared model:
+  /// the fallback when the refresh's model came back invalid. It gets the
+  /// same repair, unless it already follows one (`repaired`).
+  private func walkForActivation(
+    context: AppContext, providers: [FlashSource], targetFilter: ((JumpTarget) -> Bool)?,
+    afterVolatileDecline: Bool, repaired: Bool, isCurrent: @escaping () -> Bool,
+    completion: @escaping (_ result: DiscoveryResult, _ retried: Bool) -> Void
+  ) {
+    let pid = context.processID
+    runActivationDiscovery(context: context, providers: providers, targetFilter: targetFilter) {
+      [weak self] first in
+      guard let self else { return }
+      let lastHealthy = self.healthyTargetCounts[pid]
+      guard !repaired,
+        Self.discoveryLooksDegenerate(targets: first.collectedTargets, lastHealthy: lastHealthy)
+      else {
+        self.noteRepairedTargets(first.collectedTargets, pid: pid, lastHealthy: lastHealthy)
+        return completion(first, repaired)
+      }
+      self.repairDegenerateActivationWalk(
+        context: context, targets: first.collectedTargets,
+        afterVolatileDecline: afterVolatileDecline, isCurrent: isCurrent,
+        keep: { completion(first, false) }
+      ) { [weak self] detail in
+        self?.runActivationDiscovery(
+          context: context, providers: providers, targetFilter: targetFilter
+        ) { [weak self] retried in
+          Self.logRepairResult(
+            pid: pid, first: first.collectedTargets, retried: retried.collectedTargets,
+            detail: detail)
+          let best = retried.collectedTargets >= first.collectedTargets ? retried : first
+          self?.noteRepairedTargets(best.collectedTargets, pid: pid, lastHealthy: lastHealthy)
+          completion(best, true)
+        }
+      }
+    }
+  }
+
+  /// Decide how a degenerate activation walk is repaired and run the wait:
+  /// `keep` serves the first result as it is (nothing to repair, or the
+  /// activation went away), `rewalk` performs the one extra walk.
+  private func repairDegenerateActivationWalk(
+    context: AppContext, targets: Int, afterVolatileDecline: Bool,
+    isCurrent: @escaping () -> Bool, keep: @escaping () -> Void,
+    rewalk: @escaping (_ detail: String) -> Void
+  ) {
+    let pid = context.processID
+    let lastHealthy = healthyTargetCounts[pid]
+    // The first walk's `AppTraits.of` has cached the app's traits.
+    let repair = Self.degenerateRepair(
+      engine: AppTraits.cached(bundleIdentifier: context.bundleIdentifier)?.engine,
+      afterVolatileDecline: afterVolatileDecline, lastHealthy: lastHealthy,
+      knownEmpty: backgroundWalkGate.hasEmptyEvidence(pid))
+    let repairName: String
+    switch repair {
+    case .none: return keep()
+    case .retry: repairName = "retry"
+    case .readinessLadder: repairName = "readiness"
+    }
+    FlashLog.info(
+      "[discover] retry pid=\(pid) targets=\(targets) "
+        + "last_healthy=\(lastHealthy.map(String.init) ?? "none") repair=\(repairName)")
+    let startedAt = DispatchTime.now()
+    let walk: (Int) -> Void = { steps in
+      rewalk(
+        "repair=\(repairName) steps=\(steps) "
+          + "waited_ms=\(Self.elapsedMilliseconds(since: startedAt))")
+    }
+    activationRepairSerial &+= 1
+    let clientID = "core:activation_repair:\(activationRepairSerial)"
+    switch repair {
+    case .none: break
+    case .retry(let afterMs):
+      armActivationRepairWake(clientID, afterMs: afterMs) {
+        guard isCurrent() else { return keep() }
+        walk(1)
+      }
+    case .readinessLadder(let delaysMs):
+      climbActivationLadder(
+        context: context, delaysMs: delaysMs, step: 0, clientID: clientID,
+        isCurrent: isCurrent, abandon: keep, walk: walk)
+    }
+  }
+
+  /// The repair waits for a tree the app is still building while the user
+  /// waits on the hints, so each probe is an input-adjacent wake: `.system`,
+  /// on the shared clock rather than a timer of its own.
+  private func armActivationRepairWake(
+    _ clientID: String, afterMs: Int, _ body: @escaping () -> Void
+  ) {
+    pollScheduler.scheduleOnce(
+      clientID, afterMs: afterMs, priority: .system, on: .main, handler: body)
+  }
+
+  private static func logRepairResult(pid: pid_t, first: Int, retried: Int?, detail: String) {
+    FlashLog.info(
+      "[discover] retry_result pid=\(pid) first=\(first) "
+        + "retried=\(retried.map(String.init) ?? "none") \(detail)")
+  }
+
+  /// A served result that no longer looks degenerate becomes the app's
+  /// healthy count.
+  private func noteRepairedTargets(_ count: Int, pid: pid_t, lastHealthy: Int?) {
+    guard !Self.discoveryLooksDegenerate(targets: count, lastHealthy: lastHealthy) else { return }
+    noteHealthyTargets(count, pid: pid)
+  }
+
+  /// One step of the activation's readiness ladder: wait on the shared clock
+  /// (never sleep), then probe the tree on the AX queue — walk when it is
+  /// ready, climb otherwise, and walk regardless at the last step. The activation going away (a
+  /// replacement, Escape, focus leaving the app) ends the climb.
+  private func climbActivationLadder(
+    context: AppContext, delaysMs: [Int], step: Int, clientID: String,
+    isCurrent: @escaping () -> Bool, abandon: @escaping () -> Void,
+    walk: @escaping (_ steps: Int) -> Void
+  ) {
+    armActivationRepairWake(clientID, afterMs: delaysMs[step]) { [weak self] in
+      guard let self else { return }
+      guard isCurrent() else { return abandon() }
+      guard step < delaysMs.count - 1 else { return walk(step + 1) }
+      self.axQueue.async { [weak self] in
+        let ready = AccessibilityReadiness.probe(
+          pid: context.processID, bundleIdentifier: context.bundleIdentifier)
+        DispatchQueue.main.async {
+          guard let self else { return }
+          guard isCurrent() else { return abandon() }
+          if ready {
+            walk(step + 1)
+          } else {
+            self.climbActivationLadder(
+              context: context, delaysMs: delaysMs, step: step + 1, clientID: clientID,
+              isCurrent: isCurrent, abandon: abandon, walk: walk)
+          }
+        }
       }
     }
   }
@@ -146,7 +378,9 @@ extension AppMonitor {
   /// prefix-free assignment. Never deadline-truncated: each app's walk either
   /// completes or that app is dropped whole, so the complete-or-discard
   /// determinism contract holds per surface. The prepared model stays
-  /// focused-app-only; this path always walks fresh.
+  /// focused-app-only; this path always walks fresh. Picture in Picture
+  /// players and the Stage Manager strip (`ScreenScopeSurfaces`) are walked
+  /// too, each by its frame with the Accessibility provider alone.
   func discoverScreenAsync(
     focusedContext: AppContext,
     maxApps: Int = 6,
@@ -160,7 +394,7 @@ extension AppMonitor {
       NSScreen.screens.first { $0.frame.intersects(focusedContext.frontWindowFrame) }?.frame
       ?? NSScreen.main?.frame ?? .zero
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+    let info = WindowSnapshot.windowList(options) ?? []
     let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
       .filter { $0.pid != getpid() }
     var orderedPids: [pid_t] = []
@@ -170,6 +404,28 @@ extension AppMonitor {
     {
       orderedPids.append(entry.pid)
       if orderedPids.count >= maxApps { break }
+    }
+    var owners: [pid_t: (app: NSRunningApplication, owner: ScreenScopeSurfaces.Owner)] = [:]
+    let auxiliary = ScreenScopeSurfaces.auxiliary(entries: entries, screen: screenFrame) { pid in
+      if let known = owners[pid] { return known.owner }
+      guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+        let bundleIdentifier = app.bundleIdentifier
+      else { return nil }
+      let owner = ScreenScopeSurfaces.Owner(
+        bundleIdentifier: bundleIdentifier, isRegularApp: app.activationPolicy == .regular)
+      owners[pid] = (app, owner)
+      return owner
+    }
+    let auxiliaryContexts = auxiliary.compactMap {
+      surface -> (surface: ScreenScopeSurfaces.Surface, keepsPID: Bool, context: AppContext)? in
+      guard let (app, owner) = owners[surface.pid] else { return nil }
+      return (
+        surface, ScreenScopeSurfaces.keepsPID(owner),
+        AppContext(
+          bundleIdentifier: owner.bundleIdentifier, processID: surface.pid, runningApp: app,
+          frontWindowFrame: surface.frame, allScreensFrame: focusedContext.allScreensFrame,
+          walkRoot: .elementsInFrame)
+      )
     }
     var contexts: [AppContext] = []
     for pid in orderedPids {
@@ -185,12 +441,13 @@ extension AppMonitor {
           frontWindowFrame: surface,
           allScreensFrame: focusedContext.allScreensFrame))
     }
-    guard !contexts.isEmpty else {
+    guard !contexts.isEmpty || !auxiliaryContexts.isEmpty else {
       completion([])
       return
     }
     let visibleByPid = WindowSnapshot.buildMultiSurfaceVisibleRegions(
-      entries: entries, focusedPids: Set(contexts.map(\.processID)))
+      entries: entries, focusedPids: Set(contexts.map(\.processID)),
+      excludingIndexes: Set(auxiliary.map(\.entryIndex)))
     axQueue.async { [weak self] in
       guard let self else { return }
       self.configureRuntime(for: cfg)
@@ -207,12 +464,37 @@ extension AppMonitor {
         merged.append(contentsOf: finalized.targets)
         walked += 1
       }
+      var auxiliaryTargets = 0
+      for (ordinal, entry) in auxiliaryContexts.enumerated() {
+        let regions = WindowSnapshot.visibleRegions(
+          ofEntryAt: entry.surface.entryIndex, in: entries)
+        guard !regions.isEmpty else { continue }
+        // Only the generic walk knows how to start from a frame; plugin
+        // providers describe their app's own windows.
+        let plan = self.registry.hintProviderPlan(for: entry.context)
+        let providers = (plan.uncachedProviders + plan.preparedProviders).filter {
+          $0.identifier == Self.accessibilityProviderID
+        }
+        guard !providers.isEmpty else { continue }
+        let collection = Self.collectFocusedTargets(context: entry.context, providers: providers)
+        let finalized = TargetFinalizer.finalizeWithStats(
+          collection.targets, visibleRegions: regions)
+        merged.append(
+          contentsOf: finalized.targets.map {
+            ScreenScopeSurfaces.retarget(
+              $0, surface: entry.surface, ordinal: ordinal, keepsPID: entry.keepsPID)
+          })
+        auxiliaryTargets += finalized.targets.count
+      }
       let hints = self.assignTargets(merged, cfg: cfg)
       FlashLog.debug(
         "[discover] screen_scope complete",
         fields: [
           "apps": "\(walked)",
           "candidate_apps": "\(contexts.count)",
+          "auxiliary_surfaces": auxiliaryContexts.map { $0.surface.kind.rawValue }
+            .joined(separator: ","),
+          "auxiliary_targets": "\(auxiliaryTargets)",
           "targets": "\(merged.count)",
           "hints": "\(hints.count)",
         ])
@@ -220,10 +502,19 @@ extension AppMonitor {
     }
   }
 
+  /// `AccessibilityProvider.identifier`, the provider that walks a surface
+  /// from its frame.
+  static let accessibilityProviderID = "accessibility"
+
   private struct DiscoveryResult {
     let targets: [JumpTarget]
     let hints: [AssignedHint]
     let allowsFallback: Bool
+    /// Targets the walk found before any activation filter, which is what a
+    /// degenerate walk is judged by.
+    var collectedTargets: Int = 0
+    /// The focused window had no visible region, so nothing was walked.
+    var occluded = false
   }
 
   private struct DiscoveryFrame {
@@ -235,6 +526,7 @@ extension AppMonitor {
     context: AppContext,
     providers: [FlashSource],
     cfg: Config,
+    primaryH: CGFloat,
     dirtyToken: UInt64,
     configRevision: UInt64
   ) -> PreparedModel {
@@ -242,6 +534,7 @@ extension AppMonitor {
       reason: "prepared_model",
       context: context,
       cfg: cfg,
+      primaryH: primaryH,
       providers: providers)
     return PreparedModel(
       pid: context.processID,
@@ -249,7 +542,23 @@ extension AppMonitor {
       hints: result.hints,
       computedAt: DispatchTime.now(),
       dirtyToken: dirtyToken,
-      configRevision: configRevision)
+      configRevision: configRevision,
+      fingerprint: Self.targetsFingerprint(result.targets),
+      freshnessMs: Self.modelFreshnessMs,
+      occluded: result.occluded)
+  }
+
+  static func targetsFingerprint(_ targets: [JumpTarget]) -> Int {
+    var hasher = Hasher()
+    hasher.combine(targets.count)
+    for target in targets {
+      hasher.combine(Int(target.frame.minX.rounded()))
+      hasher.combine(Int(target.frame.minY.rounded()))
+      hasher.combine(Int(target.frame.width.rounded()))
+      hasher.combine(Int(target.frame.height.rounded()))
+      hasher.combine(target.role ?? "")
+    }
+    return hasher.finalize()
   }
 
   private func runActivationDiscovery(
@@ -259,12 +568,14 @@ extension AppMonitor {
     completion: @escaping (DiscoveryResult) -> Void
   ) {
     let cfg = snapshotConfig()
+    let primaryH = primaryScreenHeight()
     axQueue.async { [weak self] in
       guard let self else { return }
       let result = self.runAndAssign(
         reason: "activation",
         context: context,
         cfg: cfg,
+        primaryH: primaryH,
         providers: providers,
         targetFilter: targetFilter)
       DispatchQueue.main.async {
@@ -273,17 +584,20 @@ extension AppMonitor {
     }
   }
 
+  /// Runs on `axQueue`; `primaryH` is read on main beforehand because
+  /// `NSScreen` is main-affine.
   private func runAndAssign(
     reason: String,
     context: AppContext,
     cfg: Config,
+    primaryH: CGFloat,
     providers: [FlashSource],
     targetFilter: ((JumpTarget) -> Bool)? = nil
   ) -> DiscoveryResult {
     let startedAt = DispatchTime.now()
     configureRuntime(for: cfg)
     let frameStartedAt = DispatchTime.now()
-    let frame = resolveDiscoveryFrame(for: context)
+    let frame = resolveDiscoveryFrame(for: context, primaryH: primaryH)
     let frameEndedAt = DispatchTime.now()
     guard !frame.visibleRegions.isEmpty else {
       logDiscoveryPipeline(
@@ -306,7 +620,7 @@ extension AppMonitor {
         finalizeEndedAt: frameEndedAt,
         assignStartedAt: frameEndedAt,
         assignEndedAt: frameEndedAt)
-      return DiscoveryResult(targets: [], hints: [], allowsFallback: false)
+      return DiscoveryResult(targets: [], hints: [], allowsFallback: false, occluded: true)
     }
     let collectStartedAt = DispatchTime.now()
     let collection = Self.collectFocusedTargets(
@@ -345,7 +659,8 @@ extension AppMonitor {
     return DiscoveryResult(
       targets: targets,
       hints: hints,
-      allowsFallback: collection.allowsFallback)
+      allowsFallback: collection.allowsFallback,
+      collectedTargets: finalized.targets.count)
   }
 
   private func logDiscoveryPipeline(
@@ -406,32 +721,39 @@ extension AppMonitor {
     )
   }
 
-  private func resolveDiscoveryFrame(for context: AppContext) -> DiscoveryFrame {
+  private func resolveDiscoveryFrame(for context: AppContext, primaryH: CGFloat) -> DiscoveryFrame {
     if context.processID == getpid() {
       let frame = context.frontWindowFrame
       return DiscoveryFrame(
         providerContext: context,
         visibleRegions: frame.isNull ? [] : [frame])
     }
+    // Scope to the window the walk covers, not merely the app's frontmost one.
+    let walked = AccessibilityProvider.walkedWindowFrame(
+      pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
     let snapshot = WindowSnapshot.build(
-      primaryH: primaryScreenHeight(),
+      primaryH: primaryH,
       onlyComputingVisibleRegionsFor: context.processID,
-      ignoringPids: [getpid()])
-    let visible: [CGRect]
-    if let regions = snapshot.visibleRegions[context.processID] {
-      visible = regions
-    } else if snapshot.entries.isEmpty {
-      // CGWindowList can fail transiently. Fall back to the activation-time
-      // screen union so the user still gets hints instead of a silent empty
-      // overlay; normal runs use the precise active-window visible regions.
-      visible = [context.frontWindowFrame]
-    } else {
-      visible = []
-    }
+      ignoringPids: [getpid()],
+      walkedWindowFrame: walked)
+    let visible = Self.discoveryVisibleRegions(
+      of: context.processID, in: snapshot, whenWindowListUnavailable: context.frontWindowFrame)
     let providerFrame = snapshot.activeWindowFrame ?? union(of: visible)
     return DiscoveryFrame(
       providerContext: clip(context, to: providerFrame),
       visibleRegions: visible)
+  }
+
+  /// The part of `pid`'s active window the walk may hint. Empty when it is
+  /// fully covered or not on screen: the walk is then `occluded`.
+  static func discoveryVisibleRegions(
+    of pid: pid_t, in snapshot: WindowSnapshot, whenWindowListUnavailable fallback: CGRect
+  ) -> [CGRect] {
+    if let regions = snapshot.visibleRegions[pid] { return regions }
+    // CGWindowList can fail transiently. Fall back to the activation-time
+    // screen union so the user still gets hints instead of a silent empty
+    // overlay; normal runs use the precise active-window visible regions.
+    return snapshot.entries.isEmpty ? [fallback] : []
   }
 
   struct FocusedTargetCollection {

@@ -14,7 +14,7 @@ enum Alphabet {
     let warning: String?
   }
 
-  private enum Row: String, CaseIterable {
+  enum Row: String, CaseIterable {
     case toprow
     case homerow
     case bottomrow
@@ -25,10 +25,27 @@ enum Alphabet {
     case righthand
   }
 
-  private struct Layout {
-    let rows: [Row: [Character]]
-    let leftHand: Set<Character>
+  struct Layout {
+    /// Every key at its physical position, 4 rows × 10 columns: the number
+    /// row, then the top, home and bottom rows, left to right.
+    let physical: [[Character]]
     let keyScores: [Character: Int]
+    /// The letters of the top, home and bottom rows, for hint selectors.
+    let rows: [Row: [Character]]
+    /// The letters in the left five columns of those rows.
+    let leftHand: Set<Character>
+
+    init(physical rows: [String], keyScores: [Character: Int]) {
+      let physical = rows.map(Array.init)
+      self.physical = physical
+      self.keyScores = keyScores
+      self.rows = [
+        .toprow: physical[1].filter(\.isLetter),
+        .homerow: physical[2].filter(\.isLetter),
+        .bottomrow: physical[3].filter(\.isLetter),
+      ]
+      self.leftHand = Set(physical.dropFirst().flatMap { $0.prefix(5).filter(\.isLetter) })
+    }
   }
 
   private struct Selector {
@@ -37,14 +54,21 @@ enum Alphabet {
     let hand: Hand?
   }
 
-  private static let layouts: [String: Layout] = [
+  private static let qwerty = Layout(
+    physical: ["1234567890", "qwertyuiop", "asdfghjkl;", "zxcvbnm,./"],
+    keyScores: scoreGroups([
+      ("sdfjkl", 100),
+      ("agh", 92),
+      ("erui", 76),
+      ("wtyo", 66),
+      ("cvbnm", 56),
+      ("qzp", 38),
+      ("x", 32),
+    ]))
+
+  static let layouts: [String: Layout] = [
     "colemak": Layout(
-      rows: [
-        .toprow: Array("qwfpgjluy"),
-        .homerow: Array("arstdhneio"),
-        .bottomrow: Array("zxcvbkm"),
-      ],
-      leftHand: Set("qwfpgarstdzxcvb"),
+      physical: ["1234567890", "qwfpgjluy;", "arstdhneio", "zxcvbkm,./"],
       keyScores: scoreGroups([
         ("arstneio", 100),
         ("dh", 94),
@@ -52,32 +76,10 @@ enum Alphabet {
         ("qgj", 62),
         ("zxcvbm", 54),
         ("k", 42),
-      ])
-    ),
-    "qwerty": Layout(
-      rows: [
-        .toprow: Array("qwertyuiop"),
-        .homerow: Array("asdfghjkl"),
-        .bottomrow: Array("zxcvbnm"),
-      ],
-      leftHand: Set("qwertasdfgzxcvb"),
-      keyScores: scoreGroups([
-        ("sdfjkl", 100),
-        ("agh", 92),
-        ("erui", 76),
-        ("wtyo", 66),
-        ("cvbnm", 56),
-        ("qzp", 38),
-        ("x", 32),
-      ])
-    ),
+      ])),
+    "qwerty": qwerty,
     "dvorak": Layout(
-      rows: [
-        .toprow: Array("pyfgcrl"),
-        .homerow: Array("aoeuidhtns"),
-        .bottomrow: Array("qjkxbmwvz"),
-      ],
-      leftHand: Set("pyaoeuiqjkx"),
+      physical: ["1234567890", "',.pyfgcrl", "aoeuidhtns", ";qjkxbmwvz"],
       keyScores: scoreGroups([
         ("aoeutns", 100),
         ("idh", 94),
@@ -85,9 +87,16 @@ enum Alphabet {
         ("g", 62),
         ("qjkxbmwv", 54),
         ("z", 38),
-      ])
-    ),
+      ])),
   ]
+
+  /// The mouse grid's keys: the left-hand 4×5 block of the layout's keyboard
+  /// (number, top, home and bottom rows), so each screen cell sits where its
+  /// key does. A literal `hints.keys` has no layout, so it gets QWERTY's.
+  static func gridKeys(layoutName: String?) -> [[Character]] {
+    let layout = layoutName.flatMap { layouts[$0] } ?? qwerty
+    return layout.physical.map { Array($0.prefix(5)) }
+  }
 
   static let defaultKeys = "<qwerty_homerow+qwerty_toprow>"
 

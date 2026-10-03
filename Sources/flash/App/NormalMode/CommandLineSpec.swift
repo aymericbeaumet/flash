@@ -28,6 +28,33 @@ extension NormalModeDispatcher {
     case logs
     case commands
     case about
+    /// `:doctor` — `flash doctor`'s checks (permissions, capture, config,
+    /// hotkeys, plugins, layout), logged in full with a toast summary.
+    case doctor
+  }
+
+  /// The `:`-commands that are verbs: `:w` is `app_save`, `:copy` is
+  /// `clipboard_copy`, `:q` is `window_close`… so each resolves like its
+  /// mapping does.
+  static func verb(for command: CommandLineCommand) -> URLCommand? {
+    switch command {
+    case .quit(let force): return .quitApp(force: force)
+    case .save: return .save
+    case .saveAndQuit(let force): return .saveAndQuit(force: force)
+    case .print: return .print
+    case .open: return .documentOpen
+    case .newWindow: return .windowNew
+    case .newTab: return .tabNew
+    case .close: return .tabClose
+    case .closeWindow: return .windowClose
+    case .find: return .find
+    case .undo: return .undo
+    case .redo: return .redo
+    case .copy: return .clipboardCopy
+    case .cut: return .clipboardCut
+    case .paste: return .clipboardPaste
+    case .plugins, .mappings, .help, .logs, .commands, .about, .doctor: return nil
+    }
   }
 
   enum PluginsSubcommand: Equatable {
@@ -35,9 +62,6 @@ extension NormalModeDispatcher {
     case modal
     /// `:plugins reload` — stop and restart every loaded plugin.
     case reload
-    /// `:plugins doctor` — checkhealth: manifest/exec/sandbox/lifecycle
-    /// diagnosis per plugin, logged in full with a toast summary.
-    case doctor
   }
 
   static func commandLineCommand(_ raw: String) -> CommandLineCommand? {
@@ -69,12 +93,30 @@ extension NormalModeDispatcher {
     switch args[0] {
     case "reload":
       return .plugins(.reload)
-    case "doctor":
-      return .plugins(.doctor)
     default:
       return nil
     }
   }
+
+  static func commandLinePopupCommand(_ raw: String) -> URLCommand? {
+    var body = raw.trimmed
+    if body.hasPrefix(":") { body.removeFirst() }
+    let parts = body.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    guard let verb = parts.first,
+      popupCommandSyntax[verb] != nil,
+      parts.count <= 2
+    else { return nil }
+    guard let arguments = try? CommandArguments.parse(parts.dropFirst()) else { return nil }
+    return URLEventHandler.parse(verb: verb, args: arguments)
+  }
+
+  static let popupCommandSyntax = Dictionary(
+    uniqueKeysWithValues: [
+      "enter_terminal_mode", "popup_restart", "popup_quit",
+    ].compactMap {
+      name in
+      URLEventHandler.syntax(for: name, prefix: ":").map { (name, $0) }
+    })
 
   /// argv for `:open <args>` — the rest of the line split on whitespace,
   /// forwarded verbatim to `/usr/bin/open`. Returns nil when the line is
@@ -285,6 +327,7 @@ extension NormalModeDispatcher {
 
   struct CommandLineSpec {
     var names: [CommandLineName]
+    var description: String
     var bangPolicy: BangPolicy
     var build: (Bool) -> CommandLineCommand
 
@@ -304,60 +347,84 @@ extension NormalModeDispatcher {
   static let commandLineSpecs: [CommandLineSpec] = [
     // `:q` closes the focused OS window (vim's "close this window"); `:qa[ll]`
     // quits the whole app. `:q!` / `:qa!` force.
-    CommandLineSpec(names: ["q[uit]"], bangPolicy: .accepted) { _ in .closeWindow },
-    CommandLineSpec(names: ["qa[ll]"], bangPolicy: .accepted) { .quit(force: $0) },
-    CommandLineSpec(names: ["w[rite]"], bangPolicy: .accepted) { _ in .save },
-    CommandLineSpec(names: ["wq", "x[it]"], bangPolicy: .accepted) {
+    CommandLineSpec(
+      names: ["q[uit]"], description: "Close the focused window", bangPolicy: .accepted
+    ) { _ in .closeWindow },
+    CommandLineSpec(names: ["qa[ll]"], description: "Quit the focused app", bangPolicy: .accepted) {
+      .quit(force: $0)
+    },
+    CommandLineSpec(
+      names: ["w[rite]"], description: "Save the focused document", bangPolicy: .accepted
+    ) { _ in .save },
+    CommandLineSpec(names: ["wq", "x[it]"], description: "Save then quit", bangPolicy: .accepted) {
       .saveAndQuit(force: $0)
     },
-    CommandLineSpec(names: ["p[rint]"], bangPolicy: .rejected) { _ in .print },
-    CommandLineSpec(names: ["e[dit]"], bangPolicy: .rejected) { _ in .open },
-    CommandLineSpec(names: ["new"], bangPolicy: .rejected) { _ in .newWindow },
-    CommandLineSpec(names: ["tabnew", "tabedit", "tabe"], bangPolicy: .rejected) {
+    CommandLineSpec(
+      names: ["p[rint]"], description: "Print the focused document", bangPolicy: .rejected
+    ) { _ in .print },
+    CommandLineSpec(
+      names: ["e[dit]"], description: "Open a document in the focused app", bangPolicy: .rejected
+    ) { _ in .open },
+    CommandLineSpec(names: ["new"], description: "Open a new window", bangPolicy: .rejected) { _ in
+      .newWindow
+    },
+    CommandLineSpec(
+      names: ["tabnew", "tabedit", "tabe"], description: "Open a new tab", bangPolicy: .rejected
+    ) {
       _ in .newTab
     },
-    CommandLineSpec(names: ["bd[elete]", "cl[ose]"], bangPolicy: .rejected) {
+    CommandLineSpec(
+      names: ["bd[elete]", "cl[ose]"], description: "Close the focused window/tab",
+      bangPolicy: .rejected
+    ) {
       _ in .close
     },
-    CommandLineSpec(names: ["find", "grep", "vimgrep"], bangPolicy: .rejected) { _ in .find },
-    CommandLineSpec(names: ["u[ndo]"], bangPolicy: .rejected) { _ in .undo },
-    CommandLineSpec(names: ["red[o]"], bangPolicy: .rejected) { _ in .redo },
-    CommandLineSpec(names: ["y[ank]", "copy"], bangPolicy: .rejected) { _ in .copy },
-    CommandLineSpec(names: ["d[elete]", "cut"], bangPolicy: .rejected) { _ in .cut },
-    CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
-    CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins(.modal) },
-    CommandLineSpec(names: ["logs"], bangPolicy: .rejected) { _ in .logs },
-    CommandLineSpec(names: ["commands"], bangPolicy: .rejected) { _ in .commands },
-    CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
-    CommandLineSpec(names: ["about"], bangPolicy: .rejected) { _ in .about },
+    CommandLineSpec(
+      names: ["find", "grep", "vimgrep"], description: "Open the app’s native find",
+      bangPolicy: .rejected
+    ) { _ in .find },
+    CommandLineSpec(names: ["u[ndo]"], description: "Undo", bangPolicy: .rejected) { _ in .undo },
+    CommandLineSpec(names: ["red[o]"], description: "Redo", bangPolicy: .rejected) { _ in .redo },
+    CommandLineSpec(
+      names: ["y[ank]", "copy"], description: "Copy the selection", bangPolicy: .rejected
+    ) { _ in .copy },
+    CommandLineSpec(
+      names: ["d[elete]", "cut"], description: "Cut the selection", bangPolicy: .rejected
+    ) { _ in .cut },
+    CommandLineSpec(names: ["pu[t]", "paste"], description: "Paste", bangPolicy: .rejected) { _ in
+      .paste
+    },
+    CommandLineSpec(
+      names: ["plugins"], description: "Open the plugins status view", bangPolicy: .rejected
+    ) { _ in .plugins(.modal) },
+    CommandLineSpec(
+      names: ["logs"], description: "Open the logs view in the HTTP debug dashboard",
+      bangPolicy: .rejected
+    ) { _ in .logs },
+    CommandLineSpec(
+      names: ["commands"], description: "Open the commands view in the HTTP debug dashboard",
+      bangPolicy: .rejected
+    ) { _ in .commands },
+    CommandLineSpec(
+      names: ["map[pings]"], description: "Show the active key mappings", bangPolicy: .rejected
+    ) { _ in .mappings },
+    CommandLineSpec(
+      names: ["about"], description: "Open the About Flash window", bangPolicy: .rejected
+    ) { _ in .about },
+    CommandLineSpec(
+      names: ["doctor"],
+      description: "Check permissions, key capture, config, hotkeys and plugins",
+      bangPolicy: .rejected
+    ) { _ in .doctor },
   ]
 
-  /// Human-readable descriptions for the built-in command-line commands,
-  /// keyed by primary `full` name. Lives next to `commandLineSpecs` so the
-  /// two stay in sync; consumed by the HTTP inspector's command catalog.
-  private static let coreCommandDescriptions: [String: String] = [
-    "quit": "Quit the focused app (⌘Q)",
-    "write": "Save the focused document (⌘S)",
-    "wq": "Save then quit",
-    "print": "Print the focused document",
-    "edit": "Open the flashlight candidate finder",
-    "new": "Open a new window",
-    "tabnew": "Open a new tab",
-    "bdelete": "Close the focused window/tab",
-    "find": "Open the app's native find",
-    "undo": "Undo (⌘Z)",
-    "redo": "Redo (⌘⇧Z)",
-    "yank": "Copy the selection (⌘C)",
-    "delete": "Cut the selection (⌘X)",
-    "put": "Paste (⌘V)",
-    "plugins": "Open the plugins view in the HTTP debug dashboard",
-    "logs": "Open the logs view in the HTTP debug dashboard",
-    "commands": "Open the commands view in the HTTP debug dashboard",
-    "mappings": "Show the active key mappings",
-    "about": "Open the About Flash window",
+  private static let argumentCommandDescriptions: [String: String] = [
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
+    "enter_terminal_mode": "Show and focus a popup; without --name, the terminal popup",
+    "popup_restart": "Restart the focused or named popup's process",
+    "popup_quit": "Quit the focused or named popup's process; persistent popups restart",
   ]
 
   /// Flat catalog of every built-in command-line command, tagged
@@ -372,7 +439,7 @@ extension NormalModeDispatcher {
         "name": ":\(primary.full)",
         "syntax": spec.helpLine,
         "aliases": spec.names.map { ":\($0.documented)" },
-        "description": coreCommandDescriptions[primary.full] ?? "",
+        "description": spec.description,
         "source": "core",
         "source_kind": "core",
       ])
@@ -382,7 +449,17 @@ extension NormalModeDispatcher {
         "name": ":\(extra)",
         "syntax": ":\(extra) <args>",
         "aliases": [":\(extra)"],
-        "description": coreCommandDescriptions[extra] ?? "",
+        "description": argumentCommandDescriptions[extra]!,
+        "source": "core",
+        "source_kind": "core",
+      ])
+    }
+    for name in popupCommandSyntax.keys.sorted() {
+      result.append([
+        "name": ":\(name)",
+        "syntax": popupCommandSyntax[name]!,
+        "aliases": [":\(name)"],
+        "description": argumentCommandDescriptions[name]!,
         "source": "core",
         "source_kind": "core",
       ])
@@ -506,7 +583,7 @@ extension NormalModeDispatcher {
 
   /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
   /// with `pluginsCommand(_:)`.
-  static let pluginsBuiltinSubcommands: [String] = ["doctor", "reload"]
+  static let pluginsBuiltinSubcommands: [String] = ["reload"]
 
   /// Whether typing `query` is enough to actually invoke the command shown
   /// as `label`, per vim's abbreviation rule. `:q` invokes `quit` (min `q`)
@@ -545,6 +622,10 @@ extension NormalModeDispatcher {
     for extra in ["open", "help", "flashlight"] where seen.insert(extra).inserted {
       items.append(
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
+    }
+    for name in popupCommandSyntax.keys.sorted() where seen.insert(name).inserted {
+      items.append(
+        CommandLineCompletion(label: name, insertion: "\(name) ", kind: .acceptsArgs))
     }
     let dedupedPlugins = Array(Set(pluginCommands.map { $0.lowercased() })).sorted()
     for command in dedupedPlugins where seen.insert(command).inserted {

@@ -5,8 +5,14 @@
 //! last-good cache, republishes changed rendered status at minute boundaries,
 //! then refreshes Anthropic every ten minutes and OpenAI every two minutes.
 //! Only percentages, reset epochs, window lengths, and fetch time are persisted
-//! in the plugin cache; credential rotations write back only to their owning
-//! stores, and raw responses stay in memory.
+//! in the plugin cache, and raw responses stay in memory.
+//!
+//! Claude Code's credentials are read-only by default: an expired token leaves
+//! the Claude quota to age out until Claude Code renews it, with the store
+//! reread every minute and the gap logged once through `ClaudeHealth`. Only
+//! `[plugin.aiproviders] refresh_claude_code_credentials = true` lets the
+//! plugin renew the token itself and write the rotation back to Claude Code's
+//! own store.
 //!
 //! Claude Code keeps OAuth credentials in the login keychain, while Codex owns
 //! its auth behind `codex app-server`. Those interfaces require subprocesses
@@ -14,27 +20,44 @@
 //! the bundled GitHub plugin's `subprocess` posture. Tokens are passed through
 //! stdin, never argv or logs.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flash_plugin::process;
+use flash_plugin::status::duration_compact;
 use flash_plugin::{
-    inline_status_popup, run, run_osascript, CommandRequest, Context, PerformResponse, RefreshGate,
+    Color, CommandRequest, Context, Event, Markup, ObservedCadences, PerformResponse, PollPriority,
+    Published, RefreshGate, run, run_osascript,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{OnceCell, RwLock};
 
 const AUTOSEND_DELAY: Duration = Duration::from_millis(2_500);
-const AUTOSEND_SCRIPT: &str = r#"tell application "System Events" to key code 36"#;
+
+/// Return, pressed only while the app the page opened in still has focus:
+/// by the time the page has loaded the user may be typing elsewhere, where
+/// a stray Return would submit or run whatever is there. `None` for a bundle
+/// id that could not be spliced into AppleScript verbatim.
+fn autosend_script(bundle_id: &str) -> Option<String> {
+    let valid = !bundle_id.is_empty()
+        && bundle_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    valid.then(|| {
+        format!(
+            r#"tell application "System Events" to if bundle identifier of (first application process whose frontmost is true) is "{bundle_id}" then key code 36"#
+        )
+    })
+}
 
 const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
-const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const ANTHROPIC_USAGE_TTL: u64 = 600;
 const ANTHROPIC_RETRY_SECONDS: u64 = 300;
 const OPENAI_USAGE_TTL: u64 = 120;
@@ -43,10 +66,10 @@ const COMMAND_STDOUT_LIMIT: usize = 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 64 * 1024;
 const ANTHROPIC_CACHE: &str = "anthropic-usage-v1.json";
 const OPENAI_CACHE: &str = "openai-usage-v1.json";
-const ASTRA_RATE_LIMIT_ID: &str = "codex_bengalfox";
 const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CREDENTIAL_REFRESH_SETTING: &str = "refresh_claude_code_credentials";
 
 static USAGE_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static CODEX_PATH: LazyLock<OnceCell<Option<PathBuf>>> = LazyLock::new(OnceCell::new);
@@ -85,54 +108,62 @@ impl WindowUsage {
     }
 }
 
+/// The Claude weekly window the `Cld` label shows.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 struct AnthropicUsage {
     updated_at: u64,
-    shared_session: Option<WindowUsage>,
     claude_week: Option<WindowUsage>,
-    fable_week: Option<WindowUsage>,
 }
 
 impl AnthropicUsage {
     fn sanitize(mut self) -> Option<Self> {
-        self.shared_session = self.shared_session.filter(WindowUsage::valid);
         self.claude_week = self.claude_week.filter(WindowUsage::valid);
-        self.fable_week = self.fable_week.filter(WindowUsage::valid);
-        (self.shared_session.is_some() || self.claude_week.is_some() || self.fable_week.is_some())
-            .then_some(self)
+        self.claude_week.is_some().then_some(self)
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-struct UsageWindows {
-    session: Option<WindowUsage>,
-    weekly: Option<WindowUsage>,
-}
-
-impl UsageWindows {
-    fn sanitize(mut self) -> Self {
-        self.session = self.session.filter(WindowUsage::valid);
-        self.weekly = self.weekly.filter(WindowUsage::valid);
-        self
-    }
-
-    fn is_empty(&self) -> bool {
-        self.session.is_none() && self.weekly.is_none()
-    }
-}
-
+/// The Codex weekly window the `Cdx` label shows.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 struct OpenAIUsage {
     updated_at: u64,
-    openai: UsageWindows,
-    astra: UsageWindows,
+    #[serde(rename = "openai", with = "openai_weekly", default)]
+    codex_week: Option<WindowUsage>,
+}
+
+/// The cache has always kept the Codex weekly window at `openai.weekly`, so a
+/// cache written before the plugin dropped the other windows still loads.
+mod openai_weekly {
+    use super::WindowUsage;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Deserialize)]
+    struct Windows {
+        weekly: Option<WindowUsage>,
+    }
+
+    #[derive(Serialize)]
+    struct WindowsRef<'a> {
+        weekly: &'a Option<WindowUsage>,
+    }
+
+    pub fn serialize<S: Serializer>(
+        weekly: &Option<WindowUsage>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        WindowsRef { weekly }.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<WindowUsage>, D::Error> {
+        Ok(Windows::deserialize(deserializer)?.weekly)
+    }
 }
 
 impl OpenAIUsage {
     fn sanitize(mut self) -> Option<Self> {
-        self.openai = self.openai.sanitize();
-        self.astra = self.astra.sanitize();
-        (!self.openai.is_empty() || !self.astra.is_empty()).then_some(self)
+        self.codex_week = self.codex_week.filter(WindowUsage::valid);
+        self.codex_week.is_some().then_some(self)
     }
 }
 
@@ -144,31 +175,123 @@ struct UsageState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusSegments {
-    summary: String,
-    details: String,
+    claude_label: Markup,
+    codex_label: Markup,
 }
 
 #[derive(Debug, Default)]
 struct UsageRuntime {
     state: UsageState,
-    published: Option<StatusSegments>,
+    published: Published<StatusSegments>,
+    claude_health: ClaudeHealth,
 }
 
-impl UsageRuntime {
-    fn status_update(&mut self, now: u64) -> Option<StatusSegments> {
-        let segments = render_status_segments(&self.state, now);
-        if self.published.as_ref() == Some(&segments) {
-            return None;
+/// Why a Claude refresh produced no reading. Content-free: a failure class
+/// and, for a request, only its HTTP status (0 when no response arrived).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClaudeFailure {
+    /// Neither the Keychain item nor `~/.claude/.credentials.json` holds a
+    /// usable token.
+    NoCredentials,
+    /// Read-only, and Claude Code's token has expired: Claude Code renews it
+    /// on its next request.
+    TokenExpired,
+    /// The opted-in renewal did not store a new token.
+    RenewalFailed,
+    Request {
+        http_status: u16,
+    },
+    /// A successful response without the weekly window.
+    Unrecognized,
+}
+
+impl ClaudeFailure {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::NoCredentials => "no_credentials",
+            Self::TokenExpired => "token_expired",
+            Self::RenewalFailed => "renewal_failed",
+            Self::Request { .. } => "request",
+            Self::Unrecognized => "unrecognized",
         }
-        self.published = Some(segments.clone());
-        Some(segments)
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::NoCredentials => "no Claude Code sign-in found",
+            Self::TokenExpired => {
+                "Claude Code's token has expired; waiting for Claude Code to renew it"
+            }
+            Self::RenewalFailed => "renewing Claude Code's token failed",
+            Self::Request { .. } => "the usage request failed",
+            Self::Unrecognized => "the usage response has no weekly window",
+        }
+    }
+
+    fn fields(self) -> BTreeMap<String, String> {
+        let mut fields = BTreeMap::from([("reason".to_string(), self.reason().to_string())]);
+        if let Self::Request { http_status } = self {
+            fields.insert("http_status".to_string(), http_status.to_string());
+        }
+        fields
+    }
+
+    /// An expired read-only token made no request, so the next tick rereads
+    /// the store and the label recovers within a minute of Claude Code
+    /// renewing it. Every other failure waits five minutes.
+    fn retry_at(self, now: u64) -> u64 {
+        match self {
+            Self::TokenExpired => now,
+            _ => now.saturating_add(ANTHROPIC_RETRY_SECONDS),
+        }
+    }
+}
+
+type LogLine = (&'static str, String, BTreeMap<String, String>);
+
+/// Latches the last Claude failure: a failure logs when it starts or changes
+/// class, and the next reading logs the recovery. Repeated ticks stay quiet.
+#[derive(Debug, Default)]
+struct ClaudeHealth {
+    failure: Option<ClaudeFailure>,
+}
+
+impl ClaudeHealth {
+    fn observe(&mut self, outcome: Result<(), ClaudeFailure>) -> Option<LogLine> {
+        let failure = outcome.err();
+        match (std::mem::replace(&mut self.failure, failure), failure) {
+            (previous, Some(failure)) if previous != Some(failure) => Some((
+                "warn",
+                format!(
+                    "[aiproviders] Claude quota unavailable: {}",
+                    failure.describe()
+                ),
+                failure.fields(),
+            )),
+            (Some(previous), None) => Some((
+                "info",
+                "[aiproviders] Claude quota recovered".to_string(),
+                previous.fields(),
+            )),
+            _ => None,
+        }
+    }
+}
+
+fn note_claude_outcome(
+    ctx: &Context,
+    health: &mut ClaudeHealth,
+    outcome: Result<(), ClaudeFailure>,
+) {
+    if let Some((level, message, fields)) = health.observe(outcome) {
+        ctx.log_fields(level, &message, fields);
     }
 }
 
 impl StatusSegments {
     #[cfg(test)]
     fn all(&self) -> [&str; 2] {
-        [&self.summary, &self.details]
+        [self.claude_label.as_str(), self.codex_label.as_str()]
     }
 }
 
@@ -221,19 +344,24 @@ async fn write_json<T: Serialize>(path: &Path, value: &T) -> bool {
 
 fn publish_status(ctx: &Context, segments: &StatusSegments) {
     ctx.status([
-        ("summary", segments.summary.as_str()),
-        ("details", segments.details.as_str()),
+        ("claude_label", segments.claude_label.as_str()),
+        ("codex_label", segments.codex_label.as_str()),
     ]);
 }
 
 async fn publish_current_status(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
-    let segments = shared.write().await.status_update(unix_now());
-    if let Some(segments) = segments {
-        publish_status(ctx, &segments);
+    let mut runtime = shared.write().await;
+    let segments = render_status_segments(&runtime.state, unix_now());
+    if let Some(segments) = runtime.published.update(segments) {
+        publish_status(ctx, segments);
     }
 }
 
-async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
+async fn refresh_usage(
+    ctx: &Context,
+    shared: &Arc<RwLock<UsageRuntime>>,
+    refresh_credentials: bool,
+) {
     let shared = Arc::clone(shared);
     USAGE_REFRESH_GATE
         .run(ctx, move |ctx, _applications| async move {
@@ -251,7 +379,7 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
 
             let anthropic = async {
                 if refresh_anthropic {
-                    fetch_anthropic_usage(now).await
+                    Some(fetch_anthropic_usage(now, refresh_credentials).await)
                 } else {
                     None
                 }
@@ -265,21 +393,31 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
             };
             let (anthropic, openai) = tokio::join!(anthropic, openai);
 
-            if let Some(usage) = anthropic {
-                ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
-                let _ = write_json(&ctx.data_dir().join(ANTHROPIC_CACHE), &usage).await;
-                state.anthropic = Some(usage);
-            } else if refresh_anthropic {
-                ANTHROPIC_RETRY_AT.store(
-                    now.saturating_add(ANTHROPIC_RETRY_SECONDS),
-                    Ordering::Relaxed,
-                );
+            let claude_outcome = anthropic
+                .as_ref()
+                .map(|fetched| fetched.as_ref().map(|_| ()).map_err(|failure| *failure));
+            match anthropic {
+                Some(Ok(usage)) => {
+                    ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
+                    let _ = write_json(&ctx.data_dir().join(ANTHROPIC_CACHE), &usage).await;
+                    state.anthropic = Some(usage);
+                }
+                Some(Err(failure)) => {
+                    ANTHROPIC_RETRY_AT.store(failure.retry_at(now), Ordering::Relaxed)
+                }
+                None => {}
             }
             if let Some(usage) = openai {
                 let _ = write_json(&ctx.data_dir().join(OPENAI_CACHE), &usage).await;
                 state.openai = Some(usage);
             }
-            shared.write().await.state = state;
+            {
+                let mut runtime = shared.write().await;
+                runtime.state = state;
+                if let Some(outcome) = claude_outcome {
+                    note_claude_outcome(&ctx, &mut runtime.claude_health, outcome);
+                }
+            }
             publish_current_status(&ctx, &shared).await;
         })
         .await;
@@ -287,38 +425,9 @@ async fn refresh_usage(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
 
 fn parse_anthropic_usage(raw: &str, now: u64) -> Option<AnthropicUsage> {
     let root: Value = serde_json::from_str(raw).ok()?;
-    let shared_session = anthropic_window(root.get("five_hour")?, 300);
-    let claude_week = anthropic_window(root.get("seven_day")?, 10_080);
-    let fable_week = root
-        .get("limits")
-        .and_then(Value::as_array)
-        .and_then(|limits| {
-            limits.iter().find(|limit| {
-                limit.get("kind").and_then(Value::as_str) == Some("weekly_scoped")
-                    && limit
-                        .pointer("/scope/model/display_name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|name| name.eq_ignore_ascii_case("fable"))
-            })
-        })
-        .and_then(|limit| {
-            usage_percent(limit.get("percent")?).map(|used| {
-                WindowUsage::new(
-                    used,
-                    limit
-                        .get("resets_at")
-                        .and_then(Value::as_str)
-                        .and_then(parse_rfc3339_epoch),
-                    10_080,
-                )
-            })
-        });
-
     AnthropicUsage {
         updated_at: now,
-        shared_session,
-        claude_week,
-        fable_week,
+        claude_week: anthropic_window(root.get("seven_day")?, 10_080),
     }
     .sanitize()
 }
@@ -339,33 +448,24 @@ fn parse_openai_rate_limits(raw: &str, now: u64) -> Option<OpenAIUsage> {
             .then(|| value.get("result").cloned())
             .flatten()
     })?;
-    let openai = result
-        .pointer("/rateLimitsByLimitId/codex")
-        .or_else(|| result.get("rateLimits"))
-        .map(rate_limit_windows)
-        .unwrap_or_default();
-    let astra = result
-        .pointer(&format!("/rateLimitsByLimitId/{ASTRA_RATE_LIMIT_ID}"))
-        .map(rate_limit_windows)
-        .unwrap_or_default();
     OpenAIUsage {
         updated_at: now,
-        openai,
-        astra,
+        codex_week: result
+            .pointer("/rateLimitsByLimitId/codex")
+            .or_else(|| result.get("rateLimits"))
+            .and_then(weekly_window),
     }
     .sanitize()
 }
 
-fn rate_limit_windows(limits: &Value) -> UsageWindows {
-    let mut windows = [limits.get("primary"), limits.get("secondary")]
+/// The window of a day or longer among a rate limit's primary and secondary
+/// ones; the other is the session.
+fn weekly_window(limits: &Value) -> Option<WindowUsage> {
+    [limits.get("primary"), limits.get("secondary")]
         .into_iter()
         .flatten()
-        .filter_map(codex_window);
-    let weekly = windows
-        .clone()
-        .find(|window| window.window_minutes >= 1_440);
-    let session = windows.find(|window| window.window_minutes < 1_440);
-    UsageWindows { session, weekly }.sanitize()
+        .filter_map(codex_window)
+        .find(|window| window.window_minutes >= 1_440)
 }
 
 fn codex_window(value: &Value) -> Option<WindowUsage> {
@@ -381,132 +481,43 @@ fn usage_percent(value: &Value) -> Option<f64> {
 }
 
 fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
-    let (shared_session, claude_week, fable_week) = state
+    let claude_week = state
         .anthropic
         .as_ref()
-        .map(|usage| {
-            (
-                usage.shared_session.as_ref(),
-                usage.claude_week.as_ref(),
-                usage.fable_week.as_ref(),
-            )
-        })
-        .unwrap_or((None, None, None));
-    let (openai_session, openai_week, astra_session, astra_week) = state
+        .filter(|usage| fresh(usage.updated_at, 2 * ANTHROPIC_USAGE_TTL, now))
+        .and_then(|usage| usage.claude_week.as_ref());
+    let codex_week = state
         .openai
         .as_ref()
-        .map(|usage| {
-            (
-                usage.openai.session.as_ref(),
-                usage.openai.weekly.as_ref(),
-                usage.astra.session.as_ref(),
-                usage.astra.weekly.as_ref(),
-            )
-        })
-        .unwrap_or((None, None, None, None));
-    let visible = "#[fg=colour178]AI#[default]";
-
-    let openai_session_label = usage_window_label(openai_session, "5-hour");
-    let openai_week_label = usage_window_label(openai_week, "7-day");
-    let astra_session_label = usage_window_label(astra_session, "5-hour");
-    let astra_week_label = usage_window_label(astra_week, "7-day");
-    let lines = [
-        "#[fg=colour178]AI#[default]".to_string(),
-        "#[fg=colour245]Provider  Window         Left  Reset#[default]".to_string(),
-        popup_row("Claude", "5-hour", shared_session, None, now),
-        popup_row("", "7-day", claude_week, shared_session, now),
-        popup_row("  Fable", "7-day", fable_week, shared_session, now),
-        popup_row("OpenAI", &openai_session_label, openai_session, None, now),
-        popup_row("", &openai_week_label, openai_week, openai_session, now),
-        popup_row("  Astra", &astra_session_label, astra_session, None, now),
-        popup_row("", &astra_week_label, astra_week, astra_session, now),
-    ];
-    let details = lines.join("\n");
+        .filter(|usage| fresh(usage.updated_at, 2 * OPENAI_USAGE_TTL, now))
+        .and_then(|usage| usage.codex_week.as_ref());
     StatusSegments {
-        summary: inline_status_popup(visible, &details),
-        details,
+        claude_label: quota_label("Cld", claude_week, now),
+        codex_label: quota_label("Cdx", codex_week, now),
     }
 }
 
-fn usage_window_label(usage: Option<&WindowUsage>, fallback: &str) -> String {
-    usage
-        .map(|window| window_label(window.window_minutes))
-        .unwrap_or_else(|| fallback.to_string())
-}
-
-fn styled_remaining(
-    weekly: Option<&WindowUsage>,
-    session: Option<&WindowUsage>,
-    now: u64,
-) -> String {
-    let Some(weekly) = weekly else {
-        return "   —".to_string();
-    };
-    let remaining = remaining_percent(weekly.used_percent);
-    let value = format!("{remaining:>3}%");
-    if remaining < 20 || session.is_some_and(|window| remaining_percent(window.used_percent) == 0) {
-        format!("#[fg=colour196]{value}#[default]")
-    } else if ahead_of_weekly_pace(weekly, now) {
-        format!("#[fg=#D08770]{value}#[default]")
-    } else {
-        value
-    }
-}
-
-fn popup_row(
-    provider: &str,
-    window_label: &str,
-    usage: Option<&WindowUsage>,
-    pace_session: Option<&WindowUsage>,
-    now: u64,
-) -> String {
-    let remaining = styled_remaining(usage, pace_session, now);
-    let reset = usage
-        .and_then(|window| window.resets_at)
-        .map(|reset| relative_duration(reset.saturating_sub(now)))
+fn quota_label(label: &str, weekly: Option<&WindowUsage>, now: u64) -> Markup {
+    let metric = weekly
+        .map(|window| {
+            let remaining = remaining_percent(window.used_percent).min(99);
+            let mut metric = format!("{remaining}%");
+            if let Some(reset) = window.resets_at {
+                metric.push('↻');
+                metric.push_str(&duration_compact(reset.saturating_sub(now)));
+            }
+            metric
+        })
         .unwrap_or_else(|| "—".to_string());
-    format!("#[fg=colour245]{provider:<8}  {window_label:<13}#[default]  {remaining}  {reset}")
-}
-
-fn ahead_of_weekly_pace(window: &WindowUsage, now: u64) -> bool {
-    if window.window_minutes != 10_080 {
-        return false;
-    }
-    let Some(reset) = window.resets_at else {
-        return false;
-    };
-    let duration = window.window_minutes * 60;
-    let remaining = reset.saturating_sub(now);
-    if remaining > duration {
-        return false;
-    }
-    let elapsed = duration - remaining;
-    let allowed_days = (elapsed / 86_400 + 1).min(7);
-    window.used_percent * 7.0 > allowed_days as f64 * 100.0
+    Markup::raw(format!(
+        "#[fg={}]{label} #[fg={}]{metric}#[default]",
+        Color::TITLE,
+        Color::MUTED
+    ))
 }
 
 fn remaining_percent(used: f64) -> u8 {
     (100_i64 - used.floor() as i64).clamp(0, 100) as u8
-}
-
-fn relative_duration(seconds: u64) -> String {
-    if seconds < 3_600 {
-        format!("{}min", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h", seconds / 3_600)
-    } else {
-        format!("{}d", seconds / 86_400)
-    }
-}
-
-fn window_label(minutes: u64) -> String {
-    if minutes >= 1_440 && minutes.is_multiple_of(1_440) {
-        format!("{}-day", minutes / 1_440)
-    } else if minutes >= 60 && minutes.is_multiple_of(60) {
-        format!("{}-hour", minutes / 60)
-    } else {
-        format!("{minutes}-minute")
-    }
 }
 
 fn parse_rfc3339_epoch(value: &str) -> Option<u64> {
@@ -628,8 +639,57 @@ struct ClaudeCredentials {
     store: CredentialStore,
 }
 
-async fn fetch_anthropic_usage(now: u64) -> Option<AnthropicUsage> {
-    let token = claude_access_token(now).await?;
+/// What a fetch does with the stored Claude Code token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClaudeToken {
+    Use,
+    Renew,
+    Expired,
+}
+
+/// `[plugin.aiproviders] refresh_claude_code_credentials`. Renewal rotates
+/// Claude Code's refresh token with Claude Code's own OAuth client and
+/// writes the result back into Claude Code's store, which can sign Claude Code
+/// out, so the default is read-only.
+fn parse_credential_refresh(value: Option<Value>) -> Result<bool, &'static str> {
+    match value {
+        None => Ok(false),
+        Some(Value::Bool(enabled)) => Ok(enabled),
+        Some(_) => Err("refresh_claude_code_credentials must be true or false"),
+    }
+}
+
+fn configured_credential_refresh(ctx: &Context) -> bool {
+    parse_credential_refresh(ctx.config_json(CREDENTIAL_REFRESH_SETTING)).unwrap_or_else(|error| {
+        ctx.log(
+            "warn",
+            &format!("[aiproviders] invalid configuration: {error}; credentials stay read-only"),
+        );
+        false
+    })
+}
+
+/// A read-only fetch uses the token until it expires; an opted-in one renews
+/// it two minutes early.
+fn claude_token(credentials: &Value, now: u64, refresh_credentials: bool) -> ClaudeToken {
+    let expires_at = credentials
+        .pointer("/claudeAiOauth/expiresAt")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if refresh_credentials && expires_at <= now.saturating_add(120).saturating_mul(1_000) {
+        ClaudeToken::Renew
+    } else if expires_at <= now.saturating_mul(1_000) {
+        ClaudeToken::Expired
+    } else {
+        ClaudeToken::Use
+    }
+}
+
+async fn fetch_anthropic_usage(
+    now: u64,
+    refresh_credentials: bool,
+) -> Result<AnthropicUsage, ClaudeFailure> {
+    let token = claude_access_token(now, refresh_credentials).await?;
     let mut curl_config = format!(
         "header = \"Authorization: Bearer {token}\"\n\
          header = \"Content-Type: application/json\"\n\
@@ -643,25 +703,51 @@ async fn fetch_anthropic_usage(now: u64) -> Option<AnthropicUsage> {
             "header = \"x-organization-uuid: {organization}\"\n"
         ));
     }
-    let response = capture(
-        Path::new("/usr/bin/curl"),
-        &["-fsS", "--max-time", "5", "-K", "-", ANTHROPIC_USAGE_URL],
+    // No --fail: the trailing status line reports an HTTP error by number.
+    let mut command = Command::new("/usr/bin/curl");
+    command.args([
+        "-sS",
+        "--max-time",
+        "5",
+        "-w",
+        "\n%{http_code}",
+        "-K",
+        "-",
+        ANTHROPIC_USAGE_URL,
+    ]);
+    let output = process::capture(
+        &mut command,
         Some(curl_config.into_bytes()),
         COMMAND_TIMEOUT,
+        COMMAND_STDOUT_LIMIT,
+        COMMAND_STDERR_LIMIT,
     )
-    .await?;
-    parse_anthropic_usage(&response.stdout, now)
+    .await
+    .map_err(|_| ClaudeFailure::Request { http_status: 0 })?;
+    parse_usage_reply(&String::from_utf8_lossy(&output.stdout), now)
 }
 
-async fn claude_access_token(now: u64) -> Option<String> {
-    let mut credentials = load_claude_credentials().await?;
-    let expires_at = credentials
-        .value
-        .pointer("/claudeAiOauth/expiresAt")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    if expires_at <= now.saturating_add(120).saturating_mul(1_000) {
-        refresh_claude_credentials(&mut credentials, now).await?;
+/// Splits curl's `\n%{http_code}` trailer from the body. Only a 200 is parsed;
+/// any other status, or `000` when no response arrived, is reported by number.
+fn parse_usage_reply(stdout: &str, now: u64) -> Result<AnthropicUsage, ClaudeFailure> {
+    let (body, status) = stdout.rsplit_once('\n').unwrap_or(("", stdout));
+    match status.trim().parse::<u16>().unwrap_or(0) {
+        200 => parse_anthropic_usage(body, now).ok_or(ClaudeFailure::Unrecognized),
+        http_status => Err(ClaudeFailure::Request { http_status }),
+    }
+}
+
+/// An expired read-only token is left for Claude Code to renew.
+async fn claude_access_token(now: u64, refresh_credentials: bool) -> Result<String, ClaudeFailure> {
+    let mut credentials = load_claude_credentials()
+        .await
+        .ok_or(ClaudeFailure::NoCredentials)?;
+    match claude_token(&credentials.value, now, refresh_credentials) {
+        ClaudeToken::Use => {}
+        ClaudeToken::Expired => return Err(ClaudeFailure::TokenExpired),
+        ClaudeToken::Renew => refresh_claude_credentials(&mut credentials, now)
+            .await
+            .ok_or(ClaudeFailure::RenewalFailed)?,
     }
     credentials
         .value
@@ -669,6 +755,7 @@ async fn claude_access_token(now: u64) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|token| safe_header_value(token))
         .map(str::to_string)
+        .ok_or(ClaudeFailure::NoCredentials)
 }
 
 async fn load_claude_credentials() -> Option<ClaudeCredentials> {
@@ -684,16 +771,16 @@ async fn load_claude_credentials() -> Option<ClaudeCredentials> {
         Duration::from_secs(3),
     )
     .await;
-    if let Some(output) = output {
-        if let Ok(value) = serde_json::from_str(output.stdout.trim()) {
-            return Some(ClaudeCredentials {
-                value,
-                store: CredentialStore::Keychain {
-                    account: user,
-                    service,
-                },
-            });
-        }
+    if let Some(output) = output
+        && let Ok(value) = serde_json::from_str(output.stdout.trim())
+    {
+        return Some(ClaudeCredentials {
+            value,
+            store: CredentialStore::Keychain {
+                account: user,
+                service,
+            },
+        });
     }
 
     let home = user_home()?;
@@ -775,8 +862,7 @@ async fn refresh_claude_credentials(credentials: &mut ClaudeCredentials, now: u6
             json!(now.saturating_add(refresh_expires_in).saturating_mul(1_000)),
         );
     }
-    let _ = store_claude_credentials(credentials).await;
-    Some(())
+    store_claude_credentials(credentials).await.then_some(())
 }
 
 async fn store_claude_credentials(credentials: &ClaudeCredentials) -> bool {
@@ -784,24 +870,58 @@ async fn store_claude_credentials(credentials: &ClaudeCredentials) -> bool {
         return false;
     };
     match &credentials.store {
-        CredentialStore::Keychain { account, service } => capture(
-            Path::new("/usr/bin/security"),
-            &[
-                "add-generic-password",
-                "-U",
-                "-a",
-                account,
-                "-s",
-                service,
-                "-w",
-            ],
-            Some(body),
-            Duration::from_secs(3),
-        )
-        .await
-        .is_some(),
+        CredentialStore::Keychain { account, service } => {
+            let Some(command) = keychain_update_command(account, service, &body) else {
+                return false;
+            };
+            // Interactive input keeps the secret off argv. A trailing -w instead
+            // prompts on the controlling terminal and can store an empty password.
+            if capture(
+                Path::new("/usr/bin/security"),
+                &["-i"],
+                Some(command.into_bytes()),
+                Duration::from_secs(3),
+            )
+            .await
+            .is_none()
+            {
+                return false;
+            }
+            // security -i can exit successfully after a failed subcommand.
+            capture(
+                Path::new("/usr/bin/security"),
+                &["find-generic-password", "-a", account, "-s", service, "-w"],
+                None,
+                Duration::from_secs(3),
+            )
+            .await
+            .is_some_and(|stored| {
+                stored
+                    .stdout
+                    .strip_suffix('\n')
+                    .unwrap_or(&stored.stdout)
+                    .as_bytes()
+                    == body
+            })
+        }
         CredentialStore::File(path) => write_secret(path, &body).await,
     }
+}
+
+fn keychain_update_command(account: &str, service: &str, body: &[u8]) -> Option<String> {
+    if !safe_keychain_name(account)
+        || service.is_empty()
+        || body.is_empty()
+        || !service
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' '))
+    {
+        return None;
+    }
+    let hex: String = body.iter().map(|byte| format!("{byte:02x}")).collect();
+    Some(format!(
+        "add-generic-password -U -a {account} -s \"{service}\" -X {hex}\n"
+    ))
 }
 
 async fn write_secret(path: &Path, body: &[u8]) -> bool {
@@ -897,10 +1017,10 @@ async fn capture_codex_rate_limits(codex: &Path, input: &str) -> Option<String> 
     let mut lines = BufReader::new(stdout).lines();
     let response = tokio::time::timeout(COMMAND_TIMEOUT, async {
         while let Some(line) = lines.next_line().await.ok()? {
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if value.get("id").and_then(Value::as_u64) == Some(2) {
-                    return Some(line);
-                }
+            if let Ok(value) = serde_json::from_str::<Value>(&line)
+                && value.get("id").and_then(Value::as_u64) == Some(2)
+            {
+                return Some(line);
             }
         }
         None
@@ -990,12 +1110,17 @@ async fn executable_file(path: &Path) -> bool {
 
 struct AiProviders {
     usage: Arc<RwLock<UsageRuntime>>,
+    /// The quota tick runs only while a surface shows a quota segment: a
+    /// chat bang starts this plugin too, and must not leave it reading
+    /// credentials and calling the usage APIs every minute for nobody.
+    cadences: ObservedCadences,
 }
 
 impl Default for AiProviders {
     fn default() -> Self {
         Self {
             usage: Arc::new(RwLock::new(UsageRuntime::default())),
+            cadences: ObservedCadences::default(),
         }
     }
 }
@@ -1007,29 +1132,50 @@ impl FlashPlugin for AiProviders {
         let cached = load_usage_state(&ctx).await;
         *self.usage.write().await = UsageRuntime {
             state: cached,
-            published: None,
+            published: Published::new(),
+            claude_health: ClaudeHealth::default(),
         };
         publish_current_status(&ctx, &self.usage).await;
 
-        let refresh_ctx = ctx.clone();
+        let refresh_credentials = configured_credential_refresh(&ctx);
+        if self.cadences.observed() {
+            let refresh_ctx = ctx.clone();
+            let refresh_usage_state = Arc::clone(&self.usage);
+            tokio::spawn(async move {
+                refresh_usage(&refresh_ctx, &refresh_usage_state, refresh_credentials).await;
+            });
+        }
         let refresh_usage_state = Arc::clone(&self.usage);
-        tokio::spawn(async move {
-            refresh_usage(&refresh_ctx, &refresh_usage_state).await;
-        });
-        let publish_usage_state = Arc::clone(&self.usage);
-        drop(ctx.interval(STATUS_PUBLISH_INTERVAL, move |ctx| {
-            let usage = Arc::clone(&publish_usage_state);
-            async move {
-                publish_current_status(&ctx, &usage).await;
-            }
-        }));
-        let refresh_usage_state = Arc::clone(&self.usage);
-        drop(ctx.interval(USAGE_REFRESH_INTERVAL, move |ctx| {
-            let usage = Arc::clone(&refresh_usage_state);
-            async move {
-                refresh_usage(&ctx, &usage).await;
-            }
-        }));
+        // `Low`: a remote pull behind a one-minute cadence; a second of
+        // slack is invisible and lets it coalesce with everything else.
+        self.cadences.interval(
+            &ctx,
+            STATUS_PUBLISH_INTERVAL,
+            PollPriority::Low,
+            move |ctx| {
+                let usage = Arc::clone(&refresh_usage_state);
+                async move {
+                    refresh_usage(&ctx, &usage, refresh_credentials).await;
+                }
+            },
+        );
+    }
+
+    async fn on_event(&self, ctx: Context, event: Event) {
+        let Some(segments) = event
+            .segments
+            .as_deref()
+            .filter(|_| event.name == "core:status.observed")
+        else {
+            return;
+        };
+        if self.cadences.observe(segments) {
+            let usage = Arc::clone(&self.usage);
+            tokio::spawn(async move {
+                let refresh_credentials = configured_credential_refresh(&ctx);
+                refresh_usage(&ctx, &usage, refresh_credentials).await;
+            });
+        }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
@@ -1048,9 +1194,21 @@ impl FlashPlugin for AiProviders {
                 .unwrap_or("host.open failed");
             return PerformResponse::fail(error);
         }
-        if !query.is_empty() {
-            tokio::time::sleep(AUTOSEND_DELAY).await;
-            let _ = run_osascript(&ctx, AUTOSEND_SCRIPT, Duration::from_secs(10)).await;
+        let handler = opened.get("bundle_id").and_then(serde_json::Value::as_str);
+        if let Some(script) = handler
+            .filter(|_| !query.is_empty())
+            .and_then(autosend_script)
+        {
+            // The page needs a beat to load before Return reaches it: a host
+            // deadline, so the command answers at once instead of holding
+            // its perform open for the wait.
+            ctx.after(
+                AUTOSEND_DELAY,
+                PollPriority::Normal,
+                move |ctx| async move {
+                    let _ = run_osascript(&ctx, &script, Duration::from_secs(10)).await;
+                },
+            );
         }
         PerformResponse::ok()
     }
@@ -1124,104 +1282,329 @@ mod tests {
     }
 
     #[test]
-    fn autosend_preserves_the_load_delay_and_return_key() {
+    fn autosend_presses_return_only_in_the_app_the_page_opened_in() {
         assert_eq!(AUTOSEND_DELAY, Duration::from_millis(2_500));
         assert_eq!(
-            AUTOSEND_SCRIPT,
-            r#"tell application "System Events" to key code 36"#
+            autosend_script("com.google.Chrome").as_deref(),
+            Some(
+                r#"tell application "System Events" to if bundle identifier of (first application process whose frontmost is true) is "com.google.Chrome" then key code 36"#
+            )
         );
+        assert_eq!(autosend_script(""), None);
+        assert_eq!(autosend_script(r#"x" then key code 36 --"#), None);
     }
 
     #[test]
-    fn anthropic_usage_parses_claude_fable_and_the_shared_session() {
+    fn anthropic_usage_keeps_the_claude_weekly_window() {
         let usage = parse_anthropic_usage(
             r#"{
               "five_hour":{"utilization":20.4,"resets_at":"1970-01-01T03:00:00Z"},
-              "seven_day":{"utilization":47.2,"resets_at":"1970-01-06T00:00:00Z"},
-              "limits":[
-                {"kind":"weekly_scoped","scope":{"model":{"display_name":"Other"}},"percent":4},
-                {"kind":"weekly_scoped","scope":{"model":{"display_name":"Fable"}},"percent":90.1,"resets_at":"1970-01-05T00:00:00Z"}
-              ]
+              "seven_day":{"utilization":47.2,"resets_at":"1970-01-06T00:00:00Z"}
             }"#,
             0,
         )
         .expect("valid Anthropic usage");
-
-        assert_eq!(usage.updated_at, 0);
-        assert_eq!(usage.shared_session.unwrap().used_percent, 20.4);
-        assert_eq!(usage.claude_week.unwrap().resets_at, Some(5 * 86_400));
-        assert_eq!(usage.fable_week.unwrap().used_percent, 90.1);
+        assert_eq!(
+            usage,
+            AnthropicUsage {
+                updated_at: 0,
+                claude_week: Some(WindowUsage::new(47.2, Some(5 * 86_400), 10_080)),
+            }
+        );
+        assert!(
+            parse_anthropic_usage(r#"{"five_hour":{"utilization":20.4}}"#, 0).is_none(),
+            "a session alone leaves the weekly label without data"
+        );
     }
 
     #[test]
-    fn openai_usage_classifies_base_and_astra_windows_by_duration() {
+    fn openai_usage_keeps_the_codex_weekly_window() {
         let usage = parse_openai_rate_limits(
             concat!(
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"rateLimitsByLimitId\":{",
-                "\"codex\":{\"primary\":{\"usedPercent\":46.1,\"resetsAt\":432000,\"windowDurationMins\":10080}},",
-                "\"codex_bengalfox\":{",
+                "\"codex\":{",
                 "\"primary\":{\"usedPercent\":35.9,\"resetsAt\":18000,\"windowDurationMins\":300},",
-                "\"secondary\":{\"usedPercent\":12.5,\"resetsAt\":604800,\"windowDurationMins\":10080}",
+                "\"secondary\":{\"usedPercent\":46.1,\"resetsAt\":432000,\"windowDurationMins\":10080}",
+                "},",
+                "\"codex_bengalfox\":{",
+                "\"primary\":{\"usedPercent\":12.5,\"resetsAt\":604800,\"windowDurationMins\":10080}",
                 "}}}}\n"
             ),
             0,
         )
         .expect("valid OpenAI rate limits");
+        assert_eq!(
+            usage.codex_week,
+            Some(WindowUsage::new(46.1, Some(432_000), 10_080))
+        );
 
-        assert!(usage.openai.session.is_none());
-        assert_eq!(usage.openai.weekly.unwrap().used_percent, 46.1);
-        assert_eq!(usage.astra.session.unwrap().window_minutes, 300);
-        assert_eq!(usage.astra.weekly.unwrap().used_percent, 12.5);
+        let fallback = parse_openai_rate_limits(
+            concat!(
+                "{\"id\":2,\"result\":{\"rateLimits\":{",
+                "\"primary\":{\"usedPercent\":10.0,\"windowDurationMins\":10080}}}}\n"
+            ),
+            0,
+        )
+        .expect("single rate limit");
+        assert_eq!(fallback.codex_week.unwrap().used_percent, 10.0);
     }
 
     #[test]
-    fn status_segments_consolidate_every_provider_into_one_aligned_popup() {
+    fn a_cache_with_every_codex_window_keeps_its_weekly_quota() {
+        let cached = concat!(
+            "{\"updated_at\":100,",
+            "\"openai\":{",
+            "\"session\":{\"used_percent\":35.9,\"resets_at\":18000,\"window_minutes\":300},",
+            "\"weekly\":{\"used_percent\":46.1,\"resets_at\":432000,\"window_minutes\":10080}},",
+            "\"astra\":{\"session\":null,\"weekly\":null}}"
+        );
+        let usage: OpenAIUsage = serde_json::from_str(cached).expect("an earlier cache loads");
+        assert_eq!(
+            usage.clone().sanitize(),
+            Some(OpenAIUsage {
+                updated_at: 100,
+                codex_week: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
+            })
+        );
+        let written = serde_json::to_value(&usage).expect("serializes");
+        assert_eq!(written["openai"]["weekly"]["used_percent"], 46.1);
+        assert_eq!(
+            serde_json::from_value::<OpenAIUsage>(written).expect("round-trips"),
+            usage
+        );
+    }
+
+    #[test]
+    fn status_segments_show_each_providers_weekly_quota() {
         let state = UsageState {
             anthropic: Some(AnthropicUsage {
                 updated_at: 0,
-                shared_session: Some(WindowUsage::new(20.4, Some(10_800), 300)),
                 claude_week: Some(WindowUsage::new(47.2, Some(432_000), 10_080)),
-                fable_week: Some(WindowUsage::new(90.1, Some(345_600), 10_080)),
             }),
             openai: Some(OpenAIUsage {
                 updated_at: 0,
-                openai: UsageWindows {
-                    session: Some(WindowUsage::new(35.9, Some(18_000), 300)),
-                    weekly: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
-                },
-                astra: UsageWindows {
-                    session: Some(WindowUsage::new(12.0, Some(10_800), 300)),
-                    weekly: Some(WindowUsage::new(10.0, Some(604_800), 10_080)),
-                },
+                codex_week: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
             }),
         };
-
         let segments = render_status_segments(&state, 0);
         assert_eq!(
-            segments.details,
-            "#[fg=colour178]AI#[default]\n#[fg=colour245]Provider  Window         Left  Reset#[default]\n#[fg=colour245]Claude    5-hour       #[default]   80%  3h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 53%#[default]  5d\n#[fg=colour245]  Fable   7-day        #[default]  #[fg=colour196] 10%#[default]  4d\n#[fg=colour245]OpenAI    5-hour       #[default]   65%  5h\n#[fg=colour245]          7-day        #[default]  #[fg=#D08770] 54%#[default]  5d\n#[fg=colour245]  Astra   5-hour       #[default]   88%  3h\n#[fg=colour245]          7-day        #[default]   90%  7d"
+            segments.claude_label.as_str(),
+            "#[fg=#EBCB8B]Cld #[fg=colour245]53%↻5d#[default]"
         );
         assert_eq!(
-            segments.summary,
-            inline_status_popup("#[fg=colour178]AI#[default]", &segments.details)
+            segments.codex_label.as_str(),
+            "#[fg=#EBCB8B]Cdx #[fg=colour245]54%↻5d#[default]"
         );
-        assert!(!segments.summary.contains("#[link="));
-        assert!(!segments.details.ends_with('\n'));
+        for label in segments.all() {
+            assert!(!label.contains("#[popup="));
+            assert!(!label.contains("#[link="));
+        }
+    }
+
+    #[test]
+    fn quota_labels_cap_percent_without_padding() {
+        for (used, expected) in [(0.0, "99%"), (91.0, "9%"), (100.0, "0%")] {
+            let window = WindowUsage::new(used, None, 300);
+            assert_eq!(
+                quota_label("Cld", Some(&window), 0).as_str(),
+                format!("#[fg=#EBCB8B]Cld #[fg=colour245]{expected}#[default]")
+            );
+        }
+        let segments = render_status_segments(&UsageState::default(), 0);
+        assert_eq!(
+            segments.claude_label.as_str(),
+            "#[fg=#EBCB8B]Cld #[fg=colour245]—#[default]"
+        );
+        assert_eq!(
+            segments.codex_label.as_str(),
+            "#[fg=#EBCB8B]Cdx #[fg=colour245]—#[default]"
+        );
         assert!(!segments.all().iter().any(|value| value.contains("?%")));
     }
 
     #[test]
-    fn unavailable_segments_are_explicit_and_never_ambiguous() {
-        let segments = render_status_segments(&UsageState::default(), 0);
-        assert_eq!(
-            segments.summary,
-            inline_status_popup("#[fg=colour178]AI#[default]", &segments.details)
+    fn keychain_update_uses_hex_stdin_without_interpreter_injection() {
+        let body = br#"{"token":"quotes\\and\"newlines\n"}"#;
+        let command = keychain_update_command("ab", "Claude Code-credentials", body).unwrap();
+        assert!(
+            command.starts_with("add-generic-password -U -a ab -s \"Claude Code-credentials\" -X ")
         );
-        assert!(segments
-            .details
-            .contains("#[fg=colour245]Claude    5-hour       #[default]     —  —"));
-        assert!(!segments.all().iter().any(|value| value.contains("?%")));
+        assert_eq!(command.lines().count(), 1);
+        assert!(command.ends_with('\n'));
+        let hex = command.split(" -X ").nth(1).unwrap().trim();
+        let decoded: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(decoded, body);
+        assert!(keychain_update_command("ab\nquit", "Claude Code-credentials", body).is_none());
+        assert!(keychain_update_command("ab", "bad\"service", body).is_none());
+        assert!(keychain_update_command("ab", "Claude Code-credentials", &[]).is_none());
+    }
+
+    #[test]
+    fn claude_code_credentials_are_read_only_unless_refresh_is_enabled() {
+        assert_eq!(parse_credential_refresh(None), Ok(false));
+        assert_eq!(parse_credential_refresh(Some(json!(false))), Ok(false));
+        assert_eq!(parse_credential_refresh(Some(json!(true))), Ok(true));
+        assert!(parse_credential_refresh(Some(json!("true"))).is_err());
+
+        let harness = flash_plugin::testing::Harness::new("aiproviders");
+        assert!(!configured_credential_refresh(&harness.context()));
+        let harness = flash_plugin::testing::Harness::with_config(
+            "aiproviders",
+            json!({ "refresh_claude_code_credentials": 1 }),
+        );
+        assert!(!configured_credential_refresh(&harness.context()));
+        let harness = flash_plugin::testing::Harness::with_config(
+            "aiproviders",
+            json!({ "refresh_claude_code_credentials": true }),
+        );
+        assert!(configured_credential_refresh(&harness.context()));
+    }
+
+    #[test]
+    fn expired_claude_token_is_left_to_claude_code_by_default() {
+        let now = 1_000;
+        let expiring = |at: u64| json!({ "claudeAiOauth": { "expiresAt": at * 1_000 } });
+
+        assert_eq!(
+            claude_token(&expiring(now), now, false),
+            ClaudeToken::Expired
+        );
+        assert_eq!(claude_token(&json!({}), now, false), ClaudeToken::Expired);
+        assert_eq!(
+            claude_token(&expiring(now + 60), now, false),
+            ClaudeToken::Use
+        );
+        assert_eq!(
+            claude_token(&expiring(now + 60), now, true),
+            ClaudeToken::Renew
+        );
+        assert_eq!(claude_token(&expiring(now), now, true), ClaudeToken::Renew);
+        assert_eq!(
+            claude_token(&expiring(now + 600), now, true),
+            ClaudeToken::Use
+        );
+    }
+
+    /// Regression: Claude Code's eight-hour token expired overnight while
+    /// Claude Code sat idle. The label aged out to a dash for hours without a
+    /// single log line, and the store was reread only every five minutes
+    /// although an expired token makes no request.
+    #[test]
+    fn an_expired_claude_token_is_logged_once_and_rechecked_every_tick() {
+        let mut harness = flash_plugin::testing::Harness::new("aiproviders");
+        let ctx = harness.context();
+        let mut health = ClaudeHealth::default();
+        note_claude_outcome(&ctx, &mut health, Err(ClaudeFailure::TokenExpired));
+        note_claude_outcome(&ctx, &mut health, Err(ClaudeFailure::TokenExpired));
+        note_claude_outcome(&ctx, &mut health, Ok(()));
+        note_claude_outcome(&ctx, &mut health, Ok(()));
+        let logs: Vec<Value> = harness
+            .drain()
+            .into_iter()
+            .filter(|frame| frame["method"] == "log")
+            .map(|frame| frame["params"].clone())
+            .collect();
+        assert_eq!(logs.len(), 2, "{logs:?}");
+        assert_eq!(logs[0]["level"], "warn");
+        assert_eq!(logs[0]["fields"]["reason"], "token_expired");
+        assert_eq!(logs[1]["level"], "info");
+        assert_eq!(logs[1]["fields"]["reason"], "token_expired");
+        assert!(
+            logs[1]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("recovered"))
+        );
+
+        assert_eq!(ClaudeFailure::TokenExpired.retry_at(1_000), 1_000);
+        for failure in [
+            ClaudeFailure::NoCredentials,
+            ClaudeFailure::RenewalFailed,
+            ClaudeFailure::Request { http_status: 429 },
+            ClaudeFailure::Unrecognized,
+        ] {
+            assert_eq!(failure.retry_at(1_000), 1_000 + ANTHROPIC_RETRY_SECONDS);
+        }
+    }
+
+    #[test]
+    fn claude_failures_relog_only_when_their_class_changes() {
+        let mut health = ClaudeHealth::default();
+        assert_eq!(health.observe(Ok(())), None, "a first reading is not news");
+        let (level, _, fields) = health
+            .observe(Err(ClaudeFailure::Request { http_status: 429 }))
+            .expect("a new failure logs");
+        assert_eq!(level, "warn");
+        assert_eq!(fields.get("reason").map(String::as_str), Some("request"));
+        assert_eq!(fields.get("http_status").map(String::as_str), Some("429"));
+        assert_eq!(
+            health.observe(Err(ClaudeFailure::Request { http_status: 429 })),
+            None
+        );
+        assert!(
+            health
+                .observe(Err(ClaudeFailure::Request { http_status: 0 }))
+                .is_some()
+        );
+        assert!(health.observe(Err(ClaudeFailure::Unrecognized)).is_some());
+        let (level, _, fields) = health.observe(Ok(())).expect("recovery logs");
+        assert_eq!(level, "info");
+        assert_eq!(
+            fields.get("reason").map(String::as_str),
+            Some("unrecognized")
+        );
+        assert_eq!(health.observe(Ok(())), None);
+    }
+
+    #[test]
+    fn usage_reply_reports_the_http_status_without_the_body() {
+        let body = r#"{"seven_day":{"utilization":47.2,"resets_at":"1970-01-06T00:00:00Z"}}"#;
+        assert_eq!(
+            parse_usage_reply(&format!("{body}\n200"), 0).map(|usage| usage.claude_week),
+            Ok(Some(WindowUsage::new(47.2, Some(5 * 86_400), 10_080)))
+        );
+        assert_eq!(
+            parse_usage_reply(
+                "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}\n429",
+                0
+            ),
+            Err(ClaudeFailure::Request { http_status: 429 })
+        );
+        assert_eq!(
+            parse_usage_reply("\n000", 0),
+            Err(ClaudeFailure::Request { http_status: 0 })
+        );
+        assert_eq!(
+            parse_usage_reply("", 0),
+            Err(ClaudeFailure::Request { http_status: 0 })
+        );
+        assert_eq!(
+            parse_usage_reply("{\"five_hour\":{\"utilization\":2.0}}\n200", 0),
+            Err(ClaudeFailure::Unrecognized)
+        );
+    }
+
+    #[test]
+    fn stale_quota_labels_become_a_dash() {
+        let state = UsageState {
+            anthropic: Some(AnthropicUsage {
+                updated_at: 1_000,
+                claude_week: Some(WindowUsage::new(25.0, None, 10_080)),
+            }),
+            openai: Some(OpenAIUsage {
+                updated_at: 1_000,
+                codex_week: Some(WindowUsage::new(40.0, None, 10_080)),
+            }),
+        };
+        let current = render_status_segments(&state, 1_000);
+        assert!(current.claude_label.as_str().contains("75%"));
+        assert!(current.codex_label.as_str().contains("60%"));
+        let old = render_status_segments(&state, 1_000 + 2 * ANTHROPIC_USAGE_TTL);
+        assert!(old.claude_label.as_str().contains("]—#[default]"));
+        assert!(old.codex_label.as_str().contains("]—#[default]"));
     }
 
     #[test]
@@ -1230,27 +1613,29 @@ mod tests {
             state: UsageState {
                 openai: Some(OpenAIUsage {
                     updated_at: 0,
-                    openai: UsageWindows {
-                        session: None,
-                        weekly: Some(WindowUsage::new(25.0, Some(3_600), 10_080)),
-                    },
-                    astra: UsageWindows::default(),
+                    codex_week: Some(WindowUsage::new(25.0, Some(3_600), 10_080)),
                 }),
                 ..UsageState::default()
             },
-            published: None,
+            published: Published::new(),
+            claude_health: ClaudeHealth::default(),
+        };
+        let mut publish = |now| {
+            runtime
+                .published
+                .update(render_status_segments(&runtime.state, now))
+                .is_some()
         };
 
-        assert!(runtime.status_update(0).is_some());
-        assert!(runtime.status_update(0).is_none());
-        assert!(runtime.status_update(60).is_some());
-        assert!(runtime.status_update(60).is_none());
+        assert!(publish(0));
+        assert!(!publish(0));
+        assert!(publish(60));
+        assert!(!publish(60));
     }
 
     #[test]
-    fn publishing_and_provider_fetching_have_independent_cadences() {
+    fn one_minute_tick_keeps_provider_fetch_ttls_independent() {
         assert_eq!(STATUS_PUBLISH_INTERVAL, Duration::from_secs(60));
-        assert_eq!(USAGE_REFRESH_INTERVAL, Duration::from_secs(60));
         assert_eq!(ANTHROPIC_USAGE_TTL, 600);
         assert_eq!(OPENAI_USAGE_TTL, 120);
     }

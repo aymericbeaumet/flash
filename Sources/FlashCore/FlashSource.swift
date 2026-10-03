@@ -45,13 +45,13 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// left/right). Tmux runs `swap-window -t -1`/`+1`; browsers have no
   /// portable shortcut so they don't claim this capability.
   public static let tabReorder = FlashSourceCapabilities(rawValue: 1 << 9)
-  /// Source handles `T` (reopen the most recently closed tab). Browsers
-  /// claim this via their ⌘⇧T fallback; tmux returns `.unhandled` (no
-  /// equivalent gesture).
+  /// Source handles `X` (`tab_reopen`: reopen the most recently closed tab).
+  /// No bundled source claims it; browsers and editors declare their ⌘⇧T
+  /// through `action_bindings`, and tmux has no closed-window history.
   public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
-  /// Source handles `r` / `R` (`app_reload`). Browsers usually fall back to
-  /// their native refresh chords; terminal-backed sources can opt in when
-  /// they have a real refresh primitive.
+  /// Source handles `r` / `R` (`app_reload`). Browsers declare their native
+  /// refresh chords through `action_bindings`; terminal-backed sources opt
+  /// in when they have a real refresh primitive (tmux refreshes its client).
   public static let reload = FlashSourceCapabilities(rawValue: 1 << 11)
   /// Source handles `e` (`resource_archive`) for the currently focused
   /// resource. Web-app integrations use this for app-specific archive
@@ -64,10 +64,10 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// integrations use this for app-specific motions such as Gmail's
   /// newer/older conversation buttons.
   public static let resourceNavigation = FlashSourceCapabilities(rawValue: 1 << 14)
-  /// Source handles `cmd+[`/`cmd+]` (`pane_previous`/`pane_next`): cycle the
+  /// Source handles `[p`/`]p` (`pane_previous`/`pane_next`): cycle the
   /// active split *inside* the focused window. Tmux is the canonical case
-  /// (`select-pane -t :.-`/`:.+`); no browser has an analogue, so off-terminal
-  /// apps fall back to re-emitting the native ⌘[ / ⌘] chord.
+  /// (`select-pane -t :.-`/`:.+`); a terminal without a tmux client receives
+  /// its native ⌘[ / ⌘] split chord instead, and other apps ignore the pair.
   public static let paneNavigation = FlashSourceCapabilities(rawValue: 1 << 15)
   /// Source handles `pane_split_vertical` / `pane_split_horizontal`: create a
   /// new split inside the focused window. Tmux is the canonical case; the
@@ -77,6 +77,14 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// window. Tmux is the canonical case; browsers/native apps keep using
   /// `tab_close` / their own native close semantics.
   public static let paneClosing = FlashSourceCapabilities(rawValue: 1 << 17)
+  /// Source handles `H` / `L` (`history_back` / `history_forward`): the
+  /// focused app's own back/forward navigation. No bundled source claims it;
+  /// apps bind it through `action_bindings` (Cmd-[ / Cmd-] in `defaults`).
+  public static let historyNavigation = FlashSourceCapabilities(rawValue: 1 << 18)
+  /// Source handles the focused app's generic commands: undo, redo, find,
+  /// save, print, open, new and close window, and the clipboard. No bundled
+  /// source claims them; apps bind them through `action_bindings`.
+  public static let appCommands = FlashSourceCapabilities(rawValue: 1 << 19)
 
   /// Human-readable list of the flags this set carries, for trace logs.
   /// Order is stable so log lines diff cleanly between runs.
@@ -100,6 +108,8 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
     if contains(.paneNavigation) { names.append("paneNavigation") }
     if contains(.paneSplitting) { names.append("paneSplitting") }
     if contains(.paneClosing) { names.append("paneClosing") }
+    if contains(.historyNavigation) { names.append("historyNavigation") }
+    if contains(.appCommands) { names.append("appCommands") }
     return names.isEmpty ? "none" : names.joined(separator: "|")
   }
 }
@@ -107,11 +117,6 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
 extension SourceAction {
   /// Short tag used in source-action trace logs (`tab_next`, `scroll_top`, …).
   public var traceTag: String { wireName }
-}
-
-public enum SourceTabDirection: Sendable {
-  case next
-  case previous
 }
 
 public enum CandidateScope: Sendable {
@@ -350,6 +355,19 @@ public enum SourceAction: Sendable, Equatable {
   case resourcePrevious
   case scrollTop
   case scrollBottom
+  case historyBack
+  case historyForward
+  case undo
+  case redo
+  case find
+  case save
+  case print
+  case documentOpen
+  case windowNew
+  case windowClose
+  case clipboardCopy
+  case clipboardCut
+  case clipboardPaste
 
   /// Capability flag a source must advertise to be considered for this action.
   public var requiredCapability: FlashSourceCapabilities {
@@ -367,6 +385,19 @@ public enum SourceAction: Sendable, Equatable {
     case .archive: return .resourceArchiving
     case .resourceNext, .resourcePrevious: return .resourceNavigation
     case .scrollTop, .scrollBottom: return .scrollExtremes
+    case .historyBack, .historyForward: return .historyNavigation
+    case .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
+      .clipboardCopy, .clipboardCut, .clipboardPaste:
+      return .appCommands
+    }
+  }
+
+  /// The name users map and plugins bind (`action_bindings`): the wire name,
+  /// except that a forced reload is its own `app_reload_force`.
+  public var name: SourceActionName {
+    switch self {
+    case .reload(let force): return force ? .appReloadForce : .appReload
+    default: return SourceActionName(rawValue: wireName)!
     }
   }
 
@@ -375,7 +406,7 @@ public enum SourceAction: Sendable, Equatable {
     switch self {
     case .tabSelect: return "tab_select"
     case .tabNext: return "tab_next"
-    case .tabPrev: return "tab_prev"
+    case .tabPrev: return "tab_previous"
     case .tabFirst: return "tab_first"
     case .tabLast: return "tab_last"
     case .tabNew: return "tab_new"
@@ -394,8 +425,34 @@ public enum SourceAction: Sendable, Equatable {
     case .resourcePrevious: return "resource_previous"
     case .scrollTop: return "scroll_top"
     case .scrollBottom: return "scroll_bottom"
+    case .historyBack: return "history_back"
+    case .historyForward: return "history_forward"
+    case .undo: return "app_undo"
+    case .redo: return "app_redo"
+    case .find: return "app_find"
+    case .save: return "app_save"
+    case .print: return "app_print"
+    case .documentOpen: return "document_open"
+    case .windowNew: return "window_new"
+    case .windowClose: return "window_close"
+    case .clipboardCopy: return "clipboard_copy"
+    case .clipboardCut: return "clipboard_cut"
+    case .clipboardPaste: return "clipboard_paste"
     }
   }
+
+  /// Every action by wire name, for manifests that declare the actions a
+  /// plugin performs (`actions`); the parameters of a representative value
+  /// don't matter there.
+  public static let byWireName: [String: SourceAction] = Dictionary(
+    uniqueKeysWithValues: [
+      SourceAction.tabSelect(index: 1), .tabNext, .tabPrev, .tabFirst, .tabLast, .tabNew,
+      .tabClose, .tabMovePrev, .tabMoveNext, .tabReopen, .paneNext, .panePrev,
+      .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
+      .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom, .historyBack, .historyForward,
+      .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
+      .clipboardCopy, .clipboardCut, .clipboardPaste,
+    ].map { ($0.wireName, $0) })
 
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
   /// Only ``tabSelect`` currently carries one (the 1-based tab index).
@@ -406,6 +463,47 @@ public enum SourceAction: Sendable, Equatable {
     default: return [:]
     }
   }
+}
+
+/// An action Flash asks the focused app to perform, named as users map it.
+/// The name is also a key of a plugin manifest's `action_bindings` table:
+/// what the host does in an app when no source performs the action there.
+public enum SourceActionName: String, CaseIterable, Sendable {
+  case tabSelect = "tab_select"
+  case tabNext = "tab_next"
+  case tabPrevious = "tab_previous"
+  case tabFirst = "tab_first"
+  case tabLast = "tab_last"
+  case tabNew = "tab_new"
+  case tabClose = "tab_close"
+  case tabReopen = "tab_reopen"
+  case tabMoveNext = "tab_move_next"
+  case tabMovePrevious = "tab_move_previous"
+  case paneNext = "pane_next"
+  case panePrevious = "pane_previous"
+  case paneSplitVertical = "pane_split_vertical"
+  case paneSplitHorizontal = "pane_split_horizontal"
+  case paneClose = "pane_close"
+  case appReload = "app_reload"
+  case appReloadForce = "app_reload_force"
+  case resourceArchive = "resource_archive"
+  case resourceNext = "resource_next"
+  case resourcePrevious = "resource_previous"
+  case scrollTop = "scroll_top"
+  case scrollBottom = "scroll_bottom"
+  case historyBack = "history_back"
+  case historyForward = "history_forward"
+  case appUndo = "app_undo"
+  case appRedo = "app_redo"
+  case appFind = "app_find"
+  case appSave = "app_save"
+  case appPrint = "app_print"
+  case documentOpen = "document_open"
+  case windowNew = "window_new"
+  case windowClose = "window_close"
+  case clipboardCopy = "clipboard_copy"
+  case clipboardCut = "clipboard_cut"
+  case clipboardPaste = "clipboard_paste"
 }
 
 public struct SourceActionResult: Sendable {
@@ -426,17 +524,34 @@ public struct SourceActionResult: Sendable {
   public let targetPID: pid_t?
   public let disposition: Disposition
   public let navigationURL: URL?
+  /// Why a claimed action failed, as the source reported it (content-free).
+  public let failureReason: String?
+  /// The source that performed or failed the action, set by the registry.
+  public private(set) var source: String?
 
-  public init(targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil) {
+  public init(
+    targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil,
+    failureReason: String? = nil
+  ) {
     self.targetPID = targetPID
     self.disposition = disposition
     self.navigationURL = navigationURL
+    self.failureReason = failureReason
   }
 
   public var didPerform: Bool { disposition == .performed }
 
+  /// This result, attributed to the source that produced it.
+  public func attributed(to source: String) -> SourceActionResult {
+    var result = self
+    result.source = source
+    return result
+  }
+
   public static let unhandled = SourceActionResult(targetPID: nil, disposition: .unhandled)
-  public static let failed = SourceActionResult(targetPID: nil, disposition: .failed)
+  public static func failed(reason: String?) -> SourceActionResult {
+    SourceActionResult(targetPID: nil, disposition: .failed, failureReason: reason)
+  }
   public static func performed(pid: pid_t?, navigationURL: URL? = nil) -> SourceActionResult {
     SourceActionResult(targetPID: pid, disposition: .performed, navigationURL: navigationURL)
   }

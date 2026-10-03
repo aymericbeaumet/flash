@@ -20,18 +20,24 @@ struct HintProviderPlan {
 
 final class SourceRegistry {
   private let descriptors: [SourceDescriptor]
-  private let terminalBundleIDs: Set<String>
+  private let isTerminalEmulator: (String) -> Bool
   private let runningApplicationsProvider: () -> [NSRunningApplication]
   private let pluginSourcesProvider: () -> [FlashSource]
   private let lock = NSLock()
   private var activeSourcesByID: [String: FlashSource] = [:]
   private var runningApplications: [NSRunningApplication] = []
-  private var openConfig: Config.Open
+  /// Bundle ids of `runningApplications`, resolved once per refresh so
+  /// activation checks never touch `NSRunningApplication.bundleIdentifier`
+  /// (a LaunchServices round trip on a cold instance) on a read path.
+  private var runningBundleIDs: Set<String> = []
+  private var runningApplicationsRefreshQueued = false
+  /// The installed-app catalog's `ignored_apps` and `app_directories`.
+  private var flashlight: Config.Flashlight
 
   init(
     descriptors: [SourceDescriptor]? = nil,
-    openConfig: Config.Open = .init(),
-    terminalBundleIDs: Set<String> = TerminalBundles.identifiers,
+    flashlight: Config.Flashlight = .init(),
+    isTerminalEmulator: @escaping (String) -> Bool = TerminalEmulators.contains,
     runningApplications: [NSRunningApplication]? = nil,
     runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
     pluginSourcesProvider: (() -> [FlashSource])? = nil
@@ -47,15 +53,15 @@ final class SourceRegistry {
       self.runningApplicationsProvider = { NSWorkspace.shared.runningApplications }
     }
     self.pluginSourcesProvider = pluginSourcesProvider ?? { [] }
-    self.terminalBundleIDs = terminalBundleIDs
-    self.openConfig = openConfig
+    self.isTerminalEmulator = isTerminalEmulator
+    self.flashlight = flashlight
     self.descriptors =
       descriptors
       ?? [
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
           ApplicationSource(
-            ignoredApps: openConfig.ignoredApps,
-            appDirectories: openConfig.appDirectories)
+            ignoredApps: flashlight.ignoredApps,
+            appDirectories: flashlight.appDirectories)
         },
         SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
           MenuBarSource()
@@ -67,13 +73,13 @@ final class SourceRegistry {
     refreshRunningApplications(initialRunningApplications)
   }
 
-  func updateOpenConfig(_ openConfig: Config.Open) {
+  func updateFlashlightConfig(_ flashlight: Config.Flashlight) {
     lock.lock()
-    self.openConfig = openConfig
+    self.flashlight = flashlight
     let appSource = activeSourcesByID["core.apps"] as? ApplicationSource
     lock.unlock()
-    appSource?.updateIgnoredApps(openConfig.ignoredApps)
-    appSource?.updateAppDirectories(openConfig.appDirectories)
+    appSource?.updateIgnoredApps(flashlight.ignoredApps)
+    appSource?.updateAppDirectories(flashlight.appDirectories)
   }
 
   var sources: [FlashSource] {
@@ -92,17 +98,44 @@ final class SourceRegistry {
     return FlashSourceEnvironment(runningApplications: runningApplications)
   }
 
+  /// Refresh the running-app set on `runningApplicationsQueue`. Event-driven
+  /// (app launch / terminate / activation, config reload). Right after an
+  /// activation every `NSRunningApplication` property read is a LaunchServices
+  /// round trip, several milliseconds per enumeration, so it stays off main;
+  /// requests arriving while one is queued share it.
+  func scheduleRunningApplicationsRefresh() {
+    lock.lock()
+    let alreadyQueued = runningApplicationsRefreshQueued
+    runningApplicationsRefreshQueued = true
+    lock.unlock()
+    guard !alreadyQueued else { return }
+    Self.runningApplicationsQueue.async { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      self.runningApplicationsRefreshQueued = false
+      self.lock.unlock()
+      self.refreshRunningApplications()
+    }
+  }
+
+  private static let runningApplicationsQueue = DispatchQueue(
+    label: "flash.sources.running_apps", qos: .userInitiated)
+
+  /// Refresh the running-app set from the workspace synchronously. Read paths
+  /// use the cached set rather than re-enumerating the workspace per query.
   func refreshRunningApplications(_ applications: [NSRunningApplication]? = nil) {
     let applications = applications ?? runningApplicationsProvider()
+    let bundleIDs = Set(applications.compactMap(\.bundleIdentifier))
     lock.lock()
     runningApplications = applications
+    runningBundleIDs = bundleIDs
     let activeIDs = Set(
       descriptors
         .filter { descriptor in
           Self.activationPolicyMatches(
             descriptor.activationPolicy,
-            runningApplications: applications,
-            terminalBundleIDs: terminalBundleIDs)
+            runningBundleIDs: bundleIDs,
+            isTerminalEmulator: isTerminalEmulator)
         }
         .map(\.identifier))
 
@@ -113,8 +146,8 @@ final class SourceRegistry {
       if activeSourcesByID[descriptor.identifier] == nil {
         let source = descriptor.make()
         if let appSource = source as? ApplicationSource {
-          appSource.updateIgnoredApps(openConfig.ignoredApps)
-          appSource.updateAppDirectories(openConfig.appDirectories)
+          appSource.updateIgnoredApps(flashlight.ignoredApps)
+          appSource.updateAppDirectories(flashlight.appDirectories)
         }
         activeSourcesByID[descriptor.identifier] = source
       }
@@ -287,13 +320,13 @@ final class SourceRegistry {
   /// flashlight fan-out.
   private func activePluginSources() -> [FlashSource] {
     lock.lock()
-    let applications = runningApplications
+    let bundleIDs = runningBundleIDs
     lock.unlock()
     return pluginSourcesProvider().filter { source in
       Self.activationPolicyMatches(
         source.activationPolicy,
-        runningApplications: applications,
-        terminalBundleIDs: terminalBundleIDs)
+        runningBundleIDs: bundleIDs,
+        isTerminalEmulator: isTerminalEmulator)
     }
   }
 
@@ -448,21 +481,24 @@ final class SourceRegistry {
     return descriptors
   }
 
+  /// Name resolution consults LaunchServices, the app folders on disk and
+  /// every bundle's `Info.plist`, then prepares plugin catalogs, so it runs on
+  /// `resolutionQueue`; the completion lands on main.
   func resolveCandidate(
     matching target: String,
     sourceID: String? = nil,
     completion: @escaping (Candidate?) -> Void
   ) {
-    guard Thread.isMainThread else {
-      DispatchQueue.main.async { [weak self] in
-        self?.resolveCandidate(
-          matching: target,
-          sourceID: sourceID,
-          completion: completion)
-      }
-      return
+    Self.resolutionQueue.async {
+      let item = self.resolveCandidateOffMain(matching: target, sourceID: sourceID)
+      DispatchQueue.main.async { completion(item) }
     }
-    refreshRunningApplications()
+  }
+
+  private static let resolutionQueue = DispatchQueue(
+    label: "flash.sources.resolve_name", qos: .userInitiated)
+
+  private func resolveCandidateOffMain(matching target: String, sourceID: String?) -> Candidate? {
     let env = environment
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
@@ -485,8 +521,7 @@ final class SourceRegistry {
         !CandidateFinder.insertsText(item),
         item.effect == nil
       else { continue }
-      completion(CandidateFinder.prepare(item))
-      return
+      return CandidateFinder.prepare(item)
     }
 
     // Plugin fallback: warm catalogs are a synchronous host-store read now,
@@ -510,15 +545,13 @@ final class SourceRegistry {
           && (candidate.title.localizedCaseInsensitiveContains(target)
             || candidate.displayTitle.localizedCaseInsensitiveContains(target))
       }) {
-        completion(item)
-        return
+        return item
       }
     }
-    completion(nil)
+    return nil
   }
 
   func candidate(forProcessID pid: pid_t) -> Candidate? {
-    refreshRunningApplications()
     let env = environment
     for source in sources where source.identifier == "core.apps" {
       if let appSource = source as? ApplicationSource,
@@ -535,8 +568,9 @@ final class SourceRegistry {
       candidates
       .filter { $0.isLocation && $0.kind != CandidateFinder.sourceKind }
     let samePID = locationCandidates.filter { $0.pid == context.processID }
-    if let current = samePID.first(where: \.isCurrentLocation) {
-      return current
+    let selected = samePID.filter(\.isCurrentLocation)
+    if selected.count == 1 {
+      return selected[0]
     }
     // Zero or one same-process locations are already unambiguous. Do not ask
     // the Accessibility source for a document URL: its native-app fallback may
@@ -562,7 +596,6 @@ final class SourceRegistry {
     _ item: Candidate,
     completion: @escaping (CandidateResolution) -> Void
   ) {
-    refreshRunningApplications()
     let env = environment
     guard let source = source(identifier: item.sourceID) else {
       DispatchQueue.main.async { completion(.unresolved) }
@@ -603,7 +636,6 @@ final class SourceRegistry {
 
   func canRestoreNavigation(to url: URL) -> Bool {
     guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else { return false }
-    refreshRunningApplications()
     return sources.contains { source in
       source.capabilities.contains(.navigationRoutes)
         && source.navigationSchemes.contains(scheme)
@@ -618,7 +650,6 @@ final class SourceRegistry {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    refreshRunningApplications()
     let env = environment
     let sourceSnapshot = sources.filter { source in
       source.capabilities.contains(.navigationRoutes)
@@ -714,44 +745,31 @@ final class SourceRegistry {
     // trace level: materializing a reason string for every excluded plugin was
     // measurable on each repeated normal-mode mapping.
     let startedNs = DispatchTime.now().uptimeNanoseconds
-    refreshRunningApplications()
-    let refreshMs = Self.elapsedMs(since: startedNs)
+    // Sources complete on later main turns; each re-enters the interaction
+    // that asked, so their lines and the caller's completion carry its id.
+    let trace = Trace.current
     let env = environment
     let allSources = sources
-    var sourceSnapshot: [FlashSource] = []
-    for source in allSources {
-      let hasCap = source.capabilities.contains(capability)
-      let supports = source.supports(context)
-      if hasCap, supports {
-        sourceSnapshot.append(source)
-      }
-    }
-    sourceSnapshot.sort { lhs, rhs in
-      let lhsPriority = lhs.priority(in: context)
-      let rhsPriority = rhs.priority(in: context)
-      if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
-      return lhs.identifier < rhs.identifier
-    }
+    let sourceSnapshot = Self.actionChain(allSources, capability: capability, context: context)
     guard !sourceSnapshot.isEmpty else {
       FlashLog.trace(
         "[source_action] action=\(capability.traceDescription) considered=\(allSources.count) "
-          + "passing=0 refresh_ms=\(refreshMs) unhandled "
+          + "passing=0 unhandled "
           + "bundle=\(context.bundleIdentifier)")
-      DispatchQueue.main.async { completion(.unhandled) }
+      DispatchQueue.main.async { Trace.run(in: trace) { completion(.unhandled) } }
       return
     }
     FlashLog.trace(
       "[source_action] action=\(capability.traceDescription) "
         + "considered=\(allSources.count) passing=\(sourceSnapshot.count) "
-        + "chain=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))] "
-        + "refresh_ms=\(refreshMs)")
+        + "chain=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))]")
 
     func finish(_ result: SourceActionResult, handledBy: String) {
       FlashLog.trace(
-        "[source_action] cap=\(capability.rawValue) handled_by=\(handledBy) "
-          + "refresh_ms=\(refreshMs) total_ms=\(Self.elapsedMs(since: startedNs)) "
-          + "did_perform=\(result.didPerform)")
-      completion(result)
+        "[source_action] action=\(capability.traceDescription) handled_by=\(handledBy) "
+          + "total_ms=\(Self.elapsedMs(since: startedNs)) disposition=\(result.disposition)"
+          + (result.failureReason.map { " reason=\($0)" } ?? ""))
+      completion(result.attributed(to: handledBy))
     }
 
     func attempt(_ index: Int) {
@@ -762,21 +780,46 @@ final class SourceRegistry {
       let source = sourceSnapshot[index]
       let attemptNs = DispatchTime.now().uptimeNanoseconds
       action(source, env) { result in
-        FlashLog.trace(
-          "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
-            + "disposition=\(result.disposition)")
-        switch result.disposition {
-        case .performed, .failed:
-          // `.failed` also stops the chain: the source claimed the action
-          // for this context, so a lower-priority source must not re-run
-          // it (and the caller must not keystroke-fallback).
-          finish(result, handledBy: source.identifier)
-        case .unhandled:
-          attempt(index + 1)
+        Trace.run(in: trace) {
+          FlashLog.trace(
+            "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
+              + "disposition=\(result.disposition)")
+          switch result.disposition {
+          case .performed, .failed:
+            // `.failed` also stops the chain: the source claimed the action
+            // for this context, so a lower-priority source must not re-run
+            // it (and the caller must not keystroke-fallback).
+            finish(result, handledBy: source.identifier)
+          case .unhandled:
+            attempt(index + 1)
+          }
         }
       }
     }
     attempt(0)
+  }
+
+  /// The sources that get to try an action needing `capability` in
+  /// `context`, in dispatch order: highest contextual priority first, then
+  /// by identifier.
+  private static func actionChain(
+    _ sources: [FlashSource], capability: FlashSourceCapabilities, context: AppContext
+  ) -> [FlashSource] {
+    sources
+      .filter { $0.capabilities.contains(capability) && $0.supports(context) }
+      .sorted { lhs, rhs in
+        let lhsPriority = lhs.priority(in: context)
+        let rhsPriority = rhs.priority(in: context)
+        if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+        return lhs.identifier < rhs.identifier
+      }
+  }
+
+  /// The identifiers of the sources that would get first try at `action`
+  /// in `context`, in order; a read for diagnostics that performs nothing.
+  func claimants(of action: SourceAction, in context: AppContext) -> [String] {
+    Self.actionChain(sources, capability: action.requiredCapability, context: context)
+      .map(\.identifier)
   }
 
   private static func elapsedMs(since startNs: UInt64) -> Int {
@@ -785,22 +828,16 @@ final class SourceRegistry {
 
   private static func activationPolicyMatches(
     _ policy: FlashSourceActivationPolicy,
-    runningApplications: [NSRunningApplication],
-    terminalBundleIDs: Set<String>
+    runningBundleIDs: Set<String>,
+    isTerminalEmulator: (String) -> Bool
   ) -> Bool {
     switch policy {
     case .always:
       return true
     case .bundleIDs(let bundleIDs):
-      return runningApplications.contains { app in
-        guard let bundleID = app.bundleIdentifier else { return false }
-        return bundleIDs.contains(bundleID)
-      }
+      return !bundleIDs.isDisjoint(with: runningBundleIDs)
     case .terminalBundles:
-      return runningApplications.contains { app in
-        guard let bundleID = app.bundleIdentifier else { return false }
-        return terminalBundleIDs.contains(bundleID)
-      }
+      return runningBundleIDs.contains(where: isTerminalEmulator)
     }
   }
 }

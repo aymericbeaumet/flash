@@ -47,10 +47,12 @@ enum PluginRuntimeState: String {
 }
 
 /// How (and whether) a plugin's child process is scheduled. Derived from the
-/// manifest alone.
+/// manifest and, for a status-bound plugin, whether a status surface shows it.
 enum PluginActivation: String {
   /// Spawned at startup and kept running: the manifest declares `sources`,
-  /// `query`, `hints`, `status`, or `listen`.
+  /// `query`, `hints`, `status`, or `listen` — a status-bound plugin
+  /// (`PluginManifest.isStatusBound`) only while the enabled bar or a desktop
+  /// widget shows it.
   case resident
   /// Stays unspawned until its first `perform` (the perform deadline absorbs
   /// the startup budget), then remains running.
@@ -71,6 +73,19 @@ struct PluginEvent {
   /// Process id of the focused app for the event. Some events embed this
   /// in `payload.pid` already.
   var pid: pid_t?
+  /// The wire frame for this event, encoded once by `PluginManager.emit` and
+  /// shared by every listener instead of re-serializing the payload per plugin.
+  var encodedFrame: Data?
+
+  /// `core:ax.changed`: the one AX `notification` an observed app posted
+  /// (`protocol.json` `host_events.ax_notifications`), so a plugin skips the
+  /// ones that cannot change what it reads.
+  static func axChanged(pid: pid_t, notification: String, bundleID: String?) -> PluginEvent {
+    PluginEvent(
+      name: PluginProtocol.axChangedEvent,
+      payload: ["notification": notification, "pid": Int(pid)],
+      bundleID: bundleID)
+  }
 }
 
 struct PluginStatus {
@@ -83,16 +98,17 @@ struct PluginStatus {
   var state: String
   var activation: String
   var pid: Int?
-  var uptimeMs: Int?
+  /// When the running process started; readers derive its uptime.
+  var startedAtUnixMs: Int64?
   var sourceCount: Int
   var commandCount: Int
   var restartCount: Int
   var lastError: String?
   var lastLog: String?
-  /// Instantaneous CPU usage (% of one core) sampled from the plugin's
-  /// own subprocess; `nil` until the second sample lets us compute a
-  /// delta, or when the process isn't running.
-  var cpuPercent: Double?
+  /// User plus system CPU time the plugin subprocess has used, read when
+  /// the status is taken; nil when the process isn't running. A total
+  /// rather than a rate, so it needs no previous sample.
+  var cpuTimeMs: Int?
   /// Resident set size in bytes for the plugin subprocess.
   var memoryBytes: Int?
   /// Bundle identifiers the plugin's root selector is scoped to.
@@ -111,7 +127,7 @@ struct PluginStatus {
       "commands": commands.map {
         ["command": $0.command, "subcommand": $0.subcommand, "description": $0.description]
       },
-      "cpu_percent": cpuPercent ?? NSNull(),
+      "cpu_time_ms": cpuTimeMs ?? NSNull(),
       "description": description,
       "id": id,
       "last_error": lastError ?? NSNull(),
@@ -125,11 +141,33 @@ struct PluginStatus {
       "restart_count": restartCount,
       "root": root,
       "source_count": sourceCount,
+      "started_at_unix_ms": startedAtUnixMs ?? NSNull(),
       "state": state,
       "status_segments": statusSegments,
-      "uptime_ms": uptimeMs ?? NSNull(),
       "version": version,
     ]
+  }
+}
+
+/// One published status segment: plain markup, or a carousel whose lines the
+/// host rotates on its own clock (`FlashStatusBarCycleState`), rendering
+/// `prefix` once before the visible line and wrapping that line in
+/// `#[cyc]…#[nocyc]` so it takes the carousel transition.
+enum PluginStatusSegment: Equatable {
+  case text(String)
+  case carousel(prefix: String, lines: [String], cycleSeconds: TimeInterval)
+
+  static func carouselLine(prefix: String, line: String) -> String {
+    prefix + "#[cyc]" + line + "#[nocyc]"
+  }
+
+  /// The segment as the debug inspector shows it.
+  var debugText: String {
+    switch self {
+    case .text(let text): return text
+    case .carousel(let prefix, let lines, let seconds):
+      return "\(prefix)⟳\(Int(seconds))s " + lines.joined(separator: " | ")
+    }
   }
 }
 
@@ -140,7 +178,7 @@ struct PluginStatusBarInfo {
   var id: String
   var state: String
   var hasError: Bool
-  var statusSegments: [String: String]
+  var statusSegments: [String: PluginStatusSegment]
 }
 
 /// One reply to the unified `perform` method: the universal trichotomy.
@@ -160,10 +198,18 @@ struct PluginWireTarget {
   var role: String?
   var label: String?
   var url: String?
+  var contextID: String? = nil
   var pid: pid_t?
   var entersInsertMode: Bool
   var sourceID: String
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.
   var priority: FlashPriority
+
+  func capturedTarget(contextPID: pid_t) -> JumpTarget {
+    JumpTarget(
+      id: id, frame: frame, role: role, accessibilityLabel: label, url: url,
+      contextID: contextID, pid: pid ?? contextPID, entersInsertMode: entersInsertMode,
+      priority: priority, providerID: sourceID)
+  }
 }

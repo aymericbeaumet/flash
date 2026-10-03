@@ -1,0 +1,184 @@
+#include "CFlashTerminal.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <libproc.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/event.h>
+#include <sys/ioctl.h>
+#include <sys/proc_info.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <util.h>
+
+// Descriptors another thread may open between the enumeration and fork take
+// the lowest free numbers: a hole below the highest open descriptor, or just
+// above it. Closing this many past the highest covers them.
+enum { DESCRIPTOR_SLACK = 64 };
+
+// One past the highest descriptor the child must close. Enumerating the open
+// descriptors before fork keeps the child to plain close(2) calls while
+// avoiding a sweep of the whole descriptor table: a raised RLIMIT_NOFILE (a
+// login shell's unlimited `ulimit -n` allows kern.maxfilesperproc, 184,320 on
+// a current Mac) made that sweep cost ~165 ms per spawn.
+static int descriptor_bound(void) {
+  int limit = getdtablesize();
+  int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+  if (bytes <= 0)
+    return limit;
+  // Headroom for descriptors opened between the two calls.
+  bytes += 64 * (int)sizeof(struct proc_fdinfo);
+  struct proc_fdinfo *descriptors = malloc((size_t)bytes);
+  if (!descriptors)
+    return limit;
+  bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, descriptors, bytes);
+  int highest = -1;
+  for (int i = 0; i < bytes / (int)sizeof(struct proc_fdinfo); i++) {
+    if (descriptors[i].proc_fd > highest)
+      highest = descriptors[i].proc_fd;
+  }
+  free(descriptors);
+  if (bytes <= 0)
+    return limit;
+  int bound = highest + 1 + DESCRIPTOR_SLACK;
+  return bound < limit ? bound : limit;
+}
+
+int flash_spawn_file_actions_addchdir(posix_spawn_file_actions_t *actions,
+                                      const char *path) {
+  // The replacement spelling is absent from SDKs predating macOS 26.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  return posix_spawn_file_actions_addchdir_np(actions, path);
+#pragma clang diagnostic pop
+}
+
+int flash_pty_spawn(const char *executable, char *const argv[],
+                    char *const env[], const char *directory, uint16_t columns,
+                    uint16_t rows, pid_t *pid, int *failed_step) {
+  *failed_step = FLASH_PTY_STEP_SPAWN;
+  int errors[2];
+  if (pipe(errors) < 0)
+    return -1;
+  fcntl(errors[0], F_SETFD, FD_CLOEXEC);
+  fcntl(errors[1], F_SETFD, FD_CLOEXEC);
+  int descriptor_limit = descriptor_bound();
+  struct winsize size = {.ws_col = columns, .ws_row = rows};
+  int master;
+  pid_t child = forkpty(&master, NULL, NULL, &size);
+  if (child == 0) {
+    close(errors[0]);
+    for (int fd = 3; fd < descriptor_limit; fd++) {
+      if (fd != errors[1])
+        close(fd);
+    }
+    // Only async-signal-safe C calls execute between fork and exec.
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    for (int sig = 1; sig < NSIG; sig++)
+      sigaction(sig, &action, NULL);
+    sigset_t signals;
+    sigemptyset(&signals);
+    sigprocmask(SIG_SETMASK, &signals, NULL);
+    // The step that failed and its errno, in one write below PIPE_BUF.
+    int report[2] = {FLASH_PTY_STEP_DIRECTORY, 0};
+    if (!directory || chdir(directory) == 0) {
+      report[0] = FLASH_PTY_STEP_EXEC;
+      execve(executable, argv, env);
+    }
+    report[1] = errno;
+    write(errors[1], report, sizeof(report));
+    _exit(127);
+  }
+  close(errors[1]);
+  if (child < 0) {
+    int error = errno;
+    close(errors[0]);
+    errno = error;
+    return -1;
+  }
+  int report[2] = {FLASH_PTY_STEP_EXEC, 0};
+  ssize_t count;
+  do {
+    count = read(errors[0], report, sizeof(report));
+  } while (count < 0 && errno == EINTR);
+  close(errors[0]);
+  if (count > 0) {
+    close(master);
+    waitpid(child, NULL, 0);
+    *failed_step = report[0];
+    errno = report[1];
+    return -1;
+  }
+  fcntl(master, F_SETFD, FD_CLOEXEC);
+  fcntl(master, F_SETFL, fcntl(master, F_GETFL) | O_NONBLOCK);
+  *pid = child;
+  return master;
+}
+int flash_pty_resize(int fd, uint16_t columns, uint16_t rows) {
+  struct winsize size = {.ws_col = columns, .ws_row = rows};
+  return ioctl(fd, TIOCSWINSZ, &size);
+}
+void flash_pty_signal(int fd, pid_t pid, int signal, bool include_leader) {
+  if (pid <= 0)
+    return;
+  pid_t foreground = tcgetpgrp(fd);
+  if (foreground > 0 && foreground != pid)
+    kill(-foreground, signal);
+  kill(-pid, signal);
+  if (include_leader)
+    kill(pid, signal);
+}
+int flash_pty_wait(pid_t pid, int *status) {
+  int raw;
+  pid_t result = waitpid(pid, &raw, WNOHANG);
+  if (result > 0)
+    *status = WIFEXITED(raw) ? WEXITSTATUS(raw) : 128 + WTERMSIG(raw);
+  return (int)result;
+}
+
+int flash_pty_reap(pid_t pid, int *status) {
+  int raw;
+  pid_t result;
+  do {
+    result = waitpid(pid, &raw, 0);
+  } while (result < 0 && errno == EINTR);
+  if (result > 0)
+    *status = WIFEXITED(raw) ? WEXITSTATUS(raw) : 128 + WTERMSIG(raw);
+  return (int)result;
+}
+
+int flash_pty_resize_pixels(int fd, uint16_t columns, uint16_t rows,
+                            uint32_t cell_width, uint32_t cell_height) {
+  struct winsize size = {
+      .ws_col = columns,
+      .ws_row = rows,
+      .ws_xpixel =
+          (unsigned short)(columns * cell_width > 65535 ? 65535
+                                                        : columns * cell_width),
+      .ws_ypixel =
+          (unsigned short)(rows * cell_height > 65535 ? 65535
+                                                      : rows * cell_height)};
+  return ioctl(fd, TIOCSWINSZ, &size);
+}
+
+int flash_pty_await_exit(pid_t pid, int timeout_ms) {
+  int queue = kqueue();
+  if (queue < 0)
+    return -1;
+  struct kevent change, event;
+  EV_SET(&change, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+  struct timespec timeout = {.tv_sec = timeout_ms / 1000,
+                             .tv_nsec = (long)(timeout_ms % 1000) * 1000000L};
+  int count;
+  do {
+    count = kevent(queue, &change, 1, &event, 1, &timeout);
+  } while (count < 0 && errno == EINTR);
+  close(queue);
+  if (count < 0 || (count > 0 && (event.flags & EV_ERROR)))
+    return -1;
+  return count > 0 ? 1 : 0;
+}

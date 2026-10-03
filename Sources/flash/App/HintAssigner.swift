@@ -18,12 +18,18 @@ struct AssignedHint {
 }
 
 enum HintAssigner {
+  /// Label `targets` with the prefix-free set for their count, best labels
+  /// first. With `previous` hints (a `--multi` session discovering again after
+  /// a click), a target that matches a previous one keeps its label when that
+  /// label is still in the set, and the rest take the remaining labels in
+  /// order — the same deterministic result for the same two inputs.
   static func assign(
     targets: [JumpTarget],
     alphabet: [Character],
     leftHand: Set<Character> = [],
     keyScores: [Character: Int] = [:],
-    minLength: Int = 1
+    minLength: Int = 1,
+    preserving previous: [AssignedHint] = []
   ) -> [AssignedHint] {
     let labels = generateLabels(
       count: targets.count,
@@ -32,10 +38,67 @@ enum HintAssigner {
       keyScores: keyScores,
       minLength: minLength
     )
+    guard !previous.isEmpty else {
+      var out: [AssignedHint] = []
+      out.reserveCapacity(targets.count)
+      for (t, l) in zip(targets, labels) {
+        out.append(AssignedHint(target: t, label: l))
+      }
+      return out
+    }
+    return relabel(targets: targets, labels: labels, previous: previous)
+  }
+
+  /// What makes a target the same control across two walks: walk ids are
+  /// ordinals, so match on what it is and where it sits.
+  private struct Identity: Hashable {
+    let providerID: String
+    let pid: pid_t?
+    let role: String?
+    let label: String?
+    let url: String?
+    let contextID: String?
+    let frame: [Int]
+
+    init(_ target: JumpTarget) {
+      providerID = target.providerID
+      pid = target.pid
+      role = target.role
+      label = target.accessibilityLabel
+      url = target.url
+      contextID = target.contextID
+      let frame = target.frame
+      self.frame = [frame.minX, frame.minY, frame.width, frame.height].map {
+        $0.isFinite ? Int($0.rounded()) : 0
+      }
+    }
+  }
+
+  private static func relabel(
+    targets: [JumpTarget], labels: [String], previous: [AssignedHint]
+  ) -> [AssignedHint] {
+    let available = Set(labels)
+    var previousLabels: [Identity: [String]] = [:]
+    for hint in previous {
+      previousLabels[Identity(hint.target), default: []].append(hint.label)
+    }
+    var taken = Set<String>()
+    var kept = [String?](repeating: nil, count: targets.count)
+    for (index, target) in targets.enumerated() {
+      let identity = Identity(target)
+      guard var queue = previousLabels[identity], !queue.isEmpty else { continue }
+      let label = queue.removeFirst()
+      previousLabels[identity] = queue
+      if available.contains(label), taken.insert(label).inserted {
+        kept[index] = label
+      }
+    }
+    var free = labels.lazy.filter { !taken.contains($0) }.makeIterator()
     var out: [AssignedHint] = []
     out.reserveCapacity(targets.count)
-    for (t, l) in zip(targets, labels) {
-      out.append(AssignedHint(target: t, label: l))
+    for (target, label) in zip(targets, kept) {
+      guard let label = label ?? free.next() else { break }
+      out.append(AssignedHint(target: target, label: label))
     }
     return out
   }

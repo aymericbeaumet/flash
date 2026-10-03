@@ -2,36 +2,114 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Provides Flash's default plugin-layer behavior. Today this registers the canonical app keystroke verbs (app_save, app_print, document_open, window_new) with keystroke shortcuts so they bypass plugin RPC on the hot path.",
-  "verbs": [
-    {
-      "name": "app_save",
-      "description": "Synthesize the focused app's save shortcut (defaults to Cmd-S).",
-      "keystrokes": {
-        "": "cmd+s"
-      }
+  "description": "Flash's default app knowledge: the macOS conventions apps share for Flash's actions (Cmd-T opens a tab, Cmd-Z undoes, Cmd-S saves, Cmd-C copies…), the apps that bind them differently, such as editors' new tab and back/forward or Messages' conversation switching, or not at all; and the apps whose accessibility tree is walked only on demand.",
+  "action_bindings": {
+    "tab_select": {
+      "": "cmd+{index}"
     },
-    {
-      "name": "app_print",
-      "description": "Synthesize the focused app's print shortcut (defaults to Cmd-P).",
-      "keystrokes": {
-        "": "cmd+p"
-      }
+    "tab_next": {
+      "": "cmd+shift+]",
+      "com.apple.MobileSMS": "ctrl+tab"
     },
-    {
-      "name": "document_open",
-      "description": "Synthesize the focused app's open-document shortcut (defaults to Cmd-O).",
-      "keystrokes": {
-        "": "cmd+o"
-      }
+    "tab_previous": {
+      "": "cmd+shift+[",
+      "com.apple.MobileSMS": "ctrl+shift+tab"
     },
-    {
-      "name": "window_new",
-      "description": "Synthesize the focused app's new-window shortcut (defaults to Cmd-N).",
-      "keystrokes": {
-        "": "cmd+n"
-      }
+    "tab_first": {
+      "": "cmd+1"
+    },
+    "tab_new": {
+      "": "cmd+t",
+      "com.todesktop.230313mzl4w4u92": "cmd+n",
+      "com.microsoft.VSCodeInsiders": "cmd+n",
+      "com.vscodium": "cmd+n",
+      "com.exafunction.windsurf": "cmd+n",
+      "dev.zed.Zed": "cmd+n",
+      "dev.zed.Zed-Preview": "cmd+n",
+      "com.sublimetext.4": "cmd+n",
+      "com.apple.Notes": false,
+      "com.apple.TextEdit": false,
+      "com.apple.iWork.Pages": false,
+      "com.apple.mail": false
+    },
+    "tab_close": {
+      "": "cmd+w"
+    },
+    "history_back": {
+      "": "cmd+[",
+      "com.todesktop.230313mzl4w4u92": "ctrl+-",
+      "com.microsoft.VSCodeInsiders": "ctrl+-",
+      "com.vscodium": "ctrl+-",
+      "com.exafunction.windsurf": "ctrl+-",
+      "dev.zed.Zed": "ctrl+-",
+      "dev.zed.Zed-Preview": "ctrl+-",
+      "com.sublimetext.4": "ctrl+-",
+      "com.apple.dt.Xcode": "ctrl+cmd+left",
+      "com.apple.Notes": false,
+      "com.apple.TextEdit": false,
+      "com.apple.iWork.Pages": false,
+      "com.apple.mail": false
+    },
+    "history_forward": {
+      "": "cmd+]",
+      "com.todesktop.230313mzl4w4u92": "ctrl+shift+-",
+      "com.microsoft.VSCodeInsiders": "ctrl+shift+-",
+      "com.vscodium": "ctrl+shift+-",
+      "com.exafunction.windsurf": "ctrl+shift+-",
+      "dev.zed.Zed": "ctrl+shift+-",
+      "dev.zed.Zed-Preview": "ctrl+shift+-",
+      "com.sublimetext.4": "ctrl+shift+-",
+      "com.apple.dt.Xcode": "ctrl+cmd+right",
+      "com.apple.Notes": false,
+      "com.apple.TextEdit": false,
+      "com.apple.iWork.Pages": false,
+      "com.apple.mail": false
+    },
+    "app_undo": {
+      "": "cmd+z"
+    },
+    "app_redo": {
+      "": "cmd+shift+z"
+    },
+    "app_find": {
+      "": "cmd+f"
+    },
+    "app_save": {
+      "": "cmd+s"
+    },
+    "app_print": {
+      "": "cmd+p"
+    },
+    "document_open": {
+      "": "cmd+o"
+    },
+    "window_new": {
+      "": "cmd+n"
+    },
+    "window_close": {
+      "": "cmd+w"
+    },
+    "clipboard_copy": {
+      "": "cmd+c"
+    },
+    "clipboard_cut": {
+      "": "cmd+x"
+    },
+    "clipboard_paste": {
+      "": "cmd+v"
+    },
+    "tab_reopen": {
+      "com.todesktop.230313mzl4w4u92": "cmd+shift+t",
+      "com.microsoft.VSCodeInsiders": "cmd+shift+t",
+      "com.vscodium": "cmd+shift+t",
+      "com.exafunction.windsurf": "cmd+shift+t",
+      "dev.zed.Zed": "cmd+shift+t",
+      "dev.zed.Zed-Preview": "cmd+shift+t",
+      "com.sublimetext.4": "cmd+shift+t"
     }
+  },
+  "on_demand_hints": [
+    "com.apple.Notes"
   ],
   "help": {
     "topics": [
@@ -39,7 +117,7 @@
         "name": "defaults",
         "title": "Defaults",
         "summary": "Bundled plugin-layer defaults, including canonical app shortcut verbs.",
-        "body": "# Defaults\n\nThis bundled plugin owns Flash's default plugin-layer behavior. Today it registers the canonical app-shortcut verbs:\n\n- `flash app_save` - Cmd-S\n- `flash app_print` - Cmd-P\n- `flash document_open` - Cmd-O\n- `flash window_new` - Cmd-N\n\nEach verb uses the manifest's `keystrokes` table, so the host translates it directly into a core keystroke action without round-tripping through the plugin process. Users who want a raw host-only experience can disable this plugin with `[plugins] disabled = [\"defaults\"]`.\n"
+        "body": "# Defaults\n\nThis bundled plugin is Flash's default app knowledge. Flash itself knows no chord: every action it asks the focused app to perform (`tab_new`, `app_undo`, `app_save`, `clipboard_copy`, …) runs the binding a plugin declares for that app in `action_bindings`, unless a source such as tmux or the browsers plugin performs it first.\n\n`defaults` declares the macOS conventions for every app — Cmd-T opens a tab, Cmd-W closes it, Cmd-1…Cmd-9 select one, Cmd-[ / Cmd-] go back and forward, Cmd-Z / Cmd-Shift-Z undo and redo, Cmd-F finds, Cmd-S saves, Cmd-P prints, Cmd-O opens, Cmd-N opens a window, Cmd-C / Cmd-X / Cmd-V use the clipboard — and the apps that differ: editors open a tab with Cmd-N, reopen one with Cmd-Shift-T and go back with Control-Minus, Messages switches conversations with Control-Tab, and Notes, TextEdit, Pages and Mail have no tabs or history at all. It also names the apps whose accessibility tree is walked only on demand.\n\nAnother plugin overrides any of these for its apps (an app-specific entry, then a matching selector, then a higher `priority` wins). Disable it with `[plugins] disabled = [\"defaults\"]` and those actions do nothing.\n"
       }
     ]
   }

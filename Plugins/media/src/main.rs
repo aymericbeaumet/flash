@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, run_osascript, CommandOutput, CommandRequest, Context, PerformResponse,
+    CommandOutput, CommandRequest, Context, PerformResponse, run, run_command, run_osascript,
 };
+use serde_json::Value;
 
 // NSSystemDefined media key codes (IOKit IOHIDUsageTables.h, NX_KEYTYPE_*).
 // Posting these as system-defined events lets macOS route the command to
@@ -42,6 +43,13 @@ const PLAYERS: &[Player] = &[
 
 struct Media;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AudioDevice {
+    uid: String,
+    name: String,
+    is_default: bool,
+}
+
 flash_plugin::plugin!(Media);
 
 impl FlashPlugin for Media {
@@ -79,6 +87,13 @@ impl FlashPlugin for Media {
             }
             "get" => return get_current(&ctx).await,
             "status" => return status(&ctx).await,
+            "input" | "output" => {
+                let query = match audio_query(&command) {
+                    Ok(query) => query,
+                    Err(error) => return PerformResponse::fail(error),
+                };
+                return audio_device_command(&ctx, &command.subcommand, &query).await;
+            }
             "run" => {
                 let mut argv = vec!["/usr/bin/osascript".to_string()];
                 argv.extend_from_slice(&command.args);
@@ -120,11 +135,7 @@ async fn app_state(ctx: &Context, app: &str) -> Option<String> {
         return None;
     }
     let state = result.stdout.trim().to_lowercase();
-    if state.is_empty() {
-        None
-    } else {
-        Some(state)
-    }
+    if state.is_empty() { None } else { Some(state) }
 }
 
 async fn pick_player(ctx: &Context, prefer_playing: bool) -> Option<&'static Player> {
@@ -232,6 +243,167 @@ async fn status(ctx: &Context) -> PerformResponse {
     PerformResponse::ok().message(lines.join("\n"))
 }
 
+fn parse_audio_devices(response: &Value) -> Result<Vec<AudioDevice>, String> {
+    if response["ok"] != true {
+        return Err(response["error"]
+            .as_str()
+            .unwrap_or("audio device request failed")
+            .to_string());
+    }
+    let rows = response["devices"]
+        .as_array()
+        .ok_or("audio device response has no devices")?;
+    rows.iter()
+        .map(|row| {
+            Ok(AudioDevice {
+                uid: row["uid"]
+                    .as_str()
+                    .filter(|uid| !uid.is_empty())
+                    .ok_or("audio device has no UID")?
+                    .to_string(),
+                name: row["name"]
+                    .as_str()
+                    .ok_or("audio device has no name")?
+                    .to_string(),
+                is_default: row["default"]
+                    .as_bool()
+                    .ok_or("audio device has no default flag")?,
+            })
+        })
+        .collect::<Result<_, &str>>()
+        .map_err(str::to_string)
+}
+
+fn find_audio_device<'a>(
+    devices: &'a [AudioDevice],
+    query: &str,
+) -> Result<&'a AudioDevice, String> {
+    let matches = devices
+        .iter()
+        .filter(|device| device.uid == query || device.name == query)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [device] => Ok(device),
+        [] => Err(format!("audio device not found: {query}")),
+        _ => Err(format!("audio device name or UID is ambiguous: {query}")),
+    }
+}
+
+fn audio_query(command: &CommandRequest) -> Result<String, String> {
+    let verb = format!("media_{}", command.subcommand);
+    if command.raw.split_whitespace().next() == Some(verb.as_str()) {
+        return match command.args.as_slice() {
+            [] => Ok(String::new()),
+            [arg] => arg
+                .strip_prefix("device=")
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| format!("usage: {verb} --device=name-or-UID")),
+            _ => Err(format!("usage: {verb} --device=name-or-UID")),
+        };
+    }
+    Ok(command.query())
+}
+
+async fn audio_device_command(ctx: &Context, direction: &str, query: &str) -> PerformResponse {
+    let devices = match parse_audio_devices(&ctx.audio_devices(direction, None).await) {
+        Ok(devices) => devices,
+        Err(error) => return PerformResponse::fail(error),
+    };
+    if query.is_empty() {
+        let lines = devices
+            .iter()
+            .map(|device| {
+                format!(
+                    "{}{} [{}]",
+                    if device.is_default { "* " } else { "  " },
+                    device.name,
+                    device.uid
+                )
+            })
+            .collect::<Vec<_>>();
+        return PerformResponse::ok().message(if lines.is_empty() {
+            format!("no audio {direction} devices")
+        } else {
+            lines.join("\n")
+        });
+    }
+    let device = match find_audio_device(&devices, query) {
+        Ok(device) => device,
+        Err(error) => return PerformResponse::fail(error),
+    };
+    let response = ctx.audio_devices(direction, Some(&device.uid)).await;
+    if response["ok"] != true {
+        return PerformResponse::fail(
+            response["error"]
+                .as_str()
+                .unwrap_or("audio device selection failed"),
+        );
+    }
+    PerformResponse::ok().message(format!("{direction} device: {}", device.name))
+}
+
 fn main() {
     run(Media);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn audio_device_name_or_uid_must_match_uniquely() {
+        let devices = parse_audio_devices(&json!({
+            "ok": true,
+            "devices": [
+                {"uid": "usb-1", "name": "USB Audio", "default": true},
+                {"uid": "usb-2", "name": "USB Audio", "default": false},
+                {"uid": "built-in", "name": "Built-in Microphone", "default": false}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(find_audio_device(&devices, "usb-2").unwrap().uid, "usb-2");
+        assert_eq!(
+            find_audio_device(&devices, "Built-in Microphone")
+                .unwrap()
+                .uid,
+            "built-in"
+        );
+        assert!(
+            find_audio_device(&devices, "USB Audio")
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        assert!(
+            find_audio_device(&devices, "missing")
+                .unwrap_err()
+                .contains("not found")
+        );
+    }
+
+    #[test]
+    fn malformed_audio_device_reply_is_rejected() {
+        assert!(parse_audio_devices(&json!({"ok": true, "devices": [{"name": "A"}]})).is_err());
+        assert_eq!(
+            parse_audio_devices(&json!({"ok": false, "error": "CoreAudio failed"})).unwrap_err(),
+            "CoreAudio failed"
+        );
+    }
+
+    #[test]
+    fn command_bar_and_verb_queries_keep_device_names_intact() {
+        let mut command = CommandRequest {
+            subcommand: "output".into(),
+            args: vec!["USB".into(), "Audio".into()],
+            raw: "media output USB Audio".into(),
+            ..Default::default()
+        };
+        assert_eq!(audio_query(&command).unwrap(), "USB Audio");
+        command.raw = "media_output device=USB Audio".into();
+        command.args = vec!["device=USB Audio".into()];
+        assert_eq!(audio_query(&command).unwrap(), "USB Audio");
+        command.args = vec!["bogus=USB Audio".into()];
+        assert!(audio_query(&command).is_err());
+    }
 }

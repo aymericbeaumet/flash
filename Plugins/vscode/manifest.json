@@ -11,6 +11,20 @@
     "com.microsoft.VSCode"
   ],
   "priority": 20,
+  "action_bindings": {
+    "tab_new": {
+      "": "cmd+n"
+    },
+    "tab_reopen": {
+      "": "cmd+shift+t"
+    },
+    "history_back": {
+      "": "ctrl+-"
+    },
+    "history_forward": {
+      "": "ctrl+shift+-"
+    }
+  },
   "capabilities": [
     "accessibility"
   ],

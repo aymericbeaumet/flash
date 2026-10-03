@@ -1,7 +1,7 @@
 [package]
 name = "flash-plugin-caffeinate"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
 [[bin]]
@@ -10,12 +10,14 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
+nix = { version = "0.31", default-features = false, features = ["event"] }
 tokio = { version = "1", default-features = false, features = [
   "rt",
   "macros",
   "io-std",
   "io-util",
   "fs",
+  "net",
   "process",
   "time",
   "sync",

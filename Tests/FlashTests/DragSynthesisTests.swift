@@ -52,6 +52,52 @@ final class DragSynthesisTests: XCTestCase {
       MouseCommand.adjust(.doubleClick, modifiers: []).argTokens, ["--adjust", "--double"])
   }
 
+  /// A grid drag picks its grab point, restarts on the whole screen for the
+  /// drop point, and Backspace with nothing left to undo returns to the step
+  /// the grab point was chosen from.
+  func testGridDragAnchorRestartsAndBackspaceRestoresTheSourceStep() {
+    let root = CGRect(x: 0, y: 0, width: 1500, height: 1000)
+    let shape = MouseGrid.Shape.keyboard(Alphabet.gridKeys(layoutName: "qwerty"))
+    var source = MouseGrid.Navigation(root: root, screenIndex: 1)
+    source.drill(into: MouseGrid.cellFrames(of: root, shape: shape)[6])
+    var session = HintSession()
+    session.command = .drag(modifiers: [])
+    session.surface = .grid
+    session.grid = source
+
+    session.anchorGrid(at: CGPoint(x: 400, y: 600))
+    XCTAssertEqual(session.anchor?.point, CGPoint(x: 400, y: 600))
+    XCTAssertEqual(session.anchor?.grid, source)
+    XCTAssertEqual(session.grid, source.restarted, "the drop point starts from the whole screen")
+
+    // Destination-phase steps undo first…
+    session.grid?.drill(into: MouseGrid.cellFrames(of: root, shape: shape)[0])
+    XCTAssertTrue(session.gridBack())
+    XCTAssertNotNil(session.anchor)
+    XCTAssertEqual(session.grid, source.restarted)
+    // …then the anchor itself.
+    XCTAssertTrue(session.gridBack())
+    XCTAssertNil(session.anchor)
+    XCTAssertEqual(session.grid, source)
+    XCTAssertTrue(session.gridBack())
+    XCTAssertEqual(session.grid?.current.depth, 0)
+    XCTAssertFalse(session.gridBack(), "nothing left to undo")
+  }
+
+  func testGridSessionRoutesKeysToTheGridWhileTypingLabels() {
+    let shape = MouseGrid.Shape.keyboard(Alphabet.gridKeys(layoutName: "colemak"))
+    var session = HintSession()
+    session.surface = .grid
+    session.gridShape = shape
+    XCTAssertEqual(session.keyRoute, .grid(shape, cursorFollows: false))
+    session.gridCursorFollows = true
+    XCTAssertEqual(session.keyRoute, .grid(shape, cursorFollows: true))
+    session.phase = .labels(anchor: .init(point: .zero, hint: nil))
+    XCTAssertEqual(session.keyRoute, .grid(shape, cursorFollows: true))
+    session.surface = .targets
+    XCTAssertEqual(session.keyRoute, .labels)
+  }
+
   func testAdjustmentInterpreterKeymap() {
     func cmd(_ keyCode: UInt16, _ chars: String? = nil) -> HintAdjustmentCommand? {
       HintAdjustmentInterpreter.command(keyCode: keyCode, charactersIgnoringModifiers: chars)

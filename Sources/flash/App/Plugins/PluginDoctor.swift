@@ -1,6 +1,6 @@
 import Foundation
 
-/// `:plugins doctor` — the checkhealth surface: turns "a plugin doesn't
+/// The plugin half of `flash doctor` / `:doctor` — turns "a plugin doesn't
 /// work" into a self-service diagnosis instead of a support thread. Pure
 /// over the runtime statuses plus on-disk state; every check reports a
 /// line, problems are prefixed `!!` and counted. Runs off-main (profile

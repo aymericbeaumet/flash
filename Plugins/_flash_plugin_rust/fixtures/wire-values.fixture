@@ -1,0 +1,796 @@
+{
+  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, AX-change and status-observation event payloads, poll registration sets, and encoded byte accounting",
+  "protocol_version": [
+    {
+      "name": "current",
+      "value": 1,
+      "valid": true
+    },
+    {
+      "name": "boolean",
+      "value": true,
+      "valid": false
+    },
+    {
+      "name": "fraction",
+      "value": 1.5,
+      "valid": false
+    },
+    {
+      "name": "zero",
+      "value": 0,
+      "valid": false
+    },
+    {
+      "name": "negative",
+      "value": -1,
+      "valid": false
+    },
+    {
+      "name": "wide",
+      "value": 2147483648,
+      "valid": false
+    },
+    {
+      "name": "floating-integer",
+      "value": 1.0,
+      "valid": false
+    }
+  ],
+  "boolean": [
+    {
+      "name": "true",
+      "value": true,
+      "valid": true
+    },
+    {
+      "name": "false",
+      "value": false,
+      "valid": true
+    },
+    {
+      "name": "one",
+      "value": 1,
+      "valid": false
+    },
+    {
+      "name": "zero",
+      "value": 0,
+      "valid": false
+    }
+  ],
+  "pid": [
+    {
+      "name": "minimum",
+      "value": 1,
+      "valid": true
+    },
+    {
+      "name": "maximum",
+      "value": 2147483647,
+      "valid": true
+    },
+    {
+      "name": "zero",
+      "value": 0,
+      "valid": false
+    },
+    {
+      "name": "negative",
+      "value": -1,
+      "valid": false
+    },
+    {
+      "name": "overflow",
+      "value": 2147483648,
+      "valid": false
+    },
+    {
+      "name": "boolean",
+      "value": true,
+      "valid": false
+    },
+    {
+      "name": "fraction",
+      "value": 1.5,
+      "valid": false
+    },
+    {
+      "name": "floating-integer",
+      "value": 1.0,
+      "valid": false
+    }
+  ],
+  "perform": [
+    {
+      "name": "success",
+      "value": {
+        "ok": true
+      },
+      "valid": true
+    },
+    {
+      "name": "success-fields",
+      "value": {
+        "ok": true,
+        "target_pid": 1,
+        "navigation_url": "https://example.com",
+        "message": "done"
+      },
+      "valid": true
+    },
+    {
+      "name": "unhandled",
+      "value": {
+        "ok": false,
+        "unhandled": true
+      },
+      "valid": true
+    },
+    {
+      "name": "failure",
+      "value": {
+        "ok": false,
+        "error": "failed"
+      },
+      "valid": true
+    },
+    {
+      "name": "numeric-ok",
+      "value": {
+        "ok": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "success-error",
+      "value": {
+        "ok": true,
+        "error": "failed"
+      },
+      "valid": false
+    },
+    {
+      "name": "success-unhandled",
+      "value": {
+        "ok": true,
+        "unhandled": true
+      },
+      "valid": false
+    },
+    {
+      "name": "mixed-failure",
+      "value": {
+        "ok": false,
+        "unhandled": true,
+        "error": "failed"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty-error",
+      "value": {
+        "ok": false,
+        "error": ""
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-error",
+      "value": {
+        "ok": false
+      },
+      "valid": false
+    },
+    {
+      "name": "invalid-target-pid",
+      "value": {
+        "ok": true,
+        "target_pid": 2147483648
+      },
+      "valid": false
+    },
+    {
+      "name": "invalid-message",
+      "value": {
+        "ok": true,
+        "message": 42
+      },
+      "valid": false
+    },
+    {
+      "name": "invalid-url",
+      "value": {
+        "ok": true,
+        "navigation_url": false
+      },
+      "valid": false
+    },
+    {
+      "name": "failure-success-field",
+      "value": {
+        "ok": false,
+        "error": "failed",
+        "target_pid": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "nullable-success-fields",
+      "value": {
+        "ok": true,
+        "target_pid": null,
+        "navigation_url": null,
+        "message": null
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown-success-field",
+      "value": {
+        "ok": true,
+        "extra": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-unhandled-field",
+      "value": {
+        "ok": false,
+        "unhandled": true,
+        "extra": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-failure-field",
+      "value": {
+        "ok": false,
+        "error": "failed",
+        "extra": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "whitespace-error",
+      "value": {
+        "ok": false,
+        "error": " \t\n"
+      },
+      "valid": false
+    },
+    {
+      "name": "relative-navigation-url",
+      "value": {
+        "ok": true,
+        "navigation_url": "relative/path"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty-navigation-url",
+      "value": {
+        "ok": true,
+        "navigation_url": ""
+      },
+      "valid": false
+    }
+  ],
+  "hints": [
+    {
+      "name": "empty",
+      "value": {
+        "ok": true,
+        "targets": []
+      },
+      "valid": true
+    },
+    {
+      "name": "canonical",
+      "value": {
+        "ok": true,
+        "context_pid": 1,
+        "targets": [
+          {
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            },
+            "id": "target",
+            "context_id": "server/session/window/pane",
+            "label": "target"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "empty-target-context",
+      "value": {
+        "ok": true,
+        "targets": [{
+          "id": "target",
+          "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+          "context_id": ""
+        }]
+      },
+      "valid": false
+    },
+    {
+      "name": "numeric-target-context",
+      "value": {
+        "ok": true,
+        "targets": [{
+          "id": "target",
+          "frame": { "x": 1, "y": 2, "width": 3, "height": 4 },
+          "context_id": 1
+        }]
+      },
+      "valid": false
+    },
+    {
+      "name": "flat-legacy",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "x": 1,
+            "y": 2,
+            "width": 3,
+            "height": 4,
+            "id": "target"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "mixed-targets",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            },
+            "id": "target"
+          },
+          {
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": false,
+              "height": 4
+            },
+            "id": "target"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "invalid-context-pid",
+      "value": {
+        "ok": true,
+        "context_pid": true,
+        "targets": []
+      },
+      "valid": false
+    },
+    {
+      "name": "nullable-optionals",
+      "value": {
+        "ok": true,
+        "context_pid": null,
+        "targets": [
+          {
+            "id": "target",
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            },
+            "role": null,
+            "label": null,
+            "context_id": null,
+            "url": null,
+            "pid": null,
+            "priority": null,
+            "enters_insert_mode": null
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "missing-id",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            }
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "empty-id",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "",
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            }
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-result-field",
+      "value": {
+        "ok": true,
+        "targets": [],
+        "extra": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-target-field",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "target",
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            },
+            "extra": 1
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-frame-field",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "target",
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4,
+              "extra": 1
+            }
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "overflowing-frame-sum",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "target",
+            "frame": {
+              "x": 1e+308,
+              "y": 2,
+              "width": 1e+308,
+              "height": 4
+            }
+          }
+        ]
+      },
+      "valid": false
+    }
+  ],
+  "ax_changed": [
+    {
+      "name": "title",
+      "value": {"notification": "AXTitleChanged", "pid": 42, "bundle_id": "com.example"},
+      "valid": true
+    },
+    {
+      "name": "no-bundle",
+      "value": {"notification": "AXValueChanged", "pid": 42},
+      "valid": true
+    },
+    {
+      "name": "missing-notification",
+      "value": {"pid": 42},
+      "valid": false
+    },
+    {
+      "name": "empty-notification",
+      "value": {"notification": "", "pid": 42},
+      "valid": false
+    },
+    {
+      "name": "non-string-notification",
+      "value": {"notification": 1, "pid": 42},
+      "valid": false
+    },
+    {
+      "name": "missing-pid",
+      "value": {"notification": "AXTitleChanged"},
+      "valid": false
+    },
+    {
+      "name": "invalid-pid",
+      "value": {"notification": "AXTitleChanged", "pid": 0},
+      "valid": false
+    }
+  ],
+  "status_observed": [
+    {
+      "name": "one",
+      "value": {
+        "segments": ["top_cpu"]
+      },
+      "valid": true
+    },
+    {
+      "name": "several",
+      "value": {
+        "segments": ["focused_app_details", "top_cpu", "top_mem"]
+      },
+      "valid": true
+    },
+    {
+      "name": "authoritative-empty",
+      "value": {
+        "segments": []
+      },
+      "valid": true
+    },
+    {
+      "name": "missing",
+      "value": {},
+      "valid": false
+    },
+    {
+      "name": "null",
+      "value": {
+        "segments": null
+      },
+      "valid": false
+    },
+    {
+      "name": "scalar",
+      "value": {
+        "segments": "top_cpu"
+      },
+      "valid": false
+    },
+    {
+      "name": "non-string",
+      "value": {
+        "segments": [1]
+      },
+      "valid": false
+    },
+    {
+      "name": "empty-name",
+      "value": {
+        "segments": [""]
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate",
+      "value": {
+        "segments": ["top_cpu", "top_cpu"]
+      },
+      "valid": false
+    }
+  ],
+  "encoded_rows": [
+    {
+      "name": "escaped",
+      "value": [
+        {
+          "source": "s",
+          "title": "a\"b\\c\n"
+        }
+      ],
+      "encoded_bytes": 36
+    },
+    {
+      "name": "unicode",
+      "value": [
+        {
+          "source": "s",
+          "title": "é🚀"
+        }
+      ],
+      "encoded_bytes": 33
+    }
+  ],
+  "poll": [
+    {
+      "name": "empty-clears",
+      "value": {"registrations": {}},
+      "valid": true
+    },
+    {
+      "name": "cadence",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "high"}}},
+      "valid": true
+    },
+    {
+      "name": "deadline",
+      "value": {"registrations": {"d3": {"after": 0.3, "priority": "normal"}}},
+      "valid": true
+    },
+    {
+      "name": "due-now-deadline",
+      "value": {"registrations": {"d0": {"after": 0, "priority": "low"}}},
+      "valid": true
+    },
+    {
+      "name": "cadence-at-the-floor",
+      "value": {"registrations": {"i0": {"every": 0.05, "priority": "normal"}}},
+      "valid": true
+    },
+    {
+      "name": "both-at-the-ceiling",
+      "value": {"registrations": {"i0": {"every": 86400, "priority": "low"}, "d1": {"after": 86400, "priority": "low"}}},
+      "valid": true
+    },
+    {
+      "name": "names-use-the-event-alphabet",
+      "value": {"registrations": {"sample_1-a": {"every": 2, "priority": "normal"}}},
+      "valid": true
+    },
+    {
+      "name": "registration-bound",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "low"}, "i1": {"every": 1, "priority": "low"}, "i2": {"every": 1, "priority": "low"}, "i3": {"every": 1, "priority": "low"}, "i4": {"every": 1, "priority": "low"}, "i5": {"every": 1, "priority": "low"}, "i6": {"every": 1, "priority": "low"}, "i7": {"every": 1, "priority": "low"}, "i8": {"every": 1, "priority": "low"}, "i9": {"every": 1, "priority": "low"}, "i10": {"every": 1, "priority": "low"}, "i11": {"every": 1, "priority": "low"}, "i12": {"every": 1, "priority": "low"}, "i13": {"every": 1, "priority": "low"}, "i14": {"every": 1, "priority": "low"}, "i15": {"every": 1, "priority": "low"}, "i16": {"every": 1, "priority": "low"}, "i17": {"every": 1, "priority": "low"}, "i18": {"every": 1, "priority": "low"}, "i19": {"every": 1, "priority": "low"}, "i20": {"every": 1, "priority": "low"}, "i21": {"every": 1, "priority": "low"}, "i22": {"every": 1, "priority": "low"}, "i23": {"every": 1, "priority": "low"}, "i24": {"every": 1, "priority": "low"}, "i25": {"every": 1, "priority": "low"}, "i26": {"every": 1, "priority": "low"}, "i27": {"every": 1, "priority": "low"}, "i28": {"every": 1, "priority": "low"}, "i29": {"every": 1, "priority": "low"}, "i30": {"every": 1, "priority": "low"}, "i31": {"every": 1, "priority": "low"}, "i32": {"every": 1, "priority": "low"}, "i33": {"every": 1, "priority": "low"}, "i34": {"every": 1, "priority": "low"}, "i35": {"every": 1, "priority": "low"}, "i36": {"every": 1, "priority": "low"}, "i37": {"every": 1, "priority": "low"}, "i38": {"every": 1, "priority": "low"}, "i39": {"every": 1, "priority": "low"}, "i40": {"every": 1, "priority": "low"}, "i41": {"every": 1, "priority": "low"}, "i42": {"every": 1, "priority": "low"}, "i43": {"every": 1, "priority": "low"}, "i44": {"every": 1, "priority": "low"}, "i45": {"every": 1, "priority": "low"}, "i46": {"every": 1, "priority": "low"}, "i47": {"every": 1, "priority": "low"}, "i48": {"every": 1, "priority": "low"}, "i49": {"every": 1, "priority": "low"}, "i50": {"every": 1, "priority": "low"}, "i51": {"every": 1, "priority": "low"}, "i52": {"every": 1, "priority": "low"}, "i53": {"every": 1, "priority": "low"}, "i54": {"every": 1, "priority": "low"}, "i55": {"every": 1, "priority": "low"}, "i56": {"every": 1, "priority": "low"}, "i57": {"every": 1, "priority": "low"}, "i58": {"every": 1, "priority": "low"}, "i59": {"every": 1, "priority": "low"}, "i60": {"every": 1, "priority": "low"}, "i61": {"every": 1, "priority": "low"}, "i62": {"every": 1, "priority": "low"}, "i63": {"every": 1, "priority": "low"}}},
+      "valid": true
+    },
+    {
+      "name": "missing-registrations",
+      "value": {},
+      "valid": false
+    },
+    {
+      "name": "retired-intervals-map",
+      "value": {"intervals": {"i0": 1}},
+      "valid": false
+    },
+    {
+      "name": "unknown-top-level-key",
+      "value": {"registrations": {}, "extra": 1},
+      "valid": false
+    },
+    {
+      "name": "registrations-not-an-object",
+      "value": {"registrations": []},
+      "valid": false
+    },
+    {
+      "name": "bare-seconds",
+      "value": {"registrations": {"i0": 1}},
+      "valid": false
+    },
+    {
+      "name": "missing-priority",
+      "value": {"registrations": {"i0": {"every": 1}}},
+      "valid": false
+    },
+    {
+      "name": "system-priority-is-core-only",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "system"}}},
+      "valid": false
+    },
+    {
+      "name": "candidate-priority-is-not-a-poll-priority",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "urgent"}}},
+      "valid": false
+    },
+    {
+      "name": "priority-not-a-string",
+      "value": {"registrations": {"i0": {"every": 1, "priority": 1}}},
+      "valid": false
+    },
+    {
+      "name": "both-kinds",
+      "value": {"registrations": {"i0": {"every": 1, "after": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "neither-kind",
+      "value": {"registrations": {"i0": {"priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "unknown-entry-key",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "low", "jitter": 0.1}}},
+      "valid": false
+    },
+    {
+      "name": "cadence-below-the-floor",
+      "value": {"registrations": {"i0": {"every": 0.001, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "zero-cadence",
+      "value": {"registrations": {"i0": {"every": 0, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "negative-deadline",
+      "value": {"registrations": {"d0": {"after": -1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "cadence-above-the-ceiling",
+      "value": {"registrations": {"i0": {"every": 86401, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "deadline-above-the-ceiling",
+      "value": {"registrations": {"d0": {"after": 1e+300, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "string-seconds",
+      "value": {"registrations": {"i0": {"every": "1", "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "boolean-seconds",
+      "value": {"registrations": {"i0": {"every": true, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "uppercase-name",
+      "value": {"registrations": {"Sample": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "name-with-the-event-separator",
+      "value": {"registrations": {"core:poll": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "empty-name",
+      "value": {"registrations": {"": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "name-too-long",
+      "value": {"registrations": {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {"every": 1, "priority": "low"}}},
+      "valid": false
+    },
+    {
+      "name": "over-the-registration-bound",
+      "value": {"registrations": {"i0": {"every": 1, "priority": "low"}, "i1": {"every": 1, "priority": "low"}, "i2": {"every": 1, "priority": "low"}, "i3": {"every": 1, "priority": "low"}, "i4": {"every": 1, "priority": "low"}, "i5": {"every": 1, "priority": "low"}, "i6": {"every": 1, "priority": "low"}, "i7": {"every": 1, "priority": "low"}, "i8": {"every": 1, "priority": "low"}, "i9": {"every": 1, "priority": "low"}, "i10": {"every": 1, "priority": "low"}, "i11": {"every": 1, "priority": "low"}, "i12": {"every": 1, "priority": "low"}, "i13": {"every": 1, "priority": "low"}, "i14": {"every": 1, "priority": "low"}, "i15": {"every": 1, "priority": "low"}, "i16": {"every": 1, "priority": "low"}, "i17": {"every": 1, "priority": "low"}, "i18": {"every": 1, "priority": "low"}, "i19": {"every": 1, "priority": "low"}, "i20": {"every": 1, "priority": "low"}, "i21": {"every": 1, "priority": "low"}, "i22": {"every": 1, "priority": "low"}, "i23": {"every": 1, "priority": "low"}, "i24": {"every": 1, "priority": "low"}, "i25": {"every": 1, "priority": "low"}, "i26": {"every": 1, "priority": "low"}, "i27": {"every": 1, "priority": "low"}, "i28": {"every": 1, "priority": "low"}, "i29": {"every": 1, "priority": "low"}, "i30": {"every": 1, "priority": "low"}, "i31": {"every": 1, "priority": "low"}, "i32": {"every": 1, "priority": "low"}, "i33": {"every": 1, "priority": "low"}, "i34": {"every": 1, "priority": "low"}, "i35": {"every": 1, "priority": "low"}, "i36": {"every": 1, "priority": "low"}, "i37": {"every": 1, "priority": "low"}, "i38": {"every": 1, "priority": "low"}, "i39": {"every": 1, "priority": "low"}, "i40": {"every": 1, "priority": "low"}, "i41": {"every": 1, "priority": "low"}, "i42": {"every": 1, "priority": "low"}, "i43": {"every": 1, "priority": "low"}, "i44": {"every": 1, "priority": "low"}, "i45": {"every": 1, "priority": "low"}, "i46": {"every": 1, "priority": "low"}, "i47": {"every": 1, "priority": "low"}, "i48": {"every": 1, "priority": "low"}, "i49": {"every": 1, "priority": "low"}, "i50": {"every": 1, "priority": "low"}, "i51": {"every": 1, "priority": "low"}, "i52": {"every": 1, "priority": "low"}, "i53": {"every": 1, "priority": "low"}, "i54": {"every": 1, "priority": "low"}, "i55": {"every": 1, "priority": "low"}, "i56": {"every": 1, "priority": "low"}, "i57": {"every": 1, "priority": "low"}, "i58": {"every": 1, "priority": "low"}, "i59": {"every": 1, "priority": "low"}, "i60": {"every": 1, "priority": "low"}, "i61": {"every": 1, "priority": "low"}, "i62": {"every": 1, "priority": "low"}, "i63": {"every": 1, "priority": "low"}, "i64": {"every": 1, "priority": "low"}}},
+      "valid": false
+    }
+  ]
+}

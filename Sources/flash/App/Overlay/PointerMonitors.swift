@@ -20,6 +20,12 @@ extension OverlayPanel {
     ]
     pointerGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
       [weak self] event in
+      // A press in another app, the desktop or the menu bar ends a hover
+      // preview. Presses on Flash's own bar and popup are local events their
+      // views handle (a link click, pinning a popup).
+      if event.type != .scrollWheel {
+        self?.dismissEphemeralStatusBarPopup(reason: "pointer_click")
+      }
       self?.deliverPointerIntent(for: event)
     }
     pointerLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
@@ -64,7 +70,7 @@ extension OverlayPanel {
     // worst in scroll-heavy apps like Notes. Once the first scroll dismisses the
     // hints, `transientContentVisible` flips false and the rest of the gesture is
     // dropped here too.
-    if event.type == .scrollWheel, !transientContentVisible {
+    if event.type == .scrollWheel, !transientContentVisible, toast == nil {
       return
     }
     let intent: OverlayPointerIntent =
@@ -78,32 +84,26 @@ extension OverlayPanel {
     // Transient surfaces (hint chips, banner, modal-without-text) all
     // dismiss on pointer input. Normal-mode capture also dismisses,
     // matching the previous "pointerIntent" gate.
-    if transientContentVisible { return true }
-    return Self.pointerIntentMonitorShouldRun(
-      inputMode: inputMode,
-      modeBadgeVisible: modeBadgeVisible,
-      modeBadgeCapturesInput: modeBadgeCapturesInput)
+    if transientContentVisible || toast != nil { return true }
+    return Self.pointerIntentMonitorShouldRun(inputMode: inputMode)
   }
 
-  static func pointerIntentMonitorShouldRun(
-    inputMode: OverlayInputMode,
-    modeBadgeVisible: Bool,
-    modeBadgeCapturesInput: Bool
-  ) -> Bool {
-    // Command line + candidate finder both dismiss on any click outside
-    // their (mouse-event-ignoring) panel — the click reaches the
-    // underlying app via `ignoresMouseEvents = true`, and the global
-    // monitor lets us recognise it as an "interact with something else"
-    // signal worth tearing the prompt down for.
-    if inputMode == .commandLine || inputMode == .candidateFinder {
+  static func pointerIntentMonitorShouldRun(inputMode: OverlayInputMode) -> Bool {
+    switch inputMode {
+    case .commandLine:
+      // The command line dismisses on any click outside its (mouse-event-
+      // ignoring) panel: the click reaches the underlying app via
+      // `ignoresMouseEvents = true`, and the global monitor recognises it as
+      // an "interact with something else" signal worth closing the prompt for.
       return true
+    case .normal:
+      // Idle NORMAL runs the monitor so a click on the focused app (e.g. a
+      // website text field) is recognised and enters insert — whether or not
+      // the status bar is enabled, and while capture is briefly suppressed.
+      return true
+    case .passive, .hints:
+      return false
     }
-    // Idle NORMAL must run the monitor so a click on the focused app (e.g. a
-    // website text field) is recognised and enters insert. It is intentionally
-    // NOT gated on `modeBadgeCapturesInput` because capture can be temporarily
-    // suppressed while the mode surface still needs click-intent classification.
-    _ = modeBadgeCapturesInput
-    return inputMode == .normal && modeBadgeVisible
   }
 
   private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {

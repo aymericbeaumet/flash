@@ -7,35 +7,73 @@ plugins.
 
 ## Rust (the default path)
 
-1. **Command wrapper — `Plugins/slack` (~40 LOC).** The smallest useful
-   plugin: manifest `commands` + one `on_command` hook mapping subcommands
-   to a CLI via `run_command`. Command-only plugins are on-demand: the host
-   spawns them at first use, not at startup.
+1. **Command wrapper — `Plugins/spotify` (~85 LOC + unit tests).** The
+   smallest useful plugin: manifest `commands` + one `on_command` hook mapping
+   subcommands to a CLI via `run_command`, with the argv plan kept pure and
+   unit-tested. Command-only plugins are on-demand: the host spawns them at
+   first use, not at startup.
 2. **Verbs + host RPCs + persistence — `Plugins/marks` (~200 LOC).**
    Vim-style marks: manifest `verbs`, `host.normal_mode_target` and
    `host.activate` host RPCs (the `app_control` capability), JSON state
    persisted under `share_dir()`, and `listen` events keeping it fresh.
 3. **Push catalog via native APIs — `Plugins/processes` (~300 LOC).** A
    `sources` plugin building its complete row set and pushing it with
-   `publish` from `on_start`, refreshed by events + a poll, backed by the
-   SDK's libproc sampler — plus the golden-output test pattern. No readiness
+   `publish` from `on_start`, refreshed by events alone (app launch/quit,
+   flashlight open), backed by the host's process table — plus cadences
+   armed only while `core:status.observed` shows their segment. No readiness
    dance: initialize replies immediately and the catalog lands when ready.
-4. **Event-driven catalog + actions + mappings — `Plugins/safari`
-   (~440 LOC).** Browser tabs: polled osascript refreshes fanned out per
-   window that publish on change, manifest `actions` handled by `on_action`
-   with the performed / unhandled / error trichotomy, and a `mappings`
-   entry scoped by `only_bundle_ids`.
-5. **Query evaluator with background refresh — `Plugins/calculator`
-   (~630 LOC).** A synchronous, CPU-only `evaluate` over immutable state;
+4. **Event-driven catalog + actions + navigation — `Plugins/browsers`
+   (~2,500 LOC).** Browser tabs behind one per-bundle engine table: a shared
+   AppleScript skeleton with per-dialect phrases for Chromium-family browsers
+   and Safari, and for Firefox the host Accessibility broker
+   (`host.ax_snapshot` / `host.ax_perform`, the `accessibility` capability)
+   completed from a file the browser keeps on disk. Refreshes fan out per
+   browser and publish on change; manifest `actions` go through `on_action`
+   with the performed / unhandled / error trichotomy, what the plugin leaves
+   unhandled falls back to its `action_bindings`, and every row's
+   `navigation_url` route restores through `on_navigate`.
+5. **Query evaluator with background refresh — `Plugins/answers`
+   (~1270 LOC).** Three synchronous, CPU-only answer engines (calculator,
+   colors, timezones) behind one `evaluate` via an ordered engine table;
    the ECB snapshot loads from disk in `on_start` and refreshes in the
    background through `host.fetch` (the `network_fetch` capability),
-   atomically replacing state; `query.prefixes = ["="]` routing.
+   atomically replacing state; `query.prefixes = ["="]` routing sends `=`
+   input to the calculator engine alone.
 
-`Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
-the language-agnostic JSON specs in `Plugins/_flash_plugin_specs/`
-(lifecycle + wire-noise robustness always; publish/evaluate/perform gated on
-the manifest) with a PASS/FAIL exit code. CI runs the full matrix against
-every bundled plugin and the Rust SDK probe.
+Protocol conformance lives in the SDK workspace:
+`Plugins/_flash_plugin_rust/protocol.json` pins the wire constants, the
+`wire`/`runtime` test suites pin the framing and lifecycle behaviour, and the
+`probe` workspace member exercises them end to end over real stdio.
+`./Scripts/test-plugins.sh --lane all` is the one-command gate.
+
+## Overriding what an app does for an action
+
+No code needed: a manifest-only plugin (no `exec`) declares
+`action_bindings`, and its entries win over the `defaults` conventions for the
+apps it names. Say an app opens a tab with Cmd-Shift-N, closes one with a
+two-chord sequence, has a menu item for a new window and no print at all:
+
+```json
+{
+  "id": "example-app",
+  "name": "Example App",
+  "version": "0.1.0",
+  "description": "What Example App does for Flash's actions",
+  "action_bindings": {
+    "tab_new": { "com.example.app": "cmd+shift+n" },
+    "tab_close": { "com.example.app": ["cmd+k", "cmd+w"] },
+    "window_new": { "com.example.app": { "menu": ["File", "New Window"] } },
+    "app_print": { "com.example.app": false }
+  }
+}
+```
+
+Drop it in a directory, list it as `file:<path>` in `[plugins] third_party`,
+and `t` in that app now sends Cmd-Shift-N. A bundle-id entry beats any
+plugin-wide `""` entry; to cover a family of apps with `""` instead, scope the
+plugin with `only_bundle_ids` (or `only_terminals`) and, between plugins that
+both match, raise `priority`. The inspector's Mappings page ("How actions
+resolve in <App>") shows which binding won and which plugin declared it.
 
 ## The loop
 

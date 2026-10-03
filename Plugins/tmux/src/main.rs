@@ -2,32 +2,49 @@
 //!
 //! ## Warm-catalog contract
 //!
-//! Tmux exposes no native host event stream for window-list changes (no
-//! `core:focus.changed`-style ping fires when the user creates/renames/
-//! closes a window inside an attached client). The plugin therefore keeps
-//! the catalog warm with a background refresh loop:
+//! The local catalog follows tmux's own change notifications; nothing
+//! re-reads it on a timer:
 //!
-//!   1. `on_start` builds and publishes the initial rows, then a 1 s
-//!      background poll keeps them current. The candidate hash gates
-//!      publishes, so unchanged refreshes are true no-ops.
-//!   2. Host events (`core:focus.changed`, `core:apps.terminated`) trigger an
-//!      additional refresh at explicit interaction boundaries.
-//!   3. The flashlight reads the host-owned store fed by `publish`; no tmux
+//!   1. `on_start` builds and publishes the initial rows. The candidate hash
+//!      gates publishes, so unchanged refreshes are true no-ops.
+//!   2. Every local server a user's client is attached to is followed by one
+//!      output-free control-mode client ([`control_mode`]). Its notifications
+//!      — sessions and windows created, closed, renamed (automatic-rename
+//!      included) or selected, panes selected, added or closed, clients
+//!      attaching, switching or detaching — trigger one inventory read per
+//!      burst ([`Settle`]).
+//!   3. A kqueue watch on the `tmux-$UID` socket directory
+//!      ([`socket_watch`]) rediscovers servers when one starts or exits.
+//!   4. What tmux never notifies is read at interaction boundaries: a
+//!      window's working directory (and its command once automatic-rename is
+//!      off) on focus changes, app termination and flashlight opens
+//!      (`core:session.opened`). A client attaching to a server nobody is
+//!      attached to reaches no observer; while such a server runs, a settled
+//!      burst of window retitles and creations (`core:ax.changed`: attaching
+//!      retitles the terminal, a new window may start attached) refreshes
+//!      too. Other AX notifications, keystrokes among them, are ignored.
+//!   5. The flashlight reads the host-owned store fed by `publish`; no tmux
 //!      I/O ever rides the hot path.
-//!   4. Each refresh also retains its `list-clients` + process tree
+//!   6. Each refresh also retains its `list-clients` + process tree
 //!      sample. The expensive host-wide process tree is reused while the tmux
 //!      client pid set is unchanged. Hint discovery and repeatable source
 //!      actions consult that warm cache first; the actions validate only the
 //!      cached client's live session, so `[t` / `]t` avoid a host-wide `ps`
 //!      and all-socket rediscovery before changing windows.
-//!   5. Each successful local refresh also derives the attached-client
-//!      session/window/pane statusbar segments (`#{plugin:tmux.session}` /
+//!   7. Each successful local refresh also derives the attached-client
+//!      session/window/pane statusbar segments (`#{flash.plugin.tmux.session}` /
 //!      `.window` / `.pane`) from the same inventory and emits the `status`
 //!      notification only when the values change.
 //!
+//! A socket whose probe fails transiently is retried once at its backoff
+//! deadline. Remote hosts, which no local notification reaches, keep their
+//! own five-second refresh.
+//!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) and
 //! per-host SSH inventory refreshes run concurrently so one slow socket or
-//! remote host cannot make every independent backend wait behind it.
+//! remote host cannot make every independent backend wait behind it. Remote
+//! hosts are opt-in through `[plugin.tmux] ssh_hosts`; without one the plugin
+//! opens no SSH connection.
 //!
 //! ## Hint discovery
 //!
@@ -53,22 +70,25 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame,
-    HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, Priority,
-    TERMINAL_LINK_ROLE,
+    ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame, HintsRequest,
+    HintsResponse, JumpTarget, Markup, NavigateRequest, PerformResponse, PollHandle, PollPriority,
+    Priority, Settle, TERMINAL_LINK_ROLE, ax_notifications, run,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use flash_plugin::process as bounded_process;
+
+mod control_mode;
+mod socket_watch;
+mod status_hints;
 
 const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
 const SOURCE_WINDOWS: &str = "tmux.windows";
 const NAV_SCHEME: &str = "tmux";
 const PANE_TARGET_ROLE: &str = "tmux-pane";
-const TMUX_TARGET_ENTERS_INSERT_MODE: bool = false;
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 const ENV_PATH: &str = "/usr/bin/env";
@@ -78,11 +98,12 @@ const PS_PATH: &str = "/bin/ps";
 const SSH_PATH: &str = "/usr/bin/ssh";
 const TMUX_FIELD_SEP: &str = "|||";
 
-const LINKS_PER_PANE_LIMIT: usize = 40;
 const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
 const REMOTE_POLL_INTERVAL_SECS: u64 = 5;
 const REMOTE_RETRY_DELAYS_SECS: [u64; 3] = [15, 30, 60];
+/// Socket-directory rescan age, checked by refreshes only while the kqueue
+/// watch is unavailable or the last scan was incomplete.
 const SOCKET_DISCOVERY_INTERVAL_SECS: u64 = 30;
 const SOCKET_DISCOVERY_FANOUT_LIMIT: usize = 16;
 const SOCKET_RETRY_DELAYS_SECS: [u64; 3] = [5, 15, 60];
@@ -132,8 +153,7 @@ fn is_dotted_code_identifier(text: &str) -> bool {
         && chars.any(|character| character.is_ascii_uppercase())
 }
 
-/// A real clickable URL (vs. a path / dotted-host / error-code match). Used to
-/// prioritise URLs when a pane has more links than the per-pane hint budget.
+/// A real clickable URL, as opposed to a path, dotted host or error code.
 fn is_url(text: &str) -> bool {
     text.starts_with("http://") || text.starts_with("https://")
 }
@@ -176,11 +196,11 @@ async fn find_tmux() -> Option<String> {
     for prefix in TMUX_PREFIXES {
         let path = format!("{prefix}/bin/tmux");
         if is_file(&path).await {
-            return Some(path);
+            return resolve_tmux_executable(path).await;
         }
     }
     if let Some(path) = which("tmux").await {
-        return Some(path);
+        return resolve_tmux_executable(path).await;
     }
     // Version managers install outside the standard prefixes, and a GUI app's
     // PATH doesn't include their shims, so the scan above misses tmux entirely
@@ -192,6 +212,27 @@ async fn find_tmux() -> Option<String> {
         return Some(path);
     }
     find_tmux_via_login_shell().await
+}
+
+async fn resolve_tmux_executable(path: String) -> Option<String> {
+    let executable = tokio::fs::canonicalize(&path).await.ok()?;
+    if executable.file_name().is_none_or(|name| name != "mise") {
+        return Some(path);
+    }
+    // A GUI login PATH may contain mise shims. Starting mise for every tmux
+    // query consumes the entire hint deadline; resolve once before caching.
+    let output = run_cmd(
+        executable.to_str()?,
+        &["which", "tmux"],
+        Duration::from_secs(5),
+    )
+    .await?;
+    let resolved = output.trim();
+    if !std::path::Path::new(resolved).is_absolute() || !is_file(resolved).await {
+        return None;
+    }
+    let resolved_executable = tokio::fs::canonicalize(resolved).await.ok()?;
+    (resolved_executable != executable).then(|| resolved.to_string())
 }
 
 async fn is_file(path: &str) -> bool {
@@ -220,7 +261,7 @@ async fn find_tmux_via_mise() -> Option<String> {
     };
     let out = run_cmd(&mise, &["which", "tmux"], Duration::from_secs(5)).await?;
     let path = out.lines().map(str::trim).find(|l| l.starts_with('/'))?;
-    is_file(path).await.then(|| path.to_string())
+    resolve_tmux_executable(path.to_string()).await
 }
 
 /// Last resort: the user's login+interactive shell sources their full profile
@@ -231,17 +272,17 @@ async fn find_tmux_via_login_shell() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let out = run_cmd(&shell, &["-lic", "command -v tmux"], Duration::from_secs(6)).await?;
     let path = out.lines().map(str::trim).find(|l| l.starts_with('/'))?;
-    is_file(path).await.then(|| path.to_string())
+    resolve_tmux_executable(path.to_string()).await
 }
 
 async fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(program);
-        if let Ok(meta) = tokio::fs::metadata(&candidate).await {
-            if meta.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
+        if let Ok(meta) = tokio::fs::metadata(&candidate).await
+            && meta.is_file()
+        {
+            return Some(candidate.to_string_lossy().into_owned());
         }
     }
     None
@@ -530,6 +571,49 @@ fn remote_host_name(host: &str) -> &str {
     host.rsplit('@').next().unwrap_or(host)
 }
 
+const SSH_HOSTS_ERROR: &str =
+    "ssh_hosts must be an array of host names without user@ or whitespace";
+
+/// `[plugin.tmux] ssh_hosts`: the remote hosts whose tmux sessions the plugin
+/// may inventory. Inventory opens the plugin's own noninteractive SSH
+/// connections, which can ask an SSH agent or hardware key for approval and
+/// land in the remote auth log, so remote discovery is opt-in per host: with
+/// no entry the plugin never inspects SSH/Mosh processes and never runs `ssh`.
+/// Entries name the destination as written on the ssh/mosh command line,
+/// without its `user@` prefix, case-insensitively.
+fn parse_ssh_hosts(value: Option<Value>) -> Result<BTreeSet<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(BTreeSet::new());
+    };
+    value
+        .as_array()
+        .ok_or(SSH_HOSTS_ERROR)?
+        .iter()
+        .map(|host| {
+            host.as_str()
+                .filter(|host| {
+                    !host.is_empty() && !host.contains('@') && !host.contains(char::is_whitespace)
+                })
+                .map(str::to_ascii_lowercase)
+                .ok_or(SSH_HOSTS_ERROR)
+        })
+        .collect()
+}
+
+fn configured_ssh_hosts(ctx: &Context) -> BTreeSet<String> {
+    parse_ssh_hosts(ctx.config_json("ssh_hosts")).unwrap_or_else(|error| {
+        ctx.log(
+            "warn",
+            &format!("[tmux] invalid configuration: {error}; remote discovery stays off"),
+        );
+        BTreeSet::new()
+    })
+}
+
+fn ssh_host_allowed(ssh_hosts: &BTreeSet<String>, host: &str) -> bool {
+    ssh_hosts.contains(&remote_host_name(host).to_ascii_lowercase())
+}
+
 fn remote_host_label(host: &str) -> String {
     remote_host_name(host)
         .trim_matches(['[', ']'])
@@ -600,7 +684,14 @@ async fn process_command(pid: i64) -> Option<String> {
     .filter(|command| !command.is_empty())
 }
 
-async fn discover_remote_tmux_configs(ctx: &Context) -> BTreeMap<String, RemoteTmuxConfig> {
+async fn discover_remote_tmux_configs(
+    ctx: &Context,
+    ssh_hosts: &BTreeSet<String>,
+) -> BTreeMap<String, RemoteTmuxConfig> {
+    // Opt-in: without configured hosts, no process scan and no SSH side channel.
+    if ssh_hosts.is_empty() {
+        return BTreeMap::new();
+    }
     let control_path = remote_control_path().await;
     let records = process_records().await;
     let parent_map = records
@@ -629,7 +720,9 @@ async fn discover_remote_tmux_configs(ctx: &Context) -> BTreeMap<String, RemoteT
         let Some(command) = process_command(record.pid).await else {
             continue;
         };
-        let Some(transport) = parse_remote_transport(&command, process_name) else {
+        let Some(transport) = parse_remote_transport(&command, process_name)
+            .filter(|transport| ssh_host_allowed(ssh_hosts, &transport.host))
+        else {
             continue;
         };
         let nodes = if let Some(nodes) = windows_by_pid.get(&terminal_pid) {
@@ -846,6 +939,16 @@ struct TmuxSocketRegistryState {
     default_identity: Option<SocketIdentity>,
     discovered_at: Option<Instant>,
     discovery_complete: bool,
+    /// The socket directory is watched ([`socket_watch`]): a change
+    /// invalidates the discovery, so a complete one never goes stale.
+    watched: bool,
+    /// The last candidate inventory reached a server no user client is
+    /// attached to, or could not tell: a client attaching there reaches no
+    /// control-mode observer.
+    detached_server: bool,
+    /// Consecutive transient failures of the default-socket invocation and
+    /// when to retry it.
+    default_retry: Option<(usize, Instant)>,
 }
 
 #[derive(Default)]
@@ -897,8 +1000,7 @@ fn dedupe_discovered_sockets(
 }
 
 async fn discover_tmux_sockets() -> SocketDiscovery {
-    // SAFETY: geteuid has no preconditions and does not retain pointers.
-    let uid = unsafe { libc::geteuid() };
+    let uid = nix::unistd::geteuid().as_raw();
     let mut sockets = Vec::new();
     let mut complete = true;
     for root in tmux_socket_roots(uid) {
@@ -969,9 +1071,15 @@ async fn resolve_default_tmux_socket_identity(tmux_path: &str) -> Option<SocketI
 impl TmuxSocketRegistryState {
     fn needs_discovery(&self, now: Instant) -> bool {
         self.discovered_at.is_none_or(|discovered_at| {
-            now.saturating_duration_since(discovered_at)
-                >= Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS)
+            (!self.watched || !self.discovery_complete)
+                && now.saturating_duration_since(discovered_at)
+                    >= Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS)
         })
+    }
+
+    /// The watched directory changed: the next refresh rediscovers.
+    fn invalidate(&mut self) {
+        self.discovered_at = None;
     }
 
     fn refresh_discovery(
@@ -1090,15 +1198,48 @@ impl TmuxSocketRegistryState {
                     TrackedSocketState::Transient { failures, .. } => failures.saturating_add(1),
                     _ => 1,
                 };
-                let delay = SOCKET_RETRY_DELAYS_SECS
-                    [(failures - 1).min(SOCKET_RETRY_DELAYS_SECS.len() - 1)];
                 TrackedSocketState::Transient {
                     failures,
-                    retry_at: now + Duration::from_secs(delay),
+                    retry_at: now + socket_retry_delay(failures),
                 }
             }
         };
     }
+
+    fn record_default(&mut self, outcome: SocketProbeOutcome, now: Instant) {
+        self.default_retry = (outcome == SocketProbeOutcome::Transient).then(|| {
+            let failures = self
+                .default_retry
+                .map_or(1, |(failures, _)| failures.saturating_add(1));
+            (failures, now + socket_retry_delay(failures))
+        });
+    }
+
+    /// When the earliest transiently failing socket is due another probe.
+    fn next_retry_at(&self) -> Option<Instant> {
+        self.sockets
+            .values()
+            .filter_map(|tracked| match tracked.state {
+                TrackedSocketState::Transient { retry_at, .. } => Some(retry_at),
+                _ => None,
+            })
+            .chain(self.default_retry.map(|(_, retry_at)| retry_at))
+            .min()
+    }
+
+    /// Whether a client may attach where no control-mode observer or socket
+    /// watch would notice.
+    fn attach_may_go_unnoticed(&self) -> bool {
+        self.detached_server || !self.watched
+    }
+}
+
+fn socket_retry_delay(failures: usize) -> Duration {
+    Duration::from_secs(
+        SOCKET_RETRY_DELAYS_SECS[failures
+            .saturating_sub(1)
+            .min(SOCKET_RETRY_DELAYS_SECS.len() - 1)],
+    )
 }
 
 impl TmuxSocketRegistry {
@@ -1135,8 +1276,34 @@ impl TmuxSocketRegistry {
         self.state.lock().await.has_unseen_sockets()
     }
 
+    async fn set_watched(&self, watched: bool) {
+        let mut state = self.state.lock().await;
+        state.watched = watched;
+        state.invalidate();
+    }
+
+    async fn invalidate(&self) {
+        self.state.lock().await.invalidate();
+    }
+
     async fn record(&self, identity: SocketIdentity, outcome: SocketProbeOutcome, now: Instant) {
         self.state.lock().await.record(identity, outcome, now);
+    }
+
+    async fn record_default(&self, outcome: SocketProbeOutcome, now: Instant) {
+        self.state.lock().await.record_default(outcome, now);
+    }
+
+    async fn set_detached_server(&self, detached: bool) {
+        self.state.lock().await.detached_server = detached;
+    }
+
+    async fn next_retry_at(&self) -> Option<Instant> {
+        self.state.lock().await.next_retry_at()
+    }
+
+    async fn attach_may_go_unnoticed(&self) -> bool {
+        self.state.lock().await.attach_may_go_unnoticed()
     }
 }
 
@@ -1155,7 +1322,7 @@ async fn run_tmux_local(
     if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
         return Ok(result);
     }
-    // User-triggered work bypasses the poller's fan-out and retry delay: a
+    // User-triggered work bypasses the inventory's fan-out and retry delay: a
     // named server that just recovered must be reachable immediately. The
     // registry still suppresses sockets already confirmed absent.
     for socket in socket_registry.action_targets(tmux_path).await {
@@ -1297,30 +1464,40 @@ async fn run_tmux_aggregate_inventory(
     let mut results = Vec::with_capacity(handles.len());
     let mut join_failed = false;
     for (identity, handle) in handles {
-        match handle.await {
-            Ok(result) => {
-                if let Some(identity) = identity {
-                    socket_registry
-                        .record(identity, socket_probe_outcome(&result), Instant::now())
-                        .await;
-                }
-                results.push(result);
-            }
+        let (outcome, result) = match handle.await {
+            Ok(result) => (socket_probe_outcome(&result), Some(result)),
             Err(_) => {
                 join_failed = true;
-                if let Some(identity) = identity {
-                    socket_registry
-                        .record(identity, SocketProbeOutcome::Transient, Instant::now())
-                        .await;
-                }
+                (SocketProbeOutcome::Transient, None)
+            }
+        };
+        match identity {
+            Some(identity) => {
+                socket_registry
+                    .record(identity, outcome, Instant::now())
+                    .await
+            }
+            None => {
+                socket_registry
+                    .record_default(outcome, Instant::now())
+                    .await
             }
         }
+        results.extend(result);
     }
     let scope = if args.contains(&"list-windows") {
         TmuxInventoryScope::AttachedServers
     } else {
         TmuxInventoryScope::AnyServer
     };
+    if scope == TmuxInventoryScope::AttachedServers {
+        let detached = results
+            .iter()
+            .any(|result| result.ok && !candidate_inventory_has_attached_client(&result.stdout));
+        socket_registry
+            .set_detached_server(detached || join_failed || socket_plan.deferred)
+            .await;
+    }
     classify_tmux_aggregate(
         &results,
         join_failed || socket_plan.deferred,
@@ -1359,9 +1536,15 @@ fn classify_tmux_aggregate(
     TmuxAggregate::Absent
 }
 
+/// Whether a server's inventory lists a user client. Flash's control-mode
+/// observers are attached too, but show no one anything.
 fn candidate_inventory_has_attached_client(output: &str) -> bool {
     let prefix = format!("{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}");
-    output.lines().any(|line| line.starts_with(&prefix))
+    output.lines().any(|line| {
+        line.strip_prefix(&prefix)
+            .and_then(parse_tmux_client)
+            .is_some()
+    })
 }
 
 fn is_transient_tmux_failure(result: &CliResult) -> bool {
@@ -1435,10 +1618,10 @@ async fn parent_pid_map() -> HashMap<i64, i64> {
     };
     for line in out.lines() {
         let mut parts = line.split_whitespace();
-        if let (Some(pid), Some(ppid)) = (parts.next(), parts.next()) {
-            if let (Ok(pid), Ok(ppid)) = (pid.parse::<i64>(), ppid.parse::<i64>()) {
-                map.insert(pid, ppid);
-            }
+        if let (Some(pid), Some(ppid)) = (parts.next(), parts.next())
+            && let (Ok(pid), Ok(ppid)) = (pid.parse::<i64>(), ppid.parse::<i64>())
+        {
+            map.insert(pid, ppid);
         }
     }
     map
@@ -1482,33 +1665,6 @@ fn is_ancestor(ancestor_pid: i64, descendant_pid: i64, parent_map: &HashMap<i64,
     false
 }
 
-/// One-line diagnostic for why `client_hosted_by_*` resolved no client: the
-/// focused pid, the `ps` parent-map size, and for every listed client whether
-/// its pid is known to the process sample and whether it chains up to the
-/// focused terminal. Logged on the otherwise-silent no-client path so a single
-/// repro distinguishes empty-client-list vs wrong-focused-pid vs broken-ancestry.
-fn client_resolution_diag(
-    focused_pid: i64,
-    clients: &[TmuxClient],
-    parent_map: &HashMap<i64, i64>,
-) -> String {
-    let clients_in_process_sample = clients
-        .iter()
-        .filter(|client| parent_map.contains_key(&client.client_pid))
-        .count();
-    let ancestry_matches = clients
-        .iter()
-        .filter(|client| is_ancestor(focused_pid, client.client_pid, parent_map))
-        .count();
-    format!(
-        "diag pmap_len={} client_count={} clients_in_pmap={} ancestry_matches={}",
-        parent_map.len(),
-        clients.len(),
-        clients_in_process_sample,
-        ancestry_matches,
-    )
-}
-
 fn client_hosted_by_from_map(
     clients: &[TmuxClient],
     focused_pid: i64,
@@ -1548,7 +1704,7 @@ fn split_tmux_fields(line: &str, max_fields: usize) -> Vec<&str> {
 
 // ---- tmux clients -----------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct TmuxClient {
     tty: String,
     session: String,
@@ -1556,6 +1712,10 @@ struct TmuxClient {
     activity: i64,
     backend_id: String,
     remote: bool,
+    /// `$N`; local clients only.
+    session_id: String,
+    /// The server's socket; local clients only.
+    socket_path: String,
 }
 
 #[derive(Clone, Default)]
@@ -1628,13 +1788,27 @@ impl ClientSnapshot {
     }
 }
 
+/// `list-clients` fields for local servers. `client_flags` tells Flash's
+/// `no-output` control-mode observers apart from user clients; `session_id`
+/// and `socket_path` tell the observers which server and session to follow.
+fn local_client_format() -> String {
+    [
+        "#{client_tty}",
+        "#{session_name}",
+        "#{client_pid}",
+        "#{client_activity}",
+        "#{client_flags}",
+        "#{session_id}",
+        "#{socket_path}",
+    ]
+    .join(TMUX_FIELD_SEP)
+}
+
 async fn list_clients_inventory(
     tmux_path: Option<&str>,
     socket_registry: &TmuxSocketRegistry,
 ) -> Result<Vec<TmuxClient>, ()> {
-    let format = format!(
-        "#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
-    );
+    let format = local_client_format();
     // Aggregated across every discovered tmux socket — `list-clients`
     // only reports clients attached to the socket it was called on, so
     // a single-socket invocation silently drops every client (and
@@ -1658,8 +1832,10 @@ fn parse_tmux_client(line: &str) -> Option<TmuxClient> {
     parse_tmux_client_for_backend(line, "local")
 }
 
+/// A user client, or `None` for a malformed record or a `no-output` control
+/// client — Flash's own observers, which render no pane.
 fn parse_tmux_client_for_backend(line: &str, backend_id: &str) -> Option<TmuxClient> {
-    let parts = split_tmux_fields(line, 4);
+    let parts = split_tmux_fields(line, 7);
     if parts.len() < 3 {
         return None;
     }
@@ -1668,6 +1844,10 @@ fn parse_tmux_client_for_backend(line: &str, backend_id: &str) -> Option<TmuxCli
         .get(3)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
+    let field = |index: usize| parts.get(index).map(|value| value.trim()).unwrap_or("");
+    if field(4).split(',').any(|flag| flag == "no-output") {
+        return None;
+    }
     Some(TmuxClient {
         tty: parts[0].to_string(),
         session: parts[1].to_string(),
@@ -1675,7 +1855,34 @@ fn parse_tmux_client_for_backend(line: &str, backend_id: &str) -> Option<TmuxCli
         activity,
         backend_id: backend_id.to_string(),
         remote: backend_id != "local",
+        session_id: field(5).to_string(),
+        socket_path: field(6).to_string(),
     })
+}
+
+/// Each local server a user client is attached to, with the session its
+/// most recently active client shows: what the control-mode observers
+/// follow.
+fn observed_servers(clients: &[TmuxClient]) -> BTreeMap<String, String> {
+    let mut latest: BTreeMap<&str, &TmuxClient> = BTreeMap::new();
+    for client in clients.iter().filter(|client| {
+        !client.remote
+            && !client.socket_path.is_empty()
+            && control_mode::is_session_id(&client.session_id)
+    }) {
+        latest
+            .entry(client.socket_path.as_str())
+            .and_modify(|best| {
+                if client.activity > best.activity {
+                    *best = client;
+                }
+            })
+            .or_insert(client);
+    }
+    latest
+        .into_iter()
+        .map(|(socket, client)| (socket.to_string(), client.session_id.clone()))
+        .collect()
 }
 
 async fn list_clients(
@@ -1705,6 +1912,30 @@ async fn list_remote_clients(config: &RemoteTmuxConfig) -> Result<Vec<TmuxClient
         .lines()
         .filter_map(|line| parse_tmux_client_for_backend(line, &config.id))
         .collect())
+}
+
+/// Owned inputs of one `capture-pane`, so pane captures can run as spawned
+/// tasks without borrowing the plugin.
+#[derive(Clone)]
+enum PaneCaptureRunner {
+    Local {
+        tmux_path: Option<String>,
+        socket_registry: std::sync::Arc<TmuxSocketRegistry>,
+    },
+    Remote(Option<RemoteTmuxConfig>),
+}
+
+impl PaneCaptureRunner {
+    async fn capture(&self, pane_id: &str) -> Option<String> {
+        let args = ["capture-pane", "-t", pane_id, "-p"];
+        match self {
+            Self::Local {
+                tmux_path,
+                socket_registry,
+            } => run_tmux_default(tmux_path.as_deref(), &args, socket_registry).await,
+            Self::Remote(config) => run_remote_tmux_default(config.as_ref()?, &args).await,
+        }
+    }
 }
 
 async fn run_tmux_for_client(plugin: &Tmux, client: &TmuxClient, args: &[&str]) -> Option<String> {
@@ -1875,13 +2106,13 @@ async fn raise_terminal_window(
     if pid <= 0 {
         return false;
     }
-    if let Some(handle) = cached_handle {
-        if raise_terminal_window_handle(ctx, pid, handle).await {
-            return true;
-        }
-        // AX handles expire when a terminal window is recreated. Fall through
-        // to the title lookup once so stale discovery heals transparently.
+    if let Some(handle) = cached_handle
+        && raise_terminal_window_handle(ctx, pid, handle).await
+    {
+        return true;
     }
+    // AX handles expire when a terminal window is recreated. Fall through
+    // to the title lookup once so stale discovery heals transparently.
     if title.is_empty() {
         return ctx.activate(pid).await;
     }
@@ -2076,11 +2307,20 @@ fn parse_status_top_offset(line: &str) -> i64 {
         .parse::<i64>()
         .unwrap_or(if raw == "on" { 1 } else { 0 });
     let at_top = parts.next() == Some("top");
-    if at_top {
-        lines
-    } else {
-        0
+    if at_top { lines } else { 0 }
+}
+
+fn status_hint_row(status: &str, client_rows: i64) -> Option<i64> {
+    let mut fields = status.split_whitespace();
+    if !matches!(fields.next()?, "on" | "1") || client_rows <= 0 {
+        return None;
     }
+    let row = match fields.next()? {
+        "top" => 0,
+        "bottom" => client_rows - 1,
+        _ => return None,
+    };
+    matches!(fields.next()?, "on" | "1").then_some(row)
 }
 
 // ---- Alacritty font + cell geometry -----------------------------------------
@@ -2099,10 +2339,10 @@ fn read_toml_raw(text: &str, section: &str, key: &str) -> Option<String> {
         if !in_section {
             continue;
         }
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == key {
-                return Some(v.trim().to_string());
-            }
+        if let Some((k, v)) = line.split_once('=')
+            && k.trim() == key
+        {
+            return Some(v.trim().to_string());
         }
     }
     None
@@ -2113,16 +2353,18 @@ fn read_toml_string(text: &str, section: &str, key: &str) -> Option<String> {
     if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
         raw = raw[1..raw.len() - 1].to_string();
     }
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw)
-    }
+    if raw.is_empty() { None } else { Some(raw) }
 }
 
 fn read_toml_number(text: &str, section: &str, key: &str) -> Option<f64> {
     read_toml_raw(text, section, key)?.parse::<f64>().ok()
 }
+
+/// (path, mtime, font) of the last Alacritty config read; this sits on the
+/// `f` hot path, so the file is re-read only when its modification time moves.
+type AlacrittyFontCache = Option<(String, std::time::SystemTime, (String, f64))>;
+static ALACRITTY_FONT_CACHE: std::sync::LazyLock<std::sync::Mutex<AlacrittyFontCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 async fn alacritty_font() -> Option<(String, f64)> {
     let home = std::env::var("HOME").ok()?;
@@ -2131,13 +2373,30 @@ async fn alacritty_font() -> Option<(String, f64)> {
         format!("{home}/.alacritty.toml"),
     ];
     for path in paths {
+        let Ok(metadata) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        let modified = metadata.modified().ok()?;
+        if let Some((cached_path, cached_modified, font)) = ALACRITTY_FONT_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            && *cached_path == path
+            && *cached_modified == modified
+        {
+            return Some(font.clone());
+        }
         let Ok(text) = tokio::fs::read_to_string(&path).await else {
             continue;
         };
         let size = read_toml_number(&text, "font", "size").unwrap_or(11.0);
         let family =
             read_toml_string(&text, "font.normal", "family").unwrap_or_else(|| "Menlo".to_string());
-        return Some((family, size));
+        let font = (family, size);
+        *ALACRITTY_FONT_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((path, modified, font.clone()));
+        return Some(font);
     }
     None
 }
@@ -2172,16 +2431,15 @@ async fn resolve_geometry(
     cols: f64,
     rows: f64,
 ) -> (f64, f64, f64, f64) {
-    if ALACRITTY_BUNDLES.contains(&bundle_id) {
-        if let Some((family, size)) = alacritty_font().await {
-            if let Some((cell_w, cell_h)) = cell_metrics_appkit(&family, size) {
-                let content_w = cols * cell_w;
-                let content_h = rows * cell_h;
-                let pad_x = ((win_w - content_w) / 2.0).max(0.0);
-                let pad_y = ((win_h - content_h) / 2.0).max(0.0);
-                return (cell_w, cell_h, pad_x, pad_y);
-            }
-        }
+    if ALACRITTY_BUNDLES.contains(&bundle_id)
+        && let Some((family, size)) = alacritty_font().await
+        && let Some((cell_w, cell_h)) = cell_metrics_appkit(&family, size)
+    {
+        let content_w = cols * cell_w;
+        let content_h = rows * cell_h;
+        let pad_x = ((win_w - content_w) / 2.0).max(0.0);
+        let pad_y = ((win_h - content_h) / 2.0).max(0.0);
+        return (cell_w, cell_h, pad_x, pad_y);
     }
     (win_w / cols, win_h / rows, 0.0, 0.0)
 }
@@ -2196,9 +2454,68 @@ struct Pane {
     rows: i64,
 }
 
-// Ten positional args is on the high side, but `JumpTarget` itself is the
+#[derive(Debug, PartialEq, Eq)]
+struct HintContext {
+    server_pid: i64,
+    session_id: String,
+    window_id: String,
+}
+
+impl HintContext {
+    fn parse(raw: &str) -> Option<Self> {
+        let fields: Vec<_> = raw.split_whitespace().collect();
+        if fields.len() != 3 {
+            return None;
+        }
+        let server_pid = fields[0].parse::<i64>().ok().filter(|pid| *pid > 0)?;
+        for (value, marker) in [(fields[1], '$'), (fields[2], '@')] {
+            value.strip_prefix(marker)?.parse::<u64>().ok()?;
+        }
+        Some(Self {
+            server_pid,
+            session_id: fields[1].to_string(),
+            window_id: fields[2].to_string(),
+        })
+    }
+
+    fn target_id(&self, client: &TmuxClient, pane_id: &str) -> String {
+        serde_json::json!([
+            client.backend_id,
+            client.tty,
+            self.server_pid,
+            self.session_id,
+            self.window_id,
+            pane_id,
+        ])
+        .to_string()
+    }
+}
+
+fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
+    let (geometry, raw_context) = line.split_once(TMUX_FIELD_SEP)?;
+    if HintContext::parse(raw_context).as_ref() != Some(context) {
+        return None;
+    }
+    let fields: Vec<_> = geometry.split_whitespace().collect();
+    if fields.len() != 5 {
+        return None;
+    }
+    fields[0].strip_prefix('%')?.parse::<u64>().ok()?;
+    Some(Pane {
+        id: fields[0].to_string(),
+        left: fields[1].parse::<i64>().ok().filter(|value| *value >= 0)?,
+        top: fields[2].parse::<i64>().ok().filter(|value| *value >= 0)?,
+        cols: fields[3].parse::<i64>().ok().filter(|value| *value > 0)?,
+        rows: fields[4].parse::<i64>().ok().filter(|value| *value > 0)?,
+    })
+}
+
+// Nine positional args is on the high side, but `JumpTarget` itself is the
 // shape — collapsing this into a `BuildTargetArgs` struct would just rename
 // the same data without making the call sites clearer.
+//
+// Every tmux target is terminal content, so a primary click on any of them
+// hands the keyboard to the terminal and the host enters INSERT.
 #[allow(clippy::too_many_arguments)]
 fn build_target(
     target_id: &str,
@@ -2209,15 +2526,19 @@ fn build_target(
     role: &str,
     label: &str,
     pid: i64,
-    enters_insert_mode: bool,
     priority: Priority,
 ) -> JumpTarget {
-    JumpTarget::new(target_id, Frame::new(x, y, width, height))
+    let target = JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
         .label(label)
-        .enters_insert_mode(enters_insert_mode)
+        .enters_insert_mode(true)
         .pid(pid)
-        .priority(priority)
+        .priority(priority);
+    if role == TERMINAL_LINK_ROLE && is_url(label) {
+        target.url(label)
+    } else {
+        target
+    }
 }
 
 async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> HintsResponse {
@@ -2248,21 +2569,40 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     // literal text the server always emits verbatim (the same separator
     // `list-clients`/`list-windows` rely on), so the split is deterministic.
     let combined_format = format!(
-        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}}"
+        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}} #{{mouse}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{W:#{{window_index}} #{{window_id}};}}{TMUX_FIELD_SEP}#{{T:status-format[0]}}"
     );
-    let combined = run_tmux_for_client(
-        plugin,
-        &client,
-        &["display-message", "-c", &client.tty, "-p", &combined_format],
-    )
-    .await;
+    let pane_format = format!(
+        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"
+    );
+    let display_args = [
+        "display-message",
+        "-c",
+        &client.tty,
+        "-t",
+        &client.tty,
+        "-p",
+        &combined_format,
+    ];
+    let pane_args = ["list-panes", "-t", &client.tty, "-F", &pane_format];
+    // Both replies carry the live context, so a window switch between them
+    // still cancels the snapshot while independent subprocesses run together.
+    let (combined, pane_list) = tokio::join!(
+        run_tmux_for_client(plugin, &client, &display_args),
+        run_tmux_for_client(plugin, &client, &pane_args),
+    );
     let Some(combined) = combined else {
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
-    let combined_lines: Vec<&str> = combined.split(TMUX_FIELD_SEP).collect();
-    if combined_lines.len() < 2 {
+    let combined_lines: Vec<&str> = combined
+        .trim_end_matches(['\r', '\n'])
+        .splitn(5, TMUX_FIELD_SEP)
+        .collect();
+    if combined_lines.len() != 5 {
         return HintsResponse::targets(vec![]).context_pid(pid);
     }
+    let Some(hint_context) = HintContext::parse(combined_lines[2]) else {
+        return HintsResponse::targets(vec![]).context_pid(pid);
+    };
     let Some((client_cols, client_rows)) = parse_two_ints(combined_lines[0]) else {
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
@@ -2279,43 +2619,18 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     )
     .await;
 
-    let pane_list = run_tmux_for_client(
-        plugin,
-        &client,
-        &[
-            "list-panes",
-            "-t",
-            &client.tty,
-            "-F",
-            "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}",
-        ],
-    )
-    .await;
     let Some(pane_list) = pane_list else {
         return HintsResponse::targets(vec![]).context_pid(pid);
     };
 
-    let mut panes: Vec<Pane> = Vec::new();
-    for line in pane_list.split('\n') {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() != 5 {
-            continue;
-        }
-        if let (Ok(left), Ok(top), Ok(cols), Ok(rows)) = (
-            parts[1].parse::<i64>(),
-            parts[2].parse::<i64>(),
-            parts[3].parse::<i64>(),
-            parts[4].parse::<i64>(),
-        ) {
-            panes.push(Pane {
-                id: parts[0].to_string(),
-                left,
-                top,
-                cols,
-                rows,
-            });
-        }
-    }
+    let Some(panes): Option<Vec<_>> = pane_list
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| parse_hint_pane(line, &hint_context))
+        .collect()
+    else {
+        return HintsResponse::targets(vec![]).context_pid(pid);
+    };
     if panes.is_empty() {
         return HintsResponse::targets(vec![]).context_pid(pid);
     }
@@ -2331,64 +2646,108 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         screen_row: i64,
         screen_col: i64,
         text: String,
+        context_id: String,
     }
     let mut raw_links: Vec<RawLink> = Vec::new();
 
+    // Capture every pane concurrently: this used to be one awaited tmux
+    // subprocess per pane, strictly sequential, on the `f` hot path.
+    let capture_runner = if client.remote {
+        PaneCaptureRunner::Remote(plugin.remote_config(&client.backend_id))
+    } else {
+        PaneCaptureRunner::Local {
+            tmux_path: plugin.resolved_tmux_path().await.map(str::to_string),
+            socket_registry: std::sync::Arc::clone(&plugin.tmux_socket_registry_arc),
+        }
+    };
+    let mut capture_tasks = tokio::task::JoinSet::new();
     for (i, pane) in panes.iter().enumerate() {
+        let runner = capture_runner.clone();
+        let pane_id = pane.id.clone();
+        capture_tasks.spawn(async move { (i, runner.capture(&pane_id).await) });
+    }
+    let mut captures: Vec<Option<String>> = vec![None; panes.len()];
+    while let Some(Ok((i, raw))) = capture_tasks.join_next().await {
+        captures[i] = raw;
+    }
+
+    for (i, pane) in panes.iter().enumerate() {
+        let context_id = hint_context.target_id(&client, &pane.id);
         let center_col = pane.left + pane.cols / 2;
         let center_row = top_offset + pane.top + pane.rows / 2;
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
         let chip_y = min_y + win_h - pad_y - (center_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-p{i}");
-        // A pane target delegates a plain click to the terminal. It stays in
-        // NORMAL after the click; only mouse-grid and physical mouse clicks
-        // express the separate "start typing" intent.
-        pane_targets.push(build_target(
-            &target_id,
-            chip_x,
-            chip_y,
-            pane_chip_cells as f64 * cell_w,
-            cell_h,
-            PANE_TARGET_ROLE,
-            &pane.id,
-            pid,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
-            // Pane chips are the structural anchors of a tmux window, so the
-            // renderer paints them in the accent style. Link chips below are
-            // everyday clutter and stay in the default yellow.
-            Priority::Urgent,
-        ));
+        // A pane target delegates a plain click to the terminal, which then
+        // owns the keyboard: the commit enters INSERT.
+        pane_targets.push(
+            build_target(
+                &target_id,
+                chip_x,
+                chip_y,
+                pane_chip_cells as f64 * cell_w,
+                cell_h,
+                PANE_TARGET_ROLE,
+                &pane.id,
+                pid,
+                // Pane chips are the structural anchors of a tmux window, so the
+                // renderer paints them in the accent style. Link chips below are
+                // everyday clutter and stay in the default yellow.
+                Priority::Urgent,
+            )
+            .context_id(&context_id),
+        );
 
-        let Some(raw) =
-            run_tmux_for_client(plugin, &client, &["capture-pane", "-t", &pane.id, "-p"]).await
-        else {
+        let Some(raw) = captures[i].take() else {
             continue;
         };
-        // Collect this pane's links, then keep the most useful within the
-        // per-pane budget: real URLs first (the user's primary intent), then
-        // the earliest remaining matches in reading order. Without this, a
-        // screenful of file paths / dotted hostnames (a diff, a log) exhausts
-        // the budget before a URL lower down ever gets a hint.
-        let mut pane_links: Vec<RawLink> = Vec::new();
         for (row_idx, content) in raw.split('\n').enumerate() {
             if row_idx as i64 >= pane.rows {
                 break;
             }
             for (col, text) in extract_links(content, pane.cols as usize) {
-                pane_links.push(RawLink {
+                raw_links.push(RawLink {
                     screen_row: top_offset + pane.top + row_idx as i64,
                     screen_col: pane.left + col as i64,
                     text,
+                    context_id: context_id.clone(),
                 });
             }
         }
-        if pane_links.len() > LINKS_PER_PANE_LIMIT {
-            // Stable sort keeps reading order within each group; `false < true`
-            // floats URLs to the front before truncation.
-            pane_links.sort_by_key(|link| !is_url(&link.text));
-            pane_links.truncate(LINKS_PER_PANE_LIMIT);
+    }
+
+    if let Some(row) = status_hint_row(combined_lines[1], client_rows)
+        && let Some(spans) =
+            status_hints::parse_status_hints(combined_lines[4], client_cols as usize)
+    {
+        let windows: HashMap<u32, &str> = combined_lines[3]
+            .split(';')
+            .filter_map(|entry| {
+                let (index, id) = entry.split_once(' ')?;
+                id.strip_prefix('@')?.parse::<u64>().ok()?;
+                Some((index.parse().ok()?, id))
+            })
+            .collect();
+        for (index, span) in spans.into_iter().enumerate() {
+            let Some(window_id) = windows.get(&span.index) else {
+                continue;
+            };
+            let context_id = hint_context.target_id(&client, &format!("window:{window_id}"));
+            pane_targets.push(
+                build_target(
+                    &format!("tmux-{pid}-w{index}"),
+                    min_x + pad_x + span.column as f64 * cell_w,
+                    min_y + win_h - pad_y - (row + 1) as f64 * cell_h,
+                    span.width as f64 * cell_w,
+                    cell_h,
+                    "tmux-window",
+                    &span.label,
+                    pid,
+                    Priority::High,
+                )
+                .context_id(context_id),
+            );
         }
-        raw_links.extend(pane_links);
     }
 
     // Pane chips emit first so the hint assigner allocates the shortest
@@ -2406,20 +2765,21 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         let target_id = format!("tmux-{pid}-l{idx}");
         // Terminal links use a generic host-understood semantic role. The host
         // sends `f` as Shift-click and `F` as Command-Shift-click so Alacritty
-        // handles the link instead of forwarding a pane click to tmux. Link
-        // commits stay in NORMAL.
-        targets.push(build_target(
-            &target_id,
-            x,
-            y,
-            cell_w,
-            cell_h,
-            TERMINAL_LINK_ROLE,
-            &link.text,
-            pid,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
-            Priority::Normal,
-        ));
+        // handles the link instead of forwarding a pane click to tmux.
+        targets.push(
+            build_target(
+                &target_id,
+                x,
+                y,
+                cell_w,
+                cell_h,
+                TERMINAL_LINK_ROLE,
+                &link.text,
+                pid,
+                Priority::Normal,
+            )
+            .context_id(link.context_id),
+        );
     }
 
     HintsResponse::targets(targets).context_pid(pid)
@@ -2472,9 +2832,9 @@ fn routed_client_from_payload(payload: &TmuxPayload) -> Option<TmuxClient> {
             .unwrap_or(&payload.tmux_target)
             .to_string(),
         client_pid: payload.client_pid.unwrap_or(0),
-        activity: 0,
         backend_id: payload.backend_id.clone(),
         remote: payload.remote,
+        ..TmuxClient::default()
     })
 }
 
@@ -2590,8 +2950,8 @@ fn build_candidates_from_window_list(
         if line.is_empty() {
             continue;
         }
-        let parts = split_tmux_fields(line, 7);
-        if parts.len() < 3 {
+        let parts = split_tmux_fields(line, 8);
+        if parts.len() != 8 || !parts[7].starts_with('@') {
             continue;
         }
         let session = parts[0];
@@ -2621,9 +2981,10 @@ fn build_candidates_from_window_list(
             .copied()
             .or(backend.terminal_window_handle);
 
-        let target = format!("{session}:{index}");
+        let display_target = format!("{session}:{index}");
+        let target = format!("{session}:{}", parts[7].trim());
         let window_name = if name.is_empty() {
-            target.clone()
+            display_target.clone()
         } else {
             name.to_string()
         };
@@ -2634,7 +2995,7 @@ fn build_candidates_from_window_list(
         };
         let mut secondary_parts: Vec<&str> = Vec::new();
         if !name.is_empty() {
-            secondary_parts.push(target.as_str());
+            secondary_parts.push(display_target.as_str());
         }
         for value in [command, cwd.as_str()] {
             if !value.is_empty() {
@@ -2685,7 +3046,7 @@ struct CandidateBuild {
 }
 
 /// Values for the manifest-declared statusbar segments
-/// (`#{plugin:tmux.session}` / `.window` / `.pane`). Empty strings clear
+/// (`#{flash.plugin.tmux.session}` / `.window` / `.pane`). Empty strings clear
 /// the segments host-side.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TmuxStatusSegments {
@@ -2708,7 +3069,7 @@ fn status_segments(clients: &[TmuxClient], raw_windows: &str) -> TmuxStatusSegme
         ..TmuxStatusSegments::default()
     };
     for line in raw_windows.lines() {
-        let parts = split_tmux_fields(line, 7);
+        let parts = split_tmux_fields(line, 8);
         if parts.len() < 3 || parts[0] != client.session {
             continue;
         }
@@ -2780,17 +3141,17 @@ async fn build_candidates(
         });
     }
     let client_format = format!(
-        "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
+        "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}{}",
+        local_client_format()
     );
-    // The trailing `pane_index` (the window's active pane, per tmux
-    // list-windows semantics) feeds the `#{plugin:tmux.pane}` status
+    // `pane_index` (the window's active pane, per tmux
+    // list-windows semantics) feeds the `#{flash.plugin.tmux.pane}` status
     // segment; candidates themselves ignore it.
     let window_format = format!(
-        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}{TMUX_FIELD_SEP}#{{window_id}}"
     );
-    // A single tmux process per socket emits both inventories. Polling the two
-    // commands separately doubled process creation and socket discovery for
-    // the plugin's one-second freshness contract.
+    // A single tmux process per socket emits both inventories: running the
+    // two commands separately doubled process creation and socket discovery.
     let raw = match run_tmux_inventory_default(
         tmux_path,
         &[
@@ -2902,7 +3263,7 @@ async fn build_remote_candidates(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
     let window_format = format!(
-        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}{TMUX_FIELD_SEP}#{{window_id}}"
     );
     let result = run_remote_tmux(
         config,
@@ -2966,9 +3327,8 @@ async fn build_remote_candidates(
 /// every field is unchanged — including current-location state and the payload
 /// that identifies the tmux client.
 ///
-/// Without this gate, event-triggered refreshes would push a full catalog
-/// replacement across the wire every second even when tmux state was
-/// identical.
+/// Without this gate, every notification-triggered refresh would push a full
+/// catalog replacement across the wire even when tmux state was identical.
 fn hash_candidates(candidates: &[Candidate]) -> u64 {
     let mut hasher = DefaultHasher::new();
     candidates.len().hash(&mut hasher);
@@ -3187,8 +3547,8 @@ async fn refresh_candidate_locations_for_path_inner(
 
 /// Emit the `session` / `window` / `pane` statusbar segments when their
 /// values changed since the last publish. Piggybacks on the candidate
-/// refresh cadence — no timer of its own — and stays quiet on unchanged
-/// state so the 1 s poll does not spam the host's telemetry lane. Empty
+/// refresh — no timer of its own — and stays quiet on unchanged state so
+/// refreshes do not spam the host's telemetry lane. Empty
 /// values (no attached local client, no tmux server) clear the segments
 /// host-side per the wire contract.
 fn publish_status_segments(
@@ -3204,9 +3564,9 @@ fn publish_status_segments(
     }
     *guard = Some(current.clone());
     ctx.status([
-        ("session", current.session.as_str()),
-        ("window", current.window.as_str()),
-        ("pane", current.pane.as_str()),
+        ("session", Markup::text(&current.session)),
+        ("window", Markup::text(&current.window)),
+        ("pane", Markup::text(&current.pane)),
     ]);
 }
 
@@ -3375,7 +3735,26 @@ fn cli_failure_detail(result: &CliResult) -> String {
     }
 }
 
+/// Re-read the local inventory, draining newly discovered sockets in bounded
+/// waves, then converge the control-mode observers on the servers it found
+/// attached and arm the one retry a transiently failing socket is owed.
 async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
+    loop {
+        refresh_local_candidate_locations(plugin, ctx).await;
+        // Stale endpoints fail quickly, so a complete catalog still lands
+        // promptly without an unbounded subprocess fan-out.
+        if !plugin.tmux_socket_registry().has_unseen_sockets().await {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    reconcile_observers(plugin, ctx).await;
+    if let Some(at) = plugin.tmux_socket_registry().next_retry_at().await {
+        schedule_socket_retry(plugin, ctx, at);
+    }
+}
+
+async fn refresh_local_candidate_locations(plugin: &Tmux, ctx: &Context) {
     refresh_candidate_locations_for_path(
         plugin.resolved_tmux_path().await,
         ctx,
@@ -3503,94 +3882,206 @@ async fn refresh_remote_backends(
     succeeded
 }
 
-const POLL_INTERVAL_SECS: u64 = 1;
 const STARTUP_WARM_BUDGET: Duration = Duration::from_secs(10);
+/// The AX notifications that can reveal a client attaching to a server no
+/// observer follows: attaching retitles the terminal's window, and a new
+/// window may start attached.
+const AX_REFRESH_NOTIFICATIONS: [&str; 2] = [
+    ax_notifications::TITLE_CHANGED,
+    ax_notifications::WINDOW_CREATED,
+];
+/// A shell retitles the window before and after each command, so a burst
+/// refreshes once it has been quiet this long…
+const AX_SETTLE: Duration = Duration::from_millis(300);
+/// …or this long after it began, whichever comes first.
+const AX_MAX_WAIT: Duration = Duration::from_secs(10);
+/// `Normal`: it refreshes the catalog, which nobody watches refresh.
+static AX_BURST: Settle<i64> = Settle::new(AX_SETTLE, AX_MAX_WAIT, PollPriority::Normal);
+/// Control-mode notifications and socket changes come in bursts (a new
+/// window posts several at once); one inventory read follows each burst,
+/// within a second even while notifications keep coming.
+const CHANGE_SETTLE: Duration = Duration::from_millis(100);
+const CHANGE_MAX_WAIT: Duration = Duration::from_secs(1);
+/// `High`: the read redraws the session and window status segments, which
+/// the user is looking at as they switch.
+static CHANGE_BURST: Settle<()> = Settle::new(CHANGE_SETTLE, CHANGE_MAX_WAIT, PollPriority::High);
 
-fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
-    let tmux_path = std::sync::Arc::clone(&plugin.tmux_path);
-    let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
-    let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
-    let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
-    let last_status = std::sync::Arc::clone(&plugin.last_status_segments_arc);
-    let coordinator = std::sync::Arc::clone(&plugin.candidate_refresh_coordinator_arc);
-    let socket_registry = std::sync::Arc::clone(&plugin.tmux_socket_registry_arc);
-    let local_config = std::sync::Arc::clone(&plugin.local_config_arc);
+fn schedule_change_refresh(plugin: &Tmux, ctx: &Context) {
+    let plugin = plugin.clone();
+    let refresh_ctx = ctx.clone();
+    CHANGE_BURST.schedule(ctx, (), move |_| async move {
+        refresh_candidate_locations(&plugin, &refresh_ctx).await;
+    });
+}
+
+/// Retry a transiently failing socket at its backoff deadline: one pending
+/// host deadline at most, and none once every socket answered. `Low`: a
+/// backoff of seconds nobody is waiting on.
+fn schedule_socket_retry(plugin: &Tmux, ctx: &Context, at: Instant) {
+    {
+        let mut pending = plugin
+            .socket_retry_arc
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if pending.is_some_and(|pending| pending <= at) {
+            return;
+        }
+        *pending = Some(at);
+    }
+    let plugin = plugin.clone();
+    let delay = at.saturating_duration_since(Instant::now());
+    ctx.after(delay, PollPriority::Low, move |ctx| async move {
+        {
+            let mut pending = plugin
+                .socket_retry_arc
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            // An earlier retry superseded this one, or already ran.
+            if *pending != Some(at) {
+                return;
+            }
+            *pending = None;
+        }
+        refresh_candidate_locations(&plugin, &ctx).await;
+    });
+}
+
+/// Follow every local server a user client is attached to, and only those.
+async fn reconcile_observers(plugin: &Tmux, ctx: &Context) {
+    if !plugin.observers_supported().await {
+        return;
+    }
+    let Some(tmux_path) = plugin.resolved_tmux_path().await.map(str::to_string) else {
+        return;
+    };
+    let plan = plugin
+        .client_snapshot()
+        .lock()
+        .map(|snapshot| observed_servers(&snapshot.clients))
+        .unwrap_or_default();
+    let changed: Arc<dyn Fn() + Send + Sync> = {
+        let plugin = plugin.clone();
+        let ctx = ctx.clone();
+        Arc::new(move || schedule_change_refresh(&plugin, &ctx))
+    };
+    let observers = &plugin.observers_arc;
+    if observers.reconcile(&plan, |socket, follow| {
+        tokio::spawn(control_mode::observe(
+            ctx.clone(),
+            tmux_path.clone(),
+            socket.to_string(),
+            follow,
+            Arc::clone(&changed),
+        ))
+    }) {
+        ctx.log_fields(
+            "debug",
+            "[tmux] observers",
+            BTreeMap::from([("servers".to_string(), observers.count().to_string())]),
+        );
+    }
+}
+
+/// Watch the socket directory so a server starting or exiting rediscovers
+/// sockets and refreshes once the change settles. Without the watch,
+/// discovery falls back to rescanning on refreshes.
+fn start_socket_watch(plugin: &Tmux, ctx: &Context) {
+    let plugin = plugin.clone();
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let path = tmux_path.get_or_init(find_tmux).await.clone();
-        if retry_immediately {
-            refresh_candidate_locations_for_path(
-                path.as_deref(),
-                &ctx,
-                &last_hash,
-                &client_snapshot,
-                &partitions,
-                &last_status,
-                &local_config,
-                &coordinator,
-                &socket_registry,
-            )
-            .await;
-        }
-        loop {
-            if socket_registry.has_unseen_sockets().await {
-                // Drain newly discovered sockets in bounded waves. Stale
-                // endpoints fail quickly, so a complete first catalog still
-                // meets the warm-source publish budget without ever launching
-                // an unbounded subprocess fan-out.
-                tokio::task::yield_now().await;
-            } else {
-                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+        let uid = nix::unistd::geteuid().as_raw();
+        let [socket_directory, _] = tmux_socket_roots(uid);
+        let mut watch = match socket_watch::SocketDirWatch::new(socket_directory).await {
+            Ok(watch) => watch,
+            Err(error) => {
+                ctx.log(
+                    "warn",
+                    &format!("[tmux] socket directory watch unavailable; rescanning: {error}"),
+                );
+                return;
             }
-            refresh_candidate_locations_for_path(
-                path.as_deref(),
-                &ctx,
-                &last_hash,
-                &client_snapshot,
-                &partitions,
-                &last_status,
-                &local_config,
-                &coordinator,
-                &socket_registry,
-            )
-            .await;
+        };
+        plugin.tmux_socket_registry().set_watched(true).await;
+        loop {
+            if let Err(error) = watch.changed().await {
+                plugin.tmux_socket_registry().set_watched(false).await;
+                ctx.log(
+                    "warn",
+                    &format!("[tmux] socket directory watch stopped; rescanning: {error}"),
+                );
+                return;
+            }
+            plugin.tmux_socket_registry().invalidate().await;
+            schedule_change_refresh(&plugin, &ctx);
         }
     });
 }
 
-fn start_remote_candidate_poll(plugin: &Tmux, ctx: &Context, initial_succeeded: bool) {
+fn start_remote_candidate_poll(
+    plugin: &Tmux,
+    ctx: &Context,
+    ssh_hosts: Arc<BTreeSet<String>>,
+    initial_succeeded: bool,
+) {
     let remote_configs = std::sync::Arc::clone(&plugin.remote_configs_arc);
     let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
     let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
     let ctx = ctx.clone();
-    tokio::spawn(async move {
-        let mut failure_index = if initial_succeeded { 0 } else { 1 };
-        loop {
-            let delay = if failure_index == 0 {
-                REMOTE_POLL_INTERVAL_SECS
-            } else {
-                REMOTE_RETRY_DELAYS_SECS
-                    [(failure_index - 1).min(REMOTE_RETRY_DELAYS_SECS.len() - 1)]
-            };
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-            let discovered = discover_remote_tmux_configs(&ctx).await;
-            if let Ok(mut configured) = remote_configs.lock() {
-                *configured = discovered.clone();
+    let initial_index = if initial_succeeded { 0usize } else { 1 };
+    let failure_index = Arc::new(Mutex::new(initial_index));
+    let handle: Arc<OnceLock<PollHandle>> = Arc::new(OnceLock::new());
+    let slot = Arc::clone(&handle);
+    // `Low`: a remote pull over SSH, retried on a ladder; nothing on screen
+    // waits on its exact second.
+    let registered = ctx.interval(
+        Duration::from_secs(remote_poll_delay_secs(initial_index)),
+        PollPriority::Low,
+        move |ctx| {
+            let remote_configs = Arc::clone(&remote_configs);
+            let ssh_hosts = Arc::clone(&ssh_hosts);
+            let partitions = Arc::clone(&partitions);
+            let last_hash = Arc::clone(&last_hash);
+            let failure_index = Arc::clone(&failure_index);
+            let slot = Arc::clone(&slot);
+            async move {
+                let discovered = discover_remote_tmux_configs(&ctx, &ssh_hosts).await;
+                if let Ok(mut configured) = remote_configs.lock() {
+                    *configured = discovered.clone();
+                }
+                let ok = refresh_remote_backends(
+                    &discovered,
+                    &ctx,
+                    Arc::clone(&partitions),
+                    Arc::clone(&last_hash),
+                )
+                .await;
+                // Back off through the retry ladder on failure and drop back
+                // to the steady cadence as soon as a refresh lands.
+                let next = {
+                    let mut index = failure_index.lock().unwrap();
+                    *index = if ok {
+                        0
+                    } else {
+                        (*index + 1).min(REMOTE_RETRY_DELAYS_SECS.len())
+                    };
+                    remote_poll_delay_secs(*index)
+                };
+                if let Some(handle) = slot.get() {
+                    handle.set_period(Duration::from_secs(next));
+                }
             }
-            if refresh_remote_backends(
-                &discovered,
-                &ctx,
-                Arc::clone(&partitions),
-                Arc::clone(&last_hash),
-            )
-            .await
-            {
-                failure_index = 0;
-            } else {
-                failure_index = (failure_index + 1).min(REMOTE_RETRY_DELAYS_SECS.len());
-            }
-        }
-    });
+        },
+    );
+    drop(handle.set(registered));
+}
+
+/// Steady cadence at index zero, then the retry ladder.
+fn remote_poll_delay_secs(failure_index: usize) -> u64 {
+    if failure_index == 0 {
+        REMOTE_POLL_INTERVAL_SECS
+    } else {
+        REMOTE_RETRY_DELAYS_SECS[(failure_index - 1).min(REMOTE_RETRY_DELAYS_SECS.len() - 1)]
+    }
 }
 
 // ---- Tab actions ------------------------------------------------------------
@@ -3977,16 +4468,152 @@ async fn pane_select(plugin: &Tmux, client: &TmuxClient, direction: &str) -> boo
         .is_some()
 }
 
+/// `gg` / `G` inside a pane, routed the way tmux routes the wheel (its default
+/// `WheelUpPane` binding, which `ctrl-u` / `ctrl-d` go through): a pane in a
+/// mode scrolls that mode; a program that turned on mouse tracking owns its
+/// scrolling, so it receives wheel reports; any other pane scrolls tmux's
+/// history in copy-mode, whose bottom is the live pane. Driving copy-mode for
+/// a mouse-tracking program scrolled the shell history behind it instead, and
+/// `G` had no copy-mode to cancel.
+async fn scroll_extreme(plugin: &Tmux, client: &TmuxClient, top: bool) -> bool {
+    let target = format!("{}:.", client.session);
+    let Some(state) = run_tmux_for_client(
+        plugin,
+        client,
+        &["display-message", "-p", "-t", &target, PANE_SCROLL_FORMAT],
+    )
+    .await
+    .as_deref()
+    .and_then(PaneScrollState::parse) else {
+        return false;
+    };
+    match ScrollExtremePlan::new(&state, top) {
+        ScrollExtremePlan::ModeCommand(command) => {
+            run_tmux_for_client(plugin, client, &["send-keys", "-X", "-t", &target, command])
+                .await
+                .is_some()
+        }
+        ScrollExtremePlan::EnterHistoryTop => {
+            run_tmux_for_client(plugin, client, &["copy-mode", "-t", &target])
+                .await
+                .is_some()
+                && run_tmux_for_client(
+                    plugin,
+                    client,
+                    &["send-keys", "-X", "-t", &target, "history-top"],
+                )
+                .await
+                .is_some()
+        }
+        ScrollExtremePlan::AlreadyLive => true,
+        ScrollExtremePlan::WheelReports(report) => {
+            let count = EDGE_WHEEL_REPORTS.to_string();
+            run_tmux_for_client(
+                plugin,
+                client,
+                &["send-keys", "-t", &target, "-N", &count, "-l", &report],
+            )
+            .await
+            .is_some()
+        }
+    }
+}
+
+const PANE_SCROLL_FORMAT: &str =
+    "#{pane_in_mode} #{mouse_any_flag} #{mouse_sgr_flag} #{pane_width} #{pane_height}";
+
+/// Wheel reports one `gg` / `G` sends a mouse-tracking program: enough to
+/// reach either end of a long transcript, one small `send-keys -N` command.
+const EDGE_WHEEL_REPORTS: u32 = 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaneScrollState {
+    in_mode: bool,
+    mouse_tracking: bool,
+    sgr_mouse: bool,
+    width: u32,
+    height: u32,
+}
+
+impl PaneScrollState {
+    fn parse(line: &str) -> Option<Self> {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [in_mode, mouse, sgr, width, height] = fields.as_slice() else {
+            return None;
+        };
+        Some(Self {
+            in_mode: *in_mode == "1",
+            mouse_tracking: *mouse == "1",
+            sgr_mouse: *sgr == "1",
+            width: width.parse().ok()?,
+            height: height.parse().ok()?,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ScrollExtremePlan {
+    /// A copy-mode command inside the pane's current mode.
+    ModeCommand(&'static str),
+    /// Enter copy-mode, then jump to the top of the history.
+    EnterHistoryTop,
+    /// A pane outside any mode already shows its live bottom.
+    AlreadyLive,
+    /// One wheel report, sent `EDGE_WHEEL_REPORTS` times as literal text
+    /// (`send-keys -H` delivers nothing to the pane on tmux 3.7).
+    WheelReports(String),
+}
+
+impl ScrollExtremePlan {
+    fn new(state: &PaneScrollState, top: bool) -> Self {
+        if state.in_mode {
+            return Self::ModeCommand(if top { "history-top" } else { "cancel" });
+        }
+        if state.mouse_tracking {
+            return Self::WheelReports(wheel_report(state, top));
+        }
+        if top {
+            Self::EnterHistoryTop
+        } else {
+            Self::AlreadyLive
+        }
+    }
+}
+
+/// An xterm wheel report (button 64 up, 65 down) at the pane's centre, in
+/// the SGR encoding when the program asked for it, else the classic one,
+/// whose coordinates stay ASCII (so single-byte in its UTF-8 variant too).
+fn wheel_report(state: &PaneScrollState, up: bool) -> String {
+    let button: u32 = if up { 64 } else { 65 };
+    let x = (state.width / 2).max(1);
+    let y = (state.height / 2).max(1);
+    if state.sgr_mouse {
+        return format!("\x1b[<{button};{x};{y}M");
+    }
+    let classic = |value: u32| char::from_u32(32 + value.min(95)).unwrap_or(' ');
+    format!("\x1b[M{}{}{}", classic(button), classic(x), classic(y))
+}
+
 /// `[m` / `]m`: swap the focused window with its neighbour in the same
 /// session. Tmux is happy to wrap (`-d` keeps the window selected at
 /// its new position), so the user can keep tapping `]m` to bubble a
 /// window to the end without rebinding.
 async fn tab_move(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
+    let args = tab_move_args(&client.session, direction);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    run_tmux_for_client(plugin, client, &args).await.is_some()
+}
+
+fn tab_move_args(session: &str, direction: &str) -> Vec<String> {
     let neighbour = if direction == "next" { "+1" } else { "-1" };
-    let target = format!("{}:{}", client.session, neighbour);
-    run_tmux_for_client(plugin, client, &["swap-window", "-d", "-t", &target])
-        .await
-        .is_some()
+    vec![
+        "swap-window".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        format!("{session}:"),
+        "-t".to_string(),
+        format!("{session}:{neighbour}"),
+    ]
 }
 
 async fn reload_client(plugin: &Tmux, client: &TmuxClient) -> bool {
@@ -4003,7 +4630,7 @@ fn source_action_prefers_warm_client(name: &str) -> bool {
     matches!(
         name,
         "tab_next"
-            | "tab_prev"
+            | "tab_previous"
             | "tab_move_next"
             | "tab_move_previous"
             | "pane_next"
@@ -4044,10 +4671,10 @@ async fn source_action_client(
     pid: i64,
     action: &str,
 ) -> Option<(TmuxClient, &'static str)> {
-    if source_action_prefers_warm_client(action) {
-        if let Some(client) = warm_source_action_client(plugin, ctx, pid).await {
-            return Some(client);
-        }
+    if source_action_prefers_warm_client(action)
+        && let Some(client) = warm_source_action_client(plugin, ctx, pid).await
+    {
+        return Some(client);
     }
     focused_tmux_client(plugin, ctx, pid, true)
         .await
@@ -4068,18 +4695,13 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
     let resolution_started = Instant::now();
     let Some((client, client_resolution)) = source_action_client(plugin, ctx, pid, &req.name).await
     else {
-        let clients = list_clients(
-            plugin.resolved_tmux_path().await,
-            plugin.tmux_socket_registry(),
-        )
-        .await;
-        let pmap = parent_pid_map().await;
+        // A terminal without tmux is the common case: the host falls back to
+        // the app's chord at once, without waiting on a diagnostic scan.
         ctx.log(
-            "warn",
+            "debug",
             &format!(
-                "[tmux] source_action {} unhandled: no hosted tmux client | {}",
-                req.name,
-                client_resolution_diag(pid, &clients, &pmap)
+                "[tmux] source_action {} unhandled: no hosted tmux client pid={pid}",
+                req.name
             ),
         );
         return PerformResponse::unhandled();
@@ -4089,7 +4711,7 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
     let ok = match req.name.as_str() {
         "tab_select" => tab_select(plugin, &client, req.index()).await,
         "tab_next" => tab_adjacent(plugin, &client, "next").await,
-        "tab_prev" => tab_adjacent(plugin, &client, "previous").await,
+        "tab_previous" => tab_adjacent(plugin, &client, "previous").await,
         "tab_first" => tab_extreme(plugin, &client, "first").await,
         "tab_last" => tab_extreme(plugin, &client, "last").await,
         "tab_new" => tab_new(plugin, ctx, &client).await,
@@ -4101,6 +4723,8 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
         "pane_split_vertical" => pane_split(plugin, ctx, &client, true).await,
         "pane_split_horizontal" => pane_split(plugin, ctx, &client, false).await,
         "pane_close" => pane_close(plugin, ctx, &client).await,
+        "scroll_top" => scroll_extreme(plugin, &client, true).await,
+        "scroll_bottom" => scroll_extreme(plugin, &client, false).await,
         "app_reload" => reload_client(plugin, &client).await,
         _ => return PerformResponse::unhandled(),
     };
@@ -4172,8 +4796,8 @@ async fn switch_routed_target(plugin: &Tmux, client: &TmuxClient, target: &str) 
     if run_tmux_for_client(plugin, client, &args).await.is_some() {
         return true;
     }
-    // A disappeared/replaced client can leave a stale tty in the one-second
-    // local or five-second remote snapshot. Retry without `-c` only in that
+    // A disappeared/replaced client can leave a stale tty in the local or
+    // five-second remote snapshot. Retry without `-c` only in that
     // uncommon case; a healthy jump is always exactly one tmux invocation.
     !client.tty.is_empty()
         && run_tmux_for_client(plugin, client, &["switch-client", "-t", target])
@@ -4271,16 +4895,14 @@ async fn resolve(plugin: &Tmux, ctx: &Context, row: &Candidate) -> PerformRespon
             terminal_pid = find_top_level_ancestor(client.client_pid, &parent_map);
         }
     }
-    if !focus_started {
-        if let Some(pid) = terminal_pid {
-            let _ = raise_terminal_window(
-                ctx,
-                pid,
-                payload.terminal_window_handle,
-                &payload.terminal_window_title,
-            )
-            .await;
-        }
+    if !focus_started && let Some(pid) = terminal_pid {
+        let _ = raise_terminal_window(
+            ctx,
+            pid,
+            payload.terminal_window_handle,
+            &payload.terminal_window_title,
+        )
+        .await;
     }
     ctx.log_fields(
         "debug",
@@ -4523,17 +5145,15 @@ async fn restore_navigation(
         return PerformResponse::fail("navigation restore failed");
     }
 
-    if terminal_pid.is_none() {
-        if let Some(client) = route_client.as_ref().filter(|client| !client.remote) {
-            let pmap = parent_pid_map().await;
-            terminal_pid = find_top_level_ancestor(client.client_pid, &pmap);
-        }
+    if terminal_pid.is_none()
+        && let Some(client) = route_client.as_ref().filter(|client| !client.remote)
+    {
+        let pmap = parent_pid_map().await;
+        terminal_pid = find_top_level_ancestor(client.client_pid, &pmap);
     }
-    if !focus_started {
-        if let Some(pid) = terminal_pid {
-            let _ = raise_terminal_window(ctx, pid, terminal_window_handle, &terminal_window_title)
-                .await;
-        }
+    if !focus_started && let Some(pid) = terminal_pid {
+        let _ =
+            raise_terminal_window(ctx, pid, terminal_window_handle, &terminal_window_title).await;
     }
     ctx.log_fields(
         "debug",
@@ -4564,6 +5184,252 @@ async fn restore_navigation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// While no client is attached, only a window retitled or created can
+    /// reveal one attaching: a keystroke's value change never starts a burst.
+    #[tokio::test]
+    async fn only_window_retitles_and_creations_start_an_ax_burst() {
+        let plugin = Tmux::default();
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        for notification in ax_notifications::ALL
+            .into_iter()
+            .filter(|notification| !AX_REFRESH_NOTIFICATIONS.contains(notification))
+        {
+            plugin
+                .on_event(
+                    harness.context(),
+                    Event {
+                        name: "core:ax.changed".into(),
+                        pid: Some(42),
+                        notification: Some(notification.into()),
+                        ..Event::default()
+                    },
+                )
+                .await;
+            assert!(AX_BURST.due().is_none(), "{notification}");
+        }
+    }
+
+    struct ExecutableFixture(PathBuf);
+
+    impl ExecutableFixture {
+        async fn new() -> Self {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "flash-tmux-test-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            tokio::fs::create_dir_all(&path).await.unwrap();
+            Self(path)
+        }
+
+        async fn script(&self, name: &str, body: &str) -> String {
+            let path = self.0.join(name);
+            tokio::fs::write(&path, format!("#!/bin/sh\n{body}\n"))
+                .await
+                .unwrap();
+            tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .await
+                .unwrap();
+            path.to_string_lossy().into_owned()
+        }
+        async fn cleanup(self) {
+            tokio::fs::remove_dir_all(self.0).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn tmux_executable_resolves_mise_shims_once() {
+        let fixture = ExecutableFixture::new().await;
+        let binary = fixture.script("real-tmux", "exit 0").await;
+        let mise = fixture
+            .script(
+                "mise",
+                &format!(
+                    "test \"$1\" = which && test \"$2\" = tmux || exit 1\nprintf '%s\\n' {}",
+                    shell_quote(&binary)
+                ),
+            )
+            .await;
+        let shim = fixture.0.join("tmux");
+        tokio::fs::symlink(&mise, &shim).await.unwrap();
+        assert_eq!(
+            resolve_tmux_executable(shim.to_string_lossy().into_owned()).await,
+            Some(binary.clone())
+        );
+        assert_eq!(resolve_tmux_executable(binary.clone()).await, Some(binary));
+        fixture.script("mise", "exit 1").await;
+        assert!(
+            resolve_tmux_executable(shim.to_string_lossy().into_owned())
+                .await
+                .is_none()
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn hints_include_every_pane_and_all_visible_links() {
+        let fixture = ExecutableFixture::new().await;
+        let binary = fixture.script(
+            "tmux",
+            r#"case "$1" in
+display-message) printf '%s\n' '120 61|||on top on|||123 $0 @1|||0 @1;1 @2;|||#[range=user|0]first#[norange] #[range=window|1]second#[norange]' ;;
+list-panes) printf '%s\n' '%1 0 0 60 60|||123 $0 @1' '%2 61 0 59 60|||123 $0 @1' ;;
+capture-pane)
+    i=0
+    while test "$i" -lt 50; do
+        printf 'https://example.com/%s/%s\n' "$3" "$i"
+        i=$((i + 1))
+    done ;;
+*) exit 1 ;;
+esac"#,
+        ).await;
+        let plugin = Tmux::default();
+        plugin.tmux_path.set(Some(binary)).unwrap();
+        plugin.client_snapshot().lock().unwrap().clients =
+            vec![client("/dev/ttys000", "work", 42, 0)];
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        let request = HintsRequest {
+            pid: Some(42),
+            front_window_frame: Some(Frame::new(100.0, 200.0, 1200.0, 610.0)),
+            ..Default::default()
+        };
+        let response = hints_for_context(&plugin, &harness.context(), &request).await;
+        assert_eq!(response.context_pid, Some(42));
+        let panes: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some(PANE_TARGET_ROLE))
+            .collect();
+        assert_eq!(panes.len(), 2);
+        let tabs: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some("tmux-window"))
+            .collect();
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0].frame, Frame::new(100.0, 800.0, 50.0, 10.0));
+        assert_eq!(tabs[1].frame, Frame::new(160.0, 800.0, 60.0, 10.0));
+        assert_ne!(tabs[0].context_id, tabs[1].context_id);
+        let links: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some(TERMINAL_LINK_ROLE))
+            .collect();
+        assert_eq!(links.len(), 100);
+        assert_eq!(links[0].frame, Frame::new(100.0, 790.0, 10.0, 10.0));
+        assert_eq!(links[1].frame, Frame::new(710.0, 790.0, 10.0, 10.0));
+        assert!(
+            links
+                .iter()
+                .any(|t| t.label.as_deref() == Some("https://example.com/%1/49"))
+        );
+        assert!(
+            links
+                .iter()
+                .any(|t| t.label.as_deref() == Some("https://example.com/%2/49"))
+        );
+
+        // An unsupported status layout must not disable pane/link discovery.
+        let path = fixture.0.join("tmux");
+        let script = tokio::fs::read_to_string(&path).await.unwrap();
+        tokio::fs::write(
+            &path,
+            script.replace("#[range=user|0]", "#[align=right,range=user|0]"),
+        )
+        .await
+        .unwrap();
+        let response = hints_for_context(&plugin, &harness.context(), &request).await;
+        assert_eq!(response.targets.len(), 102);
+        assert!(
+            response
+                .targets
+                .iter()
+                .all(|t| t.role.as_deref() != Some("tmux-window"))
+        );
+        fixture.cleanup().await;
+    }
+
+    #[test]
+    fn status_tab_hints_require_one_visible_mouse_enabled_row() {
+        assert_eq!(status_hint_row("on top on", 25), Some(0));
+        assert_eq!(status_hint_row("1 bottom 1", 25), Some(24));
+        for status in [
+            "off top on",
+            "0 bottom 1",
+            "2 top on",
+            "on top off",
+            "on bottom 0",
+            "on top",
+            "on unknown on",
+        ] {
+            assert_eq!(status_hint_row(status, 25), None, "{status}");
+        }
+        assert_eq!(status_hint_row("on top on", 0), None);
+    }
+
+    fn pane(in_mode: bool, mouse_tracking: bool, sgr_mouse: bool) -> PaneScrollState {
+        PaneScrollState {
+            in_mode,
+            mouse_tracking,
+            sgr_mouse,
+            width: 120,
+            height: 40,
+        }
+    }
+
+    #[test]
+    fn scroll_extremes_follow_tmux_wheel_routing() {
+        // A pane in a mode scrolls that mode, even over a mouse-tracking program.
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(true, true, true), true),
+            ScrollExtremePlan::ModeCommand("history-top")
+        );
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(true, false, false), false),
+            ScrollExtremePlan::ModeCommand("cancel")
+        );
+        // A mouse-tracking program owns its scrolling.
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, true, true), false),
+            ScrollExtremePlan::WheelReports("\x1b[<65;60;20M".to_string())
+        );
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, true, true), true),
+            ScrollExtremePlan::WheelReports("\x1b[<64;60;20M".to_string())
+        );
+        // Anything else scrolls tmux history; its bottom is the live pane.
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, false, false), true),
+            ScrollExtremePlan::EnterHistoryTop
+        );
+        assert_eq!(
+            ScrollExtremePlan::new(&pane(false, false, false), false),
+            ScrollExtremePlan::AlreadyLive
+        );
+    }
+
+    #[test]
+    fn classic_wheel_reports_keep_single_byte_coordinates() {
+        let wide = PaneScrollState {
+            width: 400,
+            height: 300,
+            ..pane(false, true, false)
+        };
+        assert_eq!(wheel_report(&wide, false), "\x1b[Ma\x7f\x7f");
+        assert_eq!(wheel_report(&pane(false, true, false), true), "\x1b[M`\\4");
+    }
+
+    #[test]
+    fn pane_scroll_state_parses_the_display_format() {
+        assert_eq!(
+            PaneScrollState::parse("0 1 1 120 40\n"),
+            Some(pane(false, true, true))
+        );
+        assert_eq!(PaneScrollState::parse("0 1 1 120"), None);
+        assert_eq!(PaneScrollState::parse("0 1 1 wide 40"), None);
+    }
 
     #[test]
     fn extract_links_keeps_port_and_path() {
@@ -4621,7 +5487,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_panes_and_links_stay_normal_and_only_links_use_link_semantics() {
+    fn tmux_targets_enter_insert_and_only_links_use_link_semantics() {
         let pane = build_target(
             "pane",
             0.0,
@@ -4631,7 +5497,6 @@ mod tests {
             PANE_TARGET_ROLE,
             "%1",
             42,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
             Priority::Urgent,
         );
         let link = build_target(
@@ -4643,14 +5508,67 @@ mod tests {
             TERMINAL_LINK_ROLE,
             "example.com",
             42,
-            TMUX_TARGET_ENTERS_INSERT_MODE,
             Priority::Normal,
         );
 
+        // Every tmux target is terminal content: a primary click on it hands
+        // the keyboard to the terminal, so the host enters INSERT.
         assert_eq!(pane.role.as_deref(), Some("tmux-pane"));
-        assert_eq!(pane.enters_insert_mode, Some(false));
+        assert_eq!(pane.enters_insert_mode, Some(true));
         assert_eq!(link.role.as_deref(), Some("FlashTerminalLink"));
-        assert_eq!(link.enters_insert_mode, Some(false));
+        assert_eq!(link.enters_insert_mode, Some(true));
+    }
+
+    #[test]
+    fn tmux_http_links_publish_their_click_url() {
+        for label in [
+            "https://example.com/page",
+            "http://example.com/page",
+            "src/main.rs",
+        ] {
+            let target = build_target(
+                "link",
+                0.0,
+                0.0,
+                10.0,
+                10.0,
+                TERMINAL_LINK_ROLE,
+                label,
+                42,
+                Priority::Normal,
+            );
+            assert_eq!(target.url.as_deref(), is_url(label).then_some(label));
+        }
+    }
+
+    #[test]
+    fn hint_context_separates_reused_pane_ids_across_live_contexts() {
+        let mut client = client("/dev/ttys000", "work", 42, 0);
+        let initial = HintContext::parse("123 $0 @1").unwrap();
+        let original = initial.target_id(&client, "%1");
+        for raw in ["124 $0 @1", "123 $1 @1", "123 $0 @2"] {
+            assert_ne!(
+                original,
+                HintContext::parse(raw).unwrap().target_id(&client, "%1")
+            );
+        }
+        assert_ne!(original, initial.target_id(&client, "%2"));
+        client.tty = "/dev/ttys001".to_string();
+        assert_ne!(original, initial.target_id(&client, "%1"));
+        client.tty = "/dev/ttys000".to_string();
+        client.backend_id = "remote:work".to_string();
+        assert_ne!(original, initial.target_id(&client, "%1"));
+    }
+
+    #[test]
+    fn hint_context_rejects_a_window_switch_between_geometry_and_pane_replies() {
+        let context = HintContext::parse("123 $0 @1").unwrap();
+        let pane = parse_hint_pane("%1 0 0 80 24|||123 $0 @1", &context).unwrap();
+        assert_eq!(pane.id, "%1");
+        assert!(parse_hint_pane("%1 0 0 80 24|||123 $0 @2", &context).is_none());
+        for invalid in ["", "0 $0 @1", "123 work @1", "123 $0 1", "123 $0 @1 extra"] {
+            assert!(HintContext::parse(invalid).is_none(), "{invalid}");
+        }
     }
 
     #[test]
@@ -4684,6 +5602,7 @@ mod tests {
             activity,
             backend_id: "local".to_string(),
             remote: false,
+            ..TmuxClient::default()
         }
     }
 
@@ -4717,7 +5636,7 @@ mod tests {
     fn repeatable_navigation_actions_prefer_the_warm_client_snapshot() {
         for action in [
             "tab_next",
-            "tab_prev",
+            "tab_previous",
             "tab_move_next",
             "tab_move_previous",
             "pane_next",
@@ -4728,6 +5647,53 @@ mod tests {
         for action in ["tab_select", "tab_new", "tab_close", "pane_close"] {
             assert!(!source_action_prefers_warm_client(action), "{action}");
         }
+    }
+
+    #[test]
+    fn tab_move_pins_the_source_session_instead_of_a_marked_pane() {
+        for (direction, target) in [("next", "work:+1"), ("previous", "work:-1")] {
+            assert_eq!(
+                tab_move_args("work", direction),
+                ["swap-window", "-d", "-s", "work:", "-t", target]
+            );
+        }
+    }
+
+    #[test]
+    fn window_location_keeps_its_identity_when_reordered() {
+        let clients = [client("/dev/ttys000", "work", 1443, 30)];
+        let before = "work\t1\teditor\tnvim\t/work\t1\t0\t@17";
+        let after = "work\t3\teditor\tnvim\t/work\t1\t0\t@17";
+        let rows: Vec<_> = [before, after]
+            .iter()
+            .map(|raw| {
+                build_candidates_from_window_list(
+                    raw,
+                    &clients,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    "",
+                    &local_backend(),
+                )
+                .remove(0)
+            })
+            .collect();
+        use flash_plugin::candidate_metadata as meta;
+        assert_eq!(
+            rows[0].meta(meta::NAVIGATION_URL),
+            rows[1].meta(meta::NAVIGATION_URL)
+        );
+        assert_eq!(
+            rows[0].payload_as::<TmuxPayload>().unwrap().tmux_target,
+            "work:@17"
+        );
+        assert_eq!(
+            rows[1].payload_as::<TmuxPayload>().unwrap().tmux_target,
+            "work:@17"
+        );
+        assert!(rows[0].meta(meta::SUBTITLE).unwrap().starts_with("work:1"));
+        assert!(rows[1].meta(meta::SUBTITLE).unwrap().starts_with("work:3"));
     }
 
     #[test]
@@ -4915,8 +5881,9 @@ mod tests {
             activity: 20,
             backend_id: "remote:moria".to_string(),
             remote: true,
+            ..TmuxClient::default()
         }];
-        let raw = "scratch\t1\tcode\tzsh\t/home/ab/workspace\t1";
+        let raw = "scratch\t1\tcode\tzsh\t/home/ab/workspace\t1\t0\t@11";
         let local_backend = CandidateBackend {
             id: "local".to_string(),
             label: "macbook".to_string(),
@@ -4958,11 +5925,11 @@ mod tests {
         assert_eq!(remote[0].title, "moria · code");
         assert_eq!(
             local[0].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/local%7Cscratch:1")
+            Some("tmux://window/local%7Cscratch:%4011")
         );
         assert_eq!(
             remote[0].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/remote:moria%7Cscratch:1")
+            Some("tmux://window/remote:moria%7Cscratch:%4011")
         );
         let local_payload = local[0].payload_as::<TmuxPayload>().unwrap();
         let remote_payload = remote[0].payload_as::<TmuxPayload>().unwrap();
@@ -5060,9 +6027,11 @@ mod tests {
         assert_eq!(transport.home, "/home/ab");
         assert!(transport.ssh_options.contains(&"-p".to_string()));
         assert!(transport.ssh_options.contains(&"2222".to_string()));
-        assert!(transport
-            .ssh_options
-            .contains(&"IdentitiesOnly=yes".to_string()));
+        assert!(
+            transport
+                .ssh_options
+                .contains(&"IdentitiesOnly=yes".to_string())
+        );
         assert!(!transport.ssh_options.contains(&"BatchMode=yes".to_string()));
     }
 
@@ -5079,6 +6048,77 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
         assert_eq!(transport.host, "ab@moria.zone");
         assert_eq!(transport.tmux_path, "/home/ab/.local/share/mise/shims/tmux");
         assert_eq!(transport.home, "/home/ab");
+    }
+
+    #[test]
+    fn ssh_hosts_default_to_none_and_reject_malformed_values() {
+        assert_eq!(parse_ssh_hosts(None), Ok(BTreeSet::new()));
+        assert_eq!(parse_ssh_hosts(Some(json!([]))), Ok(BTreeSet::new()));
+        assert_eq!(
+            parse_ssh_hosts(Some(json!(["Moria.Zone", "dev"]))),
+            Ok(BTreeSet::from([
+                "dev".to_string(),
+                "moria.zone".to_string()
+            ]))
+        );
+        for malformed in [
+            json!("moria.zone"),
+            json!(true),
+            json!([""]),
+            json!(["ab@moria.zone"]),
+            json!(["moria zone"]),
+            json!([1]),
+        ] {
+            assert_eq!(
+                parse_ssh_hosts(Some(malformed)),
+                Err(SSH_HOSTS_ERROR),
+                "malformed ssh_hosts must disable remote discovery"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_transports_are_inventoried_only_for_configured_hosts() {
+        let ssh =
+            parse_remote_transport("ssh -tt ab@Moria.Zone tmux new-session -A", "ssh").unwrap();
+        let mosh = parse_remote_transport(
+            "mosh-client -# --ssh=ssh ab@moria.zone -- tmux attach | 10.0.0.1 61000",
+            "mosh-client",
+        )
+        .unwrap();
+
+        for transport in [&ssh, &mosh] {
+            assert!(!ssh_host_allowed(&BTreeSet::new(), &transport.host));
+            assert!(!ssh_host_allowed(
+                &BTreeSet::from(["dev".to_string()]),
+                &transport.host
+            ));
+            assert!(ssh_host_allowed(
+                &parse_ssh_hosts(Some(json!(["moria.zone"]))).unwrap(),
+                &transport.host
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn default_settings_open_no_remote_backend() {
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        let ctx = harness.context();
+        let ssh_hosts = configured_ssh_hosts(&ctx);
+
+        assert!(ssh_hosts.is_empty());
+        // Every remote ssh argv is built from a discovered backend; none exist.
+        assert!(
+            discover_remote_tmux_configs(&ctx, &ssh_hosts)
+                .await
+                .is_empty()
+        );
+
+        let harness = flash_plugin::testing::Harness::with_config(
+            "tmux",
+            json!({ "ssh_hosts": "moria.zone" }),
+        );
+        assert!(configured_ssh_hosts(&harness.context()).is_empty());
     }
 
     #[test]
@@ -5108,7 +6148,7 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
     fn candidate_payload_uses_the_window_discovered_for_its_tmux_client() {
         let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
         let candidates = build_candidates_from_window_list(
-            "scratch\t1\tcode\tzsh\t/Users/ab/work\t1",
+            "scratch\t1\tcode\tzsh\t/Users/ab/work\t1\t0\t@11",
             &clients,
             &HashMap::from([("scratch".to_string(), Some(1356))]),
             &HashMap::from([(1443, "scratch@macbook".to_string())]),
@@ -5126,8 +6166,8 @@ ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
     fn window_candidate_builder_emits_windows_from_all_sessions() {
         let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
         let terminal_pid_by_session = HashMap::from([("scratch".to_string(), Some(1356))]);
-        let raw = "beside\t1\tbeside-agentic\tclaude\t/Users/ab/workspace/beside\n\
-scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
+        let raw = "beside\t1\tbeside-agentic\tclaude\t/Users/ab/workspace/beside\t1\t0\t@11\n\
+scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\t1\t0\t@12\n";
 
         let candidates = build_candidates_from_window_list(
             raw,
@@ -5154,7 +6194,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         assert_eq!(candidates[1].source, SOURCE_WINDOWS);
         assert_eq!(
             candidates[1].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/local%7Cscratch:2")
+            Some("tmux://window/local%7Cscratch:%4012")
         );
         assert_eq!(candidates[1].pid_value(), Some(1356));
     }
@@ -5180,8 +6220,8 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 
         // Socket A reports its sessions; socket B reports its own. Each
         // socket's `list-windows -a` only sees its own server.
-        let socket_a_out = "work\t1\teditor\tnvim\t/Users/ab/work";
-        let socket_b_out = "play\t1\tshell\tzsh\t/Users/ab/play";
+        let socket_a_out = "work\t1\teditor\tnvim\t/Users/ab/work\t1\t0\t@11";
+        let socket_b_out = "play\t1\tshell\tzsh\t/Users/ab/play\t1\t0\t@12";
 
         // Merging is what `run_tmux_aggregate` does before handing the
         // blob off to the candidate builder. Dedup is exercised by
@@ -5207,13 +6247,13 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             .iter()
             .map(|c| c.meta(meta::NAVIGATION_URL).unwrap_or(""))
             .collect();
-        assert!(sessions.contains(&"tmux://window/local%7Cwork:1"));
-        assert!(sessions.contains(&"tmux://window/local%7Cplay:1"));
+        assert!(sessions.contains(&"tmux://window/local%7Cwork:%4011"));
+        assert!(sessions.contains(&"tmux://window/local%7Cplay:%4012"));
         // The `play` session lives on the second socket — it would
         // have been entirely missing before the fix.
         let play = candidates
             .iter()
-            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/local%7Cplay:1"))
+            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/local%7Cplay:%4012"))
             .expect("play session candidate present");
         assert_eq!(play.pid_value(), Some(1444));
     }
@@ -5981,35 +7021,375 @@ play\t3\tflash\tzsh\t/p\t1\t4\n";
              segments host-side"
         );
     }
+
+    #[test]
+    fn published_status_segments_escape_hashes_in_tmux_names() {
+        let mut harness = flash_plugin::testing::Harness::new("tmux");
+        let last_status = Mutex::new(None);
+        let segments = TmuxStatusSegments {
+            session: "work #1".to_string(),
+            window: "#[bold]logs".to_string(),
+            pane: "0".to_string(),
+        };
+
+        publish_status_segments(&harness.context(), &last_status, &segments);
+        publish_status_segments(&harness.context(), &last_status, &segments);
+
+        let frames = harness.drain_status();
+        assert_eq!(frames.len(), 1, "unchanged segments stay off the wire");
+        assert_eq!(frames[0]["session"], "work ##1");
+        assert_eq!(frames[0]["window"], "##[bold]logs");
+        assert_eq!(frames[0]["pane"], "0");
+    }
+
+    #[test]
+    fn a_watched_socket_directory_is_rescanned_only_when_it_changes() {
+        let now = Instant::now();
+        let later = now + Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS);
+        let mut state = TmuxSocketRegistryState::default();
+        assert!(state.needs_discovery(now), "never discovered");
+        state.refresh_discovery(Vec::new(), None, true, now);
+        assert!(!state.needs_discovery(now));
+        assert!(state.needs_discovery(later), "unwatched: the rescan period");
+
+        state.watched = true;
+        assert!(
+            !state.needs_discovery(later + Duration::from_secs(3_600)),
+            "watched: a complete scan stays current"
+        );
+        state.invalidate();
+        assert!(state.needs_discovery(now), "a directory change rescans");
+        state.refresh_discovery(Vec::new(), None, false, now);
+        assert!(!state.needs_discovery(now));
+        assert!(
+            state.needs_discovery(later),
+            "an incomplete scan still retries on the period"
+        );
+    }
+
+    #[test]
+    fn observers_are_not_user_clients() {
+        let sep = TMUX_FIELD_SEP;
+        let user = format!(
+            "/dev/ttys001{sep}work{sep}42{sep}100{sep}attached,focused,UTF-8{sep}$3{sep}/private/tmp/tmux-501/default"
+        );
+        let client = parse_tmux_client(&user).expect("a user client");
+        assert_eq!(client.session, "work");
+        assert_eq!(client.activity, 100);
+        assert_eq!(client.session_id, "$3");
+        assert_eq!(client.socket_path, "/private/tmp/tmux-501/default");
+
+        let observer = format!(
+            "{sep}work{sep}43{sep}200{sep}attached,focused,control-mode,ignore-size,no-detach-on-destroy,no-output,UTF-8{sep}$3{sep}/private/tmp/tmux-501/default"
+        );
+        assert!(parse_tmux_client(&observer).is_none());
+        let iterm = format!(
+            "/dev/ttys002{sep}work{sep}44{sep}300{sep}attached,control-mode,UTF-8{sep}$3{sep}/private/tmp/tmux-501/default"
+        );
+        assert!(
+            parse_tmux_client(&iterm).is_some(),
+            "a control client that shows panes (iTerm2) is a user client"
+        );
+        let legacy = format!("/dev/ttys003{sep}work{sep}45{sep}400");
+        assert_eq!(parse_tmux_client(&legacy).unwrap().activity, 400);
+
+        let only_observer = format!("{CANDIDATE_CLIENT_RECORD}{sep}{observer}\nwindow{sep}work");
+        assert!(!candidate_inventory_has_attached_client(&only_observer));
+        let with_user = format!("{only_observer}\n{CANDIDATE_CLIENT_RECORD}{sep}{user}");
+        assert!(candidate_inventory_has_attached_client(&with_user));
+    }
+
+    #[test]
+    fn observers_follow_the_most_active_client_of_each_local_server() {
+        let local = |socket: &str, session_id: &str, activity: i64| TmuxClient {
+            activity,
+            backend_id: "local".to_string(),
+            session_id: session_id.to_string(),
+            socket_path: socket.to_string(),
+            ..TmuxClient::default()
+        };
+        let clients = [
+            local("/tmp/tmux-501/default", "$1", 10),
+            local("/tmp/tmux-501/default", "$2", 30),
+            local("/tmp/tmux-501/default", "$3", 20),
+            local("/tmp/tmux-501/work", "$0", 5),
+            local("", "$4", 50),
+            local("/tmp/tmux-501/odd", "main", 50),
+            TmuxClient {
+                remote: true,
+                backend_id: "remote:moria".to_string(),
+                ..local("/tmp/tmux-1000/default", "$9", 99)
+            },
+        ];
+        assert_eq!(
+            observed_servers(&clients),
+            BTreeMap::from([
+                ("/tmp/tmux-501/default".to_string(), "$2".to_string()),
+                ("/tmp/tmux-501/work".to_string(), "$0".to_string()),
+            ])
+        );
+        assert!(observed_servers(&[]).is_empty());
+    }
+
+    #[test]
+    fn transient_failures_owe_one_retry_at_their_backoff() {
+        let now = Instant::now();
+        let socket = discovered_socket(1, 10, "/private/tmp/tmux-501/work");
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(vec![socket.clone()], None, true, now);
+        assert_eq!(state.next_retry_at(), None);
+        state.record(socket.identity, SocketProbeOutcome::Transient, now);
+        assert_eq!(state.next_retry_at(), Some(now + Duration::from_secs(5)));
+        state.record_default(SocketProbeOutcome::Transient, now);
+        state.record_default(SocketProbeOutcome::Transient, now);
+        assert_eq!(
+            state.default_retry,
+            Some((2, now + Duration::from_secs(15))),
+            "the default socket backs off too"
+        );
+        assert_eq!(state.next_retry_at(), Some(now + Duration::from_secs(5)));
+        state.record(socket.identity, SocketProbeOutcome::Absent, now);
+        assert_eq!(state.next_retry_at(), Some(now + Duration::from_secs(15)));
+        state.record_default(SocketProbeOutcome::Active, now);
+        assert_eq!(state.next_retry_at(), None, "every socket answered");
+    }
+
+    #[test]
+    fn window_bursts_refresh_only_while_an_attach_could_go_unnoticed() {
+        let mut state = TmuxSocketRegistryState::default();
+        assert!(state.attach_may_go_unnoticed(), "no socket watch yet");
+        state.watched = true;
+        assert!(!state.attach_may_go_unnoticed(), "every server observed");
+        state.detached_server = true;
+        assert!(state.attach_may_go_unnoticed(), "a detached server runs");
+    }
+
+    async fn wait_for(what: &str, mut ready: impl AsyncFnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready().await {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn read_or_empty(path: &std::path::Path) -> String {
+        tokio::fs::read_to_string(path).await.unwrap_or_default()
+    }
+
+    /// A fake tmux control client: it reports its argv and pid, answers the
+    /// attach, echoes every command it reads, follows `switch-client`, and
+    /// records the end of its input before leaving.
+    async fn fake_control_client(fixture: &ExecutableFixture) -> String {
+        let dir = fixture.0.to_string_lossy().into_owned();
+        fixture
+            .script(
+                "tmux",
+                &format!(
+                    r#"dir={dir}
+printf '%s\n' "$*" >> "$dir/argv"
+printf '%s\n' "$$" > "$dir/pid"
+printf '%%begin 1 1 0\n%%end 1 1 0\n%%session-changed $1 main\n%%window-add @2\n%%output %%1 ignored\n'
+while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$dir/stdin"
+    case "$line" in
+        "switch-client -E -t '\$2'") printf '%%begin 2 2 1\n%%end 2 2 1\n%%session-changed $2 other\n' ;;
+    esac
+done
+printf 'eof\n' >> "$dir/stdin"
+printf '%%exit\n'"#
+                ),
+            )
+            .await
+    }
+
+    async fn process_alive(pid: &str) -> bool {
+        tokio::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|status| status.success())
+    }
+
+    #[tokio::test]
+    async fn an_observer_reports_changes_follows_its_session_and_leaves_on_stop() {
+        let fixture = ExecutableFixture::new().await;
+        let tmux = fake_control_client(&fixture).await;
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        let ctx = harness.context();
+        let notified = Arc::new(AtomicU64::new(0));
+        let changed: Arc<dyn Fn() + Send + Sync> = {
+            let notified = Arc::clone(&notified);
+            Arc::new(move || {
+                notified.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let observers = control_mode::ControlObservers::default();
+        let start = |socket: &str, follow| {
+            tokio::spawn(control_mode::observe(
+                ctx.clone(),
+                tmux.clone(),
+                socket.to_string(),
+                follow,
+                Arc::clone(&changed),
+            ))
+        };
+        let socket = "/tmp/flash-test.sock".to_string();
+
+        assert!(observers.reconcile(&BTreeMap::from([(socket.clone(), "$1".to_string())]), start));
+        // The attach reply is output; the session and window notifications
+        // count, pane output does not.
+        wait_for("attach notifications", async || {
+            notified.load(Ordering::SeqCst) == 2
+        })
+        .await;
+        let argv = read_or_empty(&fixture.0.join("argv")).await;
+        assert_eq!(
+            argv.trim(),
+            "-S /tmp/flash-test.sock -N -C attach-session -E -f no-output,ignore-size,no-detach-on-destroy -t $1"
+        );
+
+        assert!(!observers.reconcile(&BTreeMap::from([(socket.clone(), "$2".to_string())]), start));
+        wait_for("the switch", async || {
+            read_or_empty(&fixture.0.join("stdin")).await == "switch-client -E -t '$2'\n"
+        })
+        .await;
+        wait_for("the new session", async || {
+            notified.load(Ordering::SeqCst) == 3
+        })
+        .await;
+
+        let pid = read_or_empty(&fixture.0.join("pid")).await;
+        assert!(process_alive(&pid).await);
+        assert!(observers.reconcile(&BTreeMap::new(), start));
+        assert_eq!(observers.count(), 0);
+        wait_for("end of input", async || {
+            read_or_empty(&fixture.0.join("stdin"))
+                .await
+                .ends_with("eof\n")
+        })
+        .await;
+        wait_for("the client to exit", async || !process_alive(&pid).await).await;
+        assert_eq!(
+            read_or_empty(&fixture.0.join("argv")).await.lines().count(),
+            1,
+            "a stopped observer does not reattach"
+        );
+        assert_eq!(
+            notified.load(Ordering::SeqCst),
+            3,
+            "stopping is not a change"
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn an_observer_that_leaves_reattaches_and_shutdown_detaches_it() {
+        let fixture = ExecutableFixture::new().await;
+        let dir = fixture.0.to_string_lossy().into_owned();
+        // The first client leaves at once; the next one stays.
+        let tmux = fixture
+            .script(
+                "tmux",
+                &format!(
+                    r#"dir={dir}
+printf '%s\n' "$$" >> "$dir/pids"
+printf '%%session-changed $1 main\n'
+if test "$(wc -l < "$dir/pids")" -eq 1; then printf '%%exit\n'; exit 0; fi
+while IFS= read -r line; do :; done
+printf 'eof\n' >> "$dir/eof""#
+                ),
+            )
+            .await;
+        let mut harness = flash_plugin::testing::Harness::new("tmux");
+        let ctx = harness.context();
+        let notified = Arc::new(AtomicU64::new(0));
+        let changed: Arc<dyn Fn() + Send + Sync> = {
+            let notified = Arc::clone(&notified);
+            Arc::new(move || {
+                notified.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let observers = control_mode::ControlObservers::default();
+        observers.reconcile(
+            &BTreeMap::from([("/tmp/flash-test.sock".to_string(), "$1".to_string())]),
+            |socket, follow| {
+                tokio::spawn(control_mode::observe(
+                    ctx.clone(),
+                    tmux.clone(),
+                    socket.to_string(),
+                    follow,
+                    Arc::clone(&changed),
+                ))
+            },
+        );
+        // The client that left at once backs off before reattaching, on the
+        // host's clock rather than a sleep: play the host and fire it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let backoff = loop {
+            if let Some(registrations) = harness.drain_poll_registrations() {
+                break registrations;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the backoff"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(
+            Value::Object(backoff.clone()),
+            json!({ "d0": { "after": 1.0, "priority": "low" } })
+        );
+        drop(harness.deliver_poll_tick("d0").expect("the backoff ends"));
+        wait_for("the reattach", async || {
+            read_or_empty(&fixture.0.join("pids")).await.lines().count() == 2
+        })
+        .await;
+        // Its session change, its leaving, then the reattached session change.
+        wait_for("the notifications", async || {
+            notified.load(Ordering::SeqCst) == 3
+        })
+        .await;
+        observers.shutdown().await;
+        assert_eq!(observers.count(), 0);
+        assert_eq!(read_or_empty(&fixture.0.join("eof")).await, "eof\n");
+        fixture.cleanup().await;
+    }
 }
 
 // ---- Plugin glue ------------------------------------------------------------
 
+#[derive(Clone, Default)]
 struct Tmux {
     tmux_path: std::sync::Arc<tokio::sync::OnceCell<Option<String>>>,
     local_config_arc: std::sync::Arc<Mutex<LocalTmuxConfig>>,
     remote_configs_arc: std::sync::Arc<Mutex<BTreeMap<String, RemoteTmuxConfig>>>,
     /// Latest eager `list-clients` + process-tree sample. Source actions
     /// need the focused tmux client, but they should not fan out across
-    /// every tmux socket on the hot key path when the poller already did
+    /// every tmux socket on the hot key path when a refresh already did
     /// that work.
     client_snapshot_arc: std::sync::Arc<Mutex<ClientSnapshot>>,
-    /// Hash of the last snapshot we emitted to the host. Shared by the poller
-    /// and event-triggered refreshes so the dedup invariant has one source of
-    /// truth.
+    /// Hash of the last snapshot we emitted to the host. Shared by every
+    /// refresh so the dedup invariant has one source of truth.
     last_locations_hash_arc: std::sync::Arc<Mutex<Option<u64>>>,
     candidate_partitions_arc: std::sync::Arc<Mutex<CandidatePartitions>>,
     /// Last statusbar segment values emitted through the `status`
-    /// notification, so the 1 s refresh only notifies on actual changes.
+    /// notification, so refreshes only notify on actual changes.
     last_status_segments_arc: std::sync::Arc<Mutex<Option<TmuxStatusSegments>>>,
-    /// Tracks live local tmux socket inodes so the one-second refresh never
-    /// re-probes stale filesystem nodes or `/tmp` aliases.
+    /// Tracks live local tmux socket inodes so refreshes never re-probe
+    /// stale filesystem nodes or `/tmp` aliases.
     tmux_socket_registry_arc: std::sync::Arc<TmuxSocketRegistry>,
     /// Serializes the complete build → hash → publish cycle shared by startup,
-    /// the one-second poll, and push events. Without it, an older slow refresh
+    /// notifications, and push events. Without it, an older slow refresh
     /// can finish after a newer one and publish stale rows over the host's
     /// current catalog.
     candidate_refresh_coordinator_arc: std::sync::Arc<CandidateRefreshCoordinator>,
+    /// Whether the tmux binary supports control-mode observers, asked once.
+    observers_supported_cell: std::sync::Arc<tokio::sync::OnceCell<bool>>,
+    /// One control-mode observer per attached local server.
+    observers_arc: std::sync::Arc<control_mode::ControlObservers>,
+    /// The pending retry of a transiently failing socket.
+    socket_retry_arc: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
 impl Tmux {
@@ -6063,6 +7443,23 @@ impl Tmux {
     async fn resolved_tmux_path(&self) -> Option<&str> {
         self.tmux_path.get_or_init(find_tmux).await.as_deref()
     }
+
+    async fn observers_supported(&self) -> bool {
+        let Some(tmux_path) = self.resolved_tmux_path().await else {
+            return false;
+        };
+        *self
+            .observers_supported_cell
+            .get_or_init(|| async move {
+                let version = run_local(
+                    &[tmux_path.to_string(), "-V".to_string()],
+                    Duration::from_secs(2),
+                )
+                .await;
+                version.ok && control_mode::supports_observers(&version.stdout)
+            })
+            .await
+    }
 }
 
 flash_plugin::plugin!(Tmux);
@@ -6073,7 +7470,8 @@ impl FlashPlugin for Tmux {
         if let Ok(mut local) = self.local_config_arc.lock() {
             *local = local_config;
         }
-        let remotes = discover_remote_tmux_configs(&ctx).await;
+        let ssh_hosts = Arc::new(configured_ssh_hosts(&ctx));
+        let remotes = discover_remote_tmux_configs(&ctx, &ssh_hosts).await;
         ctx.log_fields(
             "debug",
             "[tmux] process discovery",
@@ -6097,7 +7495,7 @@ impl FlashPlugin for Tmux {
             if self.resolved_tmux_path().await.is_none() {
                 ctx.log(
                     "debug",
-                    "[tmux] no local tmux binary; remote discovery remains active",
+                    "[tmux] no local tmux binary; configured ssh_hosts remain active",
                 );
             }
             let remote_refresh = async {
@@ -6115,8 +7513,8 @@ impl FlashPlugin for Tmux {
         })
         .await;
         // A timed-out first cycle publishes nothing (the host keeps its
-        // last-good catalog, which survives restarts); the poll retries
-        // immediately.
+        // last-good catalog, which survives restarts); it retries at once in
+        // the background.
         let degraded_initial = initial.is_err();
         if degraded_initial {
             ctx.log_fields(
@@ -6131,19 +7529,52 @@ impl FlashPlugin for Tmux {
                 ]),
             );
         }
-        start_candidate_poll(self, &ctx, degraded_initial);
-        start_remote_candidate_poll(self, &ctx, matches!(initial, Ok(true)));
+        if degraded_initial {
+            let plugin = self.clone();
+            let ctx = ctx.clone();
+            tokio::spawn(async move { refresh_candidate_locations(&plugin, &ctx).await });
+        } else if !self.observers_supported().await {
+            ctx.log(
+                "debug",
+                "[tmux] control mode needs tmux 3.2; local refreshes follow host events only",
+            );
+        }
+        start_socket_watch(self, &ctx);
+        // Remote polling can observe nothing until a host is opted in.
+        if !ssh_hosts.is_empty() {
+            start_remote_candidate_poll(self, &ctx, ssh_hosts, matches!(initial, Ok(true)));
+        }
     }
 
-    /// Push events refresh the warm locations immediately. The poll keeps the
-    /// store current between host-visible interaction boundaries.
+    /// Interaction boundaries read what tmux never notifies: working
+    /// directories, commands without automatic-rename, which client was
+    /// used last. Settled window retitles and creations stand in for the
+    /// observer a server nobody is attached to lacks.
     async fn on_event(&self, ctx: Context, event: Event) {
-        if matches!(
-            event.name.as_str(),
-            "core:focus.changed" | "core:apps.terminated"
-        ) {
-            refresh_candidate_locations(self, &ctx).await;
+        match event.name.as_str() {
+            "core:focus.changed" | "core:apps.terminated" | "core:session.opened" => {
+                refresh_candidate_locations(self, &ctx).await;
+            }
+            "core:ax.changed" if event.is_ax_change(&AX_REFRESH_NOTIFICATIONS) => {
+                // Without observers (tmux before 3.2) nothing else notices.
+                if self.observers_supported().await
+                    && !self.tmux_socket_registry().attach_may_go_unnoticed().await
+                {
+                    return;
+                }
+                let plugin = self.clone();
+                let refresh_ctx = ctx.clone();
+                AX_BURST.schedule(&ctx, event.pid.unwrap_or_default(), move |_| async move {
+                    refresh_candidate_locations(&plugin, &refresh_ctx).await;
+                });
+            }
+            _ => {}
         }
+    }
+
+    /// Detach every observer before the process exits.
+    async fn on_shutdown(&self, _ctx: Context) {
+        self.observers_arc.shutdown().await;
     }
 
     async fn on_hints(&self, ctx: Context, request: HintsRequest) -> HintsResponse {
@@ -6168,18 +7599,5 @@ impl FlashPlugin for Tmux {
 }
 
 fn main() {
-    let plugin = Tmux {
-        tmux_path: std::sync::Arc::new(tokio::sync::OnceCell::new()),
-        local_config_arc: std::sync::Arc::new(Mutex::new(LocalTmuxConfig::default())),
-        remote_configs_arc: std::sync::Arc::new(Mutex::new(BTreeMap::new())),
-        client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
-        last_locations_hash_arc: std::sync::Arc::new(Mutex::new(None)),
-        candidate_partitions_arc: std::sync::Arc::new(Mutex::new(CandidatePartitions::default())),
-        last_status_segments_arc: std::sync::Arc::new(Mutex::new(None)),
-        tmux_socket_registry_arc: std::sync::Arc::new(TmuxSocketRegistry::default()),
-        candidate_refresh_coordinator_arc: std::sync::Arc::new(
-            CandidateRefreshCoordinator::default(),
-        ),
-    };
-    run(plugin);
+    run(Tmux::default());
 }

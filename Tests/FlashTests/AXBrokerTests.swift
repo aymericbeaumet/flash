@@ -73,6 +73,25 @@ final class AXBrokerTests: XCTestCase {
     return try XCTUnwrap((node["handle"] as? NSNumber)?.uint64Value)
   }
 
+  func testSnapshotDeadlineMustBePositiveAndOnlyTruncatesWhenItPasses() {
+    let broker = AXBroker()
+    let base: [String: Any] = [
+      "pid": Int(getpid()), "roots": "app", "max_nodes": 1,
+      "collect": ["FlashNoSuchAttribute"], "follow": ["FlashNoSuchChildren"],
+    ]
+    for invalid: Any in [0, -1, "500"] {
+      let reply = brokerReply(
+        broker, "host.ax_snapshot", base.merging(["deadline_ms": invalid]) { $1 },
+        pluginID: "a")
+      XCTAssertEqual(reply["error"] as? String, "invalid snapshot scalar params", "\(invalid)")
+    }
+    let reply = brokerReply(
+      broker, "host.ax_snapshot", base.merging(["deadline_ms": 10_000]) { $1 }, pluginID: "a")
+    XCTAssertEqual(reply["ok"] as? Bool, true)
+    XCTAssertEqual((reply["nodes"] as? [[String: Any]])?.count, 1)
+    XCTAssertNil(reply["truncated"], "a walk inside its deadline is complete")
+  }
+
   func testUnknownAXMethodRepliesTheCanonicalError() {
     let reply = brokerReply(AXBroker(), "host.ax_bogus", [:], pluginID: "a")
     XCTAssertEqual(reply["ok"] as? Bool, false)
