@@ -43,9 +43,20 @@ if [[ "$MODE" == "release" ]]; then
   echo "==> Building inspector (release, optimized)"
   "$SCRIPTS/build-inspector.sh" --release
 
-  echo "==> Building flash (release, universal)"
-  swift build -c release --arch arm64 --arch x86_64 --product flash
-  BIN_PATH="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+  # SwiftPM's multi-arch plan omits the Ghostty library path when linking
+  # CFlashTerminal. Build each architecture separately, then combine the app.
+  for architecture in arm64 x86_64; do
+    echo "==> Building flash (release, $architecture)"
+    swift build -c release --arch "$architecture" --product flash
+  done
+  arm_bin="$(swift build -c release --arch arm64 --show-bin-path)"
+  x86_bin="$(swift build -c release --arch x86_64 --show-bin-path)"
+  BIN_PATH="$PROJECT_DIR/build/flash-universal"
+  rm -rf "$BIN_PATH"
+  mkdir -p "$BIN_PATH"
+  lipo -create "$arm_bin/flash" "$x86_bin/flash" -output "$BIN_PATH/flash"
+  lipo "$BIN_PATH/flash" -verify_arch arm64 x86_64
+  cp -R "$arm_bin/Flash_flash.bundle" "$BIN_PATH/Flash_flash.bundle"
   SIGN_IDENTITY="${FLASH_SIGN_IDENTITY:--}"
 
   wait "$plugins_pid" || {
