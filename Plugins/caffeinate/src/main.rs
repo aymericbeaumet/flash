@@ -157,7 +157,11 @@ fn parse_minutes(args: &[String]) -> Result<Option<u64>, ()> {
 /// reaping it (a crash, a SIGKILL past the shutdown grace), caffeinate exits
 /// with it instead of keeping the Mac awake with no owner.
 fn caffeinate_args(plugin_pid: u32, seconds: Option<u64>) -> Vec<String> {
-    let mut args = vec!["-dimsu".to_string(), "-w".to_string(), plugin_pid.to_string()];
+    let mut args = vec![
+        "-dimsu".to_string(),
+        "-w".to_string(),
+        plugin_pid.to_string(),
+    ];
     if let Some(seconds) = seconds {
         args.push("-t".to_string());
         args.push(seconds.to_string());

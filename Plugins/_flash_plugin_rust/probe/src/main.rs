@@ -96,6 +96,7 @@ fn host_arm(subcommand: &str, args: &[String]) -> Option<(&'static str, Value)> 
             "host.post_media_key",
             json!({ "key_code": int_arg(args, 0, 16) }),
         ),
+        "audio" => ("host.audio_devices", json!({ "direction": "input" })),
         "ps" => ("host.process_table", json!({})),
         "signal" => (
             "host.signal",
@@ -716,6 +717,12 @@ mod tests {
                 vec![],
                 "host.post_media_key",
                 json!({ "key_code": 16 }),
+            ),
+            (
+                "audio",
+                vec![],
+                "host.audio_devices",
+                json!({ "direction": "input" }),
             ),
             ("ps", vec![], "host.process_table", json!({})),
             (

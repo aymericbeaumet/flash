@@ -150,6 +150,7 @@ enum ConfigLoader {
 
     init(text: String) {
       var tablePath: [String] = []
+      var tableArrayIndexes: [String: Int] = [:]
       var inMultilineBasicString = false
 
       for (offset, linePart) in text.split(separator: "\n", omittingEmptySubsequences: false)
@@ -168,15 +169,34 @@ enum ConfigLoader {
         let line = Self.stripLineComment(rawLine).trimmingCharacters(in: .whitespaces)
         if line.isEmpty || line.hasPrefix("#") { continue }
 
+        if line.hasPrefix("[["), let close = line.range(of: "]]"),
+          close.lowerBound > line.index(line.startIndex, offsetBy: 2)
+        {
+          let body = String(line[line.index(line.startIndex, offsetBy: 2)..<close.lowerBound])
+            .trimmingCharacters(in: .whitespaces)
+          let index = tableArrayIndexes[body, default: 0]
+          tableArrayIndexes[body] = index + 1
+          tablePath = Self.splitDottedKey(body) + [String(index)]
+          for length in 1...tablePath.count where locations[Array(tablePath.prefix(length))] == nil
+          {
+            locations[Array(tablePath.prefix(length))] = ConfigLocation(line: lineNumber, column: 1)
+          }
+          continue
+        }
+
         if line.hasPrefix("["),
           let close = line.firstIndex(of: "]")
         {
           let body = String(line[line.index(after: line.startIndex)..<close])
             .trimmingCharacters(in: .whitespaces)
           tablePath = Self.splitDottedKey(body)
-          // A table header locates diagnostics about the table itself.
-          if locations[tablePath] == nil {
-            locations[tablePath] = ConfigLocation(line: lineNumber, column: 1)
+          // A nested table header also locates diagnostics about its parents.
+          if !tablePath.isEmpty {
+            for length in 1...tablePath.count
+            where locations[Array(tablePath.prefix(length))] == nil {
+              locations[Array(tablePath.prefix(length))] = ConfigLocation(
+                line: lineNumber, column: 1)
+            }
           }
           continue
         }
@@ -324,6 +344,7 @@ enum ConfigLoader {
 
   private struct PendingModeMapping {
     var scope: ModeScope
+    var bundleID: String?
     var rawKey: String
     var key: String
     var value: ParsedModeMappingValue
@@ -402,6 +423,7 @@ enum ConfigLoader {
       sourceURL: sourceURL,
       pendingModeMappings: &pendingModeMappings,
       into: &config)
+    applyWindowRules(root["window_rules"], locations: locations, into: &config)
     applyOverlay(section("overlay"), locations: locations, into: &config)
     applyDebug(section("debug"), locations: locations, into: &config)
     warnUnknownConfigKeys(root: root, locations: locations, into: &config)
@@ -457,7 +479,7 @@ enum ConfigLoader {
         "live_query_timeout_ms", "ignored_apps", "app_directories",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal",
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "apps",
         "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
         "click_hold_ms", "send_key_interval_ms",
       ],
@@ -475,7 +497,7 @@ enum ConfigLoader {
     ]
     // Plugin settings, popups and widgets use user-defined table names;
     // `applyPopups` and `applyWidgets` check their own keys.
-    let knownSections = Set(sectionKeys.keys).union(["plugin", "popup", "widgets"])
+    let knownSections = Set(sectionKeys.keys).union(["plugin", "popup", "widgets", "window_rules"])
     warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
     for (section, known) in sectionKeys {
       guard let table = root[section]?.table else { continue }
@@ -1699,6 +1721,168 @@ enum ConfigLoader {
           location: locations.location(for: ["mode", "command", key]))
       }
     }
+
+    if let apps = sectionTable(
+      table["apps"], name: "mode.apps", locations: locations, into: &config)
+    {
+      for (bundleID, value) in apps {
+        let appPath = ["mode", "apps", bundleID]
+        guard isValidBundleID(bundleID) else {
+          config.addDiagnostic(
+            "mode.apps bundle ID '\(bundleID)' must contain a dot and only letters, digits, dots, or hyphens",
+            location: locations.location(for: appPath))
+          continue
+        }
+        guard
+          let app = sectionTable(
+            value, name: "mode.apps.\(bundleID)", locations: locations, into: &config)
+        else { continue }
+        for (scopeName, scopeValue) in app {
+          let scopePath = appPath + [scopeName]
+          guard let scope = ModeScope(rawValue: scopeName) else {
+            config.addDiagnostic(
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal",
+              location: locations.location(for: scopePath))
+            continue
+          }
+          guard
+            let scoped = sectionTable(
+              scopeValue, name: "mode.apps.\(bundleID).\(scopeName)",
+              locations: locations, into: &config)
+          else { continue }
+          let mappingsPath = scopePath + ["mappings"]
+          applyModeMappingTable(
+            sectionTable(
+              scoped["mappings"], name: "mode.apps.\(bundleID).\(scopeName).mappings",
+              locations: locations, into: &config),
+            scope: scope,
+            bundleID: bundleID,
+            path: mappingsPath,
+            locations: locations,
+            sourceURL: sourceURL,
+            pendingModeMappings: &pendingModeMappings,
+            into: &config)
+          for (key, _) in scoped where key != "mappings" {
+            config.addDiagnostic(
+              "mode.apps.\(bundleID).\(scopeName): unknown key '\(key)' — mappings belong under [mode.apps.\"\(bundleID)\".\(scopeName).mappings]",
+              location: locations.location(for: scopePath + [key]))
+          }
+        }
+      }
+    }
+  }
+
+  private static func isValidBundleID(_ value: String) -> Bool {
+    let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count >= 2, parts.allSatisfy({ !$0.isEmpty }) else { return false }
+    let allowed = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-")
+    return value.unicodeScalars.allSatisfy { $0 == "." || allowed.contains($0) }
+  }
+
+  private static func applyWindowRules(
+    _ value: (any TOMLValueConvertible)?,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    guard let value else { return }
+    guard let rules = value.array else {
+      config.addDiagnostic(
+        "window_rules must be an array of tables ([[window_rules]])",
+        location: locations.location(for: ["window_rules"]))
+      return
+    }
+    let known: Set<String> = [
+      "bundle_id", "title_contains", "position", "x", "y", "width", "height", "screen",
+    ]
+    for (index, value) in rules.enumerated() {
+      let path = ["window_rules", String(index)]
+      guard let rule = value.table else {
+        config.addDiagnostic(
+          "window_rules[\(index)] must be a table",
+          location: locations.location(for: path))
+        continue
+      }
+      for (key, _) in rule where !known.contains(key) {
+        config.addDiagnostic(
+          "window_rules[\(index)]: unknown key '\(key)'",
+          location: locations.location(for: path + [key]))
+      }
+      guard let bundleID = rule["bundle_id"]?.string, isValidBundleID(bundleID) else {
+        config.addDiagnostic(
+          "window_rules[\(index)].bundle_id must be an exact bundle ID",
+          location: locations.location(for: path + ["bundle_id"])
+            ?? locations.location(for: path))
+        continue
+      }
+      let titleContains: String?
+      if let value = rule["title_contains"] {
+        guard let title = value.string, !title.isEmpty else {
+          config.addDiagnostic(
+            "window_rules[\(index)].title_contains must be a non-empty string",
+            location: locations.location(for: path + ["title_contains"]))
+          continue
+        }
+        titleContains = title
+      } else {
+        titleContains = nil
+      }
+      let screen: Int
+      if let value = rule["screen"] {
+        guard let parsed = value.int else {
+          config.addDiagnostic(
+            "window_rules[\(index)].screen must be a relative integer",
+            location: locations.location(for: path + ["screen"]))
+          continue
+        }
+        screen = parsed
+      } else {
+        screen = 0
+      }
+      let frameNames = ["x", "y", "width", "height"]
+      let hasFrame = frameNames.contains { rule[$0] != nil }
+      let layout: WindowLayout
+      if let position = rule["position"] {
+        guard !hasFrame, let raw = position.string,
+          let parsed = WindowPosition(rawValue: raw.lowercased())
+        else {
+          config.addDiagnostic(
+            "window_rules[\(index)].position must be a named window position and cannot be combined with percentages",
+            location: locations.location(for: path + ["position"]))
+          continue
+        }
+        layout = .position(parsed)
+      } else {
+        guard hasFrame else {
+          config.addDiagnostic(
+            "window_rules[\(index)] requires position or x, y, width, and height",
+            location: locations.location(for: path))
+          continue
+        }
+        let percentages = frameNames.map { name -> Double? in
+          guard let value = rule[name] else { return nil }
+          return value.double ?? value.int.map(Double.init)
+        }
+        guard percentages.allSatisfy({ $0 != nil }),
+          let x = percentages[0], let y = percentages[1],
+          let width = percentages[2], let height = percentages[3],
+          [x, y, width, height].allSatisfy({ $0.isFinite && (0...100).contains($0) }),
+          width > 0, height > 0, x + width <= 100, y + height <= 100
+        else {
+          config.addDiagnostic(
+            "window_rules[\(index)] requires valid x, y, width, and height percentages within the screen",
+            location: locations.location(for: path))
+          continue
+        }
+        layout = .proportional(
+          ProportionalWindowFrame(
+            xPercent: x, yPercent: y, widthPercent: width, heightPercent: height))
+      }
+      config.windowRules.append(
+        WindowPlacementRule(
+          bundleID: bundleID, titleContains: titleContains,
+          move: MoveWindowParams(layout: layout, screen: screen)))
+    }
   }
 
   private static func applyOverlay(
@@ -1941,6 +2125,7 @@ enum ConfigLoader {
   private static func applyModeMappingTable(
     _ table: TOMLTable?,
     scope: ModeScope,
+    bundleID: String? = nil,
     path: [String],
     locations: ConfigSourceLocationIndex,
     sourceURL: URL?,
@@ -1961,6 +2146,7 @@ enum ConfigLoader {
         pendingModeMappings.append(
           PendingModeMapping(
             scope: scope,
+            bundleID: bundleID,
             rawKey: key,
             key: canonical,
             value: parsed,
@@ -2179,7 +2365,7 @@ enum ConfigLoader {
     for mapping in mappings {
       if mapping.key.contains("<leader>"), mapping.scope != .normal {
         config.addDiagnostic(
-          "mapping \"\(mapping.rawKey)\" uses <leader> outside [mode.normal.mappings]",
+          "mapping \"\(mapping.rawKey)\" uses <leader> outside a normal mappings table",
           location: mapping.location, file: mapping.file)
         continue
       }
@@ -2191,12 +2377,18 @@ enum ConfigLoader {
       }
       if mapping.scope == .command, ModeMapping.parseNativeHotkey(key) == nil {
         config.addDiagnostic(
-          "mapping \"\(mapping.rawKey)\" in [mode.command.mappings] must be a single modified key",
+          "mapping \"\(mapping.rawKey)\" in a command mappings table must be a single modified key",
           location: mapping.location, file: mapping.file)
         continue
       }
       switch mapping.value {
       case .mapping(let action, let repeatsOnFinalKey):
+        if let bundleID = mapping.bundleID {
+          let entry = ModeMapping(
+            key: key, action: action, repeatsOnFinalKey: repeatsOnFinalKey)
+          config.mode.appMappings[bundleID, default: .init()].set(entry, in: mapping.scope)
+          continue
+        }
         setModeMapping(
           scope: mapping.scope,
           key: key,
@@ -2204,6 +2396,10 @@ enum ConfigLoader {
           repeatsOnFinalKey: repeatsOnFinalKey,
           into: &config)
       case .removal:
+        if let bundleID = mapping.bundleID {
+          config.mode.appMappings[bundleID, default: .init()].remove(key, in: mapping.scope)
+          continue
+        }
         removeModeMapping(scope: mapping.scope, key: key, into: &config)
       }
     }

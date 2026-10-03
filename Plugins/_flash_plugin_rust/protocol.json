@@ -36,6 +36,7 @@
       "host.activate": "app_control",
       "host.open": "open",
       "host.post_media_key": "media_keys",
+      "host.audio_devices": "audio_devices",
       "host.process_table": "process_control",
       "host.signal": "process_control",
       "host.clipboard_write": "clipboard",
@@ -199,6 +200,7 @@
   },
   "capabilities": [
     "accessibility",
+    "audio_devices",
     "app_control",
     "clipboard",
     "media_keys",

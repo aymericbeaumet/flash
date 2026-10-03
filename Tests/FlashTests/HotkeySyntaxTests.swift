@@ -583,6 +583,30 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(params.screen, 0)
   }
 
+  func testParseWindowStateCommands() {
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_minimize"])?.command,
+      .windowState(.minimize))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_restore"])?.command,
+      .windowState(.restore))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_fullscreen"])?.command,
+      .windowState(.fullscreen(.toggle)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_fullscreen", "--state=on"])?.command,
+      .windowState(.fullscreen(.on)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_fullscreen", "--state=off"])?.command,
+      .windowState(.fullscreen(.off)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_fullscreen", "--state=toggle"])?
+        .diagnosticDescription,
+      "flash window_fullscreen")
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "window_fullscreen", "--state=invalid"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "window_minimize", "--state=on"]))
+  }
+
   func testParseFlashMoveWindowProportionalFrame() {
     let action = parseMappingCommand(argv: [
       "flash", "window_move",

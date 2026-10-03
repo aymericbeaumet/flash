@@ -12,6 +12,7 @@
     "app_control",
     "clipboard",
     "media_keys",
+    "audio_devices",
     "network_fetch",
     "notify",
     "open",

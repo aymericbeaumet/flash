@@ -481,6 +481,16 @@ impl Context {
             .await)
     }
 
+    /// List audio devices for `input` or `output`, or select one by UID.
+    /// Requires the `audio_devices` capability. The host owns CoreAudio access.
+    pub async fn audio_devices(&self, direction: &str, select_uid: Option<&str>) -> Value {
+        let mut params = json!({ "direction": direction });
+        if let Some(uid) = select_uid {
+            params["select_uid"] = json!(uid);
+        }
+        self.call_host("host.audio_devices", params).await
+    }
+
     /// Read the host's process table (`host.process_table`), optionally
     /// sampling CPU over `sample_window_ms`. Returns the raw result object
     /// (rows under `"processes"`). Requires the `process_control` capability.
@@ -1320,6 +1330,12 @@ mod tests {
                 "host.post_media_key",
                 json!({ "key_code": 16 }),
                 call!(|ctx| ctx.post_media_key(16).await),
+                json!(true),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "direction": "input" }),
+                call!(|ctx| ctx.audio_devices("input", None).await["ok"].clone()),
                 json!(true),
             ),
             (

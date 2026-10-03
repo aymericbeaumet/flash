@@ -8,6 +8,77 @@ struct WindowScreenLayout: Equatable {
   let usableFrame: CGRect
 }
 
+enum WindowFocusDirection: String, Hashable {
+  case left, right, up, down
+}
+
+struct WindowFocusCandidate<ID: Hashable> {
+  let id: ID
+  let frame: CGRect
+}
+
+enum WindowFocusPlanner {
+  static func nearest<ID: Hashable>(
+    _ direction: WindowFocusDirection, from sourceID: ID,
+    in windows: [WindowFocusCandidate<ID>]
+  ) -> ID? {
+    guard let source = windows.first(where: { $0.id == sourceID }) else { return nil }
+    let origin = CGPoint(x: source.frame.midX, y: source.frame.midY)
+    return windows.enumerated().compactMap { index, candidate -> (ID, CGFloat, Int)? in
+      guard candidate.id != sourceID else { return nil }
+      let point = CGPoint(x: candidate.frame.midX, y: candidate.frame.midY)
+      let primary: CGFloat
+      let crossGap: CGFloat
+      switch direction {
+      case .left:
+        primary = origin.x - point.x
+        crossGap = max(
+          0,
+          max(
+            source.frame.minY - candidate.frame.maxY,
+            candidate.frame.minY - source.frame.maxY))
+      case .right:
+        primary = point.x - origin.x
+        crossGap = max(
+          0,
+          max(
+            source.frame.minY - candidate.frame.maxY,
+            candidate.frame.minY - source.frame.maxY))
+      case .up:
+        primary = point.y - origin.y
+        crossGap = max(
+          0,
+          max(
+            source.frame.minX - candidate.frame.maxX,
+            candidate.frame.minX - source.frame.maxX))
+      case .down:
+        primary = origin.y - point.y
+        crossGap = max(
+          0,
+          max(
+            source.frame.minX - candidate.frame.maxX,
+            candidate.frame.minX - source.frame.maxX))
+      }
+      guard primary > 0 else { return nil }
+      return (candidate.id, primary + crossGap * 4, index)
+    }.min { lhs, rhs in
+      lhs.1 == rhs.1 ? lhs.2 < rhs.2 : lhs.1 < rhs.1
+    }?.0
+  }
+}
+
+struct WindowPlacementRule: Equatable {
+  let bundleID: String
+  let titleContains: String?
+  let move: MoveWindowParams
+
+  func matches(bundleID: String, title: String?) -> Bool {
+    guard self.bundleID == bundleID else { return false }
+    guard let titleContains else { return true }
+    return title?.range(of: titleContains, options: .caseInsensitive) != nil
+  }
+}
+
 /// Owns interactive window moves and the semantic layout attached to each
 /// window. AX requests run on a dedicated serial queue: a slow target app must
 /// not stall Flash's main run loop (and therefore its keyboard tap) while it
@@ -41,7 +112,16 @@ final class WindowLayoutManager {
     var screenID: CGDirectDisplayID
   }
 
+  private struct NavigationWindow {
+    let key: WindowKey
+    let window: AXUIElement
+    let frame: CGRect
+    let updatedAt: DispatchTime = .now()
+  }
+
   private let queue = DispatchQueue(label: "flash.window-layout", qos: .userInitiated)
+  private let navigationBuildQueue = DispatchQueue(
+    label: "flash.window-navigation-build", qos: .utility)
   private var tracked: [WindowKey: TrackedLayout] = [:]
   private var currentScreens: [WindowScreenLayout] = []
   private var screenChangeGeneration: UInt64 = 0
@@ -58,6 +138,13 @@ final class WindowLayoutManager {
   /// The proportional layouts the config's `window_move` mappings apply, so a
   /// window placed by one is recognized again after Flash restarts.
   private var declaredLayouts: [WindowLayout] = []
+  /// LIFO restores still find the intended window after minimizing the last
+  /// window of an app moves focus to another process.
+  private var minimizedByFlash: [(pid: pid_t, window: AXUIElement)] = []
+  private var navigationWindows: [WindowKey: NavigationWindow] = [:]
+  private var focusedWindowKey: WindowKey?
+  private var placementRules: [WindowPlacementRule] = []
+  private var ruleAppliedWindows: Set<WindowKey> = []
 
   private let screenRecoveryDelaysMs: [Int]
   private let screenLayoutsProvider: ScreenLayoutsProvider
@@ -110,8 +197,232 @@ final class WindowLayoutManager {
     }
   }
 
+  func setWindowState(_ action: WindowStateAction, targetPID: pid_t) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      if case .restore = action {
+        while let prior = self.minimizedByFlash.popLast() {
+          if WindowMover.setWindowState(
+            action, targetPID: prior.pid, restoreWindow: prior.window) != nil
+          {
+            return
+          }
+        }
+      }
+      if let window = WindowMover.setWindowState(action, targetPID: targetPID),
+        case .minimize = action
+      {
+        self.minimizedByFlash.append((targetPID, window))
+      }
+    }
+  }
+
   func setDeclaredLayouts(_ layouts: [WindowLayout]) {
     queue.async { [weak self] in self?.declaredLayouts = layouts }
+  }
+
+  func setPlacementRules(_ rules: [WindowPlacementRule]) {
+    queue.async { [weak self] in
+      guard let self, self.placementRules != rules else { return }
+      self.placementRules = rules
+      self.ruleAppliedWindows.removeAll()
+      let screens = self.currentScreens
+      for candidate in self.navigationWindows.values {
+        self.applyPlacementRule(
+          pid: candidate.key.pid, window: candidate.window, screens: screens)
+      }
+    }
+  }
+
+  /// Prepare window geometry when the running-app set changes. Selection on a
+  /// `window_focus` keypress only reads this in-memory catalog; AX discovery
+  /// runs on a separate queue so a slow app cannot hold up a focus action.
+  func refreshNavigationCatalog(
+    statusBarReservesSpace: Bool, statusBarMonitor: Config.StatusBar.Monitor
+  ) {
+    let pids = NSWorkspace.shared.runningApplications
+      .filter { $0.activationPolicy == .regular && !$0.isTerminated }
+      .map(\.processIdentifier)
+      .filter { $0 != ProcessInfo.processInfo.processIdentifier }
+    let screens = screenLayoutsProvider(statusBarReservesSpace, statusBarMonitor)
+    let activePIDs = Set(pids)
+    queue.async { [weak self] in
+      guard let self, !screens.isEmpty else { return }
+      self.currentScreens = screens
+      self.navigationWindows = self.navigationWindows.filter { activePIDs.contains($0.key.pid) }
+    }
+    navigationBuildQueue.async { [weak self] in
+      guard let self else { return }
+      for pid in pids {
+        guard let snapshot = self.loadNavigationWindows(pid: pid, screens: screens) else {
+          continue
+        }
+        self.queue.async { [weak self] in
+          self?.installNavigationWindows(snapshot, pid: pid, screens: screens)
+        }
+      }
+    }
+  }
+
+  func focusWindow(_ direction: WindowFocusDirection, targetPID: pid_t) {
+    queue.async { [weak self] in
+      guard let self, let source = self.focusedWindowKey, source.pid == targetPID else { return }
+      let candidates = self.navigationWindows.values.sorted {
+        if $0.key.pid != $1.key.pid { return $0.key.pid < $1.key.pid }
+        if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+        return $0.frame.minY < $1.frame.minY
+      }.map {
+        WindowFocusCandidate(id: $0.key, frame: $0.frame)
+      }
+      guard let selected = WindowFocusPlanner.nearest(direction, from: source, in: candidates),
+        let target = self.navigationWindows[selected]
+      else { return }
+      _ = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
+      _ = AXUIElementSetAttributeValue(
+        target.window, kAXMainAttribute as CFString, kCFBooleanTrue)
+      _ = AXUIElementSetAttributeValue(
+        target.window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+      DispatchQueue.main.async {
+        guard let app = NSRunningApplication(processIdentifier: selected.pid) else { return }
+        RunningApplicationActivation.activate(app, restoringMinimizedWindows: false)
+      }
+    }
+  }
+
+  private func scheduleNavigationRefresh(pid: pid_t, screens: [WindowScreenLayout]) {
+    navigationBuildQueue.async { [weak self] in
+      guard let self, let snapshot = self.loadNavigationWindows(pid: pid, screens: screens)
+      else { return }
+      self.queue.async { [weak self] in
+        self?.installNavigationWindows(snapshot, pid: pid, screens: screens)
+      }
+    }
+  }
+
+  private func loadNavigationWindows(
+    pid: pid_t, screens: [WindowScreenLayout]
+  ) -> [NavigationWindow]? {
+    guard let primaryHeight = WindowMover.primaryHeight(in: screens) else { return nil }
+    let axApp = AXApp.make(pid: pid)
+    AXUIElementSetMessagingTimeout(axApp, 1)
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &raw) == .success,
+      let windows = raw as? [AXUIElement]
+    else { return nil }
+    var snapshot: [NavigationWindow] = []
+    for window in windows {
+      AXUIElementSetMessagingTimeout(window, 1)
+      guard
+        let frame = WindowMover.readWindowFrameInNSCoords(
+          window: window, primaryHeight: primaryHeight), frame.width > 0, frame.height > 0,
+        screens.contains(where: { $0.frame.intersects(frame) }),
+        !isMinimized(window)
+      else { continue }
+      let key = WindowKey(pid: pid, window: window)
+      snapshot.append(NavigationWindow(key: key, window: window, frame: frame))
+    }
+    return snapshot
+  }
+
+  private func installNavigationWindows(
+    _ snapshot: [NavigationWindow], pid: pid_t, screens: [WindowScreenLayout]
+  ) {
+    guard NSRunningApplication(processIdentifier: pid)?.isTerminated == false else { return }
+    let previous = navigationWindows.filter { $0.key.pid == pid }
+    navigationWindows = navigationWindows.filter { $0.key.pid != pid }
+    for candidate in snapshot {
+      let fresh =
+        previous[candidate.key].flatMap {
+          $0.updatedAt.uptimeNanoseconds > candidate.updatedAt.uptimeNanoseconds ? $0 : nil
+        } ?? candidate
+      navigationWindows[candidate.key] = fresh
+      applyPlacementRule(pid: pid, window: candidate.window, screens: screens)
+    }
+  }
+
+  private func isMinimized(_ window: AXUIElement) -> Bool {
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &raw)
+        == .success
+    else { return false }
+    return raw as? Bool == true
+  }
+
+  func observedWindowEvent(
+    pid: pid_t, window: AXUIElement?, notification: String,
+    statusBarReservesSpace: Bool, statusBarMonitor: Config.StatusBar.Monitor
+  ) {
+    let screens = screenLayoutsProvider(statusBarReservesSpace, statusBarMonitor)
+    queue.async { [weak self] in
+      guard let self, !screens.isEmpty else { return }
+      if notification == kAXUIElementDestroyedNotification as String, let window {
+        let key = WindowKey(pid: pid, window: window)
+        self.navigationWindows.removeValue(forKey: key)
+        self.ruleAppliedWindows.remove(key)
+      }
+      if notification == kAXWindowCreatedNotification as String
+        || notification == kAXUIElementDestroyedNotification as String
+        || notification == kAXWindowMiniaturizedNotification as String
+        || notification == kAXWindowDeminiaturizedNotification as String
+      {
+        self.scheduleNavigationRefresh(pid: pid, screens: screens)
+      }
+      if notification == kAXWindowCreatedNotification as String
+        || notification == kAXTitleChangedNotification as String,
+        let window
+      {
+        self.applyPlacementRule(pid: pid, window: window, screens: screens)
+      }
+    }
+  }
+
+  func observedTitleChanged(pid: pid_t) {
+    queue.async { [weak self] in
+      guard let self, let key = self.focusedWindowKey, key.pid == pid,
+        let candidate = self.navigationWindows[key],
+        !self.ruleAppliedWindows.contains(key)
+      else { return }
+      self.applyPlacementRule(
+        pid: pid, window: candidate.window, screens: self.currentScreens)
+    }
+  }
+
+  private func applyPlacementRule(
+    pid: pid_t, window: AXUIElement, screens: [WindowScreenLayout]
+  ) {
+    let key = WindowKey(pid: pid, window: window)
+    guard !placementRules.isEmpty, !ruleAppliedWindows.contains(key), !sessionSuspended,
+      !screens.isEmpty,
+      let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    else { return }
+    var rawTitle: CFTypeRef?
+    let title =
+      AXUIElementCopyAttributeValue(
+        window, kAXTitleAttribute as CFString, &rawTitle) == .success
+      ? rawTitle as? String : nil
+    guard let rule = placementRules.first(where: { $0.matches(bundleID: bundleID, title: title) })
+    else { return }
+    guard
+      let result = WindowMover.move(
+        rule.move, targetPID: pid, screens: screens, window: window,
+        existingLayout: { [weak self] window in
+          self?.tracked[WindowKey(pid: pid, window: window)]?.layout
+        })
+    else { return }
+    ruleAppliedWindows.insert(key)
+    if navigationWindows[key] != nil,
+      let primaryHeight = WindowMover.primaryHeight(in: screens),
+      let frame = WindowMover.readWindowFrameInNSCoords(
+        window: window, primaryHeight: primaryHeight)
+    {
+      navigationWindows[key] = NavigationWindow(key: key, window: window, frame: frame)
+    }
+    if let layout = result.layout {
+      tracked[key] = TrackedLayout(
+        pid: pid, window: window, layout: layout, screenID: result.screenID)
+      selfAuthoredChangesUntil[key] = .now() + .milliseconds(Self.authoredChangeGraceMs)
+    }
   }
 
   /// The session stopped or resumed being interactive (lock, sleep, screens
@@ -255,7 +566,12 @@ final class WindowLayoutManager {
         self.tracked.removeValue(forKey: key)
         self.selfAuthoredChangesUntil.removeValue(forKey: key)
         self.pendingRestoreKeys.remove(key)
+        self.navigationWindows.removeValue(forKey: key)
+        self.ruleAppliedWindows.remove(key)
         return
+      }
+      if self.navigationWindows[key] != nil {
+        self.navigationWindows[key] = NavigationWindow(key: key, window: window, frame: frame)
       }
       // AppKit can publish the new NSScreen topology before delivering its
       // screen-parameters notification. Do not mistake macOS's interim window
@@ -292,9 +608,16 @@ final class WindowLayoutManager {
     let screens = screenLayoutsProvider(statusBarReservesSpace, statusBarMonitor)
     queue.async { [weak self] in
       guard let self, let primaryHeight = WindowMover.primaryHeight(in: screens) else { return }
+      let key = WindowKey(pid: pid, window: window)
+      self.focusedWindowKey = key
       if self.currentScreens.isEmpty { self.currentScreens = screens }
       guard self.currentScreens == screens else { return }
-      let key = WindowKey(pid: pid, window: window)
+      self.scheduleNavigationRefresh(pid: pid, screens: screens)
+      let frame = WindowMover.readWindowFrameInNSCoords(
+        window: window, primaryHeight: primaryHeight)
+      if let frame {
+        self.navigationWindows[key] = NavigationWindow(key: key, window: window, frame: frame)
+      }
       if self.pendingRestoreKeys.contains(key) {
         // Its layout never landed (the frame was unreadable then); the user
         // is looking at it now, so put it right.
@@ -304,12 +627,12 @@ final class WindowLayoutManager {
       let now = DispatchTime.now()
       guard now >= self.screenChangeActiveUntil,
         now >= (self.selfAuthoredChangesUntil[key] ?? DispatchTime(uptimeNanoseconds: 0)),
-        let frame = WindowMover.readWindowFrameInNSCoords(
-          window: window, primaryHeight: primaryHeight)
+        let frame
       else { return }
       self.selfAuthoredChangesUntil.removeValue(forKey: key)
       self.recordObservedLayout(
         key: key, pid: pid, window: window, frame: frame, screens: screens)
+      self.applyPlacementRule(pid: pid, window: window, screens: screens)
     }
   }
 
@@ -448,6 +771,10 @@ final class WindowLayoutManager {
         self.screenChangeKeys.remove(key)
         self.pendingRestoreKeys.remove(key)
       }
+      self.minimizedByFlash.removeAll { $0.pid == pid }
+      self.navigationWindows = self.navigationWindows.filter { $0.key.pid != pid }
+      self.ruleAppliedWindows = self.ruleAppliedWindows.filter { $0.pid != pid }
+      if self.focusedWindowKey?.pid == pid { self.focusedWindowKey = nil }
     }
   }
 }
@@ -545,6 +872,7 @@ enum WindowMover {
     _ params: MoveWindowParams,
     targetPID: pid_t,
     screens: [WindowScreenLayout],
+    window: AXUIElement? = nil,
     existingLayout: (AXUIElement) -> WindowLayout?
   ) -> MoveResult? {
     let startedAt = DispatchTime.now()
@@ -564,8 +892,85 @@ enum WindowMover {
         axApp: axApp,
         bundleIdentifier: bundleIdentifier,
         prepareGeometry: prepareGeometry,
+        window: window,
         existingLayout: existingLayout)
     }
+  }
+
+  @discardableResult
+  static func setWindowState(
+    _ action: WindowStateAction, targetPID: pid_t, restoreWindow: AXUIElement? = nil
+  ) -> AXUIElement? {
+    let axApp = AXApp.make(pid: targetPID)
+    let window: AXUIElement?
+    switch action {
+    case .restore:
+      if let restoreWindow {
+        window = restoreWindow
+      } else {
+        var rawWindows: CFTypeRef?
+        guard
+          AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &rawWindows)
+            == .success, let windows = rawWindows as? [AXUIElement]
+        else { return nil }
+        window = windows.first { readBoolean($0, attribute: kAXMinimizedAttribute) == true }
+      }
+    case .minimize, .fullscreen:
+      window = resolveWindow(axApp)?.window
+    }
+    guard let window else {
+      FlashLog.warn("[window_state] no target window for pid \(targetPID)")
+      return nil
+    }
+
+    let attribute: String
+    let desired: Bool
+    switch action {
+    case .minimize:
+      attribute = kAXMinimizedAttribute
+      desired = true
+      if readBoolean(window, attribute: attribute) == true { return nil }
+    case .restore:
+      attribute = kAXMinimizedAttribute
+      desired = false
+      guard readBoolean(window, attribute: attribute) == true else { return nil }
+    case .fullscreen(let state):
+      attribute = "AXFullScreen"
+      guard let current = readBoolean(window, attribute: attribute) else {
+        FlashLog.warn("[window_state] full screen unsupported for pid \(targetPID)")
+        return nil
+      }
+      switch state {
+      case .on: desired = true
+      case .off: desired = false
+      case .toggle: desired = !current
+      }
+      if desired == current { return window }
+    }
+    guard
+      AXUIElementSetAttributeValue(
+        window, attribute as CFString,
+        desired ? kCFBooleanTrue : kCFBooleanFalse) == .success
+    else {
+      FlashLog.warn("[window_state] cannot set \(attribute) for pid \(targetPID)")
+      return nil
+    }
+    if case .restore = action {
+      _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+      DispatchQueue.main.async {
+        guard let app = NSRunningApplication(processIdentifier: targetPID) else { return }
+        RunningApplicationActivation.activate(app, restoringMinimizedWindows: false)
+      }
+    }
+    return window
+  }
+
+  private static func readBoolean(_ window: AXUIElement, attribute: String) -> Bool? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(window, attribute as CFString, &raw) == .success else {
+      return nil
+    }
+    return raw as? Bool
   }
 
   private static func move(
@@ -576,6 +981,7 @@ enum WindowMover {
     axApp: AXUIElement,
     bundleIdentifier: String?,
     prepareGeometry: () -> Void,
+    window explicitWindow: AXUIElement?,
     existingLayout: (AXUIElement) -> WindowLayout?
   ) -> MoveResult? {
 
@@ -593,7 +999,10 @@ enum WindowMover {
     //                            Works for Alacritty et al. that only
     //                            expose the list.
     let resolveStartedAt = DispatchTime.now()
-    guard let resolution = resolveWindow(axApp) else {
+    guard
+      let resolution = explicitWindow.map({ (window: $0, source: "observed") })
+        ?? resolveWindow(axApp)
+    else {
       FlashLog.warn(
         "[window_move] no AX window for pid \(targetPID)")
       return nil

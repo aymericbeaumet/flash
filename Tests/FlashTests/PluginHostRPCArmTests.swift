@@ -74,7 +74,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 19, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 20, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -88,7 +88,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 16, "16 gated + host.ping + host.storage_get/set ungated")
+    XCTAssertEqual(gated, 17, "17 gated + host.ping + host.storage_get/set ungated")
     // The ungated arms answer without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
     XCTAssertEqual(
@@ -228,6 +228,41 @@ final class PluginHostRPCArmTests: XCTestCase {
   }
 
   // MARK: - host.post_media_key (mediaKeyPoster seam)
+
+  func testAudioDevicesListsAndSelectsWithCapabilityAndDirectionValidation() {
+    final class Stub: AudioDeviceProviding {
+      var selected: [(String, AudioDeviceDirection)] = []
+      func list(direction: AudioDeviceDirection) throws -> [AudioDeviceRecord] {
+        [AudioDeviceRecord(uid: "device-1", name: "USB Audio", isDefault: true)]
+      }
+      func select(uid: String, direction: AudioDeviceDirection) throws {
+        selected.append((uid, direction))
+      }
+    }
+
+    let rpc = PluginHostRPC()
+    let stub = Stub()
+    rpc.audioDevices = stub
+    let listed = hostReply(
+      rpc, "host.audio_devices", ["direction": "input"], capabilities: [.audioDevices])
+    XCTAssertEqual(listed["ok"] as? Bool, true)
+    let devices = listed["devices"] as? [[String: Any]]
+    XCTAssertEqual(devices?.first?["uid"] as? String, "device-1")
+    XCTAssertEqual(devices?.first?["default"] as? Bool, true)
+
+    let selected = hostReply(
+      rpc, "host.audio_devices", ["direction": "output", "select_uid": "device-1"],
+      capabilities: [.audioDevices])
+    XCTAssertEqual(selected["ok"] as? Bool, true)
+    XCTAssertEqual(stub.selected.count, 1)
+    XCTAssertEqual(stub.selected.first?.0, "device-1")
+    XCTAssertEqual(stub.selected.first?.1, .output)
+
+    let invalid = hostReply(
+      rpc, "host.audio_devices", ["direction": "effects"], capabilities: [.audioDevices])
+    XCTAssertEqual(invalid["ok"] as? Bool, false)
+    XCTAssertEqual(stub.selected.count, 1)
+  }
 
   func testMediaKeyPostsDownUpPairThroughTheSeamAndValidatesRange() {
     let original = PluginHostRPC.mediaKeyPoster

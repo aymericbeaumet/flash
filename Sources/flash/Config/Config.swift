@@ -682,6 +682,72 @@ struct Config {
     return segments
   }
   struct Mode: Equatable {
+    struct AppMappings: Equatable {
+      var all: [ModeMapping] = []
+      var normal: [ModeMapping] = []
+      var insert: [ModeMapping] = []
+      var terminal: [ModeMapping] = []
+      var command: [ModeMapping] = []
+      var unmapped: [ModeScope: Set<String>] = [:]
+
+      func mappings(for scope: ModeScope) -> [ModeMapping] {
+        switch scope {
+        case .all: return all
+        case .normal: return normal
+        case .insert: return insert
+        case .terminal: return terminal
+        case .command: return command
+        }
+      }
+
+      mutating func set(_ mapping: ModeMapping, in scope: ModeScope) {
+        let sameKey: (ModeMapping) -> Bool = {
+          $0.key == mapping.key
+            || (mapping.nativeHotkey != nil && $0.nativeHotkey == mapping.nativeHotkey)
+        }
+        if let removed = unmapped[scope] {
+          let remaining = removed.filter {
+            $0 != mapping.key
+              && (mapping.nativeHotkey == nil
+                || ModeMapping.parseNativeHotkey($0) != mapping.nativeHotkey)
+          }
+          unmapped[scope] = remaining.isEmpty ? nil : remaining
+        }
+        switch scope {
+        case .all:
+          all.removeAll(where: sameKey)
+          all.insert(mapping, at: 0)
+        case .normal:
+          normal.removeAll(where: sameKey)
+          normal.insert(mapping, at: 0)
+        case .insert:
+          insert.removeAll(where: sameKey)
+          insert.insert(mapping, at: 0)
+        case .terminal:
+          terminal.removeAll(where: sameKey)
+          terminal.insert(mapping, at: 0)
+        case .command:
+          command.removeAll(where: sameKey)
+          command.insert(mapping, at: 0)
+        }
+      }
+
+      mutating func remove(_ key: String, in scope: ModeScope) {
+        let chord = ModeMapping.parseNativeHotkey(key)
+        let matches: (ModeMapping) -> Bool = {
+          $0.key == key || (chord != nil && $0.nativeHotkey == chord)
+        }
+        unmapped[scope, default: []].insert(key)
+        switch scope {
+        case .all: all.removeAll(where: matches)
+        case .normal: normal.removeAll(where: matches)
+        case .insert: insert.removeAll(where: matches)
+        case .terminal: terminal.removeAll(where: matches)
+        case .command: command.removeAll(where: matches)
+        }
+      }
+    }
+
     struct Labels: Equatable {
       var normal: String = "NORMAL"
       var insert: String = "INSERT"
@@ -698,6 +764,8 @@ struct Config {
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
+    /// Exact focused-app bundle identifier to per-scope additions/removals.
+    var appMappings: [String: AppMappings] = [:]
     /// Keys a `"<key>" = false` entry removed, per table, after every layer.
     /// A later layer mapping the key again takes it back out. Plugin
     /// mappings on these keys are dropped too (`EffectiveMappings.merge`).
@@ -715,7 +783,11 @@ struct Config {
     /// The proportional layouts `window_move` mappings apply, in any scope.
     var declaredWindowLayouts: [WindowLayout] {
       var layouts: [WindowLayout] = []
-      for mapping in all + normal + insert + terminal + command {
+      let appEntries = appMappings.sorted { $0.key < $1.key }.flatMap { entry in
+        let app = entry.value
+        return app.all + app.normal + app.insert + app.terminal + app.command
+      }
+      for mapping in all + normal + insert + terminal + command + appEntries {
         guard case .flashCommand(.moveWindow(let params)) = mapping.action,
           case .proportional? = params.layout, let layout = params.layout,
           !layouts.contains(layout)
@@ -912,13 +984,16 @@ struct Config {
     }
 
     var containsNormalModeMapping: Bool {
-      (all + normal + insert + command + terminal).contains { mapping in
+      let appEntries = appMappings.values.flatMap {
+        $0.all + $0.normal + $0.insert + $0.terminal + $0.command
+      }
+      return (all + normal + insert + command + terminal + appEntries).contains { mapping in
         mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
 
     var containsAdvancedModeMapping: Bool {
-      all.contains { mapping in
+      (all + appMappings.values.flatMap(\.all)).contains { mapping in
         mapping.action.command == .normalMode || mapping.action.command == .leaveMode
       }
     }
@@ -939,6 +1014,7 @@ struct Config {
   /// The defining layer of each text popup.
   var popupSourceURLs: [String: URL] = [:]
   var mode = Mode()
+  var windowRules: [WindowPlacementRule] = []
   var debug = Debug()
   var flashlight = Flashlight()
   var diagnostics: [ConfigDiagnostic] = []
@@ -1012,7 +1088,11 @@ struct Config {
       }
       for case .command(let command) in statusBar.clickActions.values { collect(command) }
     }
-    for mapping in mode.all + mode.normal + mode.insert + mode.terminal + mode.command {
+    let appEntries = mode.appMappings.values.flatMap {
+      $0.all + $0.normal + $0.insert + $0.terminal + $0.command
+    }
+    for mapping in mode.all + mode.normal + mode.insert + mode.terminal + mode.command + appEntries
+    {
       collect(mapping.action)
     }
     return names
@@ -1115,6 +1195,18 @@ struct Config {
   var resolvedConfigJSON: String {
     let modeJSON: [String: Any] = [
       "all": mode.all.map(Self.mappingJSONValue),
+      "apps": mode.appMappings.mapValues { app in
+        [
+          "all": app.all.map(Self.mappingJSONValue),
+          "normal": app.normal.map(Self.mappingJSONValue),
+          "insert": app.insert.map(Self.mappingJSONValue),
+          "terminal": app.terminal.map(Self.mappingJSONValue),
+          "command": app.command.map(Self.mappingJSONValue),
+          "unmapped": app.unmapped.reduce(into: [String: [String]]()) { result, entry in
+            result[entry.key.rawValue] = entry.value.sorted()
+          },
+        ]
+      },
       "command": mode.command.map(Self.mappingJSONValue),
       "insert": mode.insert.map(Self.mappingJSONValue),
       "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
@@ -1425,6 +1517,17 @@ extension URLCommand {
       }
       parts.append(kv("screen", params.screen))
       return verb("window_move", parts)
+    case .windowState(let action):
+      switch action {
+      case .minimize: return verb("window_minimize")
+      case .restore: return verb("window_restore")
+      case .fullscreen(let state):
+        return state == .toggle
+          ? verb("window_fullscreen")
+          : verb("window_fullscreen", [kv("state", state.rawValue)])
+      }
+    case .focusWindow(let direction):
+      return verb("window_focus", [kv("direction", direction.rawValue)])
     case .sendKey(let keys, _, _):
       return verb("send_key", [kv("keys", keys)])
     case .sendKeys(let keys, _, _):

@@ -17,17 +17,38 @@ import Foundation
 enum EffectiveMappings {
   static func merge(
     base: Config.Mode,
-    plugin: [(priority: Int, scope: ModeScope, mapping: ModeMapping)]
+    plugin: [(priority: Int, scope: ModeScope, mapping: ModeMapping)],
+    bundleID: String? = nil
   ) -> Config.Mode {
     let plugin = plugin.filter { !base.removes($0.mapping, in: $0.scope) }
-    guard !plugin.isEmpty else { return base }
     var effective = base
-    effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)
-    effective.normal = mergeScope(base: base.normal, plugin: plugin, scope: .normal)
-    effective.insert = mergeScope(base: base.insert, plugin: plugin, scope: .insert)
-    effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
+    if !plugin.isEmpty {
+      effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)
+      effective.normal = mergeScope(base: base.normal, plugin: plugin, scope: .normal)
+      effective.insert = mergeScope(base: base.insert, plugin: plugin, scope: .insert)
+      effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
+    }
+    if let bundleID, let app = base.appMappings[bundleID] {
+      effective.all = apply(app: app, scope: .all, to: effective.all)
+      effective.normal = apply(app: app, scope: .normal, to: effective.normal)
+      effective.insert = apply(app: app, scope: .insert, to: effective.insert)
+      effective.terminal = apply(app: app, scope: .terminal, to: effective.terminal)
+      effective.command = apply(app: app, scope: .command, to: effective.command)
+    }
     effective.recompileMappings()
     return effective
+  }
+
+  private static func apply(
+    app: Config.Mode.AppMappings, scope: ModeScope, to inherited: [ModeMapping]
+  ) -> [ModeMapping] {
+    let removed = app.unmapped[scope] ?? []
+    let removedChords = Set(removed.compactMap(ModeMapping.parseNativeHotkey))
+    let remaining = inherited.filter {
+      !removed.contains($0.key)
+        && ($0.nativeHotkey.map { !removedChords.contains($0) } ?? true)
+    }
+    return app.mappings(for: scope) + remaining
   }
 
   private static func mergeScope(

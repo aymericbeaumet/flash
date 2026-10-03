@@ -208,6 +208,10 @@ extension AppDelegate {
     guard let app = currentNonFlashRunningApplication(), app.processIdentifier == pid else {
       return
     }
+    windowLayoutManager.observedWindowEvent(
+      pid: pid, window: observedWindow, notification: notification,
+      statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: config.statusBar.monitor)
     if AppMonitor.isWindowGeometryNotification(notification), let observedWindow {
       observedWindowGeometryDidChange(
         pid: pid, window: observedWindow, notification: notification,
@@ -867,6 +871,7 @@ extension AppDelegate {
   static func normalModeCommandMayChangeKeyboardFocus(_ command: URLCommand) -> Bool {
     switch command {
     case .openApp, .pluginCommand, .pluginVerb, .appPrev, .appNext, .showAbout,
+      .windowState,
       .movementBack, .movementForward, .quitApp, .saveAndQuit:
       return true
     case .sendKey(_, _, let flagsRawValue):
@@ -986,6 +991,8 @@ extension AppDelegate {
     case .showAbout:
       handleURLCommand(command)
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
+      .focusWindow,
+      .windowState,
       .pluginVerb:
       handleURLCommand(command)
     }

@@ -37,6 +37,13 @@ flash mouse_grid --zoom-to-depth=2       # start two steps deep under the pointe
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
 flash window_move --x=10% --y=10% --width=80% --height=80% # proportional frame
+flash window_minimize                     # minimize the focused window
+flash window_restore                      # restore the most recently minimized window
+flash window_fullscreen                   # toggle native macOS full screen
+flash window_fullscreen --state=on        # enter native full screen (off exits)
+flash window_focus --direction=right      # focus the nearest window to the right
+flash media_input                         # list input devices in Flash's message overlay
+flash media_output --device='Studio Speakers' # select the default output device
 flash enter_command_mode                 # open the command line
 flash enter_terminal_mode                # show and focus the terminal popup; see docs/popups.md
 flash enter_terminal_mode --name=btop    # show a [popup.<name>] centred and focused
@@ -148,3 +155,18 @@ at a different desk) is applied once the session is back; a window whose frame
 could not be read then is restored as soon as it can be, or when focused. A
 window already sitting in a proportional frame one of your `window_move`
 mappings declares is recognized after Flash restarts.
+
+`window_minimize` acts on the focused window. `window_restore` raises and
+activates the most recent window minimized by Flash, including after focus
+moves to another app. If none remains, it restores the first minimized window
+of the focused app in Accessibility window order. `window_fullscreen` toggles
+native macOS full screen, or accepts `--state=on|off|toggle`; it needs a window
+that exposes the Accessibility `AXFullScreen` attribute. All three run
+Accessibility requests away from
+Flash's keyboard input loop.
+
+`window_focus --direction=left|right|up|down` chooses the nearest cataloged
+non-minimized window in that direction. See [window navigation and placement](windows.md)
+for automatic placement rules. The media plugin's `media_input` and
+`media_output` verbs accept an optional `--device=<exact name or UID>`; see
+[audio devices](audio.md) for command-bar listing and selection.

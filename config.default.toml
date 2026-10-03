@@ -480,6 +480,19 @@ app_directories = [
 # tmux = 200
 # "firefox.tabs" = 120
 
+# Optional window placement rules are top-level arrays of tables. A rule
+# applies once when a matching window appears; the first match wins. Use an
+# exact bundle ID, an optional case-insensitive title substring, and either
+# a named position or a complete percentage frame. See docs/windows.md.
+# [[window_rules]]
+# bundle_id = "com.apple.Terminal"
+# position = "lefthalf"
+# [[window_rules]]
+# bundle_id = "org.mozilla.firefox"
+# title_contains = "Downloads"
+# position = "righthalf"
+# screen = 1
+
 [mode]
 # Mode labels shown after the active app name in the persistent status bar
 # when advanced mode is enabled.
@@ -541,6 +554,10 @@ send_key_interval_ms = 35
 # should enter INSERT (for example, "gi" = ["flash", "focus_input"]).
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
+# "alt+m" = ["flash", "window_minimize"]
+# "alt+f" = ["flash", "window_fullscreen"]
+# "alt+shift+m" = ["flash", "window_restore"]
+# "alt+l" = ["flash", "window_focus", "--direction=right"]
 # Percentage frames require x/y/width/height together. x and y are offsets
 # from the Flash-usable frame's top-left; every value must include `%`.
 # Flash retains the layout and reapplies it after screen moves or display changes.
@@ -677,6 +694,13 @@ leader = "\\"
 "cmd+q" = ["flash", "popup_quit"] # stop the process; a persistent popup restarts it
 "cmd+r" = ["flash", "popup_restart"] # restart now; a text popup rereads its values
 "cmd+w" = ["flash", "leave_mode"] # close; a persistent process keeps running
+
+# Override mappings for one exact, case-sensitive bundle ID. Supported scopes
+# are all, normal, insert, command, and terminal. `false` removes an inherited
+# mapping only while that app is focused. See docs/configuration.md.
+# [mode.apps."com.apple.Safari".normal.mappings]
+# "f" = ["flash", "mouse_target", "--search"]
+# "r" = false
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

@@ -40,6 +40,7 @@ final class PluginHostRPC {
   /// Host-owned Location/CoreWLAN provider for `host.wifi_info`. Set by
   /// AppDelegate so plugins never access either framework directly.
   var wifiInfoProvider: WiFiInfoProviding?
+  var audioDevices: any AudioDeviceProviding = CoreAudioDevices()
   /// Per-plugin timestamp of the last accepted `host.notify`, enforcing the
   /// 1-per-second rate limit. Main-thread only (notify hops to main).
   private var lastNotifyAt: [String: Date] = [:]
@@ -184,6 +185,12 @@ final class PluginHostRPC {
         return
       }
       postMediaKey(params, reply: reply)
+    case "host.audio_devices":
+      guard capabilities.contains(.audioDevices) else {
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("audio_devices")])
+        return
+      }
+      hostAudioDevices(params, reply: reply)
     case "host.process_table":
       guard capabilities.contains(.processControl) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("process_control")])
@@ -480,6 +487,46 @@ final class PluginHostRPC {
       return
     }
     reply(["ok": false, "error": "host.open requires url or bundle_id"])
+  }
+
+  private func hostAudioDevices(
+    _ params: [String: Any], reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let rawDirection = params["direction"] as? String,
+      let direction = AudioDeviceDirection(rawValue: rawDirection)
+    else {
+      reply(["ok": false, "error": "host.audio_devices requires input or output direction"])
+      return
+    }
+    let uid: String?
+    if let selection = params["select_uid"] {
+      guard let selectedUID = selection as? String, !selectedUID.isEmpty else {
+        reply(["ok": false, "error": "host.audio_devices requires a nonempty select_uid"])
+        return
+      }
+      uid = selectedUID
+    } else {
+      uid = nil
+    }
+    let provider = audioDevices
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        if let uid {
+          try provider.select(uid: uid, direction: direction)
+          reply(["ok": true])
+        } else {
+          let devices = try provider.list(direction: direction)
+          reply([
+            "ok": true,
+            "devices": devices.map {
+              ["uid": $0.uid, "name": $0.name, "default": $0.isDefault] as [String: Any]
+            },
+          ])
+        }
+      } catch {
+        reply(["ok": false, "error": error.localizedDescription])
+      }
+    }
   }
 
   /// `host.post_media_key`: post an NX_SYSTEM_DEFINED key (play/pause 16,

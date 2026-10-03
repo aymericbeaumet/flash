@@ -41,6 +41,8 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// Post a media key (play/pause, next, …) as an NX_SYSTEM_DEFINED event
   /// through the host (`host.post_media_key`).
   case mediaKeys = "media_keys"
+  /// Enumerate and select input/output audio devices through host CoreAudio.
+  case audioDevices = "audio_devices"
   /// Read the host's process table (`host.process_table`) and signal a pid
   /// (`host.signal`).
   case processControl = "process_control"

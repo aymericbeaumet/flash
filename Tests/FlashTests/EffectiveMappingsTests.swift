@@ -3,6 +3,61 @@ import XCTest
 @testable import flash
 
 final class EffectiveMappingsTests: XCTestCase {
+  func testAppMappingsOverridePluginsAndRemoveOnlyInMatchingApp() {
+    var base = mode(normal: [ModeMapping(key: "u", action: .flashCommand(.undo))])
+    var overrides = Config.Mode.AppMappings()
+    overrides.normal = [ModeMapping(key: "q", action: .flashCommand(.tabNext))]
+    overrides.unmapped[.normal] = ["u"]
+    base.appMappings["com.apple.Safari"] = overrides
+    let plugin = [
+      (
+        priority: 25, scope: ModeScope.normal,
+        mapping: ModeMapping(key: "q", action: .flashCommand(.redo))
+      )
+    ]
+    let safari = EffectiveMappings.merge(base: base, plugin: plugin, bundleID: "com.apple.Safari")
+    let other = EffectiveMappings.merge(base: base, plugin: plugin, bundleID: "com.apple.TextEdit")
+    XCTAssertEqual(safari.compiledNormal.mapping(for: "q")?.action.command, .tabNext)
+    XCTAssertNil(safari.compiledNormal.mapping(for: "u"))
+    XCTAssertEqual(other.compiledNormal.mapping(for: "q")?.action.command, .redo)
+    XCTAssertEqual(other.compiledNormal.mapping(for: "u")?.action.command, .undo)
+  }
+
+  func testAppFocusChangesNativeHotkeyTable() {
+    var base = mode()
+    var overrides = Config.Mode.AppMappings()
+    overrides.all = [ModeMapping(key: "cmd+shift+]", action: .flashCommand(.tabNext))]
+    base.appMappings["com.apple.Safari"] = overrides
+    let safari = EffectiveMappings.merge(base: base, plugin: [], bundleID: "com.apple.Safari")
+    let other = EffectiveMappings.merge(base: base, plugin: [], bundleID: "com.apple.TextEdit")
+    let chord = try! XCTUnwrap(ModeMapping.parseNativeHotkey("cmd+shift+]"))
+    XCTAssertEqual(
+      MappingsCoordinator.activeMappingTable(in: safari, scope: .normal)[chord]?.action.command,
+      .tabNext)
+    XCTAssertNil(MappingsCoordinator.activeMappingTable(in: other, scope: .normal)[chord])
+    XCTAssertEqual(MappingsCoordinator.nativeMappings(in: safari, scope: .insert).count, 1)
+    XCTAssertTrue(MappingsCoordinator.nativeMappings(in: other, scope: .insert).isEmpty)
+  }
+
+  func testAppRemovalSuppressesPluginChordAliasOnlyForThatApp() {
+    var base = mode()
+    var overrides = Config.Mode.AppMappings()
+    overrides.unmapped[.normal] = ["cmd+shift+]"]
+    base.appMappings["com.apple.Safari"] = overrides
+    let plugin = [
+      (
+        priority: 25, scope: ModeScope.normal,
+        mapping: ModeMapping(key: "cmd+shift+}", action: .flashCommand(.tabNext))
+      )
+    ]
+    let chord = try! XCTUnwrap(ModeMapping.parseNativeHotkey("cmd+shift+]"))
+    let safari = EffectiveMappings.merge(base: base, plugin: plugin, bundleID: "com.apple.Safari")
+    let other = EffectiveMappings.merge(base: base, plugin: plugin, bundleID: "com.apple.TextEdit")
+    XCTAssertNil(MappingsCoordinator.activeMappingTable(in: safari, scope: .normal)[chord])
+    XCTAssertEqual(
+      MappingsCoordinator.activeMappingTable(in: other, scope: .normal)[chord]?.action.command,
+      .tabNext)
+  }
   /// A `Config.Mode` carrying only the supplied scope arrays — the default
   /// normal mappings are cleared so each case asserts on exactly what it sets.
   private func mode(

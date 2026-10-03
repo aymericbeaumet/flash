@@ -6,6 +6,89 @@ import XCTest
 @testable import flash
 
 final class ConfigLoaderTests: XCTestCase {
+  func testAppMappingsParseWithExactBundleIDAndLayeredRemoval() {
+    let config = ConfigLoader.parseLayers(
+      [
+        .init(
+          text: """
+            [mode.apps."com.apple.Safari".normal.mappings]
+            "u" = ["flash", "tab_new"]
+            "cmd+shift+]" = ["flash", "tab_next"]
+            """),
+        .init(
+          text: """
+            [mode.apps."com.apple.Safari".normal.mappings]
+            "u" = false
+            "cmd+shift+}" = ["flash", "tab_previous"]
+            """),
+      ], environment: [:])
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    let safari = config.mode.appMappings["com.apple.Safari"]
+    XCTAssertEqual(safari?.normal.first?.action.command, .tabPrev)
+    XCTAssertTrue(safari?.unmapped[.normal]?.contains("u") == true)
+  }
+
+  func testAppMappingsRejectUnknownScopeAndUnmodifiedCommandKey() {
+    let config = ConfigLoader.parse(
+      """
+      [mode.apps."com.apple.Safari".unknown.mappings]
+      "x" = ["flash", "tab_new"]
+      [mode.apps."com.apple.Safari".command.mappings]
+      "x" = ["flash", "tab_new"]
+      """)
+    XCTAssertEqual(config.diagnostics.count, 2)
+    XCTAssertTrue(config.diagnostics.map(\.message).contains { $0.contains("unknown") })
+    XCTAssertTrue(config.diagnostics.map(\.message).contains { $0.contains("single modified key") })
+  }
+
+  func testConfigCheckLocatesInvalidAppBundleID() {
+    let file = URL(fileURLWithPath: "/tmp/flash-app-mappings.toml")
+    let result = ConfigCheck.run(
+      fileURL: file,
+      text: """
+        [mode.apps."not a bundle".normal.mappings]
+        "x" = ["flash", "undo"]
+        """,
+      defaultLayer: nil)
+    XCTAssertEqual(result.exitCode, 1)
+    XCTAssertEqual(result.lines.count, 1)
+    XCTAssertTrue(result.lines[0].contains("/tmp/flash-app-mappings.toml:1:1:"))
+    XCTAssertTrue(result.lines[0].contains("bundle ID"))
+  }
+
+  func testWindowRulesRequireCompleteValidGeometry() {
+    let config = ConfigLoader.parse(
+      """
+      [[window_rules]]
+      bundle_id = "com.apple.Safari"
+      title_contains = "Inbox"
+      position = "lefthalf"
+      screen = 1
+      [[window_rules]]
+      bundle_id = "com.apple.Terminal"
+      x = 5
+      y = 10
+      width = 90
+      height = 80
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    XCTAssertEqual(config.windowRules.count, 2)
+    XCTAssertEqual(config.windowRules[0].bundleID, "com.apple.Safari")
+    XCTAssertEqual(config.windowRules[0].titleContains, "Inbox")
+    XCTAssertEqual(config.windowRules[0].move.screen, 1)
+    XCTAssertEqual(config.windowRules[1].bundleID, "com.apple.Terminal")
+
+    let invalid = ConfigLoader.parse(
+      """
+      [[window_rules]]
+      bundle_id = "com.apple.Safari"
+      x = 20
+      width = 80
+      """)
+    XCTAssertEqual(invalid.windowRules.count, 0)
+    XCTAssertTrue(
+      invalid.diagnostics.map(\.message).contains { $0.contains("x, y, width, and height") })
+  }
   func testModeScrollLineDefaultsAndOverrides() {
     let defaults = ConfigLoader.parse("")
     XCTAssertEqual(defaults.mode.scrollStep, 60)

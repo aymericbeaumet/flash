@@ -140,6 +140,8 @@ enum URLCommand: Hashable {
   case openApp(name: String)
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
+  case focusWindow(WindowFocusDirection)
+  case windowState(WindowStateAction)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
   case sendKeys(keys: String, keyCodes: [CGKeyCode], flagsRawValues: [UInt64])
   /// A verb registered by a plugin via the manifest's `verbs.items` section.
@@ -148,6 +150,16 @@ enum URLCommand: Hashable {
   /// may shortcut directly for inline-keystrokes verbs, or fan
   /// out to the owning plugin's command `perform`).
   case pluginVerb(name: String, args: [String: String])
+}
+
+enum WindowStateAction: Hashable {
+  enum FullscreenState: String, Hashable {
+    case on, off, toggle
+  }
+
+  case minimize
+  case restore
+  case fullscreen(FullscreenState)
 }
 
 extension URLCommand {
@@ -808,6 +820,27 @@ final class URLEventHandler: NSObject {
         .text("position", "slot"), .text("x", "percent"), .text("y", "percent"),
         .text("width", "percent"), .text("height", "percent"), .text("screen", "n"),
       ], parse: windowMoveCommand),
+
+    "window_focus": .init(
+      [.text("direction", "left|right|up|down", required: true)],
+      parse: { a in
+        guard let value = a.value("direction"),
+          let direction = WindowFocusDirection(rawValue: value)
+        else { return nil }
+        return .focusWindow(direction)
+      }),
+
+    "window_minimize": .init(parse: { a in a.args.isEmpty ? .windowState(.minimize) : nil }),
+
+    "window_restore": .init(parse: { a in a.args.isEmpty ? .windowState(.restore) : nil }),
+
+    "window_fullscreen": .init(
+      [.text("state", "on|off|toggle")],
+      parse: { a in
+        guard let state = WindowStateAction.FullscreenState(rawValue: a.value("state") ?? "toggle")
+        else { return nil }
+        return .windowState(.fullscreen(state))
+      }),
 
     "send_key": .init([.text("keys", "hotkey", required: true)], parse: sendKeyCommand),
 

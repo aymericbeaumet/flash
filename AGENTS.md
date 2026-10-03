@@ -15,6 +15,7 @@ contracts before changing a subsystem:
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
   [popups](docs/popups.md), [desktop widgets](docs/widgets.md), [help](docs/help.md).
 - [Privacy and permissions](docs/privacy.md).
+- [Window navigation and placement](docs/windows.md), [audio devices](docs/audio.md).
 - [Performance and latency benchmarks](docs/performance.md).
 
 ## Assemble great tools
@@ -130,6 +131,19 @@ Surface requests that would violate these constraints before implementing them.
   `hide`. See the popup guide.
 - Prefer events to polling. A window move or resize reads its frame from the AX
   element that fired, never a WindowServer scan, and schedules no settle tick.
+- Focused-window state verbs use `WindowLayoutManager`'s serial AX queue and
+  `WindowMover.resolveWindow`'s focused/main/window-list fallbacks; keep AX
+  requests off the main keyboard loop. Native full screen uses `AXFullScreen`,
+  while `window_move --position=maximized` remains a usable-frame resize.
+  Restore first uses the manager's most-recently minimized window because
+  minimizing an app's last window can move focus to a different process.
+- Directional window focus reads a prepared AX window catalog; catalog walks
+  run on the separate navigation-build queue. Placement rules run once per AX
+  window identity for each changed rule set so manual moves remain respected.
+- App-scoped mappings select by the focused app's exact bundle ID. Refresh the
+  effective mapping table on focus changes; defer Carbon registration work off
+  the key event path. CoreAudio device access belongs behind the media
+  plugin's declared `audio_devices` host capability.
 - `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
   main-thread Core Animation commit for SkyLight's 500 ms timeout, freezing
   main too. Read the window list only through `WindowSnapshot.windowList`

@@ -2767,7 +2767,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(secondAction.pending, "")
   }
 
-  func testAppOpenMappingsAreTreatedAsFocusChangingNormalModeActions() {
+  func testFocusChangingNormalModeActions() {
     XCTAssertTrue(
       AppDelegate.normalModeActionMayChangeKeyboardFocus(
         .flashCommand(.openApp(name: "Alacritty"))))
@@ -2775,6 +2775,7 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.normalModeActionMayChangeKeyboardFocus(.shellCommand(["open", "-a", "Slack"])))
     XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.appNext))
     XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.movementBack))
+    XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.windowState(.minimize)))
     XCTAssertTrue(
       AppDelegate.normalModeCommandMayChangeKeyboardFocus(
         .sendKey(keys: "down", keyCode: CGKeyCode(kVK_DownArrow), flagsRawValue: 0)))

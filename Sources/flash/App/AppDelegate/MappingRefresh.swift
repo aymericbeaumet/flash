@@ -52,7 +52,8 @@ extension AppDelegate {
     let key = context.cacheKey
     if let cached = effectiveMappingCache[key] { return cached }
     let pluginMappings = pluginManager.mappings(in: context)
-    let effective = EffectiveMappings.merge(base: config.mode, plugin: pluginMappings)
+    let effective = EffectiveMappings.merge(
+      base: config.mode, plugin: pluginMappings, bundleID: context.bundleID)
     effectiveMappingCache[key] = effective
     return effective
   }

@@ -216,6 +216,27 @@ for an action, declare a binding in a plugin rather than a `send_key` mapping
 `send_key`; it remains an escape hatch for a chord no action covers. INSERT entry
 rules and complete defaults live in [normal mode](normal-mode.md).
 
+### App-specific mappings
+
+Add an exact bundle identifier under `mode.apps` to override a mapping only
+while that app is focused:
+
+```toml
+[mode.apps."com.apple.Safari".normal.mappings]
+"f" = ["flash", "mouse_target", "--search"]
+"r" = false
+
+[mode.apps."com.apple.Safari".all.mappings]
+"cmd+alt+w" = ["flash", "window_focus", "--direction=right"]
+```
+
+App-specific entries take precedence over plugin and global mappings in the
+same scope. `false` suppresses an inherited mapping for that app; other apps
+keep their existing bindings. Bundle IDs match exactly and are case-sensitive.
+The available scopes are `all`, `normal`, `insert`, `command`, and `terminal`;
+COMMAND mappings still require a single modified key. Flash updates the active
+mapping table when focus changes, so no config reload is needed.
+
 Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured
 magic modifiers held on the final hint key. The complete set reaches every target.
 Terminal links additionally require Shift, so `f` is a plain current-context click

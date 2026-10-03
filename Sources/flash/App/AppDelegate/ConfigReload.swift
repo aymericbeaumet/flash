@@ -205,6 +205,7 @@ extension AppDelegate {
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
       forceRecovery: false)
+    windowLayoutManager.setPlacementRules(cfg.windowRules)
     // The status controller runs for the bar and for desktop widgets alike.
     if statusBarVisible || !cfg.enabledWidgets.isEmpty {
       statusBarController?.start()

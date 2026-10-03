@@ -2,7 +2,7 @@
   "id": "media",
   "name": "Media",
   "version": "0.1.0",
-  "description": "System media controls (play/pause, next/previous, volume) and now-playing info.",
+  "description": "System media controls, now-playing info, and audio device selection.",
   "sandbox": {
     "exec": [
       "/usr/bin/osascript"
@@ -65,11 +65,36 @@
     },
     {
       "command": "media",
+      "subcommand": "input",
+      "description": "List or select the default audio input device by name or UID"
+    },
+    {
+      "command": "media",
+      "subcommand": "output",
+      "description": "List or select the default audio output device by name or UID"
+    },
+    {
+      "command": "media",
       "subcommand": "run",
       "description": "Run osascript with raw arguments"
     }
   ],
+  "verbs": [
+    {
+      "name": "media_input",
+      "command": "media",
+      "subcommand": "input",
+      "description": "List or select the default audio input device (--device=name-or-UID)"
+    },
+    {
+      "name": "media_output",
+      "command": "media",
+      "subcommand": "output",
+      "description": "List or select the default audio output device (--device=name-or-UID)"
+    }
+  ],
   "capabilities": [
-    "media_keys"
+    "media_keys",
+    "audio_devices"
   ]
 }

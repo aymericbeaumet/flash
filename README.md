@@ -30,13 +30,15 @@ Accessibility permission, and nothing else.
   hints, `[t` / `]t` for tabs, `gg` / `G`, `ctrl+d` / `ctrl+u` to scroll, `u` to
   undo. Keys map to actions that fit the focused app: `]t` is the next browser
   tab, Finder tab or tmux window.
+- **Windows.** Focus the nearest window in a direction, place windows with
+  shortcuts or opt-in app/title rules, and control native full screen.
 - **flashlight.** A command bar that searches apps, browser tabs, tmux windows,
-  emoji, and plugin data, with inline math, unit, and currency answers.
+  native windows, emoji, and plugin data, with inline math, unit, and currency answers.
 - **Status bar and desktop widgets.** tmux-format templates with meters,
   sparklines, conditionals and shell jobs, fed by system plugins (CPU, memory,
   disks, network, battery, top processes) or any command you write.
 - **Plugins.** Any program that speaks JSON lines over stdin and stdout; a Rust
-  SDK is included.
+  SDK is included. Bundled media controls can select input and output devices.
 
 Everything reloads live when you save. There is no preferences window; the
 menu-bar icon offers About, Open Configuration, and Quit.
@@ -217,7 +219,9 @@ request, and file for each plugin.
   XQuartz on macOS. Flash widgets are native text layers fed by the same
   collectors as the bar.
 - **Hammerspoon** is a Lua automation toolkit. Flash is a ready-made keyboard
-  layer in TOML, and Hammerspoon can drive it with `flash <verb>`.
+  layer in TOML. See the [Hammerspoon migration guide](docs/hammerspoon.md)
+  for hotkeys, window controls, app launching, alerts, and what remains better
+  served by Lua. Hammerspoon can also drive Flash with `flash <verb>`.
 
 Flash only sees what an app exposes to Accessibility. Canvas-drawn interfaces
 and some games show no hints; use the grid there.
@@ -270,6 +274,8 @@ adding your setup to [`docs/examples`](docs/examples).
 
 - **Using Flash:** [configuration](docs/configuration.md) ·
   [full default reference](config.default.toml) · [commands](docs/commands.md) ·
+  [windows](docs/windows.md) · [audio devices](docs/audio.md) ·
+  [from Hammerspoon](docs/hammerspoon.md) ·
   [normal mode](docs/normal-mode.md) · [flashlight](docs/flashlight.md) ·
   [privacy](docs/privacy.md)
 - **Status bar and widgets:** [format](docs/status-format.md) ·

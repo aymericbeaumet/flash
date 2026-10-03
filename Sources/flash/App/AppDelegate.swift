@@ -369,6 +369,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     monitor = AppMonitor(registry: registry, config: config)
     // Every observed AX notification reaches plugins exactly once, here.
     monitor.focusedElementDidChange = { [weak self] pid, notification in
+      if notification == kAXTitleChangedNotification as String {
+        self?.windowLayoutManager.observedTitleChanged(pid: pid)
+      }
       guard let self, self.pluginManager.hasListener(for: PluginProtocol.axChangedEvent) else {
         return
       }
@@ -398,6 +401,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     }
     monitor.start()
+    windowLayoutManager.refreshNavigationCatalog(
+      statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: config.statusBar.monitor)
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
     }
@@ -631,6 +637,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
       }
+    case .focusWindow(let direction):
+      if let target = currentNonFlashRunningApplication() {
+        windowLayoutManager.focusWindow(direction, targetPID: target.processIdentifier)
+      }
+    case .windowState(let action):
+      if let target = currentNonFlashContext() {
+        windowLayoutManager.setWindowState(action, targetPID: target.processID)
+      } else {
+        FlashLog.warn("[window_state] no non-flash frontmost app")
+      }
     case .pluginVerb(let name, let args):
       // `core:focus.changed` etc. carry the focused-app pid/bundle id, but
       // verb dispatch is opportunistic and the verb may fire while normal
@@ -751,6 +767,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] note in
       guard let self else { return }
       self.registry.scheduleRunningApplicationsRefresh()
+      self.windowLayoutManager.refreshNavigationCatalog(
+        statusBarReservesSpace: self.statusBarVisible,
+        statusBarMonitor: self.config.statusBar.monitor)
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.pluginManager.emit(
           PluginEvent(
@@ -774,6 +793,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] note in
       guard let self else { return }
       self.registry.scheduleRunningApplicationsRefresh()
+      self.windowLayoutManager.refreshNavigationCatalog(
+        statusBarReservesSpace: self.statusBarVisible,
+        statusBarMonitor: self.config.statusBar.monitor)
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
         self.forgetActiveWindowBorderFrames(for: app.processIdentifier)
@@ -873,6 +895,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         statusBarMonitor: self.config.statusBar.monitor,
         beforeRecoveryPass: { [weak self] in self?.overlay.settleNativeMenuBarHeights() },
         afterRecoveryPass: { [weak self] _ in self?.windowLayoutRecovered() })
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(3_100)) { [weak self] in
+        guard let self else { return }
+        self.windowLayoutManager.refreshNavigationCatalog(
+          statusBarReservesSpace: self.statusBarVisible,
+          statusBarMonitor: self.config.statusBar.monitor)
+      }
       // OverlayPanel invalidates its screen snapshot from the same notification.
       // Redraw on the next main turn so the border path uses the rebuilt union.
       DispatchQueue.main.async {
@@ -1082,8 +1110,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Whether the keyboard tap swallows a `keyDown`: the pure
   /// `KeyboardCaptureTap.decide`, then only the effects that decision needs.
   /// Runs on the main thread inside the synchronous tap callback on every
-  /// keystroke, so nothing here resolves the keyboard layout or touches
-  /// AppKit. NORMAL is hermetic: `normalModeMappings` carries the same
+  /// keystroke, so it never resolves the keyboard layout or performs AX IPC.
+  /// A mismatched target pid reconciles the active mapping table before the
+  /// key is routed. NORMAL is hermetic: `normalModeMappings` carries the same
   /// compiled set the Carbon registry does, and the session tap swallows the
   /// event before Carbon dispatch, so there's no double-fire.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
@@ -1107,6 +1136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .pass:
       return false
     case .swallow:
+      reconcileFrontmostApplication(
+        forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
       return !tapReadsSecureInput()
     case .swallowIfInsertChordIsMapped:
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
