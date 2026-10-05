@@ -253,6 +253,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
+    // `F` is the grid twin of `f`, and every click prefix works on both.
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("\\s") })?.action.command,
       .mouseBigram(.click(.leftClick, modifiers: [])))
