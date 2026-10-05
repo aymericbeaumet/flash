@@ -28,24 +28,6 @@ struct ModeSurface: Equatable {
     label: "INSERT", style: .insert, barVisible: false, capturesInput: false)
 }
 
-/// What the overlay shows for the current mode, as one value. Only the mode
-/// executor writes it (`setModeSurface`); the bar, the pill, the border colour
-/// and capture all read it, so none of them can show a different mode.
-struct ModeSurface: Equatable {
-  /// The pill's text: the configured label for the mode.
-  var label: String
-  var style: OverlayModeBadgeStyle
-  /// `[statusbar] enabled`: whether the bar window is on screen. The command
-  /// line and the focus border render whether or not it is.
-  var barVisible: Bool
-  /// The overlay owns the keyboard as a command surface (idle NORMAL, the
-  /// command line).
-  var capturesInput: Bool
-
-  static let initial = ModeSurface(
-    label: "INSERT", style: .insert, barVisible: false, capturesInput: false)
-}
-
 struct CandidateDisplayItem: Equatable {
   var title: String
   var highlightedRanges: [Range<Int>] = []
