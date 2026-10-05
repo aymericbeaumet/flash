@@ -3,7 +3,7 @@ import FlashProviders
 import Foundation
 
 /// Owns one bigram walk. The corpus stays on `axQueue`; main only sees a
-/// generation and, once the query is two characters, the matches.
+/// generation and, once the query is one character, the matches.
 ///
 /// `invalidate` bumps the generation and queues the wipe. It does not wait on
 /// the queue: the keyboard loop must not block behind the walk. `start` is
@@ -69,13 +69,13 @@ final class BigramSearch {
     queue.async { [weak self] in
       guard let self, self.currentGeneration == generation else { return }
       self.query = query
-      if query.count < 2 { self.resolvedQuery = nil }
+      if query.isEmpty { self.resolvedQuery = nil }
       self.resolveIfReady(generation: generation)
     }
   }
 
   private func resolveIfReady(generation: UInt64) {
-    guard query.count == 2, let corpus, resolvedQuery != query else { return }
+    guard query.count == 1, let corpus, resolvedQuery != query else { return }
     resolvedQuery = query
     let result = Result(
       generation: generation, query: query, targets: corpus.targets(matching: query),

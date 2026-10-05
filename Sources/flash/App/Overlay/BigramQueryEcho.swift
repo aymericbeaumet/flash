@@ -1,16 +1,12 @@
 import AppKit
 import QuartzCore
 
-/// The two characters typed after `mouse_bigram`, drawn as a small chip by the
-/// pointer. Empty slots are middle dots, so the chip is not a "no targets"
+/// The letter typed after `mouse_bigram`, drawn as a small chip by the
+/// pointer. An empty query is a middle dot, so the chip is not a "no targets"
 /// banner: zero matches leave it up and stay silent.
 enum BigramQueryEcho {
   static func text(for query: String) -> String {
-    switch query.count {
-    case 0: return "\u{00B7}\u{00B7}"
-    case 1: return query + "\u{00B7}"
-    default: return String(query.prefix(2))
-    }
+    query.isEmpty ? "\u{00B7}" : String(query.prefix(1))
   }
 }
 
@@ -38,7 +34,7 @@ extension OverlayPanel {
   private func makeBigramQueryEcho(_ text: String) -> CALayer {
     let panel = ensurePanelFrame()
     let pointer = NSEvent.mouseLocation
-    let size = CGSize(width: 36, height: 22)
+    let size = CGSize(width: 22, height: 22)
     var origin = CGPoint(
       x: pointer.x - panel.minX + 12, y: pointer.y - panel.minY + 12)
     origin.x = min(max(0, origin.x), max(0, panel.width - size.width))

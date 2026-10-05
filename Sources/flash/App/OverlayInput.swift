@@ -27,7 +27,7 @@ enum HintKeyRoute: Equatable {
   case search
   case adjustment
   case pointer
-  /// `mouse_bigram`: the two characters of the on-screen pair.
+  /// `mouse_bigram`: the letter being searched, before its hint label.
   case bigram
 
   /// Pointer mode and a cursor-following grid steer the cursor, so it stays
@@ -134,10 +134,10 @@ enum HintAdjustmentCommand: Equatable {
   case cancel
 }
 
-/// One keystroke of `mouse_bigram`, before a match is chosen. Shift changes
-/// the character (smart case); it does not ride the click. Command, Control
-/// and Option are swallowed. A unique match clicks on its own, so this
-/// interpreter never commits.
+/// One keystroke of `mouse_bigram`, before the hint label. Shift changes
+/// the letter (smart case); it does not ride the click. Command, Control
+/// and Option are swallowed. The label that follows is typed on the hint
+/// route, so this interpreter never commits.
 enum HintBigramCommand: Equatable {
   case append(Character)
   case backspace

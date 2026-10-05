@@ -7,7 +7,7 @@ import Foundation
 ///
 /// The clickable-target walk stops at controls and at `maxTargets`, so body
 /// text never reaches `f`. This walk is separate and on demand: it keeps every
-/// visible run of at least two characters and resolves glyph rects only for
+/// visible run of at least one character and resolves glyph rects only for
 /// the query's matches. It does not read pixels.
 public enum BigramTextCollector {
   public static let providerID = "bigram"
@@ -30,7 +30,7 @@ public enum BigramTextCollector {
     public var runCount: Int { runs.count }
 
     public func targets(matching query: String) -> [JumpTarget] {
-      guard query.count == 2 else { return [] }
+      guard query.count == 1 else { return [] }
       var located: [(rect: CGRect, value: Hit)] = []
       for (index, run) in runs.enumerated() {
         let haystack = run.text as NSString

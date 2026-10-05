@@ -67,17 +67,14 @@ extension AppDelegate {
       "[bigram] matches=\(result.targets.count) query_len=\(result.query.count) "
         + "runs=\(result.runCount)")
     guard !result.targets.isEmpty else { return }
-    let hints = assignHints(result.targets)
+    // The letter is the search. The label is always a bigram (or longer,
+    // once the matches outgrow the alphabet), so the sequence is the letter
+    // and then those two keys.
+    let hints = assignHints(result.targets, minLength: max(2, config.hints.minLength))
+    guard !hints.isEmpty else { return }
     hintSession.hints = hints
     hintSession.prefix = ""
     overlay.clearBigramQueryEcho()
-    if hints.count == 1, let only = hints.first {
-      hintSession.phase = .labels(anchor: nil)
-      hintSession.latencyProbe = nil
-      overlay.renderPersistentContent()
-      commit(hint: only, clickModifiers: [])
-      return
-    }
     hintSession.phase = .labels(anchor: nil)
     presentHints(
       hints, prepared: .miss, outcome: .miss, bundleIdentifier: result.bundleIdentifier,
@@ -96,7 +93,7 @@ extension AppDelegate {
       overlay.setBigramQueryEcho(query)
       bigramSearch?.setQuery(query)
     case .append(let character):
-      guard case .bigram = hintSession.phase, var query = hintSession.bigramQuery, query.count < 2
+      guard case .bigram = hintSession.phase, var query = hintSession.bigramQuery, query.isEmpty
       else { return }
       query.append(character)
       hintSession.bigramQuery = query

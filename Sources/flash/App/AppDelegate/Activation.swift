@@ -197,7 +197,7 @@ extension AppDelegate {
   /// + status-bar links) stays consistent with a plain discovery result.
   /// `previous` keeps the labels of targets that persist (`--multi`).
   func assignHints(
-    _ targets: [JumpTarget], preserving previous: [AssignedHint] = []
+    _ targets: [JumpTarget], preserving previous: [AssignedHint] = [], minLength: Int? = nil
   ) -> [AssignedHint] {
     let resolved = config.resolvedAlphabet
     return HintAssigner.assign(
@@ -205,7 +205,7 @@ extension AppDelegate {
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
-      minLength: config.hints.minLength,
+      minLength: minLength ?? config.hints.minLength,
       preserving: previous)
   }
 

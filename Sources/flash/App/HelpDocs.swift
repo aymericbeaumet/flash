@@ -286,7 +286,7 @@ enum HelpDocs {
       | Secondary click | `sf` | `flash mouse_target --secondary` |
       | Double click | `df` | `flash mouse_target --double` |
       | Move the pointer | `mf` | `flash mouse_target --move` |
-      | Jump to two letters | `<leader>s` | `flash mouse_bigram` |
+      | Jump to a letter | `<leader>s` | `flash mouse_bigram` |
       | Find by visible text | See live mappings | `flash mouse_target --search` |
       | Keep choosing targets | Explicit mapping | `flash mouse_target --multi` |
       | Drag between targets | Explicit mapping | `flash mouse_target --drag` |

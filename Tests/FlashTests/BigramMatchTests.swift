@@ -5,33 +5,35 @@ import XCTest
 @testable import flash
 
 final class BigramMatchTests: XCTestCase {
-  func testLowercaseQueryIsCaseInsensitiveAndOverlaps() {
+  func testALowercaseLetterMatchesEveryCase() {
     XCTAssertEqual(
-      BigramMatcher.occurrences(in: "Aaa aa", query: "aa").map(\.location),
-      [0, 1, 4])
+      BigramMatcher.occurrences(in: "Aaa a", query: "a").map(\.location),
+      [0, 1, 2, 4])
     XCTAssertEqual(
-      BigramMatcher.occurrences(in: "aaa", query: "aa").map(\.location),
-      [0, 1])
+      BigramMatcher.occurrences(in: "Aaa a", query: "A").map(\.location),
+      [0])
   }
 
   func testUppercaseQueryIsExact() {
-    XCTAssertTrue(BigramMatcher.isCaseSensitive("Th"))
-    XCTAssertFalse(BigramMatcher.isCaseSensitive("th"))
+    XCTAssertTrue(BigramMatcher.isCaseSensitive("T"))
+    XCTAssertFalse(BigramMatcher.isCaseSensitive("t"))
     XCTAssertEqual(
-      BigramMatcher.occurrences(in: "th Th tH TH", query: "Th").map(\.location),
-      [3])
+      BigramMatcher.occurrences(in: "th Th tH TH", query: "T").map(\.location),
+      [3, 9])
   }
 
-  func testAQueryThatIsNotTwoCharactersMatchesNothing() {
+  func testAQueryThatIsNotOneCharacterMatchesNothing() {
     XCTAssertTrue(BigramMatcher.occurrences(in: "the", query: "").isEmpty)
-    XCTAssertTrue(BigramMatcher.occurrences(in: "the", query: "t").isEmpty)
+    XCTAssertTrue(BigramMatcher.occurrences(in: "the", query: "th").isEmpty)
     XCTAssertTrue(BigramMatcher.occurrences(in: "the", query: "the").isEmpty)
   }
 
-  func testTwoEmojiAreACompleteQuery() {
-    let pair = "👍👍"
-    XCTAssertEqual(pair.count, 2)
-    XCTAssertEqual(BigramMatcher.occurrences(in: "👍👍👍", query: pair).count, 2)
+  func testOneEmojiIsACompleteQuery() {
+    let mark = "👍"
+    XCTAssertEqual(mark.count, 1)
+    let hits = BigramMatcher.occurrences(in: "👍👍👍", query: mark)
+    XCTAssertEqual(hits.map(\.location), [0, 2, 4])
+    XCTAssertEqual(hits.map(\.length), [2, 2, 2])
   }
 
   func testSliceMatchUsesTheSameCaseRule() {
@@ -90,19 +92,22 @@ final class BigramMatchTests: XCTestCase {
       "OK")
     XCTAssertEqual(
       BigramText.ownString(role: "AXButton", title: "x", value: "Go", descendantEmitted: false),
-      "Go")
+      "x")
+    XCTAssertEqual(
+      BigramText.ownString(role: "AXStaticText", title: nil, value: "a", descendantEmitted: false),
+      "a")
     XCTAssertNil(
       BigramText.ownString(role: "AXButton", title: "OK", value: nil, descendantEmitted: true))
     XCTAssertNil(
       BigramText.ownString(role: "AXImage", title: "icon", value: nil, descendantEmitted: false))
     XCTAssertNil(
-      BigramText.ownString(role: "AXStaticText", title: "x", value: "y", descendantEmitted: false))
+      BigramText.ownString(role: "AXStaticText", title: " ", value: " ", descendantEmitted: false))
   }
 
-  func testQueryEchoPadsWithMiddleDots() {
-    XCTAssertEqual(BigramQueryEcho.text(for: ""), "\u{00B7}\u{00B7}")
-    XCTAssertEqual(BigramQueryEcho.text(for: "t"), "t\u{00B7}")
-    XCTAssertEqual(BigramQueryEcho.text(for: "th"), "th")
+  func testQueryEchoShowsTheSearchLetter() {
+    XCTAssertEqual(BigramQueryEcho.text(for: ""), "\u{00B7}")
+    XCTAssertEqual(BigramQueryEcho.text(for: "t"), "t")
+    XCTAssertEqual(BigramQueryEcho.text(for: "th"), "t")
   }
 
   func testABigramCommitAimsAtTheMatchCenter() {

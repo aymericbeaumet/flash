@@ -656,10 +656,11 @@ leader = "\\"
 "dF" = ["flash", "mouse_grid", "--double"]
 "mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
-# <leader>s is EasyMotion s: type two characters of visible text in the focused
-# window. One match clicks it; several get hint labels. Backspace edits the
-# query and Escape cancels. No match stays silent. <leader> keeps s free for
-# the sf / sF prefixes above.
+# <leader>s is EasyMotion s: type one letter of visible text in the focused
+# window, then the two-character hint on that letter. A lowercase letter
+# ignores case; an uppercase letter is exact. Backspace edits the letter and
+# Escape cancels. No match stays silent. <leader> keeps s free for the sf / sF
+# prefixes above.
 "<leader>s" = ["flash", "mouse_bigram"]
 "u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]

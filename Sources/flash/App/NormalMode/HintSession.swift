@@ -69,7 +69,7 @@ struct HintSession {
     /// Typing hint labels; `anchor` once a two-phase gesture chose its first
     /// point.
     case labels(anchor: Anchor?)
-    /// `mouse_bigram`: the two characters of visible text, before any label.
+    /// `mouse_bigram`: the letter to find, before its hint label.
     case bigram
     case search(Search)
     /// `--adjust`: the matched hint and the point the commit key clicks.

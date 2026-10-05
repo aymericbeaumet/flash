@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// Where a two-character query sits in a string, in UTF-16 indexes so the
+/// Where a one-character query sits in a string, in UTF-16 indexes so the
 /// range can be handed to `kAXBoundsForRangeParameterizedAttribute`.
 public struct BigramOccurrence: Equatable {
   public let location: Int
@@ -13,9 +13,8 @@ public struct BigramOccurrence: Equatable {
   }
 }
 
-/// Pure matching for an EasyMotion-style bigram jump. Both lowercase
-/// characters are case-insensitive; any uppercase character is exact.
-/// Occurrences may overlap (`aa` matches twice in `aaa`).
+/// Pure matching for an EasyMotion-style letter jump. A lowercase letter is
+/// case-insensitive; an uppercase letter is exact.
 public enum BigramMatcher {
   /// Centers closer than this are the same glyph reported by two nodes.
   public static let duplicateCenterDistance: CGFloat = 2
@@ -24,10 +23,11 @@ public enum BigramMatcher {
     query.contains { $0.isUppercase }
   }
 
-  /// Every match of a two-character query, advancing one UTF-16 unit so
-  /// overlaps are kept. Any other query length matches nothing.
+  /// Every match of a one-character query. The step is the match's own
+  /// UTF-16 length, so each glyph is one hit. Any other query length
+  /// matches nothing.
   public static func occurrences(in text: String, query: String) -> [BigramOccurrence] {
-    guard query.count == 2 else { return [] }
+    guard query.count == 1 else { return [] }
     let haystack = text as NSString
     let needleLength = (query as NSString).length
     guard needleLength > 0, haystack.length >= needleLength else { return [] }
@@ -40,7 +40,7 @@ public enum BigramMatcher {
         range: NSRange(location: start, length: haystack.length - start))
       if range.location == NSNotFound || range.length <= 0 { break }
       found.append(BigramOccurrence(location: range.location, length: range.length))
-      start = range.location + 1
+      start = range.location + range.length
     }
     return found
   }
@@ -103,9 +103,9 @@ public enum BigramMatcher {
 }
 
 /// Which accessibility nodes own visible text, and which string on them is
-/// the one a bigram search indexes. The returned string is the raw attribute
+/// the one a letter search indexes. The returned string is the raw attribute
 /// (whitespace included) so UTF-16 indexes match `boundsForRange`. A string
-/// is indexed only when its trimmed length is at least two characters.
+/// is indexed only when its trimmed length is at least one character.
 public enum BigramText {
   public static let ownerRoles: Set<String> = [
     "AXStaticText", "AXHeading", "AXLink",
@@ -138,7 +138,7 @@ public enum BigramText {
     for candidate in ordered {
       guard let candidate else { continue }
       let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-      if trimmed.count >= 2 { return candidate }
+      if trimmed.count >= 1 { return candidate }
     }
     return nil
   }

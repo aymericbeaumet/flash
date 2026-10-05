@@ -896,7 +896,7 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the `--search` sub-state. Only called while
   /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
-  /// One keystroke of `mouse_bigram` while the two characters are being typed.
+  /// One keystroke of `mouse_bigram` while the search letter is being typed.
   func overlayDidBigram(_ command: HintBigramCommand)
   /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
   /// `.grid`.

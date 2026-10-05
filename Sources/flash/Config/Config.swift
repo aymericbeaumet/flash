@@ -895,9 +895,8 @@ struct Config {
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
-        // EasyMotion `s`: two characters of visible text. A unique match clicks
-        // immediately; several matches get hint labels. `<leader>` keeps `s`
-        // free for the `sf` / `sF` prefixes.
+        // EasyMotion `s`: one visible letter, then its two-character hint.
+        // `<leader>` keeps `s` free for the `sf` / `sF` prefixes.
         ("<leader>s", .flashCommand(.mouseBigram(.click(.leftClick, modifiers: [])))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),

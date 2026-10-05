@@ -99,10 +99,10 @@ final class HintSessionPhaseTests: XCTestCase {
   func testBackspaceOnABigramLabelReturnsToTheQuery() {
     var session = HintSession()
     session.phase = .labels(anchor: nil)
-    session.bigramQuery = "th"
-    session.hints = [hint("a"), hint("s")]
+    session.bigramQuery = "t"
+    session.hints = [hint("as"), hint("ad")]
     XCTAssertTrue(session.retreatBigram())
-    XCTAssertEqual(session.bigramQuery, "t")
+    XCTAssertEqual(session.bigramQuery, "")
     XCTAssertTrue(session.hints.isEmpty)
     XCTAssertEqual(session.prefix, "")
     XCTAssertEqual(session.keyRoute, .bigram)

@@ -20,8 +20,8 @@ import FlashCore
 
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
-  /// Two characters of visible text in the focused window, then a click
-  /// (`<leader>s`). Only `.click` and `.move`.
+  /// One letter of visible text in the focused window, then a hint bigram,
+  /// then a click (`<leader>s`). Only `.click` and `.move`.
   case mouseBigram(MouseCommand)
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
@@ -892,10 +892,11 @@ extension URLEventHandler {
       not verbs: they report (as text, or JSON with `--json`) and cannot be
       mapped. `:doctor` runs the doctor's checks from the command line.
 
-      `mouse_target` selects an app-discovered target. `mouse_bigram` types two
-      characters of the focused window's visible text and clicks that pair:
-      one match clicks immediately, several matches use hint labels, and none
-      stays silent. `--move` moves the pointer onto the pair. `mouse_grid` selects
+      `mouse_target` selects an app-discovered target. `mouse_bigram` types one
+      letter of the focused window's visible text, then the two-character hint
+      on that letter. A lowercase letter ignores case and an uppercase letter
+      is exact; no match stays silent. `--move` moves the pointer onto the
+      letter. `mouse_grid` selects
       a precise screen position: the screen splits like the left half of
       the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
       `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its

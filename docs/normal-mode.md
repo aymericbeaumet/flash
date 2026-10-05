@@ -59,12 +59,12 @@ mappings.
   screen position through the grid. A lowercase prefix picks the click on
   either surface: none for primary, `s` secondary, `d` double, `m` move.
   So `df` double-clicks an element and `dF` double-clicks a grid position.
-- `<leader>s` then two characters jumps to that pair in the focused window's
-  visible text (EasyMotion `s`). A unique match clicks it; several matches get
-  hint labels. Both lowercase letters ignore case; any uppercase letter is
-  exact. Backspace edits the query, Escape cancels, and no match stays silent.
-  `mouse_bigram --move` moves the pointer without clicking. The text comes
-  from Accessibility, never from screen pixels.
+- `<leader>s`, then one letter, then a two-character hint jumps to that
+  letter in the focused window's visible text (EasyMotion `s`). A lowercase
+  letter ignores case; an uppercase letter is exact. Backspace edits the
+  letter, Escape cancels, and no match stays silent. `mouse_bigram --move`
+  moves the pointer without clicking. The text comes from Accessibility,
+  never from screen pixels.
 - A prefix letter must not also be a mapping of its own, or that mapping waits
   for `sequence_timeout_ms` before it fires. Triple click therefore ships
   unbound, because `tf` would stall the bare `t` (new tab). To bind `tf` /
