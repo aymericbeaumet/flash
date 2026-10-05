@@ -16,9 +16,10 @@ struct ActiveWindowBorderStyle: Equatable {
 /// never show different modes.
 extension OverlayPanel {
   /// Border stroke style per badge style: a thin green stroke in normal, a thin
-  /// purple one in command (the mode-badge accents), and a thicker,
-  /// softly-glowing blue one in insert. Normal and command share insert's outer
-  /// edge — only insert grows inward (see `activeWindowBorderLocalRect`).
+  /// mauve one in command, a thin violet one in hyper (the mode-badge accents),
+  /// and a thicker, softly-glowing blue one in insert. Normal, command and
+  /// hyper share insert's outer edge — only insert grows inward (see
+  /// `activeWindowBorderLocalRect`).
   static func activeWindowBorderStyle(
     for badgeStyle: OverlayModeBadgeStyle,
     sizeOverride: Double = 0,
@@ -29,6 +30,7 @@ extension OverlayPanel {
     case .normal: style = .init(color: nordAuroraGreenCG, lineWidth: 1, glow: false)
     case .insert: style = .init(color: nordFrost2CG, lineWidth: 2, glow: true)
     case .command: style = .init(color: nordAuroraPurpleCG, lineWidth: 1, glow: false)
+    case .hyper: style = .init(color: hyperPurpleCG, lineWidth: 1, glow: false)
     }
     // `[overlay] window_border_size` / `window_border_color` apply across
     // every mode; the defaults (0 / nil) keep the per-mode identity above.

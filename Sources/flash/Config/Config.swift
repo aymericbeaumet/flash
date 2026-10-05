@@ -688,6 +688,7 @@ struct Config {
       var insert: [ModeMapping] = []
       var terminal: [ModeMapping] = []
       var command: [ModeMapping] = []
+      var hyper: [ModeMapping] = []
       var unmapped: [ModeScope: Set<String>] = [:]
 
       func mappings(for scope: ModeScope) -> [ModeMapping] {
@@ -697,6 +698,7 @@ struct Config {
         case .insert: return insert
         case .terminal: return terminal
         case .command: return command
+        case .hyper: return hyper
         }
       }
 
@@ -729,6 +731,9 @@ struct Config {
         case .command:
           command.removeAll(where: sameKey)
           command.insert(mapping, at: 0)
+        case .hyper:
+          hyper.removeAll(where: sameKey)
+          hyper.insert(mapping, at: 0)
         }
       }
 
@@ -744,6 +749,7 @@ struct Config {
         case .insert: insert.removeAll(where: matches)
         case .terminal: terminal.removeAll(where: matches)
         case .command: command.removeAll(where: matches)
+        case .hyper: hyper.removeAll(where: matches)
         }
       }
     }
@@ -753,9 +759,10 @@ struct Config {
       var insert: String = "INSERT"
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
+      var hyper: String = "HYPER"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count, terminal.count)
+        max(normal.count, insert.count, command.count, terminal.count, hyper.count)
       }
     }
 
@@ -764,6 +771,9 @@ struct Config {
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
+    /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
+    /// a hyper binding replaces NORMAL for that key for the duration of the hold.
+    var hyper: [ModeMapping] = []
     /// Exact focused-app bundle identifier to per-scope additions/removals.
     var appMappings: [String: AppMappings] = [:]
     /// Keys a `"<key>" = false` entry removed, per table, after every layer.
@@ -785,9 +795,9 @@ struct Config {
       var layouts: [WindowLayout] = []
       let appEntries = appMappings.sorted { $0.key < $1.key }.flatMap { entry in
         let app = entry.value
-        return app.all + app.normal + app.insert + app.terminal + app.command
+        return app.all + app.normal + app.insert + app.terminal + app.command + app.hyper
       }
-      for mapping in all + normal + insert + terminal + command + appEntries {
+      for mapping in all + normal + insert + terminal + command + hyper + appEntries {
         guard case .flashCommand(.moveWindow(let params)) = mapping.action,
           case .proportional? = params.layout, let layout = params.layout,
           !layouts.contains(layout)
@@ -895,6 +905,9 @@ struct Config {
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
+        // EasyMotion `s`: one visible letter, then its two-character hint.
+        // `<leader>` keeps `s` free for the `sf` / `sF` prefixes.
+        ("<leader>s", .flashCommand(.mouseBigram(.click(.leftClick, modifiers: [])))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
         ("x", .flashCommand(.tabClose)),
@@ -947,6 +960,7 @@ struct Config {
     private(set) var compiledNormal = CompiledMappings()
     private(set) var compiledInsert = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
+    private(set) var compiledHyper = CompiledMappings()
 
     var effectiveTerminalMappings: [ModeMapping] {
       var claimed = Set<String>()
@@ -968,6 +982,7 @@ struct Config {
       compiledNormal = CompiledMappings(mappings(for: .normal))
       compiledInsert = CompiledMappings(mappings(for: .insert))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
+      compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
     }
 
     mutating func refreshLeaderDerivedDefaults() {
@@ -1202,6 +1217,7 @@ struct Config {
           "insert": app.insert.map(Self.mappingJSONValue),
           "terminal": app.terminal.map(Self.mappingJSONValue),
           "command": app.command.map(Self.mappingJSONValue),
+          "hyper": app.hyper.map(Self.mappingJSONValue),
           "unmapped": app.unmapped.reduce(into: [String: [String]]()) { result, entry in
             result[entry.key.rawValue] = entry.value.sorted()
           },
@@ -1212,10 +1228,12 @@ struct Config {
       "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
       "labels": [
         "command": mode.labels.command,
+        "hyper": mode.labels.hyper,
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
       ],
+      "hyper": mode.hyper.map(Self.mappingJSONValue),
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
       "scroll_smooth_ms": mode.scrollSmoothMs,
@@ -1395,6 +1413,8 @@ extension URLCommand {
     switch self {
     case .mouseTarget(let command):
       return verb("mouse_target", command.argTokens)
+    case .mouseBigram(let command):
+      return verb("mouse_bigram", command.argTokens)
     case .mouseTargetScreen(let command):
       return verb("mouse_target", ["--scope=screen"] + command.argTokens)
     case .mouseGrid(let command):

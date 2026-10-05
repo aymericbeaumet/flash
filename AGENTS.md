@@ -247,10 +247,6 @@ before replacing these implementations.
 Run inside the current bonsai worktree. Prefix shell commands with `rtk`.
 Fresh checkouts need `mise install` and `Scripts/build-ghostty.sh --dev` before
 standalone SwiftPM commands; build/install/integration scripts bootstrap Ghostty.
-For universal releases, build Swift separately for arm64 and x86_64, then
-`lipo` the executable. SwiftPM's multi-arch plan loses the Ghostty XCFramework
-library path while linking CFlashTerminal; `Scripts/build.sh --release` owns
-the working sequence.
 
 Required checks for relevant changes:
 

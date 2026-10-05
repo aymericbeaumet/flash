@@ -176,6 +176,7 @@ leader = "\\"
 "<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight "]
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "f" = ["flash", "mouse_target"]
+"<leader>s" = ["flash", "mouse_bigram"]
 "F" = ["flash", "mouse_grid"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
@@ -206,6 +207,18 @@ spelled another way (`cmd+shift+]` and `cmd+shift+}`). `true` and
 `{ command = false }` are rejected.
 
 NORMAL persists across commands and focus changes. Its unmapped keys are swallowed.
+Holding the NORMAL leader key enters HYPER until the key is released. The
+status pill turns purple and shows `mode.labels.hyper` (default `HYPER`).
+Keys pressed during the hold come from `[mode.hyper.mappings]`. A key with
+no hyper mapping can still complete a NORMAL `<leader>` sequence. A tap
+that presses nothing else arms that prefix on release, so `<leader>`
+sequences keep working. `+` is written `<plus>`.
+
+```toml
+[mode.hyper.mappings]
+"-" = ["flash", "plugin_command", "--command=media", "--subcommand=volumedown"]
+"<plus>" = ["flash", "plugin_command", "--command=media", "--subcommand=volumeup"]
+```
 Map keys to high-level actions such as `tab_new`, `app_undo` or `app_reload`:
 each resolves in the focused app's context, through a source or the binding a
 plugin declares for that app (`action_bindings`; the bundled `defaults` plugin
@@ -233,7 +246,7 @@ while that app is focused:
 App-specific entries take precedence over plugin and global mappings in the
 same scope. `false` suppresses an inherited mapping for that app; other apps
 keep their existing bindings. Bundle IDs match exactly and are case-sensitive.
-The available scopes are `all`, `normal`, `insert`, `command`, and `terminal`;
+The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, and `hyper`;
 COMMAND mappings still require a single modified key. Flash updates the active
 mapping table when focus changes, so no config reload is needed.
 

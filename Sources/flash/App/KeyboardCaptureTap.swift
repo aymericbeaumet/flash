@@ -20,6 +20,7 @@ final class KeyboardCaptureTap {
   private var runLoopSource: CFRunLoopSource?
   private let shouldSwallow: (CGEvent) -> Bool
   private let handle: (NSEvent) -> Void
+  private let handleKeyUp: (NSEvent) -> Void
   /// Releases pair with the presses this tap swallowed. Main-thread only: the
   /// tap source runs in the main run loop.
   private var swallowedKeys = SwallowedKeys()
@@ -47,10 +48,12 @@ final class KeyboardCaptureTap {
 
   init(
     shouldSwallow: @escaping (CGEvent) -> Bool,
-    handle: @escaping (NSEvent) -> Void
+    handle: @escaping (NSEvent) -> Void,
+    handleKeyUp: @escaping (NSEvent) -> Void = { _ in }
   ) {
     self.shouldSwallow = shouldSwallow
     self.handle = handle
+    self.handleKeyUp = handleKeyUp
   }
 
   /// What the tap does with one `keyDown`, decided from state alone. The
@@ -210,7 +213,12 @@ final class KeyboardCaptureTap {
     }
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
     if type == .keyUp {
-      return me.swallowedKeys.releaseIsSwallowed(keyCode) ? nil : passthrough
+      guard me.swallowedKeys.releaseIsSwallowed(keyCode) else { return passthrough }
+      if let ns = NSEvent(cgEvent: event) {
+        let keyUp = me.handleKeyUp
+        DispatchQueue.main.async { keyUp(ns) }
+      }
+      return nil
     }
     guard type == .keyDown else { return passthrough }
     let swallow = me.shouldSwallow(event)

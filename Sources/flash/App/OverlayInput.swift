@@ -27,6 +27,8 @@ enum HintKeyRoute: Equatable {
   case search
   case adjustment
   case pointer
+  /// `mouse_bigram`: the letter being searched, before its hint label.
+  case bigram
 
   /// Pointer mode and a cursor-following grid steer the cursor, so it stays
   /// visible; every other route hides it behind the labels.
@@ -34,7 +36,7 @@ enum HintKeyRoute: Equatable {
     switch self {
     case .pointer: return true
     case .grid(_, let cursorFollows): return cursorFollows
-    case .labels, .search, .adjustment: return false
+    case .labels, .search, .adjustment, .bigram: return false
     }
   }
 }
@@ -130,6 +132,44 @@ enum HintAdjustmentCommand: Equatable {
   case reset
   case commit
   case cancel
+}
+
+/// One keystroke of `mouse_bigram`, before the hint label. Shift changes
+/// the letter (smart case); it does not ride the click. Command, Control
+/// and Option are swallowed. The label that follows is typed on the hint
+/// route, so this interpreter never commits.
+enum HintBigramCommand: Equatable {
+  case append(Character)
+  case backspace
+  case cancel
+}
+
+enum HintBigramInterpreter {
+  static func command(
+    keyCode: UInt16,
+    characters: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> HintBigramCommand? {
+    let strict = modifierFlags.intersection([.command, .control, .option])
+    switch keyCode {
+    case 53:  // escape
+      return .cancel
+    case 51:  // delete
+      return strict.isEmpty ? .backspace : nil
+    case 36, 76, 48, 123, 124, 125, 126:
+      // Return, tab and arrows are not characters of the query.
+      return nil
+    default:
+      break
+    }
+    guard strict.isEmpty else { return nil }
+    guard let characters, let char = characters.first else { return nil }
+    if char == " " { return .append(" ") }
+    guard !char.isNewline,
+      char.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+    else { return nil }
+    return .append(char)
+  }
 }
 
 /// One keystroke of the `--search` sub-state (seek & click): type visible
@@ -389,6 +429,11 @@ enum OverlayInputInterpreter {
 /// through `processNormalModeKey`; configured modified mappings are handled by
 /// the Carbon registry outside the panel.
 extension OverlayPanel {
+  override func keyUp(with event: NSEvent) {
+    if !keyboardCaptureActive, coordinator?.handleLeaderKeyUp(event) == true { return }
+    super.keyUp(with: event)
+  }
+
   override func keyDown(with event: NSEvent) {
     if inputMode == .commandLine {
       super.keyDown(with: event)
@@ -426,6 +471,9 @@ extension OverlayPanel {
   /// resulting action while the overlay panel owns keyboard input.
   func processNormalModeKey(_ event: NSEvent) {
     guard let coordinator = coordinator else { return }
+    // The tap path claims the leader hold before it gets here. The key-window
+    // fallback is the only other reader of NORMAL keys.
+    if !keyboardCaptureActive, coordinator.handleLeaderHoldKeyDown(event) { return }
     let now = Date()
     let pendingBeforeTimeout = normalModePending
     if NormalModeInterpreter.pendingSequenceTimedOut(
@@ -563,6 +611,15 @@ extension OverlayPanel {
           eventFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
           allowed: clickAllowed)
         coordinator.overlayDidAdjust(command, clickModifiers: clickModifiers)
+      }
+      return true
+    case .bigram:
+      if let command = HintBigramInterpreter.command(
+        keyCode: event.keyCode,
+        characters: keys.characters,
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+      {
+        coordinator.overlayDidBigram(command)
       }
       return true
     }

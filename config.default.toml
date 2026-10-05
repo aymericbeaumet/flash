@@ -656,6 +656,12 @@ leader = "\\"
 "dF" = ["flash", "mouse_grid", "--double"]
 "mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
+# <leader>s is EasyMotion s: type one letter of visible text in the focused
+# window, then the two-character hint on that letter. A lowercase letter
+# ignores case; an uppercase letter is exact. Backspace edits the letter and
+# Escape cancels. No match stays silent. <leader> keeps s free for the sf / sF
+# prefixes above.
+"<leader>s" = ["flash", "mouse_bigram"]
 "u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]
 # x closes the current tab (tmux: its window, after tmux's confirmation) and X
@@ -695,9 +701,19 @@ leader = "\\"
 "cmd+r" = ["flash", "popup_restart"] # restart now; a text popup rereads its values
 "cmd+w" = ["flash", "leave_mode"] # close; a persistent process keeps running
 
+# HYPER is on while the NORMAL leader key is held. The status pill turns
+# purple and shows mode.labels.hyper (default HYPER). Keys are read from
+# this table; a key with no hyper mapping can still finish a NORMAL
+# <leader> sequence. Releasing the leader returns to NORMAL. A tap that
+# pressed nothing else arms the <leader> prefix, so <leader>s still works
+# as press-leader, release, then the next key. `+` is written <plus>.
+# [mode.hyper.mappings]
+# "-" = ["flash", "plugin_command", "--command=media", "--subcommand=volumedown"]
+# "<plus>" = ["flash", "plugin_command", "--command=media", "--subcommand=volumeup"]
+
 # Override mappings for one exact, case-sensitive bundle ID. Supported scopes
-# are all, normal, insert, command, and terminal. `false` removes an inherited
-# mapping only while that app is focused. See docs/configuration.md.
+# are all, normal, insert, command, terminal, and hyper. `false` removes an
+# inherited mapping only while that app is focused. See docs/configuration.md.
 # [mode.apps."com.apple.Safari".normal.mappings]
 # "f" = ["flash", "mouse_target", "--search"]
 # "r" = false

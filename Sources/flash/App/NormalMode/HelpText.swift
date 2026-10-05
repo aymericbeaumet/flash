@@ -68,6 +68,10 @@ extension NormalModeDispatcher {
         - `sf` / `sF` right-click a target or a grid position.
         - `df` / `dF` double-click a target or a grid position.
         - `mf` / `mF` move the cursor to a target or a grid position.
+        - `<leader>s`, then one letter, then the two-character hint clicks
+          that letter in the focused window (`mouse_bigram`). A lowercase
+          letter ignores case; an uppercase letter is exact. Backspace edits,
+          Escape cancels, and no match stays silent.
         - A click leaves the pointer on its target; `hints.restore_pointer`
           puts it back after every committed click, drag or selection.
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
@@ -181,6 +185,7 @@ extension NormalModeDispatcher {
     let rows =
       mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
+      + mappingRows(scope: "hyper", mappings: config.mode.hyper)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
       + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
       + mappingRows(scope: "command", mappings: config.mode.command)

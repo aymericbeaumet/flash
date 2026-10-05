@@ -22,6 +22,9 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertEqual(session.keyRoute, .adjustment)
     session.phase = .pointer(.init())
     XCTAssertEqual(session.keyRoute, .pointer)
+    session.phase = .bigram
+    session.bigramQuery = "th"
+    XCTAssertEqual(session.keyRoute, .bigram)
     XCTAssertNil(session.search, "entering one phase leaves the others")
     XCTAssertNil(session.anchor)
   }
@@ -33,7 +36,7 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertTrue(session.isActive)
     session.hints = []
     for phase: HintSession.Phase in [
-      .search(.init()), .adjusting(hint: hint("a"), point: .zero), .pointer(.init()),
+      .search(.init()), .adjusting(hint: hint("a"), point: .zero), .pointer(.init()), .bigram,
     ] {
       session.phase = phase
       XCTAssertTrue(session.isActive)
@@ -91,5 +94,23 @@ final class HintSessionPhaseTests: XCTestCase {
 
     delegate.hintSession = HintSession()
     XCTAssertEqual(delegate.overlay.hintKeyRoute, .labels)
+  }
+
+  func testBackspaceOnABigramLabelReturnsToTheQuery() {
+    var session = HintSession()
+    session.phase = .labels(anchor: nil)
+    session.bigramQuery = "t"
+    session.hints = [hint("as"), hint("ad")]
+    XCTAssertTrue(session.retreatBigram())
+    XCTAssertEqual(session.bigramQuery, "")
+    XCTAssertTrue(session.hints.isEmpty)
+    XCTAssertEqual(session.prefix, "")
+    XCTAssertEqual(session.keyRoute, .bigram)
+    XCTAssertTrue(session.isActive)
+    session.bigramQuery = ""
+    session.phase = .labels(anchor: nil)
+    XCTAssertFalse(session.retreatBigram())
+    session.phase = .bigram
+    XCTAssertFalse(session.retreatBigram(), "retreat is only from the label phase")
   }
 }

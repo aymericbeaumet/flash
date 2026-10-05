@@ -139,6 +139,11 @@ enum ConfigLoader {
       }
     }
 
+    // Resolve built-in `<leader>` keys before the file's mappings land.
+    // Otherwise `<leader>s` is still the placeholder when the file's
+    // already-resolved `\s` arrives, so the two sit side by side and the
+    // later refresh turns them into a duplicate.
+    config.mode.refreshLeaderDerivedDefaults()
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
@@ -479,7 +484,8 @@ enum ConfigLoader {
         "live_query_timeout_ms", "ignored_apps", "app_directories",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "apps",
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "hyper",
+        "apps",
         "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
         "click_hold_ms", "send_key_interval_ms",
       ],
@@ -1553,22 +1559,25 @@ enum ConfigLoader {
         (1...32).contains(normal.count),
         (1...32).contains(insert.count),
         (1...32).contains(command.count),
-        (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count)
+        (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count),
+        (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count)
       {
-        for key in parsed.keys where !["normal", "insert", "command", "terminal"].contains(key) {
+        for key in parsed.keys
+        where !["normal", "insert", "command", "terminal", "hyper"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
           normal: normal,
           insert: insert,
           command: command,
-          terminal: parsed["terminal"] ?? config.mode.labels.terminal)
+          terminal: parsed["terminal"] ?? config.mode.labels.terminal,
+          hyper: parsed["hyper"] ?? config.mode.labels.hyper)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
-          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\" } "
+          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\", hyper = \"...\" } "
             + "with each label 1-32 characters",
           location: location)
       }
@@ -1679,7 +1688,7 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal] {
+    for scope in [ModeScope.insert, .terminal, .hyper] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1741,7 +1750,7 @@ enum ConfigLoader {
           let scopePath = appPath + [scopeName]
           guard let scope = ModeScope(rawValue: scopeName) else {
             config.addDiagnostic(
-              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal",
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper",
               location: locations.location(for: scopePath))
             continue
           }
@@ -2336,6 +2345,9 @@ enum ConfigLoader {
     case .command:
       config.mode.command.removeAll { $0.key == key }
       config.mode.command.append(mapping)
+    case .hyper:
+      config.mode.hyper.removeAll { $0.key == key }
+      config.mode.hyper.append(mapping)
     }
   }
 
@@ -2353,6 +2365,7 @@ enum ConfigLoader {
     case .insert: config.mode.insert.removeAll(where: removed)
     case .terminal: config.mode.terminal.removeAll(where: removed)
     case .command: config.mode.command.removeAll(where: removed)
+    case .hyper: config.mode.hyper.removeAll(where: removed)
     }
   }
 

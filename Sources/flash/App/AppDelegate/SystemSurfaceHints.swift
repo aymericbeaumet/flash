@@ -25,12 +25,15 @@ extension AppDelegate {
   }
 
   /// Where a committed hint aims before its target resolves. Most hints aim
-  /// at their chip, which sits on the target; a menu title, status item or
-  /// notification control is clicked at its centre instead — a banner's chip
-  /// sits on its top-left corner, where the close button appears on hover.
+  /// at their chip, which sits on the target; a menu title, status item,
+  /// notification control or bigram match is clicked at its centre instead —
+  /// a banner's chip sits on its top-left corner, where the close button
+  /// appears on hover, and a bigram's chip sits beside the letters.
   static func hintCommitPoint(for hint: AssignedHint, fontSize: CGFloat) -> CGPoint {
     let provider = hint.target.providerID
-    if provider == menuBarProviderID || provider == notificationsProviderID {
+    if provider == menuBarProviderID || provider == notificationsProviderID
+      || provider == BigramTextCollector.providerID
+    {
       return CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
     }
     let chip = OverlayPanel.chipFrame(for: hint, fontSize: fontSize)

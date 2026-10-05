@@ -20,6 +20,9 @@ import FlashCore
 
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
+  /// One letter of visible text in the focused window, then a hint bigram,
+  /// then a click (`<leader>s`). Only `.click` and `.move`.
+  case mouseBigram(MouseCommand)
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
   case mouseTargetScreen(MouseCommand)
@@ -579,6 +582,18 @@ final class URLEventHandler: NSObject {
       }),
     // The grid IS the precision surface, so `--adjust` and `--search` are
     // config errors there.
+    "mouse_bigram": .init(
+      [
+        .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
+        .flag("move"), .text("modifiers", "cmd+ctrl+alt+shift"),
+      ],
+      parse: { a in
+        guard let command = mouseCommand(a, allowAdjust: false) else { return nil }
+        switch command {
+        case .click, .move: return .mouseBigram(command)
+        default: return nil
+        }
+      }),
     "mouse_grid": .init(
       mouseParameters.filter { !["adjust", "search"].contains($0.name) }
         + [.flag("bisect"), .integer("zoom_to_depth")],
@@ -877,7 +892,11 @@ extension URLEventHandler {
       not verbs: they report (as text, or JSON with `--json`) and cannot be
       mapped. `:doctor` runs the doctor's checks from the command line.
 
-      `mouse_target` selects an app-discovered target. `mouse_grid` selects
+      `mouse_target` selects an app-discovered target. `mouse_bigram` types one
+      letter of the focused window's visible text, then the two-character hint
+      on that letter. A lowercase letter ignores case and an uppercase letter
+      is exact; no match stays silent. `--move` moves the pointer onto the
+      letter. `mouse_grid` selects
       a precise screen position: the screen splits like the left half of
       the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
       `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its

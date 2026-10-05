@@ -131,6 +131,7 @@ final class ConfigLoaderTests: XCTestCase {
       for (scope, mappings) in [
         ("all", config.mode.all), ("normal", config.mode.normal), ("insert", config.mode.insert),
         ("command", config.mode.command), ("terminal", config.mode.terminal),
+        ("hyper", config.mode.hyper),
       ] {
         for mapping in mappings {
           switch mapping.action.command {
@@ -252,6 +253,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
+    // `F` is the grid twin of `f`, and every click prefix works on both.
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("\\s") })?.action.command,
+      .mouseBigram(.click(.leftClick, modifiers: [])))
     // `F` is the grid twin of `f`, and every click prefix works on both.
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
@@ -1344,6 +1349,21 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNotNil(c.mode.terminal.first(where: { $0.key == key("cmd+w") }))
   }
 
+  /// The built-in `<leader>s` is resolved before file mappings apply, so
+  /// removing it under a different leader actually drops it.
+  func testRemovingTheBuiltinLeaderBigramDropsIt() {
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = ","
+      [mode.normal.mappings]
+      "<leader>s" = false
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertNil(c.mode.normal.first { $0.key == key(",s") })
+    XCTAssertNil(c.mode.compiledNormal.mapping(for: key(",s")))
+  }
+
   func testTrueAndCommandFalseAreRejectedWithTheRemovalSpelling() {
     let bare = ConfigLoader.parse(
       """
@@ -1595,6 +1615,27 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
+  }
+
+  func testHyperMappingsParseVolumeKeysAndRejectLeader() {
+    let toml = """
+      [mode.normal]
+      leader = "<space>"
+      [mode.hyper.mappings]
+      "-" = ["flash", "plugin_command", "--command=media", "--subcommand=volumedown"]
+      "<plus>" = ["flash", "plugin_command", "--command=media", "--subcommand=volumeup"]
+      "<leader>s" = ["flash", "quit"]
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
+    XCTAssertEqual(c.mode.hyper.map(\.key).sorted(), ["+", "-"])
+    XCTAssertEqual(
+      c.mode.compiledHyper.mapping(for: "-")?.action.command,
+      .pluginCommand(command: "media", subcommand: "volumedown", args: []))
+    XCTAssertEqual(
+      c.mode.compiledHyper.mapping(for: "+")?.action.command,
+      .pluginCommand(command: "media", subcommand: "volumeup", args: []))
+    XCTAssertNil(c.mode.hyper.first { $0.key.contains("<leader>") || $0.key.contains("space") })
   }
 
   func testOldModeMappingTablesAreRejected() {

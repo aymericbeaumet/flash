@@ -63,12 +63,14 @@ struct HintSession {
   }
 
   /// What keys do in this session. The phases exclude one another — a session
-  /// types labels, filters by text, refines a matched point, or steers the
-  /// pointer — so they are one value, never a set of flags.
+  /// types a bigram, types labels, filters by text, refines a matched point,
+  /// or steers the pointer — so they are one value, never a set of flags.
   enum Phase {
     /// Typing hint labels; `anchor` once a two-phase gesture chose its first
     /// point.
     case labels(anchor: Anchor?)
+    /// `mouse_bigram`: the letter to find, before its hint label.
+    case bigram
     case search(Search)
     /// `--adjust`: the matched hint and the point the commit key clicks.
     case adjusting(hint: AssignedHint, point: CGPoint)
@@ -76,6 +78,9 @@ struct HintSession {
   }
 
   var phase = Phase.labels(anchor: nil)
+  /// The characters typed for `.bigram`, kept while their matches are labeled
+  /// so Backspace can return to the query. Nil for every other session.
+  var bigramQuery: String?
 
   /// How the overlay routes keys; a projection of `phase`, with label typing
   /// on the grid surface going to the grid.
@@ -84,6 +89,7 @@ struct HintSession {
     case .labels:
       guard surface == .grid else { return .labels }
       return .grid(gridShape, cursorFollows: gridCursorFollows)
+    case .bigram: return .bigram
     case .search: return .search
     case .adjusting: return .adjustment
     case .pointer: return .pointer
@@ -105,8 +111,8 @@ struct HintSession {
     return nil
   }
 
-  /// Search, adjustment and pointer phases own the keyboard even with no hint
-  /// on screen; typing labels needs hints.
+  /// Search, adjustment, pointer and bigram phases own the keyboard even with
+  /// no hint on screen; typing labels needs hints.
   var isActive: Bool {
     if case .labels = phase { return !hints.isEmpty }
     return true
@@ -133,6 +139,18 @@ struct HintSession {
     guard case .labels(let anchor?) = phase, let source = anchor.grid else { return false }
     phase = .labels(anchor: nil)
     grid = source
+    return true
+  }
+
+  /// Backspace on an empty label prefix during a bigram session: drop the
+  /// last query character and return to typing it. False when this session
+  /// has no query to edit.
+  mutating func retreatBigram() -> Bool {
+    guard case .labels = phase, let query = bigramQuery, !query.isEmpty else { return false }
+    bigramQuery = String(query.dropLast())
+    hints = []
+    prefix = ""
+    phase = .bigram
     return true
   }
 }

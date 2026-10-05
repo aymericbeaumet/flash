@@ -59,6 +59,12 @@ mappings.
   screen position through the grid. A lowercase prefix picks the click on
   either surface: none for primary, `s` secondary, `d` double, `m` move.
   So `df` double-clicks an element and `dF` double-clicks a grid position.
+- `<leader>s`, then one letter, then a two-character hint jumps to that
+  letter in the focused window's visible text (EasyMotion `s`). A lowercase
+  letter ignores case; an uppercase letter is exact. Backspace edits the
+  letter, Escape cancels, and no match stays silent. `mouse_bigram --move`
+  moves the pointer without clicking. The text comes from Accessibility,
+  never from screen pixels.
 - A prefix letter must not also be a mapping of its own, or that mapping waits
   for `sequence_timeout_ms` before it fires. Triple click therefore ships
   unbound, because `tf` would stall the bare `t` (new tab). To bind `tf` /
@@ -476,10 +482,25 @@ again at publication. Changing or leaving that query clears its rows and rejects
 both stale replies and timeout results. Initial snapshot publication never
 overwrites the current live-query result.
 
+## Hyper
+
+Holding the NORMAL leader key enters HYPER until that key is released. The
+status pill is purple and shows `mode.labels.hyper` (default `HYPER`). Keys
+pressed while it is held are read from `[mode.hyper.mappings]`, not from
+NORMAL. A key with no hyper mapping can still complete a NORMAL `<leader>`
+sequence, so holding the leader and pressing `s` still runs `<leader>s`
+when `s` is not a hyper binding. Unmapped keys are swallowed.
+
+Releasing the leader returns to NORMAL. If nothing else was pressed, that
+tap arms the `<leader>` prefix: press the leader, release it, then the next
+key, and the sequence runs as before. HYPER is only entered from idle
+NORMAL. INSERT, the command line, a popup, and an open hint session keep
+their own keys. See [configuration](configuration.md).
+
 ## Popup input
 
-Every popup is a terminal. TERMINAL is the fourth mode, beside NORMAL, INSERT
-and COMMAND: `enter_terminal_mode [--name=<popup>]` enters it by showing the
+Every popup is a terminal. TERMINAL sits beside NORMAL, INSERT, COMMAND, and
+the momentary HYPER layer: `enter_terminal_mode [--name=<popup>]` enters it by showing the
 popup standalone (the built-in `terminal` popup without a name), and clicking a
 popup's body or pinning it from the status bar enters it too. Either way the
 popup's local terminal view gets focus. `leave_mode` leaves it, closing the

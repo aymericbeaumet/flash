@@ -27,7 +27,8 @@ Every hint activation logs one line when its hints reach the screen:
   (any app that handles http and https), `electron` (other Chromium apps) and
   `other`.
 - `surface` names the activation: `targets` (`mouse_target`), `screen`,
-  `scroll`, `grid`, `mouse_dock`, `mouse_menubar`, `mouse_notifications`.
+  `scroll`, `grid`, `bigram` (`mouse_bigram`), `mouse_dock`, `mouse_menubar`,
+  `mouse_notifications`.
 - `bundle` is the app the hints are for (`-` when unknown).
 - `outcome` says how the app's own hints were obtained: `hit` (the prepared
   model), `miss` (a walk), `retried` (a degenerate first walk was walked

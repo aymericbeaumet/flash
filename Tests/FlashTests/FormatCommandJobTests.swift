@@ -1,5 +1,4 @@
 import Darwin
-import FlashTerminal
 import Foundation
 import XCTest
 
@@ -93,7 +92,8 @@ final class FormatCommandJobTests: XCTestCase {
       let started = ProcessInfo.processInfo.systemUptime
       XCTAssertEqual(StatusFormatCommandJob.shutdown([active]), [])
       XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.2)
-      XCTAssertEqual(ProcessExit.members(ofGroup: active.processIdentifier), [])
+      XCTAssertEqual(kill(-active.processIdentifier, 0), -1)
+      XCTAssertEqual(errno, ESRCH)
       XCTAssertEqual(waitpid(active.processIdentifier, nil, WNOHANG), -1)
       XCTAssertEqual(errno, ECHILD)
       job = nil

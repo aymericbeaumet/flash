@@ -227,6 +227,7 @@ extension OverlayPanel {
     appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
     appendCommandSurfaceLayers(to: &sublayers, panelFrame: frame)
     appendToastLayerIfNeeded(to: &sublayers)
+    if let bigramQueryEcho { sublayers.append(bigramQueryEcho) }
     contentLayer.sublayers = sublayers.isEmpty ? nil : sublayers
     if modeSurface.capturesInput {
       captureKeyboardInput()

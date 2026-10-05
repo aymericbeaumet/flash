@@ -19,6 +19,7 @@ final class ModeReducerTests: XCTestCase {
     .terminal(restoreTo: .normal),
     .terminal(restoreTo: .insert),
     .terminal(restoreTo: .disabled),
+    .hyper(restoreTo: .normal),
   ]
 
   // Representative events covering every case.
@@ -39,6 +40,8 @@ final class ModeReducerTests: XCTestCase {
     .startup(advancedEnabled: true),
     .startup(advancedEnabled: false),
     .focusedAppChanged(pid: 7),
+    .enterHyper,
+    .exitHyper,
   ]
 
   // MARK: Initialization
@@ -120,7 +123,7 @@ final class ModeReducerTests: XCTestCase {
       let (next, effects) = ModeReducer.reduce(state, .focusedAppChanged(pid: 99))
       XCTAssertEqual(next, state, "focusedAppChanged must not change \(state)")
       switch state {
-      case .normal, .command:
+      case .normal, .command, .hyper:
         XCTAssertEqual(effects, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         XCTAssertTrue(effects.isEmpty)
@@ -436,6 +439,45 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.normal.badgeStyle, .normal)
     XCTAssertEqual(Mode.insert.badgeStyle, .insert)
     XCTAssertEqual(Mode.disabled.badgeStyle, .insert)
+    XCTAssertEqual(Mode.hyper(restoreTo: .normal).badgeStyle, .hyper)
+    XCTAssertEqual(Mode.hyper(restoreTo: .normal).label, .hyper)
+  }
+
+  func testHyperIsALeaderHoldOnNormal() {
+    let (entered, enterEffects) = ModeReducer.reduce(.normal, .enterHyper)
+    XCTAssertEqual(entered, .hyper(restoreTo: .normal))
+    XCTAssertEqual(enterEffects, [.renderSurface])
+    XCTAssertEqual(entered.flashMode, .normal)
+    XCTAssertEqual(
+      entered.overlayInputMode(hasHints: false, activationInFlight: false), .normal)
+    XCTAssertTrue(entered.ownsKeyboard(hasHints: false, activationInFlight: false))
+
+    let (left, leaveEffects) = ModeReducer.reduce(entered, .exitHyper)
+    XCTAssertEqual(left, .normal)
+    XCTAssertEqual(leaveEffects, [.renderSurface])
+
+    XCTAssertEqual(ModeReducer.reduce(.insert, .enterHyper).0, .insert)
+    XCTAssertEqual(
+      ModeReducer.reduce(.command(restoreTo: .normal), .enterHyper).0, .command(restoreTo: .normal))
+    XCTAssertEqual(ModeReducer.reduce(.normal, .exitHyper).0, .normal)
+    XCTAssertEqual(
+      ModeReducer.reduce(.hyper(restoreTo: .normal), .leaveMode(hasHints: false, targetPID: nil)).0,
+      .normal)
+    let command = ModeReducer.reduce(.hyper(restoreTo: .normal), .openCommand(restoreMode: true)).0
+    XCTAssertEqual(command, .command(restoreTo: .normal))
+  }
+
+  func testLeaderHoldArmsPrefixOnlyOnACleanTap() {
+    var hold = LeaderHold()
+    XCTAssertEqual(hold.step(.leaderDown), .enter)
+    XCTAssertEqual(hold.step(.leaderDown), .ignore)
+    XCTAssertEqual(hold.step(.leaderUp), .exit(armPrefix: true))
+
+    XCTAssertEqual(hold.step(.leaderDown), .enter)
+    XCTAssertEqual(hold.step(.otherKey), .key)
+    XCTAssertEqual(hold.step(.leaderUp), .exit(armPrefix: false))
+    XCTAssertEqual(hold.step(.leaderUp), .passthrough)
+    XCTAssertEqual(hold.step(.otherKey), .passthrough)
   }
 
   // MARK: Structural purity

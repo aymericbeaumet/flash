@@ -36,6 +36,11 @@ enum Mode: Equatable {
   /// suspended. Entered by `enter_terminal_mode` or by focusing a popup, and
   /// left by `leave_mode`, which closes the popup.
   case terminal(restoreTo: ReturnMode)
+
+  /// Momentary layer while the NORMAL leader key is physically held.
+  /// Mappings come from `[mode.hyper.mappings]`. Releasing the leader returns
+  /// to `restoreTo` (NORMAL). A clean tap still arms a `<leader>` sequence.
+  case hyper(restoreTo: ReturnMode)
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.
@@ -63,7 +68,8 @@ extension Mode {
     case .insert: return .insert
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(let restoreTo), .terminal(let restoreTo): return restoreTo
+    case .command(let restoreTo), .terminal(let restoreTo), .hyper(let restoreTo):
+      return restoreTo
     }
   }
 
@@ -73,6 +79,11 @@ extension Mode {
   }
 
   var isNormal: Bool { self == .normal }
+
+  var isHyper: Bool {
+    if case .hyper = self { return true }
+    return false
+  }
 
   var isTerminal: Bool {
     if case .terminal = self { return true }

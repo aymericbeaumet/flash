@@ -21,6 +21,9 @@ flash mouse_target --multi               # click several targets, rediscovered a
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_target --search              # type visible text to pick the target (seek & click)
+flash mouse_bigram                       # type a visible letter, then its hint bigram
+flash mouse_bigram --secondary           # right-click that letter
+flash mouse_bigram --move                # move the pointer onto that letter
 flash mouse_target --scope=screen        # hints across every app on the screen
 flash mouse_dock                         # hint the Dock's items
 flash mouse_menubar                      # hint the focused app's menu titles and the status items
@@ -78,7 +81,7 @@ are fixed for `"schema": 2`:
 | `schema` | `2` |
 | `version`, `build` | The app's version and build number |
 | `mode` | `disabled`, `insert`, `normal`, `command` or `terminal` |
-| `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting` or `pointer` |
+| `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer` or `bigram` |
 | `focused_app` | The focused app's bundle identifier, or `null` |
 | `accessibility` | Whether Flash has the Accessibility grant |
 | `capture` | How hint keys arrive: `tap`, or `key_window` without a tap or under secure input |
