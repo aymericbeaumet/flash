@@ -26,6 +26,9 @@ extension OverlayPanel {
   static let nordAuroraGreen = NSColor(calibratedRed: 0.64, green: 0.75, blue: 0.55, alpha: 1)
   static let nordAuroraYellow = NSColor(calibratedRed: 0.92, green: 0.80, blue: 0.55, alpha: 1)
   static let nordAuroraPurple = NSColor(calibratedRed: 0.71, green: 0.56, blue: 0.68, alpha: 1)
+  /// A clearer violet than command's dusty mauve, so the momentary HYPER
+  /// pill reads as purple on its own.
+  static let hyperPurple = NSColor(calibratedRed: 0.62, green: 0.42, blue: 0.89, alpha: 1)
   static let nordAuroraRed = NSColor(calibratedRed: 0.75, green: 0.38, blue: 0.42, alpha: 1)
   static let tmuxGrey245 = NSColor(calibratedWhite: 0.54, alpha: 1)
   static let tmuxRed196 = NSColor(calibratedRed: 1.00, green: 0.00, blue: 0.00, alpha: 1)
@@ -37,6 +40,7 @@ extension OverlayPanel {
   static let nordAuroraGreenCG = nordAuroraGreen.cgColor
   static let nordAuroraYellowCG = nordAuroraYellow.cgColor
   static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
+  static let hyperPurpleCG = hyperPurple.cgColor
   static let tmuxGrey245CG = tmuxGrey245.cgColor
   /// Hairline drawn along the bottom edge of the status bar so it separates
   /// from the window beneath without a shadow.
@@ -78,6 +82,11 @@ extension OverlayPanel {
     bottomCG: nordAuroraPurpleCG,
     foregroundCG: nordPolarNight0CG,
     borderCG: nordAuroraYellowCG)
+  static let hyperPalette = ModeBadgePalette(
+    topCG: lifted(hyperPurple, by: 0.14).cgColor,
+    bottomCG: hyperPurpleCG,
+    foregroundCG: nordPolarNight0CG,
+    borderCG: nordAuroraYellowCG)
   static let commandInputPaletteValue = ModeBadgePalette(
     topCG: nordPolarNight0CG,
     bottomCG: nordPolarNight0CG,
@@ -89,6 +98,7 @@ extension OverlayPanel {
     case .insert: return Self.insertPalette
     case .normal: return Self.normalPalette
     case .command: return Self.commandPaletteValue
+    case .hyper: return Self.hyperPalette
     }
   }
 

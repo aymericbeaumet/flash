@@ -701,9 +701,19 @@ leader = "\\"
 "cmd+r" = ["flash", "popup_restart"] # restart now; a text popup rereads its values
 "cmd+w" = ["flash", "leave_mode"] # close; a persistent process keeps running
 
+# HYPER is on while the NORMAL leader key is held. The status pill turns
+# purple and shows mode.labels.hyper (default HYPER). Keys are read from
+# this table; a key with no hyper mapping can still finish a NORMAL
+# <leader> sequence. Releasing the leader returns to NORMAL. A tap that
+# pressed nothing else arms the <leader> prefix, so <leader>s still works
+# as press-leader, release, then the next key. `+` is written <plus>.
+# [mode.hyper.mappings]
+# "-" = ["flash", "plugin_command", "--command=media", "--subcommand=volumedown"]
+# "<plus>" = ["flash", "plugin_command", "--command=media", "--subcommand=volumeup"]
+
 # Override mappings for one exact, case-sensitive bundle ID. Supported scopes
-# are all, normal, insert, command, and terminal. `false` removes an inherited
-# mapping only while that app is focused. See docs/configuration.md.
+# are all, normal, insert, command, terminal, and hyper. `false` removes an
+# inherited mapping only while that app is focused. See docs/configuration.md.
 # [mode.apps."com.apple.Safari".normal.mappings]
 # "f" = ["flash", "mouse_target", "--search"]
 # "r" = false

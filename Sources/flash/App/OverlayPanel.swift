@@ -7,6 +7,7 @@ enum OverlayModeBadgeStyle {
   case insert
   case normal
   case command
+  case hyper
 }
 
 /// What the overlay shows for the current mode, as one value. Only the mode
@@ -336,6 +337,24 @@ final class OverlayPanel: NSPanel {
   }
   var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
+  var hyperModeMappings: CompiledMappings = CompiledMappings()
+  /// Sequence state for keys typed while the leader is held. Separate from
+  /// `normalModePending` so a hyper sequence cannot leak into NORMAL.
+  var hyperPending: String = "" {
+    didSet {
+      if hyperPending.isEmpty { hyperPendingUpdatedAt = nil }
+    }
+  }
+  var hyperPendingUpdatedAt: Date?
+  /// NORMAL `<leader>` sequence continued by a key pressed while the leader
+  /// is still down. Nil when the hold is not inside that fallback.
+  var leaderFallbackPending: String? {
+    didSet {
+      if leaderFallbackPending == nil { leaderFallbackUpdatedAt = nil }
+    }
+  }
+  var leaderFallbackUpdatedAt: Date?
+  var leaderHold = LeaderHold()
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
@@ -903,6 +922,11 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidGrid(_ command: MouseGridKeyCommand)
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
+  /// Leader key-down on the key-window fallback. The tap path does not come
+  /// through the panel. True when the key was consumed as the hyper hold.
+  func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool
+  /// Leader key-up on the key-window fallback. True when it closed a hold.
+  func handleLeaderKeyUp(_ event: NSEvent) -> Bool
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)

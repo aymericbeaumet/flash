@@ -1107,7 +1107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     let tap = KeyboardCaptureTap(
       shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
-      handle: { [weak self] event in self?.routeTapCapturedKey(event) })
+      handle: { [weak self] event in self?.routeTapCapturedKey(event) },
+      handleKeyUp: { [weak self] event in _ = self?.handleLeaderKeyUp(event) })
     guard tap.start() else { return }
     keyboardCaptureTap = tap
     overlay.keyboardCaptureActive = true
@@ -1207,6 +1208,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashLog.debug(
       "[latency] tap_to_route ms="
         + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+    // HYPER is a hold on top of NORMAL routing. Claim the leader, and every
+    // key while it is held, before a NORMAL chord or sequence can see them.
+    if overlay.inputMode == .normal || modeStore.mode.isHyper {
+      if handleLeaderHoldKeyDown(event) { return }
+    }
     switch overlay.inputMode {
     case .passive:
       // A chord the tap swallowed in INSERT is an active mapping (see

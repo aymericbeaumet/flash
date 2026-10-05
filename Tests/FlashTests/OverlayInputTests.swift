@@ -1026,6 +1026,8 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
       normalModeActions.append((action, repeatCount))
     }
   }
+  func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool { false }
+  func handleLeaderKeyUp(_ event: NSEvent) -> Bool { false }
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
     guard mappingEventsToHandle > 0 else { return false }
     mappingEventsToHandle -= 1

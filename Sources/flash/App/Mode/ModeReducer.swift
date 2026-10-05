@@ -37,6 +37,8 @@ enum ModeReducer {
         return reduce(state, .closeCommand(reason: "leave_mode"))
       case .insert where !hasHints:
         return reduce(state, .enterNormal(targetPID: targetPID))
+      case .hyper:
+        return reduce(state, .exitHyper)
       case .insert, .normal, .disabled:
         // Active hints are dismissed in place; without hints there is no
         // enclosing mode to leave, so nothing re-renders.
@@ -109,11 +111,24 @@ enum ModeReducer {
       // Sticky/global: never flips the mode. Only the command surfaces need to
       // reclaim key focus after an app switch.
       switch state {
-      case .normal, .command:
+      case .normal, .command, .hyper:
         return (state, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         return (state, [])
       }
+
+    case .enterHyper:
+      // The leader key is a NORMAL concept. INSERT keeps typing the key,
+      // and command / terminal surfaces keep their own input.
+      guard case .normal = state else { return (state, []) }
+      let next = Mode.hyper(restoreTo: .normal)
+      return (next, enterEffects(for: next, targetPID: nil))
+
+    case .exitHyper:
+      guard case .hyper(let restoreTo) = state else { return (state, []) }
+      // Paint the restored label only. The full enter-effects of NORMAL
+      // would dismiss hints and recapture on every leader release.
+      return (restoreTo.mode, [.renderSurface])
     }
   }
 
@@ -149,6 +164,11 @@ enum ModeReducer {
         .prepareModeEntry, .setMappingScope(.terminal), .clearTransientHintState,
         .hideOverlayIfIdle, .renderSurface,
       ]
+    case .hyper:
+      // Keep the NORMAL mapping scope and the hint session. The pill is the
+      // only thing that changes; Carbon registrations stay put so a hold does
+      // not churn hotkey registrations.
+      return [.renderSurface]
     }
   }
 
@@ -169,6 +189,7 @@ enum ModeReducer {
     switch state {
     case .terminal: return reduce(state, .closeTerminal(targetPID: targetPID))
     case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
+    case .hyper: return (.disabled, enterEffects(for: .disabled, targetPID: targetPID))
     case .disabled: return (state, [])
     case .normal, .insert: preconditionFailure("Enabled mode has disabled eligibility")
     }

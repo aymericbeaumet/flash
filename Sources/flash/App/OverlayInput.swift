@@ -429,6 +429,11 @@ enum OverlayInputInterpreter {
 /// through `processNormalModeKey`; configured modified mappings are handled by
 /// the Carbon registry outside the panel.
 extension OverlayPanel {
+  override func keyUp(with event: NSEvent) {
+    if !keyboardCaptureActive, coordinator?.handleLeaderKeyUp(event) == true { return }
+    super.keyUp(with: event)
+  }
+
   override func keyDown(with event: NSEvent) {
     if inputMode == .commandLine {
       super.keyDown(with: event)
@@ -466,6 +471,9 @@ extension OverlayPanel {
   /// resulting action while the overlay panel owns keyboard input.
   func processNormalModeKey(_ event: NSEvent) {
     guard let coordinator = coordinator else { return }
+    // The tap path claims the leader hold before it gets here. The key-window
+    // fallback is the only other reader of NORMAL keys.
+    if !keyboardCaptureActive, coordinator.handleLeaderHoldKeyDown(event) { return }
     let now = Date()
     let pendingBeforeTimeout = normalModePending
     if NormalModeInterpreter.pendingSequenceTimedOut(

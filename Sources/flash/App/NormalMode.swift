@@ -350,6 +350,57 @@ enum NormalModeInterpreter {
     return value
   }
 
+  /// The atoms a key event can match, in the interpreter's try-order.
+  static func eventKeyAtoms(
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> [String] {
+    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    return mappingKeys(
+      keyCode: keyCode,
+      modifierFlags: independent,
+      hasControl: independent.contains(.control),
+      hasShift: independent.contains(.shift),
+      ignoredChar: firstCharacter(charactersIgnoringModifiers)?.lowercased().first,
+      actualChar: firstCharacter(characters))
+  }
+
+  /// True when this physical key is the configured leader and is not part of
+  /// a Command/Control/Option chord. Shift is allowed: Shift-Space is still
+  /// Space. Key-up events sometimes carry no characters; named keys still
+  /// match by virtual key code.
+  static func isLeaderKey(
+    atom: String,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> Bool {
+    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if independent.contains(.command) || independent.contains(.control)
+      || independent.contains(.option)
+    {
+      return false
+    }
+    if eventKeyAtoms(
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers
+    ).contains(atom) {
+      return true
+    }
+    switch Int(keyCode) {
+    case kVK_Space: return atom == "space"
+    case kVK_Tab: return atom == "tab"
+    case kVK_Escape: return atom == "escape"
+    case kVK_Return: return atom == "return" || atom == "enter"
+    default: return false
+    }
+  }
+
   private static func mappingKeys(
     keyCode: UInt16,
     modifierFlags: NSEvent.ModifierFlags,

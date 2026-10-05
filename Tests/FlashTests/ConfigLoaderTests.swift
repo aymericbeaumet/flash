@@ -131,6 +131,7 @@ final class ConfigLoaderTests: XCTestCase {
       for (scope, mappings) in [
         ("all", config.mode.all), ("normal", config.mode.normal), ("insert", config.mode.insert),
         ("command", config.mode.command), ("terminal", config.mode.terminal),
+        ("hyper", config.mode.hyper),
       ] {
         for mapping in mappings {
           switch mapping.action.command {
@@ -1613,6 +1614,27 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
+  }
+
+  func testHyperMappingsParseVolumeKeysAndRejectLeader() {
+    let toml = """
+      [mode.normal]
+      leader = "<space>"
+      [mode.hyper.mappings]
+      "-" = ["flash", "plugin_command", "--command=media", "--subcommand=volumedown"]
+      "<plus>" = ["flash", "plugin_command", "--command=media", "--subcommand=volumeup"]
+      "<leader>s" = ["flash", "quit"]
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
+    XCTAssertEqual(c.mode.hyper.map(\.key).sorted(), ["+", "-"])
+    XCTAssertEqual(
+      c.mode.compiledHyper.mapping(for: "-")?.action.command,
+      .pluginCommand(command: "media", subcommand: "volumedown", args: []))
+    XCTAssertEqual(
+      c.mode.compiledHyper.mapping(for: "+")?.action.command,
+      .pluginCommand(command: "media", subcommand: "volumeup", args: []))
+    XCTAssertNil(c.mode.hyper.first { $0.key.contains("<leader>") || $0.key.contains("space") })
   }
 
   func testOldModeMappingTablesAreRejected() {

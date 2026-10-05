@@ -6,10 +6,12 @@ enum ModeScope: String, CaseIterable, Hashable {
   case insert
   case terminal
   case command
+  case hyper
 }
 
-/// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`, or
-/// `[mode.insert.mappings]`, `[mode.command.mappings]`, or `[mode.terminal.mappings]`.
+/// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`,
+/// `[mode.insert.mappings]`, `[mode.command.mappings]`, `[mode.terminal.mappings]`,
+/// or `[mode.hyper.mappings]`.
 /// Terminal mappings are evaluated locally by the focused terminal popup.
 /// The key is the mapping lhs and the action is resolved at config load.
 /// `repeatsOnFinalKey` keeps a completed normal-mode sequence armed so each

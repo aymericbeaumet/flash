@@ -185,6 +185,7 @@ extension NormalModeDispatcher {
     let rows =
       mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
+      + mappingRows(scope: "hyper", mappings: config.mode.hyper)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
       + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
       + mappingRows(scope: "command", mappings: config.mode.command)

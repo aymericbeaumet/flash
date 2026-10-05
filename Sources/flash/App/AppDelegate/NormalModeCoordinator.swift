@@ -125,7 +125,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .terminal:
+    case .command, .terminal, .hyper:
       break
     }
   }
@@ -164,6 +164,121 @@ extension AppDelegate {
     case .normal: return config.mode.labels.normal
     case .command: return config.mode.labels.command
     case .terminal: return config.mode.labels.terminal
+    case .hyper: return config.mode.labels.hyper
+    }
+  }
+
+  /// Leader key-down from the tap or the key-window fallback.
+  ///
+  /// Returns true when the key was consumed as the hyper hold or as a key
+  /// typed during it. Other keys return false and follow the NORMAL path.
+  func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool {
+    guard let atom = currentLeaderAtom() else { return false }
+    let keys = overlay.keyCharacters(for: event)
+    let isLeader = NormalModeInterpreter.isLeaderKey(
+      atom: atom,
+      keyCode: event.keyCode,
+      modifierFlags: event.modifierFlags,
+      characters: keys.characters,
+      charactersIgnoringModifiers: keys.ignoringModifiers)
+    if case .hyper = modeStore.mode {
+      if isLeader {
+        _ = overlay.leaderHold.step(.leaderDown)
+        return true
+      }
+      _ = overlay.leaderHold.step(.otherKey)
+      expireHyperSequences()
+      let result = HyperKeyRouter.route(
+        hyperPending: overlay.hyperPending,
+        leaderFallbackPending: overlay.leaderFallbackPending,
+        leaderAtom: atom,
+        keyCode: event.keyCode,
+        modifierFlags: event.modifierFlags,
+        characters: keys.characters,
+        charactersIgnoringModifiers: keys.ignoringModifiers,
+        hyperMappings: overlay.hyperModeMappings,
+        normalMappings: overlay.normalModeMappings)
+      overlay.hyperPending = result.hyperPending
+      if !result.hyperPending.isEmpty { overlay.hyperPendingUpdatedAt = Date() }
+      overlay.leaderFallbackPending = result.leaderFallbackPending
+      if result.leaderFallbackPending != nil { overlay.leaderFallbackUpdatedAt = Date() }
+      overlayDidHandleNormalMode(
+        result.transition.action, repeatCount: result.transition.repeatCount)
+      return true
+    }
+    guard isLeader, !event.isARepeat else { return false }
+    guard modeStore.mode == .normal, overlay.inputMode == .normal,
+      overlay.normalModePending.isEmpty, overlay.normalModeRepeatAnchor == nil
+    else { return false }
+    _ = overlay.leaderHold.step(.leaderDown)
+    FlashLog.trace("[mode] hyper enter")
+    dispatchMode(.enterHyper)
+    return true
+  }
+
+  /// Leader key-up. A clean tap arms the NORMAL `<leader>` prefix; a hold
+  /// that typed anything returns to NORMAL without one.
+  func handleLeaderKeyUp(_ event: NSEvent) -> Bool {
+    guard let atom = currentLeaderAtom() else { return false }
+    let keys = overlay.keyCharacters(for: event)
+    guard
+      NormalModeInterpreter.isLeaderKey(
+        atom: atom,
+        keyCode: event.keyCode,
+        modifierFlags: event.modifierFlags,
+        characters: keys.characters,
+        charactersIgnoringModifiers: keys.ignoringModifiers)
+    else { return false }
+    let step = overlay.leaderHold.step(.leaderUp)
+    guard case .exit(let armPrefix) = step else { return false }
+    let fallback = overlay.leaderFallbackPending
+    overlay.hyperPending = ""
+    overlay.leaderFallbackPending = nil
+    guard case .hyper = modeStore.mode else { return true }
+    FlashLog.trace("[mode] hyper exit arm_prefix=\(armPrefix)")
+    dispatchMode(.exitHyper)
+    guard modeStore.mode == .normal else { return true }
+    if let fallback, !fallback.isEmpty {
+      overlay.normalModePending = fallback
+      overlay.normalModePendingUpdatedAt = Date()
+      overlayDidHandleNormalMode(nil, repeatCount: 1)
+    } else if armPrefix, leaderAtomArmsPrefix(atom) {
+      overlay.normalModePending = atom
+      overlay.normalModePendingUpdatedAt = Date()
+      overlayDidHandleNormalMode(nil, repeatCount: 1)
+    }
+    return true
+  }
+
+  private func currentLeaderAtom() -> String? {
+    let raw = config.mode.normalLeader ?? Config.Mode.defaultNormalLeader
+    return NormalModeInterpreter.translateLeader(raw)
+  }
+
+  private func leaderAtomArmsPrefix(_ atom: String) -> Bool {
+    overlay.normalModeMappings.mapping(for: atom) != nil
+      || overlay.normalModeMappings.hasStrictPrefix(atom)
+  }
+
+  private func expireHyperSequences() {
+    let now = Date()
+    let timeout = config.mode.sequenceTimeoutMs
+    if NormalModeInterpreter.pendingSequenceTimedOut(
+      pending: overlay.hyperPending,
+      lastInputAt: overlay.hyperPendingUpdatedAt,
+      now: now,
+      timeoutMs: timeout)
+    {
+      overlay.hyperPending = ""
+    }
+    if let fallback = overlay.leaderFallbackPending,
+      NormalModeInterpreter.pendingSequenceTimedOut(
+        pending: fallback,
+        lastInputAt: overlay.leaderFallbackUpdatedAt,
+        now: now,
+        timeoutMs: timeout)
+    {
+      overlay.leaderFallbackPending = nil
     }
   }
 
@@ -287,6 +402,9 @@ extension AppDelegate {
     cancelCandidateFinderSessionWork()
     overlay.normalModePending = ""
     overlay.normalModeRepeatAnchor = nil
+    overlay.hyperPending = ""
+    overlay.leaderFallbackPending = nil
+    overlay.leaderHold = LeaderHold()
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     finder.candidates = []

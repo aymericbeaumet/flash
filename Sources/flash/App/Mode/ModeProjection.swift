@@ -12,6 +12,7 @@ enum ModeLabel: Equatable {
   case normal
   case command
   case terminal
+  case hyper
 }
 
 extension Mode {
@@ -23,7 +24,7 @@ extension Mode {
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert, .terminal: return .insert
-    case .normal, .command: return .normal
+    case .normal, .command, .hyper: return .normal
     }
   }
 
@@ -44,7 +45,7 @@ extension Mode {
     switch self {
     case .disabled, .insert, .terminal:
       return false
-    case .normal:
+    case .normal, .hyper:
       return !hasHints && !activationInFlight
     case .command:
       return true
@@ -63,13 +64,18 @@ extension Mode {
     // `.hints` hides the mouse cursor, but the user needs a visible cursor to
     // drive the context menu. Capture is off regardless (see `ownsKeyboard`); this
     // only governs cursor visibility / routing for when capture later resumes.
-    if nativeSurfaceSuspended, case .normal = self { return .normal }
+    if nativeSurfaceSuspended {
+      switch self {
+      case .normal, .hyper: return .normal
+      default: break
+      }
+    }
     switch self {
     case .disabled, .insert:
       return hasHints || activationInFlight ? .hints : .passive
     case .terminal:
       return .normal
-    case .normal:
+    case .normal, .hyper:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
     case .command:
@@ -84,6 +90,7 @@ extension Mode {
     case .normal: return .normal
     case .command: return .command
     case .terminal: return .terminal
+    case .hyper: return .hyper
     }
   }
 
@@ -96,6 +103,7 @@ extension Mode {
     case .normal: return .normal
     case .command: return .command
     case .terminal: return .command
+    case .hyper: return .hyper
     }
   }
 }

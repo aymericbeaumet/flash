@@ -70,6 +70,7 @@ struct FlashStatusReport: Equatable {
     case .normal: return "normal"
     case .command: return "command"
     case .terminal: return "terminal"
+    case .hyper: return "hyper"
     }
   }
 
