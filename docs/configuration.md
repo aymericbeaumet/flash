@@ -176,6 +176,7 @@ leader = "\\"
 "<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight "]
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "f" = ["flash", "mouse_target"]
+"<leader>s" = ["flash", "mouse_bigram"]
 "F" = ["flash", "mouse_grid"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]

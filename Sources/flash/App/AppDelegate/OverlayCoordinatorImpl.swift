@@ -228,6 +228,10 @@ extension AppDelegate {
 
   func overlayDidUpdatePrefix(_ prefix: String) {
     if prefix == "__BACKSPACE__" {
+      if hintSession.prefix.isEmpty, hintSession.retreatBigram() {
+        retreatFromBigramLabels()
+        return
+      }
       if !hintSession.prefix.isEmpty {
         hintSession.prefix.removeLast()
         overlay.filter(prefix: hintSession.prefix, hints: hintSession.hints)
@@ -238,7 +242,7 @@ extension AppDelegate {
     }
   }
 
-  private func commit(hint: AssignedHint, clickModifiers held: ClickModifiers) {
+  func commit(hint: AssignedHint, clickModifiers held: ClickModifiers) {
     guard !activationLifecycle.inFlight else { return }
     if hint.target.providerID == AppDelegate.statusBarProviderID {
       commitStatusBarHint(hint)

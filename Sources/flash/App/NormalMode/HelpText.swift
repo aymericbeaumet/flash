@@ -68,6 +68,10 @@ extension NormalModeDispatcher {
         - `sf` / `sF` right-click a target or a grid position.
         - `df` / `dF` double-click a target or a grid position.
         - `mf` / `mF` move the cursor to a target or a grid position.
+        - `<leader>s` then two characters clicks that pair in the focused
+          window (`mouse_bigram`). One match clicks immediately; several get
+          hint labels. Backspace edits, Escape cancels, and no match stays
+          silent.
         - A click leaves the pointer on its target; `hints.restore_pointer`
           puts it back after every committed click, drag or selection.
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status

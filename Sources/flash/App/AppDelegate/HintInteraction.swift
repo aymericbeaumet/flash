@@ -13,6 +13,7 @@ enum HintActivationRequest {
   case menuBar
   case notifications
   case repeatLast(Int)
+  case bigram(MouseCommand, AppContext?)
 }
 
 extension AppDelegate {
@@ -186,6 +187,9 @@ extension AppDelegate {
     case .menuBar: activateMenuBarHints()
     case .notifications: activateNotificationHints()
     case .repeatLast(let count): performMouseRepeat(repeatCount: count)
+    case .bigram(let command, let context):
+      activateMouseBigram(
+        command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
     }
   }
 
@@ -287,6 +291,7 @@ extension AppDelegate {
   /// holds survives it — a `--move` commit or a replacing activation carries
   /// the drag on — until Escape, `leave_mode` or quit releases it.
   func clearHintSessionState(preservingStatusBarSnapshot: Bool = false) {
+    bigramSearch?.invalidate()
     hintSession = HintSession()
     if !preservingStatusBarSnapshot, !activationLifecycle.isCommitting {
       overlay.releaseStatusBarHintSnapshot()

@@ -236,6 +236,10 @@ final class OverlayPanel: NSPanel {
   var candidateFinderResultsShowsEmptyMessage = false
   var activeWindowBorderToken: UInt64 = 0
   var transientContentVisible = false
+  /// Query chip for `mouse_bigram`. `renderPersistentContent` replaces
+  /// `contentLayer.sublayers`, so the chip is reattached there and cleared
+  /// before `display` or `hide` rebuilds the tree.
+  var bigramQueryEcho: CALayer?
   var suppressCommandTextFieldChange = false
 
   /// One shape layer holds every debug border, drawn as a single CGPath. This
@@ -892,6 +896,8 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the `--search` sub-state. Only called while
   /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
+  /// One keystroke of `mouse_bigram` while the two characters are being typed.
+  func overlayDidBigram(_ command: HintBigramCommand)
   /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
   /// `.grid`.
   func overlayDidGrid(_ command: MouseGridKeyCommand)

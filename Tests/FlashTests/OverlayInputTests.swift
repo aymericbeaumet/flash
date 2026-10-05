@@ -355,6 +355,15 @@ final class OverlayInputTests: XCTestCase {
     panel.hintKeyRoute = .search
     panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
     XCTAssertEqual(coordinator.searchCommands, [.append("а")])
+
+    panel.hintKeyRoute = .bigram
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_T, characters: "е"))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_H, characters: "р", modifierFlags: [.shift]))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_T, characters: "t", modifierFlags: [.command]))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Escape, characters: ""))
+    XCTAssertEqual(coordinator.bigramCommands, [.append("t"), .append("H"), .cancel])
   }
 
   func testAReferenceLayoutFeedsNormalMode() throws {
@@ -995,6 +1004,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var adjustCommands: [HintAdjustmentCommand] = []
   var pointerCommands: [PointerModeCommand] = []
   var searchCommands: [HintSearchCommand] = []
+  var bigramCommands: [HintBigramCommand] = []
 
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
@@ -1008,6 +1018,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {
     searchCommands.append(command)
   }
+  func overlayDidBigram(_ command: HintBigramCommand) { bigramCommands.append(command) }
   func overlayDidGrid(_ command: MouseGridKeyCommand) { gridCommands.append(command) }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {

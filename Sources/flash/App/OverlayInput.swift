@@ -27,6 +27,8 @@ enum HintKeyRoute: Equatable {
   case search
   case adjustment
   case pointer
+  /// `mouse_bigram`: the two characters of the on-screen pair.
+  case bigram
 
   /// Pointer mode and a cursor-following grid steer the cursor, so it stays
   /// visible; every other route hides it behind the labels.
@@ -34,7 +36,7 @@ enum HintKeyRoute: Equatable {
     switch self {
     case .pointer: return true
     case .grid(_, let cursorFollows): return cursorFollows
-    case .labels, .search, .adjustment: return false
+    case .labels, .search, .adjustment, .bigram: return false
     }
   }
 }
@@ -130,6 +132,44 @@ enum HintAdjustmentCommand: Equatable {
   case reset
   case commit
   case cancel
+}
+
+/// One keystroke of `mouse_bigram`, before a match is chosen. Shift changes
+/// the character (smart case); it does not ride the click. Command, Control
+/// and Option are swallowed. A unique match clicks on its own, so this
+/// interpreter never commits.
+enum HintBigramCommand: Equatable {
+  case append(Character)
+  case backspace
+  case cancel
+}
+
+enum HintBigramInterpreter {
+  static func command(
+    keyCode: UInt16,
+    characters: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> HintBigramCommand? {
+    let strict = modifierFlags.intersection([.command, .control, .option])
+    switch keyCode {
+    case 53:  // escape
+      return .cancel
+    case 51:  // delete
+      return strict.isEmpty ? .backspace : nil
+    case 36, 76, 48, 123, 124, 125, 126:
+      // Return, tab and arrows are not characters of the query.
+      return nil
+    default:
+      break
+    }
+    guard strict.isEmpty else { return nil }
+    guard let characters, let char = characters.first else { return nil }
+    if char == " " { return .append(" ") }
+    guard !char.isNewline,
+      char.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+    else { return nil }
+    return .append(char)
+  }
 }
 
 /// One keystroke of the `--search` sub-state (seek & click): type visible
@@ -563,6 +603,15 @@ extension OverlayPanel {
           eventFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
           allowed: clickAllowed)
         coordinator.overlayDidAdjust(command, clickModifiers: clickModifiers)
+      }
+      return true
+    case .bigram:
+      if let command = HintBigramInterpreter.command(
+        keyCode: event.keyCode,
+        characters: keys.characters,
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+      {
+        coordinator.overlayDidBigram(command)
       }
       return true
     }

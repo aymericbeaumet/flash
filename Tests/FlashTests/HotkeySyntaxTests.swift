@@ -281,6 +281,24 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(URLCommand.mouseMenuBar.diagnosticDescription, "flash mouse_menubar")
     XCTAssertEqual(
       URLCommand.mouseNotifications.diagnosticDescription, "flash mouse_notifications")
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_bigram"])?.command,
+      .mouseBigram(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_bigram", "--move"])?.command,
+      .mouseBigram(.move))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_bigram", "--secondary"])?.command,
+      .mouseBigram(.click(.rightClick, modifiers: [])))
+    XCTAssertEqual(
+      URLCommand.mouseBigram(.click(.doubleClick, modifiers: [])).diagnosticDescription,
+      "flash mouse_bigram --double")
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--drag"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--select"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--multi"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--adjust"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--search"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--move", "--secondary"]))
   }
 
   func testParseEnterCommandRestoreMode() {

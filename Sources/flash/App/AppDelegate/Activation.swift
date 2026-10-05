@@ -380,7 +380,7 @@ extension AppDelegate {
     }
   }
 
-  private func isAccessibilityTrusted() -> Bool {
+  func isAccessibilityTrusted() -> Bool {
     if cachedAccessibilityTrusted { return true }
     let trusted = PermissionCheck.isAccessibilityTrusted
     if trusted { cachedAccessibilityTrusted = true }

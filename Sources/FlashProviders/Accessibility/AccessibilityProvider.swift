@@ -1328,7 +1328,7 @@ public final class AccessibilityProvider: FlashSource {
     return raw as? [AXUIElement]
   }
 
-  private static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
+  static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
     guard AXValueGetType(pos) == .cgPoint, AXValueGetType(size) == .cgSize else { return nil }
     var origin = CGPoint.zero
     var sz = CGSize.zero

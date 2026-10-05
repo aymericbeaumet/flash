@@ -41,7 +41,8 @@ struct FlashStatusReport: Equatable {
   var build: String
   /// `disabled`, `insert`, `normal`, `command` or `terminal`.
   var mode: String
-  /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting` or `pointer`.
+  /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`
+  /// or `bigram`.
   var hintSession: String
   var focusedApp: String?
   var accessibility: Bool
@@ -82,6 +83,7 @@ struct FlashStatusReport: Equatable {
     case .search: return "search"
     case .adjustment: return "adjusting"
     case .pointer: return "pointer"
+    case .bigram: return "bigram"
     }
   }
 

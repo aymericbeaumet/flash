@@ -444,7 +444,13 @@ final class NormalModeTests: XCTestCase {
         modifierFlags: [],
         mappings: defaultMappings))
     XCTAssertEqual(command(chars: "/"), .find)
-    XCTAssertEqual(transition(chars: "\\").pending, "")
+    // `\` is the leader. `<leader>s` makes it a prefix, so it waits for `s`
+    // rather than being consumed at once. A key that does not continue the
+    // sequence is interpreted on its own.
+    XCTAssertEqual(transition(chars: "\\").pending, "\\")
+    XCTAssertEqual(
+      command(pending: "\\", chars: "s"),
+      .mouseBigram(.click(.leftClick, modifiers: [])))
     XCTAssertNil(transition(pending: "\\", keyCode: kVK_Space, chars: " ").command)
     let modified = transition(chars: "r", flags: [.command])
     XCTAssertNil(modified.command)
@@ -2437,6 +2443,7 @@ final class NormalModeTests: XCTestCase {
       "dF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "[a", "]a", "[t", "]t", "N{mapping}",
       "flash mouse_target",
+      "flash mouse_bigram",
       "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_target --move",
       "flash mouse_grid", "flash mouse_grid --double",

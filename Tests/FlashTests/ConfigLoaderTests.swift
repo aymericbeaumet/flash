@@ -252,6 +252,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("\\s") })?.action.command,
+      .mouseBigram(.click(.leftClick, modifiers: [])))
     // `F` is the grid twin of `f`, and every click prefix works on both.
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
@@ -1342,6 +1345,21 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.compiledNormal.mapping(for: key(",x")))
     XCTAssertNil(c.mode.terminal.first(where: { $0.key == key("cmd+q") }))
     XCTAssertNotNil(c.mode.terminal.first(where: { $0.key == key("cmd+w") }))
+  }
+
+  /// The built-in `<leader>s` is resolved before file mappings apply, so
+  /// removing it under a different leader actually drops it.
+  func testRemovingTheBuiltinLeaderBigramDropsIt() {
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = ","
+      [mode.normal.mappings]
+      "<leader>s" = false
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertNil(c.mode.normal.first { $0.key == key(",s") })
+    XCTAssertNil(c.mode.compiledNormal.mapping(for: key(",s")))
   }
 
   func testTrueAndCommandFalseAreRejectedWithTheRemovalSpelling() {

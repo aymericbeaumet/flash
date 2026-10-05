@@ -141,6 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The overlay's key routing and the focus border's visibility are
   /// projections of it, pushed here on every change so neither keeps a copy
   /// that could disagree.
+  /// The focused window's text for `mouse_bigram`. Nil until the first
+  /// activation; cleared by generation, not by dropping the object, so a walk
+  /// already on `axQueue` cannot present after Escape.
+  var bigramSearch: BigramSearch?
   var hintSession = HintSession() {
     didSet {
       guard let overlay else { return }
@@ -536,6 +540,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     switch cmd {
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: nil)
+    case .mouseBigram(let command):
+      activateMouseBigram(command, contextOverride: nil)
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
     case .mouseGrid(let request):

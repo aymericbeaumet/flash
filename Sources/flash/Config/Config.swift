@@ -895,6 +895,10 @@ struct Config {
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
+        // EasyMotion `s`: two characters of visible text. A unique match clicks
+        // immediately; several matches get hint labels. `<leader>` keeps `s`
+        // free for the `sf` / `sF` prefixes.
+        ("<leader>s", .flashCommand(.mouseBigram(.click(.leftClick, modifiers: [])))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
         ("x", .flashCommand(.tabClose)),
@@ -1395,6 +1399,8 @@ extension URLCommand {
     switch self {
     case .mouseTarget(let command):
       return verb("mouse_target", command.argTokens)
+    case .mouseBigram(let command):
+      return verb("mouse_bigram", command.argTokens)
     case .mouseTargetScreen(let command):
       return verb("mouse_target", ["--scope=screen"] + command.argTokens)
     case .mouseGrid(let command):

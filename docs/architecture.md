@@ -85,7 +85,7 @@ Overlay states that exclude one another are one value, never parallel flags.
 The overlay owns the border's drawn frame and derives its stroke from the badge
 style the status-bar pill is painted from, re-stroking when that style changes,
 so the border and the pill cannot show different modes. A hint session's phase
-(typing labels, searching, adjusting, steering the pointer) is one enum; the
+(typing a bigram, typing labels, searching, adjusting, steering the pointer) is one enum; the
 overlay's key route is its projection, pushed on every session change together
 with the border's visibility, which is hidden for the whole session. A toast is
 its own layer above everything else: it never recycles hint chips or closes the

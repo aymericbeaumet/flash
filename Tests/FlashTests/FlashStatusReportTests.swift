@@ -83,6 +83,7 @@ final class FlashStatusReportTests: XCTestCase {
     XCTAssertEqual(
       R.hintSessionPhase(route: .adjustment, active: true, discovering: false), "adjusting")
     XCTAssertEqual(R.hintSessionPhase(route: .pointer, active: true, discovering: false), "pointer")
+    XCTAssertEqual(R.hintSessionPhase(route: .bigram, active: true, discovering: false), "bigram")
   }
 
   func testCaptureIsTheSessionsOrWhatASessionStartingNowGets() {

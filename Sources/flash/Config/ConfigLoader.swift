@@ -139,6 +139,11 @@ enum ConfigLoader {
       }
     }
 
+    // Resolve built-in `<leader>` keys before the file's mappings land.
+    // Otherwise `<leader>s` is still the placeholder when the file's
+    // already-resolved `\s` arrives, so the two sit side by side and the
+    // later refresh turns them into a duplicate.
+    config.mode.refreshLeaderDerivedDefaults()
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
