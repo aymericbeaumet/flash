@@ -4,10 +4,10 @@ import XCTest
 
 final class LogicalKeyboardTests: XCTestCase {
   func testNavigationFollowsThePhysicalHjklColumns() {
-    assertNavigation("qwerty", halves: "hjkl", wasd: "aswd", quadrants: ["yu", "bn"])
-    assertNavigation("colemak", halves: "hnei", wasd: "arws", quadrants: ["jl", "bk"])
-    assertNavigation("dvorak", halves: "dhtn", wasd: "ao,e", quadrants: ["fg", "xb"])
-    assertNavigation("bepo", halves: "ctsr", wasd: "auéi", quadrants: ["^v", "k'"])
+    assertNavigation("qwerty", halves: "hjkl", esdf: "sdef", quadrants: ["yu", "bn"])
+    assertNavigation("colemak", halves: "hnei", esdf: "rsft", quadrants: ["jl", "bk"])
+    assertNavigation("dvorak", halves: "dhtn", esdf: "oe.u", quadrants: ["fg", "xb"])
+    assertNavigation("bepo", halves: "ctsr", esdf: "uipe", quadrants: ["^v", "k'"])
   }
 
   func testDefaultHyperPostsQwertyArrowsBesideTheFunctionRow() throws {
@@ -21,14 +21,16 @@ final class LogicalKeyboardTests: XCTestCase {
     XCTAssertNil(byKey["k"])
     XCTAssertNil(byKey["l"])
     XCTAssertNil(byKey["shift+h"])
-    XCTAssertEqual(byKey["w"], "flash arrow --direction=up")
-    XCTAssertEqual(byKey["a"], "flash arrow --direction=left")
-    XCTAssertEqual(byKey["s"], "flash arrow --direction=down")
-    XCTAssertEqual(byKey["d"], "flash arrow --direction=right")
-    XCTAssertEqual(byKey["shift+w"], "flash arrow --direction=up --shift")
-    XCTAssertEqual(byKey["shift+a"], "flash arrow --direction=left --shift")
-    XCTAssertEqual(byKey["shift+s"], "flash arrow --direction=down --shift")
-    XCTAssertEqual(byKey["shift+d"], "flash arrow --direction=right --shift")
+    XCTAssertNil(byKey["w"])
+    XCTAssertNil(byKey["a"])
+    XCTAssertEqual(byKey["e"], "flash arrow --direction=up")
+    XCTAssertEqual(byKey["s"], "flash arrow --direction=left")
+    XCTAssertEqual(byKey["d"], "flash arrow --direction=down")
+    XCTAssertEqual(byKey["f"], "flash arrow --direction=right")
+    XCTAssertEqual(byKey["shift+e"], "flash arrow --direction=up --shift")
+    XCTAssertEqual(byKey["shift+s"], "flash arrow --direction=left --shift")
+    XCTAssertEqual(byKey["shift+d"], "flash arrow --direction=down --shift")
+    XCTAssertEqual(byKey["shift+f"], "flash arrow --direction=right --shift")
     XCTAssertEqual(byKey["1"], "flash system_key --key=brightness_down")
     XCTAssertEqual(byKey["="], "flash system_key --key=volume_up")
     XCTAssertEqual(byKey["shift+="], "flash function_key --key=f12")
@@ -53,28 +55,30 @@ final class LogicalKeyboardTests: XCTestCase {
     XCTAssertNil(byKey["shift+h"])
     XCTAssertNil(byKey["shift+j"])
     XCTAssertNil(byKey["shift+d"])
-    XCTAssertEqual(byKey["w"], "flash arrow --direction=up")
-    XCTAssertEqual(byKey["a"], "flash arrow --direction=left")
-    XCTAssertEqual(byKey["r"], "flash arrow --direction=down")
-    XCTAssertEqual(byKey["s"], "flash arrow --direction=right")
-    XCTAssertEqual(byKey["shift+w"], "flash arrow --direction=up --shift")
-    XCTAssertEqual(byKey["shift+a"], "flash arrow --direction=left --shift")
-    XCTAssertEqual(byKey["shift+r"], "flash arrow --direction=down --shift")
-    XCTAssertEqual(byKey["shift+s"], "flash arrow --direction=right --shift")
+    XCTAssertNil(byKey["w"])
+    XCTAssertNil(byKey["a"])
+    XCTAssertEqual(byKey["f"], "flash arrow --direction=up")
+    XCTAssertEqual(byKey["r"], "flash arrow --direction=left")
+    XCTAssertEqual(byKey["s"], "flash arrow --direction=down")
+    XCTAssertEqual(byKey["t"], "flash arrow --direction=right")
+    XCTAssertEqual(byKey["shift+f"], "flash arrow --direction=up --shift")
+    XCTAssertEqual(byKey["shift+r"], "flash arrow --direction=left --shift")
+    XCTAssertEqual(byKey["shift+s"], "flash arrow --direction=down --shift")
+    XCTAssertEqual(byKey["shift+t"], "flash arrow --direction=right --shift")
     XCTAssertNil(byKey["j"])
     XCTAssertNil(byKey["k"])
     XCTAssertNil(byKey["l"])
-    // Physical S types r. An input source keeps key code S; a remapper sends R.
-    let typed = interpretHyper(config, key: "s", character: "r", shift: false)
+    // Physical D types s. An input source keeps key code D; a remapper sends S.
+    let typed = interpretHyper(config, key: "d", character: "s", shift: false)
     XCTAssertEqual(typed.command, .arrow(direction: .down, shift: false))
-    let remapped = interpretHyper(config, key: "r", character: "r", shift: false)
+    let remapped = interpretHyper(config, key: "s", character: "s", shift: false)
     XCTAssertEqual(remapped.command, .arrow(direction: .down, shift: false))
-    let shiftedPhysical = interpretHyper(config, key: "s", character: "R", shift: true)
+    let shiftedPhysical = interpretHyper(config, key: "d", character: "S", shift: true)
     XCTAssertEqual(shiftedPhysical.command, .arrow(direction: .down, shift: true))
-    let shiftedLetter = interpretHyper(config, key: "r", character: "R", shift: true)
+    let shiftedLetter = interpretHyper(config, key: "s", character: "S", shift: true)
     XCTAssertEqual(shiftedLetter.command, .arrow(direction: .down, shift: true))
-    let right = interpretHyper(config, key: "s", character: "S", shift: true)
-    XCTAssertEqual(right.command, .arrow(direction: .right, shift: true))
+    let right = interpretHyper(config, key: "f", character: "t", shift: false)
+    XCTAssertEqual(right.command, .arrow(direction: .right, shift: false))
   }
 
   func testBundledDefaultKeysDoNotPinQwertyOverTheLogicalLayout() throws {
@@ -120,7 +124,9 @@ final class LogicalKeyboardTests: XCTestCase {
     XCTAssertEqual(colemak.hints.keys, "<colemak>")
     XCTAssertEqual(colemak.effectiveHintKeys(), "<colemak>")
     XCTAssertNil(arrows(colemak)["n"])
-    XCTAssertEqual(arrows(colemak)["r"], "flash arrow --direction=down")
+    XCTAssertEqual(arrows(colemak)["f"], "flash arrow --direction=up")
+    XCTAssertEqual(arrows(colemak)["r"], "flash arrow --direction=left")
+    XCTAssertEqual(arrows(colemak)["t"], "flash arrow --direction=right")
     XCTAssertNil(arrows(colemak)[","])
     XCTAssertNil(arrows(colemak)["o"])
 
@@ -133,9 +139,11 @@ final class LogicalKeyboardTests: XCTestCase {
       """)
     XCTAssertEqual(qwerty.effectiveHintKeys(), Alphabet.defaultKeys)
     XCTAssertNil(arrows(qwerty)["j"])
-    XCTAssertEqual(arrows(qwerty)["s"], "flash arrow --direction=down")
+    XCTAssertEqual(arrows(qwerty)["e"], "flash arrow --direction=up")
+    XCTAssertEqual(arrows(qwerty)["s"], "flash arrow --direction=left")
+    XCTAssertEqual(arrows(qwerty)["f"], "flash arrow --direction=right")
     XCTAssertNil(arrows(qwerty)["n"])
-    XCTAssertNil(arrows(qwerty)["r"])
+    XCTAssertNil(arrows(qwerty)["t"])
   }
 
   func testAUserHyperMappingOrRemovalWinsOverADerivedArrow() {
@@ -146,7 +154,7 @@ final class LogicalKeyboardTests: XCTestCase {
       [mode.hyper.mappings]
       "h" = ["flash", "hints_dismiss"]
       "j" = false
-      "a" = false
+      "s" = false
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, config.diagnostics.map(\.message).joined())
     let byKey = arrows(config)
@@ -154,10 +162,10 @@ final class LogicalKeyboardTests: XCTestCase {
     XCTAssertNil(byKey["j"])
     XCTAssertNil(byKey["shift+j"])
     XCTAssertNil(byKey["k"])
-    XCTAssertNil(byKey["a"])
-    XCTAssertEqual(byKey["shift+a"], "flash arrow --direction=left --shift")
-    XCTAssertEqual(byKey["w"], "flash arrow --direction=up")
-    XCTAssertEqual(byKey["s"], "flash arrow --direction=down")
+    XCTAssertNil(byKey["s"])
+    XCTAssertEqual(byKey["shift+s"], "flash arrow --direction=left --shift")
+    XCTAssertEqual(byKey["e"], "flash arrow --direction=up")
+    XCTAssertEqual(byKey["d"], "flash arrow --direction=down")
   }
 
   func testAnUnknownLayoutIsDiagnosedAndStaysQwerty() {
@@ -170,7 +178,8 @@ final class LogicalKeyboardTests: XCTestCase {
     XCTAssertTrue(config.diagnostics[0].message.contains("keyboard.layout"))
     XCTAssertEqual(config.keyboard.layout, "qwerty")
     XCTAssertNil(arrows(config)["j"])
-    XCTAssertEqual(arrows(config)["s"], "flash arrow --direction=down")
+    XCTAssertEqual(arrows(config)["d"], "flash arrow --direction=down")
+    XCTAssertEqual(arrows(config)["f"], "flash arrow --direction=right")
   }
 
   func testInstallingArrowsTwiceDoesNotDuplicateThem() {
@@ -182,8 +191,8 @@ final class LogicalKeyboardTests: XCTestCase {
     config.prepareDerivedValues()
     XCTAssertEqual(config.mode.hyper.filter { $0.key == "h" }.count, 0)
     XCTAssertEqual(config.mode.hyper.filter { $0.key == "shift+h" }.count, 0)
-    XCTAssertEqual(config.mode.hyper.filter { $0.key == "w" }.count, 1)
-    XCTAssertEqual(config.mode.hyper.filter { $0.key == "shift+w" }.count, 1)
+    XCTAssertEqual(config.mode.hyper.filter { $0.key == "e" }.count, 1)
+    XCTAssertEqual(config.mode.hyper.filter { $0.key == "shift+e" }.count, 1)
   }
 
   func testBepoResolvesWithoutAnAmbiguousShiftWarning() {
@@ -193,18 +202,19 @@ final class LogicalKeyboardTests: XCTestCase {
     XCTAssertFalse(config.diagnostics.contains { $0.message.contains("magic_modifiers") })
     XCTAssertFalse(String(config.resolvedAlphabet.chars).contains("^"))
     XCTAssertNil(arrows(config)["c"])
-    XCTAssertNil(arrows(config)["t"])
-    XCTAssertEqual(arrows(config)["é"], "flash arrow --direction=up")
-    XCTAssertEqual(arrows(config)["a"], "flash arrow --direction=left")
-    XCTAssertEqual(arrows(config)["u"], "flash arrow --direction=down")
-    XCTAssertEqual(arrows(config)["i"], "flash arrow --direction=right")
-    XCTAssertEqual(arrows(config)["shift+é"], "flash arrow --direction=up --shift")
+    XCTAssertNil(arrows(config)["é"])
+    XCTAssertNil(arrows(config)["a"])
+    XCTAssertEqual(arrows(config)["p"], "flash arrow --direction=up")
+    XCTAssertEqual(arrows(config)["u"], "flash arrow --direction=left")
+    XCTAssertEqual(arrows(config)["i"], "flash arrow --direction=down")
+    XCTAssertEqual(arrows(config)["e"], "flash arrow --direction=right")
+    XCTAssertEqual(arrows(config)["shift+p"], "flash arrow --direction=up --shift")
     XCTAssertNil(arrows(config)["shift+w"])
     XCTAssertNil(arrows(config)["shift+h"])
     XCTAssertNil(arrows(config)["shift+c"])
-    let up = interpretHyper(config, key: "w", character: "é", shift: false)
+    let up = interpretHyper(config, key: "e", character: "p", shift: false)
     XCTAssertEqual(up.command, .arrow(direction: .up, shift: false))
-    let shifted = interpretHyper(config, key: "w", character: "É", shift: true)
+    let shifted = interpretHyper(config, key: "e", character: "P", shift: true)
     XCTAssertEqual(shifted.command, .arrow(direction: .up, shift: true))
   }
 
@@ -243,38 +253,42 @@ final class LogicalKeyboardTests: XCTestCase {
         keyCode: 0, charactersIgnoringModifiers: "w", modifierFlags: [], arrows: arrows))
   }
 
-  func testDvorakWasdUsesTheCommaOnTheWKey() {
+  func testDvorakEsdfUsesThePeriodOnTheEKey() {
     let config = ConfigLoader.parse(
       """
       [keyboard]
       layout = "dvorak"
       """)
     let byKey = arrows(config)
-    XCTAssertEqual(byKey[","], "flash arrow --direction=up")
-    XCTAssertEqual(byKey["a"], "flash arrow --direction=left")
-    XCTAssertEqual(byKey["o"], "flash arrow --direction=down")
-    XCTAssertEqual(byKey["e"], "flash arrow --direction=right")
-    XCTAssertNil(byKey["d"])
-    XCTAssertEqual(byKey["shift+w"], "flash arrow --direction=up --shift")
-    XCTAssertNil(byKey["shift+,"])
-    let up = interpretHyper(config, key: "w", character: ",", shift: false)
+    XCTAssertEqual(byKey["."], "flash arrow --direction=up")
+    XCTAssertEqual(byKey["o"], "flash arrow --direction=left")
+    XCTAssertEqual(byKey["e"], "flash arrow --direction=down")
+    XCTAssertEqual(byKey["u"], "flash arrow --direction=right")
+    XCTAssertNil(byKey[","])
+    XCTAssertNil(byKey["a"])
+    XCTAssertEqual(byKey[">"], "flash arrow --direction=up --shift")
+    XCTAssertEqual(byKey["shift+e"], "flash arrow --direction=down --shift")
+    XCTAssertNil(byKey["shift+."])
+    let up = interpretHyper(config, key: "e", character: ".", shift: false)
     XCTAssertEqual(up.command, .arrow(direction: .up, shift: false))
-    let shifted = interpretHyper(config, key: "w", character: "<", shift: true)
+    let shifted = interpretHyper(config, key: "e", character: ">", shift: true)
     XCTAssertEqual(shifted.command, .arrow(direction: .up, shift: true))
+    let down = interpretHyper(config, key: "d", character: "E", shift: true)
+    XCTAssertEqual(down.command, .arrow(direction: .down, shift: true))
   }
 
   private func assertNavigation(
-    _ layout: String, halves: String, wasd: String, quadrants: [String],
+    _ layout: String, halves: String, esdf: String, quadrants: [String],
     file: StaticString = #filePath, line: UInt = #line
   ) {
     let navigation = Alphabet.navigation(layoutName: layout)
     let cluster = String([navigation.left, navigation.down, navigation.up, navigation.right])
     XCTAssertEqual(cluster, halves, layout, file: file, line: line)
-    let wasdCluster = String([
-      navigation.wasd.left.character, navigation.wasd.down.character,
-      navigation.wasd.up.character, navigation.wasd.right.character,
+    let esdfCluster = String([
+      navigation.esdf.left.character, navigation.esdf.down.character,
+      navigation.esdf.up.character, navigation.esdf.right.character,
     ])
-    XCTAssertEqual(wasdCluster, wasd, layout, file: file, line: line)
+    XCTAssertEqual(esdfCluster, esdf, layout, file: file, line: line)
     XCTAssertEqual(
       navigation.quadrants.map { String($0) }, quadrants, layout, file: file, line: line)
   }

@@ -539,12 +539,13 @@ pressed while it is held are read from `[mode.hyper.mappings]`, not from
 NORMAL. The defaults are the Apple function row on `1`–`9`, `0`, `-`, and
 `=`: brightness, Mission Control, Spotlight, Dictation, Focus, media, mute,
 and volume. Shift plus the same key sends F1–F12. Arrows sit on the
-physical keys where QWERTY has `w` `a` `s` `d` (up, left, down, right),
+physical keys where QWERTY has `e` `s` `d` `f` (up, left, down, right),
 spelled as the letters those keys type in `[keyboard] layout`: QWERTY
-`w` `a` `s` `d`, Colemak `w` `a` `r` `s`, Dvorak `,` `a` `o` `e`, Bépo
-`é` `a` `u` `i`. Shift posts a shifted arrow on that same letter, so
-Colemak down is `shift+r`. A punctuation key keeps the ANSI name, so
-Dvorak up is `shift+w`. A mapping or `false` on one of those keys wins.
+`e` `s` `d` `f`, Colemak `f` `r` `s` `t`, Dvorak `.` `o` `e` `u`, Bépo
+`p` `u` `i` `e`. F is the home-row index-finger mark, and it is right.
+Shift posts a shifted arrow on that same letter, so Colemak down is
+`shift+s`. A punctuation key uses the character Shift types there, so
+Dvorak up is `>`. A mapping or `false` on one of those keys wins.
 The arrow is posted into the focused app's key window, downstream of the
 session tap. `postToPid` carries no window, so a terminal drops it while
 the hyper key is still down. Volume is a system event and does not take

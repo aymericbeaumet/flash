@@ -92,14 +92,15 @@ Bisect halves use the home-row columns where QWERTY has `h` `j` `k` `l`
 Bépo `c` `t` `s` `r`. Quadrants use the keys at QWERTY `y` `u` and `b` `n`.
 Bépo's top-left quadrant is the dead key `^`, so one press may not type it.
 
-HYPER posts arrows from the physical QWERTY WASD positions (up, left,
-down, right): QWERTY `w` `a` `s` `d`, Colemak `w` `a` `r` `s`, Dvorak
-`,` `a` `o` `e`, Bépo `é` `a` `u` `i`. Shift posts a shifted arrow on
-that same letter: Colemak's S position types `r`, and its shifted arrow
-is `shift+r`. A punctuation key keeps the ANSI name, so Dvorak up is
-`shift+w`. A mapping or `false` on one of the keys wins. Pointer movement
-and bisect stay on the hjkl columns. The bindings are derived, so
-`config.default.toml` does not list them.
+HYPER posts arrows from the physical QWERTY ESDF positions (up, left,
+down, right): QWERTY `e` `s` `d` `f`, Colemak `f` `r` `s` `t`, Dvorak
+`.` `o` `e` `u`, Bépo `p` `u` `i` `e`. F is the home-row index-finger
+mark, and it is right. Shift posts a shifted arrow on that same letter:
+Colemak's D position types `s`, and its shifted arrow is `shift+s`. A
+punctuation key uses the character Shift types there, so Dvorak up is
+`>`. A mapping or `false` on one of the keys wins. Pointer movement and bisect stay on
+the hjkl columns. The bindings are derived, so `config.default.toml`
+does not list them.
 
 
 ## Environment overrides

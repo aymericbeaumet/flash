@@ -51,7 +51,7 @@ flash media output 'Studio Speakers'     # select the default output device
 flash media volumedown                   # one macOS volume step; the alert shows the percent
 flash system_key --key=brightness_down   # an Apple function-row key
 flash function_key --key=f1              # plain F1, as shift+hyper+1 does
-flash arrow --direction=left             # one arrow; --shift holds Shift. HYPER uses the layout's WASD positions
+flash arrow --direction=left             # one arrow; --shift holds Shift. HYPER uses the layout's ESDF positions
 flash caffeinate toggle                  # plugin command, same words as :caffeinate toggle
 flash clipboard show                     # plugin command, same words as :clipboard show
 flash clipboard delete <id>              # remove one history entry; <id> is 32 hex characters

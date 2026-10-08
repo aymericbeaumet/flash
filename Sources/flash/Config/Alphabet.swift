@@ -122,26 +122,27 @@ enum Alphabet {
   }
 
   /// Home-row columns 5–8 are the vim cluster (left, down, up, right).
-  /// `wasd` is the QWERTY W/A/S/D positions (up, left, down, right).
+  /// `esdf` is the QWERTY E/S/D/F positions (up, left, down, right). F is
+  /// the home-row index-finger mark, so the right arrow sits on that bump.
   /// Quadrants are the QWERTY y/u and b/n keys on that layout.
   /// `left`/`down`/`up`/`right` stay the vim cluster for bisect and pointer
-  /// movement. HYPER arrows use `wasd` only.
+  /// movement. HYPER arrows use `esdf` only.
   struct Navigation: Equatable {
     var quadrants: [[Character]]
     var left: Character
     var down: Character
     var up: Character
     var right: Character
-    var wasd: Cluster
+    var esdf: Cluster
 
     static let qwerty = Navigation(
       quadrants: [["y", "u"], ["b", "n"]],
       left: "h", down: "j", up: "k", right: "l",
-      wasd: Cluster(
-        left: Key(character: "a", ansi: "a"),
-        down: Key(character: "s", ansi: "s"),
-        up: Key(character: "w", ansi: "w"),
-        right: Key(character: "d", ansi: "d")))
+      esdf: Cluster(
+        left: Key(character: "s", ansi: "s"),
+        down: Key(character: "d", ansi: "d"),
+        up: Key(character: "e", ansi: "e"),
+        right: Key(character: "f", ansi: "f")))
   }
 
   static var layoutNames: [String] { layouts.keys.sorted() }
@@ -162,11 +163,11 @@ enum Alphabet {
     return Navigation(
       quadrants: [[top[5], top[6]], [bottom[4], bottom[5]]],
       left: home[5], down: home[6], up: home[7], right: home[8],
-      wasd: Cluster(
-        left: key(home, qwertyHome, 0),
-        down: key(home, qwertyHome, 1),
-        up: key(top, qwertyTop, 1),
-        right: key(home, qwertyHome, 2)))
+      esdf: Cluster(
+        left: key(home, qwertyHome, 1),
+        down: key(home, qwertyHome, 2),
+        up: key(top, qwertyTop, 2),
+        right: key(home, qwertyHome, 3)))
   }
 
   /// The mouse grid's keys: the left-hand 4×5 block of the layout's keyboard

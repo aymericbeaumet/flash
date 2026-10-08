@@ -733,12 +733,13 @@ hyper = "<leader>"
 # sequence. Releasing the leader returns to NORMAL. A tap that pressed
 # nothing else arms the <leader> prefix, so a <leader> sequence still works
 # as press, release, then the next key. `+` is written <plus>.
-# Holding a key also posts an arrow from the physical QWERTY WASD positions
-# (up, left, down, right), spelled as the letters [keyboard] layout types
-# there: QWERTY wasd, Colemak wars, Dvorak ,aoe, Bépo éaui. Shift uses that
-# same letter, so Colemak down is shift+r. A punctuation key keeps its ANSI
-# name, so Dvorak up is shift+w. A mapping or `false` on one of those keys
-# wins. These bindings are derived, so they are not listed below.
+# Holding a key also posts an arrow from the physical QWERTY ESDF positions
+# (up, left, down, right). F is the home-row index-finger mark, so the right
+# arrow sits on that bump. The keys are spelled as the letters [keyboard]
+# layout types there: QWERTY esdf, Colemak frst, Dvorak .oeu, Bépo puie.
+# Shift uses that same letter, so Colemak down is shift+s. A punctuation key
+# uses the character Shift types there, so Dvorak up is >. A mapping or `false` on one
+# of those keys wins. These bindings are derived, so they are not listed below.
 # The Apple function row, in the order printed on the keyboard. Shift plus
 # the same key sends F1–F12. `=` is the unshifted volume-up key.
 [mode.hyper.mappings]

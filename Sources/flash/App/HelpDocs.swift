@@ -819,8 +819,8 @@ enum HelpDocs {
       macOS or another app may own a global shortcut. Secure input can hide
       keys from the event tap; `doctor` reports the holder when available.
       `[app] keyboard_layout` reads keypresses. `[keyboard] layout` is the
-      logical layout for hints, the grid, bisect, and the WASD positions
-      HYPER uses as arrows.
+      logical layout for hints, the grid, bisect, and the ESDF positions
+      HYPER uses as arrows. The right key is the home-row index-finger mark.
 
       ## A saved config change is missing
 

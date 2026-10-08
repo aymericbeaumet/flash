@@ -220,9 +220,11 @@ Surface requests that would violate these constraints before implementing them.
   bisect, pointer movement and derived HYPER arrows. With `hints.keys` still
   the bundled default, a non-QWERTY layout's hint alphabet is that layout's
   letters (`<colemak>`), so the file does not also set `hints.keys`. HYPER arrows are the
-  physical QWERTY WASD positions, spelled as the letters that layout types.
-  A shifted letter arrow is `shift+` that letter. A non-letter (Dvorak's
-  comma on W) stays `shift+` the ANSI name. Do not merge the two layouts.
+  physical QWERTY ESDF positions (up, left, down, right). F is the home-row
+  index-finger mark. They are spelled as the letters that layout types
+  (Colemak `f` `r` `s` `t`). A shifted letter arrow is `shift+` that letter.
+  A non-letter uses the character Shift types (Dvorak's period on E is `>`).
+  Do not merge the two layouts.
 - NORMAL defaults and bundled plugin mappings bind keys to high-level actions,
   never to raw chords: none uses `send_key`, which stays a user escape hatch
   (a test enforces it). An action resolves in the focused app's context: a

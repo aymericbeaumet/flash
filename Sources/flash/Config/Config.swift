@@ -1317,27 +1317,31 @@ struct Config {
     mode.recompileMappings()
   }
 
-  /// HYPER plus the physical QWERTY WASD keys posts an arrow, spelled as the
-  /// letters those keys type on `[keyboard] layout`. Derived, so a qwerty
-  /// default and a colemak file agree without listing the keys in
-  /// `config.default.toml`. A mapping or `false` already on the key wins.
-  /// Shift uses that same letter (`shift+r` is Colemak down). A key that
-  /// types punctuation keeps its ANSI name (`shift+w` is Dvorak up).
-  /// Idempotent: a second pass drops only the arrows this installed.
+  /// HYPER plus the physical QWERTY ESDF keys posts an arrow, spelled as the
+  /// letters those keys type on `[keyboard] layout`. F is the home-row
+  /// index-finger mark, and it is right. Derived, so a qwerty default and a
+  /// colemak file agree without listing the keys in `config.default.toml`.
+  /// A mapping or `false` already on the key wins. Shift uses that same
+  /// letter (`shift+s` is Colemak down). A key that types punctuation uses
+  /// the character Shift types there (`>` is Dvorak up): the key code's ANSI
+  /// name can be another arrow's letter. Idempotent: a second pass drops
+  /// only the arrows this installed.
   private mutating func installLayoutArrows() {
     mode.hyper.removeAll { mapping in
       guard mapping.origin == ModeMapping.defaultOrigin else { return false }
       if case .flashCommand(.arrow(_, _)) = mapping.action { return true }
       return false
     }
-    let cluster = Alphabet.navigation(layoutName: positionLayoutName).wasd
+    let cluster = Alphabet.navigation(layoutName: positionLayoutName).esdf
     let directions: [(Alphabet.Key, WindowFocusDirection)] = [
       (cluster.left, .left), (cluster.down, .down), (cluster.up, .up),
       (cluster.right, .right),
     ]
     for (key, direction) in directions {
       let shifted =
-        key.character.isLetter ? "shift+\(key.character)" : "shift+\(key.ansi)"
+        key.character.isLetter
+        ? "shift+\(key.character)"
+        : Self.shiftedPunctuation[key.character] ?? "shift+\(key.ansi)"
       for (raw, shift) in [
         (String(key.character), false), (shifted, true),
       ] {
@@ -1350,6 +1354,13 @@ struct Config {
       }
     }
   }
+
+  /// US ANSI shift of a punctuation key, in mapping syntax. `<` and `>` are
+  /// not bare mapping characters.
+  private static let shiftedPunctuation: [Character: String] = [
+    ".": "<greater>", ",": "<less>", "/": "?", ";": ":", "'": "\"",
+    "[": "{", "]": "}", "-": "_", "=": "<plus>", "`": "~", "\\": "|",
+  ]
 
   /// ASCII keys go through the mapping canonicalizer. A layout letter outside
   /// ASCII (Bépo `é`, and `shift+é`) is still the character that key types.

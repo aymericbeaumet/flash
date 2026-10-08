@@ -160,7 +160,7 @@ enum URLCommand: Hashable {
   case systemKey(SystemKeyboard.RowKey)
   /// A plain F1–F12 keystroke, with no modifiers.
   case functionKey(Int)
-  /// One arrow key, optionally shifted. HYPER binds the layout's WASD positions here.
+  /// One arrow key, optionally shifted. HYPER binds the layout's ESDF positions here.
   case arrow(direction: WindowFocusDirection, shift: Bool)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
   case sendKeys(keys: String, keyCodes: [CGKeyCode], flagsRawValues: [UInt64])
