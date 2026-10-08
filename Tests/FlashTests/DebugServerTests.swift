@@ -5,6 +5,26 @@ import XCTest
 @testable import flash
 
 final class DebugServerTests: XCTestCase {
+  func testInspectorPagePrefersTheAppBundleCopy() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-inspector-page-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let appCopy = directory.appendingPathComponent("app.html")
+    let moduleCopy = directory.appendingPathComponent("module.html")
+    try Data("staged dev page".utf8).write(to: appCopy)
+    try Data("swiftpm build copy".utf8).write(to: moduleCopy)
+    XCTAssertEqual(
+      DebugServer.inspectorPage(appCopy: appCopy, moduleCopy: moduleCopy),
+      "staged dev page")
+    XCTAssertEqual(
+      DebugServer.inspectorPage(
+        appCopy: directory.appendingPathComponent("missing.html"), moduleCopy: moduleCopy),
+      "swiftpm build copy")
+    XCTAssertTrue(
+      DebugServer.inspectorPage(appCopy: nil, moduleCopy: nil).contains("UI bundle missing"))
+  }
+
   func testRuntimeSnapshotIsSerializableAndKeepsPluginSettingsPrivate() throws {
     _ = NSApplication.shared
     let delegate = AppDelegate()
@@ -76,7 +96,17 @@ final class DebugServerTests: XCTestCase {
     XCTAssertEqual(DebugServer.route(path: "/api/logs"), .logs)
     XCTAssertEqual(DebugServer.route(path: "/api/traces"), .traces)
     XCTAssertEqual(DebugServer.route(path: "/api/events"), .events)
-    for path in ["/api", "/api/", "/api/state/x", "/api/docs"] {
+    XCTAssertEqual(DebugServer.route(path: "/api/config"), .config)
+    XCTAssertEqual(DebugServer.route(path: "/api/config/purge"), .configPurge)
+    let id = "0123456789abcdef0123456789abcdef"
+    XCTAssertEqual(DebugServer.route(path: "/api/clipboard/\(id)"), .clipboardItem(id: id))
+    XCTAssertEqual(DebugServer.requestMethod("DELETE /api/clipboard/\(id) HTTP/1.1\r\n"), "DELETE")
+    for path in [
+      "/api", "/api/", "/api/state/x", "/api/docs", "/api/config/x", "/api/clipboard",
+      "/api/clipboard/",
+      "/api/clipboard/\(id)/x", "/api/clipboard/NOT-32-HEX",
+      "/api/clipboard/\(id.uppercased())",
+    ] {
       XCTAssertEqual(DebugServer.route(path: path), .missingEndpoint, path)
     }
     for path in ["/docs/", "/mappings/", "/plugins/tmux/"] {
@@ -259,6 +289,22 @@ final class DebugServerTests: XCTestCase {
     XCTAssertTrue(spin { server.publication.streams == 0 }, "the closed stream is released")
   }
 
+  /// Chrome and other strict clients only open an EventSource after a real
+  /// blank line. A multiline string drops the newline before its closing
+  /// delimiter, so the last `\r` used to sit against `event:` and the
+  /// inspector stayed disconnected.
+  func testEventStreamHeadersEndOnABlankLine() throws {
+    let server = DebugServer(host: "localhost", port: 0) { ["ok": true] }
+    server.start()
+    defer { server.stop() }
+    let port = try waitForListeningPort(server)
+    let stream = EventStreamClient(port: port)
+    defer { stream.cancel() }
+    XCTAssertTrue(
+      spin { stream.text.contains("\r\n\r\nevent:") },
+      "headers must end before the first event, got \(Array(stream.text.prefix(180).utf8))")
+  }
+
   /// Changes inside one window collapse into one snapshot; with no stream
   /// open nothing is taken, and a stream arriving on a stale cache gets a
   /// fresh snapshot.
@@ -312,6 +358,101 @@ final class DebugServerTests: XCTestCase {
     XCTAssertTrue(
       try fetchSpinningMain(port: port, path: "/api/state?refresh=1").contains("\"n\":3"))
     XCTAssertEqual(snapshots, 3, "an explicit refresh resamples")
+  }
+
+  func testAssembleRequestHonorsContentLengthAndTheBodyCap() {
+    let headers = "PUT /api/config HTTP/1.1\r\nHost: 127.0.0.1:4242\r\nContent-Length: 5\r\n\r\n"
+    XCTAssertEqual(DebugServer.assembleRequest(Data(headers.utf8)), .incomplete)
+    let ready = DebugServer.assembleRequest(Data((headers + "abcdeEXTRA").utf8))
+    guard case .ready(let received, let body) = ready else {
+      return XCTFail("expected a complete request")
+    }
+    XCTAssertTrue(received.contains("PUT /api/config"))
+    XCTAssertEqual(body, Data("abcde".utf8))
+    XCTAssertEqual(
+      DebugServer.assembleRequest(Data("GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".utf8)),
+      .ready(headers: "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1", body: Data()))
+    var huge = Data("POST /api/config/purge HTTP/1.1\r\nContent-Length: 300000\r\n\r\n".utf8)
+    XCTAssertEqual(DebugServer.assembleRequest(huge), .tooLarge)
+    huge = Data(count: DebugServer.maxRequestBytes + 1)
+    XCTAssertEqual(DebugServer.assembleRequest(huge), .tooLarge)
+  }
+
+  func testConfigPutDeliversABodyLargerThanTheOldReceive() throws {
+    let payload = Data(repeating: 0x61, count: 20_000)
+    let seen = LockedData()
+    let server = DebugServer(
+      host: "localhost", port: 0,
+      configHTTP: { method, purge, body, done in
+        seen.store(method: method, purge: purge, body: body)
+        done("200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
+      },
+      stateProvider: { [:] }
+    )
+    server.start()
+    defer { server.stop() }
+    let port = try waitForListeningPort(server)
+    let saved = try fetchBody(port: port, method: "PUT", path: "/api/config", body: payload)
+    XCTAssertEqual(saved, 200)
+    XCTAssertEqual(seen.method, "PUT")
+    XCTAssertEqual(seen.purge, false)
+    XCTAssertEqual(seen.body, payload)
+
+    let purged = try fetchBody(
+      port: port, method: "POST", path: "/api/config/purge", body: Data("x".utf8))
+    XCTAssertEqual(purged, 200)
+    XCTAssertEqual(seen.method, "POST")
+    XCTAssertEqual(seen.purge, true)
+
+    let missing = DebugServer(host: "localhost", port: 0) { [:] }
+    missing.start()
+    defer { missing.stop() }
+    let missingPort = try waitForListeningPort(missing)
+    XCTAssertEqual(try fetchBody(port: missingPort, method: "GET", path: "/api/config"), 503)
+  }
+
+  func testClipboardItemServesBytesAndRejectsOtherMethods() throws {
+    let id = "0123456789abcdef0123456789abcdef"
+    let png = Data([0x89, 0x50, 0x4E, 0x47])
+    let calls = LockedCounter()
+    let server = DebugServer(
+      host: "localhost", port: 0,
+      clipboardHTTP: { method, itemID, done in
+        calls.increment()
+        if method == "GET", itemID == id {
+          done("200 OK", "image/png", png)
+        } else if method == "DELETE", itemID == id {
+          done("200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
+        } else {
+          done("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
+        }
+      },
+      stateProvider: { [:] }
+    )
+    server.start()
+    defer { server.stop() }
+    let port = try waitForListeningPort(server)
+
+    let image = try fetchData(port: port, method: "GET", path: "/api/clipboard/\(id)")
+    XCTAssertEqual(image.status, 200)
+    XCTAssertEqual(image.type, "image/png")
+    XCTAssertEqual(image.body, png)
+    XCTAssertEqual(image.cache, "no-store")
+
+    let deleted = try fetchData(port: port, method: "DELETE", path: "/api/clipboard/\(id)")
+    XCTAssertEqual(deleted.status, 200)
+    XCTAssertEqual(String(decoding: deleted.body, as: UTF8.self), "{\"ok\":true}")
+
+    let posted = try fetchData(port: port, method: "POST", path: "/api/clipboard/\(id)")
+    XCTAssertEqual(posted.status, 405)
+    XCTAssertEqual(calls.value, 2, "an unsupported method never reaches the handler")
+
+    let missing = DebugServer(host: "localhost", port: 0) { [:] }
+    missing.start()
+    defer { missing.stop() }
+    let missingPort = try waitForListeningPort(missing)
+    let unavailable = try fetchData(port: missingPort, method: "GET", path: "/api/clipboard/\(id)")
+    XCTAssertEqual(unavailable.status, 503)
   }
 
   func testWhenListeningAnswersFromTheListenerState() throws {
@@ -393,6 +534,45 @@ final class DebugServerTests: XCTestCase {
     return try XCTUnwrap(server.listeningPort, "DebugServer never started listening")
   }
 
+  private func fetchData(port: UInt16, method: String, path: String) throws -> (
+    status: Int, type: String?, cache: String?, body: Data
+  ) {
+    let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)\(path)"))
+    var request = URLRequest(url: url)
+    request.httpMethod = method
+    let sem = DispatchSemaphore(value: 0)
+    var result: (Int, String?, String?, Data)?
+    URLSession.shared.dataTask(with: request) { data, response, _ in
+      let http = response as? HTTPURLResponse
+      result = (
+        http?.statusCode ?? 0,
+        http?.value(forHTTPHeaderField: "Content-Type"),
+        http?.value(forHTTPHeaderField: "Cache-Control"),
+        data ?? Data()
+      )
+      sem.signal()
+    }.resume()
+    XCTAssertEqual(sem.wait(timeout: .now() + 5), .success)
+    return try XCTUnwrap(result)
+  }
+
+  private func fetchBody(port: UInt16, method: String, path: String, body: Data = Data()) throws
+    -> Int
+  {
+    let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)\(path)"))
+    var request = URLRequest(url: url)
+    request.httpMethod = method
+    if method != "GET" { request.httpBody = body }
+    let sem = DispatchSemaphore(value: 0)
+    var status = 0
+    URLSession.shared.dataTask(with: request) { _, response, _ in
+      status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      sem.signal()
+    }.resume()
+    XCTAssertEqual(sem.wait(timeout: .now() + 5), .success)
+    return status
+  }
+
   private func fetch(url: URL, deadline: Date) throws -> (status: Int, body: String) {
     var lastError: Error?
     while Date() < deadline {
@@ -420,6 +600,36 @@ final class DebugServerTests: XCTestCase {
     }
     if let lastError { throw lastError }
     return (0, "")
+  }
+}
+
+private final class LockedData: @unchecked Sendable {
+  private let lock = NSLock()
+  private(set) var method = ""
+  private(set) var purge = false
+  private(set) var body = Data()
+
+  func store(method: String, purge: Bool, body: Data) {
+    lock.lock()
+    self.method = method
+    self.purge = purge
+    self.body = body
+    lock.unlock()
+  }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+  func increment() {
+    lock.lock()
+    count += 1
+    lock.unlock()
+  }
+  var value: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return count
   }
 }
 

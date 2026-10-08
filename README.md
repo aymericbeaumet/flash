@@ -1,4 +1,4 @@
-# Flash [![CI](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml/badge.svg)](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml)
+# flash [![CI](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml/badge.svg)](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/aymericbeaumet/flash)](https://github.com/aymericbeaumet/flash/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Your keyboard, all of macOS.**
 
@@ -22,7 +22,8 @@ Accessibility permission, and nothing else.
 - **Keyboard grid.** The screen is split like the left half of your keyboard
   (`12345` / `qwert` / `asdfg` / `zxcvb` on QWERTY, your layout's keys
   otherwise). Press the key where you want to go, again to refine. Bisect mode
-  halves the screen with `hjkl`.
+  halves the screen with the keys at the QWERTY h, j, k and l positions of
+  your layout.
 - **Terminal hints.** The bundled tmux plugin labels panes, every detected URL
   and file path, and [supported status-bar tabs](docs/architecture.md#hint-activation)
   inside your terminal.
@@ -45,11 +46,38 @@ menu-bar icon offers About, Open Configuration, and Quit.
 
 ## Install
 
+### 1. Homebrew
+
 ```sh
 brew install --cask aymericbeaumet/tap/flash@nightly
 ```
 
-This installs `Flash.app` and the `flash` command, and starts Flash. Then:
+This installs `Flash.app` and the `flash` command, and starts Flash. Nightly
+builds are ad-hoc signed, so macOS can drop the Accessibility grant after an
+update while the toggle still shows as on. If hints stop working after
+`brew upgrade`, remove Flash from the list with **−** and add it again.
+
+### 2. mise
+
+From a clone, mise installs the toolchain this repository pins. The installer
+then builds and starts Flash:
+
+```sh
+git clone https://github.com/aymericbeaumet/flash.git
+cd flash
+mise install
+mise exec -- ./Scripts/install.sh
+```
+
+See [development](docs/development.md) for tests and the dev build.
+
+### 3. Cargo
+
+Flash is a Swift app and is not published as a Cargo package. `cargo install
+flash` installs a different program. The installer above builds Flash's Rust
+plugins with Cargo; there is no separate `cargo install` step.
+
+Whichever way you installed it:
 
 1. **Allow the first launch.** Builds are not notarized yet. If macOS says it
    could not verify Flash, open **System Settings → Privacy & Security** and
@@ -57,15 +85,10 @@ This installs `Flash.app` and the `flash` command, and starts Flash. Then:
 2. **Grant Accessibility.** Flash opens **System Settings → Privacy & Security →
    Accessibility** for you. Turn Flash on.
 
-Nightly builds are ad-hoc signed, so macOS can drop the Accessibility grant
-after an update while the toggle still shows as on. If hints stop working after
-`brew upgrade`, remove Flash from the list with **−** and add it again.
-
-To build from source, see [development](docs/development.md).
-
 Open `:help` (or `flash help_show` from a terminal) for the browser help
-homepage: feature guides, searchable commands, plugins, and live runtime
-information. In NORMAL mode, `?` jumps straight to your mappings; `:help
+homepage. It is a checklist of what this Mac has already set up and what is
+still missing, plus the feature guides, commands, plugins, and live runtime
+pages. In NORMAL mode, `?` jumps straight to your mappings; `:help
 flashlight` opens a specific guide. See [browser help](docs/help.md).
 
 ## Start easy, go deep

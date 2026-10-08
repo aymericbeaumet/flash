@@ -77,7 +77,7 @@ final class FlashStatusReportTests: XCTestCase {
     XCTAssertEqual(R.hintSessionPhase(route: .labels, active: true, discovering: false), "labels")
     XCTAssertEqual(
       R.hintSessionPhase(
-        route: .grid(.bisect, cursorFollows: false), active: true, discovering: false),
+        route: .grid(.qwertyBisect, cursorFollows: false), active: true, discovering: false),
       "grid")
     XCTAssertEqual(R.hintSessionPhase(route: .search, active: true, discovering: false), "search")
     XCTAssertEqual(

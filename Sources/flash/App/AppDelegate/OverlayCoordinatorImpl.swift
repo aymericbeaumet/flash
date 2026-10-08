@@ -277,12 +277,13 @@ extension AppDelegate {
     }
   }
 
-  /// A status-bar hint acts at the centre of its span's visible text, the
-  /// same spot for every session; only the action differs
-  /// (`statusBarHintCommit`). A followed link opens from the URL the hint
-  /// carried, without moving the pointer into the menu-bar band.
+  /// A status-bar hint acts on its span. `f` uses the centre of the visible
+  /// text; `s` lands one point left of the glyph centre. Only the action
+  /// differs (`statusBarHintCommit`). A followed link opens from the URL the
+  /// hint carried, without moving the pointer into the menu-bar band.
   private func commitStatusBarHint(_ hint: AssignedHint) {
-    let point = CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
+    let point = Self.statusBarHintPoint(
+      hint.target.frame, bigram: hintSession.isBigramCapture)
     let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
     let commit = Self.statusBarHintCommit(
       command: hintSession.command, url: hint.target.url.flatMap { URL(string: $0) })
@@ -296,6 +297,8 @@ extension AppDelegate {
     case .hover:
       _ = ActionDispatcher.moveCursor(to: point)
       if let popup { overlay.showStatusBarPopup(popup, at: point, preservingContent: true) }
+    case .pin:
+      if let popup { overlay.activateStatusBarPopup(popup, at: point) }
     }
     overlay.releaseStatusBarHintSnapshot()
   }
@@ -752,7 +755,7 @@ extension AppDelegate {
       let roots = WindowMover.screenLayouts(
         statusBarReservesSpace: statusBarVisible,
         statusBarMonitor: config.statusBar.monitor
-      ).map(\.usableFrame)
+      ).map { MouseGrid.gridRoot(of: $0, includeStatusBar: statusBarVisible) }
       if navigation.switchScreen(delta, roots: roots) { displayMouseGrid(navigation) }
     case .toggleFollow:
       hintSession.gridCursorFollows.toggle()

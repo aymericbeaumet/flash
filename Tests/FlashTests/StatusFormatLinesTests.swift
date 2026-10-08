@@ -28,6 +28,20 @@ final class StatusFormatLinesTests: XCTestCase {
     XCTAssertEqual(lines("\n \n").map(text), [" "], "a line of spaces is content")
   }
 
+  func testLabelIsASemanticForegroundThatDefaultAndNolabelClear() throws {
+    let labelled = StatusFormatDocument.parse("#[label]Cld#[default] 6%")
+    let name = try XCTUnwrap(labelled.runs.first { $0.text.contains("Cld") })
+    XCTAssertEqual(name.foreground, .label)
+    let metric = try XCTUnwrap(labelled.runs.first { $0.text.contains("6%") })
+    XCTAssertEqual(metric.foreground, .defaultForeground)
+    let cleared = StatusFormatDocument.parse("#[label]Cld#[nolabel] 6%")
+    XCTAssertEqual(cleared.runs.first { $0.text.contains("6%") }?.foreground, .defaultForeground)
+    XCTAssertEqual(StatusFormatDocument.parse("#[fg=label]Cld").runs.first { $0.text.contains("Cld") }?.foreground, .label)
+    XCTAssertEqual(FlashStatusTextColor.validated("label"), .label)
+    XCTAssertEqual(FlashStatusTextColor.label.markerValue, "label")
+    XCTAssertEqual(FlashStatusTextColor.nsColor(.label), FlashStatusTextColor.nsColor(.rgb(0xEBCB8B)))
+  }
+
   func testColoursAndAttributesCarryOverToTheNextLine() throws {
     let result = lines("#[fg=red,bold]a\nb#[default]\nc")
     XCTAssertEqual(result.map(text), ["a", "b", "c"])

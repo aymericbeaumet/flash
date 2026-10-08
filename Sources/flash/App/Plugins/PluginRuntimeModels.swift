@@ -10,12 +10,20 @@ import Foundation
 /// diagnosis; the phase it failed in is evident from the call site and log.
 enum PluginError: Error, CustomStringConvertible {
   case failure(String)
+  /// A `flash` subcommand token this plugin cannot own. The manager unloads
+  /// the plugin; a malformed edit of some other kind keeps a running process.
+  case commandConflict(String)
 
   var description: String {
     switch self {
-    case .failure(let message):
+    case .failure(let message), .commandConflict(let message):
       return message
     }
+  }
+
+  var isCommandConflict: Bool {
+    if case .commandConflict = self { return true }
+    return false
   }
 }
 

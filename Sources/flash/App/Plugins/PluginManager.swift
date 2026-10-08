@@ -170,6 +170,12 @@ final class PluginManager {
     set { hostRPC.onNotifyRequested = newValue }
   }
 
+  /// See `PluginHostRPC.onOutputVolumeChanged`. The resident shows the percent.
+  var onOutputVolumeChanged: ((Int) -> Void)? {
+    get { hostRPC.onOutputVolumeChanged }
+    set { hostRPC.onOutputVolumeChanged = newValue }
+  }
+
   /// See `PluginHostRPC.wifiInfoProvider`; forwarded so AppDelegate owns the
   /// system authorization provider while the manager owns RPC routing.
   var wifiInfoProvider: WiFiInfoProviding? {
@@ -322,7 +328,8 @@ final class PluginManager {
             scope: registration.scope,
             mapping: ModeMapping(
               key: canonical, action: action,
-              repeatsOnFinalKey: registration.repeatsOnFinalKey)))
+              repeatsOnFinalKey: registration.repeatsOnFinalKey,
+              origin: ModeMapping.pluginOrigin(id: manifest.id, name: manifest.name))))
       }
 
       // Topic names collide on a first-wins basis with the host's topics
@@ -646,13 +653,13 @@ final class PluginManager {
       switch outcome {
       case .performed(let pid, let navigationURL, let message):
         FlashLog.debug(
-          "[plugin_command] command=\(command) subcommand=\(subcommand) ok=true "
+          "[plugin] command=\(command) subcommand=\(subcommand) ok=true "
             + "target_pid=\(pid.map(String.init) ?? "nil") "
             + "navigation_scheme=\(navigationURL?.scheme ?? "nil")")
         onResult?(true, pid, message, navigationURL)
       case .unhandled:
         FlashLog.debug(
-          "[plugin_command] command=\(command) subcommand=\(subcommand) unhandled")
+          "[plugin] command=\(command) subcommand=\(subcommand) unhandled")
         onResult?(false, nil, nil, nil)
       case .failed(let error):
         FlashLog.plugin(
@@ -732,7 +739,7 @@ final class PluginManager {
   /// queries surface it live instead). Two sources combine here:
   ///   * **Manifest bangs** — declared statically in `manifest.json`,
   ///     gated against the focused app. Used by plugins with a small fixed
-  ///     set of bangs (aiproviders: chatgpt/claude/…).
+  ///     set of bangs.
   ///   * **Published dynamic bangs** — kind="bang" rows the plugin keeps in
   ///     its pushed catalog (reference: the DDG bang rows embedded from
   ///     `bangs.tsv`). Those are *not* returned here; they
@@ -876,6 +883,16 @@ final class PluginManager {
       pendingHides.removeValue(forKey: name)?.cancel()
     }
     let observedStatus = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
+    var claimManifests: [PluginManifest] = []
+    var claimIDs = Set<String>()
+    for item in desired {
+      guard let manifest = try? PluginManifest.load(from: item.root),
+        !config.plugins.disabled.contains(manifest.id),
+        claimIDs.insert(manifest.id).inserted
+      else { continue }
+      claimManifests.append(manifest)
+    }
+    let claimFailures = PluginManifest.commandClaimFailures(claimManifests)
     for item in desired {
       do {
         let manifest = try PluginManifest.load(from: item.root)
@@ -890,6 +907,9 @@ final class PluginManager {
             "[plugins] duplicate plugin id \(manifest.id) ignored",
             fields: ["id": manifest.id, "root": item.root.path])
           continue
+        }
+        if let reason = claimFailures[manifest.id] {
+          throw PluginError.commandConflict(reason)
         }
         nextIDs.insert(manifest.id)
         let settings = config.plugins.settings[manifest.id] ?? [:]
@@ -951,7 +971,11 @@ final class PluginManager {
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin, store: catalogStore)
         plugin.start()
       } catch {
-        if let existing = pluginsByID.values.first(where: { $0.root == item.root }),
+        // A command-name conflict must take the plugin down. A malformed edit
+        // of a plugin that was already valid keeps that process until fixed.
+        let claimConflict = (error as? PluginError)?.isCommandConflict == true
+        if !claimConflict,
+          let existing = pluginsByID.values.first(where: { $0.root == item.root }),
           !config.plugins.disabled.contains(existing.identifier)
         {
           // A malformed edit is not a new definition. Keep the validated

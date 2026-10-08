@@ -615,6 +615,21 @@ pub struct Event {
     /// and possibly empty — empty means nothing is observed. Order carries
     /// no meaning.
     pub segments: Option<Vec<String>>,
+    /// `core:clipboard.changed`: 32 lowercase hex characters. The host has
+    /// already stored an image, when there is one, at
+    /// `share/images/<id>.<ext>` in this plugin's data directory.
+    pub id: Option<String>,
+    /// `text`, `image`, `html`, or `files`.
+    pub kind: Option<String>,
+    /// Formatted copy, present when `kind` is `html`.
+    pub html: Option<String>,
+    /// `image/png`, `image/jpeg`, `image/gif`, or `image/webp` when the
+    /// matching file exists.
+    pub mime: Option<String>,
+    /// Copied file paths when `kind` is `files`.
+    pub files: Vec<String>,
+    /// Lowercase hex SHA-256 of the image file.
+    pub sha256: Option<String>,
 }
 
 impl Event {

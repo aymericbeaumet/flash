@@ -2,7 +2,8 @@ import AppKit
 import FlashCore
 
 /// Pointer mode (`mouse_pointer`): freestyle keyboard cursor control.
-/// h/j/k/l or arrows move with autorepeat acceleration (shift = 2px fine),
+/// The layout's hjkl cluster or the arrow keys move with autorepeat
+/// acceleration (shift = 2px fine),
 /// `m` / `,` / `.` click left/middle/right in place, `v` toggles a drag,
 /// Return or space clicks and returns to NORMAL; Escape (or `q`) exits.
 /// `mouse_button` presses and releases outside it; both share

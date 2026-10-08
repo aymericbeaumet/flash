@@ -10,13 +10,15 @@
   "capabilities": [
     "app_control"
   ],
-  "verbs": [
+  "commands": [
     {
-      "name": "set_mark",
-      "description": "Save the focused non-Flash app under a one-letter slot (a-z)."
+      "command": "marks",
+      "subcommand": "set",
+      "description": "Save the focused non-Flash app under a one-letter slot (a-z or 0-9)."
     },
     {
-      "name": "jump_to_mark",
+      "command": "marks",
+      "subcommand": "jump",
       "description": "Reactivate the app previously saved under the given letter."
     }
   ],
@@ -26,7 +28,7 @@
         "name": "marks",
         "title": "Marks",
         "summary": "Save and recall named apps with explicit commands or custom mappings.",
-        "body": "# Marks\n\nEach letter `a`-`z` holds one mark. Setting a mark records the focused app's pid and bundle identifier so jumps survive process restarts.\n\n## Commands\n\n```text\nflash set_mark --letter=a\nflash jump_to_mark --letter=a\n```\n\nIf the original pid is gone, Flash relaunches the app from its bundle identifier.\n\n## Optional mappings\n\nMarks have no default NORMAL bindings. Choose explicit mappings in `flash.toml`:\n\n```toml\n[mode.normal.mappings]\n\"ma\" = [\"flash\", \"set_mark\", \"--letter=a\"]\n\"`a\" = [\"flash\", \"jump_to_mark\", \"--letter=a\"]\n```\n\n## Storage\n\nThe 26 lowercase slots persist to `Library/Application Support/Flash/Plugins/marks/share/marks.json`.\n",
+        "body": "# Marks\n\nEach letter `a`-`z` holds one mark. Setting a mark records the focused app's pid and bundle identifier so jumps survive process restarts.\n\n## Commands\n\n```text\nflash marks set a\nflash marks jump a\n```\n\nIf the original pid is gone, Flash relaunches the app from its bundle identifier.\n\n## Optional mappings\n\nMarks have no default NORMAL bindings. Choose explicit mappings in `flash.toml`:\n\n```toml\n[mode.normal.mappings]\n\"ma\" = [\"flash\", \"marks\", \"set\", \"a\"]\n\"`a\" = [\"flash\", \"marks\", \"jump\", \"a\"]\n```\n\n## Storage\n\nThe 26 lowercase slots persist to `Library/Application Support/Flash/Plugins/marks/share/marks.json`.\n",
         "aliases": [
           "mark"
         ]

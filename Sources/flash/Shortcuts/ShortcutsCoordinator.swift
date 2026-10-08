@@ -166,6 +166,16 @@ final class MappingsCoordinator {
         virtualKey: UInt32(event.keyCode)))
   }
 
+  /// The command a chord would fire, without firing it. EasyMotion uses this
+  /// to tell a mode change from a chord that should stay inside the jump.
+  func action(for event: NSEvent) -> MappingCommand? {
+    activeMappings[
+      ParsedHotkey(
+        modifiers: Self.carbonModifiers(from: event.modifierFlags),
+        virtualKey: UInt32(event.keyCode))
+    ]?.action
+  }
+
   /// Whether a raw event matches the same resolved chord used by Carbon and
   /// panel dispatch, without allocating an NSEvent on the tap hot path.
   func hasMapping(virtualKey: UInt32, cgFlags: CGEventFlags) -> Bool {

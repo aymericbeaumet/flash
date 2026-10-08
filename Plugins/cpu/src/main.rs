@@ -233,7 +233,7 @@ impl FlashPlugin for Cpu {
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             // Unobserved, nothing samples between commands: sample first.
-            "" if !self.cadences.observed() => {
+            "show" if !self.cadences.observed() => {
                 refresh_all(
                     &ctx,
                     &self.state,
@@ -244,7 +244,7 @@ impl FlashPlugin for Cpu {
                 .await;
                 details_response(current_report(&ctx, &self.state))
             }
-            "" => details_response(current_report(&ctx, &self.state)),
+            "show" => details_response(current_report(&ctx, &self.state)),
             "refresh" => {
                 refresh_all(
                     &ctx,
@@ -655,7 +655,8 @@ fn render_report(
         .row("GPU", gpu_value)
         .row("Model", model);
     Report {
-        label: metric("CPU", cpu.total()),
+        // The template owns the name and the width (`#[label]CPU #[default]#{p-3:…}`).
+        label: Markup::text(percent2(cpu.total()).trim()),
         summary: visible_summary(cpu, gpu, history, summary_mode),
         preview,
         raw: raw_metrics(cpu, history),
@@ -688,8 +689,8 @@ fn percent_series(history: &CpuHistory) -> String {
         .join(" ")
 }
 
-/// Yellow section name plus the grey two-digit percentage the monitor labels
-/// share.
+/// Yellow section name plus the grey two-digit percentage. `summary` only:
+/// `label` is the percentage, and the template owns the name.
 fn metric(name: &str, percent: f64) -> Markup {
     Markup::colored(name, Color::TITLE) + " " + Markup::colored(percent2(percent), Color::MUTED)
 }
@@ -746,8 +747,8 @@ mod tests {
     #[test]
     fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
         for (user, expected) in [
-            (0.0, " 0%"),
-            (9.0, " 9%"),
+            (0.0, "0%"),
+            (9.0, "9%"),
             (10.0, "10%"),
             (99.6, "99%"),
             (100.0, "99%"),
@@ -761,10 +762,8 @@ mod tests {
                 uptime_seconds: None,
             };
             let report = render_report(&cpu, None, &history([user]), SummaryMode::Full);
-            assert_eq!(
-                report.label.as_str(),
-                format!("#[fg=#EBCB8B]CPU#[default] #[fg=colour245]{expected}#[default]")
-            );
+            assert_eq!(report.label.as_str(), expected);
+            assert!(!report.label.as_str().contains("#["));
             let segments = wire(&report);
             assert_eq!(segments["label"], report.label.as_str());
             assert!(segments["summary"].contains("popup="));

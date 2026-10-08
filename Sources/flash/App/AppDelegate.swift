@@ -186,8 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var menuPathPresser: MenuPathPresser = AXMenuPathPresser()
   let finder = CandidateFinderSession()
   /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
-  /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
-  /// then surfaced through `debugStateJSON`.
+  /// from the clipboard plugin on `:clipboard show`, `:clipboard delete`, and
+  /// each pasteboard change, then surfaced through `debugStateJSON`.
   var clipboardEntries: [ClipboardModalEntry] = [] {
     didSet { debugStateDidChange() }
   }
@@ -299,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
   /// See `noteSecureInput`.
   var secureInputObserved = false
+  let secureInputFixer = SecureInputFixer()
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderUpdateGeneration: UInt64 = 0
   /// The authoritative front-window read queued for the next main turn.
@@ -424,6 +425,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onNotifyRequested = { [weak self] message, durationMs in
       self?.overlay.displayBanner(message, durationMs: durationMs)
     }
+    pluginManager.onOutputVolumeChanged = { [weak self] percent in
+      self?.overlay.displayAlert(StatusAlert.volume(percent))
+    }
     pluginManager.wifiInfoProvider = wifiInfoProvider
     pluginManager.onCatalogsChanged = { [weak self] in
       self?.handlePluginCatalogsChanged()
@@ -458,6 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.popupStyle = config.popupStyle
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
+    overlay.keyboardNavigation = Alphabet.navigation(layoutName: config.positionLayoutName)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
     keyboardLayoutMonitor.onChange = { [weak self] state in
       self?.overlay.keyboardLayout = state.reference.table
@@ -482,8 +487,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       },
       widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
-    // Once at launch; afterwards the tap and hint activations refresh it.
+    // Once at launch; afterwards the tap, hint activations and the secure-input
+    // poll refresh it. The poll is what notices a hold that starts while the
+    // tap is blind.
     noteSecureInput(IsSecureEventInputEnabled())
+    secureInputFixer.onFlag = { [weak self] enabled in
+      DispatchQueue.main.async { self?.noteSecureInput(enabled) }
+    }
+    secureInputFixer.start()
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
@@ -586,7 +597,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .movementBack, .movementForward, .appPrev, .appNext,
       .quitApp, .saveAndQuit, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
       .clipboardCopy, .clipboardCut, .clipboardPaste,
-      .sendKey, .sendKeys:
+      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow:
       performMappedCommand(cmd)
     case .showAlert(let alert):
       shownConfigError = nil
@@ -612,6 +623,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .openApp(let name):
       openSourceItem(matching: name)
     case .pluginCommand(let command, let subcommand, let args):
+      // Same as `:clipboard show`: the history is the inspector page, not a
+      // banner of the plugin's JSON.
+      if command.caseInsensitiveCompare("clipboard") == .orderedSame,
+        subcommand.caseInsensitiveCompare("show") == .orderedSame,
+        args.isEmpty
+      {
+        openClipboardDashboard()
+        return true
+      }
       let dispatched = pluginManager.invoke(
         command: command,
         subcommand: subcommand,
@@ -624,7 +644,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           return
         }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-        if let stdout { self?.overlay.displayBanner(stdout) }
+        self?.presentPluginResult(stdout)
+        self?.noteClipboardDelete(command: command, subcommand: subcommand, ok: true)
       }
       if !dispatched { warnUnsupportedCommand(cmd.diagnosticDescription) }
       return dispatched
@@ -670,7 +691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           return
         }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-        if let stdout { self?.overlay.displayBanner(stdout) }
+        self?.presentPluginResult(stdout)
       }
       if !dispatched {
         warnUnsupportedCommand(cmd.diagnosticDescription)
@@ -692,9 +713,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     displayCommandWarning("Command failed or was not handled: \(command). Check :logs for details.")
   }
 
+  /// `:clipboard delete` changes history without a toast. Refresh the
+  /// inspector cache once the plugin has finished.
+  func noteClipboardDelete(command: String, subcommand: String, ok: Bool) {
+    guard ok, command.caseInsensitiveCompare("clipboard") == .orderedSame,
+      subcommand.caseInsensitiveCompare("delete") == .orderedSame
+    else { return }
+    DispatchQueue.main.async { [weak self] in
+      self?.refreshClipboardDashboardCache()
+    }
+  }
+
+  /// A caffeinate result is the same modal as the volume percent. Other
+  /// plugin output stays a banner.
+  private func presentPluginResult(_ stdout: String?) {
+    guard let stdout, !stdout.isEmpty else { return }
+    if let alert = StatusAlert.caffeinate(reported: stdout) {
+      overlay.displayAlert(alert)
+    } else {
+      overlay.displayBanner(stdout)
+    }
+  }
+
   private func displayCommandWarning(_ message: String) {
     FlashLog.warn(message, source: "core:Command")
-    overlay.displayAlert(message, duration: 8, style: .error)
+    overlay.displayAlert(message, style: .error)
   }
 
   private func installDismissObservers() {
@@ -723,7 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.terminalInputMappings?.flush()
-        self.overlay.hideStatusBarPopup()
+        self.overlay.relinquishShownStatusPopup(reason: "focus_changed")
         let secureUI = Self.activeWindowBorderSecureUISuspendsSession(
           bundleIdentifier: app.bundleIdentifier)
         self.setSessionSuspended(
@@ -803,12 +846,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor)
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-        self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
-        self.forgetActiveWindowBorderFrames(for: app.processIdentifier)
-        if app.processIdentifier == self.observedFocusedAppPID {
+        let pid = app.processIdentifier
+        self.windowLayoutManager.appDidTerminate(pid: pid)
+        self.forgetActiveWindowBorderFrames(for: pid)
+        // Cmd-Q and a last window that quits the app never pass through
+        // `app_quit`. Focus the previous app before macOS picks one.
+        self.focusAppAfterQuit(of: pid)
+        if pid == self.observedFocusedAppPID || self.appNavigationTargetPID != nil {
           self.hideActiveWindowBorder(reason: "app_terminated")
           DispatchQueue.main.async {
-            self.reconcileFrontmostApplication(reason: "app_terminated")
+            if let aimed = self.appNavigationTargetPID,
+              let next = NSRunningApplication(processIdentifier: aimed), !next.isTerminated
+            {
+              self.applyFocusedApplicationChange(
+                next, reason: "app_terminated", emitFocusEvent: true)
+            } else {
+              self.reconcileFrontmostApplication(reason: "app_terminated")
+            }
             self.updateActiveWindowBorder(reason: "app_terminated")
             self.scheduleActiveWindowBorderReconciliation(
               delaysMs: Self.activeWindowBorderRecoveryDelaysMs,
@@ -916,7 +970,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           reason: "screen_parameters")
       }
     }
-    localNotificationTokens = [screenParameters]
+    let appResigned = NotificationCenter.default.addObserver(
+      forName: NSApplication.didResignActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      // Deactivation can restore a panel that hidesOnDeactivate left visible,
+      // and on Tahoe an app switch sometimes never posts didActivateApplication.
+      // Order the popup out on the next turn, once that restoration has run,
+      // and only when another app actually holds the front.
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        guard
+          NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            != Bundle.main.bundleIdentifier
+        else { return }
+        self.overlay.relinquishShownStatusPopup(reason: "app_resigned")
+      }
+    }
+    localNotificationTokens = [screenParameters, appResigned]
 
     resignKeyToken = NotificationCenter.default.addObserver(
       forName: NSWindow.didResignKeyNotification,
@@ -997,7 +1069,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshFocusDependentState(for: app)
     debugStateDidChange()
     if emitFocusEvent {
-      overlay.dismissEphemeralStatusBarPopup(reason: "focus_changed")
+      overlay.relinquishShownStatusPopup(reason: "focus_changed")
       pluginManager.emit(
         PluginEvent(
           name: "core:focus.changed",
@@ -1065,12 +1137,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return
     }
     FlashLog.debug("[clipboard] watcher started")
-    clipboardMonitor = ClipboardMonitor { [weak self] text in
-      guard let self else { return }
+    clipboardMonitor = ClipboardMonitor { [weak self] item in
+      guard let self, self.pluginManager.hasListener(for: "core:clipboard.changed") else { return }
+      guard
+        let payload = ClipboardImageStore.changedPayload(
+          for: item,
+          dataDir: Self.clipboardDataDir(),
+          id: ClipboardCapture.makeID())
+      else { return }
       self.pluginManager.emit(
         PluginEvent(
           name: "core:clipboard.changed",
-          payload: ["text": text],
+          payload: payload,
           bundleID: nil))
       // Let the plugin fold the new entry into its history, then refresh the
       // inspector's Clipboard tab so an open dashboard updates live.
@@ -1169,7 +1247,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   /// The swallow decision's secure-input read. Every swallow yields to a
   /// focused password field; a change it sees is published on the next
-  /// turn, outside the synchronous tap callback.
+  /// turn, outside the synchronous tap callback. While the flag is on, this
+  /// tap receives no keys, so `SecureInputFixer` is what notices a hold that
+  /// starts or sticks in the background.
   private func tapReadsSecureInput() -> Bool {
     let enabled = IsSecureEventInputEnabled()
     if enabled != secureInputObserved {
@@ -1254,6 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
+    secureInputFixer.stop()
     activationLifecycle.invalidate()
     clearHintSessionState()
     releaseHeldMouseButton(reason: "quit")

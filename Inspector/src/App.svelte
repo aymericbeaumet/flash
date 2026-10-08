@@ -7,6 +7,7 @@
   import Icon from "./lib/Icon.svelte";
   import LogList from "./lib/LogList.svelte";
   import MappingsPanel from "./lib/MappingsPanel.svelte";
+  import { markGuideRead } from "./lib/onboarding";
   import PluginsPanel from "./lib/PluginsPanel.svelte";
   import RuntimePanel from "./lib/RuntimePanel.svelte";
   import { router } from "./lib/router.svelte";
@@ -24,6 +25,7 @@
     { id: "clipboard", href: "/clipboard", label: "Clipboard", group: "Inspect" },
   ];
   const route = $derived(router.route);
+  $effect(() => { if (route.page === "docs") markGuideRead(route.param); });
   let search = $state("");
   let searchInput = $state<HTMLInputElement>();
   let mobileNav = $state(false);
@@ -40,7 +42,7 @@
     const matchesFound = [
       ...docs.filter((doc) => matches([doc.title, doc.name, doc.summary, doc.body, ...(doc.aliases ?? [])].join(" "))).map((doc) => ({ title: doc.title, summary: doc.summary, kind: "Guide", icon: "docs", href: paths.docs(doc.name) })),
       ...commands.filter((command) => matches([command.name, command.syntax, command.description, ...(command.aliases ?? [])].join(" "))).map((command) => ({ title: command.name, summary: command.description ?? command.source, kind: "Command", icon: "commands", href: paths.commands(command.name) })),
-      ...(mappings.effective_rows ?? mappings.rows).filter((row) => matches(row.key + " " + row.action)).map((row) => ({ title: row.key, summary: row.action, kind: "Mapping", icon: "mappings", href: paths.mappings(row.key) })),
+      ...(mappings.effective_rows ?? mappings.rows).filter((row) => matches([row.key, row.action, row.explanation, row.origin ?? ""].join(" "))).map((row) => ({ title: row.key, summary: row.explanation || [row.action, row.origin].filter(Boolean).join(" · "), kind: "Mapping", icon: "mappings", href: paths.mappings(row.key) })),
       ...plugins.filter((plugin) => matches([plugin.id, plugin.name, plugin.description].join(" "))).map((plugin) => ({ title: plugin.name || plugin.id, summary: plugin.description ?? plugin.state, kind: "Plugin", icon: "plugins", href: paths.plugins(plugin.id) })),
     ];
     const rank = (title: string) => {
@@ -98,9 +100,9 @@
           {#if results.length === 0}<div class="empty"><strong>No matches yet</strong>Try a feature, command, key, or plugin name.</div>{/if}
           {#if results.length > 80}<p class="empty">Showing the first 80 matches. Add another word to narrow your search.</p>{/if}
         </div></div>
-      {:else if route.page === "home"}<HomePanel state={store.state} connected={store.connected} />
+      {:else if route.page === "home"}<HomePanel snapshot={store.state} connected={store.connected} />
       {:else if route.page === "docs"}<DocsPanel {docs} topic={route.param} />
-      {:else if route.page === "mappings"}<MappingsPanel {mappings} filter={route.param} />
+      {:else if route.page === "mappings"}<MappingsPanel {mappings} {commands} filter={route.param} />
       {:else if route.page === "commands"}<CommandsPanel {commands} filter={route.param} />
       {:else if route.page === "plugins"}<PluginsPanel {plugins} filter={route.param} sampledAt={store.state.snapshot_at_unix_ms} onresample={() => store.refresh()} />
       {:else if route.page === "state"}<RuntimePanel state={store.state} connected={store.connected} onrefresh={() => store.refresh()} />
@@ -139,7 +141,8 @@
   .connection i { width: 6px; height: 6px; border-radius: 50%; background: #c99c55; }
   .connection.connected i { background: #5c9662; box-shadow: 0 0 0 3px #e9f1e4; }
   .connection-note { padding: 8px 24px; font-size: 11px; color: #78642c; background: #fff9e6; border-bottom: 1px solid #e7ddba; }
-  main { flex: 1; overflow: auto; min-height: 0; }
+  main { flex: 1; overflow: auto; min-height: 0; display: flex; flex-direction: column; }
+  main > :global(*) { flex: none; }
   .mobile-toggle { display: none; padding: 6px; }
   .search-results { overflow: hidden; }
   .search-results a { display: flex; align-items: center; gap: 16px; padding: 17px 20px; border-bottom: 1px solid var(--border-soft); color: var(--text); text-decoration: none; }
@@ -147,8 +150,10 @@
   .result-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); flex-shrink: 0; }
   .search-results a > span:nth-child(2) { flex: 1; min-width: 0; }
   .result-summary { display: block; font-size: 12px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-top: 3px; }
-  .log-page { height: 100%; display: flex; flex-direction: column; }
-  .log-surface { flex: 1; min-height: 320px; overflow: hidden; }
+  /* Percentage height does not resolve against main's flex size, so this page
+     grows as a flex child and the record list fills the space under the heading. */
+  .log-page { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
+  .log-surface { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   .skip-link { position: fixed; top: -100px; left: 12px; z-index: 100; background: #fff; border: 1px solid var(--border); padding: 10px; }
   .skip-link:focus { top: 12px; }
   @media (max-width: 1150px) { .topbar { padding: 14px 24px; gap: 16px; } .workspace { grid-template-columns: 205px minmax(0, 1fr); } }

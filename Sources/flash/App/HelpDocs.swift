@@ -94,8 +94,13 @@ enum HelpDocs {
       # Mapping Syntax
 
       The [live mappings page](/mappings) shows the effective bindings from
-      defaults, plugins and your configuration. Press `?` in NORMAL or run
-      `:mappings` to open it. This guide explains how to write your own.
+      defaults, plugins and your configuration. Bindings are grouped by mode.
+      With the search empty they stay alphabetical by the command; a search
+      ranks what the binding does, and a close spelling still matches. Each
+      row's ? explains that binding. The Source column uses the same badge as
+      the command list. The page focuses its search when it opens. Press `?`
+      in NORMAL or run `:mappings` to open it. This guide explains how to
+      write your own.
 
       ## Add, replace or remove a binding
 
@@ -274,27 +279,39 @@ enum HelpDocs {
       # Hints & mouse actions
 
       `flash mouse_target` labels clickable controls in the focused app.
-      Type a label to click it, or Escape to cancel. In NORMAL the default
+      Type a label to click it, or Escape to cancel. The pointer hides while
+      the labels are up and returns when it moves. In NORMAL the default
       is `f`. Labels come from Accessibility; terminal content can be supplied
       by the tmux plugin. Flash never reads screen pixels to find targets.
 
       ## Choose an action
 
-      | Goal | NORMAL default | CLI |
-      | --- | --- | --- |
-      | Primary click | `f` | `flash mouse_target` |
-      | Secondary click | `sf` | `flash mouse_target --secondary` |
-      | Double click | `df` | `flash mouse_target --double` |
-      | Move the pointer | `mf` | `flash mouse_target --move` |
-      | Jump to a letter | `<leader>s` | `flash mouse_bigram` |
-      | Find by visible text | See live mappings | `flash mouse_target --search` |
-      | Keep choosing targets | Explicit mapping | `flash mouse_target --multi` |
-      | Drag between targets | Explicit mapping | `flash mouse_target --drag` |
-      | Select between points | Explicit mapping | `flash mouse_target --select` |
+      A mouse action is one prefix and one finisher. `c` is the right-click
+      (the context menu). It is the operator Vim and Vimium leave free.
+      `r` reloads and `s` is the search finisher, so neither is that prefix.
+
+      | | Click `f` | Grid `F` | Search `s` |
+      | --- | --- | --- | --- |
+      | Primary | `f` | `F` | `s` |
+      | Move `m` | `mf` | `mF` | `ms` |
+      | Double `d` | `df` | `dF` | `ds` |
+      | Right-click `c` | `cf` | `cF` | `cs` |
+
+      | Goal | CLI |
+      | --- | --- |
+      | Primary click | `flash mouse_target` |
+      | Secondary click | `flash mouse_target --secondary` |
+      | Double click | `flash mouse_target --double` |
+      | Move the pointer | `flash mouse_target --move` |
+      | Jump to a letter | `flash mouse_bigram` |
+      | Find by visible text | `flash mouse_target --search` |
+      | Keep choosing targets | `flash mouse_target --multi` |
+      | Drag between targets | `flash mouse_target --drag` |
+      | Select between points | `flash mouse_target --select` |
 
       Hold a configured magic modifier on the final hint key to include it in
       the click; Shift is always available. Terminal link hints add Shift so
-      your terminal opens the link. The [command inventory](/commands) lists
+      your terminal opens the link, and that click stays in NORMAL. The [command inventory](/commands) lists
       all flags, scopes and installed mouse verbs.
 
       ## Beyond the focused window
@@ -308,7 +325,10 @@ enum HelpDocs {
       ## Tune labels and pointer behavior
 
       `[hints] keys` selects a layout or alphabet; `min_length` controls
-      label length. `[overlay]` controls font, colors and `hint_placement`.
+      label length. Two-key labels alternate hands, then prefer the same
+      keyboard row, then a shorter jump between rows. A key ranks by where
+      it sits: home row, then bottom row, then top row. `[overlay]`
+      controls font, colors and `hint_placement`.
       `[overlay.dark]` supplies dark-mode color overrides. `click_feedback`
       draws a short ring where a click lands.
 
@@ -331,8 +351,10 @@ enum HelpDocs {
       # Mouse grid & pointer
 
       `flash mouse_grid` (NORMAL `F`) divides the display into a keyboard-shaped
-      grid. Press the key nearest your destination to zoom into its cell.
-      Repeat until the last step clicks. Every step uses the same layout.
+      grid, including Flash's status bar. Press the key nearest your destination
+      to zoom into its cell. Repeat until the last step clicks. Every step uses
+      the same layout. The grid stops at the Dock, and at the menu bar when the
+      Flash bar is hidden.
 
       ```text
       1 2 3 4 5
@@ -359,14 +381,17 @@ enum HelpDocs {
 
       ## Change the action or geometry
 
-      `sF`, `dF` and `mF` request secondary click, double click and movement.
+      `cF`, `dF` and `mF` request a right-click, a double click and movement.
       The grid accepts the same click modifiers and action flags as hints.
       `--drag` and `--select` collect two positions; `--multi` starts again
       after each click. `--zoom-to-depth=N` begins around the pointer.
 
-      `flash mouse_grid --bisect` uses `h/j/k/l` for the left/bottom/top/right
-      half and `y/u/b/n` for quadrants. Return commits immediately; otherwise
-      it commits when the region is small enough.
+      `flash mouse_grid --bisect` keeps a half with the keys at the QWERTY
+      h/j/k/l positions of `[keyboard] layout` (h/j/k/l on QWERTY, h/n/e/i on
+      Colemak, d/h/t/n on Dvorak, c/t/s/r on Bépo) and a quadrant with the
+      keys at y/u and b/n. Bépo's top-left quadrant is the dead key `^`.
+      Return commits immediately; otherwise it commits when the region is
+      small enough.
 
       ## Hold a button or steer the pointer
 
@@ -493,7 +518,8 @@ enum HelpDocs {
       and app state, and [logs](/logs) follows diagnostics as they happen.
       These describe this resident, including your changes.
 
-      `?` in NORMAL opens mappings. `:help` opens the [homepage](/).
+      `?` in NORMAL opens mappings. `:help` opens the [homepage](/), which
+      checks what this Mac has already set up and what is still missing.
       `:help <topic>` opens a guide, for example `:help widgets`.
       Plugin guides appear alongside built-in topics when their manifests load.
 
@@ -568,6 +594,7 @@ enum HelpDocs {
       | `#{flash.plugin.cpu.percent}` | A plugin's declared status value |
       | `%H:%M` | Local time |
       | `#[fg=green,bold]OK#[default]` | Style a span |
+      | `#[label]Cld#[default]` | Colour a name, then the ordinary foreground |
       | `#[align=right]text` | Place a section |
       | `#{?flash.secure_input,SECURE,}` | Conditional content |
       | `#[meter=12]42#[nometer]` | Numeric bar |
@@ -733,13 +760,16 @@ enum HelpDocs {
 
       Logs live in `~/Library/Logs/Flash/`. Command history, ranking data,
       plugin caches and clipboard history live in
-      `~/Library/Application Support/Flash/`. Clipboard history ignores
-      items marked concealed or transient by password managers. Flash's own
+      `~/Library/Application Support/Flash/`. Clipboard history keeps text,
+      images, formatted copies, and file paths, and ignores items marked
+      concealed, transient, or auto-generated. Flash's own
       submitted commands can appear in command history and diagnostic logs.
 
       This help server listens on loopback and starts when a browser command
       needs it (or at launch if configured). It exposes live state, logs and
-      clipboard entries to local clients until Flash quits. Other programs
+      clipboard entries to local clients until Flash quits. The homepage
+      remembers opened guides in that browser only; Flash does not receive
+      the list. Other programs
       on your Mac can access it; it is not a remote monitoring service.
       Do not share a log or runtime export without reviewing its contents.
 
@@ -788,11 +818,20 @@ enum HelpDocs {
       A mapping that prefixes a longer sequence waits for its timeout.
       macOS or another app may own a global shortcut. Secure input can hide
       keys from the event tap; `doctor` reports the holder when available.
-      `[app] keyboard_layout` controls the reference layout used for mappings.
+      `[app] keyboard_layout` reads keypresses. `[keyboard] layout` is the
+      logical layout for hints, the grid, bisect, and the WASD positions
+      HYPER uses as arrows.
 
       ## A saved config change is missing
 
       Check the active config path and diagnostics on [Runtime](/state).
+      That page shows the resolved configuration as JSON and edits the file.
+      Save writes it after the text parses as TOML. Purge defaults removes
+      assignments that equal the bundled file and leaves the result in the
+      editor until you save. Values from the default configuration keep the
+      base colour. A value your file or an environment variable overrode is
+      marked with that layer (`config` and the filename, or `env` and the
+      `FLASH_` variable).
       `FLASH_CONFIG` or `XDG_CONFIG_HOME` may select a different file.
       Invalid values are diagnosed and preserve the previous valid value
       according to the field's validation rule. Avoid duplicate TOML tables.

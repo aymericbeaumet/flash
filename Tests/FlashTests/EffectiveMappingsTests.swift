@@ -85,10 +85,37 @@ final class EffectiveMappingsTests: XCTestCase {
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
     XCTAssertEqual(
       NormalModeDispatcher.mappingsJSON(mode: effective).filter { $0["scope"] == "normal" },
-      [["scope": "normal", "key": "q", "action": URLCommand.redo.diagnosticDescription]])
+      [
+        [
+          "scope": "normal", "key": "q", "action": URLCommand.redo.diagnosticDescription,
+          "origin": "default", "explanation": URLCommand.redo.explanation,
+        ]
+      ])
     XCTAssertEqual(
       NormalModeDispatcher.mappingsJSON(mode: base).first { $0["scope"] == "normal" },
-      ["scope": "normal", "key": "q", "action": URLCommand.undo.diagnosticDescription])
+      [
+        "scope": "normal", "key": "q", "action": URLCommand.undo.diagnosticDescription,
+        "origin": "default", "explanation": URLCommand.undo.explanation,
+      ])
+  }
+
+  func testMappingReferenceKeepsTheWinningOrigin() {
+    let base = mode(normal: [
+      ModeMapping(key: "q", action: .flashCommand(.undo), origin: "config:flash.toml")
+    ])
+    let effective = EffectiveMappings.merge(
+      base: base,
+      plugin: [
+        (
+          priority: 25, scope: .normal,
+          mapping: ModeMapping(key: "q", action: .flashCommand(.redo), origin: "plugin:tmux")
+        )
+      ])
+    let row = NormalModeDispatcher.mappingsJSON(mode: effective).first { $0["key"] == "q" }
+    XCTAssertEqual(row?["origin"], "plugin:tmux")
+    XCTAssertEqual(row?["action"], URLCommand.redo.diagnosticDescription)
+    let configured = NormalModeDispatcher.mappingsJSON(mode: base).first { $0["key"] == "q" }
+    XCTAssertEqual(configured?["origin"], "config:flash.toml")
   }
 
   func testMappingReferenceShowsOnlyTheWinningPhysicalChord() {

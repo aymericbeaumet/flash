@@ -112,6 +112,27 @@ extension AppDelegate {
     )
   }
 
+  /// The app to focus after `quitting` goes away, and the back stack that
+  /// leaves that app current. Recency is the app focused now, then the one
+  /// just left (`forward`'s tail), then older apps. The quitting pid is
+  /// never a candidate. `isAvailable` drops terminated apps and Flash itself.
+  static func appQuitFocus(
+    quitting: pid_t,
+    current: pid_t?,
+    back: [pid_t],
+    forward: [pid_t],
+    isAvailable: (pid_t) -> Bool
+  ) -> (target: pid_t, back: [pid_t])? {
+    var seen = Set<pid_t>()
+    var recentFirst: [pid_t] = []
+    let recency = (current.map { [$0] } ?? []) + forward.reversed() + back.reversed()
+    for pid in recency where pid != quitting && isAvailable(pid) && seen.insert(pid).inserted {
+      recentFirst.append(pid)
+    }
+    guard let target = recentFirst.first else { return nil }
+    return (target: target, back: Array(recentFirst.dropFirst().reversed()))
+  }
+
   func recordMovement(_ entry: MovementEntry, source: String, isAmbient: Bool = false) {
     guard let identity = movementIdentity(entry) else { return }
     if isAmbient, let target = movementNavigationTargetKey, target != identity.key {

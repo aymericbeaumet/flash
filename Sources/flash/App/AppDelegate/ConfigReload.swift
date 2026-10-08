@@ -170,6 +170,7 @@ extension AppDelegate {
     overlay.popupStyle = cfg.popupStyle
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
+    overlay.keyboardNavigation = Alphabet.navigation(layoutName: cfg.positionLayoutName)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     // Rebuilt on every load: the setting may have changed, and so may the
     // installed layouts an explicit input-source ID names.
@@ -263,7 +264,7 @@ extension AppDelegate {
       return
     }
     guard message != shownConfigError?.message else { return }
-    overlay.displayAlert(message, duration: 8, style: .error)
+    overlay.displayAlert(message, style: .error)
     shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
 }

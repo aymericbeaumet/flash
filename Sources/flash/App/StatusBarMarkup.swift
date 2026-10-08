@@ -4,6 +4,7 @@ extension FlashStatusTextColor {
   static func validated(_ raw: String) -> FlashStatusTextColor? {
     let word = raw.lowercased()
     if word == "default" || word == "terminal" { return .defaultForeground }
+    if word == "label" { return .label }
     if let index = StatusFormatPalette.index(word) { return .palette(UInt8(index)) }
     if let rgb = StatusFormatPalette.rgb(word) { return .rgb(rgb) }
     return nil
@@ -26,6 +27,8 @@ extension FlashStatusTextColor {
         green: CGFloat((value >> 8) & 0xFF) / 255,
         blue: CGFloat(value & 0xFF) / 255,
         alpha: 1)
+    case .label:
+      return Self.nsColor(.rgb(0xEBCB8B))
     case .palette(let n):
       return Self.xterm(n)
     }

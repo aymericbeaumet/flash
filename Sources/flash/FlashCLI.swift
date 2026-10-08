@@ -42,6 +42,7 @@ enum FlashCLI {
   static let usage = """
     Usage:
       flash <verb> [--name=value | --flag ...]
+      flash <plugin-command> [<subcommand> [word ...]]
       flash status [--json]            the resident's state
       flash doctor [--json]            check permissions, capture, config, plugins
       flash config_check [--file=path] validate a config file without the resident
@@ -61,6 +62,11 @@ enum FlashCLI {
       flash window_move --x=10% --y=10% --width=80% --height=80%
       flash help_show
       flash mappings_show
+      flash media volumedown
+      flash media output 'USB Audio'
+      flash caffeinate toggle
+      flash clipboard show
+      flash clipboard delete <id>
     """
 
   static func run(args: [String]) -> Int32 {
@@ -74,12 +80,27 @@ enum FlashCLI {
     }
     let verb = first
     let argEntries = Array(args.dropFirst())
+    if PluginRepository.declaresCommand(verb), !URLEventHandler.isBuiltInVerb(verb),
+      FlashQuery(rawValue: verb) == nil
+    {
+      guard
+        case .pluginCommand(let command, let subcommand, let pluginArgs) =
+          PluginGitInvocation.command(argvAfterFlash: args)
+      else {
+        FileHandle.standardError.write(
+          Data("flash: invalid command or arguments for '\(verb)'\n".utf8))
+        return 2
+      }
+      var eventArgs = ["subcommand": subcommand]
+      if !pluginArgs.isEmpty { eventArgs["args"] = pluginArgs.joined(separator: " ") }
+      return sendVerb(command, args: eventArgs)
+    }
     do {
       let argDict = try CommandArguments.parse(argEntries)
       if let query = FlashQuery(rawValue: verb) {
         return runQuery(query, args: argDict)
       }
-      guard URLEventHandler.parseOrPluginVerb(verb: verb, args: argDict) != nil else {
+      guard URLEventHandler.parse(verb: verb, args: argDict) != nil else {
         FileHandle.standardError.write(
           Data("flash: invalid command or arguments for '\(verb)'\n".utf8))
         return 2

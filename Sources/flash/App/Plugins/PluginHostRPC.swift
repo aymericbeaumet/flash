@@ -37,6 +37,9 @@ final class PluginHostRPC {
   /// given message and duration. Set by AppDelegate (routes to the overlay's
   /// banner surface).
   var onNotifyRequested: ((String, Int) -> Void)?
+  /// The output volume just moved one macOS tick. The argument is the percent
+  /// the system bezel would show, from 0 to 100.
+  var onOutputVolumeChanged: ((Int) -> Void)?
   /// Host-owned Location/CoreWLAN provider for `host.wifi_info`. Set by
   /// AppDelegate so plugins never access either framework directly.
   var wifiInfoProvider: WiFiInfoProviding?
@@ -492,6 +495,17 @@ final class PluginHostRPC {
   private func hostAudioDevices(
     _ params: [String: Any], reply: @escaping ([String: Any]) -> Void
   ) {
+    if params["volume_delta"] != nil || params["mute"] != nil {
+      if params["direction"] != nil || params["select_uid"] != nil {
+        reply([
+          "ok": false,
+          "error": "host.audio_devices volume and mute do not take a direction",
+        ])
+        return
+      }
+      hostOutputVolume(params, reply: reply)
+      return
+    }
     guard let rawDirection = params["direction"] as? String,
       let direction = AudioDeviceDirection(rawValue: rawDirection)
     else {
@@ -523,6 +537,55 @@ final class PluginHostRPC {
             },
           ])
         }
+      } catch {
+        reply(["ok": false, "error": error.localizedDescription])
+      }
+    }
+  }
+
+  /// Volume and mute are the same CoreAudio grant as device selection. They
+  /// do not go through osascript: `set volume` is a scripting addition the
+  /// plugin sandbox cannot load.
+  private func hostOutputVolume(
+    _ params: [String: Any], reply: @escaping ([String: Any]) -> Void
+  ) {
+    let delta = PluginJSON.integer(params["volume_delta"])
+    let mute = params["mute"] as? String
+    if params["volume_delta"] != nil {
+      guard let delta, delta != 0, (-100...100).contains(delta) else {
+        reply([
+          "ok": false,
+          "error": "host.audio_devices volume_delta must be a non-zero integer from -100 to 100",
+        ])
+        return
+      }
+    }
+    if params["mute"] != nil, mute != "toggle" {
+      reply(["ok": false, "error": "host.audio_devices mute must be \"toggle\""])
+      return
+    }
+    guard delta != nil || mute == "toggle" else {
+      reply(["ok": false, "error": "host.audio_devices requires volume_delta or mute"])
+      return
+    }
+    let provider = audioDevices
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        var percent: Int?
+        if let delta {
+          percent = try provider.adjustOutputVolume(deltaPercent: delta)
+        }
+        if mute == "toggle" {
+          try provider.toggleOutputMute()
+        }
+        if let percent {
+          DispatchQueue.main.async { [weak self] in
+            self?.onOutputVolumeChanged?(percent)
+          }
+        }
+        var body: [String: Any] = ["ok": true]
+        if let percent { body["volume_percent"] = percent }
+        reply(body)
       } catch {
         reply(["ok": false, "error": error.localizedDescription])
       }

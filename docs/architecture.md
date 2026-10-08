@@ -53,6 +53,10 @@ receive window-tab hints when their expanded format exposes numeric
 bound to live window IDs before publication. Scrolling lists, other alignments,
 overflow and multi-row status layouts omit tab hints; pane and link hints remain
 available. Tab selection uses the same host mouse-click path as pane selection.
+Letter search in a terminal with no accessibility text reads this same client
+grid and the same window rectangle, including the status line and each
+pane-border title. `f` and `cf` label that grid's panes, links, window
+tabs and pane titles; they also label the same status-bar spans.
 
 Prepared models contain a complete finalized target set and assigned labels.
 Reads require matching PID, dirty token, configuration revision and freshness.
@@ -115,8 +119,8 @@ readiness and maintenance wakes, the activation readiness ladder, the yank's
 pasteboard wait, AX observer registration retries, plugin and popup restart
 backoffs, the config, plugin-file, plugin-state, application-directory and
 ambient-location debounces, the network and volume change coalescers, the
-catalog notify throttle, the inspector's publish window and a covered widget's
-grace. A plain one-shot `asyncAfter` remains only where no clock is involved:
+catalog notify throttle, the inspector's publish window, a covered widget's
+grace and the latched hyper key. A plain one-shot `asyncAfter` remains only where no clock is involved:
 a timeout bounding one operation (request and perform deadlines, the kill
 escalation of a stopped child, the first-paint budget, a focus hand-off), the
 fixed timing of an interaction in progress (synthesized key, scroll and click
@@ -159,6 +163,8 @@ among `high`, `normal` and `low`; `system` is core-only.
 | Prepared model · `core:prepared_model_refresh:<pid>`, `…_readiness:<pid>` | 80 ms debounce; readiness ladder | normal | Warms a model ahead of an activation nobody asked for yet |
 | Prepared model · `core:prepared_model_maintenance` | Before the 1.5–30 s freshness ceiling | normal | Slack stays inside the 250 ms lead |
 | Clipboard watcher · `core:clipboard` | 0.5 s while a plugin subscribes | normal | No pasteboard notification; a late copy reaches history late |
+| Secure input · `core:secure-input` | 2 s for the life of the resident | low | The tap receives no keys while the flag is on, so this poll is what sees a stuck hold |
+| Secure input release · `core:secure-input-fix` | 0.2–0.7 s steps of one release | normal | Spacing an activate, blur or restore already in progress |
 | AX observer retry · `core:ax_observer_retry:<pid>` | 60 ms–3 s ladder | normal | Events go unobserved until it lands |
 | Debounces · `core:config_reload`, `core:plugin_state_refresh`, `core:app_directories`, `core:ambient_location`, `core:plugin_reload:<id>:<n>` | 100–750 ms after the last event | normal | Someone is about to look, nobody is watching the instant |
 | Change coalescers · `core:network_changed`, `core:volumes_changed` | 500 ms window | normal | Plugins re-read what changed |
@@ -171,7 +177,10 @@ among `high`, `normal` and `low`; `system` is core-only.
 
 Registrations are also scoped to when they can observe anything at all: the
 pasteboard watcher runs only while a plugin subscribes to `clipboard.changed`,
-and the menu-bar reveal probe only while the pointer is in the band. Main-thread
+and the menu-bar reveal probe only while the pointer is in the band. Secure
+input is the exception that stays registered: the tap receives nothing while
+the flag is on, so `core:secure-input` is how a stuck hold is noticed at all.
+Main-thread
 stalls need no poll at all: the run loop reports each busy stretch itself, and
 the HTTP inspector pushes its state on the changes it shows.
 
@@ -179,7 +188,15 @@ Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's
 normal-level window only while the window list lags an activation, so when that
 leaves it fully covered the regions are recomputed without those windows
-(`[discover] frontmost_window_covered`); floating layers still cover it. A walk
+(`[discover] frontmost_window_covered`); floating layers still cover it. A
+system dialog that never becomes the frontmost app — Gatekeeper's card
+(`CoreServicesUIAgent`), an authentication panel — is still the surface `f`
+and EasyMotion walk: an elevated dialog-sized window, or a normal-level
+window of a non-regular process, in front of the focused app. Picture in
+Picture, Stage Manager, menu-bar status strips, and another regular app's
+ordinary window are not that surface. The walk hints a window's close button
+when it has one, and a dialog's default, cancel, and help buttons. A click on
+an agent that cannot become frontmost is posted immediately. A walk
 that leaves the window no visible region is never cached as a prepared model
 (see [prepared models](prepared-model.md#windows-that-are-covered)). An
 activation result that is empty, or collapsed below a tenth of the app's last

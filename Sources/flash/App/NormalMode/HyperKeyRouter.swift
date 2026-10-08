@@ -3,9 +3,9 @@ import AppKit
 /// One key while HYPER is held.
 ///
 /// Hyper mappings win. A key that does not match one can still complete a
-/// NORMAL `<leader>` sequence (`<leader>s` while space is held), but it is
-/// never re-read as an ordinary NORMAL command — an unmapped hyper key is
-/// swallowed, the same way NORMAL swallows keys it does not know.
+/// NORMAL `<leader>` sequence, but it is never re-read as an ordinary NORMAL
+/// command — an unmapped hyper key is swallowed, the same way NORMAL swallows
+/// keys it does not know.
 enum HyperKeyRouter {
   struct Result: Equatable {
     var hyperPending: String
@@ -16,7 +16,7 @@ enum HyperKeyRouter {
   static func route(
     hyperPending: String,
     leaderFallbackPending: String?,
-    leaderAtom: String,
+    leaderAtom: String?,
     keyCode: UInt16,
     modifierFlags: NSEvent.ModifierFlags,
     characters: String?,
@@ -63,6 +63,7 @@ enum HyperKeyRouter {
     }
 
     guard
+      let leaderAtom,
       continues(
         pending: leaderAtom,
         keyCode: keyCode,

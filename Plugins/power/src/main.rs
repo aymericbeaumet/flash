@@ -139,7 +139,7 @@ impl FlashPlugin for Power {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "" => details_response(last_good()),
+            "show" => details_response(last_good()),
             "refresh" => {
                 let refreshed = try_refresh_and_publish(&ctx, true).await.flatten();
                 details_response(refreshed.or_else(last_good))
@@ -378,7 +378,9 @@ fn render_status(
     );
     PowerStatus {
         summary: visible_summary(snapshot, summary_mode),
-        label: Markup::colored("BAT", Color::TITLE) + " " + Markup::colored(charge, Color::MUTED),
+        // The template owns the name (`#[label]BAT`). Charge is unpadded: it
+        // crosses a width boundary too rarely to reserve a column.
+        label: Markup::text(charge.trim()),
         preview: preview(snapshot, health, history),
         percent: snapshot
             .battery
@@ -641,10 +643,8 @@ mod tests {
                 }),
             };
             let status = render_status(&snapshot, None, SummaryMode::Full, &ChargeHistory::new());
-            assert_eq!(
-                status.label.as_str(),
-                format!("#[fg=#EBCB8B]BAT#[default] #[fg=colour245]{expected}#[default]")
-            );
+            assert_eq!(status.label.as_str(), expected);
+            assert!(!status.label.as_str().contains("#["));
             assert!(!status.preview.is_empty());
         }
     }

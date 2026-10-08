@@ -96,6 +96,36 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertEqual(delegate.overlay.hintKeyRoute, .labels)
   }
 
+  func testBigramCaptureCoversTheQueryAndItsLabels() {
+    var session = HintSession()
+    XCTAssertFalse(session.isBigramCapture)
+    session.phase = .bigram
+    XCTAssertTrue(session.isBigramCapture)
+    session.phase = .labels(anchor: nil)
+    session.bigramQuery = "t"
+    XCTAssertTrue(session.isBigramCapture, "the hint labels of the jump still own the keyboard")
+    session.bigramQuery = nil
+    XCTAssertFalse(session.isBigramCapture)
+  }
+
+  func testEscapeStaysInTheJumpWhileAModeChangeOrTheLeaderEndsIt() {
+    XCTAssertEqual(BigramCapture.exit(isLeader: false, chord: nil, typed: nil), .stay)
+    XCTAssertEqual(BigramCapture.exit(isLeader: true, chord: nil, typed: nil), .leader)
+    let insert = MappingCommand.flashCommand(.insertMode)
+    XCTAssertEqual(
+      BigramCapture.exit(isLeader: false, chord: insert, typed: nil), .mode(insert))
+    let scroll = MappingCommand.flashCommand(.scroll(.left))
+    XCTAssertEqual(
+      BigramCapture.exit(isLeader: false, chord: scroll, typed: insert), .stay,
+      "a chord that does not change mode is not read again as a bare key")
+    XCTAssertEqual(
+      BigramCapture.exit(isLeader: false, chord: nil, typed: insert), .mode(insert))
+    XCTAssertFalse(URLCommand.mouseBigram(.click(.leftClick, modifiers: [])).changesMode)
+    XCTAssertTrue(URLCommand.enterCommand(input: "", restoreMode: false).changesMode)
+    XCTAssertTrue(URLCommand.terminalMode(name: nil).changesMode)
+    XCTAssertTrue(URLCommand.leaveMode.changesMode)
+  }
+
   func testBackspaceOnABigramLabelReturnsToTheQuery() {
     var session = HintSession()
     session.phase = .labels(anchor: nil)

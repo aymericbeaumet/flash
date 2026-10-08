@@ -189,4 +189,138 @@ extension AppMonitor {
     "com.apple.notificationcenterui",
     "com.apple.systemuiserver",
   ]
+
+  /// Processes that present a dialog without reliably becoming the frontmost
+  /// app. CoreServicesUIAgent can still report a regular activation policy
+  /// (it takes a Dock icon while it is verifying), so policy alone would
+  /// treat its card as the app-switch lag `WindowSnapshot` repairs.
+  static let systemDialogBundleIdentifiers: Set<String> = [
+    "com.apple.coreservices.uiagent",
+    "com.apple.SecurityAgent",
+    "com.apple.LocalAuthentication.UIAgent",
+  ]
+
+  /// A window in front of `front` that is the thing the user is looking at
+  /// but whose process did not become the frontmost app: Gatekeeper's card,
+  /// an authentication panel, a modal sheet owned by an agent. `f` walks it.
+  /// Picture in Picture, Stage Manager, menu-bar strips, and another regular
+  /// app's ordinary window are not that surface.
+  func coveringInteractionContext(inFrontOf front: AppContext?) -> AppContext? {
+    guard let front else { return nil }
+    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let info = WindowSnapshot.windowList(opts) else { return nil }
+    let entries = WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+    var screen: CGRect = .null
+    for candidate in NSScreen.screens where candidate.frame.intersects(front.frontWindowFrame) {
+      screen = candidate.frame
+      break
+    }
+    if screen.isNull { screen = NSScreen.main?.frame ?? front.allScreensFrame }
+    guard
+      let entry = Self.coveringInteractionWindow(
+        entries: entries,
+        frontPid: front.processID,
+        screen: screen,
+        ignoringPids: [getpid()],
+        owner: { pid in
+          guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+            let bundleIdentifier = app.bundleIdentifier
+          else { return nil }
+          return CoveringInteractionOwner(
+            bundleIdentifier: bundleIdentifier, isRegularApp: app.activationPolicy == .regular)
+        }
+      )
+    else { return nil }
+    guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated
+    else { return nil }
+    FlashLog.debug(
+      "[activation] covering_window pid=\(entry.pid) "
+        + "bundle=\(app.bundleIdentifier ?? "") layer=\(entry.layer)")
+    return AppContext(
+      bundleIdentifier: app.bundleIdentifier ?? "",
+      processID: entry.pid,
+      runningApp: app,
+      frontWindowFrame: entry.nsBounds,
+      allScreensFrame: front.allScreensFrame,
+      walkRoot: .elementsInFrame)
+  }
+}
+
+/// Owner facts `coveringInteractionWindow` needs. Resolved by the caller so
+/// the choice itself stays a pure function of the window list.
+struct CoveringInteractionOwner: Equatable {
+  var bundleIdentifier: String
+  var isRegularApp: Bool
+}
+
+extension AppMonitor {
+  /// Smallest window that is a dialog rather than a tooltip, menu row, or
+  /// hover card. Gatekeeper's card and the standard alert are both larger.
+  static let minimumCoveringWidth: CGFloat = 180
+  static let minimumCoveringHeight: CGFloat = 100
+
+  /// The front-most interaction window above `frontPid` that hint activation
+  /// should walk instead of the frontmost app.
+  ///
+  /// Scan stops at `frontPid`'s own window and at another regular app's
+  /// normal-level window. That second case is the z-order lag
+  /// `WindowSnapshot` already repairs after an app switch; treating it as a
+  /// dialog would hint the app the user just left. A normal-level window of
+  /// a non-regular process, or of a known system-dialog process such as
+  /// CoreServicesUIAgent, and any elevated dialog-sized window are the
+  /// surface. Picture in Picture, Stage Manager, system chrome,
+  /// and menu-bar status strips are skipped so they stay out of `f`.
+  static func coveringInteractionWindow(
+    entries: [WindowSnapshot.Entry],
+    frontPid: pid_t,
+    screen: CGRect,
+    ignoringPids: Set<pid_t> = [],
+    owner ownerOf: (pid_t) -> CoveringInteractionOwner?
+  ) -> WindowSnapshot.Entry? {
+    let statusLayer = Int(CGWindowLevelForKey(.statusWindow))
+    let floatingLayer = Int(CGWindowLevelForKey(.floatingWindow))
+    let screenArea = screen.width * screen.height
+    for entry in entries {
+      guard WindowSnapshot.isInteractionSurfaceLayer(entry.layer), entry.occludes,
+        entry.pid > 0, !ignoringPids.contains(entry.pid)
+      else { continue }
+      if entry.pid == frontPid { return nil }
+      if entry.layer == statusLayer { continue }
+      guard let owner = ownerOf(entry.pid) else { continue }
+      if systemChromeBundleIdentifiers.contains(owner.bundleIdentifier) { continue }
+      if owner.bundleIdentifier == ScreenScopeSurfaces.pictureInPictureBundleID
+        || owner.bundleIdentifier == ScreenScopeSurfaces.stageManagerBundleID
+      {
+        continue
+      }
+      if isFloatingPlayer(
+        entry, regularApp: owner.isRegularApp, floatingLayer: floatingLayer, screenArea: screenArea)
+      {
+        continue
+      }
+      let dialogSized =
+        entry.nsBounds.width >= minimumCoveringWidth
+        && entry.nsBounds.height >= minimumCoveringHeight
+      if entry.layer == 0 {
+        let systemDialog = systemDialogBundleIdentifiers.contains(owner.bundleIdentifier)
+        if owner.isRegularApp, !systemDialog { return nil }
+        if dialogSized { return entry }
+        continue
+      }
+      if dialogSized { return entry }
+    }
+    return nil
+  }
+
+  /// A regular app's small floating window is a Picture in Picture player
+  /// (the same shape `ScreenScopeSurfaces` already treats as one). It stays
+  /// above the focused app without being the window `f` should switch to.
+  private static func isFloatingPlayer(
+    _ entry: WindowSnapshot.Entry, regularApp: Bool, floatingLayer: Int, screenArea: CGFloat
+  ) -> Bool {
+    guard regularApp, entry.layer == floatingLayer, screenArea > 0 else { return false }
+    let frame = entry.nsBounds
+    let small = frame.width * frame.height <= screenArea * ScreenScopeSurfaces.maxAreaFraction
+    return small && min(frame.width, frame.height) >= ScreenScopeSurfaces.minPlayerSide
+  }
 }

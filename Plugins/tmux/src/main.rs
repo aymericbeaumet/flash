@@ -2452,6 +2452,8 @@ struct Pane {
     top: i64,
     cols: i64,
     rows: i64,
+    border: String,
+    title: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2492,14 +2494,19 @@ impl HintContext {
 }
 
 fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
-    let (geometry, raw_context) = line.split_once(TMUX_FIELD_SEP)?;
+    let mut parts = line.splitn(3, TMUX_FIELD_SEP);
+    let geometry = parts.next()?;
+    let raw_context = parts.next()?;
+    let title = parts.next().unwrap_or("");
     if HintContext::parse(raw_context).as_ref() != Some(context) {
         return None;
     }
     let fields: Vec<_> = geometry.split_whitespace().collect();
-    if fields.len() != 5 {
-        return None;
-    }
+    let border = match fields.len() {
+        5 => "off",
+        6 => fields[5],
+        _ => return None,
+    };
     fields[0].strip_prefix('%')?.parse::<u64>().ok()?;
     Some(Pane {
         id: fields[0].to_string(),
@@ -2507,6 +2514,8 @@ fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
         top: fields[2].parse::<i64>().ok().filter(|value| *value >= 0)?,
         cols: fields[3].parse::<i64>().ok().filter(|value| *value > 0)?,
         rows: fields[4].parse::<i64>().ok().filter(|value| *value > 0)?,
+        border: border.to_string(),
+        title: title.to_string(),
     })
 }
 
@@ -2514,8 +2523,9 @@ fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
 // shape — collapsing this into a `BuildTargetArgs` struct would just rename
 // the same data without making the call sites clearer.
 //
-// Every tmux target is terminal content, so a primary click on any of them
-// hands the keyboard to the terminal and the host enters INSERT.
+// A pane, window or title is terminal content: a primary click hands the
+// keyboard to the terminal and the host enters INSERT. A link is navigation,
+// so that click stays in NORMAL.
 #[allow(clippy::too_many_arguments)]
 fn build_target(
     target_id: &str,
@@ -2531,7 +2541,7 @@ fn build_target(
     let target = JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
         .label(label)
-        .enters_insert_mode(true)
+        .enters_insert_mode(role != TERMINAL_LINK_ROLE)
         .pid(pid)
         .priority(priority);
     if role == TERMINAL_LINK_ROLE && is_url(label) {
@@ -2572,7 +2582,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}} #{{mouse}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{W:#{{window_index}} #{{window_id}};}}{TMUX_FIELD_SEP}#{{T:status-format[0]}}"
     );
     let pane_format = format!(
-        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"
+        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}} #{{pane-border-status}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{T:pane-border-format}}"
     );
     let display_args = [
         "display-message",
@@ -2697,6 +2707,27 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             )
             .context_id(&context_id),
         );
+
+        if let Some(row) =
+            status_hints::pane_title_row(&pane.border, top_offset, pane.top, pane.rows)
+            && (0..client_rows).contains(&row)
+            && let Some(placed) = status_hints::place_format_line(&pane.title, pane.cols as usize)
+        {
+            pane_targets.push(
+                build_target(
+                    &format!("tmux-{pid}-t{i}"),
+                    min_x + pad_x + (pane.left + placed.column as i64) as f64 * cell_w,
+                    min_y + win_h - pad_y - (row + 1) as f64 * cell_h,
+                    placed.width as f64 * cell_w,
+                    cell_h,
+                    "tmux-pane-title",
+                    &placed.text,
+                    pid,
+                    Priority::High,
+                )
+                .context_id(&context_id),
+            );
+        }
 
         let Some(raw) = captures[i].take() else {
             continue;
@@ -4964,7 +4995,7 @@ fn resolve_response(
 /// requested target and return the terminal pid hosting it so Flash can
 /// raise that window. The target argument is taken verbatim from the
 /// first command arg, so a mapping like
-/// `["flash", "plugin_command", "command=tmux", "subcommand=window", "args=main:1"]`
+/// `["flash", "tmux", "window", "main:1"]`
 /// jumps straight to `main:1`.
 async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> PerformResponse {
     let tmux_path = plugin.resolved_tmux_path().await;
@@ -5511,12 +5542,12 @@ esac"#,
             Priority::Normal,
         );
 
-        // Every tmux target is terminal content: a primary click on it hands
-        // the keyboard to the terminal, so the host enters INSERT.
+        // A pane hands the keyboard to the terminal. A link is navigation and
+        // stays in NORMAL.
         assert_eq!(pane.role.as_deref(), Some("tmux-pane"));
         assert_eq!(pane.enters_insert_mode, Some(true));
         assert_eq!(link.role.as_deref(), Some("FlashTerminalLink"));
-        assert_eq!(link.enters_insert_mode, Some(true));
+        assert_eq!(link.enters_insert_mode, Some(false));
     }
 
     #[test]

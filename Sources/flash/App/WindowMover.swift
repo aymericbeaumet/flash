@@ -126,6 +126,10 @@ final class WindowLayoutManager {
   private var currentScreens: [WindowScreenLayout] = []
   private var screenChangeGeneration: UInt64 = 0
   private var screenChangeKeys: Set<WindowKey> = []
+  /// Displays as they were before this change. Recovery uses them to scale a
+  /// window that macOS left on a display that is gone.
+  private var screenChangeBaseline: [WindowScreenLayout] = []
+  private var screenChangeTopologyChanged = false
   private var screenChangeActiveUntil = DispatchTime(uptimeNanoseconds: 0)
   private var selfAuthoredChangesUntil: [WindowKey: DispatchTime] = [:]
   /// Accessibility cannot read or move windows while the session is locked or
@@ -510,8 +514,11 @@ final class WindowLayoutManager {
       let continuingChange = now < self.screenChangeActiveUntil
       if !continuingChange {
         self.screenChangeKeys = Set(self.tracked.keys)
+        self.screenChangeBaseline = previousScreens
+        self.screenChangeTopologyChanged = previousScreens != initialScreens
       } else {
         self.screenChangeKeys.formUnion(self.tracked.keys)
+        if previousScreens != initialScreens { self.screenChangeTopologyChanged = true }
       }
       self.screenChangeActiveUntil =
         now + .milliseconds((self.screenRecoveryDelaysMs.last ?? 0) + Self.authoredChangeGraceMs)
@@ -530,6 +537,10 @@ final class WindowLayoutManager {
             if !screens.isEmpty {
               self.currentScreens = screens
               self.restoreTrackedLayouts(self.screenChangeKeys, using: screens)
+              if self.screenChangeTopologyChanged {
+                self.fitWindowsLeftOffTheDisplays(
+                  previous: self.screenChangeBaseline, current: screens)
+              }
               if let afterRecoveryPass {
                 DispatchQueue.main.async {
                   afterRecoveryPass(screens)
@@ -759,6 +770,90 @@ final class WindowLayoutManager {
         + "restored=\(counts[.restored] ?? 0) already_correct=\(counts[.alreadyCorrect] ?? 0) "
         + "refused=\(counts[.refused] ?? 0) unreadable=\(counts[.unreadable] ?? 0) "
         + "untracked=\(dropped) pending=\(pendingRestoreKeys.count)")
+  }
+
+  /// macOS moves background windows onto a remaining display and leaves the
+  /// frontmost one at the old size. Anything already tracked was restored
+  /// above. This pass scales the rest onto a connected display.
+  private func fitWindowsLeftOffTheDisplays(
+    previous: [WindowScreenLayout], current: [WindowScreenLayout]
+  ) {
+    guard !sessionSuspended,
+      let primaryHeight = WindowMover.primaryHeight(in: current)
+    else { return }
+    let flashPID = ProcessInfo.processInfo.processIdentifier
+    let pids = NSWorkspace.shared.runningApplications.compactMap { app -> pid_t? in
+      guard app.activationPolicy == .regular, !app.isTerminated,
+        app.processIdentifier != flashPID
+      else { return nil }
+      return app.processIdentifier
+    }
+    var fitted = 0
+    for pid in pids {
+      guard let windows = loadRecoveryWindows(pid: pid, primaryHeight: primaryHeight) else {
+        continue
+      }
+      let bundleIdentifier = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+      let axApp = AXApp.make(pid: pid)
+      for candidate in windows {
+        let key = candidate.key
+        if tracked[key] != nil { continue }
+        guard
+          let frame = WindowMover.relocatedFrame(
+            candidate.frame, from: previous, to: current)
+        else { continue }
+        let outcome = GeckoAccessibility.withWindowManagement(
+          pid: pid,
+          bundleIdentifier: bundleIdentifier,
+          app: axApp
+        ) { axApp, prepareGeometry -> RestoreOutcome in
+          prepareGeometry()
+          switch WindowMover.apply(
+            rect: frame,
+            toWindow: candidate.window,
+            axApp: axApp,
+            primaryHeight: primaryHeight,
+            bundleIdentifier: bundleIdentifier)
+          {
+          case .converged: return .restored
+          case .refused: return .refused
+          case .unreadable: return .unreadable
+          }
+        }
+        if outcome == .restored {
+          fitted += 1
+          selfAuthoredChangesUntil[key] = .now() + .milliseconds(Self.authoredChangeGraceMs)
+          recordObservedLayout(
+            key: key, pid: pid, window: candidate.window, frame: frame, screens: current)
+        }
+      }
+    }
+    if fitted > 0 {
+      FlashLog.debug("[window_layout] fit_stranded count=\(fitted)")
+    }
+  }
+
+  private func loadRecoveryWindows(
+    pid: pid_t, primaryHeight: CGFloat
+  ) -> [NavigationWindow]? {
+    let axApp = AXApp.make(pid: pid)
+    AXUIElementSetMessagingTimeout(axApp, 1)
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &raw) == .success,
+      let windows = raw as? [AXUIElement]
+    else { return nil }
+    var snapshot: [NavigationWindow] = []
+    for window in windows {
+      AXUIElementSetMessagingTimeout(window, 1)
+      guard
+        let frame = WindowMover.readWindowFrameInNSCoords(
+          window: window, primaryHeight: primaryHeight), frame.width > 1, frame.height > 1,
+        !isMinimized(window)
+      else { continue }
+      snapshot.append(
+        NavigationWindow(key: WindowKey(pid: pid, window: window), window: window, frame: frame))
+    }
+    return snapshot
   }
 
   func appDidTerminate(pid: pid_t) {
@@ -1098,6 +1193,77 @@ enum WindowMover {
         from: source.usableFrame,
         to: destination.usableFrame),
       layout: nil)
+  }
+
+  /// Where a window should sit after a display is unplugged, when its frame
+  /// no longer fits a connected screen. Nil when the window already fits, or
+  /// when the move would not change it. A window that filled the departed
+  /// display fills the display it lands on; one that merely overflows is
+  /// pulled inside that display.
+  static func relocatedFrame(
+    _ frame: CGRect,
+    from previous: [WindowScreenLayout],
+    to current: [WindowScreenLayout]
+  ) -> CGRect? {
+    guard frame.width > 1, frame.height > 1, !current.isEmpty,
+      !frameFits(frame, on: current)
+    else { return nil }
+    let onCurrent = screenOwning(frame: frame, screens: current)
+    let source = screenOwning(frame: frame, screens: previous)
+    // Misses every display we have seen: the user parked it off-screen.
+    guard source != nil || onCurrent != nil else { return nil }
+    let destination = onCurrent ?? current[0]
+    let placed: CGRect
+    if let source,
+      !framesApproximatelyEqual(source.usableFrame, destination.usableFrame, tolerance: 1)
+    {
+      placed = fitted(
+        remap(frame: frame, from: source.usableFrame, to: destination.usableFrame),
+        within: destination.usableFrame)
+    } else {
+      placed = fitted(frame, within: destination.usableFrame)
+    }
+    guard !framesMatchPlacement(placed, frame) else { return nil }
+    return placed
+  }
+
+  /// True when `frame` lies inside some connected display, plus a few points
+  /// so AX rounding is not treated as an orphan.
+  static func frameFits(
+    _ frame: CGRect, on screens: [WindowScreenLayout], tolerance: CGFloat = 8
+  ) -> Bool {
+    screens.contains { screen in
+      screen.frame.insetBy(dx: -tolerance, dy: -tolerance).contains(frame)
+    }
+  }
+
+  /// The display that contains the frame's centre, or the one it overlaps
+  /// most. Nil when the frame misses every display: an intentionally
+  /// off-screen window, not one a departed display left behind.
+  static func screenOwning(
+    frame: CGRect, screens: [WindowScreenLayout]
+  ) -> WindowScreenLayout? {
+    let centre = CGPoint(x: frame.midX, y: frame.midY)
+    if let hit = screens.first(where: { $0.frame.contains(centre) }) { return hit }
+    guard
+      let best = screens.max(by: {
+        intersectionArea(frame, $0.frame) < intersectionArea(frame, $1.frame)
+      }), intersectionArea(frame, best.frame) > 0
+    else { return nil }
+    return best
+  }
+
+  /// Shrink and slide `frame` until it lies inside `usable`.
+  static func fitted(_ frame: CGRect, within usable: CGRect) -> CGRect {
+    guard usable.width > 1, usable.height > 1 else { return frame }
+    var result = frame
+    result.size.width = min(result.width, usable.width)
+    result.size.height = min(result.height, usable.height)
+    if result.minX < usable.minX { result.origin.x = usable.minX }
+    if result.minY < usable.minY { result.origin.y = usable.minY }
+    if result.maxX > usable.maxX { result.origin.x = usable.maxX - result.width }
+    if result.maxY > usable.maxY { result.origin.y = usable.maxY - result.height }
+    return result
   }
 
   /// Resolve the destination for a tracked intent after any screen-topology or

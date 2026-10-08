@@ -20,7 +20,7 @@ enum FlashTunables {
   /// `[mode] send_key_interval_ms` — spacing between send_key chords.
   static var sendKeyIntervalMs: Int = 35
   /// `[overlay] alert_duration` — default `alert_show` dwell (seconds).
-  static var alertDuration: TimeInterval = 2.0
+  static var alertDuration: TimeInterval = 3.0
   /// `[overlay] banner_duration_ms` — transient banner dwell.
   static var bannerDurationMs: Int = 700
   /// `[plugins] install_timeout` — third-party install script hard kill.
@@ -39,7 +39,8 @@ enum FlashTunables {
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
   /// `[statusbar] notch_margin` — points kept clear beside a notch.
-  static var statusBarNotchMargin: Double = 6
+  /// 4pt keeps the glyph a 6pt margin would drop for a sub-point overlap.
+  static var statusBarNotchMargin: Double = 4
 
   static func apply(_ config: Config) {
     scrollStepPixels = Int32(config.mode.scrollStep)

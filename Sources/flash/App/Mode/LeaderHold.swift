@@ -30,6 +30,22 @@ struct LeaderHold: Equatable {
     case passthrough
   }
 
+  /// A leader key-down enters hyper from idle NORMAL, and also while the only
+  /// pending input is the prefix armed by releasing the leader. A mapped
+  /// `<leader><leader>` sequence still owns that second press. Any other
+  /// pending sequence, a repeat anchor, or a key repeat does not.
+  static func canEnter(
+    pending: String,
+    repeatAnchor: String?,
+    leaderAtom: String,
+    leaderContinuesPending: Bool,
+    isRepeat: Bool
+  ) -> Bool {
+    guard !isRepeat, repeatAnchor == nil else { return false }
+    if pending.isEmpty { return true }
+    return pending == leaderAtom && !leaderContinuesPending
+  }
+
   mutating func step(_ input: Input) -> Step {
     switch input {
     case .leaderDown:

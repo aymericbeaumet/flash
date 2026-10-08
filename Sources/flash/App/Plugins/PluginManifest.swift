@@ -9,8 +9,9 @@ import Foundation
 /// it. The registry is frozen: additions are allowed, renames never
 /// (parity-tested against `protocol.json`).
 enum PluginCapability: String, Codable, CaseIterable, Equatable {
-  /// Subscribe to `core:clipboard.changed`, which carries the full clipboard
-  /// text, and call `host.clipboard_write`.
+  /// Subscribe to `core:clipboard.changed` (text, image, HTML, and file
+  /// metadata; image bytes are a file in this plugin's data directory) and
+  /// call `host.clipboard_write`.
   case clipboard
   /// Call the host's Accessibility broker (`host.ax_snapshot`,
   /// `host.ax_perform`, `host.ax_set`, `host.ax_select_child`) and the
@@ -1030,25 +1031,31 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure(
         "manifest.json id must be lowercase [a-z0-9._-] and not contain \"..\"")
     }
-    for verb in verbs {
-      // `flash status` / `doctor` / `config_check` are CLI queries: a plugin
-      // verb of the same name could never be reached.
-      if let reason = FlashQuery.reservationMessage(verb.name) {
-        throw PluginError.failure("plugin verb \(verb.name) is reserved: \(reason)")
-      }
-      if URLEventHandler.isBuiltInVerb(verb.name.lowercased()) {
-        throw PluginError.failure(
-          "plugin verb \(verb.name) is one of Flash's own verbs; bind what an app does "
-            + "for it in action_bindings")
-      }
+    // A plugin command is always `flash <command> <subcommand>`. A one-word
+    // `verbs` entry, or a command with no subcommand, is rejected here so it
+    // cannot be registered.
+    if !verbs.isEmpty {
+      throw PluginError.commandConflict(
+        "plugin \(id) failed to load: verbs are not a flash command — "
+          + "declare flash <command> <subcommand> in commands")
     }
     for command in commands {
-      // An empty subcommand registers a *top-level* command (`:copy`), and
-      // `"*"` registers a wildcard that consumes the remainder (`:calc 2 + 2`).
-      // Only the command verb itself is mandatory.
       if command.command.trimmed.isEmpty {
         throw PluginError.failure("plugin command must not be empty")
       }
+      let subcommand = command.subcommand
+      if subcommand.trimmed.isEmpty {
+        throw PluginError.commandConflict(
+          "plugin \(id) failed to load: flash \(command.command) requires a subcommand "
+            + "(flash \(command.command) <subcommand>)")
+      }
+      if subcommand != subcommand.trimmed || subcommand.contains(where: { $0.isWhitespace }) {
+        throw PluginError.failure(
+          "plugin command \(command.command) subcommand must be a single token")
+      }
+    }
+    if let conflict = Self.commandClaimFailures([self])[id] {
+      throw PluginError.commandConflict(conflict)
     }
     for bang in bangs {
       if bang.token.trimmed.isEmpty {
@@ -1084,5 +1091,78 @@ struct PluginManifest: Decodable, Equatable {
           "plugin status segment \(segment) must be lowercase [a-z0-9_-]")
       }
     }
+  }
+
+  /// Flash subcommand tokens that cannot be shared. A plugin command is
+  /// `flash <command> <subcommand>`; a verb is `flash <name>`. Either token
+  /// colliding with Flash, a reserved query, or another plugin fails every
+  /// plugin that claims it.
+  static func commandClaimFailures(_ manifests: [PluginManifest]) -> [String: String] {
+    struct Claim {
+      var pluginID: String
+    }
+    var owners: [String: [Claim]] = [:]
+    var failures: [String: String] = [:]
+    func note(_ id: String, _ message: String) {
+      if let existing = failures[id] {
+        failures[id] = existing + "; " + message
+      } else {
+        failures[id] = message
+      }
+    }
+    for manifest in manifests {
+      var commandNames = Set<String>()
+      var pairs = Set<String>()
+      for command in manifest.commands {
+        let name = command.command.trimmed.lowercased()
+        guard !name.isEmpty else { continue }
+        let subcommand = command.subcommand.trimmed.lowercased()
+        if !pairs.insert(name + "\u{1f}" + subcommand).inserted {
+          note(
+            manifest.id,
+            "plugin \(manifest.id) failed to load: flash \(name) \(subcommand) conflicts — "
+              + "declared more than once")
+        }
+        if commandNames.insert(name).inserted {
+          owners[name, default: []].append(Claim(pluginID: manifest.id))
+        }
+      }
+      var verbNames = Set<String>()
+      for verb in manifest.verbs {
+        let name = verb.name.trimmed.lowercased()
+        guard !name.isEmpty else { continue }
+        if !verbNames.insert(name).inserted {
+          note(
+            manifest.id,
+            "plugin \(manifest.id) failed to load: flash \(name) conflicts — "
+              + "declared more than once")
+        }
+        if commandNames.contains(name) {
+          note(
+            manifest.id,
+            "plugin \(manifest.id) failed to load: flash \(name) conflicts — "
+              + "used as both a command and a verb")
+        }
+        owners[name, default: []].append(Claim(pluginID: manifest.id))
+      }
+    }
+    for (token, claims) in owners {
+      let plugins = Array(Set(claims.map(\.pluginID))).sorted()
+      let reserved = FlashQuery.reservationMessage(token)
+      let builtin = URLEventHandler.isBuiltInVerb(token)
+      guard plugins.count > 1 || reserved != nil || builtin else { continue }
+      let why: String
+      if let reserved {
+        why = "\(token) is reserved: \(reserved)"
+      } else if builtin {
+        why = "\(token) is one of Flash's own verbs"
+      } else {
+        why = "\(token) is declared by \(plugins.joined(separator: ", "))"
+      }
+      for id in plugins {
+        note(id, "plugin \(id) failed to load: flash \(token) conflicts — \(why)")
+      }
+    }
+    return failures
   }
 }

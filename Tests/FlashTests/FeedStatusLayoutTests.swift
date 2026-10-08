@@ -21,15 +21,15 @@ final class FeedStatusLayoutTests: XCTestCase {
     XCTAssertTrue(surface.layout.text.hasSuffix("CPU 10%"))
   }
 
-  func testLongTitleStopsBeforeActualAbsoluteCentreAndLeavesArrowClickable() throws {
-    let surface = render(feed + "#[align=absolute-centre]CENTER#[align=right]CPU 10%")
+  func testLongTitleStopsBeforeActualNotchAndLeavesArrowClickable() throws {
+    let surface = render(feed + "#[align=notch]CENTER#[align=right]CPU 10%")
     let centre = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "CENTER" })
     XCTAssertLessThanOrEqual(try arrowFrame(surface).maxX, surface.runFrames[centre].minX)
     assertFoldedTitleAndSuffix(surface)
     XCTAssertTrue(surface.layout.text.hasSuffix("CPU 10%"))
   }
 
-  func testOrdinaryCentreAlsoReservesRoomBeforeNativeAlignment() throws {
+  func testCentreLabelStaysInTheNotchClearOfTheFeed() throws {
     let surface = render(feed + "#[align=centre]CENTER#[align=right]CPU 10%")
     let centre = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "CENTER" })
     XCTAssertLessThanOrEqual(try arrowFrame(surface).maxX, surface.runFrames[centre].minX)

@@ -32,8 +32,8 @@ goes away. Ready-made panels live in [`examples/widgets`](examples/widgets/READM
 ## Lines
 
 Every line of `template` is its own tmux status line, laid out at the widget's
-width: `#[align=left|centre|right|absolute-centre]`, `fill=` and lists work per
-line. Two rules connect the lines:
+width: `#[align=left|centre|right|notch]` (`absolute-centre` is tmux's name for `notch`), `fill=` and lists work per
+line. On a widget, `centre` is the middle of that line. The status bar draws `#[align=centre]` as its notch. Two rules connect the lines:
 
 - colours and attributes carry over a line break, as they would in a terminal;
 - alignment does not: each line starts in its left section again.

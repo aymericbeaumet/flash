@@ -45,7 +45,7 @@ enum HintKeyRoute: Equatable {
 enum MouseGridKeyCommand: Equatable {
   /// A cell's key, with the modifiers that ride a click it commits.
   case cell(Character, ClickModifiers)
-  /// Bisect's h/j/k/l: keep that half.
+  /// Bisect's home-row cluster: keep that half.
   case half(MouseGrid.Direction, ClickModifiers)
   /// Space: zoom into the centre pseudo-cell (or click its centre).
   case centre(ClickModifiers)
@@ -104,12 +104,12 @@ enum MouseGridInputInterpreter {
     }
     guard let key = typed?.lowercased().first else { return .cancel }
     if key == "`" { return .toggleFollow }
-    if shape == .bisect {
+    if case .bisect(let navigation) = shape {
       switch key {
-      case "h": return .half(.left, click)
-      case "j": return .half(.down, click)
-      case "k": return .half(.up, click)
-      case "l": return .half(.right, click)
+      case navigation.left: return .half(.left, click)
+      case navigation.down: return .half(.down, click)
+      case navigation.up: return .half(.up, click)
+      case navigation.right: return .half(.right, click)
       default: break
       }
     }
@@ -142,6 +142,28 @@ enum HintBigramCommand: Equatable {
   case append(Character)
   case backspace
   case cancel
+}
+
+/// What an EasyMotion key does besides the query and the hint label.
+/// Escape stays with the interpreters (`cancel`). The leader and a mapping
+/// that enters another mode end the jump first, then run.
+enum BigramCaptureExit: Equatable {
+  case stay
+  case leader
+  case mode(MappingCommand)
+}
+
+enum BigramCapture {
+  static func exit(isLeader: Bool, chord: MappingCommand?, typed: MappingCommand?)
+    -> BigramCaptureExit
+  {
+    if isLeader { return .leader }
+    let action = chord ?? typed
+    if action?.command?.changesMode == true, let action {
+      return .mode(action)
+    }
+    return .stay
+  }
 }
 
 enum HintBigramInterpreter {
@@ -262,7 +284,8 @@ enum PointerModeInterpreter {
   static func command(
     keyCode: UInt16,
     charactersIgnoringModifiers: String?,
-    modifierFlags: NSEvent.ModifierFlags
+    modifierFlags: NSEvent.ModifierFlags,
+    arrows: Alphabet.Navigation = .qwerty
   ) -> PointerModeCommand? {
     let fine = modifierFlags.contains(.shift)
     switch keyCode {
@@ -279,10 +302,10 @@ enum PointerModeInterpreter {
     }
     guard let char = charactersIgnoringModifiers?.lowercased().first else { return nil }
     switch char {
-    case "h": return .move(dx: -1, dy: 0, fine: fine)
-    case "l": return .move(dx: 1, dy: 0, fine: fine)
-    case "j": return .move(dx: 0, dy: -1, fine: fine)
-    case "k": return .move(dx: 0, dy: 1, fine: fine)
+    case arrows.left: return .move(dx: -1, dy: 0, fine: fine)
+    case arrows.right: return .move(dx: 1, dy: 0, fine: fine)
+    case arrows.down: return .move(dx: 0, dy: -1, fine: fine)
+    case arrows.up: return .move(dx: 0, dy: 1, fine: fine)
     case "m": return .clickLeft
     case ",": return .clickMiddle
     case ".": return .clickRight
@@ -313,7 +336,8 @@ enum HintAdjustmentInterpreter {
   /// do). Pure so the whole adjustment keymap is unit-testable.
   static func command(
     keyCode: UInt16,
-    charactersIgnoringModifiers: String?
+    charactersIgnoringModifiers: String?,
+    arrows: Alphabet.Navigation = .qwerty
   ) -> HintAdjustmentCommand? {
     switch keyCode {
     case 53:  // escape
@@ -333,10 +357,10 @@ enum HintAdjustmentInterpreter {
     }
     guard let char = charactersIgnoringModifiers?.lowercased().first else { return nil }
     switch char {
-    case "h": return .snapLeft
-    case "l": return .snapRight
-    case "k": return .snapTop
-    case "j": return .snapBottom
+    case arrows.left: return .snapLeft
+    case arrows.right: return .snapRight
+    case arrows.up: return .snapTop
+    case arrows.down: return .snapBottom
     case "0": return .reset
     case "1"..."9": return .interpolate(char.wholeNumberValue ?? 5)
     default: return nil
@@ -554,6 +578,10 @@ extension OverlayPanel {
 
     if inputMode == .commandLine { return false }
 
+    // Escape and a mode change end an EasyMotion jump. The letter and its
+    // hint must not keep the keyboard once the user has left that jump.
+    if coordinator.overlayEndsBigramCapture(for: event) { return true }
+
     // Labels, the grid, pointer and adjustment read keys by position on the
     // reference layout; search matches visible text, so it keeps what was
     // actually typed.
@@ -596,7 +624,8 @@ extension OverlayPanel {
       if let command = PointerModeInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: keys.ignoringModifiers,
-        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+        arrows: keyboardNavigation)
       {
         coordinator.overlayDidPointer(command)
       }
@@ -604,7 +633,8 @@ extension OverlayPanel {
     case .adjustment:
       if let command = HintAdjustmentInterpreter.command(
         keyCode: event.keyCode,
-        charactersIgnoringModifiers: keys.ignoringModifiers)
+        charactersIgnoringModifiers: keys.ignoringModifiers,
+        arrows: keyboardNavigation)
       {
         let clickAllowed = magicModifiers.union(.shift)
         let clickModifiers = ClickModifiers(

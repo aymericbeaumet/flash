@@ -237,10 +237,6 @@ final class OverlayPanel: NSPanel {
   var candidateFinderResultsShowsEmptyMessage = false
   var activeWindowBorderToken: UInt64 = 0
   var transientContentVisible = false
-  /// Query chip for `mouse_bigram`. `renderPersistentContent` replaces
-  /// `contentLayer.sublayers`, so the chip is reattached there and cleared
-  /// before `display` or `hide` rebuilds the tree.
-  var bigramQueryEcho: CALayer?
   var suppressCommandTextFieldChange = false
 
   /// One shape layer holds every debug border, drawn as a single CGPath. This
@@ -280,6 +276,8 @@ final class OverlayPanel: NSPanel {
     didSet { statusBarLayoutRevision &+= 1 }
   }
   var magicModifiers: ClickModifiers = .defaultMagic
+  /// Home-row cluster and bisect quadrants for `[keyboard] layout`.
+  var keyboardNavigation = Alphabet.Navigation.qwerty
   /// `[app] keyboard_layout`'s reference table, or nil while keys read as
   /// typed. Set only by `KeyboardLayoutMonitor`; the key path reads it once
   /// per key (`keyCharacters(for:)`).
@@ -289,9 +287,10 @@ final class OverlayPanel: NSPanel {
   }
 
   /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
-  /// a chip or distract from picking one. Pointer mode is the exception — the
-  /// cursor is its interface, and so is a cursor-following grid. A projection
-  /// of `inputMode` and `hintKeyRoute`.
+  /// a chip or distract from picking one. It comes back when the pointer moves,
+  /// and when the hints go away. Pointer mode is the exception — the cursor is
+  /// its interface, and so is a cursor-following grid. A projection of
+  /// `inputMode` and `hintKeyRoute`.
   var hintCursorShouldHide: Bool { inputMode == .hints && !hintKeyRoute.showsCursor }
 
   /// Apply `hintCursorShouldHide` once, at the end of the current turn: routing
@@ -307,17 +306,23 @@ final class OverlayPanel: NSPanel {
     }
   }
   private var cursorVisibilityUpdateScheduled = false
-  /// Guards the ref-counted `CGDisplayHideCursor`/`CGDisplayShowCursor` so the
-  /// cursor can never get stuck hidden across repeated hint renders.
+  /// Hides until the pointer moves, or shows it at once. Tests replace this so
+  /// a suite never hides the user's cursor.
+  static var hintCursorVisibility: (Bool) -> Void = { hideUntilMouseMoves in
+    NSCursor.setHiddenUntilMouseMoves(hideUntilMouseMoves)
+  }
+  /// True while this panel has asked for the cursor to stay hidden. A mouse
+  /// move reveals it on its own; leaving the hint session shows it even if
+  /// the pointer never moved. The flag keeps the two calls paired.
   private var hintCursorHidden = false
   private func hideHintCursor() {
     guard !hintCursorHidden else { return }
-    CGDisplayHideCursor(CGMainDisplayID())
+    Self.hintCursorVisibility(true)
     hintCursorHidden = true
   }
   private func showHintCursor() {
     guard hintCursorHidden else { return }
-    CGDisplayShowCursor(CGMainDisplayID())
+    Self.hintCursorVisibility(false)
     hintCursorHidden = false
   }
   var normalModePending: String = "" {
@@ -355,6 +360,9 @@ final class OverlayPanel: NSPanel {
   }
   var leaderFallbackUpdatedAt: Date?
   var leaderHold = LeaderHold()
+  /// Samples of a latched hold whose key-up the tap may have dropped.
+  /// Reset when HYPER is entered or left.
+  var hyperHoldWatch = HyperHoldWatch()
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
@@ -917,6 +925,10 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
   /// One keystroke of `mouse_bigram` while the search letter is being typed.
   func overlayDidBigram(_ command: HintBigramCommand)
+  /// Escape is left to the hint interpreters. A leader press or a mapping
+  /// that enters another mode ends the EasyMotion jump and runs that mode.
+  /// False when this key still belongs to the jump.
+  func overlayEndsBigramCapture(for event: NSEvent) -> Bool
   /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
   /// `.grid`.
   func overlayDidGrid(_ command: MouseGridKeyCommand)
@@ -942,4 +954,8 @@ protocol OverlayCoordinator: AnyObject {
   func overlayExpandFlashlightAlias(
     _ text: String, cursorIndex: Int
   ) -> (text: String, cursorIndex: Int)?
+}
+
+extension OverlayCoordinator {
+  func overlayEndsBigramCapture(for event: NSEvent) -> Bool { false }
 }

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import XCTest
 
@@ -478,6 +479,83 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(hold.step(.leaderUp), .exit(armPrefix: false))
     XCTAssertEqual(hold.step(.leaderUp), .passthrough)
     XCTAssertEqual(hold.step(.otherKey), .passthrough)
+  }
+
+  /// The session tap can drop the hyper key's key-up after a swallowed press
+  /// and a synthetic post. Two consecutive "latched, but the key is up"
+  /// readings leave; one flicker, a key that is still down, or a hold that
+  /// already ended does not.
+  func testHyperHoldLeavesWhenTheKeyStaysUp() {
+    var watch = HyperHoldWatch()
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: true), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .exit)
+
+    // A down between two ups starts the count over. An ended hold does too,
+    // so the next single up reading does not leave.
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: true), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .exit)
+    XCTAssertEqual(watch.sample(holding: false, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+
+    XCTAssertTrue(HyperHoldWatch.keyArrivedWhileUp(holding: true, keyIsDown: false))
+    XCTAssertFalse(HyperHoldWatch.keyArrivedWhileUp(holding: true, keyIsDown: true))
+    XCTAssertFalse(HyperHoldWatch.keyArrivedWhileUp(holding: false, keyIsDown: false))
+  }
+
+  /// A chord is down only when every part of it is down. Shift on an
+  /// unmodified space hold does not release it.
+  func testHyperKeyChordRequiresEveryKey() {
+    let space = HyperKeyChord.parse("space")
+    XCTAssertEqual(space?.key, CGKeyCode(HotkeySyntax.parseKey("space")!))
+    XCTAssertEqual(space?.modifiers, [])
+    let spaceDown: (CGKeyCode) -> Bool = { $0 == space!.key }
+    XCTAssertTrue(HyperKeyChord.isDown(space!, keyIsDown: spaceDown, flags: []))
+    XCTAssertTrue(HyperKeyChord.isDown(space!, keyIsDown: spaceDown, flags: .maskShift))
+    XCTAssertFalse(HyperKeyChord.isDown(space!, keyIsDown: { _ in false }, flags: .maskShift))
+
+    let chord = HyperKeyChord.parse("cmd+space")
+    XCTAssertEqual(chord?.modifiers, .maskCommand)
+    XCTAssertFalse(HyperKeyChord.isDown(chord!, keyIsDown: spaceDown, flags: []))
+    XCTAssertFalse(HyperKeyChord.isDown(chord!, keyIsDown: { _ in false }, flags: .maskCommand))
+    XCTAssertTrue(HyperKeyChord.isDown(chord!, keyIsDown: spaceDown, flags: .maskCommand))
+
+    let letter = HyperKeyChord.parse("ctrl-a")
+    XCTAssertEqual(letter?.key, CGKeyCode(HotkeySyntax.parseKey("a")!))
+    XCTAssertEqual(letter?.modifiers, .maskControl)
+    XCTAssertNil(HyperKeyChord.parse("ctrl-"))
+    XCTAssertNil(HyperKeyChord.parse("cmd+nope"))
+  }
+
+  func testASecondLeaderHoldEntersHyperWhileItsPrefixIsArmed() {
+    XCTAssertTrue(
+      LeaderHold.canEnter(
+        pending: "", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    // Releasing the leader armed `<space>`. Holding it again still enters.
+    XCTAssertTrue(
+      LeaderHold.canEnter(
+        pending: " ", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    // `<leader><leader>` is a real sequence, so the second press stays in it.
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: " ", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: true,
+        isRepeat: false))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "g", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "", repeatAnchor: "[a", leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: true))
   }
 
   // MARK: Structural purity

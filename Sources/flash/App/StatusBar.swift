@@ -11,6 +11,8 @@ enum FlashStatusTextColor: Equatable {
   case palette(UInt8)
   /// A literal `#RRGGBB` value.
   case rgb(UInt32)
+  /// The status-bar name colour (`#[label]`). Nord aurora yellow, `#EBCB8B`.
+  case label
 
   static let colour0 = FlashStatusTextColor.palette(0)
   static let colour178 = FlashStatusTextColor.palette(178)
@@ -468,7 +470,7 @@ enum FlashStatusBarTemplateEngine {
       }.filter { !$0.text.isEmpty || $0.isStyleBoundary || $0.isModeLabel }
     }
     let left = barRuns(.left)
-    let centre = barRuns(.centre) + barRuns(.absoluteCentre)
+    let centre = barRuns(.centre) + barRuns(.notch)
     let right = barRuns(.right)
     var popups: [String: [FlashStatusTextSegment]] = [:]
     var jobs = result.jobs

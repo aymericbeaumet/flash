@@ -1,8 +1,16 @@
 import Foundation
 
 enum StatusFormatAlignment: String, Equatable {
-  case `default`, left, centre, right
-  case absoluteCentre = "absolute-centre"
+  case `default`, left, centre, right, notch
+
+  /// `notch` is the physical-centre lane. tmux spells that lane `absolute-centre`.
+  /// On the status bar `centre` is that same lane: the housing at the middle
+  /// of the bar. A tmux row, including a widget line, still centres `centre`
+  /// in the gap between its sides.
+  static func parse(_ name: String) -> Self? {
+    if name == "absolute-centre" { return .notch }
+    return Self(rawValue: name)
+  }
 }
 
 enum StatusFormatUnderline: String, Equatable {
@@ -250,6 +258,7 @@ extension FlashStatusTextColor {
     case .defaultForeground, .defaultBackground: return "default"
     case .palette(let index): return "colour\(index)"
     case .rgb(let rgb): return String(format: "#%06x", rgb)
+    case .label: return "label"
     }
   }
 }
@@ -298,7 +307,7 @@ struct StatusFormatStyleState {
       } else if token == "noalign" {
         candidate.alignment = .default
       } else if token.hasPrefix("align=") {
-        guard let value = StatusFormatAlignment(rawValue: String(token.dropFirst(6))),
+        guard let value = StatusFormatAlignment.parse(String(token.dropFirst(6))),
           value != .default
         else { return false }
         candidate.alignment = value
@@ -376,6 +385,10 @@ struct StatusFormatStyleState {
           candidate.popup = value.isEmpty ? nil : value
           candidate.popupContent = nil
         }
+      } else if token == "label" {
+        candidate.foreground = .label
+      } else if token == "nolabel" {
+        candidate.foreground = currentDefault.foreground
       } else if token == "pill" {
         candidate.pill = true
       } else if token == "nopill" {

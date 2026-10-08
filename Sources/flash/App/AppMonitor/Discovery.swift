@@ -717,8 +717,15 @@ extension AppMonitor {
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
+      keyRows: resolved.keyRows,
       minLength: cfg.hints.minLength
     )
+  }
+
+  /// The window rectangle hint providers measure, shared by `f` / `cf`
+  /// and by EasyMotion so a terminal cell lands on the same point for each.
+  func providerFrame(for context: AppContext, primaryH: CGFloat) -> CGRect {
+    resolveDiscoveryFrame(for: context, primaryH: primaryH).providerContext.frontWindowFrame
   }
 
   private func resolveDiscoveryFrame(for context: AppContext, primaryH: CGFloat) -> DiscoveryFrame {
@@ -729,8 +736,17 @@ extension AppMonitor {
         visibleRegions: frame.isNull ? [] : [frame])
     }
     // Scope to the window the walk covers, not merely the app's frontmost one.
-    let walked = AccessibilityProvider.walkedWindowFrame(
-      pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
+    // A frame-scoped walk (a system dialog, a Picture in Picture player)
+    // already named its window. The process's focused window is a different
+    // surface, and swapping to it would hint the app behind the dialog.
+    let walked: CGRect?
+    switch context.walkRoot {
+    case .elementsInFrame:
+      walked = context.frontWindowFrame.isNull ? nil : context.frontWindowFrame
+    case .focusedWindow:
+      walked = AccessibilityProvider.walkedWindowFrame(
+        pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
+    }
     let snapshot = WindowSnapshot.build(
       primaryH: primaryH,
       onlyComputingVisibleRegionsFor: context.processID,

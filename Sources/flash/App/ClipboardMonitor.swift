@@ -1,6 +1,6 @@
 import AppKit
 
-/// Watches the general pasteboard for changes and reports new text.
+/// Watches the general pasteboard for changes and reports a new copy.
 ///
 /// macOS exposes no pasteboard-change notification, so the only mechanism is
 /// to compare `NSPasteboard.changeCount` (a monotonic integer the system bumps
@@ -14,10 +14,10 @@ import AppKit
 /// from this watcher's callback.
 final class ClipboardMonitor {
   private let pasteboard: NSPasteboard
-  private let onChange: (String) -> Void
-  /// The 2 Hz poll runs on a utility queue: `changeCount` is a cheap read
-  /// that never needs the main run loop (which hosts the keyboard tap), and
-  /// only an actual change hops to main to read the payload.
+  private let onChange: (ClipboardCapture.Item) -> Void
+  /// The 2 Hz poll runs on a utility queue. `NSPasteboard` reads are
+  /// thread-safe, and image or HTML conversion must stay off the main run
+  /// loop that hosts the keyboard tap.
   private let queue = DispatchQueue(label: "flash.clipboard", qos: .utility)
   private let scheduler: PollScheduler
   private var registered = false
@@ -39,7 +39,7 @@ final class ClipboardMonitor {
   init(
     pasteboard: NSPasteboard = .general,
     scheduler: PollScheduler = .shared,
-    onChange: @escaping (String) -> Void
+    onChange: @escaping (ClipboardCapture.Item) -> Void
   ) {
     self.pasteboard = pasteboard
     self.scheduler = scheduler
@@ -69,12 +69,9 @@ final class ClipboardMonitor {
     let current = pasteboard.changeCount
     guard current != lastChangeCount else { return }
     lastChangeCount = current
-    DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      guard Self.isRecordable(self.pasteboard.types ?? []) else { return }
-      guard let text = self.pasteboard.string(forType: .string), !text.isEmpty else { return }
-      self.onChange(text)
-    }
+    guard Self.isRecordable(pasteboard.types ?? []) else { return }
+    guard let item = ClipboardCapture.read(pasteboard) else { return }
+    onChange(item)
   }
 
   /// Whether a payload declaring `types` may enter clipboard history.

@@ -42,7 +42,7 @@ pre { font-size: 12px; overflow: auto; line-height: 1.65; }
 .badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 5px; background: var(--panel-strong); color: var(--accent); padding: 3px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .badge.error { background: #fbeae6; color: var(--danger); }
 .badge.neutral { background: #f0f2ee; color: var(--muted); }
-.page { padding: 36px 40px 64px; max-width: 1440px; margin: 0 auto; }
+.page { box-sizing: border-box; width: 100%; min-width: 0; padding: 36px 40px 64px; max-width: 1440px; margin: 0 auto; }
 .page-heading { margin-bottom: 28px; }
 .page-heading .eyebrow { margin-bottom: 9px; }
 .page-heading p { margin-top: 11px; color: var(--muted); max-width: 680px; font-size: 15px; }

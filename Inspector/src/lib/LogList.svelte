@@ -4,6 +4,11 @@
   import type { LogRecord } from "./types";
   import { logSearchText, timestamp } from "./format";
 
+  // The field is the page's search, so opening the page lands the cursor there.
+  function focusOnMount(node: HTMLInputElement) {
+    node.focus({ preventScroll: true });
+  }
+
   let { logs }: { logs: LogRecord[] } = $props();
   const ROW_HEIGHT = 36;
   const OVERSCAN = 12;
@@ -87,7 +92,7 @@
 
 <div class="logs">
   <div class="toolbar">
-    <input type="search" aria-label="Search logs" placeholder="Search messages, sources, or fields…" bind:value={query} />
+    <input type="search" aria-label="Search logs" placeholder="Search messages, sources, or fields…" use:focusOnMount bind:value={query} />
     <select aria-label="Filter log level" bind:value={level}><option value="">All levels</option>{#each levels as item}<option value={item}>{item}</option>{/each}</select>
     <select class="source-filter" aria-label="Filter log source" bind:value={source}><option value="">All sources</option>{#each sources as item}<option value={item}>{item}</option>{/each}</select>
     <button class="tail-button" class:following aria-pressed={following} onclick={toggleFollowing} title={following ? "Pause automatic scrolling" : "Resume automatic scrolling"}><i></i>{following ? "Pause tail" : "Resume tail"}</button>
@@ -129,7 +134,7 @@
 </div>
 
 <style>
-  .logs { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .logs { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
   .toolbar { flex-shrink: 0; padding: 14px 16px; }
   .toolbar input, .toolbar select, .toolbar button { font-size: 11px; min-height: 33px; }
   .toolbar input { max-width: none; flex: 1; min-width: 180px; }
@@ -142,7 +147,7 @@
   .log-caption button { margin-left: 10px; border: 0; min-height: 0; padding: 0; color: var(--accent); background: none; font-size: 10px; text-decoration: underline; }
   .header, .row { display: grid; grid-template-columns: 103px 54px minmax(90px, .25fr) minmax(180px, 1fr) 12px; gap: 13px; align-items: center; padding: 0 17px; }
   .header { min-height: 34px; background: #f8faf5; border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border); color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; flex-shrink: 0; }
-  .viewport { flex: 1; overflow: auto; min-height: 90px; position: relative; }
+  .viewport { flex: 1; overflow: auto; min-width: 0; min-height: 0; position: relative; }
   .spacer { position: relative; width: 100%; min-width: 600px; }
   .rows { position: absolute; top: 0; left: 0; right: 0; }
   .row { width: 100%; height: 36px; min-height: 36px; text-align: left; border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; cursor: pointer; background: #fff; }
@@ -173,7 +178,7 @@
   @media (max-width: 640px) { .log-caption { flex-wrap: wrap; gap: 3px; }.toolbar { gap: 7px; }.toolbar input { flex-basis: 100%; }.header { grid-template-columns: 91px 49px 75px minmax(160px, 1fr) 12px; overflow: hidden; }.header span { white-space: nowrap; } }
   .print-rows { display: none; }
   @media print {
-    .logs { display: block; height: auto; }
+    .logs { display: block; height: auto; flex: none; }
     .toolbar, .viewport, .header, .detail, .log-caption > span:last-child { display: none; }
     .log-caption { padding: 0 0 8px; }
     .print-rows { display: block; }

@@ -76,17 +76,56 @@ extension NormalModeDispatcher {
     virtualKey: CGKeyCode,
     flags: CGEventFlags
   ) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    guard let events = focusedKeyEvents(virtualKey: virtualKey, flags: flags) else { return false }
+    events.down.post(tap: .cghidEventTap)
+    events.up.post(tap: .cghidEventTap)
+    return true
+  }
+
+  /// Test seam. Production posts at the annotated session tap: downstream of
+  /// `KeyboardCaptureTap`, so the stroke is not swallowed as another hyper
+  /// key, and the window server attaches it to the key window. `postToPid`
+  /// has no window, so Alacritty drops it while the hyper key is still
+  /// physically down. Volume is an auxiliary system event and does not take
+  /// this path.
+  static var focusedKeyPoster: (CGEvent) -> Void = { event in
+    event.post(tap: .cgAnnotatedSessionEventTap)
+  }
+
+  /// One key down/up for the focused app. A private source keeps the held
+  /// hyper key out of the event; the session keyboard type still fills the
+  /// function-key unicode arrows and F-keys need.
+  static func focusedKeyEvents(
+    virtualKey: CGKeyCode,
+    flags: CGEventFlags
+  ) -> (down: CGEvent, up: CGEvent)? {
+    let source = CGEventSource(stateID: .privateState)
+    if let source {
+      source.localEventsSuppressionInterval = 0
+      if let session = CGEventSource(stateID: .combinedSessionState) {
+        source.keyboardType = session.keyboardType
+      }
+    }
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
-    else { return false }
+    else { return nil }
     down.flags = flags
     up.flags = flags
     down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    return (down, up)
+  }
+
+  /// Posts one key into the focused app's key window. See `focusedKeyPoster`.
+  @discardableResult
+  static func sendFocusedKey(
+    virtualKey: CGKeyCode,
+    flags: CGEventFlags = []
+  ) -> Bool {
+    guard let events = focusedKeyEvents(virtualKey: virtualKey, flags: flags) else { return false }
+    focusedKeyPoster(events.down)
+    focusedKeyPoster(events.up)
     return true
   }
 

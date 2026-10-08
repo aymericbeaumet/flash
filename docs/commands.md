@@ -21,21 +21,22 @@ flash mouse_target --multi               # click several targets, rediscovered a
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_target --search              # type visible text to pick the target (seek & click)
-flash mouse_bigram                       # type a visible letter, then its hint bigram
+flash mouse_bigram                       # type a visible character (v/V and 3/# match) in the window or status bar, then its hint bigram
 flash mouse_bigram --secondary           # right-click that letter
+flash mouse_bigram --double              # double-click that letter
 flash mouse_bigram --move                # move the pointer onto that letter
 flash mouse_target --scope=screen        # hints across every app on the screen
 flash mouse_dock                         # hint the Dock's items
 flash mouse_menubar                      # hint the focused app's menu titles and the status items
 flash mouse_notifications                # hint Notification Center's banners, alerts and buttons
-flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
+flash mouse_pointer                      # freestyle cursor control (layout hjkl, m/,/. click, v drag)
 flash mouse_button --state=down          # press the primary button where the pointer is
 flash mouse_button --state=up            # release it
 flash mouse_button --state=toggle --secondary # press or release the secondary button (or --middle)
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position (keyboard-shaped grid)
-flash mouse_grid --bisect                # halve the screen with h/j/k/l, quarter it with y/u/b/n
+flash mouse_grid --bisect                # half at the layout's hjkl columns, quarter at y/u and b/n
 flash mouse_grid --zoom-to-depth=2       # start two steps deep under the pointer
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
@@ -45,8 +46,15 @@ flash window_restore                      # restore the most recently minimized 
 flash window_fullscreen                   # toggle native macOS full screen
 flash window_fullscreen --state=on        # enter native full screen (off exits)
 flash window_focus --direction=right      # focus the nearest window to the right
-flash media_input                         # list input devices in Flash's message overlay
-flash media_output --device='Studio Speakers' # select the default output device
+flash media input                        # list input devices in Flash's message overlay
+flash media output 'Studio Speakers'     # select the default output device
+flash media volumedown                   # one macOS volume step; the alert shows the percent
+flash system_key --key=brightness_down   # an Apple function-row key
+flash function_key --key=f1              # plain F1, as shift+hyper+1 does
+flash arrow --direction=left             # one arrow; --shift holds Shift. HYPER uses the layout's WASD positions
+flash caffeinate toggle                  # plugin command, same words as :caffeinate toggle
+flash clipboard show                     # plugin command, same words as :clipboard show
+flash clipboard delete <id>              # remove one history entry; <id> is 32 hex characters
 flash enter_command_mode                 # open the command line
 flash enter_terminal_mode                # show and focus the terminal popup; see docs/popups.md
 flash enter_terminal_mode --name=btop    # show a [popup.<name>] centred and focused
@@ -85,7 +93,7 @@ are fixed for `"schema": 2`:
 | `focused_app` | The focused app's bundle identifier, or `null` |
 | `accessibility` | Whether Flash has the Accessibility grant |
 | `capture` | How hint keys arrive: `tap`, or `key_window` without a tap or under secure input |
-| `secure_input` | Whether secure input is on (a password field has focus) |
+| `secure_input` | Whether secure input is on (a password field has focus, or an app left the hold on) |
 | `input_source` | The selected input source's ID |
 | `keyboard_layout` | `[app] keyboard_layout` as configured |
 | `reference_layout` | The layout keys are read on, or `null` while they read as typed |
@@ -97,7 +105,8 @@ are fixed for `"schema": 2`:
 The text rendering lists the three busiest apps under `hints`.
 
 `flash doctor` runs every check `:doctor` runs and prints one line per check:
-Accessibility, the keyboard tap, secure input (and which app holds it), the
+Accessibility, the keyboard tap, secure input (and which app holds it; a stuck
+hold is released automatically, a focused password field is not), the
 app's code signature (an ad-hoc signature can lose the Accessibility grant on
 update), other Flash residents, config diagnostics, hotkeys another app
 registered first, plugin health, hint and grid keys the current keyboard layout
@@ -170,6 +179,5 @@ Flash's keyboard input loop.
 
 `window_focus --direction=left|right|up|down` chooses the nearest cataloged
 non-minimized window in that direction. See [window navigation and placement](windows.md)
-for automatic placement rules. The media plugin's `media_input` and
-`media_output` verbs accept an optional `--device=<exact name or UID>`; see
-[audio devices](audio.md) for command-bar listing and selection.
+for automatic placement rules. `flash media input` and `flash media output`
+list or select the default device; see [audio devices](audio.md).

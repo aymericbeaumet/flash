@@ -76,7 +76,7 @@ impl FlashPlugin for Caffeinate {
             return PerformResponse::fail(error.diagnostic());
         }
         match command.subcommand.as_str() {
-            "" | "status" => performed(&state),
+            "status" => performed(&state),
             "on" => self.start_and_report(&ctx, &mut state, minutes).await,
             "off" => stop_and_report(&ctx, &mut state).await,
             "toggle" if state.pid().is_some() => stop_and_report(&ctx, &mut state).await,
@@ -196,7 +196,8 @@ async fn terminate_into(
 
 fn performed(state: &AssertionState) -> PerformResponse {
     match state.pid() {
-        Some(pid) => PerformResponse::ok().message(format!("caffeinate on (pid {pid})")),
+        // These phrases share Flash's alert box with `volume 100%`.
+        Some(_) => PerformResponse::ok().message("caffeinate on"),
         None => PerformResponse::ok().message("caffeinate off"),
     }
 }

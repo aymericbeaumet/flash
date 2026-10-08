@@ -63,6 +63,10 @@ export interface MappingRow {
   scope: string;
   key: string;
   action: string;
+  /** What this binding does, including its flags. The row's ? shows it, and search ranks it. */
+  explanation?: string;
+  /** `default`, `config` or `config:<file>`, or `plugin:<name>`. */
+  origin?: string;
 }
 
 /** How one action resolves in the focused app, in dispatch order. */
@@ -86,10 +90,20 @@ export interface MappingsState {
 }
 
 export interface ClipboardEntry {
-  /// One-line label.
+  /** 32 lowercase hex characters. Image bytes load from `/api/clipboard/<id>`. */
+  id: string;
+  /** `text`, `image`, `html`, or `files`. */
+  kind: string;
+  /** One-line label. */
   preview: string;
-  /// Full text — copied back to the system clipboard on click.
+  /** Plain text put back on the clipboard. Empty for an image that had none. */
   value: string;
+  /** Formatted copy, shown in a sandboxed frame. */
+  html?: string;
+  /** Present when this entry has an image to render. */
+  mime?: string;
+  /** Paths from a file copy. */
+  files?: string[];
 }
 
 export interface DocTopic {
@@ -121,6 +135,8 @@ export interface InspectorState {
   overlay?: string | null;
   focused_app?: FocusedApp;
   config?: Record<string, unknown>;
+  /** Sparse tree parallel to `config`. A node's `$` is `{ layer, where }` when a later layer overrode the default. */
+  config_sources?: { $?: { layer?: string; where?: string }; [key: string]: unknown };
   plugins?: PluginInfo[];
   commands?: CommandInfo[];
   docs?: DocTopic[];

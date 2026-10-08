@@ -13,7 +13,7 @@ There is one namespace, `[popup.<name>]`, and each popup is one of two kinds:
 
 ```toml
 [popup]                      # the chrome every popup shares
-bg = "#242933F2"
+bg = "#242933"
 padding = 10
 
 [popup.date]                 # a text popup
@@ -46,7 +46,7 @@ closest style key.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `fg` | `#D8DEE9` | Default text colour; `#[fg=…]` in a text popup overrides it |
-| `bg` | `#2E3440F2` | Surface and terminal background |
+| `bg` | `#2E3440` | Surface and terminal background |
 | `border` | `#4C566A` | Border colour |
 | `border_size` | `1` | Border width, 0–12 points |
 | `corner_radius` | `8` | 0–64 points |
@@ -55,7 +55,8 @@ closest style key.
 | `max_width` | `750` | Widest a text popup grows, 80–2000 points |
 | `offset` | `8` | Gap between the status bar and a hover popup, 0–64 points |
 
-Colours are `#RRGGBB` or `#RRGGBBAA`. Terminal text is opaque, so a translucent
+Colours are `#RRGGBB` or `#RRGGBBAA`. The default background is opaque; an alpha
+byte on `bg` still shows through. Terminal text is opaque, so a translucent
 `fg` is mixed over `bg`. At the 13-point font with 10-point padding and a
 one-point border, the 480-point `min_width` fits 50 content columns and the
 750-point `max_width` 80, enough for the three-month [calendar](calendar.md).
@@ -101,11 +102,14 @@ and resize notifications.
 
 Each side of `size` is a cell count from 1 to 1000 or a percentage from 1% to
 100% of the visible frame of the screen the popup shows on, for example
-`"120x36"`, `"90%x85%"` or `"120x80%"`. A percentage sizes the whole popup,
+`"120x36"`, `"90%x85%"` or `"120x80%"`. A percentage may be fractional, such
+as `"78.615%"`; a cell count stays a whole number. A percentage sizes the whole popup,
 padding and border included. Every grid is clamped to the screen. A popup sized
 in percentages resizes its PTY when it shows on another screen and when its
 screen's visible frame changes (a display change, the menu bar, the Dock);
-hidden ones refit to the main screen. Changing `size`, colours or fonts keeps
+hidden ones refit to the main screen. A popup that is already showing is
+placed again on that new geometry: one hanging from a label follows the
+label, and a standalone one recentres on the screen that still contains it. Changing `size`, colours or fonts keeps
 the process; changing `command`, `cwd`, `env` or `persistent` replaces it.
 Removing a declaration stops it.
 
@@ -213,7 +217,12 @@ one it had when it was hidden.
 repeated clicks keep it open, and clicking another label switches popups.
 Labels with a click action or link keep their left-click action; right-click
 or Option-click pins their popup. Pinning leaves a preview where it is, and a
-pinned popup stays hung from its label while the pointer moves.
+pinned popup stays hung from its label while the pointer moves. When that
+popup loses focus — another app comes forward, a click lands outside Flash,
+or the panel loses key, as when newsboat opens an article in the browser —
+it leaves the screen instead of floating above the new window. A persistent
+popup is hidden and keeps its process; a fresh one is closed and its process
+stops.
 
 **`enter_terminal_mode --name=<name>`** shows a popup standalone, centred on
 the focused application's screen and focused. Without a name it opens

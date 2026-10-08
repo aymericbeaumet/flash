@@ -56,9 +56,14 @@ final class StatusPopupController {
   /// A hover preview whose panel waits for its first frame.
   private(set) var isAwaitingFirstFrame = false
   private var firstFrameFallback: DispatchWorkItem?
+  /// `resignKey` can re-enter while dismissal orders the panel out.
+  private var resigningFocus = false
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
   var didDismissFocus: ((String) -> Void)?
+  /// The popup panel lost key while a pinned or standalone popup was showing.
+  /// The owner takes it off the screen; unset, the controller dismisses itself.
+  var onFocusLost: (() -> Void)?
   /// Observation only: the registry has already been told the showing ended.
   var didDismiss: ((String) -> Void)?
   /// Observation only: the presentation or one of the registry's sessions
@@ -89,8 +94,14 @@ final class StatusPopupController {
     container.addSubview(exitLabel)
     panel.contentView = container
     panel.focusLost = { [weak self] in
-      guard let self, self.presentation.isFocused else { return }
-      self.dismiss(reason: "focus_lost")
+      guard let self, self.presentation.isFocused, !self.resigningFocus else { return }
+      self.resigningFocus = true
+      defer { self.resigningFocus = false }
+      if let onFocusLost = self.onFocusLost {
+        onFocusLost()
+      } else {
+        self.dismiss(reason: "focus_lost")
+      }
     }
     terminalView.onFocusRequested = { [weak self] in self?.focus() }
     terminalView.onFrameReceived = { [weak self] in self?.showAwaitedPreview() }
@@ -207,13 +218,24 @@ final class StatusPopupController {
     layout(region: region)
   }
 
-  func refresh(_ regions: [StatusBarPopupRegion]) {
+  /// `visibleFrameContaining` is the visible frame of the display that now
+  /// holds the anchor. A monitor resize moves that display; keeping the frame
+  /// from when the popup opened clamps it to a screen that no longer matches
+  /// the label.
+  func refresh(
+    _ regions: [StatusBarPopupRegion],
+    visibleFrameContaining: (CGRect) -> CGRect? = { _ in nil }
+  ) {
     guard !presentation.isStandalone else { return }
     guard let name = presentation.name, let current = region else { return }
     guard let updated = Self.span(matching: current, in: regions) else {
       if isContentSnapshot { return }
       dismiss(reason: "region_removed")
       return
+    }
+    let previousVisible = visibleFrame
+    if let frame = visibleFrameContaining(updated.anchor) {
+      visibleFrame = frame
     }
     if terminals.isPager(name), presentation.isFocused || isContentSnapshot {
       let segments = updated.document ?? FlashStatusBarRenderer.segments(from: updated.content)
@@ -223,7 +245,7 @@ final class StatusPopupController {
       var moved = current
       moved.rect = updated.rect
       moved.textBounds = updated.textBounds
-      guard moved != current else { return }
+      guard moved != current || visibleFrame != previousVisible else { return }
       region = moved
       layout(region: moved)
       return
@@ -666,6 +688,8 @@ final class StatusPopupController {
     case .palette(let value): return ["58", "5", String(value)]
     case .rgb(let value):
       return ["58", "2", String(value >> 16 & 255), String(value >> 8 & 255), String(value & 255)]
+    case .label:
+      return underlineColorCodes(.rgb(0xEBCB8B))
     }
   }
 
@@ -677,6 +701,8 @@ final class StatusPopupController {
     case .palette(let index): return [base, "5", String(index)]
     case .rgb(let rgb):
       return [base, "2", String((rgb >> 16) & 255), String((rgb >> 8) & 255), String(rgb & 255)]
+    case .label:
+      return colorCodes(.rgb(0xEBCB8B), foreground: foreground)
     }
   }
 

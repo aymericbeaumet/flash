@@ -50,6 +50,9 @@ extension AppDelegate {
         ?? self.normalModeTargetPID
       self.dispatchMode(.openTerminal)
     }
+    popup.onFocusLost = { [weak self] in
+      self?.overlay.relinquishShownStatusPopup(reason: "focus_lost")
+    }
     popup.willDismissFocus = { [weak self] in self?.terminalInputMappings?.flush() }
     popup.didDismissFocus = { [weak self] reason in
       guard let self else { return }

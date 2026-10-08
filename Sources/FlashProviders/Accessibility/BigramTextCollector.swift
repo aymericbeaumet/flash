@@ -7,10 +7,22 @@ import Foundation
 ///
 /// The clickable-target walk stops at controls and at `maxTargets`, so body
 /// text never reaches `f`. This walk is separate and on demand: it keeps every
-/// visible run of at least one character and resolves glyph rects only for
-/// the query's matches. It does not read pixels.
+/// visible run of at least one character. A single-line run places glyphs from
+/// its frame. A tall run measures each visible line once while collecting, and
+/// the letter is then a string search over those lines. It does not read pixels
+/// and it does not ask Accessibility for every match: a common letter would
+/// otherwise wait on one bounds query per glyph.
 public enum BigramTextCollector {
   public static let providerID = "bigram"
+
+  /// How a run turns a letter into glyph rects. Resolved while collecting,
+  /// before the letter is known, so the letter itself is only a string search.
+  enum GlyphLayout {
+    /// The frame is one visual line.
+    case proportional
+    /// Visible lines, measured once per line or estimated from the frame.
+    case lines([BigramMatcher.BigramLineBox])
+  }
 
   struct Run {
     let element: AXUIElement
@@ -18,6 +30,7 @@ public enum BigramTextCollector {
     let role: String
     let subrole: String?
     let frame: CGRect
+    let layout: GlyphLayout
   }
 
   public struct Corpus {
@@ -34,12 +47,7 @@ public enum BigramTextCollector {
       var located: [(rect: CGRect, value: Hit)] = []
       for (index, run) in runs.enumerated() {
         let haystack = run.text as NSString
-        for occurrence in BigramMatcher.occurrences(in: run.text, query: query) {
-          guard
-            let rect = BigramTextCollector.matchRect(
-              element: run.element, text: run.text, frame: run.frame,
-              location: occurrence.location, length: occurrence.length, screenH: screenH)
-          else { continue }
+        for (occurrence, rect) in BigramTextCollector.glyphHits(run, query: query) {
           let center = CGPoint(x: rect.midX, y: rect.midY)
           guard clip.containsInclusive(center) else { continue }
           let label = haystack.substring(
@@ -127,7 +135,7 @@ public enum BigramTextCollector {
     var runs: [Run] = []
     while let step = stack.popLast() {
       if step.leave {
-        finish(step.index, nodes: &nodes, runs: &runs, clip: clip)
+        finish(step.index, nodes: &nodes, runs: &runs, clip: clip, screenH: screenH)
         continue
       }
       let index = step.index
@@ -166,7 +174,7 @@ public enum BigramTextCollector {
   }
 
   private static func finish(
-    _ index: Int, nodes: inout [Node], runs: inout [Run], clip: CGRect
+    _ index: Int, nodes: inout [Node], runs: inout [Run], clip: CGRect, screenH: CGFloat
   ) {
     if nodes[index].emitted { return }
     guard let role = nodes[index].role,
@@ -175,10 +183,12 @@ public enum BigramTextCollector {
       let frame = nodes[index].frame,
       clip.containsInclusive(CGPoint(x: frame.midX, y: frame.midY))
     else { return }
+    let element = nodes[index].element
     runs.append(
       Run(
-        element: nodes[index].element, text: text, role: role, subrole: nodes[index].subrole,
-        frame: frame))
+        element: element, text: text, role: role, subrole: nodes[index].subrole, frame: frame,
+        layout: glyphLayout(
+          element: element, text: text, frame: frame, screenH: screenH, clip: clip)))
     markEmitted(&nodes, index)
   }
 
@@ -247,19 +257,171 @@ public enum BigramTextCollector {
     return raw as? [AXUIElement]
   }
 
-  private static func matchRect(
-    element: AXUIElement, text: String, frame: CGRect, location: Int, length: Int,
-    screenH: CGFloat
-  ) -> CGRect? {
-    if let bounds = AXAttribute.boundsForRange(
-      element, location: location, length: length, screenH: screenH)
-    {
-      return bounds
+  /// Glyph rects for one run. The layout was measured while collecting, so
+  /// this is a string search whatever the letter is.
+  private static func glyphHits(
+    _ run: Run, query: String
+  ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
+    let lines: [BigramMatcher.BigramLineBox]
+    switch run.layout {
+    case .proportional:
+      let length = (run.text as NSString).length
+      lines = [BigramMatcher.BigramLineBox(location: 0, length: length, bounds: run.frame)]
+    case .lines(let measured):
+      lines = measured
     }
-    let total = (text as NSString).length
-    guard BigramMatcher.allowsProportionalFallback(text: text, frame: frame) else { return nil }
-    return BigramMatcher.proportionalRect(
-      frame: frame, location: location, length: length, totalUTF16: total)
+    return BigramMatcher.glyphRects(in: run.text, query: query, lines: lines)
+  }
+
+  /// A short run uses its frame. A tall run's visible lines are measured now,
+  /// once, so the later letter does not repeat that work per glyph.
+  private static func glyphLayout(
+    element: AXUIElement, text: String, frame: CGRect, screenH: CGFloat, clip: CGRect
+  ) -> GlyphLayout {
+    if BigramMatcher.allowsProportionalFallback(text: text, frame: frame) {
+      return .proportional
+    }
+    switch visibleLineBoxes(element: element, text: text, screenH: screenH, clip: clip) {
+    case .boxes(let boxes):
+      return .lines(boxes)
+    case .unsupported:
+      if text.contains("\n") {
+        return .lines(BigramMatcher.newlineBoxes(text: text, frame: frame))
+      }
+      if let glyph = AXAttribute.boundsForRange(
+        element, location: 0, length: 1, screenH: screenH),
+        glyph.width > 0, glyph.height > 0
+      {
+        return .lines(BigramMatcher.wrappedBoxes(text: text, frame: frame, glyph: glyph))
+      }
+      return .proportional
+    }
+  }
+
+  private enum LineProbe {
+    case unsupported
+    case boxes([BigramMatcher.BigramLineBox])
+  }
+
+  /// How a line sits against the window. NS coordinates grow upward.
+  private enum LineBand {
+    case above
+    case intersects
+    case below
+  }
+
+  /// At most this many visible lines are measured. A taller window still
+  /// covers what fits; the cap keeps a broken line layout from walking a file.
+  private static let maxMeasuredLines = 240
+
+  /// Lines of `element` whose bounds meet `clip`. Nil-equivalent `.unsupported`
+  /// means the element has no line layout at all.
+  private static func visibleLineBoxes(
+    element: AXUIElement, text: String, screenH: CGFloat, clip: CGRect
+  ) -> LineProbe {
+    let length = (text as NSString).length
+    guard length > 0 else { return .boxes([]) }
+    let cache = LineCache(element: element, textLength: length, screenH: screenH)
+    guard let first = cache.range(0), let firstBounds = cache.bounds(0, range: first) else {
+      return .unsupported
+    }
+    // One range covering a tall value is not a line layout. Fall back to
+    // per-glyph bounds rather than smearing every letter down the frame.
+    if first.length >= length, firstBounds.height > 64 { return .unsupported }
+    let start = firstVisibleLine(textLength: length, element: element, clip: clip, cache: cache)
+    var boxes: [BigramMatcher.BigramLineBox] = []
+    var line = start
+    let limit = start + maxMeasuredLines
+    while line < limit {
+      guard let range = cache.range(line), let bounds = cache.bounds(line, range: range) else {
+        break
+      }
+      switch band(of: bounds, in: clip) {
+      case .above:
+        line += 1
+        continue
+      case .below:
+        return .boxes(boxes)
+      case .intersects:
+        boxes.append(
+          BigramMatcher.BigramLineBox(
+            location: range.location, length: range.length, bounds: bounds))
+      }
+      if range.location + range.length >= length { break }
+      line += 1
+    }
+    return .boxes(boxes)
+  }
+
+  /// The first line that is not above the window. A visible-character range
+  /// that is a real window slice wins; a range covering the whole value is the
+  /// document, and the line is found from its bounds instead.
+  private static func firstVisibleLine(
+    textLength: Int, element: AXUIElement, clip: CGRect, cache: LineCache
+  ) -> Int {
+    if let visible = AXAttribute.visibleCharacterRange(element),
+      visible.length > 0, visible.length < textLength,
+      let line = AXAttribute.lineForIndex(element, index: visible.location), line >= 0
+    {
+      return line
+    }
+    var hi = 1
+    while hi < 200_000 {
+      guard let range = cache.range(hi), let bounds = cache.bounds(hi, range: range) else { break }
+      if band(of: bounds, in: clip) != .above { break }
+      hi *= 2
+    }
+    var lo = 0
+    var right = hi
+    while lo < right {
+      let mid = lo + (right - lo) / 2
+      guard let range = cache.range(mid), let bounds = cache.bounds(mid, range: range) else {
+        right = mid
+        continue
+      }
+      if band(of: bounds, in: clip) == .above { lo = mid + 1 } else { right = mid }
+    }
+    return lo
+  }
+
+  private static func band(of bounds: CGRect, in clip: CGRect) -> LineBand {
+    if bounds.maxY <= clip.minY + 0.5 { return .below }
+    if bounds.minY >= clip.maxY - 0.5 { return .above }
+    return .intersects
+  }
+
+  /// One element's line ranges and bounds for the duration of a collection.
+  private final class LineCache {
+    let element: AXUIElement
+    let textLength: Int
+    let screenH: CGFloat
+    private var ranges: [Int: CFRange?] = [:]
+    private var boundsByLine: [Int: CGRect?] = [:]
+
+    init(element: AXUIElement, textLength: Int, screenH: CGFloat) {
+      self.element = element
+      self.textLength = textLength
+      self.screenH = screenH
+    }
+
+    func range(_ line: Int) -> CFRange? {
+      if let cached = ranges[line] { return cached }
+      let resolved = AXAttribute.rangeForLine(element, line: line).flatMap { range -> CFRange? in
+        guard range.location < textLength else { return nil }
+        return CFRange(
+          location: range.location, length: min(range.length, textLength - range.location))
+      }
+      ranges[line] = resolved
+      return resolved
+    }
+
+    func bounds(_ line: Int, range: CFRange) -> CGRect? {
+      if let cached = boundsByLine[line] { return cached }
+      let resolved = AXAttribute.boundsForRange(
+        element, location: range.location, length: range.length, screenH: screenH)
+      boundsByLine[line] = resolved
+      return resolved
+    }
   }
 
   private static func target(
@@ -282,8 +444,8 @@ public enum BigramTextCollector {
           element, location: location, length: length, screenH: screenH)
         {
           let center = CGPoint(x: bounds.midX, y: bounds.midY)
-          if clip.containsInclusive(center) { return center }
-          return nil
+          guard clip.containsInclusive(center) else { return nil }
+          return BigramMatcher.clickPoint(in: bounds)
         }
         let frame = currentFrame(of: element, screenH: screenH) ?? capturedFrame
         guard BigramMatcher.allowsProportionalFallback(text: text, frame: frame),
@@ -292,7 +454,8 @@ public enum BigramTextCollector {
             totalUTF16: (text as NSString).length)
         else { return nil }
         let center = CGPoint(x: estimated.midX, y: estimated.midY)
-        return clip.containsInclusive(center) ? center : nil
+        guard clip.containsInclusive(center) else { return nil }
+        return BigramMatcher.clickPoint(in: estimated)
       }
     }
     return JumpTarget(

@@ -4,6 +4,28 @@ import XCTest
 
 @testable import FlashProviders
 
+final class WindowChromeHintTests: XCTestCase {
+  func testACloseButtonJustOutsideTheClipIsStillAHint() {
+    let clip = CGRect(x: 100, y: 100, width: 800, height: 600)
+    let titleBar = CGPoint(x: 114, y: clip.maxY + 12)
+    XCTAssertTrue(
+      AccessibilityProvider.acceptsHintCenter(titleBar, visible: clip, subrole: "AXCloseButton"))
+    XCTAssertTrue(
+      AccessibilityProvider.acceptsHintCenter(
+        CGPoint(x: clip.maxX - 16, y: clip.maxY + 10), visible: clip, subrole: "AXHelpButton"))
+    XCTAssertFalse(
+      AccessibilityProvider.acceptsHintCenter(titleBar, visible: clip, subrole: nil))
+    XCTAssertFalse(
+      AccessibilityProvider.acceptsHintCenter(titleBar, visible: clip, subrole: "AXMinimizeButton"))
+    XCTAssertFalse(
+      AccessibilityProvider.acceptsHintCenter(
+        CGPoint(x: 114, y: clip.maxY + 40), visible: clip, subrole: "AXCloseButton"))
+    XCTAssertTrue(
+      AccessibilityProvider.acceptsHintCenter(
+        CGPoint(x: clip.midX, y: clip.midY), visible: clip, subrole: nil))
+  }
+}
+
 final class AccessibilityTraversalTests: XCTestCase {
   func testWorklistHandlesDeepSingleChildTreesWithoutRecursion() {
     let maximumDepth = 100_000
@@ -156,9 +178,9 @@ final class HintPointCandidateTests: XCTestCase {
   }
 
   /// A terminal emulator's window is one typing surface: a primary hint click
-  /// anywhere in it hands the keyboard to the terminal, so every target the
-  /// walk finds there enters INSERT. Which apps are terminals is plugin data
-  /// (manifest `terminal_emulators`); other apps keep the per-role judgement.
+  /// on its content hands the keyboard to the terminal. A link is navigation
+  /// and stays in NORMAL. Which apps are terminals is plugin data (manifest
+  /// `terminal_emulators`); other apps keep the per-role judgement.
   func testTerminalEmulatorTargetsEnterInsertAndOtherAppsKeepTheirRoleJudgement() {
     let targets = [
       JumpTarget(
@@ -167,16 +189,22 @@ final class HintPointCandidateTests: XCTestCase {
       JumpTarget(
         id: "tab", frame: CGRect(x: 0, y: 300, width: 80, height: 20),
         role: "AXButton", providerID: "ax"),
+      JumpTarget(
+        id: "link", frame: CGRect(x: 10, y: 40, width: 80, height: 16),
+        role: JumpTarget.terminalLinkRole, providerID: "tmux"),
+      JumpTarget(
+        id: "ax-link", frame: CGRect(x: 10, y: 60, width: 80, height: 16),
+        role: "AXLink", entersInsertMode: true, providerID: "ax"),
     ]
     let isTerminal: (String) -> Bool = { $0 == "com.mitchellh.ghostty" }
 
     let terminal = AccessibilityProvider.settlingInsertIntent(
       targets, bundleIdentifier: "com.mitchellh.ghostty", isTerminalEmulator: isTerminal)
-    XCTAssertEqual(terminal.map(\.id), ["content", "tab"])
-    XCTAssertEqual(terminal.map(\.entersInsertMode), [true, true])
+    XCTAssertEqual(terminal.map(\.id), ["content", "tab", "link", "ax-link"])
+    XCTAssertEqual(terminal.map(\.entersInsertMode), [true, true, false, false])
 
     let editor = AccessibilityProvider.settlingInsertIntent(
       targets, bundleIdentifier: "com.apple.TextEdit", isTerminalEmulator: isTerminal)
-    XCTAssertEqual(editor.map(\.entersInsertMode), [true, false])
+    XCTAssertEqual(editor.map(\.entersInsertMode), [true, false, false, true])
   }
 }

@@ -1136,7 +1136,7 @@ final class StatusBarTests: XCTestCase {
       .init(write: nil, owned: false))
   }
 
-  func testErrorAlertsSurviveTransientTeardownAndInfoToastsDoNot() {
+  func testErrorAlertsSurviveTransientTeardownAndInfoToastsDoNot() throws {
     _ = NSApplication.shared
     let panel = OverlayPanel()
     defer {
@@ -1159,6 +1159,27 @@ final class StatusBarTests: XCTestCase {
 
     // An informational toast keeps the get-out-of-the-way behaviour.
     panel.displayAlert("Sleep ON", duration: 30, style: .standard)
+    XCTAssertEqual(StatusAlert.volume(6).value, "6%")
+    XCTAssertEqual(StatusAlert.volume(50).value, "50%")
+    XCTAssertEqual(StatusAlert.volume(100).value, "100%")
+    XCTAssertEqual(StatusAlert.volume(6).title, "volume")
+    panel.displayAlert(StatusAlert.volume(6), duration: 30)
+    let volumeNarrow = try XCTUnwrap(panel.toast?.layer.frame.width)
+    panel.displayAlert(StatusAlert.volume(100), duration: 30)
+    let volumeWide = try XCTUnwrap(panel.toast?.layer.frame.width)
+    XCTAssertEqual(
+      StatusAlert.caffeinate(on: true),
+      StatusAlert(title: "caffeinate", value: "on", valueAnchor: "off"))
+    XCTAssertEqual(
+      StatusAlert.caffeinate(on: false),
+      StatusAlert(title: "caffeinate", value: "off", valueAnchor: "off"))
+    panel.displayAlert(StatusAlert.caffeinate(on: true), duration: 30)
+    let caffeinateOn = try XCTUnwrap(panel.toast?.layer.frame.width)
+    panel.displayAlert(StatusAlert.caffeinate(on: false), duration: 30)
+    let caffeinateOff = try XCTUnwrap(panel.toast?.layer.frame.width)
+    XCTAssertEqual(volumeNarrow, volumeWide)
+    XCTAssertEqual(caffeinateOn, caffeinateOff)
+    XCTAssertNotEqual(volumeWide, caffeinateOff)
     XCTAssertNotNil(panel.toast)
     panel.hide()
     XCTAssertNil(panel.toast)

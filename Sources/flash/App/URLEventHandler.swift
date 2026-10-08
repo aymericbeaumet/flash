@@ -20,9 +20,20 @@ import FlashCore
 
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
-  /// One letter of visible text in the focused window, then a hint bigram,
-  /// then a click (`<leader>s`). Only `.click` and `.move`.
+  /// One letter of visible text in the focused window and on its status bar,
+  /// then a hint bigram, then a click (`s`). Only `.click` and `.move`.
   case mouseBigram(MouseCommand)
+
+  /// Entering or leaving a mode. An EasyMotion jump releases the keyboard
+  /// for these and then runs them; other commands stay inside the jump.
+  var changesMode: Bool {
+    switch self {
+    case .insertMode, .normalMode, .commandMode, .enterCommand, .terminalMode, .leaveMode:
+      return true
+    default:
+      return false
+    }
+  }
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
   case mouseTargetScreen(MouseCommand)
@@ -145,6 +156,12 @@ enum URLCommand: Hashable {
   case moveWindow(MoveWindowParams)
   case focusWindow(WindowFocusDirection)
   case windowState(WindowStateAction)
+  /// One printed Apple function-row action (brightness, sound, …).
+  case systemKey(SystemKeyboard.RowKey)
+  /// A plain F1–F12 keystroke, with no modifiers.
+  case functionKey(Int)
+  /// One arrow key, optionally shifted. HYPER binds the layout's WASD positions here.
+  case arrow(direction: WindowFocusDirection, shift: Bool)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
   case sendKeys(keys: String, keyCodes: [CGKeyCode], flagsRawValues: [UInt64])
   /// A verb registered by a plugin via the manifest's `verbs.items` section.
@@ -426,10 +443,10 @@ final class URLEventHandler: NSObject {
       answer(query, argsJSON: argsJSON, reply: reply)
       return
     }
-    // CLI / AppleEvent path uses `parseOrPluginVerb` so a `flash <verb>`
-    // call can reach plugin-registered verbs. Config-load goes through
-    // strict `parse` instead, so a stale verb in `[mode.*.mappings]`
-    // still surfaces as a config error rather than a silent runtime miss.
+    // A declared plugin command arrives as the AppleEvent verb (`media`)
+    // with `subcommand` and optional `args`. Anything else is a built-in
+    // verb. Mapping config only accepts the same `flash <command> <subcommand>`
+    // words.
     guard let args = Self.decodeArgs(json: argsJSON) else {
       Self.reject(reply: reply, message: "Invalid command or arguments")
       return
@@ -440,6 +457,19 @@ final class URLEventHandler: NSObject {
         "--\($0)=\(args[$0] ?? "")"
       }).joined(separator: " ")
     let message = Self.rejectionMessage(invocation)
+    if PluginRepository.declaresCommand(verb), !Self.isBuiltInVerb(verb),
+      FlashQuery(rawValue: verb) == nil
+    {
+      guard let cmd = Self.pluginSubcommand(verb: verb, args: args) else {
+        rejected(invocation)
+        Self.reject(reply: reply, message: message)
+        return
+      }
+      if !Trace.triggered(at: arrivedAt, { handler(cmd) }) {
+        Self.reject(reply: reply, message: message)
+      }
+      return
+    }
     guard let cmd = Self.parseOrPluginVerb(verb: verb, args: args) else {
       rejected(invocation)
       Self.reject(reply: reply, message: message)
@@ -497,19 +527,30 @@ final class URLEventHandler: NSObject {
     reply.setParam(NSAppleEventDescriptor(string: message), forKeyword: AEKeyword(keyErrorString))
   }
 
-  /// Look up a verb in the dispatch table and turn its args dict into a
-  /// resolved ``URLCommand``. Returns nil for unknown verbs or for verbs
-  /// whose required parameters are missing/invalid. The AppleEvent handler
-  /// rejects the invocation with an error reply; config loading emits a
-  /// located diagnostic naming the rejected command.
+  /// Look up a verb in the built-in dispatch table and turn its args dict
+  /// into a resolved ``URLCommand``. Returns nil for unknown verbs or for
+  /// verbs whose required parameters are missing/invalid.
   ///
-  /// Strict by design: plugin-registered verbs are NOT resolved here so the
-  /// mapping/CLI parsers reject stale verbs at config-load time. Runtime
-  /// dispatch entry points use ``parseOrPluginVerb(verb:args:)`` to fall
-  /// back to a ``URLCommand/pluginVerb(name:args:)`` when the built-in table
-  /// misses but the name looks like a plugin verb.
+  /// Plugin commands are not in this table. They are
+  /// `flash <command> <subcommand>`, parsed by ``PluginGitInvocation``.
   static func parse(verb: String, args: [String: String]) -> URLCommand? {
     commands[verb]?.command(arguments: args)
+  }
+
+  /// `flash <command> <subcommand> [word ...]` as the resident receives it
+  /// from the CLI: the AppleEvent verb is the command, and `subcommand` plus
+  /// optional space-separated `args` are the rest. Nil when that pair is not
+  /// declared.
+  static func pluginSubcommand(verb: String, args: [String: String]) -> URLCommand? {
+    guard Set(args.keys).isSubset(of: ["subcommand", "args"]),
+      let subcommand = args["subcommand"], !subcommand.isEmpty,
+      PluginRepository.declaresCommand(verb, subcommand: subcommand)
+    else { return nil }
+    let words =
+      args["args"]?
+      .split(separator: " ", omittingEmptySubsequences: true)
+      .map(String.init) ?? []
+    return .pluginCommand(command: verb, subcommand: subcommand, args: words)
   }
 
   /// Whether `verb` names one of Flash's own verbs, which a plugin verb of
@@ -520,10 +561,9 @@ final class URLEventHandler: NSObject {
 
   /// Same as ``parse(verb:args:)`` but, on a built-in miss for an
   /// identifier-shape verb, returns a ``URLCommand/pluginVerb(name:args:)``
-  /// so the dispatch path can hand the call to ``PluginManager``. Used by
-  /// the AppleEvent handler — config validation stays on `parse(verb:args:)`
-  /// so stale verbs surface a clear failure instead of silently turning
-  /// into no-op plugin calls.
+  /// so the AppleEvent handler can hand the call to ``PluginManager``.
+  /// Mapping config does not use this: an undeclared name there is a typo,
+  /// not a plugin call.
   static func parseOrPluginVerb(verb: String, args: [String: String]) -> URLCommand? {
     if Self.commands[verb] != nil { return Self.parse(verb: verb, args: args) }
     if FlashQuery(rawValue: verb) == nil, Self.looksLikePluginVerb(verb) {
@@ -814,22 +854,6 @@ final class URLEventHandler: NSObject {
         return .openApp(name: name)
       }),
 
-    "plugin_command": .init(
-      [
-        .text("command", "command", required: true),
-        .text("subcommand", "subcommand", required: true), .text("args", "space-separated"),
-      ],
-      parse: { a in
-        guard let command = a.value("command"), !command.isEmpty,
-          let subcommand = a.value("subcommand"), !subcommand.isEmpty
-        else { return nil }
-        let args =
-          a.value("args")?
-          .split(separator: " ", omittingEmptySubsequences: true)
-          .map(String.init) ?? []
-        return .pluginCommand(command: command, subcommand: subcommand, args: args)
-      }),
-
     "window_move": .init(
       [
         .text("position", "slot"), .text("x", "percent"), .text("y", "percent"),
@@ -855,6 +879,33 @@ final class URLEventHandler: NSObject {
         guard let state = WindowStateAction.FullscreenState(rawValue: a.value("state") ?? "toggle")
         else { return nil }
         return .windowState(.fullscreen(state))
+      }),
+
+    "system_key": .init(
+      [.text("key", "brightness_down", required: true)],
+      parse: { a in
+        guard let name = a.value("key"), let key = SystemKeyboard.RowKey.named(name) else {
+          return nil
+        }
+        return .systemKey(key)
+      }),
+
+    "function_key": .init(
+      [.text("key", "f1", required: true)],
+      parse: { a in
+        guard let name = a.value("key")?.lowercased(),
+          name.hasPrefix("f"), let index = Int(name.dropFirst()), (1...12).contains(index)
+        else { return nil }
+        return .functionKey(index)
+      }),
+
+    "arrow": .init(
+      [.text("direction", "left|down|up|right", required: true), .flag("shift")],
+      parse: { a in
+        guard let value = a.value("direction"),
+          let direction = WindowFocusDirection(rawValue: value)
+        else { return nil }
+        return .arrow(direction: direction, shift: a.bool("shift"))
       }),
 
     "send_key": .init([.text("keys", "hotkey", required: true)], parse: sendKeyCommand),
@@ -893,15 +944,20 @@ extension URLEventHandler {
       mapped. `:doctor` runs the doctor's checks from the command line.
 
       `mouse_target` selects an app-discovered target. `mouse_bigram` types one
-      letter of the focused window's visible text, then the two-character hint
-      on that letter. A lowercase letter ignores case and an uppercase letter
-      is exact; no match stays silent. `--move` moves the pointer onto the
+      letter, then the two-character hint on each match in the focused window
+      and on the status bar of its screen. A textless terminal also matches
+      the tmux status line and pane titles. `v` and `V` match the same glyphs;
+      no match stays silent.
+      `--move` moves the pointer onto the
       letter. `mouse_grid` selects
       a precise screen position: the screen splits like the left half of
       the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
       `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its
-      cell. `--bisect` halves the region instead (h/j/k/l, or y/u/b/n for a
-      quadrant); `--zoom-to-depth=N` starts N steps deep under the pointer.
+      cell. `--bisect` keeps a half with the keys at the QWERTY h/j/k/l
+      positions of `[keyboard] layout` (h/j/k/l on QWERTY, h/n/e/i on Colemak,
+      d/h/t/n on Dvorak, c/t/s/r on Bépo) and a quadrant with the keys at y/u
+      and b/n. Bépo's top-left quadrant is the dead key `^`.
+      `--zoom-to-depth=N` starts N steps deep under the pointer.
       `--multi` keeps clicking, discovering the targets again after each
       click. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
       the status items) and `mouse_notifications` (Notification Center's

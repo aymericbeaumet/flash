@@ -118,7 +118,7 @@ enum ModeReducer {
       }
 
     case .enterHyper:
-      // The leader key is a NORMAL concept. INSERT keeps typing the key,
+      // HYPER is entered from idle NORMAL. INSERT keeps typing the key,
       // and command / terminal surfaces keep their own input.
       guard case .normal = state else { return (state, []) }
       let next = Mode.hyper(restoreTo: .normal)

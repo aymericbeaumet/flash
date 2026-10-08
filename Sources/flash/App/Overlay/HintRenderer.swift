@@ -12,7 +12,6 @@ import QuartzCore
 /// + palette pair drawn through the same chip layer.
 extension OverlayPanel {
   func display(hints: [AssignedHint]) {
-    bigramQueryEcho = nil
     FlashLog.trace("[overlay] display hints=\(hints.count) input=\(inputMode)")
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -435,7 +434,6 @@ extension OverlayPanel {
   }
 
   func hide() {
-    bigramQueryEcho = nil
     FlashLog.trace(
       "[overlay] hide transient=\(transientContentVisible) bar=\(modeSurface.barVisible) "
         + "capture=\(modeSurface.capturesInput) input=\(inputMode)")

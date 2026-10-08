@@ -158,12 +158,19 @@ enum NormalModeInterpreter {
     }
 
     if state.prefix.isEmpty, let digit = digitValue(ignoredChar) {
-      if state.count == nil, digit == 0 {
-        return .consume
+      // A digit bound to a command is that command. Otherwise it is a repeat
+      // count, and a bare `0` is swallowed.
+      let digitIsCommand = keys.contains { key in
+        mappings.mapping(for: key) != nil || mappings.hasStrictPrefix(key)
       }
-      let next = min(((state.count ?? 0) * 10) + digit, maxRepeatCount)
-      return .pending(
-        PendingState(count: next, prefix: "", register: state.register).encoded)
+      if !digitIsCommand {
+        if state.count == nil, digit == 0 {
+          return .consume
+        }
+        let next = min(((state.count ?? 0) * 10) + digit, maxRepeatCount)
+        return .pending(
+          PendingState(count: next, prefix: "", register: state.register).encoded)
+      }
     }
 
     // `"` starts a register prefix (Vim's `"<reg>`), but only when it's at the
@@ -367,6 +374,32 @@ enum NormalModeInterpreter {
       actualChar: firstCharacter(characters))
   }
 
+  /// True when this physical key is the hyper hold key. A chord atom matches
+  /// with its modifiers. An unmodified named key still matches on key-up,
+  /// when the event may carry no characters. Shift-Space is still Space.
+  static func isHyperKey(
+    atom: String,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> Bool {
+    if eventKeyAtoms(
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers
+    ).contains(atom) {
+      return true
+    }
+    return isLeaderKey(
+      atom: atom,
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers)
+  }
+
   /// True when this physical key is the configured leader and is not part of
   /// a Command/Control/Option chord. Shift is allowed: Shift-Space is still
   /// Space. Key-up events sometimes carry no characters; named keys still
@@ -495,6 +528,15 @@ enum NormalModeInterpreter {
           modifiers: modifiers,
           key: String(letter))
       }
+    }
+    // A shifted letter is the letter that key types. Layout arrows name the
+    // physical QWERTY position by that letter, and both an input source and
+    // a key-code remapper report it. The key code's ANSI name is a different
+    // key once the layout has moved the letter.
+    if modifiers == ["shift"], let ignoredChar, ignoredChar.isLetter {
+      return NormalModeInterpreter.canonicalModifiedKeyAtom(
+        modifiers: modifiers,
+        key: String(ignoredChar))
     }
     guard let key = HotkeySyntax.canonicalKeyName(virtualKey: UInt32(keyCode)) else {
       return nil

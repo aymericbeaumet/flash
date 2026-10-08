@@ -656,7 +656,8 @@ final class PluginSystemTests: XCTestCase {
     // On-demand: only perform-driven surfaces.
     XCTAssertEqual(
       try activation(
-        #", "exec": ["/usr/bin/true"], "commands": [{"command": "x", "description": "x"}]"#),
+        #", "exec": ["/usr/bin/true"], "commands": [{"command": "x", "subcommand": "go", "description": "x"}]"#
+      ),
       .onDemand)
     XCTAssertEqual(
       try activation(
@@ -686,7 +687,7 @@ final class PluginSystemTests: XCTestCase {
     // Status, the listen subscriptions feeding it, and perform surfaces.
     let bound = try manifest(
       #", "exec": ["/usr/bin/true"], "status": ["state"], "listen": ["core:power.changed"], "#
-        + #""commands": [{"command": "x", "description": "x"}]"#)
+        + #""commands": [{"command": "x", "subcommand": "go", "description": "x"}]"#)
     XCTAssertTrue(bound.isStatusBound)
     XCTAssertEqual(bound.activation(statusObserved: true), .resident)
     XCTAssertEqual(bound.activation(statusObserved: false), .onDemand)
@@ -908,9 +909,6 @@ final class PluginSystemTests: XCTestCase {
               { "token": "m", "description": "Multi", "source": "multi.items" }
             ]
           },
-          "verbs": [
-            { "name": "multi_open", "description": "Open" }
-          ],
           "mappings": [
             { "key": "q", "command": ["flash", "hints_dismiss"] }
           ]
@@ -933,7 +931,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.bangCommand, "multi")
     XCTAssertEqual(manifest.bangs.map(\.token), ["m"])
     XCTAssertEqual(manifest.bangs.first?.source, "multi.items")
-    XCTAssertEqual(manifest.verbs.map(\.name), ["multi_open"])
+    XCTAssertTrue(manifest.verbs.isEmpty)
     XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
     XCTAssertEqual(manifest.activation, .resident)
   }
@@ -950,7 +948,7 @@ final class PluginSystemTests: XCTestCase {
           "install": "true",
           "exec": ["/usr/bin/true"],
           "mappings": [
-            { "key": "q", "command": ["flash", "plugin_command", "--command=spotify", "--subcommand=run"] },
+            { "key": "q", "command": ["flash", "spotify", "run"] },
             {
               "key": "ctrl+k",
               "mode": "insert",
@@ -1279,13 +1277,13 @@ final class PluginSystemTests: XCTestCase {
             "version": "1.0.0",
             "description": "fixture",
             "exec": ["/usr/bin/true"],
-            "verbs": [{ "name": "\(name)" }]
+            "commands": [{ "command": "\(name)", "subcommand": "show", "description": "x" }]
           }
           """)
       defer { try? FileManager.default.removeItem(at: root) }
       XCTAssertThrowsError(try PluginManifest.load(from: root), name) { error in
         XCTAssertTrue(
-          String(describing: error).contains("plugin verb \(name) is reserved"),
+          String(describing: error).contains("\(name) is reserved"),
           String(describing: error))
       }
       XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: name, args: [:]), name)
@@ -1418,7 +1416,7 @@ final class PluginSystemTests: XCTestCase {
         "install": "true",
         "exec": ["/usr/bin/true"],
         "commands": [
-          { "command": "x", "subcommand": "", "description": "X" }
+          { "command": "x", "subcommand": "go", "description": "X" }
         ]
       }
       """)
@@ -1594,11 +1592,14 @@ final class PluginSystemTests: XCTestCase {
   func testDecodeClipboardModalEntriesRoundTripsPluginJSON() throws {
     // The shape the Rust clipboard plugin emits for `:clipboard`.
     let json = """
-      [{"preview":"hello","value":"hello"},{"preview":"two…","value":"two lines\\nof text"}]
+      [{"id":"0123456789abcdef0123456789abcdef","kind":"text","preview":"hello","value":"hello"},{"id":"fedcba9876543210fedcba9876543210","kind":"html","preview":"two…","value":"two lines\\nof text","html":"<p>two</p>"}]
       """
     let entries = try XCTUnwrap(AppDelegate.decodeClipboardModalEntries(json))
     XCTAssertEqual(entries.map(\.preview), ["hello", "two…"])
     XCTAssertEqual(entries.map(\.value), ["hello", "two lines\nof text"])
+    XCTAssertEqual(entries[1].html, "<p>two</p>")
+    XCTAssertEqual(entries[0].files, [])
+    XCTAssertNil(entries[0].mime)
   }
 
   func testDecodeClipboardModalEntriesAcceptsEmptyHistory() throws {
@@ -1611,6 +1612,24 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(
       AppDelegate.decodeClipboardModalEntries("[{\"preview\":\"x\"}]"),
       "an entry missing the required `value` field decodes to nil")
+    XCTAssertNil(
+      AppDelegate.decodeClipboardModalEntries(
+        "[{\"preview\":\"x\",\"value\":\"x\",\"kind\":\"text\"}]"),
+      "an entry missing `id` decodes to nil")
+  }
+
+  func testClipboardStateOmitsImageBytes() {
+    let id = "0123456789abcdef0123456789abcdef"
+    let entry = ClipboardModalEntry(
+      id: id, kind: "files", preview: "shot.png", value: "/tmp/shot.png", mime: "image/png",
+      files: ["/tmp/shot.png"])
+    let object = AppDelegate.clipboardStateObject(entry)
+    XCTAssertEqual(object["id"] as? String, id)
+    XCTAssertEqual(object["kind"] as? String, "files")
+    XCTAssertEqual(object["mime"] as? String, "image/png")
+    XCTAssertEqual(object["files"] as? [String], ["/tmp/shot.png"])
+    XCTAssertNil(object["sha256"])
+    XCTAssertNil(object["image"])
   }
 
   // MARK: - Official plugins
@@ -1667,6 +1686,67 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  func testPluginCommandNameConflictsFailEveryClaimant() {
+    func manifest(id: String, commands: [String] = [], verbs: [String] = []) -> PluginManifest {
+      PluginManifest(
+        id: id, name: id, version: "1", description: "fixture",
+        exec: ["/usr/bin/true"],
+        commands: commands.map { PluginCommandRegistration(command: $0, subcommand: "go") },
+        verbs: verbs.map { PluginVerbRegistration(name: $0) })
+    }
+    let builtin = PluginManifest.commandClaimFailures([manifest(id: "bad", commands: ["quit"])])
+    XCTAssertTrue(builtin["bad"]?.contains("quit") == true, "\(builtin)")
+
+    let shared = PluginManifest.commandClaimFailures([
+      manifest(id: "a", commands: ["media"]),
+      manifest(id: "b", commands: ["media"]),
+    ])
+    XCTAssertNotNil(shared["a"])
+    XCTAssertNotNil(shared["b"])
+
+    let distinct = PluginManifest.commandClaimFailures([
+      manifest(id: "media", commands: ["media"]),
+      manifest(id: "caffeinate", commands: ["caffeinate"]),
+    ])
+    XCTAssertTrue(distinct.isEmpty, "\(distinct)")
+
+    let bothKinds = PluginManifest.commandClaimFailures([
+      manifest(id: "overlap", commands: ["media"], verbs: ["media"])
+    ])
+    XCTAssertTrue(
+      bothKinds["overlap"]?.contains("both a command and a verb") == true, "\(bothKinds)")
+    XCTAssertTrue(bothKinds["overlap"]?.contains("conflicts") == true, "\(bothKinds)")
+  }
+
+  func testPluginCommandNamedLikeAFlashVerbFailsToLoad() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "badquit", "name": "Bad Quit", "version": "1.0.0", "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "commands": [{ "command": "quit", "subcommand": "go", "description": "x" }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue((error as? PluginError)?.isCommandConflict == true, "\(error)")
+      XCTAssertTrue("\(error)".contains("conflicts"), "\(error)")
+    }
+  }
+
+  func testOfficialPluginsHaveDistinctFlashSubcommands() throws {
+    var manifests: [PluginManifest] = []
+    for root in try officialPluginRoots() {
+      do {
+        manifests.append(try PluginManifest.load(from: root))
+      } catch {
+        XCTFail("\(root.lastPathComponent) failed to load: \(error)")
+      }
+    }
+    XCTAssertFalse(manifests.isEmpty)
+    XCTAssertEqual(PluginManifest.commandClaimFailures(manifests), [:])
+  }
+
   /// A plugin verb named like one of Flash's own would never be reached.
   func testPluginVerbsCannotShadowFlashVerbs() throws {
     let root = try temporaryPluginRoot(
@@ -1678,7 +1758,24 @@ final class PluginSystemTests: XCTestCase {
         """)
     defer { try? FileManager.default.removeItem(at: root) }
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue("\(error)".contains("one of Flash's own verbs"), "\(error)")
+      XCTAssertTrue((error as? PluginError)?.isCommandConflict == true, "\(error)")
+      XCTAssertTrue("\(error)".contains("verbs are not a flash command"), "\(error)")
+    }
+  }
+
+  func testPluginCommandWithoutASubcommandFailsToLoad() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "bare", "name": "Bare", "version": "1.0.0", "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "commands": [{ "command": "bare", "subcommand": "", "description": "x" }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue((error as? PluginError)?.isCommandConflict == true, "\(error)")
+      XCTAssertTrue("\(error)".contains("requires a subcommand"), "\(error)")
     }
   }
 

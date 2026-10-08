@@ -77,8 +77,8 @@ tool, remove it rather than maintain both.
    hint discovery.
 9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
    app clicks, primary hint and mouse-grid clicks on input targets (every
-   target in a declared `terminal_emulators` app is one, tmux pane, window and
-   link hints included), and the typing intents `app_find` and `tab_new` once they reached the app (not after
+   target in a declared `terminal_emulators` app is one, tmux pane and window
+   hints included; `f` on a terminal link hint stays in NORMAL), and the typing intents `app_find` and `tab_new` once they reached the app (not after
    a failed source, an app without the action or a refused chord). Other
    commands, including tab switching and `focus_input`, preserve NORMAL; never add
    editable-focus follow-up or mode changes on app activation. Hint input intent
@@ -159,7 +159,18 @@ Surface requests that would violate these constraints before implementing them.
   `system` (core input-adjacent probes only), `high`, `normal`, `low` — matching
   how visible lateness is: slack is what lets wake-ups coalesce. Scope every
   registration to when it can observe anything (a subscriber present, the
-  pointer in the band, a browser listening), saying so where it is armed.
+  pointer in the band, a browser listening, the hyper key while HYPER is
+  latched), saying so where it is armed. The hyper hold watch
+  (`core:hyper-hold`, priority `system`) is the backstop for a key-up the
+  session tap dropped: two ticks of `CGEventSource.keyState(.hidSystemState)`
+  reporting the chord up, and only while HYPER is latched. Combined session
+  state can report a swallowed key as up; do not read it for this.
+  Secure input (`core:secure-input`, priority `low`, every 2 s for the life of
+  the resident) stays armed for the same reason: while the flag is on the
+  session tap gets no keys, so only this poll can see a hold that outlived the
+  password field. `SecureInputRelease` leaves a focused secure field, and a
+  text field in the holding app, alone. One release attempt per episode; no
+  dialog and no lock screen.
   Polls pause while displays sleep or the session is locked; the scheduler
   owns that gate and resumes with one catch-up tick, so clients never check it.
   Use `CLOCK_MONOTONIC_RAW` for sleep-inclusive deadlines; compare readings
@@ -178,6 +189,11 @@ Surface requests that would violate these constraints before implementing them.
   catalog sources. Sources return global NSScreen coordinates and canonical
   openable URLs when available. `.failed` owns a failed action and prevents a
   duplicate fallback; `.unhandled` permits the next source or host fallback.
+- A plugin command is `flash <command> <subcommand>` with both words required
+  (`flash caffeinate toggle`). Manifest `commands[]` rejects an empty
+  subcommand, and manifest `verbs` (a one-word `flash <name>`) is rejected, so
+  neither can register. `*` is the wildcard subcommand. A command name that
+  matches a Flash verb, a reserved query, or another plugin fails the load.
 - Validate plugin wire changes across Swift and Rust. The wire contract lives in
   `Plugins/_flash_plugin_rust`: `protocol.json` pins the constants, the
   `wire`/`runtime` suites and the `probe` workspace member pin the behaviour. A
@@ -198,6 +214,15 @@ Surface requests that would violate these constraints before implementing them.
 - Config validation is shared by all layers; preserve authored values and derive
   only after overrides. Only executable/working-directory fields receive path
   resolution; argv tails stay opaque. Update whole-section default parity tests.
+- `[app] keyboard_layout` is the input source that reads a keypress (`auto` or
+  `com.apple.keylayout.*`). `[keyboard] layout` is the logical layout (default
+  `qwerty`; `colemak`, `dvorak`, `bepo`) for hint positions, the mouse grid,
+  bisect, pointer movement and derived HYPER arrows. With `hints.keys` still
+  the bundled default, a non-QWERTY layout's hint alphabet is that layout's
+  letters (`<colemak>`), so the file does not also set `hints.keys`. HYPER arrows are the
+  physical QWERTY WASD positions, spelled as the letters that layout types.
+  A shifted letter arrow is `shift+` that letter. A non-letter (Dvorak's
+  comma on W) stays `shift+` the ANSI name. Do not merge the two layouts.
 - NORMAL defaults and bundled plugin mappings bind keys to high-level actions,
   never to raw chords: none uses `send_key`, which stays a user escape hatch
   (a test enforces it). An action resolves in the focused app's context: a

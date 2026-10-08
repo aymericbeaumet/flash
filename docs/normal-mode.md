@@ -26,7 +26,9 @@ mappings.
   Browsers use their own chords (Safari's hard reload is Cmd-Option-R) and
   tmux refreshes its client. Other apps, terminals included, do nothing:
   Cmd-R replies in Mail and runs in Xcode.
-- `[a` / `]a` cycle previous/next app in MRU order.
+- `[a` / `]a` cycle previous/next app in MRU order. Quitting the focused
+  app (`:qa`, `:wq`, `app_quit`, or the app's own quit) focuses that
+  previous app, from command mode and from every other mode.
 - `[t` / `]t` switch to the previous/next tab (`tab_previous` / `tab_next`);
   repeat the final `t` to keep switching. Inside tmux they switch tmux windows;
   elsewhere the app's own chord (Control-(Shift-)Tab in Messages), else
@@ -55,16 +57,45 @@ mappings.
   outdents use their own chord (Control-Minus in VS Code, Cursor, Zed and
   Sublime Text; Control-Command-Arrow in Xcode). Terminals and apps without
   history (Notes, TextEdit, Pages, Mail) do nothing.
-- Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
-  screen position through the grid. A lowercase prefix picks the click on
-  either surface: none for primary, `s` secondary, `d` double, `m` move.
-  So `df` double-clicks an element and `dF` double-clicks a grid position.
-- `<leader>s`, then one letter, then a two-character hint jumps to that
-  letter in the focused window's visible text (EasyMotion `s`). A lowercase
-  letter ignores case; an uppercase letter is exact. Backspace edits the
-  letter, Escape cancels, and no match stays silent. `mouse_bigram --move`
-  moves the pointer without clicking. The text comes from Accessibility,
-  never from screen pixels.
+- A mouse action is a prefix and a finisher. Prefixes are none, `m` (move),
+  `d` (double) and `c` (context, the right-click). Finishers are `f` (a
+  discovered target), `F` (a screen position through the grid) and `s` (one
+  visible letter). `c` is the operator Vim and Vimium leave free; `r` reloads
+  and `s` is the search finisher. The pointer hides while `f` and `F` labels
+  are up and returns when it moves, or when the labels go away. Pointer mode
+  and a cursor-following grid keep it visible. So `df` double-clicks an
+  element, `dF` double-clicks a grid position, and `ds` double-clicks a letter.
+  `cf`, `cF` and `cs` are the right-click of each.
+  A system dialog in front of the focused app, such as the Gatekeeper prompt,
+  is the surface `f` and `s` walk even when its process does not become
+  frontmost. A window's close button is a hint when the window has one, and
+  so are a dialog's default, cancel, and help buttons.
+- `s`, then one letter, then a two-character hint jumps to that
+  letter in the focused window's visible text (EasyMotion). The same prefixes
+  apply: `cs` right-clicks, `ds` double-clicks, `ms` moves the pointer. `s`
+  starts no other mapping, so the jump fires at once.
+  Nothing is drawn for the search letter itself: the hints are the only
+  surface, sitting on each match.
+  The search character matches either case, so `v` and `V` find the same
+  glyphs, and the other character of that US key, so `3` and `#` do too,
+  everywhere in the focused window and on the status bar of that window's
+  screen (the surfaces `f` reaches). A letter on a status-bar link or popup
+  does what `f` does there; a letter on plain bar text moves the pointer onto
+  it. The click and the move land one point left of the glyph's centre, still
+  on the letter, so a later selection can start on that glyph's leading side.
+  Hint labels are uppercase and accept either case. Backspace
+  edits the letter, Escape cancels, and no match stays silent. Holding the
+  hyper key, or any other key that enters a mode, ends the jump and enters
+  that mode instead of typing into it. `mouse_bigram --move`
+  moves the pointer without clicking. The text comes from Accessibility.
+  Each visible line is measured once, so a common letter costs the same as a
+  rare one.
+  A terminal whose tree has no text uses the tmux grid of the client attached
+  to that window: pane text, the tmux status line, and each pane-border title,
+  measured on the same window `f` and `cf` use. Those two label the same
+  targets, including pane titles and the status bar. On the status bar,
+  `cf` right-clicks, which pins the popup. `s` labels the letters
+  on that grid. Flash never reads screen pixels.
 - A prefix letter must not also be a mapping of its own, or that mapping waits
   for `sequence_timeout_ms` before it fires. Triple click therefore ships
   unbound, because `tf` would stall the bare `t` (new tab). To bind `tf` /
@@ -72,8 +103,9 @@ mappings.
   then fires on its second key with no timeout.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. Everything in a terminal emulator (an app a plugin declares in
-  `terminal_emulators`) is an input target, so a primary click on any hint
-  there — tmux pane, window and link hints included — enters INSERT. A hint click moves the pointer to the target and leaves it there;
+  `terminal_emulators`) is an input target, so a primary click on a hint
+  there — tmux pane and window hints included — enters INSERT. A terminal
+  link hint is navigation and stays in NORMAL. A hint click moves the pointer to the target and leaves it there;
   `m` (move) moves it without clicking. With `[hints] restore_pointer = true`,
   every committed click, drag or selection — hint or grid, and `mouse_repeat`
   — puts the pointer back where it was; `m` and `mouse_pointer` still move it.
@@ -86,11 +118,12 @@ mappings.
   and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
   the grid alike. Link text repeated in a terminal pane resolves to the copy
   under the hint.
-- `sF` / `dF` use the [mouse grid](#mouse-grid) for secondary/double clicks.
-- `mF` moves the cursor with the mouse grid.
+- `cF`, `dF` and `mF` use the [mouse grid](#mouse-grid) for a right-click, a
+  double click and a move.
 - `?` and `:mappings` open the browser mapping reference for the focused app,
   with both effective plugin-merged and configured mappings, including expanded leader
-  bindings and argv mappings.
+  bindings and argv mappings. Each row names where the binding comes from:
+  a built-in default, a config file, or a plugin.
 - `:help` opens the browser help homepage; `:help <topic>` opens a feature guide.
 
 ## Mouse grid
@@ -120,8 +153,9 @@ step uses the same muscle memory. The last of `hints.mouse_grid_steps` (default
 step's cells are smaller than a label, they are drawn as one glued cluster
 centred on (and covering) the chosen cell; each click lands on its label.
 
-The grid starts on the display of the focused window, below Flash's status
-bar, or on the pointer's display when no window is focused.
+The grid starts on the display of the focused window and covers Flash's
+status bar, or on the pointer's display when no window is focused. It still
+stops at the Dock, and at the menu bar when the Flash bar is hidden.
 
 | Key | Action |
 | --- | --- |
@@ -351,15 +385,27 @@ Each hint or grid session fixes its capture path when it starts
 field) macOS hides keys from every tap, so that session takes the key window
 instead and typed labels reach Flash, never the password field. A commit hands
 focus back by raising its target; a cancel yields activation to the covered
-app. `#{flash.secure_input}` and `flash status` show the state, which the tap
-refreshes when it reads it for a key; there is no banner and no poll.
+app. `#{flash.secure_input}` and `flash status` show the state. The tap
+refreshes it when a key still reaches Flash. While the flag is on the tap
+receives nothing, so `core:secure-input` polls it (low priority, every 2 s)
+for the life of the resident; there is no banner. A focused secure field, and
+a text field in the app that holds the flag, are left alone. Anything else is
+a stuck hold, and Flash asks that app to release it once: a Chromium browser
+blurs its focused element and, if the flag stays on, is sent to its address
+bar; Firefox and Safari are sent to the address bar; any other holding app is
+activated and the app you were in is restored. The first browser blur can ask
+for Automation. Flash does not lock the screen and does not show a dialog.
+One attempt per time the flag turns on. A password field that is focused when
+the attempt would start is left alone; one that appears after the attempt has
+started does not abort a release already in progress.
 
 Interpreters read keys through `[app] keyboard_layout`'s reference table
 (`KeyCharacters.read`, one lookup per key): labels, the grid, pointer and
 adjustment keys and NORMAL mappings match by key position under a non-Latin
-input source, while `--search` keeps the typed text. The table is rebuilt on
-input-source changes and config loads, never per key, and the swallow decision
-never reads it.
+input source, while `--search` keeps the typed text. Which characters those
+positions spell comes from `[keyboard] layout`, not from this input-source
+table. The table is rebuilt on input-source changes and config loads, never
+per key, and the swallow decision never reads it.
 
 Handing activation back needs the cooperative API: `NSApp.yieldActivation(to:)`
 then `app.activate(from: .current)`. `NSApp.deactivate()` and a bare
@@ -484,16 +530,47 @@ overwrites the current live-query result.
 
 ## Hyper
 
-Holding the NORMAL leader key enters HYPER until that key is released. The
+Holding `mode.normal.hyper` enters HYPER until that key is released. The
+default is `<leader>`, which follows `mode.normal.leader`. When the key is
+`<leader>` and the leader is not set (`leader = false`), HYPER stays off.
+Any other single key works in its place (`a`, `<space>`, `cmd+space`). The
 status pill is purple and shows `mode.labels.hyper` (default `HYPER`). Keys
 pressed while it is held are read from `[mode.hyper.mappings]`, not from
-NORMAL. A key with no hyper mapping can still complete a NORMAL `<leader>`
-sequence, so holding the leader and pressing `s` still runs `<leader>s`
-when `s` is not a hyper binding. Unmapped keys are swallowed.
+NORMAL. The defaults are the Apple function row on `1`–`9`, `0`, `-`, and
+`=`: brightness, Mission Control, Spotlight, Dictation, Focus, media, mute,
+and volume. Shift plus the same key sends F1–F12. Arrows sit on the
+physical keys where QWERTY has `w` `a` `s` `d` (up, left, down, right),
+spelled as the letters those keys type in `[keyboard] layout`: QWERTY
+`w` `a` `s` `d`, Colemak `w` `a` `r` `s`, Dvorak `,` `a` `o` `e`, Bépo
+`é` `a` `u` `i`. Shift posts a shifted arrow on that same letter, so
+Colemak down is `shift+r`. A punctuation key keeps the ANSI name, so
+Dvorak up is `shift+w`. A mapping or `false` on one of those keys wins.
+The arrow is posted into the focused app's key window, downstream of the
+session tap. `postToPid` carries no window, so a terminal drops it while
+the hyper key is still down. Volume is a system event and does not take
+this path. F-keys use the same window posting.
+Pointer movement and bisect stay on the hjkl columns.
 
-Releasing the leader returns to NORMAL. If nothing else was pressed, that
-tap arms the `<leader>` prefix: press the leader, release it, then the next
-key, and the sequence runs as before. HYPER is only entered from idle
+While the hyper key is the leader, a key with no hyper mapping can still
+complete a NORMAL `<leader>` sequence when that key continues one. Unmapped
+keys are swallowed.
+
+Releasing the key returns to NORMAL. The session tap can drop that key-up
+after it swallowed the press and a synthetic event (a volume key, a posted
+chord) lands in between; HYPER would otherwise stay up until the key is
+pressed again. While HYPER is latched, `core:hyper-hold` reads the key from
+the HID state table (`CGEventSource.keyState(.hidSystemState)`, and every
+modifier in a chord such as `cmd+space`) and leaves once the key has been up
+for two ticks. Combined session state is the wrong table: a swallowed press
+can look up there. The next key sees the same reading, leaves first, and is
+routed as a NORMAL key. A delivered key-up still leaves immediately. The
+watch is registered only while the mode is HYPER.
+
+If nothing else was pressed and the hyper key is the leader, that tap arms
+the `<leader>` prefix: press it,
+release it, then the next key, and the sequence runs as before. Holding it
+again enters HYPER while that prefix is armed. A mapped `<leader><leader>`
+sequence still takes the second press. Any other pending sequence stays in
 NORMAL. INSERT, the command line, a popup, and an open hint session keep
 their own keys. See [configuration](configuration.md).
 
@@ -566,7 +643,8 @@ INSERT is entered by:
 - a configured `enter_insert_mode` mapping;
 - a physical primary click while NORMAL is capturing;
 - a primary hint or mouse-grid click on an input target (the same rule for
-  `f` and `F`): a text input, or anything in a declared terminal emulator;
+  `f` and `F`): a text input, or anything in a declared terminal emulator.
+  A terminal link hint is navigation, so `f` on one stays in NORMAL;
 - `app_find` (`/`) or `tab_new` (`t`) once it reached the app.
 
 Other normal commands, focus changes and app activation preserve NORMAL.

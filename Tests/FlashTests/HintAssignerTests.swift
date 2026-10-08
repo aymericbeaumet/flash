@@ -155,12 +155,20 @@ final class HintAssignerTests: XCTestCase {
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
+      keyRows: resolved.keyRows,
       minLength: 2)
-    let homeRow: Set<Character> = Set("sdfjkl")
+    let homeRow: Set<Character> = Set("asdfghjkl")
     XCTAssertTrue(
       labels.allSatisfy { Set($0).isSubset(of: homeRow) },
-      "expected early pairs to stay on the strongest home-row keys, got \(labels)")
-    XCTAssertEqual(labels.first, "sj")
+      "expected early pairs to stay on the home row, got \(labels)")
+    XCTAssertEqual(labels.first, "fj")
+    for label in labels {
+      let chars = Array(label)
+      XCTAssertNotEqual(
+        resolved.leftHand.contains(chars[0]),
+        resolved.leftHand.contains(chars[1]),
+        "expected an alternating pair, got \(label)")
+    }
   }
 
   func testPairsUseInferredLayoutScoresForLayoutTokens() {
@@ -171,15 +179,168 @@ final class HintAssignerTests: XCTestCase {
       alphabet: qwerty.chars,
       leftHand: qwerty.leftHand,
       keyScores: qwerty.keyScores,
+      keyRows: qwerty.keyRows,
       minLength: 2)
     let colemakLabels = HintAssigner.generateLabels(
       count: 4,
       alphabet: colemak.chars,
       leftHand: colemak.leftHand,
       keyScores: colemak.keyScores,
+      keyRows: colemak.keyRows,
       minLength: 2)
     XCTAssertNotEqual(qwertyLabels, colemakLabels)
-    XCTAssertTrue(colemakLabels[0].contains("a"))
+    XCTAssertEqual(qwertyLabels[0], "fj")
+    XCTAssertEqual(colemakLabels[0], "tn")
+  }
+
+  /// Holding the best keys back as single-character labels used to leave
+  /// one awkward prefix, so most two-key labels were the same hand.
+  func testMixedLabelsKeepAlternatingHands() {
+    let colemak = Alphabet.resolve("<colemak>")
+    let labels = HintAssigner.generateLabels(
+      count: 100,
+      alphabet: colemak.chars,
+      leftHand: colemak.leftHand,
+      keyScores: colemak.keyScores,
+      keyRows: colemak.keyRows)
+    XCTAssertEqual(labels.count, 100)
+    XCTAssertEqual(Set(labels).count, 100)
+    let doubles = labels.filter { $0.count == 2 }
+    XCTAssertFalse(doubles.isEmpty)
+    XCTAssertLessThan(
+      labels.lastIndex { $0.count == 1 } ?? -1, labels.firstIndex { $0.count == 2 }!)
+    for label in doubles {
+      let chars = Array(label)
+      XCTAssertNotEqual(
+        colemak.leftHand.contains(chars[0]),
+        colemak.leftHand.contains(chars[1]),
+        "same-hand label \(label) in \(doubles)")
+    }
+    XCTAssertEqual(labels[0], "t")
+    XCTAssertEqual(doubles[0], "nt")
+    for (index, label) in labels.enumerated() {
+      for other in labels where other != label {
+        XCTAssertFalse(label.hasPrefix(other), "\(label) at \(index) starts with \(other)")
+      }
+    }
+  }
+
+  func testMixedLabelsPreferTheBestSingleThenTheBestAlternation() {
+    // Score order a…f. Left a b c, right d e f. Ten labels need two
+    // prefixes; keeping `a` as a single beats spending it on a pair.
+    let alphabet = Array("abcdef")
+    let labels = HintAssigner.generateLabels(
+      count: 10,
+      alphabet: alphabet,
+      leftHand: Set("abc"),
+      keyScores: ["a": 100, "b": 90, "c": 80, "d": 70, "e": 60, "f": 50],
+      minLength: 1)
+    XCTAssertEqual(labels, ["a", "b", "c", "f", "da", "db", "ea", "dc", "eb", "ec"])
+  }
+
+  func testAlternationBeatsASameHandHomeRowPair() {
+    let qwerty = Alphabet.resolve("<qwerty>")
+    XCTAssertGreaterThan(
+      HintAssigner.scoreLabel(
+        "qp", leftHand: qwerty.leftHand, keyScores: qwerty.keyScores, keyRows: qwerty.keyRows),
+      HintAssigner.scoreLabel(
+        "sd", leftHand: qwerty.leftHand, keyScores: qwerty.keyScores, keyRows: qwerty.keyRows),
+      "a weak alternating pair outranks the strongest same-hand home keys")
+  }
+
+  /// Hand changes rank first. Among alternating labels, each row of travel
+  /// outranks any key-ease difference, including across a longer label.
+  func testLessRowTravelOutranksKeyEase() {
+    let alphabet = Array("abcde")
+    // a and e are the left home keys, b the right home key. c is one row
+    // away on the right, d is two rows away on the left.
+    let leftHand: Set<Character> = ["a", "d", "e"]
+    let keyScores: [Character: Int] = [
+      "a": 40,
+      "b": 30,
+      "c": 100,
+      "d": 400,
+      "e": 5,
+    ]
+    let keyRows: [Character: Int] = [
+      "a": 2,
+      "b": 2,
+      "c": 1,
+      "d": 0,
+      "e": 2,
+    ]
+    func score(_ label: String, rows: [Character: Int] = keyRows) -> Int {
+      HintAssigner.scoreLabel(label, leftHand: leftHand, keyScores: keyScores, keyRows: rows)
+    }
+
+    XCTAssertGreaterThan(score("ab"), score("ac"))
+    XCTAssertGreaterThan(score("ac"), score("bd"))
+    XCTAssertGreaterThan(score("bd"), score("ae"))
+    XCTAssertGreaterThan(score("aba"), score("abd"))
+    XCTAssertGreaterThan(score("bd", rows: [:]), score("ac", rows: [:]))
+    XCTAssertGreaterThan(score("ac", rows: [:]), score("ab", rows: [:]))
+    XCTAssertGreaterThan(score("abd", rows: [:]), score("aba", rows: [:]))
+
+    let labels = HintAssigner.generateLabels(
+      count: 4,
+      alphabet: alphabet,
+      leftHand: leftHand,
+      keyScores: keyScores,
+      keyRows: keyRows,
+      minLength: 2)
+    XCTAssertEqual(labels, ["ab", "ba", "be", "eb"])
+  }
+
+  /// On QWERTY, a weak same-row pair beats a strong one-row jump. A
+  /// one-row jump stays ahead of a two-row jump, and that jump still
+  /// beats a same-hand home pair. `fj` stays first, and the two-key list
+  /// is grouped by row distance.
+  func testLayoutPairsGroupByRowDistanceThenEase() {
+    let qwerty = Alphabet.resolve("<qwerty>")
+    func score(_ label: String, rows: [Character: Int]) -> Int {
+      HintAssigner.scoreLabel(
+        label, leftHand: qwerty.leftHand, keyScores: qwerty.keyScores, keyRows: rows)
+    }
+    XCTAssertGreaterThan(score("qp", rows: [:]), 0)
+    XCTAssertGreaterThan(
+      score("fm", rows: [:]),
+      score("qp", rows: [:]),
+      "key ease alone prefers the home-to-bottom index pair")
+    XCTAssertGreaterThan(score("qp", rows: qwerty.keyRows), score("fm", rows: qwerty.keyRows))
+    XCTAssertGreaterThan(score("fm", rows: qwerty.keyRows), score("rm", rows: qwerty.keyRows))
+    XCTAssertGreaterThan(score("rm", rows: qwerty.keyRows), score("sd", rows: qwerty.keyRows))
+
+    var sameRowPairs = 0
+    for first in qwerty.chars {
+      for second in qwerty.chars where first != second {
+        guard qwerty.leftHand.contains(first) != qwerty.leftHand.contains(second) else { continue }
+        guard qwerty.keyRows[first] == qwerty.keyRows[second] else { continue }
+        sameRowPairs += 1
+      }
+    }
+    let labels = HintAssigner.generateLabels(
+      count: sameRowPairs + 2,
+      alphabet: qwerty.chars,
+      leftHand: qwerty.leftHand,
+      keyScores: qwerty.keyScores,
+      keyRows: qwerty.keyRows,
+      minLength: 2)
+    XCTAssertEqual(labels.first, "fj")
+    func distance(_ label: String) -> Int {
+      let chars = Array(label)
+      return abs(qwerty.keyRows[chars[0]]! - qwerty.keyRows[chars[1]]!)
+    }
+    XCTAssertEqual(labels.prefix(sameRowPairs).filter { distance($0) == 0 }.count, sameRowPairs)
+    XCTAssertEqual(distance(labels[sameRowPairs]), 1)
+    XCTAssertEqual(distance(labels[sameRowPairs + 1]), 1)
+    var previous = 0
+    for label in labels {
+      let rowDistance = distance(label)
+      XCTAssertGreaterThanOrEqual(rowDistance, previous, label)
+      previous = rowDistance
+      let chars = Array(label)
+      XCTAssertNotEqual(qwerty.leftHand.contains(chars[0]), qwerty.leftHand.contains(chars[1]))
+    }
   }
 
   func testLiteralPairsUseLiteralOrderScores() {

@@ -7,6 +7,15 @@ overrides. `FLASH_CONFIG` selects a file; otherwise Flash uses
 The resident watches these configuration files for changes. CLI arguments invoke
 verbs; they do not configure the resident's startup.
 
+The inspector runtime page shows the resolved configuration as JSON and edits
+the selected file. Values that still come from the bundled default use the
+base text colour. A value a later layer wrote uses the override style and
+names that layer: `config` with the filename, or `env` with the `FLASH_`
+variable. Save writes the editor after the text parses as TOML. Purge
+defaults removes assignments that equal the bundled file and leaves the
+result in the editor; it does not write until Save. The request body is
+limited to 256KB.
+
 Every layer uses the same TOML schema, diagnostics and validators. Invalid values
 are reported with their source and preserve the previous valid value according
 to that field's validation contract. Derivation runs after all layers are applied.
@@ -52,6 +61,46 @@ config load, never on a keypress; the keyboard tap's swallow decision does not
 read it. `--search` still matches the text you actually type, since it filters
 by visible text. `flash status` shows the selected source and the reference
 layout.
+
+## Logical layout
+
+`[keyboard] layout` names where keys sit for hint labels, the mouse grid,
+bisect, pointer movement and HYPER arrows. It defaults to `qwerty` and also
+accepts `colemak`, `dvorak` and `bepo`. This is not the input source:
+`[app] keyboard_layout` only decides how a keypress is read.
+
+When `hints.keys` is still the bundled default and the layout is not QWERTY,
+hint labels use that layout's letters — home row, top row and bottom row —
+the same alphabet as `keys = "<colemak>"`. QWERTY keeps the bundled home-row
+and top-row alphabet. A `hints.keys` token in your file wins, including an
+explicit QWERTY token or a narrower selector such as
+`<colemak_homerow+colemak_toprow>`. The mouse grid uses the left-hand block
+of the resolved hint layout.
+
+Two-key labels alternate hands while the alphabet can spell them that way.
+One-key labels stay in front only while the keys held back as prefixes can
+cover the rest with those alternations. Among those labels, a hand change
+ranks first, then less travel between keyboard rows (a same-row pair, then
+a one-row jump, then a two-row jump), then key ease. Key ease is the
+physical row and column, one formula for every layout: home row above
+bottom row above top row, and on a row the index finger, then middle, the
+inward index reach, ring, and pinky. The left key of a mirrored pair ranks
+one point higher.
+
+Bisect halves use the home-row columns where QWERTY has `h` `j` `k` `l`
+(left, down, up, right): Colemak `h` `n` `e` `i`, Dvorak `d` `h` `t` `n`,
+Bépo `c` `t` `s` `r`. Quadrants use the keys at QWERTY `y` `u` and `b` `n`.
+Bépo's top-left quadrant is the dead key `^`, so one press may not type it.
+
+HYPER posts arrows from the physical QWERTY WASD positions (up, left,
+down, right): QWERTY `w` `a` `s` `d`, Colemak `w` `a` `r` `s`, Dvorak
+`,` `a` `o` `e`, Bépo `é` `a` `u` `i`. Shift posts a shifted arrow on
+that same letter: Colemak's S position types `r`, and its shifted arrow
+is `shift+r`. A punctuation key keeps the ANSI name, so Dvorak up is
+`shift+w`. A mapping or `false` on one of the keys wins. Pointer movement
+and bisect stay on the hjkl columns. The bindings are derived, so
+`config.default.toml` does not list them.
+
 
 ## Environment overrides
 
@@ -176,18 +225,25 @@ leader = "\\"
 "<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight "]
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "f" = ["flash", "mouse_target"]
-"<leader>s" = ["flash", "mouse_bigram"]
 "F" = ["flash", "mouse_grid"]
+"s" = ["flash", "mouse_bigram"]
+"cf" = ["flash", "mouse_target", "--secondary"]
+"cF" = ["flash", "mouse_grid", "--secondary"]
+"cs" = ["flash", "mouse_bigram", "--secondary"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
 ```
 
 Mapping values are argv arrays, or inline tables with a `command` argv array and
-optional `repeat` metadata. `repeat = true` repeats a completed normal-mode
+optional `repeat` metadata. Resolved configuration JSON reports that same argv,
+in canonical form. `repeat = true` repeats a completed normal-mode
 sequence whenever its final key is pressed again. Arrays beginning with `"flash"`
 dispatch in-process; any other executable launches directly. Arguments receive
-home/environment expansion, with no implicit shell. The CLI queries
-`status`, `doctor` and `config_check` are not verbs and cannot be mapped.
+home/environment expansion, with no implicit shell. A plugin command is two
+words (`["flash", "caffeinate", "toggle"]`). A one-word plugin name is
+rejected. The CLI queries `status`, `doctor` and `config_check` are not verbs
+and cannot be mapped. A built-in verb with invalid arguments, or a name no
+manifest declares, is rejected.
 
 Entries extend the defaults layer by layer: reusing a key replaces its mapping,
 and `false` removes it.
@@ -207,18 +263,36 @@ spelled another way (`cmd+shift+]` and `cmd+shift+}`). `true` and
 `{ command = false }` are rejected.
 
 NORMAL persists across commands and focus changes. Its unmapped keys are swallowed.
-Holding the NORMAL leader key enters HYPER until the key is released. The
-status pill turns purple and shows `mode.labels.hyper` (default `HYPER`).
-Keys pressed during the hold come from `[mode.hyper.mappings]`. A key with
-no hyper mapping can still complete a NORMAL `<leader>` sequence. A tap
-that presses nothing else arms that prefix on release, so `<leader>`
-sequences keep working. `+` is written `<plus>`.
+Holding `mode.normal.hyper` enters HYPER until the key is released. It
+defaults to `<leader>`, which follows `mode.normal.leader`. `leader = false`
+clears the leader; HYPER then stays off until `hyper` is a real key. Any other
+single key remaps the hold (`"a"`, `"<space>"`, `"cmd+space"`). The status
+pill turns purple and shows `mode.labels.hyper` (default `HYPER`). Keys
+pressed during the hold come from `[mode.hyper.mappings]`. While the hyper
+key is the leader, a key with no hyper mapping can still complete a NORMAL
+`<leader>` sequence. A tap that presses nothing else arms that prefix on
+release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
 ```toml
+[mode.normal]
+hyper = "<leader>"
+
 [mode.hyper.mappings]
-"-" = ["flash", "plugin_command", "--command=media", "--subcommand=volumedown"]
-"<plus>" = ["flash", "plugin_command", "--command=media", "--subcommand=volumeup"]
+"1" = ["flash", "system_key", "--key=brightness_down"]
+"-" = ["flash", "system_key", "--key=volume_down"]
+"=" = ["flash", "system_key", "--key=volume_up"]
 ```
+
+The built-in row is brightness, Mission Control, Spotlight, Dictation, Focus,
+media, mute, and volume on `1`–`9`, `0`, `-`, and `=`. Shift plus the same
+key sends F1–F12. A later mapping replaces one key.
+
+A plugin command is the same words as the command bar, and both are required:
+`flash caffeinate toggle`, `flash media volumedown`, `flash media output USB Audio`.
+Words after the subcommand are the command's arguments. A one-word plugin name,
+or a command with no subcommand, is rejected at plugin load. A name that matches
+a Flash verb, a reserved query (`status`, `doctor`, `config_check`), or another
+plugin's command is an error: every plugin that claims it fails to load.
 Map keys to high-level actions such as `tab_new`, `app_undo` or `app_reload`:
 each resolves in the focused app's context, through a source or the binding a
 plugin declares for that app (`action_bindings`; the bundled `defaults` plugin

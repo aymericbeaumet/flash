@@ -20,15 +20,25 @@ final class StatusFormatLayoutTests: XCTestCase {
     XCTAssertEqual(row("123456789012", 10), "1234567890")
   }
 
-  func testAbsoluteCentreOverlaysOtherAlignmentSections() {
+  func testNotchOverlaysOtherAlignmentSections() {
     XCTAssertEqual(
-      row("LLLL#[align=centre]CC#[align=right]RRRR#[align=absolute-centre]AB", 10),
+      row("LLLL#[align=centre]CC#[align=right]RRRR#[align=notch]AB", 10),
       "LLLLABRRRR")
   }
 
+  func testNotchAndTmuxAbsoluteCentreAreTheSameLane() {
+    for marker in ["notch", "absolute-centre"] {
+      let text = StatusFormatDocument.parse("#[align=\(marker)]N").runs.filter {
+        !$0.isStyleBoundary
+      }
+      XCTAssertEqual(text.map(\.alignment), [.notch], marker)
+      XCTAssertEqual(text.map(\.text), ["N"], marker)
+    }
+  }
+
   func testWideGlyphPaddingSurvivesAnOverlayAtItsTrailingCell() {
-    XCTAssertEqual(row("界界界界#[align=absolute-centre]X", 8), "界界界界")
-    XCTAssertEqual(row("界界界界#[align=absolute-centre]XX", 8), "界界X 界")
+    XCTAssertEqual(row("界界界界#[align=notch]X", 8), "界界界界")
+    XCTAssertEqual(row("界界界界#[align=notch]XX", 8), "界界X 界")
   }
 
   func testNegativeOneCentreOffsetKeepsThePreviousNativeCursor() {
@@ -218,6 +228,7 @@ final class StatusFormatLayoutTests: XCTestCase {
     switch value {
     case .defaultForeground, .defaultBackground: return fallback
     case .rgb(let rgb): return rgb
+    case .label: return 0xEBCB8B
     case .palette: return nil
     }
   }

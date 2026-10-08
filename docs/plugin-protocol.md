@@ -45,7 +45,7 @@ global shell paths.
 
 **Activation.** A plugin is *resident* — spawned at startup and kept running —
 iff its manifest declares `sources`, `query`, `hints`, `status`, or `listen`.
-A plugin declaring only on-demand surfaces (`commands`, `bangs`, `verbs`,
+A plugin declaring only on-demand surfaces (`commands`, `bangs`,
 `navigation`) is *on-demand*: it stays unspawned until its first `perform`,
 which launches it (the `perform` deadline comfortably absorbs the startup
 budget) and then it stays running normally. Manifest-only plugins (no `exec`)
@@ -205,6 +205,20 @@ Notifications have no deadlines.
   of polling for it. The host observes the network (System Configuration's
   dynamic store) and volume mounts (workspace notifications) only while at
   least one plugin's `listen` matches the event.
+  `core:clipboard.changed` requires the `clipboard` capability. Its payload
+  is `{id, kind, text, html?, mime?, files?, sha256?}`. `id` is 32 lowercase
+  hex characters. `kind` is `text`, `image`, `html`, or `files`. `text` is
+  the plain fallback and may be empty for an image. `html` is a formatted
+  copy, capped at 64 KiB. `files` lists up to 20 copied paths. Image bytes
+  are not in the payload: before the event the host writes
+  `share/images/<id>.<ext>` under the clipboard plugin's data directory,
+  where `ext` is `png`, `jpg`, `gif`, or `webp` for `mime`. `sha256` is the
+  lowercase hex digest of that file. A TIFF pasteboard image is stored as
+  PNG. Concealed, transient, and auto-generated pasteboard types are never
+  emitted. `:clipboard show` returns `{id, kind, preview, value, html?,
+  mime?, files?}` for each entry, without the image bytes or the digest.
+  `:clipboard delete` takes `id=<id>` (or the bare id) and removes that
+  entry and its image file.
 - `evaluate` — `{query, scope, surface}` → `{"ok": true, "answers": [...]}`.
   The per-input evaluator: synchronous, CPU-only over state prepared earlier
   — no I/O. Unclaimed input answers `{"ok": true, "answers": []}` —
@@ -513,7 +527,6 @@ or stale host", never ambiguity.
   "hints": { "fallback_on_empty": true },
   "navigation": ["example"],
   "status": ["state"],
-  "verbs": [{ "name": "example_sync", "description": "Sync now" }],
   "action_bindings": {
     "tab_next": { "": "cmd+shift+]" },
     "clipboard_copy": { "": ["cmd+a", "cmd+c"] },
@@ -555,9 +568,14 @@ Section semantics:
   literal markers (never regexes) that route matching input only to this
   evaluator; without one, evaluators are additive. Evaluator ordering is the
   manifest root `priority`, ties broken by plugin id.
-- **`commands`** — `:command subcommand` registrations; subcommand `"*"`
-  consumes the remainder as args; per-entry `timeout_ms` overrides the
-  `perform` deadline for interactive commands.
+- **`commands`** — `flash <command> <subcommand>` registrations, the same
+  words as `:command subcommand`. Both words are required. An empty
+  subcommand is rejected, and so is a `verbs` entry (that was a one-word
+  `flash <name>`). Subcommand `"*"` consumes the remainder as args;
+  per-entry `timeout_ms` overrides the `perform` deadline for interactive
+  commands. A command name that matches a Flash verb, a reserved query, or
+  another plugin's command fails the load of every plugin that claims it.
+  Declaring the same pair twice does too.
 - **`bangs`** — flashlight bangs; `token: "*"` is the catch-all; an entry's
   `source` scopes live-source completion to that bang.
 - **`actions`** — source-owned normal-mode action names, dispatched as
@@ -568,9 +586,6 @@ Section semantics:
 - **`navigation`** — durable route schemes restorable from movement history,
   dispatched as `perform {kind: "navigate"}`.
 - **`status`** — status-bar segment names fed by the `status` notification.
-- **`verbs`** — CLI/mapping verbs a plugin process serves through
-  `perform {kind: "command"}`. A verb may not reuse one of Flash's own verb
-  names: what an app does for those belongs in `action_bindings`.
 - **`action_bindings`** — what each app does for Flash's actions: action
   name → bundle id → binding. The bundle id `""` covers every app the root
   selector matches. A binding is one of:
@@ -624,8 +639,8 @@ Section semantics:
   data: across plugins the union gets the terminal rules (an unbound Command
   chord is refused rather than typed, pixel wheels are refused, and a primary
   hint or grid click anywhere in one enters INSERT) and matches
-  `only_terminals`. The bundled manifest-only `terminals` plugin declares the
-  common emulators.
+  `only_terminals`. A terminal link hint stays in NORMAL. The bundled
+  manifest-only `terminals` plugin declares the common emulators.
 - **`on_demand_hints`** — bundle ids of apps whose accessibility tree costs
   too much to warm in the background. Across plugins, the union is walked
   only when hints are requested and observed with the reduced notification

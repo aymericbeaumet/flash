@@ -437,15 +437,58 @@ final class HotkeySyntaxTests: XCTestCase {
   func testParseFlashPlugins() {
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "plugins"])?.command, .showPlugins)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "about"])?.command, .showAbout)
-    let action = parseMappingCommand(argv: [
-      "flash", "plugin_command", "--command=spotify", "--subcommand=pause", "--args=quiet",
-    ])
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "plugin_command", "--command=spotify", "--subcommand=pause", "--args=quiet",
+      ]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "media", "volumedown"])?.diagnosticDescription,
+      "flash media volumedown")
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "media", "output", "USB", "Audio"])?
+        .diagnosticDescription,
+      "flash media output USB Audio")
+    XCTAssertEqual(
+      URLEventHandler.pluginSubcommand(
+        verb: "media", args: ["subcommand": "volumedown"]
+      )?.diagnosticDescription,
+      "flash media volumedown")
+    XCTAssertNil(
+      URLEventHandler.parse(
+        verb: "plugin_command", args: ["command": "media", "subcommand": "volumedown"]))
+  }
+
+  func testPluginCommandIsAFlashSubcommand() {
+    let action = parseMappingCommand(argv: ["flash", "media", "volumedown"])
     guard case .flashCommand(.pluginCommand(let command, let subcommand, let args)) = action else {
-      return XCTFail("expected .pluginCommand")
+      return XCTFail("expected media volumedown, got \(String(describing: action))")
     }
-    XCTAssertEqual(command, "spotify")
-    XCTAssertEqual(subcommand, "pause")
-    XCTAssertEqual(args, ["quiet"])
+    XCTAssertEqual(command, "media")
+    XCTAssertEqual(subcommand, "volumedown")
+    XCTAssertEqual(args, [])
+
+    // The tail is the command bar's words: `:media output USB Audio`.
+    let positioned = parseMappingCommand(argv: ["flash", "media", "output", "USB", "Audio"])
+    guard case .flashCommand(.pluginCommand(_, let output, let deviceArgs)) = positioned else {
+      return XCTFail("expected media output, got \(String(describing: positioned))")
+    }
+    XCTAssertEqual(output, "output")
+    XCTAssertEqual(deviceArgs, ["USB", "Audio"])
+
+    let clipboard = parseMappingCommand(argv: ["flash", "clipboard", "show"])
+    guard
+      case .flashCommand(
+        .pluginCommand(let clipboardCommand, let clipboardSub, let clipboardArgs)) = clipboard
+    else {
+      return XCTFail("expected clipboard show, got \(String(describing: clipboard))")
+    }
+    XCTAssertEqual(clipboardCommand, "clipboard")
+    XCTAssertEqual(clipboardSub, "show")
+    XCTAssertEqual(clipboardArgs, [])
+
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "clipboard"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "media"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "media", "not-a-subcommand"]))
   }
 
   func testNonFlashArgvIsTreatedAsShellCommand() {
@@ -577,6 +620,10 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testInvalidFlashURLRejected() {
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "caffeinate_toggle"]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "caffeinate", "toggle"])?.command,
+      .pluginCommand(command: "caffeinate", subcommand: "toggle", args: []))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "unknown_command"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "app_open"]))  // no name
     XCTAssertNil(parseMappingCommand(argv: ["flash", "alert_show"]))  // no message

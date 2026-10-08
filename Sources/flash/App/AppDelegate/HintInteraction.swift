@@ -161,9 +161,9 @@ extension AppDelegate {
     hintActivationStats.record(bundleIdentifier: bundleIdentifier, ms: ms, empty: empty)
   }
 
-  /// Whether secure input was on the last time Flash looked — at a hint
-  /// activation, or when the tap read it for a keystroke. Published as
-  /// `#{flash.secure_input}`; never polled.
+  /// Whether secure input was on the last time Flash looked. The tap and a
+  /// hint activation publish a change; `SecureInputFixer` publishes the
+  /// samples the tap cannot see. Shown as `#{flash.secure_input}`.
   func noteSecureInput(_ enabled: Bool) {
     guard enabled != secureInputObserved else { return }
     secureInputObserved = enabled
@@ -204,7 +204,22 @@ extension AppDelegate {
   static func hintCommitNeedsFrontmostHandoff(
     targetPID: pid_t?, frontmostPID: pid_t?
   ) -> Bool {
-    guard let targetPID else { return false }
+    let activates: Bool
+    if let targetPID, let app = NSRunningApplication(processIdentifier: targetPID) {
+      // An agent that shows a dialog (Gatekeeper) never becomes the frontmost
+      // app. Waiting for it to do so only delays the click.
+      activates = app.activationPolicy == .regular
+    } else {
+      activates = true
+    }
+    return hintCommitNeedsFrontmostHandoff(
+      targetPID: targetPID, frontmostPID: frontmostPID, targetActivates: activates)
+  }
+
+  static func hintCommitNeedsFrontmostHandoff(
+    targetPID: pid_t?, frontmostPID: pid_t?, targetActivates: Bool
+  ) -> Bool {
+    guard let targetPID, targetActivates else { return false }
     return targetPID != frontmostPID
   }
 

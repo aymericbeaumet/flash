@@ -111,6 +111,14 @@ struct HintSession {
     return nil
   }
 
+  /// EasyMotion (`mouse_bigram`): the query, or the hint labels that follow it.
+  /// `bigramQuery` stays set while those labels are typed, so Backspace can
+  /// return to the letter. Nil for every other session.
+  var isBigramCapture: Bool {
+    if case .bigram = phase { return true }
+    return bigramQuery != nil
+  }
+
   /// Search, adjustment, pointer and bigram phases own the keyboard even with
   /// no hint on screen; typing labels needs hints.
   var isActive: Bool {

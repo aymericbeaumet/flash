@@ -10,15 +10,16 @@ enum MouseGrid {
     /// Rows of keys, top row first. Every step of the grid tiles its region
     /// with this matrix, so a cell's position always matches its key's.
     case keyboard([[Character]])
-    /// `--bisect`: y/u/b/n keep a quadrant; h/j/k/l keep a half.
-    case bisect
+    /// `--bisect`: the layout's y/u and b/n keys keep a quadrant; its hjkl
+    /// cluster keeps a half. QWERTY's cluster is the static value tests use.
+    case bisect(Alphabet.Navigation)
 
-    static let bisectKeys: [[Character]] = [["y", "u"], ["b", "n"]]
+    static var qwertyBisect: Self { .bisect(.qwerty) }
 
     var keys: [[Character]] {
       switch self {
       case .keyboard(let keys): return keys
-      case .bisect: return Self.bisectKeys
+      case .bisect(let navigation): return navigation.quadrants
       }
     }
 
@@ -98,7 +99,8 @@ enum MouseGrid {
       height: size.height)
   }
 
-  /// Bisect's h/j/k/l: the half of `region` on the `direction` side.
+  /// The half of `region` on the `direction` side. Bisect's home-row cluster
+  /// selects one of these.
   static func half(of region: CGRect, _ direction: Direction) -> CGRect {
     switch direction {
     case .left:
@@ -122,7 +124,7 @@ enum MouseGrid {
     switch shape {
     case .keyboard:
       return depth + 1 >= steps || min(cell.width, cell.height) <= minimumTerminalSize
-    case .bisect:
+    case .bisect(_):
       return keepCommits(CGRect(origin: .zero, size: cell))
     }
   }
@@ -177,12 +179,25 @@ enum MouseGrid {
     return out
   }
 
-  /// The grid's starting area: the usable frame (below Flash's status bar) of
-  /// the front window's screen, else the pointer's, else the primary's.
+  /// The grid's root on one display. The usable frame stops at the Dock and,
+  /// when the bar is showing, at the bottom of Flash's status bar. The grid
+  /// covers that bar; it still stops at the Dock, and at the menu bar when
+  /// the Flash bar is hidden.
+  static func gridRoot(of layout: WindowScreenLayout, includeStatusBar: Bool) -> CGRect {
+    let usable = layout.usableFrame
+    guard includeStatusBar, usable.maxY < layout.frame.maxY else { return usable }
+    return CGRect(
+      x: usable.minX, y: usable.minY, width: usable.width,
+      height: layout.frame.maxY - usable.minY)
+  }
+
+  /// The grid's starting area: `gridRoot` of the front window's screen, else
+  /// the pointer's, else the primary's.
   static func initialRegion(
     context: AppContext?,
     layouts: [WindowScreenLayout],
-    pointer: CGPoint?
+    pointer: CGPoint?,
+    includeStatusBar: Bool
   ) -> (root: CGRect, screenIndex: Int)? {
     guard !layouts.isEmpty else { return nil }
     let index: Int
@@ -197,7 +212,7 @@ enum MouseGrid {
     } else {
       index = layouts.firstIndex { $0.frame.origin == .zero } ?? 0
     }
-    return (layouts[index].usableFrame, index)
+    return (gridRoot(of: layouts[index], includeStatusBar: includeStatusBar), index)
   }
 
   /// Where a grid session is, and every earlier position so Backspace can undo
@@ -280,7 +295,7 @@ enum MouseGrid {
     }
 
     /// Tab / Shift-Tab: the whole of the next / previous display. `roots` are
-    /// the displays' usable frames in `NSScreen.screens` order. False with a
+    /// the displays' grid roots in `NSScreen.screens` order. False with a
     /// single display.
     @discardableResult
     mutating func switchScreen(_ delta: Int, roots: [CGRect]) -> Bool {

@@ -16,8 +16,8 @@ execution, hardware integrations, or custom windows and web views.
 | [`hs.eventtap` keystrokes](https://www.hammerspoon.org/docs/hs.eventtap.html) | `send_key` and `send_keys` for explicit key sequences |
 | [`hs.task`](https://www.hammerspoon.org/docs/hs.task.html) | A mapping can run an argv array; managed plugins can expose resident commands and data |
 | [`hs.menubar`](https://www.hammerspoon.org/docs/hs.menubar.html), [`hs.canvas`](https://www.hammerspoon.org/docs/hs.canvas.html) | The configurable status bar and desktop widgets, with tmux-format templates and plugin data |
-| [`hs.audiodevice`](https://www.hammerspoon.org/docs/hs.audiodevice.html), [`hs.caffeinate`](https://www.hammerspoon.org/docs/hs.caffeinate.html) | Bundled `media` commands for volume, playback, and [input/output device selection](audio.md); `caffeinate_on`, `caffeinate_off`, and `caffeinate_toggle` plugin verbs |
-| [`hs.pasteboard`](https://www.hammerspoon.org/docs/hs.pasteboard.html), [`hs.shortcuts`](https://www.hammerspoon.org/docs/hs.shortcuts.html) | Clipboard history with `:clipboard`; Shortcuts catalog with `:flashlight @shortcuts` |
+| [`hs.audiodevice`](https://www.hammerspoon.org/docs/hs.audiodevice.html), [`hs.caffeinate`](https://www.hammerspoon.org/docs/hs.caffeinate.html) | Bundled `media` commands for volume, playback, and [input/output device selection](audio.md); `:caffeinate on`, `:caffeinate off`, and `:caffeinate toggle` |
+| [`hs.pasteboard`](https://www.hammerspoon.org/docs/hs.pasteboard.html), [`hs.shortcuts`](https://www.hammerspoon.org/docs/hs.shortcuts.html) | Clipboard history with `:clipboard show`; Shortcuts catalog with `:flashlight @shortcuts` |
 
 ## Move a hotkey
 
@@ -39,7 +39,7 @@ can live in `~/.config/flash/flash.toml` instead:
 "alt+m" = ["flash", "window_minimize"]
 "alt+shift+m" = ["flash", "window_restore"]
 "alt+l" = ["flash", "window_focus", "--direction=right"]
-"alt+c" = ["flash", "caffeinate_toggle"]
+"alt+c" = ["flash", "caffeinate", "toggle"]
 ```
 
 Flash reloads mappings when the file changes. Run `flash config_check` to

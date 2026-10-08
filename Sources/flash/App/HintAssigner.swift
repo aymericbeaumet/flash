@@ -28,6 +28,7 @@ enum HintAssigner {
     alphabet: [Character],
     leftHand: Set<Character> = [],
     keyScores: [Character: Int] = [:],
+    keyRows: [Character: Int] = [:],
     minLength: Int = 1,
     preserving previous: [AssignedHint] = []
   ) -> [AssignedHint] {
@@ -36,6 +37,7 @@ enum HintAssigner {
       alphabet: alphabet,
       leftHand: leftHand,
       keyScores: keyScores,
+      keyRows: keyRows,
       minLength: minLength
     )
     guard !previous.isEmpty else {
@@ -121,15 +123,25 @@ enum HintAssigner {
   ///     length L (smallest L with K^L ≥ count and L ≥ minLength) —
   ///     the original uniform-length behaviour.
   ///
-  /// Within a length class, labels are sorted by an ergonomic score
-  /// that favours left/right hand alternation first, rewards high-value
-  /// layout keys inside the same hand pattern, penalises same-key repeats,
-  /// then falls back to deterministic key order.
+  /// Within a length class, labels are sorted by an ergonomic score.
+  /// A hand change outranks every row jump. Less travel between physical
+  /// rows then outranks key ease, graded by how many rows the fingers
+  /// move. Key ease is `Alphabet.physicalKeyScore`: home row, then bottom,
+  /// then top. Same-key repeats rank last. A key with no row adds no
+  /// travel penalty, so a literal alphabet keeps its written order. Ties
+  /// keep alphabet order.
+  ///
+  /// Single-character labels stay in front, but only while the keys held
+  /// back as prefixes can still spell the remaining labels as left/right
+  /// alternations. Reserving every strong key as a single forces those
+  /// pairs onto the leftover prefixes and fills the screen with same-hand
+  /// bigrams.
   static func generateLabels(
     count: Int,
     alphabet: [Character],
     leftHand: Set<Character> = [],
     keyScores: [Character: Int] = [:],
+    keyRows: [Character: Int] = [:],
     minLength: Int = 1
   ) -> [String] {
     guard count > 0 else { return [] }
@@ -146,10 +158,22 @@ enum HintAssigner {
       if count <= k {
         return (0..<count).map { String(alphabet[$0]) }
       }
+      if let alternating = alternatingMixedLabels(
+        count: count,
+        alphabet: alphabet,
+        leftHand: leftHand,
+        keyScores: keyScores,
+        keyRows: keyRows
+      ) {
+        return alternating
+      }
       // Max X such that the remaining count fits in 2-char labels with
       // a prefix-free constraint:
       //   X + (K − X) * K ≥ count
       //   X(K − 1) ≤ K² − count
+      // Used when one hand cannot cover the rest, or the alphabet has no
+      // hand split. The two-character tail is still score order, so
+      // alternations come before same-hand pairs.
       let cap = (k * k - count) / max(1, k - 1)
       let singlesCount = max(0, min(k - 1, cap))
       if singlesCount > 0 {
@@ -159,6 +183,7 @@ enum HintAssigner {
           alphabet: alphabet,
           leftHand: leftHand,
           keyScores: keyScores,
+          keyRows: keyRows,
           length: 2
         )
         .lazy.filter {
@@ -188,6 +213,7 @@ enum HintAssigner {
       alphabet: alphabet,
       leftHand: leftHand,
       keyScores: keyScores,
+      keyRows: keyRows,
       length: length
     )
     if sorted.count >= count {
@@ -198,7 +224,7 @@ enum HintAssigner {
 
   /// Returns the full K^L candidate space sorted by ergonomic score
   /// (descending), with a deterministic key-order tiebreak. Memoised by
-  /// `(alphabet, leftHand, keyScores, length)` via a bounded LRU.
+  /// `(alphabet, leftHand, keyScores, keyRows, length)` via a bounded LRU.
   ///
   /// In steady state the user runs one alphabet preset, so cache hits
   /// dominate; the LRU cap (`cacheCapacity`) keeps memory bounded even
@@ -207,12 +233,14 @@ enum HintAssigner {
     alphabet: [Character],
     leftHand: Set<Character>,
     keyScores: [Character: Int] = [:],
+    keyRows: [Character: Int] = [:],
     length: Int
   ) -> [String] {
     let key = CacheKey(
       alphabet: alphabet,
       leftHand: leftHand,
       keyScores: keyScores,
+      keyRows: keyRows,
       length: length
     )
     os_unfair_lock_lock(&cacheLock)
@@ -226,6 +254,7 @@ enum HintAssigner {
       alphabet: alphabet,
       leftHand: leftHand,
       keyScores: keyScores,
+      keyRows: keyRows,
       length: length
     )
 
@@ -244,12 +273,15 @@ enum HintAssigner {
     let leftHandSorted: [Character]
     let scoresSorted: [Int]
     let scoreChars: [Character]
+    let rowChars: [Character]
+    let rowsSorted: [Int]
     let length: Int
 
     init(
       alphabet: [Character],
       leftHand: Set<Character>,
       keyScores: [Character: Int],
+      keyRows: [Character: Int],
       length: Int
     ) {
       self.alphabet = alphabet
@@ -259,6 +291,9 @@ enum HintAssigner {
       let sortedKeys = keyScores.keys.sorted()
       self.scoreChars = sortedKeys
       self.scoresSorted = sortedKeys.map { keyScores[$0] ?? 0 }
+      let sortedRows = keyRows.keys.sorted()
+      self.rowChars = sortedRows
+      self.rowsSorted = sortedRows.map { keyRows[$0] ?? 0 }
       self.length = length
     }
   }
@@ -301,9 +336,31 @@ enum HintAssigner {
 
   private enum Score {
     static let keyWeight = 10
-    static let handAlternation = 10_000
-    static let sameHand = -10_000
-    static let sameKey = -50_000
+    /// One row of travel. Larger than the whole key-ease total of a label
+    /// of up to `maxPackedLength` keys (10 × 331 × 12 = 39_720).
+    static let rowStep = 40_000
+    /// One hand change. Larger than every row of travel on that label
+    /// (11 steps × 3 rows × `rowStep` = 1_320_000).
+    static let handAlternation = 1_400_000
+    static let sameHand = -1_400_000
+    /// Worse than a same-hand transition plus a full three-row jump.
+    static let sameKey = -4_000_000
+  }
+
+  /// Score of one step. `rowDistance` is nil when either key has no
+  /// physical row, so a literal alphabet pays nothing for travel.
+  private static func transitionScore(sameKey: Bool, changesHand: Bool, rowDistance: Int?) -> Int {
+    if sameKey { return Score.sameKey }
+    var score = changesHand ? Score.handAlternation : Score.sameHand
+    if let rowDistance {
+      score -= rowDistance * Score.rowStep
+    }
+    return score
+  }
+
+  private static func rowDistance(_ previous: Int, _ next: Int) -> Int? {
+    guard previous >= 0, next >= 0 else { return nil }
+    return abs(previous - next)
   }
 
   /// Maximum supported label length when packing indices into a UInt64.
@@ -316,6 +373,7 @@ enum HintAssigner {
     alphabet: [Character],
     leftHand: Set<Character>,
     keyScores: [Character: Int],
+    keyRows: [Character: Int],
     length: Int
   ) -> [String] {
     let k = alphabet.count
@@ -327,6 +385,10 @@ enum HintAssigner {
     for (i, ch) in alphabet.enumerated() { leftByIndex[i] = leftHand.contains(ch) }
     var keyScoreByIndex = [Int](repeating: 0, count: k)
     for (i, ch) in alphabet.enumerated() { keyScoreByIndex[i] = keyScores[ch] ?? 0 }
+    var rowByIndex = [Int](repeating: -1, count: k)
+    for (i, ch) in alphabet.enumerated() {
+      if let row = keyRows[ch] { rowByIndex[i] = row }
+    }
 
     // When length fits in our packed UInt64 (and the alphabet fits
     // in 5 bits per slot) we sort a single `[(score, packedIndices)]`
@@ -347,15 +409,13 @@ enum HintAssigner {
           score += keyScoreByIndex[indices[i]] * Score.keyWeight
         }
         for i in 1..<length {
-          let a = indices[i - 1]
-          let b = indices[i]
-          if a == b {
-            score += Score.sameKey
-          } else if leftByIndex[a] != leftByIndex[b] {
-            score += Score.handAlternation
-          } else {
-            score += Score.sameHand
-          }
+          let previous = indices[i - 1]
+          let next = indices[i]
+          score += transitionScore(
+            sameKey: previous == next,
+            changesHand: leftByIndex[previous] != leftByIndex[next],
+            rowDistance: rowDistance(rowByIndex[previous], rowByIndex[next])
+          )
         }
         var packed: UInt64 = 0
         for i in 0..<length {
@@ -404,15 +464,13 @@ enum HintAssigner {
         score += keyScoreByIndex[indices[i]] * Score.keyWeight
       }
       for i in 1..<length {
-        let a = indices[i - 1]
-        let b = indices[i]
-        if a == b {
-          score += Score.sameKey
-        } else if leftByIndex[a] != leftByIndex[b] {
-          score += Score.handAlternation
-        } else {
-          score += Score.sameHand
-        }
+        let previous = indices[i - 1]
+        let next = indices[i]
+        score += transitionScore(
+          sameKey: previous == next,
+          changesHand: leftByIndex[previous] != leftByIndex[next],
+          rowDistance: rowDistance(rowByIndex[previous], rowByIndex[next])
+        )
       }
       candidates.append(Candidate(indices: indices, score: score))
     }
@@ -438,7 +496,8 @@ enum HintAssigner {
   static func scoreLabel(
     _ label: String,
     leftHand: Set<Character>,
-    keyScores: [Character: Int]
+    keyScores: [Character: Int],
+    keyRows: [Character: Int] = [:]
   ) -> Int {
     let chars = Array(label)
     guard !chars.isEmpty else { return 0 }
@@ -448,15 +507,122 @@ enum HintAssigner {
     }
     if chars.count < 2 { return score }
     for i in 1..<chars.count {
-      if chars[i] == chars[i - 1] {
-        score += Score.sameKey
-      } else {
-        let prevLeft = leftHand.contains(chars[i - 1])
-        let currLeft = leftHand.contains(chars[i])
-        score += prevLeft != currLeft ? Score.handAlternation : Score.sameHand
-      }
+      let previous = chars[i - 1]
+      let next = chars[i]
+      score += transitionScore(
+        sameKey: previous == next,
+        changesHand: leftHand.contains(previous) != leftHand.contains(next),
+        rowDistance: rowDistance(keyRows[previous] ?? -1, keyRows[next] ?? -1)
+      )
     }
     return score
+  }
+
+  /// Largest set of one-key labels whose withheld prefixes can spell the
+  /// rest as alternating two-key labels. Nil when a hand is missing or
+  /// there are not enough alternating pairs: the caller then keeps the
+  /// shorter labels and allows same-hand pairs.
+  private static func alternatingMixedLabels(
+    count: Int,
+    alphabet: [Character],
+    leftHand: Set<Character>,
+    keyScores: [Character: Int],
+    keyRows: [Character: Int]
+  ) -> [String]? {
+    let k = alphabet.count
+    guard count > k else { return nil }
+    var left: [Character] = []
+    var right: [Character] = []
+    left.reserveCapacity(k)
+    right.reserveCapacity(k)
+    for character in alphabet {
+      if leftHand.contains(character) {
+        left.append(character)
+      } else {
+        right.append(character)
+      }
+    }
+    guard !left.isEmpty, !right.isEmpty else { return nil }
+
+    let sorted = sortedCandidates(
+      alphabet: alphabet,
+      leftHand: leftHand,
+      keyScores: keyScores,
+      keyRows: keyRows,
+      length: 2
+    )
+    var scoreOf: [String: Int] = [:]
+    scoreOf.reserveCapacity(sorted.count)
+    for label in sorted {
+      scoreOf[label] = scoreLabel(
+        label, leftHand: leftHand, keyScores: keyScores, keyRows: keyRows)
+    }
+
+    for prefixCount in 1..<k {
+      let needed = count - (k - prefixCount)
+      guard needed > 0, prefixCount * k >= needed else { continue }
+      var winner: (singles: [Character], bigrams: [String])?
+      for rightCount in 0...min(prefixCount, right.count) {
+        let leftCount = prefixCount - rightCount
+        guard leftCount >= 0, leftCount <= left.count else { continue }
+        let capacity = rightCount * left.count + leftCount * right.count
+        guard capacity >= needed else { continue }
+        var prefixes = Set<Character>(minimumCapacity: prefixCount)
+        for character in right.prefix(rightCount) { prefixes.insert(character) }
+        for character in left.prefix(leftCount) { prefixes.insert(character) }
+        var bigrams: [String] = []
+        bigrams.reserveCapacity(needed)
+        for label in sorted {
+          guard let first = label.first, prefixes.contains(first) else { continue }
+          let chars = Array(label)
+          guard chars.count == 2, leftHand.contains(chars[0]) != leftHand.contains(chars[1])
+          else { continue }
+          bigrams.append(label)
+          if bigrams.count == needed { break }
+        }
+        guard bigrams.count == needed else { continue }
+        let singles = alphabet.filter { !prefixes.contains($0) }
+        if let current = winner,
+          !planBeats(
+            singles, bigrams,
+            current.singles, current.bigrams,
+            keyScores: keyScores,
+            scoreOf: scoreOf
+          )
+        {
+          continue
+        }
+        winner = (singles, bigrams)
+      }
+      if let winner {
+        return winner.singles.map(String.init) + winner.bigrams
+      }
+    }
+    return nil
+  }
+
+  /// True when the first plan is the better label sequence. Both plans
+  /// have the same number of singles; the earlier label decides, and a
+  /// one-key label is compared by its key score.
+  private static func planBeats(
+    _ singles: [Character],
+    _ bigrams: [String],
+    _ otherSingles: [Character],
+    _ otherBigrams: [String],
+    keyScores: [Character: Int],
+    scoreOf: [String: Int]
+  ) -> Bool {
+    for (lhs, rhs) in zip(singles, otherSingles) {
+      let leftScore = keyScores[lhs] ?? 0
+      let rightScore = keyScores[rhs] ?? 0
+      if leftScore != rightScore { return leftScore > rightScore }
+    }
+    for (lhs, rhs) in zip(bigrams, otherBigrams) {
+      let leftScore = scoreOf[lhs] ?? 0
+      let rightScore = scoreOf[rhs] ?? 0
+      if leftScore != rightScore { return leftScore > rightScore }
+    }
+    return false
   }
 
   private static func intPow(_ base: Int, _ exp: Int) -> Int {

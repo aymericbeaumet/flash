@@ -272,16 +272,16 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(cmd(kVK_Tab, "\t", [.shift]), .screen(-1))
     XCTAssertEqual(cmd(kVK_ANSI_Grave, "`"), .toggleFollow)
 
-    XCTAssertEqual(cmd(kVK_ANSI_H, "h", shape: .bisect), .half(.left, []))
-    XCTAssertEqual(cmd(kVK_ANSI_J, "j", shape: .bisect), .half(.down, []))
-    XCTAssertEqual(cmd(kVK_ANSI_K, "k", shape: .bisect), .half(.up, []))
-    XCTAssertEqual(cmd(kVK_ANSI_L, "l", [.shift], shape: .bisect), .half(.right, [.shift]))
+    XCTAssertEqual(cmd(kVK_ANSI_H, "h", shape: .qwertyBisect), .half(.left, []))
+    XCTAssertEqual(cmd(kVK_ANSI_J, "j", shape: .qwertyBisect), .half(.down, []))
+    XCTAssertEqual(cmd(kVK_ANSI_K, "k", shape: .qwertyBisect), .half(.up, []))
+    XCTAssertEqual(cmd(kVK_ANSI_L, "l", [.shift], shape: .qwertyBisect), .half(.right, [.shift]))
     for key in ["y", "u", "b", "n"] {
-      XCTAssertEqual(cmd(0, key, shape: .bisect), .cell(Character(key), []))
+      XCTAssertEqual(cmd(0, key, shape: .qwertyBisect), .cell(Character(key), []))
     }
-    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", shape: .bisect), .cancel)
-    XCTAssertEqual(cmd(kVK_Return, "\r", shape: .bisect), .commitHere([]))
-    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", shape: .bisect), .back)
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", shape: .qwertyBisect), .cancel)
+    XCTAssertEqual(cmd(kVK_Return, "\r", shape: .qwertyBisect), .commitHere([]))
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", shape: .qwertyBisect), .back)
   }
 
   func testGridTypedCharacterIsUnshiftedOnlyWhileShiftIsHeld() {
@@ -885,6 +885,29 @@ final class OverlayInputTests: XCTestCase {
     }
     panel.inputMode = .passive
     panel.hintKeyRoute = .labels
+  }
+
+  func testHintCursorHidesUntilTheMouseMovesAndShowsWhenHintsEnd() {
+    let panel = OverlayPanel()
+    var hiddenUntilMove: [Bool] = []
+    let previous = OverlayPanel.hintCursorVisibility
+    OverlayPanel.hintCursorVisibility = { hiddenUntilMove.append($0) }
+    defer {
+      OverlayPanel.hintCursorVisibility = previous
+      panel.inputMode = .passive
+    }
+    panel.hintKeyRoute = .labels
+    panel.inputMode = .hints
+    let shown = expectation(description: "cursor hides")
+    DispatchQueue.main.async { shown.fulfill() }
+    wait(for: [shown], timeout: 1)
+    XCTAssertEqual(hiddenUntilMove, [true])
+
+    panel.inputMode = .passive
+    let restored = expectation(description: "cursor shows")
+    DispatchQueue.main.async { restored.fulfill() }
+    wait(for: [restored], timeout: 1)
+    XCTAssertEqual(hiddenUntilMove, [true, false])
   }
 
   func testActiveWindowBorderIsStrokedInTheStyleOfTheBadgeShown() {

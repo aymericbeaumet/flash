@@ -14,7 +14,9 @@ remains available through `:help mappings`.
 :help config
 ```
 
-The homepage links first steps, feature guides, and live diagnostics. Guides
+The homepage is one checklist for this Mac. It marks permissions, the config
+file, shortcuts, plugins, and the status bar from the resident's state, and it
+remembers which guides this browser has opened. Guides
 cover hints, grid/pointer control, modes, flashlight, mappings, configuration,
 status formats, the status bar, widgets, popups, plugins, privacy,
 troubleshooting and development. Plugin manifests add their own topics.
@@ -23,12 +25,12 @@ troubleshooting and development. Plugin manifests add their own topics.
 
 | Page | What it describes |
 | --- | --- |
-| Mappings | Effective bindings after defaults, plugin contributions and user overrides |
-| Commands | Built-in and installed plugin command definitions |
+| Mappings | Effective bindings after defaults, plugin contributions and user overrides, grouped by mode. A blank search stays alphabetical by command. The search ranks what a binding does, including typos, and each row's ? explains that binding. The Source column is the same badge as Commands |
+| Commands | Built-in and installed plugin command definitions, sorted alphabetically |
 | Plugins | Loaded manifests, process health, errors and capabilities |
-| Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state |
+| Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. The same page edits the TOML file; Purge defaults removes bundled values in the editor and Save writes the file |
 | Logs | Recent structured diagnostics and interaction traces |
-| Clipboard | Recent entries supplied by the clipboard plugin |
+| Clipboard | Recent text, images, formatted copies, and files from the clipboard plugin. Each entry can be copied back or deleted |
 
 The browser follows the resident's event stream: Flash pushes a snapshot when
 something it shows changes, never on a timer, and the page derives uptimes
@@ -47,12 +49,14 @@ the browser commands needs it, or at launch with
 
 | Path | Destination |
 | --- | --- |
-| `/` | Help homepage |
+| `/` | Help homepage: a live onboarding checklist |
 | `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
-| `/mappings`, `/commands` | Effective mappings and how each action resolves in the focused app; command catalog. `?q=<text>` starts the list filtered |
+| `/mappings`, `/commands` | Effective mappings and how each action resolves in the focused app; command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
 | `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
-| `/state`, `/logs`, `/clipboard` | Runtime, logs and clipboard pages |
+| `/state`, `/clipboard` | Runtime and clipboard pages |
+| `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |
 | `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |
+| `/api/clipboard/<id>` | `GET` returns one history image. `DELETE` removes that entry. The id is 32 lowercase hex characters |
 
 The page routes itself with the History API: same-origin page links navigate
 in place, back/forward restore each page's scroll position, and modified,
@@ -103,7 +107,10 @@ print a subset.
 `Scripts/build-inspector.sh --release` from the repository root to update the
 committed `Sources/flash/Resources/inspector.html`. Plain SwiftPM builds serve
 that resource; CI checks that it matches the frontend source. A dev install
-builds a separate unminified page and stages it into the installed app.
+builds a separate unminified page and stages it into the app at
+`Contents/Resources/Flash_flash.bundle/inspector.html`. The resident reads
+that copy. The generated `Bundle.module` path does not, so leaving the new
+page only in `.build` does not change what the installed app serves.
 
 Check browser routes (direct loads, back/forward, heading anchors), search,
 guide links, live/disconnected states, narrow layouts and print preview after

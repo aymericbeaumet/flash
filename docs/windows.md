@@ -66,3 +66,9 @@ window once for the current configuration, so moving it by hand afterward does
 not fight an automatic resize. Saving the config evaluates existing
 non-minimized windows with frames on connected displays against the changed
 rules too. macOS Accessibility does not identify which Space each window is on.
+
+Unplugging a display puts tracked layouts back on a remaining screen. macOS
+does that itself for background windows and often leaves the frontmost window
+at the old size; Flash scales that window, and any other that no longer fits
+a connected display, onto the screen it lands on. A window parked off every
+display stays there.

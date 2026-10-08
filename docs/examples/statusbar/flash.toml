@@ -4,13 +4,28 @@ enabled = true
 # The bar is one line: the template's newlines are dropped, so each lane can
 # sit on its own lines.
 template = """
-#[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
-#[align=absolute-centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
-#[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
-#[popup=ai-usage]#[link=https://claude.ai/settings/usage]#{flash.plugin.aiproviders.claude_label}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#{flash.plugin.aiproviders.codex_label}#[nolink]#[nopopup]
-#[fg=colour245] · #[popup=cpu]#{flash.plugin.cpu.label}#[nopopup] #[popup=memory]#{flash.plugin.memory.label}#[nopopup] #[popup=disks]#{flash.plugin.disks.label}#[nopopup] #[popup=network]#{flash.plugin.network.label}#[nopopup] #[popup=battery]#{flash.plugin.power.label}#[nopopup]
+#[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.aymericbeaumet.com]#[label]aggr#[default] #{flash.plugin.feed.label}#[nolink]#[nopopup]
+# The centre lane is the notch: a housing at the middle of the bar.
+#[align=centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
+#[align=right]#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default] ,}
+#[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.source.cld}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.source.cdx}#[nolink] #[link=https://grok.com/?_s=usage]#[label]Grk#[default] #{flash.source.grk}#[nolink]#[nopopup]
+#[fg=colour245] · #[popup=cpu]#[label]CPU#[default] #{p-3:flash.plugin.cpu.label}#[nopopup] #[popup=memory]#[label]MEM#[default] #{p-3:flash.plugin.memory.label}#[nopopup] #[popup=disks]#[label]DSK#[default] #{p-3:flash.plugin.disks.label}#[nopopup] #[popup=network]#[label]NET#[default] #{p-4:flash.plugin.network.label}#[nopopup] #[popup=battery]#[label]BAT#[default] #{flash.plugin.power.label}#[nopopup]
 #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
+
+# The names and colours above are the template's. Each source prints only the
+# metric (`6%↻22h`). Replace these echoes with the commands that read your quotas.
+[statusbar.sources.cld]
+command = ["echo", "53%↻5d"]
+interval = 60
+
+[statusbar.sources.cdx]
+command = ["echo", "54%↻5d"]
+interval = 60
+
+[statusbar.sources.grk]
+command = ["echo", "9%↻1d"]
+interval = 60
 
 [popup.active-app]
 text = """
@@ -45,8 +60,13 @@ text = "#{flash.plugin.power.details}"
 [popup.date]
 text = "#{flash.calendar}"
 
+# Hover of the aggr name and its headline. The plugin prints the headline only.
+[popup.feed]
+command = ["newsboat", "-u", "urls", "-C", "config"]
+persistent = true
+cwd = "."
+
 [plugin.feed]
-label = "AGGR"
 url = "https://aggr.aymericbeaumet.com/rss.xml"
 refresh_interval = 300
 cycle_interval = 30

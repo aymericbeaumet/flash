@@ -18,7 +18,7 @@
   "commands": [
     {
       "command": "power",
-      "subcommand": "",
+      "subcommand": "show",
       "description": "Show current battery and power details"
     },
     {

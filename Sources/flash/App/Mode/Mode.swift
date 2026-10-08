@@ -37,9 +37,10 @@ enum Mode: Equatable {
   /// left by `leave_mode`, which closes the popup.
   case terminal(restoreTo: ReturnMode)
 
-  /// Momentary layer while the NORMAL leader key is physically held.
-  /// Mappings come from `[mode.hyper.mappings]`. Releasing the leader returns
-  /// to `restoreTo` (NORMAL). A clean tap still arms a `<leader>` sequence.
+  /// Momentary layer while `mode.normal.hyper` is physically held. The default
+  /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
+  /// the key returns to `restoreTo` (NORMAL). A clean tap of the leader still
+  /// arms a `<leader>` sequence.
   case hyper(restoreTo: ReturnMode)
 }
 

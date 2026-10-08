@@ -44,11 +44,18 @@ enum ConfigLoader {
     /// non-primary layer (e.g. the embedded default config) names its file.
     /// nil for the primary (user) config, whose diagnostics stay unprefixed.
     var diagnosticLabel: String?
+    /// Nil for the bundled default. A user file, environment variable, or
+    /// other later layer sets the writer the inspector shows on overrides.
+    var valueSource: ConfigValueSource?
 
-    init(text: String, sourceURL: URL? = nil, diagnosticLabel: String? = nil) {
+    init(
+      text: String, sourceURL: URL? = nil, diagnosticLabel: String? = nil,
+      valueSource: ConfigValueSource? = nil
+    ) {
       self.text = text
       self.sourceURL = sourceURL
       self.diagnosticLabel = diagnosticLabel
+      self.valueSource = valueSource
     }
   }
 
@@ -67,7 +74,12 @@ enum ConfigLoader {
     if let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     {
-      layers.append(Layer(text: text, sourceURL: url.resolvingSymlinksInPath()))
+      let file = url.resolvingSymlinksInPath()
+      let name = file.lastPathComponent
+      // A file that is itself the bundled default stays the base layer.
+      let source: ConfigValueSource? =
+        name == "config.default.toml" ? nil : ConfigValueSource(layer: "config", detail: name)
+      layers.append(Layer(text: text, sourceURL: file, valueSource: source))
     }
     return parseLayers(layers, environment: env)
   }
@@ -111,6 +123,7 @@ enum ConfigLoader {
     var pendingModeMappings: [PendingModeMapping] = []
 
     for layer in layers + environmentLayers(environment) {
+      config.activeValueSource = layer.valueSource
       let diagnosticsBefore = config.diagnostics.count
       let locations = ConfigSourceLocationIndex(text: layer.text)
       do {
@@ -138,11 +151,11 @@ enum ConfigLoader {
           file: diagnostic.file ?? layer.sourceURL?.path)
       }
     }
+    config.activeValueSource = nil
 
     // Resolve built-in `<leader>` keys before the file's mappings land.
-    // Otherwise `<leader>s` is still the placeholder when the file's
-    // already-resolved `\s` arrives, so the two sit side by side and the
-    // later refresh turns them into a duplicate.
+    // Otherwise a placeholder `<leader>…` and the file's already-resolved
+    // key sit side by side, and the later refresh turns them into a duplicate.
     config.mode.refreshLeaderDerivedDefaults()
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
@@ -414,6 +427,7 @@ enum ConfigLoader {
       sectionTable(root[name], name: name, locations: locations, into: &config)
     }
     applyApp(section("app"), locations: locations, into: &config)
+    applyKeyboard(section("keyboard"), locations: locations, into: &config)
     applyHints(section("hints"), locations: locations, into: &config)
     applyPlugins(section("plugins"), locations: locations, sourceURL: sourceURL, into: &config)
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
@@ -467,6 +481,7 @@ enum ConfigLoader {
   ) {
     let sectionKeys: [String: Set<String>] = [
       "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
+      "keyboard": ["layout"],
       "hints": [
         "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
         "mouse_grid_keys", "mouse_grid_cursor_follow", "restore_pointer",
@@ -929,6 +944,21 @@ enum ConfigLoader {
       assign: { value, config in config.app.keyboardLayout = value })
   }
 
+  private static func applyKeyboard(
+    _ table: TOMLTable?,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    let names = Alphabet.layoutNames.joined(separator: ", ")
+    applyString(
+      table["layout"], path: ["keyboard", "layout"],
+      message: "keyboard.layout must be one of \(names)",
+      locations: locations, into: &config,
+      validate: { Alphabet.layouts[$0.lowercased()] != nil },
+      assign: { value, config in config.keyboard.layout = value.lowercased() })
+  }
+
   private static func applyStatusBarTail(
     _ table: TOMLTable,
     locations: ConfigSourceLocationIndex,
@@ -1135,6 +1165,7 @@ enum ConfigLoader {
         environment: parsed.environment, intervalSeconds: Double(interval),
         cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds,
         historyLength: history > 0 ? history : nil)
+      config.recordLocation(path: path, location: location)
       if definition["interval"] == nil {
         config.statusBar.sourcesUsingDefaultInterval.insert(name)
       } else {
@@ -1269,7 +1300,8 @@ enum ConfigLoader {
       guard let raw = value.string, let parsed = Config.PopupSize(raw) else {
         invalid(
           ".size must be \"COLUMNSxROWS\", each side a cell count from 1 to 1000 or a "
-            + "percentage of the screen from 1% to 100%, like \"100x28\" or \"90%x85%\"",
+            + "percentage of the screen from 1% to 100% (a fraction is allowed), "
+            + "like \"100x28\", \"90%x85%\" or \"78.615%x78.615%\"",
           at: "size")
         return
       }
@@ -1639,18 +1671,36 @@ enum ConfigLoader {
     if let normal = sectionTable(
       table["normal"], name: "mode.normal", locations: locations, into: &config)
     {
+      if normal["leader"]?.bool == false {
+        config.mode.normalLeader = nil
+        config.recordLocation(
+          path: "mode.normal.leader",
+          location: locations.location(for: ["mode", "normal", "leader"]))
+      } else {
+        applyString(
+          normal["leader"], path: ["mode", "normal", "leader"],
+          message:
+            "mode.normal.leader must be a single key (e.g. \"\\\\\" or \",\"), or false to clear it",
+          locations: locations,
+          into: &config,
+          validate: {
+            // Reject multi-atom strings here — otherwise every <leader>
+            // mapping later fails with a misleading "leader is not set".
+            NormalModeInterpreter.translateLeader(canonicalNormalModeKeyToken($0)) != nil
+          },
+          assign: { value, config in
+            config.mode.normalLeader = canonicalNormalModeKeyToken(value)
+          })
+      }
       applyString(
-        normal["leader"], path: ["mode", "normal", "leader"],
-        message: "mode.normal.leader must be a single key (e.g. \"\\\\\" or \",\")",
+        normal["hyper"], path: ["mode", "normal", "hyper"],
+        message:
+          "mode.normal.hyper must be one key (\"<leader>\", \"a\", \"<space>\", \"cmd+space\")",
         locations: locations,
         into: &config,
-        validate: {
-          // Reject multi-atom strings here — otherwise every <leader>
-          // mapping later fails with a misleading "leader is not set".
-          NormalModeInterpreter.translateLeader(canonicalNormalModeKeyToken($0)) != nil
-        },
+        validate: { Config.Mode.resolveHyperKey($0, leader: "\\") != nil },
         assign: { value, config in
-          config.mode.normalLeader = canonicalNormalModeKeyToken(value)
+          config.mode.hyperKey = value
         })
       applyModeMappingTable(
         sectionTable(
@@ -1662,10 +1712,10 @@ enum ConfigLoader {
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in normal where key != "leader" && key != "mappings" {
+      for (key, _) in normal where key != "leader" && key != "hyper" && key != "mappings" {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
-            + "[mode.normal.mappings]; valid keys are leader, mappings",
+            + "[mode.normal.mappings]; valid keys are leader, hyper, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }
@@ -1703,7 +1753,6 @@ enum ConfigLoader {
         sourceURL: sourceURL,
         pendingModeMappings: &pendingModeMappings,
         into: &config)
-
       for (key, _) in scoped where key != "mappings" {
         config.addDiagnostic(
           "mode.\(name): unknown key '\(key)' — mappings belong under [mode.\(name).mappings]",
@@ -2314,12 +2363,14 @@ enum ConfigLoader {
     key: String,
     action: MappingCommand,
     repeatsOnFinalKey: Bool,
+    origin: String,
     into config: inout Config
   ) {
     let mapping = ModeMapping(
       key: key,
       action: action,
-      repeatsOnFinalKey: repeatsOnFinalKey)
+      repeatsOnFinalKey: repeatsOnFinalKey,
+      origin: origin)
     // Mapping a key a lower layer removed takes it back.
     if let removed = config.mode.unmapped[scope] {
       let remaining = removed.filter {
@@ -2396,9 +2447,10 @@ enum ConfigLoader {
       }
       switch mapping.value {
       case .mapping(let action, let repeatsOnFinalKey):
+        let origin = ModeMapping.configOrigin(file: mapping.file)
         if let bundleID = mapping.bundleID {
           let entry = ModeMapping(
-            key: key, action: action, repeatsOnFinalKey: repeatsOnFinalKey)
+            key: key, action: action, repeatsOnFinalKey: repeatsOnFinalKey, origin: origin)
           config.mode.appMappings[bundleID, default: .init()].set(entry, in: mapping.scope)
           continue
         }
@@ -2407,6 +2459,7 @@ enum ConfigLoader {
           key: key,
           action: action,
           repeatsOnFinalKey: repeatsOnFinalKey,
+          origin: origin,
           into: &config)
       case .removal:
         if let bundleID = mapping.bundleID {

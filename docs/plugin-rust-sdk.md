@@ -44,7 +44,7 @@ fn main() {
 manifest: warm `sources` ⇒ `on_start` (runs AFTER the immediate initialize
 reply; build the catalog and `ctx.publish(...)` when ready), `live: true`
 sources ⇒ `on_search`, `query` ⇒ a synchronous `evaluate`, `commands` /
-`bangs` / keystroke-less `verbs` ⇒ `on_command`, `actions` ⇒ `on_action`,
+`bangs` ⇒ `on_command`, `actions` ⇒ `on_action`,
 `navigation` ⇒ `on_navigate`, `hints` ⇒ `on_hints`. Optional: `on_event`,
 `on_resolve`, `on_shutdown` (runs on stdin EOF before exit). Forgetting a
 required handler is a compile error, not a runtime surprise. On the wire,
@@ -100,12 +100,14 @@ Handed to every handler; cheap to clone. Key surface:
   observed — `observe(segments)` cancels or re-arms them and returns true
   when they were just re-armed, so you sample at once; `observed()` tells a
   command to sample first, since nothing sampled meanwhile (the cpu, memory,
-  disks and aiproviders plugins).
+  and disks plugins).
 - Status values: `status(segments)` takes anything `Into<StatusSegment>` —
   a plain string is ready-made markup, build `StatusValue::text(visible)`
   and attach a hover document with `.with_preview(Preview)`, or publish a
-  host-rotated `StatusCarousel::new(lines, cycle).with_prefix(label)` whose
-  lines each carry their own preview (the feed plugin). `Markup::text`
+  host-rotated `StatusCarousel::new(lines, cycle)` whose
+  lines each carry their own preview (the feed plugin). `with_prefix` pins
+  markup that does not rotate; a status-bar name belongs in the template
+  (`#[label]`), not in that prefix. `Markup::text`
   is the only entry for externally sourced text (it doubles literal `#`);
   `Markup::raw` inserts intentional markup, `Markup::colored`/`styled`
   wrap content in a `Style` (`Color::TITLE`, `MUTED`, `ACCENT`, `ALERT`,

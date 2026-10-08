@@ -4,8 +4,8 @@ import XCTest
 @testable import flash
 
 /// A hover preview is ephemeral: a click elsewhere or a focus change closes
-/// it, and it stays shut under an unmoved pointer. Popups something else
-/// holds (focused, pinned) are left alone.
+/// it, and it stays shut under an unmoved pointer. A pinned popup is not
+/// ephemeral, but losing focus still takes it off the screen.
 final class StatusPopupDismissalTests: XCTestCase {
   private let region = StatusBarPopupRegion(
     rect: CGRect(x: 100, y: 800, width: 200, height: 25), name: "article", content: "Preview")
@@ -39,6 +39,21 @@ final class StatusPopupDismissalTests: XCTestCase {
     XCTAssertEqual(panel.statusBarHoverGate, .dismissed("article"))
 
     // The pointer never left the anchor: hovering it again must not reopen.
+    panel.showStatusBarPopup(region, at: CGPoint(x: 150, y: 812))
+    XCTAssertFalse(panel.statusPopupController.isVisible)
+  }
+
+  func testFocusLossTakesAPinnedPopupOffScreenAndKeepsItShut() {
+    let panel = panelShowingPreview()
+    defer { panel.hideStatusBarClickWindows() }
+    panel.statusPopupController.focus()
+    XCTAssertEqual(panel.statusPopupController.focusedName, "article")
+
+    panel.relinquishShownStatusPopup(reason: "app_resigned")
+    XCTAssertFalse(panel.statusPopupController.isVisible)
+    XCTAssertNil(panel.statusPopupController.focusedName)
+    XCTAssertEqual(panel.statusBarHoverGate, .dismissed("article"))
+
     panel.showStatusBarPopup(region, at: CGPoint(x: 150, y: 812))
     XCTAssertFalse(panel.statusPopupController.isVisible)
   }

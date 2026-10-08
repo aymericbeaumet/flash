@@ -67,10 +67,11 @@ launch-time inspector is disabled.
 | Endpoint | Content |
 | --- | --- |
 | `/`, `/docs/<topic>`, `/mappings`, … | the help and runtime UI ([routes](help.md#routes-and-ownership)) |
-| `/api/state` | snapshot time, version/build, start time, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings, focused app, current hints, windows, plugins (state, start time, restarts, last error and log line, CPU time, memory); `?refresh=1` takes a fresh snapshot |
+| `/api/state` | snapshot time, version/build, start time, Accessibility/capture state, config path and diagnostics, redacted config, configured/effective mappings (each row names its origin: `default`, `config` or `config:<file>`, or `plugin:<name>`), focused app, current hints, windows, plugins (state, start time, restarts, last error and log line, CPU time, memory); `?refresh=1` takes a fresh snapshot |
 | `/api/logs` | the last 2,000 lines; `/api/logs?trace=<id>` returns one interaction's lines |
 | `/api/traces` | recent interactions, newest first: origin, start, duration, line count, worst level, and which host and plugin sources took part |
 | `/api/events` | server-sent `state`, `logs` and `log` events |
+| `/api/clipboard/<id>` | `GET` one history image; `DELETE` that entry. The id is 32 lowercase hex characters |
 
 The state snapshot follows the app's changes and has no clock: mode and
 input routing, focus and mappings, hints and activation, input capture and

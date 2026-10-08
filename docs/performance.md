@@ -269,8 +269,8 @@ work whose source has no change notification, and all of it rides the one
 | Event debounces and coalescers | A config, plugin-file, application-directory, network or volume change | 100–500 ms after it | normal |
 
 Bundled plugins register cadences only for values no event reports, and only
-while something can see them: `cpu`, `memory`, `disks`, `processes` and
-`aiproviders` samples while a status surface shows their segments, `network`
+while something can see them: `cpu`, `memory`, `disks`, and `processes`
+sample while a status surface shows their segments, `network`
 traffic while a traffic segment is shown, the remote tmux hosts listed in
 `[plugin.tmux] ssh_hosts`, and the `feed` and `answers` refreshes. Network
 discovery follows `core:network.changed`, the disk mount set

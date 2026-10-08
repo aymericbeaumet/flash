@@ -8,7 +8,10 @@ extension ConfigLoader {
     environmentFields.compactMap { field in
       let name = "FLASH_" + field.path.replacingOccurrences(of: ".", with: "_").uppercased()
       guard let value = environment[name] else { return nil }
-      return Layer(text: "\(field.path) = \(field.literal(value))", diagnosticLabel: name)
+      return Layer(
+        text: "\(field.path) = \(field.literal(value))",
+        diagnosticLabel: name,
+        valueSource: ConfigValueSource(layer: "env", detail: name))
     }
   }
 

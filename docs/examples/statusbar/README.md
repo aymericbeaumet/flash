@@ -1,32 +1,40 @@
 # Status strip with popups
 
 The companion [Flash configuration](flash.toml) uses bundled plugin data for
-the quota labels and every system popup. The AI usage popup runs
-[tokscale](https://github.com/junhoyeo/tokscale), which you install yourself,
-for example with `npm i -g tokscale`; every other popup needs no external
+every system popup. Every name on the bar is template markup (`#[label]`):
+the feed, the quotas, and CPU/MEM/DSK/NET/BAT. Each plugin or source prints
+only the value beside that name. The hover is the `[popup.*]` the template
+names. The AI usage popup runs
+[tokscale](https://github.com/junhoyeo/tokscale), and the feed hover runs
+newsboat; you install both yourself. Every system popup needs no external
 application.
 
 ```text
-Cld 53%↻5d Cdx 54%↻5d · CPU  9% MEM 42% DSK 68% NET 1.2M BAT 99%
+aggr Headline (example.com) · Cld 53%↻5d Cdx 54%↻5d Grk 9%↻1d · CPU  9% MEM 42% DSK 68% NET 1.2M BAT 99%
 ```
 
-Labels are yellow; metrics are grey. CPU/MEM/DSK percentages reserve two digits,
-capped at 99%, plus the percent sign; battery charge can reach 100%.
-Detail reports retain the true value. NET uses four cells
-for download + upload on the default-route interface, in decimal bytes/second.
+Names are yellow; values are grey. `p-3` reserves two digits for a
+CPU/MEM/DSK percentage, capped at 99%, plus the percent sign. Battery charge
+can reach 100% and is not padded. `p-4` reserves NET's four cells.
+Detail reports retain the true value. NET is download plus upload on the
+default-route interface, in decimal bytes per second.
 
-AI percentages also cap at 99, with no padding because they change slowly.
+The example metrics are unpadded and capped at 99 by the command that prints
+them, because they change slowly.
 
-Cld/Cdx show the remaining weekly quota and the weekly reset delay. They share
-one popup, tokscale's own TUI: tokens and cost by day and model, with every
-subscription's session, weekly and model quotas under its Usage tab. The
-popup is persistent, so hovering shows it at once and keeps the tab you left
-it on; tokscale's `autoRefreshEnabled` setting keeps it current. Left-click a label to open that
-provider’s usage page; right-click pins the popup. A stale badge becomes a
-dash (Claude: 20 minutes; Codex: 4 minutes). An empty Claude Code credential
-requires `/login` in Claude Code before live quotas can return.
+Cld/Cdx/Grk, aggr, and CPU/MEM/DSK/NET/BAT use `#[label]`. The grey value
+beside each one is whatever `#{flash.source.cld}` or `#{flash.plugin.cpu.label}`
+prints. Declare the quota sources with
+your own commands. They share one popup, tokscale's own TUI: tokens and cost
+by day and model, with every subscription's session, weekly and model quotas
+under its Usage tab. The popup is persistent, so hovering shows it at once and
+keeps the tab you left it on; tokscale's `autoRefreshEnabled` setting keeps it
+current. Left-click a label to open that provider’s usage page; right-click
+pins the popup. Flash does not fetch the quotas. A source that prints an empty
+string keeps its previous value.
 
-CPU/MEM/DSK/NET/BAT hover displays the corresponding bundled plugin’s full
+CPU/MEM/DSK/NET/BAT hover is the popup wrapped around that name. The example
+points each one at the bundled plugin’s full
 `details` segment: aggregate CPU/GPU and history, memory composition/swap,
 volume capacity/I/O, network traffic/routes/addresses, and battery power/health.
 Availability depends on macOS and the hardware. Every popup runs in a real PTY.
@@ -75,6 +83,8 @@ and a finished one-shot report closes on a key press.
 Hidden persistent processes skip frame extraction, drawing, and cursor blinking.
 
 Feed headlines rotate newest first through the last 24 hours, sliding upward
-every 30 seconds while the label stays still. Hover shows the cached excerpt.
+every 30 seconds. The `#[label]aggr` name stays still because the template
+writes it. Hover runs `[popup.feed]`. Bind `#{flash.plugin.feed.summary}`
+instead when a headline should carry its own excerpt popup.
 
 See [popups](../../popups.md) for kinds, lifecycles and verbs.

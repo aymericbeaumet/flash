@@ -1,108 +1,228 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import { buildOnboarding, loadReadGuides, markGuideRead, markGuideUnread, type Step, type StepStatus } from "./onboarding";
   import { paths } from "./routes";
   import type { InspectorState } from "./types";
-  let { state, connected }: { state: InspectorState; connected: boolean } = $props();
-  const features = [
-    { title: "Point with your keyboard", text: "Click a label, refine a grid, or move the pointer. Reach anything on screen.", topic: "hints", icon: "grid", label: "Hints & grid" },
-    { title: "Find it with flashlight", text: "Apps, tabs, terminal windows, emoji, and quick answers in one command bar.", topic: "flashlight", icon: "search", label: "Search & answers" },
-    { title: "Make macOS modal", text: "Navigate, scroll, switch tabs, and act with a consistent set of keys.", topic: "normal-mode", icon: "mappings", label: "Modes & navigation" },
-    { title: "Build your own workspace", text: "Live status bars, desktop widgets, and popups, composed in your config.", topic: "widgets", icon: "settings", label: "Status & widgets" },
-  ];
-  const running = $derived((state.plugins ?? []).filter((plugin) => plugin.state === "running" || plugin.state === "ready").length);
-  const failed = $derived((state.plugins ?? []).filter((plugin) => ["failed", "crashed", "error"].includes(plugin.state)).length);
-  const mappings = $derived(state.mappings?.effective_rows ?? state.mappings?.rows ?? []);
+
+  let { snapshot, connected }: { snapshot: InspectorState; connected: boolean } = $props();
+  let revision = $state(0);
+  let filter = $state<"all" | "todo" | "done">("all");
+  let openId = $state<string | null>(null);
+  let chosen = $state(false);
+  let copied = $state<string | null>(null);
+
+  const model = $derived.by(() => {
+    revision;
+    return buildOnboarding(snapshot, connected, loadReadGuides());
+  });
+  const visible = $derived(model.sections.map((section) => ({
+    ...section,
+    steps: section.steps.filter((step) => matches(step, filter)),
+  })).filter((section) => section.steps.length > 0));
+
+  $effect(() => {
+    if (chosen) return;
+    openId = model.blockers[0]?.id ?? model.next?.id ?? null;
+  });
+
+  function matches(step: Step, which: typeof filter): boolean {
+    if (which === "all") return true;
+    if (which === "done") return step.status === "done";
+    return step.status === "todo" || step.status === "attention";
+  }
+
+  function toggle(id: string) {
+    chosen = true;
+    openId = openId === id ? null : id;
+  }
+
+  async function show(id: string) {
+    chosen = true;
+    filter = "all";
+    openId = id;
+    await tick();
+    document.getElementById(`step-${id}`)?.scrollIntoView({ block: "nearest" });
+  }
+
+  function toggleGuide(step: Step) {
+    if (!step.guide) return;
+    if (step.status === "done") markGuideUnread(step.guide);
+    else markGuideRead(step.guide);
+    revision += 1;
+  }
+
+  async function copySnippet(step: Step) {
+    if (!step.snippet) return;
+    try {
+      await navigator.clipboard.writeText(step.snippet);
+      copied = step.id;
+    } catch {
+      copied = null;
+    }
+  }
+
+  function label(status: StepStatus): string {
+    if (status === "done") return "Done";
+    if (status === "attention") return "Needs attention";
+    if (status === "waiting") return "Waiting";
+    return "To do";
+  }
 </script>
 
 <div class="page home">
-  <section class="hero">
-    <div class="hero-copy"><p class="eyebrow">Your keyboard, all of macOS</p><h1>A little guidance.<br />A lot more possibility.</h1><p class="intro">Get to know Flash, make it yours, and see what’s happening on your Mac. Your guide and your running app, together.</p><div class="hero-actions"><a class="primary" href="/docs/getting-started">Start with the essentials <Icon name="arrow" size={16} /></a><a class="secondary" href="/mappings">Explore your mappings <span>↗</span></a></div></div>
-    <div class="keyboard-art" aria-hidden="true"><div class="art-caption"><span>LESS REACHING. MORE DOING.</span><i></i></div><div class="key-row"><span>q</span><span>w</span><span>e</span><span>r</span><span>t</span></div><div class="key-row"><span>a</span><span>s</span><span>d</span><span class="hint-key">f<small>HINTS</small></span><span>g</span></div><div class="key-row"><span>z</span><span>x</span><span>c</span><span>v</span><span>b</span></div><div class="art-footer"><span class="tiny-bolt"><Icon name="bolt" size={14} /></span>ONE KEY. EVERYWHERE.</div></div>
-  </section>
+  <header class="intro">
+    <p class="eyebrow">On this Mac</p>
+    <h1>{model.title}</h1>
+    <p class="lede">{model.lede}</p>
+    {#if model.total > 0}
+      <div class="progress" role="progressbar" aria-valuenow={model.done} aria-valuemin="0" aria-valuemax={model.total} aria-label="Checklist progress">
+        <span style:width="{model.total === 0 ? 0 : (model.done / model.total) * 100}%"></span>
+      </div>
+      <p class="progress-label">{model.done} of {model.total} done</p>
+    {/if}
+    <div class="hero-actions">
+      <a class="primary" href={paths.docs("getting-started")}>Start with the essentials <Icon name="arrow" size={16} /></a>
+      <a class="text-link" href={paths.docs()}>All documentation <Icon name="arrow" size={15} /></a>
+      <a class="text-link" href={paths.mappings()}>Your key mappings <Icon name="arrow" size={15} /></a>
+    </div>
+  </header>
 
-  {#if state.runtime?.config_error}<div class="notice error"><strong>Your configuration needs attention.</strong> {state.runtime.config_error} <a href="/state">Inspect configuration →</a></div>{/if}
-  {#if state.runtime?.accessibility_trusted === false}<div class="notice"><strong>Accessibility is not granted.</strong> Enable Flash in System Settings to use keyboard navigation and hints. <a href="/docs/troubleshooting">View troubleshooting →</a></div>{/if}
+  {#if model.blockers.length > 0 || model.next}
+    <section class="missing surface" aria-label="What is missing">
+      <h2>What is missing</h2>
+      {#if model.blockers.length > 0}
+        <ul>
+          {#each model.blockers as blocker}
+            <li>
+              <button type="button" onclick={() => show(blocker.id)}>
+                <strong>{blocker.title}</strong>
+                <span>{blocker.evidence}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else if model.next}
+        <button type="button" class="next" onclick={() => show(model.next?.id ?? "")}>
+          <span class="eyebrow">Next</span>
+          <strong>{model.next.title}</strong>
+          <span>{model.next.evidence}</span>
+        </button>
+        {#if model.later > 0}<p class="later">{model.later} more after this.</p>{/if}
+      {/if}
+    </section>
+  {/if}
 
-  <section class="runtime-strip surface" aria-label="Current runtime summary"><div class="live-title"><span class="live-dot" class:offline={!connected}></span><span><strong>Your Flash, right now</strong><small>{connected ? "Updates live from the resident app" : "Waiting for a live connection"}</small></span></div><a href="/state"><span class="stat-label">Mode</span><strong class="mode">{state.mode ?? "—"}</strong></a><a href="/state"><span class="stat-label">Focused app</span><strong>{state.focused_app?.localized_name ?? "No focused app"}</strong></a><a href="/plugins"><span class="stat-label">Plugins</span><strong>{running} running{#if failed}<span class="failed"> · {failed} failed</span>{/if}</strong></a><a href="/state" class="runtime-arrow" aria-label="Inspect full runtime"><Icon name="arrow" size={19} /></a></section>
+  <div class="list-head">
+    <h2>Checklist</h2>
+    <div class="segmented" role="group" aria-label="Filter checklist">
+      <button type="button" class:active={filter === "all"} aria-pressed={filter === "all"} onclick={() => filter = "all"}>All</button>
+      <button type="button" class:active={filter === "todo"} aria-pressed={filter === "todo"} onclick={() => filter = "todo"}>Still to do</button>
+      <button type="button" class:active={filter === "done"} aria-pressed={filter === "done"} onclick={() => filter = "done"}>Done</button>
+    </div>
+  </div>
 
-  <section class="feature-section"><div class="section-heading"><div><p class="eyebrow">Find your next move</p><h2>One tool. Many ways to work.</h2></div><a href="/docs">All documentation <Icon name="arrow" size={15} /></a></div><div class="feature-grid">{#each features as feature}<a class="feature-card surface" href={paths.docs(feature.topic)}><span class="feature-icon"><Icon name={feature.icon} size={22} /></span><span class="feature-label">{feature.label}</span><h3>{feature.title}</h3><p>{feature.text}</p><span class="card-arrow"><Icon name="arrow" size={17} /></span></a>{/each}</div></section>
+  {#if visible.length === 0}
+    <p class="empty-filter">Nothing in this filter.</p>
+  {/if}
 
-  <div class="bottom-grid"><section class="quick-reference surface"><div class="section-heading"><h2>Make yourself at home</h2><Icon name="commands" size={20} /></div><a href="/mappings"><span><strong>Your key mappings</strong><small>{mappings.length} effective bindings from your current configuration</small></span><kbd>?</kbd></a><a href="/commands"><span><strong>The command catalog</strong><small>{(state.commands ?? []).length} built-in and plugin commands to explore</small></span><kbd>:</kbd></a><a href="/docs/config"><span><strong>One file. Your workflow.</strong><small>Configure Flash in TOML; changes apply when you save</small></span><Icon name="arrow" size={16} /></a></section><section class="extend-card"><p class="eyebrow">Made to be extended</p><h2>More Flash,<br />your way.</h2><p>Discover the plugins powering your workspace, or build something of your own.</p><a href="/plugins">Meet your plugins <Icon name="arrow" size={16} /></a><a href="/docs/plugins" class="sub-link">Read the plugin guide</a></section></div>
-  <footer class="home-footer"><span>Open this page with <code>:help</code>. Jump to a guide with <code>:help &lt;topic&gt;</code>.</span><span>Flash {state.runtime?.version ?? ""}</span></footer>
+  {#each visible as section (section.id)}
+    <section class="group" aria-labelledby="group-{section.id}">
+      <div class="group-heading">
+        <h2 id="group-{section.id}">{section.title}</h2>
+        <p>{section.intro}</p>
+      </div>
+      <div class="steps">
+        {#each section.steps as step (step.id)}
+          <article class="surface step" class:open={openId === step.id} id="step-{step.id}">
+            <h3>
+              <button type="button" class="step-toggle" aria-expanded={openId === step.id} aria-controls="step-body-{step.id}" onclick={() => toggle(step.id)}>
+                <span class="mark" data-status={step.status} aria-hidden="true">{step.status === "done" ? "✓" : step.status === "attention" ? "!" : step.status === "waiting" ? "…" : ""}</span>
+                <span class="step-copy"><span class="step-title">{step.title}</span><span class="evidence">{step.evidence}</span></span>
+                <span class="badge" data-status={step.status}>{label(step.status)}</span>
+              </button>
+            </h3>
+            <div class="step-body" class:shown={openId === step.id} id="step-body-{step.id}">
+                <p>{step.body}</p>
+                {#if step.snippet}
+                  <pre>{step.snippet}</pre>
+                  <button type="button" class="copy" onclick={() => copySnippet(step)}>{copied === step.id ? "Copied" : "Copy"}</button>
+                {/if}
+                <div class="step-links">
+                  {#if step.href}<a href={step.href} onclick={() => step.guide && markGuideRead(step.guide)}>{step.hrefLabel} <Icon name="arrow" size={14} /></a>{/if}
+                  {#if step.guide}
+                    <button type="button" onclick={() => toggleGuide(step)}>{step.status === "done" ? "Mark as unread" : "Mark as read"}</button>
+                  {/if}
+                </div>
+              </div>
+          </article>
+        {/each}
+      </div>
+    </section>
+  {/each}
+
+  <footer class="home-footer">
+    <span>Open this page with <code>:help</code>. Jump to a guide with <code>:help &lt;topic&gt;</code>.</span>
+    <span>Flash {snapshot.runtime?.version ?? ""}</span>
+  </footer>
 </div>
 
 <style>
-  .home { max-width: 1370px; }
-  .hero { display: grid; grid-template-columns: 1.3fr 1fr; align-items: center; gap: 40px; padding: 15px 0 40px; }
-  .hero .eyebrow { color: #6b805c; font-size: 10px; margin-bottom: 18px; }
-  .hero h1 { font-size: clamp(32px, 3.3vw, 49px); letter-spacing: -.05em; line-height: 1.13; font-weight: 550; }
-  .intro { margin-top: 18px; max-width: 460px; font-size: 14px; color: var(--muted); line-height: 1.75; }
-  .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 24px; font-size: 11px; }
-  .primary { display: flex; align-items: center; gap: 13px; background: #2b533d; color: white; border-radius: 7px; padding: 11px 15px; font-weight: 500; }
+  .home { max-width: 880px; }
+  .intro { padding: 8px 0 8px; }
+  .intro h1 { max-width: 16ch; }
+  .lede { margin-top: 12px; max-width: 62ch; color: var(--muted); font-size: 15px; line-height: 1.6; }
+  .progress { height: 8px; margin-top: 22px; border-radius: 99px; background: var(--panel-strong); overflow: hidden; }
+  .progress span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+  .progress-label { margin-top: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 18px; margin-top: 22px; }
+  .primary { display: inline-flex; align-items: center; gap: 10px; background: #2b533d; color: white; border-radius: 7px; padding: 11px 15px; font-weight: 500; font-size: 13px; }
   .primary:hover { background: #1c402c; text-decoration: none; }
-  .secondary { display: flex; gap: 8px; font-size: 11px; }
-  .keyboard-art { max-width: 335px; justify-self: end; width: 100%; padding: 24px 24px 17px; border-radius: 18px; background: linear-gradient(145deg, #e7eddd, #eff1e4); border: 1px solid #dfe6d5; transform: rotate(-3deg); box-shadow: 0 10px 30px #44563407; }
-  .art-caption { font-size: 7px; letter-spacing: .16em; color: #839073; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .art-caption i { width: 5px; height: 5px; background: #83a070; border-radius: 50%; }
-  .key-row { display: flex; gap: 7px; margin-bottom: 7px; }
-  .key-row:nth-child(3) { margin-left: 7px; margin-right: -7px; }
-  .key-row:nth-child(4) { margin-left: 14px; margin-right: -14px; }
-  .key-row > span { flex: 1; height: 43px; background: #f9faf3; border: 1px solid #d7decb; border-bottom: 3px solid #ced7c0; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 14px; color: #95a088; }
-  .key-row > span.hint-key { background: #d5e49a; border-color: #b7cb71; color: #4a6123; position: relative; font-size: 18px; transform: translateY(-3px); box-shadow: 0 4px 8px #78895420; }
-  .hint-key small { position: absolute; bottom: 4px; font-size: 5px; letter-spacing: .08em; }
-  .art-footer { margin-top: 20px; display: flex; align-items: center; gap: 8px; font-size: 6px; color: #8a977c; letter-spacing: .17em; }
-  .tiny-bolt { display: flex; }
-  .runtime-strip { display: grid; grid-template-columns: 1.4fr .7fr 1fr .8fr auto; gap: 20px; align-items: center; padding: 21px 24px; font-size: 12px; }
-  .live-title { display: flex; gap: 11px; align-items: center; }
-  .live-title strong { font-weight: 550; }
-  .live-title small { display: block; color: var(--muted); font-size: 10px; margin-top: 3px; }
-  .live-dot { width: 7px; height: 7px; background: #6b9560; box-shadow: 0 0 0 4px #eff4e9; border-radius: 50%; flex-shrink: 0; }
-  .live-dot.offline { background: #c5a458; }
-  .runtime-strip a { color: var(--text); min-width: 0; }
-  .runtime-strip a strong { display: block; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .stat-label { display: block; font-size: 9px; color: var(--muted); margin-bottom: 4px; }
-  .mode { text-transform: uppercase; letter-spacing: .06em; color: var(--accent); }
-  .failed { color: var(--danger); }
-  .runtime-arrow { display: flex; }
-  .feature-section { margin-top: 36px; }
-  .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 19px; }
-  .section-heading .eyebrow { margin-bottom: 7px; }
-  .section-heading h2 { font-size: 21px; }
-  .section-heading > a { display: flex; gap: 7px; align-items: center; font-size: 11px; white-space: nowrap; }
-  .feature-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-  .feature-card { padding: 23px 20px 21px; color: var(--text); position: relative; text-decoration: none; transition: transform 150ms, border-color 150ms; }
-  .feature-card:hover { transform: translateY(-3px); border-color: #a3b396; }
-  .feature-icon { color: #5a7350; display: flex; margin-bottom: 24px; }
-  .feature-label { display: block; font-size: 8px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); margin-bottom: 7px; }
-  .feature-card h3 { font-size: 15px; line-height: 1.4; }
-  .feature-card p { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 9px 0 24px; }
-  .card-arrow { display: flex; color: #79906d; }
-  .bottom-grid { display: grid; grid-template-columns: 1.45fr 1fr; gap: 20px; margin-top: 24px; }
-  .quick-reference { padding: 24px; }
-  .quick-reference h2 { font-size: 17px; }
-  .quick-reference .section-heading { margin-bottom: 5px; }
-  .quick-reference > a { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px 0; border-bottom: 1px solid var(--border-soft); color: var(--text); }
-  .quick-reference > a:last-child { border-bottom: 0; padding-bottom: 0; }
-  .quick-reference strong { font-size: 12px; font-weight: 500; }
-  .quick-reference small { display: block; color: var(--muted); font-size: 10px; margin-top: 4px; }
-  .extend-card { padding: 26px 28px; background: #e8eedf; border: 1px solid #dce5d0; border-radius: 12px; }
-  .extend-card .eyebrow { font-size: 8px; }
-  .extend-card h2 { margin-top: 12px; font-size: 29px; line-height: 1.15; }
-  .extend-card p:not(.eyebrow) { max-width: 300px; font-size: 11px; color: #6b7863; margin-top: 11px; line-height: 1.8; }
-  .extend-card a { display: flex; align-items: center; gap: 12px; margin-top: 15px; font-size: 11px; }
-  .extend-card .sub-link { font-size: 10px; color: var(--muted); margin-top: 8px; }
-  .home-footer { display: flex; justify-content: space-between; gap: 20px; color: #85907f; font-size: 9px; margin-top: 25px; }
-  @media (max-width: 1200px) { .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .runtime-strip { grid-template-columns: 1.3fr .6fr 1fr .8fr; gap: 14px; } .runtime-arrow { display: none; } .hero { gap: 24px; } .keyboard-art { padding: 20px 16px; } }
-  @media (max-width: 950px) { .hero { grid-template-columns: 1fr; } .keyboard-art { display: none; } .runtime-strip { grid-template-columns: repeat(3, 1fr); } .live-title { grid-column: 1 / -1; } .bottom-grid { grid-template-columns: 1fr; } }
-  @media (max-width: 450px) { .feature-grid { grid-template-columns: 1fr; } .feature-card { padding: 20px; } .feature-icon { margin-bottom: 15px; } .runtime-strip { padding: 18px; gap: 16px 10px; } .section-heading { align-items: flex-start; } .section-heading > a { font-size: 10px; } .home-footer { flex-direction: column; gap: 5px; } }
+  .text-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .missing { margin-top: 28px; padding: 18px 18px 8px; }
+  .missing h2, .list-head h2, .group-heading h2 { font-size: 16px; }
+  .missing ul { list-style: none; margin: 12px 0 0; padding: 0; }
+  .missing li { border-top: 1px solid var(--border-soft); }
+  .missing button, .next { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 0; padding: 12px 2px; min-height: 0; }
+  .missing button:hover, .next:hover { background: #f7faf4; }
+  .missing strong, .next strong { font-size: 14px; }
+  .missing span, .next span, .later { color: var(--muted); font-size: 13px; }
+  .next { border-radius: 8px; }
+  .later { margin: 0 2px 12px; }
+  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 32px 0 8px; flex-wrap: wrap; }
+  .empty-filter { color: var(--muted); margin: 12px 0 0; }
+  .group { margin-top: 22px; }
+  .group-heading p { margin-top: 4px; color: var(--muted); font-size: 13px; max-width: 68ch; }
+  .steps { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .step { overflow: hidden; }
+  .step h3 { margin: 0; font-size: inherit; font-weight: inherit; }
+  .step-toggle { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 0; min-height: 0; padding: 12px 14px; }
+  .step-toggle:hover { background: #f8faf6; }
+  .mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--panel-strong); color: var(--muted); }
+  .mark[data-status="done"] { background: var(--accent-soft); color: var(--accent); }
+  .mark[data-status="attention"] { background: #fbeae6; color: var(--danger); }
+  .step-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .step-title { font-weight: 600; font-size: 14px; }
+  .evidence { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .badge[data-status="done"] { background: var(--accent-soft); }
+  .badge[data-status="attention"] { background: #fbeae6; color: var(--danger); }
+  .badge[data-status="waiting"], .badge[data-status="todo"] { background: #f0f2ee; color: var(--muted); }
+  .step-body { display: none; padding: 0 14px 14px 46px; }
+  .step-body.shown { display: block; }
+  .step-body p { color: var(--text); font-size: 14px; max-width: 68ch; }
+  .step-body pre { margin: 12px 0 0; padding: 12px 14px; background: #f6f7f4; border: 1px solid var(--border-soft); border-radius: 8px; max-width: 100%; }
+  .copy { margin-top: 8px; }
+  .step-links { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-top: 12px; }
+  .step-links a { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .home-footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: #85907f; font-size: 12px; margin-top: 28px; }
+  @media (max-width: 640px) {
+    .step-toggle { grid-template-columns: 22px minmax(0, 1fr); }
+    .step-toggle .badge { grid-column: 2; justify-self: start; }
+    .step-body { padding-left: 14px; }
+  }
   @media print {
-    .hero { grid-template-columns: 1fr; padding-bottom: 24px; }
-    .keyboard-art, .runtime-arrow, .card-arrow { display: none; }
-    .primary { color: var(--accent); background: none; border: 1px solid var(--accent); }
-    .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .runtime-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .live-title { grid-column: 1 / -1; }
-    .runtime-strip, .feature-card, .quick-reference, .extend-card { break-inside: avoid; }
-    .bottom-grid { grid-template-columns: 1fr; }
+    .missing button, .next, .step-toggle, .copy { border: 0; }
+    .step-body { display: block; }
+    .step { break-inside: avoid; }
   }
 </style>

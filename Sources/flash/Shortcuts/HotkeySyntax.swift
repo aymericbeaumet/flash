@@ -75,6 +75,18 @@ enum HotkeySyntax {
     case "end": return UInt32(kVK_End)
     case "pageup", "page_up": return UInt32(kVK_PageUp)
     case "pagedown", "page_down": return UInt32(kVK_PageDown)
+    case "f1": return UInt32(kVK_F1)
+    case "f2": return UInt32(kVK_F2)
+    case "f3": return UInt32(kVK_F3)
+    case "f4": return UInt32(kVK_F4)
+    case "f5": return UInt32(kVK_F5)
+    case "f6": return UInt32(kVK_F6)
+    case "f7": return UInt32(kVK_F7)
+    case "f8": return UInt32(kVK_F8)
+    case "f9": return UInt32(kVK_F9)
+    case "f10": return UInt32(kVK_F10)
+    case "f11": return UInt32(kVK_F11)
+    case "f12": return UInt32(kVK_F12)
     case "leftbrace": return UInt32(kVK_ANSI_LeftBracket)
     case "rightbrace": return UInt32(kVK_ANSI_RightBracket)
     default: break
@@ -104,6 +116,18 @@ enum HotkeySyntax {
     case kVK_End: return "end"
     case kVK_PageUp: return "pageup"
     case kVK_PageDown: return "pagedown"
+    case kVK_F1: return "f1"
+    case kVK_F2: return "f2"
+    case kVK_F3: return "f3"
+    case kVK_F4: return "f4"
+    case kVK_F5: return "f5"
+    case kVK_F6: return "f6"
+    case kVK_F7: return "f7"
+    case kVK_F8: return "f8"
+    case kVK_F9: return "f9"
+    case kVK_F10: return "f10"
+    case kVK_F11: return "f11"
+    case kVK_F12: return "f12"
     default:
       return Self.virtualKeyToCanonicalCharacter[virtualKey].map(String.init)
     }

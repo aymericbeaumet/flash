@@ -10,8 +10,9 @@ public struct AppContext: @unchecked Sendable {
     /// The app's focused (else main, else first) window: every app surface.
     case focusedWindow
     /// The app's top-level elements that meet `frontWindowFrame`: a surface
-    /// that is not the app's focused window, such as a Picture in Picture
-    /// player or the Stage Manager strip (`mouse_target --scope=screen`).
+    /// that is not the app's focused window, such as a system dialog in front
+    /// of another app, a Picture in Picture player, or the Stage Manager strip
+    /// (`mouse_target --scope=screen`).
     case elementsInFrame
   }
 

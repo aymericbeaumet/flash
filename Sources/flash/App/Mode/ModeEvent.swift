@@ -52,10 +52,10 @@ enum ModeEvent: Equatable {
   /// insert↔normal (mode is global and sticky).
   case focusedAppChanged(pid: pid_t)
 
-  /// The NORMAL leader key went down. Only accepted from `.normal`.
+  /// The hyper key went down. Only accepted from `.normal`.
   case enterHyper
 
-  /// The NORMAL leader key was released. Returns to the mode hyper was
-  /// entered from. Ignored unless the current mode is `.hyper`.
+  /// The hyper key was released. Returns to the mode hyper was entered from.
+  /// Ignored unless the current mode is `.hyper`.
   case exitHyper
 }

@@ -36,7 +36,7 @@ dev app settled at a 126.54 MiB median physical footprint for Flash plus its
 inside the existing 130 MiB budget.
 
 Those figures predate status-bound activation. The status-only monitors
-(`cpu`, `memory`, `disks`, `power`, `caffeinate`, `feed`, `aiproviders`) now
+(`cpu`, `memory`, `disks`, `power`, `caffeinate`, `feed`) now
 spawn only while the enabled status bar shows one of their segments, so with
 the bar off (the default) none of them runs until its command does.
 

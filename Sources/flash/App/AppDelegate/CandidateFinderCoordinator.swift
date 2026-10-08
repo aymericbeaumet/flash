@@ -1030,7 +1030,7 @@ extension AppDelegate {
   /// `[statusbar.click]` action map — tmux's status-line mouse model: the
   /// span names the action, the binding lives in config. URLs open
   /// activating; action arrays run through the mapping-command dispatcher
-  /// (same power as a keybinding, e.g. ["flash", "plugin_command", …]).
+  /// (same power as a keybinding, e.g. ["flash", "media", "volumedown"]).
   func performStatusBarClickAction(named name: String) {
     guard let action = config.statusBar.clickActions[name] else {
       FlashLog.warn(
@@ -1307,11 +1307,12 @@ extension AppDelegate {
       performCommandLineCommand(command)
       return
     }
-    // Bare `:clipboard` opens the dashboard's Clipboard tab rather than firing
+    // `:clipboard show` opens the dashboard's Clipboard tab rather than firing
     // a fire-and-forget plugin command; the host caches the history and the web
-    // UI renders it. `:clipboard <arg>` falls through below.
+    // UI renders it. `:clipboard show <arg>` falls through below.
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
-      plugin.command.lowercased() == "clipboard", plugin.subcommand.isEmpty, plugin.args.isEmpty
+      plugin.command.lowercased() == "clipboard", plugin.subcommand.lowercased() == "show",
+      plugin.args.isEmpty
     {
       finishCommandLineInteraction(reason: "clipboard_submit")
       openClipboardDashboard()
@@ -1329,6 +1330,8 @@ extension AppDelegate {
             self?.warnCommandFailure(raw)
             return
           }
+          self?.noteClipboardDelete(
+            command: plugin.command, subcommand: plugin.subcommand, ok: true)
           self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
           guard let stdout, !stdout.isEmpty else { return }
           if captureOutput {
@@ -1339,7 +1342,7 @@ extension AppDelegate {
           }
         })
     {
-      finishCommandLineInteraction(reason: "plugin_command_submit")
+      finishCommandLineInteraction(reason: "plugin_submit")
       return
     }
     let topLevelEmpty =

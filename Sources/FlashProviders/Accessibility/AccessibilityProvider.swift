@@ -735,16 +735,21 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   /// A terminal emulator's window is one typing surface: a primary click on
-  /// any of its targets hands the keyboard to the terminal, so they all enter
-  /// INSERT. Which apps are terminals is plugin data (manifest
-  /// `terminal_emulators`); every other app keeps the per-role judgement the
-  /// walk made.
+  /// its targets hands the keyboard to the terminal, so they enter INSERT.
+  /// A link is navigation and stays in NORMAL. Which apps are terminals is
+  /// plugin data (manifest `terminal_emulators`); every other app keeps the
+  /// per-role judgement the walk made.
   static func settlingInsertIntent(
     _ targets: [JumpTarget], bundleIdentifier: String,
     isTerminalEmulator: (String) -> Bool = TerminalEmulators.contains
   ) -> [JumpTarget] {
     guard isTerminalEmulator(bundleIdentifier) else { return targets }
-    return targets.map { $0.entersInsertMode ? $0 : $0.enteringInsertMode(true) }
+    return targets.map { target in
+      if target.role == JumpTarget.terminalLinkRole || target.role == "AXLink" {
+        return target.entersInsertMode ? target.enteringInsertMode(false) : target
+      }
+      return target.entersInsertMode ? target : target.enteringInsertMode(true)
+    }
   }
 
   /// The frame (NSScreen coords) of the window a walk of `pid` covers — its
@@ -848,6 +853,45 @@ public final class AccessibilityProvider: FlashSource {
     "AXSheet",
     "AXSystemDialog",
   ]
+
+  /// Window controls that are also attributes, so a tree that omits them as
+  /// children still gets a hint. Help is a child (`AXHelpButton`), not an
+  /// attribute. Minimize and zoom stay out: only the close button, and a
+  /// dialog's default and cancel buttons, are hint targets of this kind.
+  static let windowChromeSubroles: Set<String> = [
+    "AXCloseButton", "AXHelpButton", "AXDefaultButton", "AXCancelButton",
+  ]
+
+  private static let windowChromeAttributes: [String] = [
+    kAXCloseButtonAttribute as String,
+    kAXDefaultButtonAttribute as String,
+    kAXCancelButtonAttribute as String,
+  ]
+
+  /// Title-bar and dialog buttons sit on the window's edge. A clip that is
+  /// the content rect leaves their centre a few points outside; a real
+  /// control is still within a title bar of the clip.
+  static func acceptsHintCenter(_ center: CGPoint, visible: CGRect, subrole: String?) -> Bool {
+    if visible.containsInclusive(center) { return true }
+    guard let subrole, windowChromeSubroles.contains(subrole) else { return false }
+    return visible.insetBy(dx: -28, dy: -28).containsInclusive(center)
+  }
+
+  /// Close, default, and cancel buttons the window exposes only as attributes.
+  /// A button that is already a child is left to the ordinary walk.
+  private static func windowChromeButtons(
+    missingFrom children: [AXUIElement], of window: AXUIElement
+  ) -> [AXUIElement] {
+    var extra: [AXUIElement] = []
+    for name in windowChromeAttributes {
+      guard let button = elementAttribute(window, name) else { continue }
+      let alreadyListed =
+        children.contains { CFEqual($0, button) } || extra.contains { CFEqual($0, button) }
+      if alreadyListed { continue }
+      extra.append(button)
+    }
+    return extra
+  }
 
   private func walk(
     _ element: AXUIElement,
@@ -998,7 +1042,8 @@ public final class AccessibilityProvider: FlashSource {
     // row/cell branch), whereas every other disabled element stays inert.
     if let posV = posValue, let sizeV = sizeValue,
       let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
-      visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
+      Self.acceptsHintCenter(
+        CGPoint(x: frame.midX, y: frame.midY), visible: visible, subrole: subrole),
       roleAllowed, !hidden
     {
       state.idCounter += 1
@@ -1100,6 +1145,11 @@ public final class AccessibilityProvider: FlashSource {
       role: role,
       insideWebArea: insideWebArea,
       children: children)
+    // Only the window root carries the standard button attributes. Deeper
+    // nodes are controls and groups; asking them is a wasted IPC per element.
+    if depth == 0 {
+      children = Self.windowChromeButtons(missingFrom: children, of: element) + children
+    }
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"

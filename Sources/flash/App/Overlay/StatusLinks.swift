@@ -68,6 +68,24 @@ struct StatusBarScreenInteractions {
   var hints: [StatusBarHintRegion] = []
 }
 
+/// One drawn status-bar run, in screen coordinates, for a letter search.
+struct StatusBarLetterRun: Equatable {
+  /// The glyphs. A pill run is its label; the padded cells are not searchable.
+  var text: String
+  /// The run's screen rect. A left-aligned run starts at `minX`. A centred
+  /// run (the mode pill) draws `text` in the middle of the rect.
+  var frame: CGRect
+  var cellWidth: CGFloat
+  var centered: Bool
+}
+
+/// The status bar on one screen: its glyphs and the interactive spans `f` hints.
+struct StatusBarLetterSurface: Equatable {
+  var screenFrame: CGRect
+  var runs: [StatusBarLetterRun]
+  var regions: [StatusBarHintRegion]
+}
+
 /// The status bar's click surface: one window per screen spanning the menu-bar
 /// band, routed by normal Cocoa hit-testing — no CGEvent tap. Two jobs:
 ///
@@ -690,6 +708,17 @@ extension OverlayPanel {
     activeStatusBarPopupName = nil
   }
 
+  /// The bars `f` can reach, with the glyphs currently drawn on each.
+  func statusBarLetterSurfaces() -> [StatusBarLetterSurface] {
+    let surfaces = [primaryStatusBarSurface] + secondaryStatusBars
+    return zip(statusBarInteractionsByScreen, surfaces).map { interactions, surface in
+      StatusBarLetterSurface(
+        screenFrame: interactions.screenFrame,
+        runs: surface.letterRuns(panelFrame: frame),
+        regions: interactions.hints)
+    }
+  }
+
   /// Route a hovered segment (screen coordinates) to the surface drawing it;
   /// every other surface hides its wash.
   func setStatusBarHoverHighlight(_ screenRect: CGRect?) {
@@ -790,7 +819,11 @@ extension OverlayPanel {
     at pointer: CGPoint,
     screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
-    statusPopupController.refresh(popups)
+    statusPopupController.refresh(popups) { anchor in
+      let centre = CGPoint(x: anchor.midX, y: anchor.midY)
+      return screenSnapshot.screens.first { $0.frame.contains(centre) }?.visibleFrame
+        ?? screenSnapshot.screens.first { $0.frame.intersects(anchor) }?.visibleFrame
+    }
     activeStatusBarPopupName = statusPopupController.presentation.name
     activeStatusBarPopupContent = statusPopupController.content
     hitTestStatusBarHover(popups: popups, links: links, at: pointer, screenSnapshot: screenSnapshot)
