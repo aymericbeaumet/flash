@@ -120,7 +120,7 @@ final class InspectorStatePushTests: XCTestCase {
     assertOnePush("secure input") { delegate.noteSecureInput(true) }
     assertOnePush("keyboard capture") {
       delegate.keyboardCaptureTap = KeyboardCaptureTap(
-        shouldSwallow: { _ in false }, handle: { _ in })
+        shouldSwallow: { _ in .pass }, handle: { _ in })
     }
     assertOnePush("clipboard") {
       delegate.clipboardEntries = [

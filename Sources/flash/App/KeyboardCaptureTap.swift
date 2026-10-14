@@ -18,7 +18,7 @@ import CoreGraphics
 final class KeyboardCaptureTap {
   private var tap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
-  private let shouldSwallow: (CGEvent) -> Bool
+  private let shouldSwallow: (CGEvent) -> KeyDownOutcome
   private let handle: (NSEvent) -> Void
   private let handleKeyUp: (NSEvent) -> Void
   /// Whether a swallowed release with this key code is one the key-up handler
@@ -66,20 +66,25 @@ final class KeyboardCaptureTap {
 
   /// An autorepeat follows its press rather than the mode of the moment: a
   /// press the app received keeps repeating there, and a swallowed press
-  /// keeps its repeats from the app — routed while the mode still reads that
-  /// key, dropped once it does not, so a key whose press entered INSERT
-  /// repeats nothing into the app. A fresh press, or a repeat whose press the
-  /// tap never saw, decides.
-  static func keyDownOutcome(held: Bool?, isRepeat: Bool, decide: () -> Bool) -> KeyDownOutcome {
+  /// keeps its repeats from the app — routed as the mode would route the
+  /// key now, dropped once the mode no longer reads it, so a key whose press
+  /// entered INSERT repeats nothing into the app. A fresh press, or a repeat
+  /// whose press the tap never saw, decides. The decision itself names the
+  /// routing: a swallowed key the decision already acted on (the Escape that
+  /// closes a hover preview) is swallowed and not routed.
+  static func keyDownOutcome(
+    held: Bool?, isRepeat: Bool, decide: () -> KeyDownOutcome
+  ) -> KeyDownOutcome {
     if isRepeat, let held {
       guard held else { return .pass }
-      return .swallow(route: decide())
+      guard case .swallow(let route) = decide() else { return .swallow(route: false) }
+      return .swallow(route: route)
     }
-    return decide() ? .swallow(route: true) : .pass
+    return decide()
   }
 
   init(
-    shouldSwallow: @escaping (CGEvent) -> Bool,
+    shouldSwallow: @escaping (CGEvent) -> KeyDownOutcome,
     handle: @escaping (NSEvent) -> Void,
     handleKeyUp: @escaping (NSEvent) -> Void = { _ in },
     keyUpMatters: @escaping (Int64) -> Bool = { _ in false }

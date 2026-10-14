@@ -105,9 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Desktop widget windows; the status controller evaluates their lines.
   var widgetController: WidgetController?
   let mainRunLoopStallObserver = MainRunLoopStallObserver()
-  /// The swallowed Escape that closed a hover preview; its routing, queued
-  /// right behind, must not also reach a mapping or the interpreter.
-  var tapEscapeClosedPopup = false
   var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
@@ -1195,7 +1192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return
     }
     let tap = KeyboardCaptureTap(
-      shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
+      shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? .pass },
       handle: { [weak self] event in self?.routeTapCapturedKey(event) },
       handleKeyUp: { [weak self] event in _ = self?.handleLeaderKeyUp(event) },
       keyUpMatters: { [weak self] keyCode in
@@ -1214,7 +1211,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// key is routed. NORMAL is hermetic: `normalModeMappings` carries the same
   /// compiled set the Carbon registry does, and the session tap swallows the
   /// event before Carbon dispatch, so there's no double-fire.
-  private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
+  /// The tap's keyDown decision, with its routing: a swallowed key reaches
+  /// `routeTapCapturedKey` unless the decision already acted on it here.
+  private func keyboardTapShouldSwallow(_ event: CGEvent) -> KeyboardCaptureTap.KeyDownOutcome {
     let flags = event.flags
     let decision = KeyboardCaptureTap.decide(
       isTerminal: modeStore.mode.isTerminal,
@@ -1233,29 +1232,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil)
     switch decision {
     case .pass:
-      return false
+      return .pass
     case .swallow:
       reconcileFrontmostApplication(
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
-      return !tapReadsSecureInput()
+      return tapReadsSecureInput() ? .pass : .swallow(route: true)
     case .swallowIfInsertChordIsMapped:
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       reconcileFrontmostApplication(
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
-      guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
-      return !tapReadsSecureInput()
+      guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return .pass }
+      return tapReadsSecureInput() ? .pass : .swallow(route: true)
     case .closeEphemeralPopup:
-      guard !tapReadsSecureInput() else { return false }
-      tapEscapeClosedPopup = true
+      guard !tapReadsSecureInput() else { return .pass }
       // Out of the synchronous tap callback: hiding a panel is AppKit work.
+      // The key is spent here: it must not also reach a mapping or the
+      // interpreter, so it is swallowed without being routed.
       DispatchQueue.main.async { [weak self] in
         self?.overlay.dismissEphemeralStatusBarPopup(reason: "escape")
       }
-      return true
+      return .swallow(route: false)
     case .swallowIfNativeSurfaceKeyIsMapped:
-      guard !tapReadsSecureInput() else { return false }
+      guard !tapReadsSecureInput() else { return .pass }
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       return keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
+        ? .swallow(route: true) : .pass
     }
   }
 
@@ -1290,10 +1291,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// interpreter.
   func routeTapCapturedKey(_ event: NSEvent) {
     MainThreadActivity.note("tap_key")
-    if tapEscapeClosedPopup {
-      tapEscapeClosedPopup = false
-      return
-    }
     Trace.begin(.key, triggeredAt: event.timestamp) { routeTracedKey(event) }
   }
 

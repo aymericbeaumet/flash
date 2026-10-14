@@ -191,17 +191,28 @@ final class KeyboardCaptureTapTests: XCTestCase {
   /// key — `t` opened a tab and entered INSERT, so its repeats type nothing.
   func testAutorepeatFollowsItsPress() {
     typealias Tap = KeyboardCaptureTap
-    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { true }, .swallow(route: true))
-    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { false }, .pass)
+    let routed = Tap.KeyDownOutcome.swallow(route: true)
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { routed }, routed)
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { .pass }, .pass)
     XCTAssertEqual(
-      Tap.keyDownOutcome(held: nil, isRepeat: true) { true }, .swallow(route: true),
+      Tap.keyDownOutcome(held: nil, isRepeat: true) { routed }, routed,
       "a repeat whose press predates the tap decides like a press")
-    XCTAssertEqual(Tap.keyDownOutcome(held: false, isRepeat: true) { true }, .pass)
-    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { true }, .swallow(route: true))
-    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { false }, .swallow(route: false))
+    XCTAssertEqual(Tap.keyDownOutcome(held: false, isRepeat: true) { routed }, .pass)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { routed }, routed)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { .pass }, .swallow(route: false))
     XCTAssertEqual(
-      Tap.keyDownOutcome(held: true, isRepeat: false) { false }, .pass,
+      Tap.keyDownOutcome(held: true, isRepeat: false) { .pass }, .pass,
       "a new press of a key with a stale pairing decides afresh")
+  }
+
+  /// A decision that already acted on the key — the Escape that closes a
+  /// hover preview — swallows it without routing it, press and repeats
+  /// alike: no flag has to remember to drop the next routed key.
+  func testASpentKeyIsSwallowedWithoutBeingRouted() {
+    typealias Tap = KeyboardCaptureTap
+    let spent = Tap.KeyDownOutcome.swallow(route: false)
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { spent }, spent)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { spent }, spent)
   }
 
 }
