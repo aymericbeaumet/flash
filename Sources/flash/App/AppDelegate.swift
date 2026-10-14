@@ -236,6 +236,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var sourceItemResolutionGeneration: UInt64 = 0
   var appCurrent: pid_t?
   var observedFocusedAppPID: pid_t?
+  /// The last app plugins heard focus move to; see `FocusEmissionGate`.
+  var focusEmissionGate = FocusEmissionGate()
   var lastFocusedApplicationPID: pid_t? {
     observedFocusedAppPID.flatMap { $0 == getpid() ? nil : $0 }
   }
@@ -1075,7 +1077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     observedFocusedAppPID = app.processIdentifier
     refreshFocusDependentState(for: app)
     debugStateDidChange()
-    if emitFocusEvent {
+    if emitFocusEvent, focusEmissionGate.shouldEmit(pid: app.processIdentifier) {
       overlay.relinquishShownStatusPopup(reason: "focus_changed")
       pluginManager.emit(
         PluginEvent(
