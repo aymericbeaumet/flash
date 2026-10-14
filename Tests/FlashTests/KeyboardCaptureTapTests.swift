@@ -170,4 +170,38 @@ final class KeyboardCaptureTapTests: XCTestCase {
     XCTAssertTrue(keys.isEmpty)
   }
 
+  /// A release the tap never saw (a timeout disable, secure input turning on,
+  /// the hyper key's dropped key-up) leaves a stale pairing. The next press of
+  /// that key decides afresh, and its pairing replaces the stale one: a press
+  /// the app received owes the app its release.
+  func testAPassedPressReplacesAStaleSwallowedPairing() {
+    var keys = KeyboardCaptureTap.SwallowedKeys()
+    keys.press(45, swallowed: true)
+    keys.press(45, swallowed: false)
+    XCTAssertFalse(keys.releaseIsSwallowed(45), "the app is owed this release")
+    XCTAssertTrue(keys.isEmpty)
+    keys.press(45, swallowed: false)
+    keys.press(45, swallowed: true)
+    XCTAssertTrue(keys.releaseIsSwallowed(45))
+  }
+
+  /// A held key's autorepeat follows its press, not the mode of the moment: a
+  /// press the app received keeps repeating there, and a swallowed press keeps
+  /// its repeats from the app, routed only while the mode still reads that
+  /// key — `t` opened a tab and entered INSERT, so its repeats type nothing.
+  func testAutorepeatFollowsItsPress() {
+    typealias Tap = KeyboardCaptureTap
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { true }, .swallow(route: true))
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { false }, .pass)
+    XCTAssertEqual(
+      Tap.keyDownOutcome(held: nil, isRepeat: true) { true }, .swallow(route: true),
+      "a repeat whose press predates the tap decides like a press")
+    XCTAssertEqual(Tap.keyDownOutcome(held: false, isRepeat: true) { true }, .pass)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { true }, .swallow(route: true))
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { false }, .swallow(route: false))
+    XCTAssertEqual(
+      Tap.keyDownOutcome(held: true, isRepeat: false) { false }, .pass,
+      "a new press of a key with a stale pairing decides afresh")
+  }
+
 }

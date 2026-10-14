@@ -36,18 +36,46 @@ final class KeyboardCaptureTap {
   /// key whose press NORMAL consumed leaks an escape sequence into the app.
   /// Pairing on the press rather than the current mode means a mode change
   /// mid-keypress can neither leak a release nor strand one an app is waiting
-  /// for. Extracted so the rule is unit-testable without a live `CGEventTap`.
+  /// for. Every press records its decision, so a press that reached the app
+  /// replaces a stale swallowed pairing whose release the tap never saw (a
+  /// timeout disable, secure input), and a held key's autorepeat can follow
+  /// its press (`keyDownOutcome`). Extracted so the rule is unit-testable
+  /// without a live `CGEventTap`.
   struct SwallowedKeys {
-    private var codes: Set<Int64> = []
-    var isEmpty: Bool { codes.isEmpty }
+    private var decisions: [Int64: Bool] = [:]
+    var isEmpty: Bool { decisions.isEmpty }
 
     mutating func press(_ code: Int64, swallowed: Bool) {
-      if swallowed { codes.insert(code) }
+      decisions[code] = swallowed
     }
 
     mutating func releaseIsSwallowed(_ code: Int64) -> Bool {
-      codes.remove(code) != nil
+      decisions.removeValue(forKey: code) ?? false
     }
+
+    /// The press decision of a key still held, nil when none was seen.
+    func heldDecision(_ code: Int64) -> Bool? { decisions[code] }
+  }
+
+  /// What one `keyDown` does, given the decision its press got.
+  enum KeyDownOutcome: Equatable {
+    case pass
+    /// Swallowed; `route` sends it to the handler, false drops it.
+    case swallow(route: Bool)
+  }
+
+  /// An autorepeat follows its press rather than the mode of the moment: a
+  /// press the app received keeps repeating there, and a swallowed press
+  /// keeps its repeats from the app — routed while the mode still reads that
+  /// key, dropped once it does not, so a key whose press entered INSERT
+  /// repeats nothing into the app. A fresh press, or a repeat whose press the
+  /// tap never saw, decides.
+  static func keyDownOutcome(held: Bool?, isRepeat: Bool, decide: () -> Bool) -> KeyDownOutcome {
+    if isRepeat, let held {
+      guard held else { return .pass }
+      return .swallow(route: decide())
+    }
+    return decide() ? .swallow(route: true) : .pass
   }
 
   init(
@@ -228,10 +256,16 @@ final class KeyboardCaptureTap {
       return nil
     }
     guard type == .keyDown else { return passthrough }
-    let swallow = me.shouldSwallow(event)
-    me.swallowedKeys.press(keyCode, swallowed: swallow)
-    guard swallow else { return passthrough }
-    if let ns = NSEvent(cgEvent: event) {
+    let outcome = Self.keyDownOutcome(
+      held: me.swallowedKeys.heldDecision(keyCode),
+      isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+    ) { me.shouldSwallow(event) }
+    guard case .swallow(let route) = outcome else {
+      me.swallowedKeys.press(keyCode, swallowed: false)
+      return passthrough
+    }
+    me.swallowedKeys.press(keyCode, swallowed: true)
+    if route, let ns = NSEvent(cgEvent: event) {
       // The swallow (returning nil) is synchronous, so the key never reaches
       // the app; defer the (possibly heavy) handling so the callback returns
       // fast and the tap doesn't trip its time budget.

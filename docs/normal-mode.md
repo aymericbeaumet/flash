@@ -287,7 +287,9 @@ only explicit mappings act. Map a key to the high-level action it stands for;
 for a chord no action covers, `send_key` is the explicit escape hatch, or the
 user enters INSERT first. The release of a swallowed key is swallowed with it,
 because a terminal running the Kitty keyboard protocol encodes key releases to
-its pty.
+its pty. A held key's repeats follow its press: a key whose press entered
+INSERT repeats nothing into the app, and a key the app received keeps
+repeating there.
 
 A synthesized chord reaches an iOS app (Mac Catalyst or iPad) with its
 modifiers pressed and released around the key, as a keyboard sends it: UIKit
