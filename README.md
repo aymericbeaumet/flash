@@ -2,17 +2,21 @@
 
 **Your keyboard, all of macOS.**
 
-Click anything, drive every app from a Vim-like normal mode, and build your own
-status bar and desktop widgets, all from one TOML file. Flash never reads your
+What Vimium does in the browser, Flash does in every app: press a hotkey, type
+the label on the thing you want, and it is clicked. Then keep going: a Vim-like
+normal mode over all of macOS, a mouse grid, a tmux-style status bar, desktop
+widgets and terminal popups, all from one TOML file. Flash never reads your
 screen.
 
 Coming from i3, sway or Hyprland with keynav, conky, polybar and rofi? This is
 that toolkit for macOS. Never edited a dotfile? Start with one hotkey.
 
-<!-- Demo: a 10–15 s GIF of hotkey → labels → typed hint → click, in a browser and a native app. -->
+<!-- Demo: docs/assets/demo.gif, 10–15 s. Hotkey → labels → typed hint → click in
+     Safari and in a native app, then `f` from normal mode and a `]t` tab switch.
+     Show the keys pressed (KeyCastr) and keep the GIF under 5 MB. -->
 
-Flash is free and open source (MIT). It needs macOS 14 or later and the
-Accessibility permission, and nothing else.
+Flash is free and open source (MIT), written in Swift with plugins in Rust. It
+needs macOS 14 or later and the Accessibility permission.
 
 ## What you get
 
@@ -44,6 +48,25 @@ Accessibility permission, and nothing else.
 Everything reloads live when you save. There is no preferences window; the
 menu-bar icon offers About, Open Configuration, and Quit.
 
+## What Flash will not do
+
+These are design rules, enforced by tests and a guardrail script, not plans.
+
+- **Never read the screen.** No OCR, no Vision, no pixel access. Hints come
+  from the Accessibility tree and window geometry; apps that expose nothing
+  get the keyboard grid instead. `:screenshot` runs Apple's `screencapture`
+  straight to the clipboard, and no image passes through Flash.
+- **Never record keys.** One keyboard tap, in one file, decides whether a key
+  is swallowed or passed through. It never logs, stores or sends keystrokes.
+- **No private APIs, no SIP changes, no helper daemons.** One process, public
+  frameworks, autostart through the standard login item.
+- **No preferences window, no accounts, no telemetry, no update checks.** The
+  configuration file is the whole interface; `flash config_check` validates
+  it in CI.
+- **Assemble, don't replace.** When a maintained tool already does the job
+  (btop, newsboat, calcurse), Flash shows it in a popup instead of growing a
+  copy of it.
+
 ## Install
 
 ### 1. Homebrew
@@ -71,17 +94,14 @@ mise exec -- ./Scripts/install.sh
 
 See [development](docs/development.md) for tests and the dev build.
 
-### 3. Cargo
-
-Flash is a Swift app and is not published as a Cargo package. `cargo install
-flash` installs a different program. The installer above builds Flash's Rust
-plugins with Cargo; there is no separate `cargo install` step.
+Flash is not on crates.io: `cargo install flash` installs an unrelated
+program.
 
 Whichever way you installed it:
 
-1. **Allow the first launch.** Builds are not notarized yet. If macOS says it
-   could not verify Flash, open **System Settings → Privacy & Security** and
-   click **Open Anyway**.
+1. **Allow the first launch.** Builds are ad-hoc signed and not notarized yet.
+   If macOS says it could not verify Flash, open **System Settings → Privacy &
+   Security** and click **Open Anyway**.
 2. **Grant Accessibility.** Flash opens **System Settings → Privacy & Security →
    Accessibility** for you. Turn Flash on.
 
@@ -196,8 +216,11 @@ the [plugin cookbook](docs/plugin-cookbook.md).
 
 ## Privacy
 
-Flash asks for Accessibility only. It does not use Screen Recording, OCR, or
-Input Monitoring, and it has no telemetry, analytics, or update checks.
+Flash itself asks for Accessibility and nothing else. It does not use Screen
+Recording, OCR, or Input Monitoring, and it has no telemetry, analytics, or
+update checks. Bundled plugins are enabled by default and a few ask for
+something more the first time you use them; every prompt, request and file is
+listed on the [privacy page](docs/privacy.md).
 
 - **Screen.** Hints come from the Accessibility tree and window geometry. Flash
   never reads screen pixels. The optional `:screenshot` command runs macOS
@@ -206,45 +229,37 @@ Input Monitoring, and it has no telemetry, analytics, or update checks.
   normal mode, the command bar). It decides whether to swallow or pass each key
   and never records what you type in other apps. Queries you submit in Flash's
   own command bar are kept in a local history.
-- **Network.** Flash's core has no network features. A few bundled plugins
-  fetch data, such as daily exchange rates, and remote tmux over SSH is off
-  until you list hosts. Disable any plugin with `[plugins] disabled = ["<id>"]`.
-- **Local data.** Clipboard history, command history, and ranking data stay in
-  `~/Library/Application Support/Flash`. Clipboard history skips items that
-  password managers mark as concealed or transient.
-
-The [privacy page](docs/privacy.md) lists every permission prompt, network
-request, and file for each plugin.
+- **Other prompts.** Listing browser tabs asks for Automation of that browser.
+  Indexing Notes, Reminders or Contacts asks for Automation of those apps. A
+  command you configure yourself, such as a calendar CLI in a widget, triggers
+  its own prompt, attributed to Flash.
+- **Network.** Flash's core has no network features. By default, `answers`
+  fetches daily exchange rates from the ECB and `github` runs your `gh` CLI if
+  it is signed in. Feeds and remote tmux over SSH are off until you configure
+  them. Disable any plugin with `[plugins] disabled = ["<id>"]`.
+- **Local data.** Clipboard history, command history, ranking data and a copy
+  of your Chrome and Firefox history (for the `history` search source) stay in
+  `~/Library/Application Support/Flash`, readable only by you. Clipboard
+  history skips items that password managers mark as concealed or transient.
 
 ## How it compares
 
-- **Neru** (MIT) is the closest open-source relative: hints, grid, recursive
-  grid, bisect, and scroll modes, controlled over a Unix socket. Its optional
-  OCR and contour detection need Screen Recording. Flash stays on
-  Accessibility only and adds normal mode, search, a status bar, and widgets.
-- **Homerow** is polished, closed source, and paid. Flash is free, MIT-licensed,
-  configured in a file, and goes beyond clicking.
-- **Vimac** was Homerow's open-source predecessor and is no longer maintained.
-- **Shortcat** is free and closed source, and clicks by typing visible text.
-  Flash has that as `mouse_target --search`, next to labels.
-- **Scoot** (BSD-3) offers element hints and a grid. Flash adds normal mode,
-  terminal hints, search, and plugins.
-- **Wooshy**, **Mouseless**, and **Superkey** are paid. Superkey's text seek
-  needs Screen Recording; Flash asks for Accessibility only.
-- **Vimium** and **Surfingkeys** work inside the browser only. Flash covers the
-  browser and every other app, with no extension.
-- **Raycast** and **Alfred** are launchers. flashlight covers apps, tabs, emoji,
-  and quick math, but Flash's focus is acting on what is on screen, and it runs
-  fine next to them.
-- **SketchyBar** is a scriptable bar. Flash's bar uses tmux formats and shares
-  its plugins with hints, search, and widgets.
-- **Übersicht** renders desktop widgets as web views, and **conky** needs
-  XQuartz on macOS. Flash widgets are native text layers fed by the same
-  collectors as the bar.
-- **Hammerspoon** is a Lua automation toolkit. Flash is a ready-made keyboard
-  layer in TOML. See the [Hammerspoon migration guide](docs/hammerspoon.md)
-  for hotkeys, window controls, app launching, alerts, and what remains better
-  served by Lua. Hammerspoon can also drive Flash with `flash <verb>`.
+| | License | Hints from | Also has | Flash adds |
+| --- | --- | --- | --- | --- |
+| [Neru](https://github.com/y3owk1n/neru) | MIT | Accessibility, optional OCR and contour detection | Grid, bisect, scroll mode, Linux and Windows | Accessibility only, normal mode with per-app actions, search, status bar, widgets, popups, plugins |
+| [Homerow](https://www.homerow.app) | Paid, closed | Accessibility | Scroll, search | Free, configured in a file, everything past clicking |
+| [Shortcat](https://shortcat.app) | Closed | Accessibility, by typing visible text | | `mouse_target --search` does that, next to labels |
+| [Scoot](https://github.com/mjrusso/scoot) | BSD-3 | Accessibility | Grid | Normal mode, terminal hints, search, plugins |
+| [Vimac](https://github.com/nchudleigh/vimac) | GPL, unmaintained | Accessibility | Scroll | Homerow's open-source predecessor; Flash is maintained |
+| Wooshy, Mouseless, Superkey | Paid | Accessibility or text seek | | Superkey's text seek needs Screen Recording; Flash does not |
+| [Vimium](https://github.com/philc/vimium), Surfingkeys | MIT | The DOM, in the browser | | Every app, no extension |
+| [Hammerspoon](https://www.hammerspoon.org) | MIT | | Lua automation of everything | A ready-made keyboard layer in TOML; see the [migration guide](docs/hammerspoon.md). Hammerspoon can drive Flash with `flash <verb>` |
+| [SketchyBar](https://github.com/FelixKratz/SketchyBar) | GPL | | Scriptable bar | tmux formats, and one plugin feeds the bar, hints, search and widgets |
+| [Übersicht](https://github.com/felixhageloh/uebersicht), conky | GPL | | Web-view widgets; conky needs XQuartz | Native text widgets fed by the bar's collectors |
+| Raycast, Alfred | Closed | | Launchers | flashlight covers apps, tabs, emoji and quick math; Flash's focus is acting on what is on screen, and it runs fine next to them |
+
+Window managers are not on the list on purpose: Flash moves and focuses
+windows but does not tile. It runs next to AeroSpace, yabai or Rectangle.
 
 Flash only sees what an app exposes to Accessibility. Canvas-drawn interfaces
 and some games show no hints; use the grid there.
@@ -256,6 +271,44 @@ so most activations draw hints without walking the app. Every activation logs
 its latency from the keypress to the frame that shows the hints;
 [performance](docs/performance.md) has the method, the benchmark script, and
 measurements.
+
+## FAQ
+
+**Is it Vim?** No. NORMAL, INSERT and COMMAND are borrowed from Vim because
+they are a good way to make one keyboard do two jobs; the bindings are
+Vimium's and your own, not an editor's.
+
+**Does it work in Electron apps and Chrome?** Yes, through the Accessibility
+tree Chromium exposes once an assistive client asks for it. Flash prepares a
+window's targets in the background as it changes; a prepared window shows
+hints in a fraction of a millisecond, and a cold walk of a small page takes
+10 to 25 ms on an M4 Pro. A canvas, a game or a remote desktop exposes
+nothing; use the grid.
+
+**Is the key tap a keylogger?** It runs only while Flash owns input, decides
+swallow or pass for each key, and never stores anything. The tap lives in one
+file, `KeyboardCaptureTap.swift`, and a guardrail rejects any other tap or
+global key monitor.
+
+**What does it cost at idle?** Hints follow Accessibility events and tmux
+follows its control client, so nothing polls for them. Whatever must poll
+(CPU, battery, a feed) ticks on the one scheduler in the process, which
+coalesces wake-ups and pauses when the display sleeps. The budget and the
+script that measures it are in [performance](docs/performance.md).
+
+**Why not Hammerspoon, Karabiner, SketchyBar and a tiler?** You can keep
+them. Flash is the part that wants a single modal layer and a single file:
+hints, modes and the bar sharing one set of plugins. It does not tile, remap
+hardware keys or run Lua.
+
+**Non-QWERTY keyboard?** Labels, grid keys and mappings are read by key
+position, so AZERTY, Dvorak and non-Latin input sources work without
+configuration (`[app] keyboard_layout`).
+
+**Several displays?** Hints cover the focused window; `--scope=screen` labels
+every app on the screen. Tab moves the grid to the next display. The bar sits
+on the display you choose, and each widget can sit on one display or all of
+them.
 
 ## Troubleshooting
 
@@ -286,12 +339,23 @@ brew uninstall --cask --zap flash@nightly
 
 `--zap` also removes your configuration, logs, and local data.
 
+## Status
+
+Flash is pre-1.0 and used daily by its author on macOS 26. There is one
+rolling `nightly` release, built and published by CI from `main` on every push
+that passes the full test and plugin gate. Expect configuration keys to be
+renamed without compatibility shims until a tagged release; `flash
+config_check` rejects the old ones and the commit that renamed them says
+what to write instead.
+
 ## Community
 
-Flash is young and moves fast. Bug reports with the app name and version, new
-plugins, and your bar and widget setups are all welcome: open an
-[issue](https://github.com/aymericbeaumet/flash/issues) or send a pull request
-adding your setup to [`docs/examples`](docs/examples).
+Bug reports with the app name and version, new plugins, and your bar and
+widget setups are all welcome: open an
+[issue](https://github.com/aymericbeaumet/flash/issues/new/choose) or send a
+pull request adding your setup to [`docs/examples`](docs/examples). See
+[CONTRIBUTING.md](CONTRIBUTING.md) before changing code, and
+[SECURITY.md](SECURITY.md) for private reports.
 
 ## Documentation
 
