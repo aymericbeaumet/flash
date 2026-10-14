@@ -63,4 +63,4 @@ python3 Scripts/test-hints-latency-summary.py   # the log parser's unit tests
 hotkeys and plugins; `flash config_check --file=<path>` validates a config file
 without it.
 
-`swift build` alone does not update the resident app in `/Applications`. CI publishes releases; [release.md](release.md) explains versioning, signing and notarization. See [AGENTS.md](../AGENTS.md) for the architecture, source contracts, and repository guardrails.
+`swift build` alone does not update the resident app in `/Applications`. CI publishes releases; [release.md](release.md) explains versioning, signing and notarization. The manual is `docs/` built by mkdocs (`mkdocs.yml`); preview it with `uvx --with mkdocs-material==9.7.7 mkdocs serve` and keep `mkdocs build` free of warnings, since the Docs workflow runs it in strict mode. See [AGENTS.md](https://github.com/aymericbeaumet/flash/blob/main/AGENTS.md) for the architecture, source contracts, and repository guardrails.

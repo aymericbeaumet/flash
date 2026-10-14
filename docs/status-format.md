@@ -388,8 +388,8 @@ Unicode is pinned to **utf8proc 2.12.0 / Unicode 18.0**, with tmux 3.7c's width
 overrides. Flash's data is modified into 482 compact non-unit width intervals,
 uses tmux's one-cell private-use rule, and applies the 162 tmux overrides first.
 This removes macOS-version-dependent `wcwidth` results. The source-data licenses
-are retained in [utf8proc-LICENSE](../Resources/utf8proc-LICENSE) and
-[tmux-LICENSE](../Resources/tmux-LICENSE), and accompany app builds.
+are retained in [utf8proc-LICENSE](https://github.com/aymericbeaumet/flash/blob/main/Resources/utf8proc-LICENSE) and
+[tmux-LICENSE](https://github.com/aymericbeaumet/flash/blob/main/Resources/tmux-LICENSE), and accompany app builds.
 
 The test-only oracle bootstrap pins tmux 3.7c and statically links utf8proc
 2.12.0. Each oracle uses a disposable named socket with an empty tmux config;

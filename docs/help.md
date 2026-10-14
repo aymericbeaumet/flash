@@ -77,9 +77,12 @@ identify only one accepted topic: built-ins take precedence, then the first
 plugin topic claiming the name wins. The browser's navigation and search use
 that installed inventory. Links between guides use `/docs/<topic>`; links to
 runtime companions use their page paths, such as `/mappings` or `/state`.
-Repository references use absolute links pinned to the bundle's
-`FlashGitCommit` when available, so they work from a locally served page and
-follow the installed source revision.
+Long-form references link to the published manual through
+`HelpDocs.manual("<page>")`, which is `docs/` built by mkdocs at
+<https://aymericbeaumet.github.io/flash/> from `main`; the `manual` topic
+(`:help manual`, aliases `docs`, `reference`, `alternatives`) is its table
+of contents. Source files that are not manual pages, such as `AGENTS.md`,
+keep absolute repository links pinned to the bundle's `FlashGitCommit`.
 
 Built-in prose lives in `HelpDocs.swift` or beside the feature that owns it
 (`Config.helpTopic`, `NormalModeDispatcher.helpTopic`,

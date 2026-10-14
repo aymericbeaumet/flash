@@ -143,15 +143,26 @@ listed on the [privacy page](docs/privacy.md).
 
 ## How it compares
 
-Flash is closest to [Neru](https://github.com/y3owk1n/neru) (free, hints with
-optional OCR, cross-platform) and to Homerow, Shortcat and Scoot on macOS.
-It differs by staying on Accessibility only and by what comes after the
-click: persistent modes with per-app actions, search, the bar, widgets and
-popups, all sharing one plugin set. It does not tile windows and runs next to
-AeroSpace, yabai or Rectangle, and it can be driven from Hammerspoon with
-`flash <verb>`. The [comparison and FAQ](docs/comparison.md) has the table,
-latency numbers and the usual questions; [troubleshooting](docs/troubleshooting.md)
-starts with `flash doctor`.
+Flash covers ground that usually takes several apps. Each line is one of
+those areas, the tools people use for it, and a page that says honestly
+where they are better and how to move over.
+
+| Area | In Flash | Tools it compares with |
+| --- | --- | --- |
+| Clicking by keyboard | Hints, search, grid, bisect, drag, selection | [Neru](docs/alternatives/neru.md) · [Homerow](docs/alternatives/homerow.md) · [Shortcat](docs/alternatives/shortcat.md) · [Scoot](docs/alternatives/scoot.md) · [Vimac](docs/alternatives/vimac.md) · [Mouseless](docs/alternatives/mouseless.md) · [Wooshy](docs/alternatives/wooshy.md) · [Superkey](docs/alternatives/superkey.md) · [warpd](docs/alternatives/warpd.md) · [Neverclick](docs/neverclick.md) · [mousemaster](docs/mousemaster.md) |
+| Vim keys everywhere | NORMAL, INSERT, COMMAND and TERMINAL modes across every app | [Vimium](docs/alternatives/vimium.md) · [Surfingkeys](docs/alternatives/surfingkeys.md) |
+| Keyboard automation | Mappings to any verb or executable, per app | [Hammerspoon](docs/alternatives/hammerspoon.md) |
+| Search and launching | flashlight: apps, tabs, windows, tmux, emoji, math, currency, plugin data | [Raycast](docs/alternatives/raycast.md) · [Alfred](docs/alternatives/alfred.md) |
+| Status bar | tmux-format templates fed by plugins and shell jobs | [SketchyBar](docs/alternatives/sketchybar.md) |
+| Desktop widgets | The same templates, drawn below your windows | [Übersicht](docs/alternatives/uebersicht.md) · [conky](docs/alternatives/conky.md) |
+| Terminal popups | Any TUI in a real PTY under a bar segment | None; Flash shows btop, newsboat or calcurse instead of rebuilding them |
+| Window placement | Named positions, rules, directional focus, full screen; no tiling | [AeroSpace](docs/alternatives/aerospace.md) · [yabai](docs/alternatives/yabai.md) · [Rectangle](docs/alternatives/rectangle.md) |
+| Plugins | Sandboxed JSON-lines processes in any language, one set for all of the above | Raycast's store, Hammerspoon's Spoons |
+
+What Flash will not do: read pixels, run on Linux or Windows, tile, remap
+hardware keys or expand text. The [alternatives index](docs/alternatives/README.md)
+says more, the [comparison table and FAQ](docs/comparison.md) is the one-screen
+summary, and [troubleshooting](docs/troubleshooting.md) starts with `flash doctor`.
 
 ## Status
 

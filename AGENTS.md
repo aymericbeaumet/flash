@@ -19,7 +19,12 @@ contracts before changing a subsystem:
 - [Performance and latency benchmarks](docs/performance.md).
 - [Releases, signing and notarization](docs/release.md); user-facing
   [getting started](docs/getting-started.md), [comparison and FAQ](docs/comparison.md),
-  [troubleshooting](docs/troubleshooting.md).
+  [alternatives](docs/alternatives/README.md) (one page per tool, with a
+  migration section), [troubleshooting](docs/troubleshooting.md).
+- `docs/` is published by `mkdocs.yml` and `.github/workflows/pages.yml` to
+  <https://aymericbeaumet.github.io/flash/>; the browser help links there
+  through `HelpDocs.manual`. New pages join the `nav` in `mkdocs.yml`; the
+  strict build fails on a broken link.
 
 ## Assemble great tools
 

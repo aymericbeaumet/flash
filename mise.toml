@@ -5,4 +5,6 @@
 # multi-target support for universal release builds.
 [tools]
 python = "3.14.7"
+# uv runs the pinned mkdocs toolchain for the documentation site (mkdocs.yml).
+uv = "0.11.15"
 zig = "0.16.0"

@@ -1,5 +1,9 @@
 # How Flash compares, and FAQ
 
+This is the one-screen summary. The [alternatives](alternatives/README.md)
+pages take each tool in turn, with where it is stronger than Flash, where
+Flash is stronger, and how to move a setup over.
+
 | | License | Hints from | Also has | Flash adds |
 | --- | --- | --- | --- | --- |
 | [Neru](https://github.com/y3owk1n/neru) | MIT | Accessibility, optional OCR and contour detection | Grid, bisect, scroll mode, Linux and Windows | Accessibility only, normal mode with per-app actions, search, status bar, widgets, popups, plugins |
