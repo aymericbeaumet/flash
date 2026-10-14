@@ -16,7 +16,7 @@
   const normalize = (text: string) => text.trim().toLowerCase();
   const selected = $derived(docs.find((doc) => normalize(doc.name) === normalize(topic) || (doc.aliases ?? []).some((alias) => normalize(alias) === normalize(topic))));
   const groups = $derived(groupTopics(docs.filter((doc) => !query.trim() || normalize([doc.title, doc.name, doc.summary, doc.body, ...(doc.aliases ?? [])].join(" ")).includes(normalize(query)))));
-  const rendered = $derived(selected ? renderMarkdown(selected.body, docs) : { html: "", titleId: undefined, headings: [] });
+  const rendered = $derived(selected ? renderMarkdown(selected.body, docs) : { fragment: document.createDocumentFragment(), titleId: undefined, headings: [] });
   const minutes = $derived(selected ? Math.max(1, Math.ceil(selected.body.split(/\s+/).length / 220)) : 0);
   const currentGroup = $derived(selected?.group ?? "Documentation");
   const { previous, next } = $derived(neighbours(docs, selected?.name));
@@ -33,12 +33,12 @@
   });
   $effect(() => { void selected; topicsOpen = false; });
 
-  // Copy buttons on code blocks and the outline's current section, applied
-  // after the sanitized HTML renders.
+  // The guide's nodes (built, never parsed from HTML), then copy buttons on
+  // code blocks and the outline's current section.
   $effect(() => {
-    void rendered.html;
     const container = body;
     if (!container) return;
+    container.replaceChildren(rendered.fragment.cloneNode(true));
     let observer: IntersectionObserver | undefined;
     void tick().then(() => {
       for (const pre of Array.from(container.querySelectorAll("pre"))) {
@@ -98,7 +98,7 @@
         {#if rendered.headings.length}
           <details class="toc-inline"><summary>On this page</summary><nav aria-label="On this page">{#each rendered.headings as heading}<a class:subheading={heading.level === 3} href={"#" + heading.id}>{heading.title}</a>{/each}</nav></details>
         {/if}
-        <div class="article-body" bind:this={body}>{@html rendered.html}</div>
+        <div class="article-body" bind:this={body}></div>
         <footer class="article-footer">
           {#if previous}<a class="prev" href={paths.docs(previous.name)}><span class="eyebrow">Previous</span>{previous.title}</a>{:else}<a class="prev" href="/docs"><span class="eyebrow">Up</span>All guides</a>{/if}
           {#if next}<a class="next" href={paths.docs(next.name)}><span class="eyebrow">Next</span>{next.title}</a>{/if}
