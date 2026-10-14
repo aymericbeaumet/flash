@@ -253,6 +253,73 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(manager.pluginStatuses().filter { $0.id == fixture.pluginID }.count, 1)
   }
 
+  /// A changed definition's requests route to its replacement from the
+  /// moment it is reconciled, while the old child is still being stopped: a
+  /// command typed right after saving the config waits for the replacement
+  /// instead of failing on a process that is going away.
+  func testReconcileRoutesToTheReplacementWhileTheOldChildStops() throws {
+    // Answers requests while stdin is open, then lingers past EOF and
+    // ignores SIGTERM, so stopping the old child takes the full escalation.
+    let script = """
+      #!/bin/sh
+      D="$FLASH_PLUGIN_DATA_DIR"
+      printf 'spawn\\n' >> "$D/spawns"
+      trap '' TERM
+      while IFS= read -r line; do
+        id=$(printf '%s' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+        case "$line" in
+        *'"method":"initialize"'*)
+          \(PluginFixtureKit.initializeOK)
+          ;;
+        *'"method":"perform"'*)
+          \(PluginFixtureKit.performOK)
+          ;;
+        esac
+      done
+      while :; do sleep 0.05; done
+      """
+    let fixture = try PluginFixtureKit.make(
+      id: "reloadrouting",
+      manifest: PluginFixtureKit.manifest(
+        id: "reloadrouting",
+        extra: Self.residentSurfaces
+          + #","commands":[{"command":"routed","subcommand":"ping","description":"test"}]"#),
+      script: script)
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    var config = testConfig(thirdParty: ["file:\(fixture.root.path)"])
+    manager.start(config: config)
+    waitUntilTrue("first definition running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let firstPID = try XCTUnwrap(status(manager, fixture.pluginID)?.pid)
+
+    config.plugins.settings[fixture.pluginID] = ["generation": .string("2")]
+    manager.updateConfig(config)
+    // The reconcile has reached this definition once its row stops reading
+    // "running": the old child is being stopped, and lingers for ~1.5 s.
+    waitUntilTrue("reconcile reached the definition") {
+      self.status(manager, fixture.pluginID)?.state != "running"
+    }
+    XCTAssertEqual(kill(pid_t(firstPID), 0), 0, "the old child is still alive")
+    let answered = expectation(description: "command answered")
+    var handled: Bool?
+    XCTAssertTrue(
+      manager.invoke(command: "routed", subcommand: "ping", args: [], raw: "routed ping") {
+        ok, _, _, _ in
+        handled = ok
+        answered.fulfill()
+      })
+    wait(for: [answered], timeout: 15)
+    XCTAssertEqual(handled, true, "the replacement answered once it ran")
+    waitUntilTrue("replacement running") {
+      let row = self.status(manager, fixture.pluginID)
+      return row?.state == "running" && row?.pid != firstPID
+    }
+    waitUntilTrue("old child killed") { kill(pid_t(firstPID), 0) != 0 }
+  }
+
   func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
     let fixture = try residentFixture(id: "definitionwatch")
     defer { fixture.cleanup() }

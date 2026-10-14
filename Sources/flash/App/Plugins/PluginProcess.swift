@@ -307,7 +307,14 @@ final class PluginProcess {
 
   func start() {
     queue.async {
-      self.applyLifecycle(.start(resident: self.activation == .resident))
+      let activation = self.activation
+      self.applyLifecycle(.start(resident: activation == .resident))
+      // Performs that arrived before the start — a replacement published
+      // while its predecessor was still stopping — asked for the child.
+      if activation == .onDemand, !self.deferredPerforms.isEmpty {
+        self.performActivated = true
+        self.applyLifecycle(.activate)
+      }
       if self.watchFiles { self.installFileWatchers() }
     }
   }
@@ -1011,30 +1018,28 @@ final class PluginProcess {
         return
       }
       let timeoutMs = timeoutMs ?? PluginProtocol.performDeadlineMs
-      switch self.runtimeStateSnapshot() {
-      case .failed:
+      let route = PluginLifecycle.performRoute(
+        state: self.lifecycle.state, onDemand: self.activation == .onDemand)
+      switch route {
+      case .unhandled:
         mainCompletion(.unhandled)
-      case .running:
+      case .dispatch:
         self.dispatchPerform(
           kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
-      case .stopped where self.lifecycle.state == .stopped:
-        mainCompletion(.unhandled)
-      case .stopped
-      where self.activation == .onDemand
-        && (self.lifecycle.state == .idle || self.lifecycle.state == .initial):
-        self.enqueueDeferredPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
-          completion: mainCompletion)
-        self.performActivated = true
-        self.applyLifecycle(.activate)
-      case .stopped, .installing, .launching:
-        // A resident plugin still starting (or between restarts): dispatch
+      case .wait:
+        // Not yet started, still starting, or between restarts: dispatch
         // once running; the deferral deadline settles `.unhandled` if that
         // never happens.
         self.enqueueDeferredPerform(
           kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
+      case .waitAndActivate:
+        self.enqueueDeferredPerform(
+          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          completion: mainCompletion)
+        self.performActivated = true
+        self.applyLifecycle(.activate)
       }
     }
   }

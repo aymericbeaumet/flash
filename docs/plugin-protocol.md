@@ -87,7 +87,9 @@ a replacement child can reuse an ID without receiving the old child's reply.
 Explicit reload and file changes reconcile the manifest through PluginManager.
 Unchanged definitions restart only the affected binaries and retain catalogs.
 A changed valid definition rebuilds its registrations, authorization, adapter,
-and process together and drops its previous catalog. An invalid replacement
+and process together and drops its previous catalog. Its requests route to
+the replacement from the moment it is reconciled: they wait while the old
+process stops, and the replacement starts only once it has. An invalid replacement
 keeps the last validated definition running and reports its load error; fixing
 the file allows reconciliation to recover without a resident-app restart.
 A plugin should also exit when `FLASH_PLUGIN_PARENT_PID` dies.

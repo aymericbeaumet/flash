@@ -855,6 +855,25 @@ final class PluginProcessLifecycleTests: XCTestCase {
     waitUntilTrue("child reaped") { kill(pid_t(pid), 0) != 0 }
   }
 
+  /// Where a `perform` goes is a function of the lifecycle state. A
+  /// definition not yet started only queues, even on demand: `start` spawns
+  /// the child for what waits by then, so a replacement published while its
+  /// predecessor still stops never runs beside it.
+  func testPerformRouteFollowsTheLifecycleState() {
+    typealias Lifecycle = PluginLifecycle
+    for onDemand in [false, true] {
+      XCTAssertEqual(Lifecycle.performRoute(state: .running, onDemand: onDemand), .dispatch)
+      XCTAssertEqual(Lifecycle.performRoute(state: .failed, onDemand: onDemand), .unhandled)
+      XCTAssertEqual(Lifecycle.performRoute(state: .stopped, onDemand: onDemand), .unhandled)
+      XCTAssertEqual(Lifecycle.performRoute(state: .initial, onDemand: onDemand), .wait)
+      XCTAssertEqual(Lifecycle.performRoute(state: .installing, onDemand: onDemand), .wait)
+      XCTAssertEqual(Lifecycle.performRoute(state: .launching, onDemand: onDemand), .wait)
+      XCTAssertEqual(Lifecycle.performRoute(state: .backoff, onDemand: onDemand), .wait)
+    }
+    XCTAssertEqual(Lifecycle.performRoute(state: .idle, onDemand: false), .wait)
+    XCTAssertEqual(Lifecycle.performRoute(state: .idle, onDemand: true), .waitAndActivate)
+  }
+
   func testLingeringPluginIsKilledByEscalationWithinTwoSeconds() throws {
     // Ignores EOF and SIGTERM: the host escalates stdin-close → (1 s)
     // SIGTERM → (+0.5 s) SIGKILL and stopAndWait returns once the kill is

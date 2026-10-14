@@ -906,6 +906,10 @@ final class PluginManager {
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
+    // Replacements are installed and published first, started and their
+    // predecessors stopped second: dispatch then reaches the replacement
+    // for the whole stop, which can take a child's full escalation.
+    var replacements: [Replacement] = []
     // Only configured widgets can be covered; a removed one forgets it.
     let enabledWidgets = Set(config.enabledWidgets.keys)
     hiddenWidgets.formIntersection(enabledWidgets)
@@ -956,10 +960,6 @@ final class PluginManager {
           if restartIDs.contains(manifest.id) { existing?.reload(reason: "definition_reload") }
           continue
         }
-        existing?.stopAndWait(reason: "config_reload")
-        if let existing, existing.manifest != manifest || existing.root != item.root {
-          catalogStore.drop(pluginID: existing.identifier)
-        }
         let plugin = PluginProcess(
           root: item.root,
           manifest: manifest,
@@ -999,7 +999,12 @@ final class PluginManager {
         }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin, store: catalogStore)
-        plugin.start()
+        replacements.append(
+          Replacement(
+            previous: existing,
+            dropsCatalog: existing.map { $0.manifest != manifest || $0.root != item.root }
+              ?? false,
+            plugin: plugin))
       } catch {
         // A command-name conflict must take the plugin down. A malformed edit
         // of a plugin that was already valid keeps that process until fixed.
@@ -1049,15 +1054,35 @@ final class PluginManager {
       }
     }
 
+    var removed: [PluginProcess] = []
     for id in Array(pluginsByID.keys) where !nextIDs.contains(id) {
-      pluginsByID[id]?.stopAndWait(reason: "config_removed")
-      pluginsByID.removeValue(forKey: id)
+      if let plugin = pluginsByID.removeValue(forKey: id) { removed.append(plugin) }
       sourceAdaptersByID.removeValue(forKey: id)
-      // Unload drops the published catalog — the rows' owner is gone.
-      catalogStore.drop(pluginID: id)
     }
+    // From here every request resolves to the replacement, which queues it
+    // until its child runs; the old child was never going to answer it.
     publishHotSnapshot()
+    for replacement in replacements {
+      replacement.previous?.stopAndWait(reason: "config_reload")
+      if replacement.dropsCatalog, let previous = replacement.previous {
+        catalogStore.drop(pluginID: previous.identifier)
+      }
+      replacement.plugin.start()
+    }
+    for plugin in removed {
+      plugin.stopAndWait(reason: "config_removed")
+      // Unload drops the published catalog — the rows' owner is gone.
+      catalogStore.drop(pluginID: plugin.identifier)
+    }
     notifyStateChanged()
+  }
+
+  /// A definition reconciled this pass: the process it replaces, if any,
+  /// whether that one's catalog goes with it, and the one to start.
+  private struct Replacement {
+    let previous: PluginProcess?
+    let dropsCatalog: Bool
+    let plugin: PluginProcess
   }
 
   /// Stop every loaded plugin and restart it. Triggered by
