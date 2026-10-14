@@ -136,6 +136,12 @@ extension AppMonitor {
               extra: ["targets": "\(model.targets.count)"])
           }
         } else {
+          // A nil model also reaches a waiter that a newer activation of the
+          // same app displaced; its walk would only queue ahead of that
+          // activation's own, so it ends here instead.
+          guard isCurrent() else {
+            return complete(path: "activation_superseded", hints: [], retried: retried)
+          }
           self.walkForActivation(
             context: context, providers: plan.preparedProviders, targetFilter: targetFilter,
             afterVolatileDecline: afterVolatileDecline, repaired: retried, isCurrent: isCurrent

@@ -181,12 +181,9 @@ final class AppMonitor {
     minimumIntervalMs: backgroundModelMinIntervalMs,
     freshnessMs: modelFreshnessMs,
     maintenanceLeadMs: modelMaintenanceLeadMs)
-  /// Only the latest activation waiter matters — earlier waiters are
-  /// stale activations whose generation has already moved on. A scalar
-  /// per pid replaces the previous unbounded array; if a second
-  /// activation lands while a walk is in flight, it overwrites the
-  /// first instead of stacking.
-  var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
+  /// The activation waiting on each app's in-flight walk; a displaced or
+  /// cancelled waiter is completed with nil, never dropped.
+  var pendingModelWaiters = PreparedModelWaiters()
   /// The last trusted target count per app: what a later walk of the same app
   /// is judged against (`discoveryLooksDegenerate`). Written by activations
   /// and by stored background walks that do not look degenerate; forgotten
