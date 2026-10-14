@@ -35,6 +35,22 @@ final class HelpDocsTests: XCTestCase {
     }
   }
 
+  /// The sidebar, index and previous/next links follow `HelpDocs.groups`;
+  /// a built-in topic outside it would fall to the end unnoticed.
+  func testEveryBuiltInTopicHasAGroupInReadingOrder() {
+    let topics = HelpDocs.allTopics(config: .default, showModes: true)
+    let ordered = HelpDocs.groups.flatMap(\.names)
+    XCTAssertEqual(topics.map(\.name), ordered, "built-in topics follow the group table")
+    for topic in topics {
+      XCTAssertNotEqual(topic.group, HelpDocs.pluginGroup, "\(topic.name) needs a built-in group")
+      XCTAssertNotNil(topic.manual, "\(topic.name) names its manual page")
+    }
+    let plugin = HelpTopic(name: "zzz", title: "Z", summary: "", body: "# Z")
+    let withPlugin = HelpDocs.allTopics(config: .default, showModes: true, pluginTopics: [plugin])
+    XCTAssertEqual(withPlugin.last?.name, "zzz")
+    XCTAssertEqual(withPlugin.last?.group, HelpDocs.pluginGroup)
+  }
+
   /// Guides link to browser help pages by path; fragments are reserved for
   /// headings on the same page.
   func testTopicLinksResolveWithinTheInstalledBuiltInInventory() throws {

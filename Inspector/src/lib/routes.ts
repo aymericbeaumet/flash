@@ -2,16 +2,16 @@
 // hands the app to a direct load or reload of any page, and a 404 to the rest.
 // Data endpoints live under `/api/`; fragments are in-page heading anchors.
 
-export type PageName = "home" | "docs" | "mappings" | "commands" | "plugins" | "state" | "logs" | "clipboard" | "keyboard";
+export type PageName = "home" | "docs" | "mappings" | "commands" | "plugins" | "state" | "logs" | "clipboard" | "keyboard" | "search";
 
-/** `param` is the docs topic, the plugin id, or the `?q=` filter of mappings and commands. */
+/** `param` is the docs topic, the plugin id, or the `?q=` query of mappings, commands and search. */
 export type Route = { page: PageName | "not-found"; param: string };
 
-const pages = new Set(["docs", "mappings", "commands", "plugins", "state", "logs", "clipboard", "keyboard"]);
+const pages = new Set(["docs", "mappings", "commands", "plugins", "state", "logs", "clipboard", "keyboard", "search"]);
 /** Pages that accept one detail segment. */
 const detailPages = new Set(["docs", "plugins"]);
 /** Pages whose list starts filtered by `?q=`. */
-const filterPages = new Set(["mappings", "commands"]);
+const filterPages = new Set(["mappings", "commands", "search"]);
 const notFound: Route = { page: "not-found", param: "" };
 
 export function parseRoute(url: { pathname: string; search: string }): Route {
@@ -33,4 +33,5 @@ export const paths = {
   mappings: (query?: string) => filtered("/mappings", query),
   commands: (query?: string) => filtered("/commands", query),
   plugins: (id?: string) => (id ? `/plugins/${encodeURIComponent(id)}` : "/plugins"),
+  search: (query?: string) => filtered("/search", query),
 };

@@ -57,12 +57,18 @@ the browser commands needs it, or at launch with
 | `/keyboard` | The live keyboard map |
 | `/state`, `/clipboard` | Runtime and clipboard pages |
 | `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |
+| `/search?q=<text>` | Results across guide sections, commands, mappings and plugins. Typing in the top bar rewrites the query in place, so a search reloads and can be shared; `↓` `↑` `↩` pick a result |
 | `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |
 | `/api/clipboard/<id>` | `GET` returns one history image. `DELETE` removes that entry. The id is 32 lowercase hex characters |
 
 The page routes itself with the History API: same-origin page links navigate
 in place, back/forward restore each page's scroll position, and modified,
-middle or new-window clicks keep the browser's behavior. The server answers
+middle or new-window clicks keep the browser's behavior. The top bar shows
+the path as a breadcrumb (home › page › group › guide) and the tab title
+names the guide. After a navigation focus moves to the main region and the
+new title is announced to assistive technology. Shortcuts outside a text
+field: `/` or `⌘K` search, `[` and `]` previous and next guide, `g` then a
+letter jumps to a page, `?` opens the shortcut sheet. The server answers
 a direct load or reload of any page with the app, an unknown path with the
 app's not-found page and a 404 status, and an unknown `/api/` path with a
 plain 404. `DebugServer.Page` and `Inspector/src/lib/routes.ts` hold the same
@@ -72,9 +78,17 @@ Fragments are in-page anchors. Guide headings take GitHub-style slugs, so
 `/docs/normal-mode#input-capture-and-latency` opens a guide at a section, and a
 guide's `#heading` links and `other-guide.md#heading` references resolve.
 
-`HelpDocs.allTopics` merges built-in and manifest topics. A name or alias may
-identify only one accepted topic: built-ins take precedence, then the first
-plugin topic claiming the name wins. The browser's navigation and search use
+`HelpDocs.allTopics` merges built-in and manifest topics in reading order:
+`HelpDocs.groups` names each built-in topic's section and position, and
+plugin topics follow under one group. The snapshot carries `group` and
+`manual` with each topic; the browser groups the sidebar and index from
+them and derives previous/next links, so a new built-in guide only joins
+`groups` (a test rejects one left out). The browser also remembers, in its
+own localStorage, a hash of each guide it has shown: a guide whose body
+changed since is marked updated and an unknown one new, until opened, and
+the guide index lists them with a link to the release notes. A name or alias
+may identify only one accepted topic: built-ins take precedence, then the
+first plugin topic claiming the name wins. The browser's navigation and search use
 that installed inventory. Links between guides use `/docs/<topic>`; links to
 runtime companions use their page paths, such as `/mappings` or `/state`.
 Long-form references link to the published manual through
@@ -119,5 +133,10 @@ page only in `.build` does not change what the installed app serves.
 
 Check browser routes (direct loads, back/forward, heading anchors), search,
 guide links, live/disconnected states, narrow layouts and print preview after
-UI changes. The page must remain self-contained and must render
+UI changes. Below 1300 px the outline folds into a disclosure above the
+article; below 1000 px the guide list becomes a drawer under a toggle; below
+700 px the sidebar becomes a scrimmed drawer and the breadcrumb keeps its
+last crumb. Nothing is set below 12 px and interactive targets are at least
+40 px tall. `node --test Inspector/*.test.ts` runs the pure tests (search,
+reading state, onboarding, mapping search, keyboard). The page must remain self-contained and must render
 plugin-authored Markdown as untrusted content.

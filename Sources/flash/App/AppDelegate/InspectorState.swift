@@ -298,6 +298,8 @@ extension AppDelegate {
         "summary": topic.summary,
         "body": topic.body,
         "aliases": topic.aliases,
+        "group": topic.group,
+        "manual": topic.manual.map { HelpDocs.manual($0) } as Any,
       ]
     }
     return [

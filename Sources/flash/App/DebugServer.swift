@@ -745,8 +745,8 @@ extension DebugServer {
   /// API; the server recognizes the same paths so a direct load or reload of
   /// any page receives the app. `Inspector/src/lib/routes.ts` mirrors this
   /// table: `/`, `/docs[/<topic>]`, `/mappings`, `/commands`,
-  /// `/plugins[/<id>]`, `/state`, `/logs` and `/clipboard`. Fragments stay
-  /// free for in-page anchors.
+  /// `/plugins[/<id>]`, `/state`, `/logs`, `/clipboard`, `/keyboard` and
+  /// `/search`. Fragments stay free for in-page anchors.
   enum Page: Equatable {
     case home
     case docs(topic: String?)
@@ -759,11 +759,15 @@ extension DebugServer {
     /// The live keyboard map: the effective bindings of the mode Flash is in,
     /// the hint alphabet and the grid keys, on a drawing of the layout.
     case keyboard
+    /// Search results across guides, commands, mappings and plugins; the
+    /// query travels in `?q=` so a search can be reloaded and shared.
+    case search
 
     /// Pages that accept one detail segment, such as a topic or plugin id.
     private static let detailPages: Set<String> = ["docs", "plugins"]
     private static let pages: Set<String> = [
       "docs", "mappings", "commands", "plugins", "state", "logs", "clipboard", "keyboard",
+      "search",
     ]
     /// RFC 3986 unreserved characters: everything else in a detail segment,
     /// including `/`, `?` and `#`, is percent-encoded.
@@ -782,6 +786,7 @@ extension DebugServer {
       case .logs: return "/logs"
       case .clipboard: return "/clipboard"
       case .keyboard: return "/keyboard"
+      case .search: return "/search"
       }
     }
 
@@ -808,6 +813,7 @@ extension DebugServer {
       case "state": self = .state
       case "logs": self = .logs
       case "keyboard": self = .keyboard
+      case "search": self = .search
       default: self = .clipboard
       }
     }

@@ -8,6 +8,12 @@ struct HelpTopic: Equatable {
   /// Extra strings that resolve to this topic in `:help <topic>`.
   /// Use for singular/plural pairs (`mark` ↔ `marks`) or short forms.
   var aliases: [String] = []
+  /// The section the browser help files the topic under, in reading order.
+  /// `HelpDocs.allTopics` assigns built-in groups; plugin topics share one.
+  var group: String = HelpDocs.pluginGroup
+  /// The manual page (`docs/<page>.md`) holding the long-form reference, or
+  /// nil when the guide is the whole story.
+  var manual: String? = nil
 }
 
 enum HelpDocs {
@@ -57,12 +63,46 @@ enum HelpDocs {
     return render(topic)
   }
 
+  static let pluginGroup = "Plugin guides"
+
+  /// Reading order of the built-in guides: the browser's sidebar, index,
+  /// previous/next links and `:help` listing all follow it. A topic absent
+  /// from this table is a bug caught by the help tests.
+  static let groups: [(title: String, names: [String])] = [
+    ("Start here", ["overview", "getting-started", "hints", "normal-mode", "mappings"]),
+    ("Move and discover", ["mouse-grid", "flashlight", "verbs"]),
+    ("Make it yours", ["config", "statusbar", "status-format", "widgets", "popups"]),
+    ("Extend and understand", ["plugins", "privacy", "troubleshooting", "development", "manual"]),
+  ]
+
+  /// Manual pages behind the built-in guides (`HelpDocs.manual`).
+  static let manualPages: [String: String] = [
+    "overview": "",
+    "getting-started": "getting-started",
+    "hints": "commands",
+    "normal-mode": "normal-mode",
+    "mappings": "configuration",
+    "mouse-grid": "commands",
+    "flashlight": "flashlight",
+    "verbs": "commands",
+    "config": "configuration",
+    "statusbar": "status-format",
+    "status-format": "status-format",
+    "widgets": "widgets",
+    "popups": "popups",
+    "plugins": "plugin-cookbook",
+    "privacy": "privacy",
+    "troubleshooting": "troubleshooting",
+    "development": "development",
+    "manual": "",
+  ]
+
   static func allTopics(
     config: Config,
     showModes: Bool,
     pluginTopics: [HelpTopic] = []
   ) -> [HelpTopic] {
-    let builtIn: [HelpTopic] = [
+    let declared: [HelpTopic] = [
       overviewTopic,
       gettingStartedTopic,
       manualTopic,
@@ -82,6 +122,19 @@ enum HelpDocs {
       troubleshootingTopic,
       developmentTopic,
     ]
+    let byName = Dictionary(declared.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    var builtIn: [HelpTopic] = []
+    for (title, names) in groups {
+      for name in names {
+        guard var topic = byName[name] else { continue }
+        topic.group = title
+        topic.manual = manualPages[name]
+        builtIn.append(topic)
+      }
+    }
+    // A declared topic missing from `groups` still renders, at the end.
+    let placed = Set(builtIn.map(\.name))
+    builtIn += declared.filter { !placed.contains($0.name) }
     // Names and aliases share one route namespace. Host topics win, then
     // the first accepted plugin topic owns its names.
     var claimedNames = Set(
@@ -93,7 +146,7 @@ enum HelpDocs {
       claimedNames.formUnion(names)
       return true
     }
-    return (builtIn + extras).sorted { $0.name < $1.name }
+    return builtIn + extras.sorted { $0.name < $1.name }
   }
 
   static let mappingsTopic = HelpTopic(

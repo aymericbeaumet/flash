@@ -113,6 +113,10 @@ export interface DocTopic {
   /** Raw Markdown — the Docs tab renders it client-side. */
   body: string;
   aliases?: string[];
+  /** The section Flash files the guide under; topics arrive in reading order. */
+  group?: string;
+  /** The published manual page with the long-form reference, if any. */
+  manual?: string | null;
 }
 
 /** The keyboard page's model: the layout, the hint alphabet and what the keys do. */

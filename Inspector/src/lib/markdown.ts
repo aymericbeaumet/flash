@@ -9,7 +9,27 @@ const reservedIds = ["main-content"];
 
 const slug = (text: string) => text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s+/g, "-") || "section";
 
-export function renderMarkdown(markdown: string, docs: DocTopic[]) {
+export interface Rendered {
+  html: string;
+  titleId: string | undefined;
+  headings: { id: string; title: string; level: number }[];
+}
+
+/** Every snapshot carries every guide; a body that did not change renders once. */
+const cache = new Map<string, Rendered>();
+const cacheLimit = 64;
+
+export function renderMarkdown(markdown: string, docs: DocTopic[]): Rendered {
+  const key = `${docs.length}\u0000${markdown}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const rendered = renderUncached(markdown, docs);
+  if (cache.size >= cacheLimit) cache.delete(cache.keys().next().value!);
+  cache.set(key, rendered);
+  return rendered;
+}
+
+function renderUncached(markdown: string, docs: DocTopic[]): Rendered {
   // Plugin help is authored outside the host. Parse in an inert template and
   // admit only documentation markup, with no executable or fetching elements.
   const template = document.createElement("template");
@@ -43,6 +63,7 @@ export function renderMarkdown(markdown: string, docs: DocTopic[]) {
         if (!["http:", "https:", "mailto:"].includes(url.protocol)) throw new Error("Unsupported link");
         element.setAttribute("target", "_blank");
         element.setAttribute("rel", "noopener noreferrer");
+        element.setAttribute("data-external", url.host);
       } catch { element.removeAttribute("href"); }
     }
   }
