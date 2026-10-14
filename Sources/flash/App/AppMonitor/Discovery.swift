@@ -390,6 +390,7 @@ extension AppMonitor {
   func discoverScreenAsync(
     focusedContext: AppContext,
     maxApps: Int = 6,
+    isCurrent: @escaping () -> Bool = { true },
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
@@ -454,22 +455,55 @@ extension AppMonitor {
     let visibleByPid = WindowSnapshot.buildMultiSurfaceVisibleRegions(
       entries: entries, focusedPids: Set(contexts.map(\.processID)),
       excludingIndexes: Set(auxiliary.map(\.entryIndex)))
-    axQueue.async { [weak self] in
-      guard let self else { return }
-      self.configureRuntime(for: cfg)
-      var merged: [JumpTarget] = []
-      var walked = 0
-      for context in contexts {
-        guard let regions = visibleByPid[context.processID], !regions.isEmpty else { continue }
+    // One app per `axQueue` turn, with a main-thread currency check between
+    // apps: a newer activation's walk runs between them, and a cancelled
+    // screen scope stops after the app in progress. `merged` and `walked`
+    // are touched only on `axQueue`, one step at a time.
+    let walkable = contexts.filter { !(visibleByPid[$0.processID] ?? []).isEmpty }
+    var merged: [JumpTarget] = []
+    var walked = 0
+    SteppedWalk.run(
+      count: walkable.count, on: axQueue, isCurrent: isCurrent,
+      step: { [weak self] index in
+        guard let self else { return }
+        self.configureRuntime(for: cfg)
+        let context = walkable[index]
+        guard let regions = visibleByPid[context.processID] else { return }
         let plan = self.registry.hintProviderPlan(for: context)
         let providers = plan.uncachedProviders + plan.preparedProviders
-        guard !providers.isEmpty else { continue }
+        guard !providers.isEmpty else { return }
         let collection = Self.collectFocusedTargets(context: context, providers: providers)
         let finalized = TargetFinalizer.finalizeWithStats(
           collection.targets, visibleRegions: regions)
         merged.append(contentsOf: finalized.targets)
         walked += 1
-      }
+      },
+      done: { [weak self] completed in
+        guard completed else {
+          FlashLog.debug("[discover] screen_scope superseded apps=\(walked)")
+          completion([])
+          return
+        }
+        self?.finishScreenScope(
+          merged: merged, walked: walked, contexts: contexts, auxiliaryContexts: auxiliaryContexts,
+          entries: entries, screenFrame: screenFrame, cfg: cfg, completion: completion)
+      })
+  }
+
+  /// The auxiliary surfaces, assignment and completion of a screen-scope
+  /// walk whose apps all walked; on `axQueue`.
+  private func finishScreenScope(
+    merged: [JumpTarget], walked: Int, contexts: [AppContext],
+    auxiliaryContexts: [(
+      surface: ScreenScopeSurfaces.Surface, keepsPID: Bool, context: AppContext
+    )],
+    entries: [WindowSnapshot.Entry], screenFrame: CGRect, cfg: Config,
+    completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      self.configureRuntime(for: cfg)
+      var merged = merged
       var auxiliaryTargets = 0
       for (ordinal, entry) in auxiliaryContexts.enumerated() {
         let regions = WindowSnapshot.visibleRegions(

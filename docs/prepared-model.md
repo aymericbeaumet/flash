@@ -44,7 +44,11 @@ configuration revision are unchanged.
 
 AX observer sources are hosted on a dedicated `AXObserverThread`; callbacks
 enqueue and the main thread drains each burst in one hop, bumping every dirty
-token in arrival order. AX storms and automatic walks taking at least 50 ms
+token in arrival order. Observer registration, its retry ladder, focused-window
+re-observation and teardown run on a serial queue of their own, so a walk, a
+readiness probe or a commit on the AX queue never waits behind an app slow to
+answer a registration; a multi-app screen-scope walk steps one app per turn
+and asks main between apps whether its activation still stands. AX storms and automatic walks taking at least 50 ms
 suppress AX, queued, and maintenance warming. Focus and configuration requests can reassess those apps;
 explicit activation remains available and complete. A degenerate walk (see
 below) is fast because there was nothing to read, so it never lifts the

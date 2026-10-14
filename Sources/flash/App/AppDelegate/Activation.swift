@@ -438,7 +438,12 @@ extension AppDelegate {
     }
     let myGen = activationLifecycle.begin()
     applyModeOverlay()
-    monitor.discoverScreenAsync(focusedContext: context) { [weak self] hints in
+    // A walk still stepping through apps stops once this activation is gone.
+    let isCurrent: () -> Bool = { [weak self] in
+      self?.activationLifecycle.isCurrent(myGen) ?? false
+    }
+    monitor.discoverScreenAsync(focusedContext: context, isCurrent: isCurrent) {
+      [weak self] hints in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       guard self.activationLifecycle.isCurrent(myGen) else { return }

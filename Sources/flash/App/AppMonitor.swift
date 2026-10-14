@@ -36,6 +36,13 @@ final class AppMonitor {
   let registry: SourceRegistry
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
+  /// AX observer registration, its retry ladder, focused-window
+  /// re-observation, teardown, and the launch-time Chromium wakes: each is an
+  /// IPC the target app answers at its own pace, up to the 1.5 s messaging
+  /// timeout, so they run here and a walk, a readiness probe or a commit on
+  /// `axQueue` never waits behind them. The focus-path wake stays on
+  /// `axQueue`, ahead of the probe that watches the tree it builds.
+  let observerQueue = DispatchQueue(label: "flash.ax_observers", qos: .userInitiated)
   /// AX geometry reads for the active-window border that must not wait behind
   /// an AX walk on `axQueue`. Window-list reads never run here; see
   /// `WindowSnapshot.windowList`.
@@ -208,7 +215,7 @@ final class AppMonitor {
     /// notifications are emitted by the window element, not the application
     /// element, so the focused window needs its own registrations.
     var focusedWindow: AXUIElement?
-    /// Accessed only on `axQueue`. Set by teardown so a pending registration
+    /// Accessed only on `observerQueue`. Set by teardown so a pending registration
     /// retry stops instead of registering on an observer that is gone.
     var isTornDown = false
 
@@ -437,11 +444,18 @@ final class AppMonitor {
   }
 
   private func wakeChromiumAccessibilityForAllRunningApps() {
-    AccessibilityWaker.wakeAllRunningApps(on: axQueue)
+    AccessibilityWaker.wakeAllRunningApps(on: observerQueue)
   }
 
+  /// The focus-path wake, on `axQueue`: the readiness probe queued behind it
+  /// watches the tree this starts building.
   func maybeWakeChromiumAccessibility(for app: NSRunningApplication) {
     AccessibilityWaker.maybeWake(app: app, on: axQueue)
+  }
+
+  /// A launch-time wake: nothing waits on it, so it stays off the walk queue.
+  func wakeChromiumAccessibilityInBackground(for app: NSRunningApplication) {
+    AccessibilityWaker.maybeWake(app: app, on: observerQueue)
   }
 
   func stop() {
