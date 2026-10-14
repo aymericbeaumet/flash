@@ -488,20 +488,22 @@ final class PluginManager {
     reconcile(config: config)
   }
 
-  private func configurationSnapshot() -> (Config, Int)? {
+  /// Restart `ids` under the configuration in effect, read with the request
+  /// under one lock: a reconcile taken between a caller's snapshot and its
+  /// request cannot drop the request, and a stopped manager drops it on
+  /// purpose, having no configuration.
+  private func requestRestarts(_ ids: Set<String>) {
     generationLock.lock()
-    defer { generationLock.unlock() }
-    return latestConfig.map { ($0, configGeneration) }
-  }
-
-  private func reconcile(
-    config: Config, restartIDs: Set<String> = [], expectedGeneration: Int? = nil
-  ) {
-    generationLock.lock()
-    if let expectedGeneration, expectedGeneration != configGeneration {
+    guard let config = latestConfig else {
       generationLock.unlock()
       return
     }
+    generationLock.unlock()
+    reconcile(config: config, restartIDs: ids)
+  }
+
+  private func reconcile(config: Config, restartIDs: Set<String> = []) {
+    generationLock.lock()
     latestConfig = config
     requestedRestarts.formUnion(restartIDs)
     configGeneration += 1
@@ -555,7 +557,10 @@ final class PluginManager {
   /// Re-derive which segments the running plugins' surfaces show, without
   /// reloading any plugin.
   private func applyObservedStatus() {
-    guard let (config, _) = configurationSnapshot() else { return }
+    generationLock.lock()
+    let current = latestConfig
+    generationLock.unlock()
+    guard let config = current else { return }
     let observed = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     for (id, plugin) in pluginsByID {
       // The segments first, as on reload: a plugin that becomes observed
@@ -567,11 +572,8 @@ final class PluginManager {
 
   private func reloadDefinition(_ plugin: PluginProcess) {
     queue.async { [weak self, weak plugin] in
-      guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin,
-        let (config, generation) = self.configurationSnapshot()
-      else { return }
-      self.reconcile(
-        config: config, restartIDs: [plugin.identifier], expectedGeneration: generation)
+      guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin else { return }
+      self.requestRestarts([plugin.identifier])
     }
   }
 
@@ -1093,9 +1095,7 @@ final class PluginManager {
   @discardableResult
   func reloadAll() -> [String] {
     let ids = readHotSnapshot().plugins.map(\.identifier)
-    if let (config, generation) = configurationSnapshot() {
-      reconcile(config: config, restartIDs: Set(ids), expectedGeneration: generation)
-    }
+    requestRestarts(Set(ids))
     return ids
   }
 
