@@ -309,7 +309,8 @@ extension AppDelegate {
     guard
       LeaderHold.canEnter(
         pending: overlay.normalModePending,
-        repeatAnchor: overlay.normalModeRepeatAnchor,
+        leaderRepeatsAnchor: LeaderHold.leaderRepeats(
+          anchor: overlay.normalModeRepeatAnchor, leaderAtom: atom),
         leaderAtom: atom,
         leaderContinuesPending: leaderDownContinuesPending(overlay.normalModePending, event: event),
         isRepeat: event.isARepeat)
@@ -320,7 +321,9 @@ extension AppDelegate {
       FlashLog.warn("[mode] hyper_enter_skipped reason=stale_hold")
       return true
     }
-    overlay.normalModePending = ""
+    // The hold supersedes whatever NORMAL had armed: the leader prefix, or a
+    // repeat the leader just dropped, with the timeout armed for either.
+    resetPendingNormalSequence(reason: "hyper_enter")
     FlashLog.trace("[mode] hyper enter")
     dispatchMode(.enterHyper)
     return true

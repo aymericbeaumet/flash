@@ -707,30 +707,43 @@ final class ModeReducerTests: XCTestCase {
   func testASecondLeaderHoldEntersHyperWhileItsPrefixIsArmed() {
     XCTAssertTrue(
       LeaderHold.canEnter(
-        pending: "", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        pending: "", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
         isRepeat: false))
     // Releasing the leader armed `<space>`. Holding it again still enters.
     XCTAssertTrue(
       LeaderHold.canEnter(
-        pending: " ", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        pending: " ", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
         isRepeat: false))
     // `<leader><leader>` is a real sequence, so the second press stays in it.
     XCTAssertFalse(
       LeaderHold.canEnter(
-        pending: " ", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: true,
+        pending: " ", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: true,
         isRepeat: false))
     XCTAssertFalse(
       LeaderHold.canEnter(
-        pending: "g", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        pending: "g", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
         isRepeat: false))
     XCTAssertFalse(
       LeaderHold.canEnter(
-        pending: "", repeatAnchor: "[a", leaderAtom: " ", leaderContinuesPending: false,
-        isRepeat: false))
-    XCTAssertFalse(
-      LeaderHold.canEnter(
-        pending: "", repeatAnchor: nil, leaderAtom: " ", leaderContinuesPending: false,
+        pending: "", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
         isRepeat: true))
+  }
+
+  /// `]t` arms a repeat of `t`. Any other key drops that anchor, the leader
+  /// included, so holding it right after enters HYPER; only a mapping whose
+  /// final key is the leader keeps the press as its repeat.
+  func testALeaderHoldAfterARepeatableSequenceEntersHyper() {
+    XCTAssertFalse(LeaderHold.leaderRepeats(anchor: "]t", leaderAtom: " "))
+    XCTAssertTrue(
+      LeaderHold.canEnter(
+        pending: "", leaderRepeatsAnchor: LeaderHold.leaderRepeats(anchor: "]t", leaderAtom: " "),
+        leaderAtom: " ", leaderContinuesPending: false, isRepeat: false))
+    XCTAssertFalse(LeaderHold.leaderRepeats(anchor: nil, leaderAtom: " "))
+    XCTAssertTrue(LeaderHold.leaderRepeats(anchor: "g\u{1F} ", leaderAtom: " "))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "", leaderRepeatsAnchor: true, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
   }
 
   // MARK: Structural purity

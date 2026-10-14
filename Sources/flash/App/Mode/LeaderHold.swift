@@ -33,17 +33,26 @@ struct LeaderHold: Equatable {
   /// A leader key-down enters hyper from idle NORMAL, and also while the only
   /// pending input is the prefix armed by releasing the leader. A mapped
   /// `<leader><leader>` sequence still owns that second press. Any other
-  /// pending sequence, a repeat anchor, or a key repeat does not.
+  /// pending sequence or a key repeat does not. An armed repeat (`]t`) is
+  /// dropped by any key but its final one, so it blocks the hold only when
+  /// the leader is that key (`leaderRepeatsAnchor`).
   static func canEnter(
     pending: String,
-    repeatAnchor: String?,
+    leaderRepeatsAnchor: Bool,
     leaderAtom: String,
     leaderContinuesPending: Bool,
     isRepeat: Bool
   ) -> Bool {
-    guard !isRepeat, repeatAnchor == nil else { return false }
+    guard !isRepeat, !leaderRepeatsAnchor else { return false }
     if pending.isEmpty { return true }
     return pending == leaderAtom && !leaderContinuesPending
+  }
+
+  /// Whether pressing the leader repeats the armed `anchor`: its final key is
+  /// the leader.
+  static func leaderRepeats(anchor: String?, leaderAtom: String) -> Bool {
+    guard let anchor else { return false }
+    return NormalModeInterpreter.keyAtoms(from: anchor).last == leaderAtom
   }
 
   mutating func step(_ input: Input) -> Step {

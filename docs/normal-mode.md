@@ -626,6 +626,11 @@ While the hyper key is the leader, a key with no hyper mapping can still
 complete a NORMAL `<leader>` sequence when that key continues one. Unmapped
 keys are swallowed.
 
+A hold enters HYPER right after a repeatable mapping too: `]t` arms a repeat
+of `t`, which any other key drops, the hyper key included. Only a mapping
+whose final key is the hyper key keeps that press as its repeat. Entering
+HYPER drops whatever NORMAL had pending, with its timeout.
+
 Releasing the key returns to NORMAL. The session tap can drop that key-up
 after it swallowed the press and a synthetic event (a volume key, a posted
 chord) lands in between; HYPER would otherwise stay up until the key is
