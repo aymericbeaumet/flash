@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import FlashTerminal
 
 struct StatusTerminalInputOrigin: Equatable {
@@ -109,8 +110,8 @@ extension AppDelegate {
       (lastAppliedMappingMode ?? config.mode).compiledTerminal,
       timeoutMs: config.mode.sequenceTimeoutMs)
     // Sessions start with the login environment, so their commands see the
-    // user's PATH and tooling.
-    guard statusTerminalEnvironmentReady else { return }
+    // user's PATH and tooling; the launch refresh applies them once it lands.
+    guard FlashProcessEnvironment.shared.phase != .resolving else { return }
     overlay.statusTerminals.apply(
       style: config.popupStyle, terminals: config.terminalPopups,
       invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)

@@ -41,7 +41,9 @@ builds a scrubbed environment containing only basic locale/path/process keys
 plus those values; ambient tokens, agent sockets, SDK search paths, and
 login-shell secrets are not inherited — put credentials in the plugin's
 config table. Install CLI tools under `FLASH_PLUGIN_DATA_DIR`, never into
-global shell paths.
+global shell paths. A child is spawned only once the host's login environment
+has resolved, so its `PATH` is the user's; a resolution that fails keeps the
+seeded one.
 
 **Activation.** A plugin is *resident* — spawned at startup and kept running —
 iff its manifest declares `sources`, `query`, `hints`, `status`, or `listen`.

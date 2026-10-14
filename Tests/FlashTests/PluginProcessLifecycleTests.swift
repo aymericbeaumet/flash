@@ -158,7 +158,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
   private func makeProcess(
     _ fixture: PluginFixtureKit.Fixture,
     store: PluginCatalogStore? = nil,
-    statusObserved: Bool = true
+    statusObserved: Bool = true,
+    environment: FlashProcessEnvironment = .shared
   ) throws -> PluginProcess {
     let manifest = try PluginManifest.load(from: fixture.root)
     let process = PluginProcess(
@@ -167,9 +168,39 @@ final class PluginProcessLifecycleTests: XCTestCase {
       origin: .official,
       baseDataDir: fixture.baseDataDir,
       watchFiles: false,
-      statusObserved: statusObserved)
+      statusObserved: statusObserved,
+      environment: environment)
     process.catalogStore = store
     return process
+  }
+
+  /// A child inherits the environment in effect when it spawns, for its
+  /// whole life: a resident plugin started while the login shell is still
+  /// being read waits for it, then spawns once with the resolved `PATH`.
+  func testChildSpawnsOnlyOnceTheLoginEnvironmentResolved() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "envgate",
+      manifest: PluginFixtureKit.manifest(id: "envgate"),
+      script: PluginFixtureKit.script(prologue: #"printf '%s\n' "$PATH" >> "$D/path""#))
+    defer { fixture.cleanup() }
+    let release = DispatchSemaphore(value: 0)
+    let environment = FlashProcessEnvironment(seed: ["PATH": "/usr/bin:/bin"]) { _, _ in
+      release.wait()
+      return ["PATH": "/flash/resolved:/usr/bin:/bin"]
+    }
+    environment.refresh()
+    let process = try makeProcess(fixture, environment: environment)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    XCTAssertEqual(fixture.spawnCount(), 0, "no child before the environment resolved")
+    XCTAssertEqual(process.runtimeStateSnapshot(), .installing)
+    release.signal()
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    let path = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("path"), encoding: .utf8)
+    XCTAssertTrue(path.hasPrefix("/flash/resolved:"), "the child got the resolved PATH: \(path)")
   }
 
   /// Shrinks the lifecycle seams for the duration of `body` and restores the

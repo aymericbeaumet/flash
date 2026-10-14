@@ -1,3 +1,4 @@
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -33,7 +34,7 @@ final class StatusBarControllerTests: XCTestCase {
 
     init(
       _ template: String, sources: [String: FlashStatusBarSourceDefinition] = [:],
-      interval: TimeInterval = 0
+      interval: TimeInterval = 0, environment: FlashProcessEnvironment = .shared
     ) {
       controller = FlashStatusBarController(
         template: .init(template: template, sourceNames: Set(sources.keys)), sources: sources,
@@ -45,7 +46,8 @@ final class StatusBarControllerTests: XCTestCase {
           let task = Task(invocation, line: line, completion: completion)
           tasks.append(task)
           return task
-        })
+        },
+        environment: environment)
       controller.start()
       drain()
     }
@@ -232,6 +234,30 @@ final class StatusBarControllerTests: XCTestCase {
     XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 130)
     harness.update("#{flash.plugin.feed.label}")
     XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+  }
+
+  /// A source job inherits the environment in effect when it spawns. While
+  /// the login shell is still being read the bar renders without jobs; the
+  /// moment it resolves, every due job starts with the resolved `PATH`.
+  func testSourceJobsWaitForTheLoginEnvironment() {
+    let release = DispatchSemaphore(value: 0)
+    let environment = FlashProcessEnvironment(seed: ["PATH": "/usr/bin:/bin"]) { _, _ in
+      release.wait()
+      return ["PATH": "/flash/resolved:/usr/bin:/bin"]
+    }
+    environment.refresh()
+    let source = FlashStatusBarSourceDefinition(command: ["/bin/value"], intervalSeconds: 60)
+    let harness = Harness(
+      "#{flash.source.value}", sources: ["value": source], environment: environment)
+    defer { harness.controller.stop() }
+    XCTAssertEqual(harness.tasks.count, 0, "no job before the environment resolved")
+    XCTAssertNotNil(harness.queue.sync { harness.controller.lastPublishedModel })
+    release.signal()
+    let started = expectation(
+      for: NSPredicate { _, _ in harness.tasks.count == 1 }, evaluatedWith: nil)
+    wait(for: [started], timeout: 5)
+    harness.drain()
+    XCTAssertEqual(harness.tasks[0].invocation.environment["PATH"], "/flash/resolved:/usr/bin:/bin")
   }
 
   func testUnchangedReloadPreservesRunningSourceAndCompletion() {

@@ -16,6 +16,10 @@ final class FlashStatusBarController {
   private let wallClock: () -> Date
   private var clockObservers: [NSObjectProtocol] = []
   private let makeJob: StatusCommandFactory
+  /// The login environment jobs inherit; none starts before it resolves.
+  private let environment: FlashProcessEnvironment
+  /// Whether a publish is already owed once the environment resolves.
+  private var environmentWakeArmed = false
   private var template: FlashStatusBarTemplate
   private var popupTemplates: [String: FlashStatusBarTemplate]
   private var sources: [String: FlashStatusBarSourceDefinition]
@@ -199,9 +203,11 @@ final class FlashStatusBarController {
         environment: invocation.environment, workingDirectory: invocation.workingDirectory,
         timeoutSeconds: invocation.timeoutSeconds, onLine: onLine, onCompletion: onCompletion)
     },
+    environment: FlashProcessEnvironment = .shared,
     widgetSink: ((String, [StatusFormatDocument]) -> Void)? = nil
   ) {
     self.widgetSink = widgetSink
+    self.environment = environment
     self.scheduler = scheduler
     self.queue = queue
     self.clock = clock
@@ -616,6 +622,20 @@ final class FlashStatusBarController {
   }
 
   private func runDueJobs(now: TimeInterval) {
+    // A job inherits the environment in effect when it spawns. Until the
+    // login shell has resolved the bar renders without jobs, and publishes
+    // once more the moment it has, which starts every job that is due.
+    guard environment.phase != .resolving else {
+      if !environmentWakeArmed {
+        environmentWakeArmed = true
+        environment.whenResolved(on: queue) { [weak self] in
+          guard let self else { return }
+          self.environmentWakeArmed = false
+          self.publishCurrentModel()
+        }
+      }
+      return
+    }
     for name in requiredSources.sorted() {
       guard let definition = sources[name] else { continue }
       if sourceRecords[name] == nil { sourceRecords[name] = SourceRecord(definition: definition) }
@@ -647,7 +667,7 @@ final class FlashStatusBarController {
     let launch = CommandLaunchConfiguration(
       command: definition.command,
       workingDirectory: definition.workingDirectory, overrides: definition.environment,
-      environment: FlashProcessEnvironment.shared.environment)
+      environment: environment.environment)
     var argv = launch.command
     if let executable = argv.first {
       argv[0] = Self.executablePath(executable, environment: launch.environment)
@@ -695,7 +715,7 @@ final class FlashStatusBarController {
       shellRecords[key]?.job = try makeJob(
         StatusCommandInvocation(
           argv: ["/bin/sh", "-c", request.command],
-          environment: FlashProcessEnvironment.shared.environment,
+          environment: environment.environment,
           workingDirectory: nil, timeoutSeconds: nil), queue,
         { [weak self] line in
           guard let self, self.shellRecords[key]?.schedule.owns(token) == true else { return }

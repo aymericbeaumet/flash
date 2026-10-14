@@ -386,7 +386,9 @@ Waiting for a child process always ends on its kernel exit event
 (`ProcessExit`, a `kqueue` `NOTE_EXIT` or a process dispatch source), never a
 sleep loop: plugin stops, status-job shutdown and deferred terminal reaping
 return the moment the process is gone, and deadlines only bound one that is
-not. Status jobs retain their running process and value when effective definitions
+not. Plugins, status jobs and persistent popups start once the login
+environment resolves, since a child keeps the environment it spawned with; a
+resolution that fails keeps the seeded one. Status jobs retain their running process and value when effective definitions
 are unchanged. Replacements invalidate tokens before stopping children in one
 bounded batch. The scheduler arms only evaluated jobs, active cycles, the
 next boundary of the finest time unit a visible surface shows, and pending

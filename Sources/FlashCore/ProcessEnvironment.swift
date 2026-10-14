@@ -36,6 +36,37 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
   private var followUpCompletions: [([String: String]) -> Void] = []
   private var refreshInProgress = false
   private var followUpQueued = false
+  /// Where the first login-shell resolution stands. `seeded` until a refresh
+  /// is first requested (the CLI and unit tests never ask); `resolving`
+  /// while that first run is out; `resolved` from the moment it lands,
+  /// successfully or not, for the life of the process.
+  public enum Phase: Equatable {
+    case seeded, resolving, resolved
+  }
+  private var phaseValue: Phase = .seeded
+  private var resolvedWaiters: [(queue: DispatchQueue, body: () -> Void)] = []
+
+  public var phase: Phase {
+    lock.lock()
+    defer { lock.unlock() }
+    return phaseValue
+  }
+
+  /// Run `body` on `queue` once the first resolution has landed: at once
+  /// while nothing was ever asked, or once resolved. A child inherits the
+  /// environment in effect when it spawns for its whole life, so every
+  /// long-lived child — plugins, status jobs, persistent popups — waits here
+  /// rather than start with launchd's bare `PATH`.
+  public func whenResolved(on queue: DispatchQueue, _ body: @escaping () -> Void) {
+    lock.lock()
+    if phaseValue == .resolving {
+      resolvedWaiters.append((queue, body))
+      lock.unlock()
+      return
+    }
+    lock.unlock()
+    queue.async(execute: body)
+  }
 
   /// Seeds with the current process environment (plus a `PATH` fallback) so a
   /// command that runs before the first ``refresh(completion:)`` still has a
@@ -80,6 +111,7 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
       return
     }
     refreshInProgress = true
+    if phaseValue == .seeded { phaseValue = .resolving }
     if let completion { runCompletions.append(completion) }
     lock.unlock()
     refreshQueue.async { self.runRefresh(shellPath: shellPath, timeout: timeout) }
@@ -95,7 +127,11 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     followUpCompletions.removeAll()
     followUpQueued = false
     if !runAgain { refreshInProgress = false }
+    phaseValue = .resolved
+    let waiters = resolvedWaiters
+    resolvedWaiters.removeAll()
     lock.unlock()
+    for waiter in waiters { waiter.queue.async(execute: waiter.body) }
     for completion in completions { completion(environment) }
     if runAgain { runRefresh(shellPath: shellPath, timeout: timeout) }
   }

@@ -200,9 +200,11 @@ final class PluginProcess {
     watchFiles: Bool = true,
     settings: [String: PluginConfigValue] = [:],
     statusObserved: Bool = true,
-    observedStatusSegments: Set<String> = []
+    observedStatusSegments: Set<String> = [],
+    environment: FlashProcessEnvironment = .shared
   ) {
     self.root = root
+    self.environment = environment
     self.manifest = manifest
     self.origin = origin
     self.listenPatterns = manifest.listen.map(PluginPattern.init)
@@ -217,6 +219,9 @@ final class PluginProcess {
     self.observedStatusSegments = Self.statusObservedSegments(
       observedStatusSegments, declared: manifest.status)
   }
+
+  /// The login environment the child inherits; a spawn waits for it.
+  private let environment: FlashProcessEnvironment
 
   var identifier: String { manifest.id }
 
@@ -375,6 +380,17 @@ final class PluginProcess {
 
   private func startOnQueue(generation: UInt64) {
     guard manifest.exec != nil else { return }
+    // The child inherits the environment in effect when it spawns, for its
+    // whole life: wait for the login environment, so a plugin started at
+    // launch does not keep launchd's bare `PATH` until its next restart.
+    environment.whenResolved(on: queue) { [weak self] in
+      guard let self, self.lifecycle.generation == generation, self.lifecycle.state == .installing
+      else { return }
+      self.installAndLaunch(generation: generation)
+    }
+  }
+
+  private func installAndLaunch(generation: UInt64) {
     let startedAt = DispatchTime.now()
     do {
       try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
@@ -1305,9 +1321,7 @@ final class PluginProcess {
     overrides["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
     overrides["FLASH_PLUGIN_CONFIG"] = settingsJSON
     overrides["FLASH_PLUGIN_PARENT_PID"] = String(getpid())
-    return Self.sanitizedPluginEnvironment(
-      base: FlashProcessEnvironment.shared.environment,
-      overrides: overrides)
+    return Self.sanitizedPluginEnvironment(base: environment.environment, overrides: overrides)
   }
 
   static func sanitizedPluginEnvironment(

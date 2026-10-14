@@ -104,7 +104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var statusBarController: FlashStatusBarController?
   /// Desktop widget windows; the status controller evaluates their lines.
   var widgetController: WidgetController?
-  var statusTerminalEnvironmentReady = false
   let mainRunLoopStallObserver = MainRunLoopStallObserver()
   /// The swallowed Escape that closed a hover preview; its routing, queued
   /// right behind, must not also reach a mapping or the interpreter.
@@ -354,7 +353,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashProcessEnvironment.shared.refresh { [weak self] _ in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
-        self.statusTerminalEnvironmentReady = true
         self.reloadTerminalPopupConfiguration()
         self.overlay.statusTerminals.retryFailedLaunches()
       }

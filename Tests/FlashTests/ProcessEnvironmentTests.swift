@@ -174,6 +174,41 @@ final class ProcessEnvironmentTests: XCTestCase {
     XCTAssertEqual(runs, 2)
   }
 
+  /// Nothing waits while no refresh was ever asked (the CLI, unit tests);
+  /// once one is, waiters run only after the first resolution has landed,
+  /// even a failed one, which keeps the seed.
+  func testWhenResolvedWaitsForTheFirstResolutionOnly() {
+    let seeded = FlashProcessEnvironment(seed: ["PATH": "/seed"])
+    XCTAssertEqual(seeded.phase, .seeded)
+    let atOnce = expectation(description: "runs at once while seeded")
+    seeded.whenResolved(on: .global()) { atOnce.fulfill() }
+    wait(for: [atOnce], timeout: 2)
+
+    let release = DispatchSemaphore(value: 0)
+    let env = FlashProcessEnvironment(seed: ["PATH": "/seed"]) { _, _ in
+      release.wait()
+      return nil
+    }
+    env.refresh()
+    XCTAssertEqual(env.phase, .resolving)
+    let resolved = expectation(description: "runs once resolved")
+    var ranBeforeRelease = false
+    env.whenResolved(on: .global()) {
+      ranBeforeRelease = env.phase != .resolved
+      resolved.fulfill()
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    XCTAssertEqual(env.phase, .resolving, "the waiter is held")
+    release.signal()
+    wait(for: [resolved], timeout: 5)
+    XCTAssertFalse(ranBeforeRelease)
+    XCTAssertEqual(env.phase, .resolved, "a failed resolution still resolves")
+    XCTAssertEqual(env.environment["PATH"], "/seed", "and keeps the seed")
+    let later = expectation(description: "runs at once once resolved")
+    env.whenResolved(on: .global()) { later.fulfill() }
+    wait(for: [later], timeout: 2)
+  }
+
   /// Requests made during a run share one follow-up run.
   func testRequestsDuringARunShareOneFollowUp() {
     let firstStarted = DispatchSemaphore(value: 0)
