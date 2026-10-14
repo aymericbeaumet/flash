@@ -545,6 +545,41 @@ final class StatusTerminalRegistryTests: XCTestCase {
     waitUntil { self.running(registry.session(named: "tool")) != nil }
   }
 
+  /// Two restart requests while the command is still missing read the
+  /// environment twice, and only the first reply restarts the process. The
+  /// second lands on a session a restart already replaced — the same
+  /// `TerminalSession` object, so identity cannot tell — and must leave the
+  /// fresh process and whatever was typed into it alone.
+  func testASecondRestartRequestDoesNotRestartTheProcessTwice() throws {
+    var completions: [() -> Void] = []
+    let bin = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-bin-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+    let registry = StatusTerminalRegistry(
+      environment: FlashProcessEnvironment(seed: ["PATH": "\(bin.path):/usr/bin:/bin"]),
+      refreshEnvironment: { completions.append($0) })
+    defer {
+      registry.shutdown()
+      try? FileManager.default.removeItem(at: bin)
+    }
+    apply(registry, ["tool": terminal(["flash-missing-tool"], persistent: true)])
+    waitUntil {
+      registry.session(named: "tool")?.state == .failed(.commandNotFound("flash-missing-tool"))
+    }
+    registry.restart(name: "tool")
+    registry.restart(name: "tool")
+    XCTAssertEqual(completions.count, 2)
+    try install("flash-missing-tool", in: bin)
+    completions[0]()
+    waitUntil { self.running(registry.session(named: "tool")) != nil }
+    let pid = running(registry.session(named: "tool"))
+    let generation = registry.inputGenerations["tool"]
+    completions[1]()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    XCTAssertEqual(registry.inputGenerations["tool"], generation, "the late reply restarts nothing")
+    XCTAssertEqual(running(registry.session(named: "tool")), pid)
+  }
+
   /// A reload rereads the login environment and then starts every persistent
   /// popup whose command could not start.
   func testReloadRetriesPopupsWhoseCommandCouldNotStart() throws {

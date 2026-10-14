@@ -540,14 +540,20 @@ final class StatusTerminalRegistry {
   /// Restart the process explicitly: every kind, whatever its lifecycle. A
   /// pager rereads the latest collected document. A command that could not
   /// start rereads the login environment first, so a tool installed since
-  /// then is found.
+  /// then is found. The reply restarts only the session as it was asked:
+  /// `restartSession` reuses the `TerminalSession` object, so a restart that
+  /// landed meanwhile (a second request, a reload's retry) shows only in the
+  /// input generation, and a reply from before it must not restart again.
   func restart(name: String) {
     guard let entry = entries[name], case .terminal(let definition) = entry.kind,
       case .failed(let failure) = entry.session.state, failure.isPermanent
     else { return restartSession(name: name, resetBackoff: true) }
     let session = entry.session
+    let generation = inputGenerations[name]
     refreshEnvironment { [weak self] in
-      guard let self, self.entries[name]?.session === session else { return }
+      guard let self, self.entries[name]?.session === session,
+        self.inputGenerations[name] == generation
+      else { return }
       self.restartSession(
         name: name, resetBackoff: true, environment: self.launchEnvironment(for: definition))
     }
