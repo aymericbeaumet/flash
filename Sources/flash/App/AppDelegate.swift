@@ -311,6 +311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// next main turn corrects it.
   var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
+  /// The latest `focus_input` request; an older one still queued is dropped.
+  var focusTextInputRequest: UInt64 = 0
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
     didSet {
       guard oldValue.inFlight != activationLifecycle.inFlight else { return }

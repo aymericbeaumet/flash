@@ -12,6 +12,13 @@ import FlashCore
 /// `inputMode` stays `.hints` so the capture policy is untouched, and the
 /// session's pointer phase routes keys to `PointerModeInterpreter`.
 extension AppDelegate {
+  /// `focus_input` walks run here one after another; see
+  /// `focusTextInputInNormalMode`.
+  static let focusTextInputQueue = DispatchQueue(
+    label: "flash.focus_input", qos: .userInitiated)
+}
+
+extension AppDelegate {
   func enterPointerMode() {
     guard prepareHintActivation(.pointer) else { return }
     hintSession.phase = .pointer(.init())
@@ -137,10 +144,19 @@ extension AppDelegate {
     let pid = context.processID
     let normalized = max(1, index)
     let generation = activationGen
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+    // Requests run one at a time, in order, and a request made since wins
+    // outright: two quick presses no longer race on the AX focus write, and
+    // the superseded one never writes at all.
+    focusTextInputRequest &+= 1
+    let request = focusTextInputRequest
+    Self.focusTextInputQueue.async { [weak self] in
+      let current = DispatchQueue.main.sync { self?.focusTextInputRequest == request }
+      guard current else { return }
       let focused = NormalModeDispatcher.focusTextInput(pid: pid, index: normalized)
       DispatchQueue.main.async {
-        guard let self, self.activationLifecycle.isCurrent(generation) else { return }
+        guard let self, self.activationLifecycle.isCurrent(generation),
+          self.focusTextInputRequest == request
+        else { return }
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
         } else {
