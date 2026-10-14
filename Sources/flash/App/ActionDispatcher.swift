@@ -427,22 +427,34 @@ enum ActionDispatcher {
   /// queued on `clickQueue` in the same turn, so they post in order.
   private static var buttonHold = MouseButtonHold()
 
-  static var heldButton: MouseButtonKind? { buttonHold.held }
+  static var heldButton: MouseButtonKind? { buttonHold.held?.button }
 
-  /// Told, on main, each time the held button changes, with the button now
-  /// held: the mode follows the hold (VISUAL), whichever path pressed or
+  /// What the held button is for: a visual selection or a drag.
+  static var heldPurpose: ButtonHold? { buttonHold.held?.purpose }
+
+  /// Told, on main, each time the held button changes, with the hold now in
+  /// place: the mode follows it (VISUAL or DRAG), whichever path pressed or
   /// released it — `mouse_button`, pointer mode's `v`, an overlay cancel, a
   /// committed gesture freeing the buttons, quit.
-  static var heldButtonDidChange: ((MouseButtonKind?) -> Void)?
+  static var heldButtonDidChange: ((MouseButtonHold.Held?) -> Void)?
 
-  /// Press, release or toggle `button` at `screenPoint` (NSScreen; the
-  /// pointer's location for `mouse_button`). Returns what was posted.
+  /// Press, release, toggle or cancel `button` at `screenPoint` (NSScreen;
+  /// the pointer's location for `mouse_button`), held for `purpose`. A
+  /// cancel drags back to where the button went down and lets go there.
+  /// Returns what was posted.
   @discardableResult
   static func setMouseButton(
-    _ state: MouseButtonState, _ button: MouseButtonKind, at screenPoint: CGPoint
+    _ state: MouseButtonState, _ button: MouseButtonKind, for purpose: ButtonHold,
+    at screenPoint: CGPoint
   ) -> [MouseButtonHold.Effect] {
-    let effects = buttonHold.apply(state, button)
-    postButtonEffects(effects, at: screenPoint)
+    var releasePoint = screenPoint
+    if state == .cancel, let origin = buttonHold.held?.origin {
+      // Queued on `clickQueue` ahead of the release below.
+      moveCursor(to: origin)
+      releasePoint = origin
+    }
+    let effects = buttonHold.apply(state, button, for: purpose, at: screenPoint)
+    postButtonEffects(effects, at: releasePoint)
     if !effects.isEmpty { heldButtonDidChange?(buttonHold.held) }
     return effects
   }

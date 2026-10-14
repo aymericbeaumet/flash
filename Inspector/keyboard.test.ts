@@ -39,10 +39,11 @@ test("the live mode reads its own scope and all", () => {
   assert.deepEqual(scopesForMode("insert"), ["insert", "all"]);
   assert.deepEqual(scopesForMode(undefined), ["all"]);
   assert.deepEqual(scopesForMode("visual"), ["visual", "normal", "all"]);
+  assert.deepEqual(scopesForMode("drag"), ["drag", "normal", "all"]);
 });
 
 test("the mode buttons pick what the keyboard lights and the list shows", () => {
-  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "visual", "hyper", "insert", "command", "terminal"]);
+  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "visual", "drag", "hyper", "insert", "command", "terminal"]);
   const rows: MappingRow[] = [
     { scope: "normal", key: "f", action: "flash mouse_target" },
     { scope: "visual", key: "j", action: "flash mouse_step --direction=down" },

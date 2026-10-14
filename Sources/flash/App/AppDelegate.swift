@@ -383,14 +383,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
-    // The held mouse button is the VISUAL mode: whichever path presses or
-    // releases it, the mode follows the hold, and only from NORMAL.
+    // A held mouse button is VISUAL or DRAG, by what it was pressed for:
+    // whichever path presses or releases it, the mode follows the hold, and
+    // only from NORMAL.
     ActionDispatcher.heldButtonDidChange = { [weak self] held in
       guard let self else { return }
-      if held != nil, self.modeStore.mode == .normal {
-        self.dispatchMode(.enterVisual)
-      } else if held == nil, self.modeStore.mode.isVisual {
-        self.dispatchMode(.exitVisual)
+      if let held, self.modeStore.mode == .normal {
+        self.dispatchMode(.buttonHeld(held.purpose))
+      } else if held == nil, self.modeStore.mode.buttonHold != nil {
+        self.dispatchMode(.buttonReleased)
       }
     }
     // A native menu's own open and close are the evidence that decides how
@@ -593,6 +594,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMouseWarp(request)
     case .mouseStep(let direction):
       performMouseStep(direction)
+    case .mouseNudge(let direction, let distance):
+      performMouseNudge(direction, distance: distance)
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):

@@ -303,14 +303,17 @@ key is the leader, a key with no hyper mapping can still complete a NORMAL
 `<leader>` sequence. A tap that presses nothing else arms that prefix on
 release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
-Holding a mouse button (`v`, `mouse_button --state=toggle`) enters VISUAL,
-NORMAL with the button down, until the button is released; the status pill
-turns orange and shows `mode.labels.visual` (default `VISUAL`). Keys in
-`[mode.visual.mappings]` are read before NORMAL's while the button is held,
-modified chords included; every other key keeps its NORMAL meaning. The
-defaults put Vim's `j` `k` `h` `l` on `mouse_step`, so they move the pointer
-one text line or character and the held drag extends the selection. See the
-[mode guide](normal-mode.md#holding-a-mouse-button-visual).
+VISUAL is a visual selection (`v`): text is selected from where it began to
+the cursor, and Vim's motions extend it. DRAG is a drag with a mouse button
+held (`D` the left button, `cD` the right): pointer moves carry what was
+grabbed, Return drops it and Escape puts it back. Their status pills are
+orange and yellow and show `mode.labels.visual` and `mode.labels.drag`
+(defaults `VISUAL`, `DRAG`). `[mode.visual.mappings]` and
+`[mode.drag.mappings]` are read before NORMAL's in their mode, modified
+chords included; every other key keeps its NORMAL meaning, and a key they
+bind hides the NORMAL sequences it starts. See the
+[mode guide](normal-mode.md#visual-selection-visual) and
+[dragging](normal-mode.md#dragging-drag).
 
 ```toml
 [mode.normal]
@@ -359,8 +362,8 @@ while that app is focused:
 App-specific entries take precedence over plugin and global mappings in the
 same scope. `false` suppresses an inherited mapping for that app; other apps
 keep their existing bindings. Bundle IDs match exactly and are case-sensitive.
-The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, `hyper`, and
-`visual`;
+The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, `hyper`,
+`visual`, and `drag`;
 COMMAND mappings still require a single modified key. Flash updates the active
 mapping table when focus changes, so no config reload is needed.
 

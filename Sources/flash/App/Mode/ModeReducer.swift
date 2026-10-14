@@ -8,7 +8,8 @@ import Foundation
 //  - Insert stickiness: only explicit keyboard requests and disabling
 //    advanced mode leave `.insert`.
 //  - Mouse enters only: `.clickResolved` acts only from `.normal` or
-//    `.visual`; it can move NORMAL→insert but can never move insert→anything.
+//    a held-button mode (`.visual`, `.drag`); it can move NORMAL→insert but can
+//    never move insert→anything.
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
 //  - Advanced gate: `.enterNormal` is refused while `.disabled`.
 enum ModeReducer {
@@ -39,8 +40,8 @@ enum ModeReducer {
         return reduce(state, .enterNormal)
       case .hyper:
         return reduce(state, .exitHyper)
-      case .visual:
-        return reduce(state, .exitVisual)
+      case .visual, .drag:
+        return reduce(state, .buttonReleased)
       case .insert, .normal, .disabled:
         // Active hints are dismissed in place; without hints there is no
         // enclosing mode to leave, so nothing re-renders.
@@ -78,7 +79,7 @@ enum ModeReducer {
     case .clickResolved(let entersInsert, let targetPID):
       // The mouse only acts in NORMAL (a held button included) and can never
       // leave INSERT.
-      guard state == .normal || state == .visual else { return (state, []) }
+      guard state == .normal || state.buttonHold != nil else { return (state, []) }
       if entersInsert {
         let next = Mode.insert
         return (next, enterEffects(for: next, targetPID: targetPID))
@@ -117,7 +118,7 @@ enum ModeReducer {
       // Sticky/global: never flips the mode. Only the command surfaces need to
       // reclaim key focus after an app switch.
       switch state {
-      case .normal, .command, .hyper, .visual:
+      case .normal, .command, .hyper, .visual, .drag:
         return (state, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         return (state, [])
@@ -136,15 +137,15 @@ enum ModeReducer {
       // would dismiss hints and recapture on every leader release.
       return (restoreTo.mode, [.renderSurface])
 
-    case .enterVisual:
-      // VISUAL is NORMAL with a button held: the pill and the mapping table
-      // change (`[mode.visual.mappings]` over NORMAL), nothing else — a
+    case .buttonHeld(let hold):
+      // VISUAL and DRAG are NORMAL with a button held: the pill and the
+      // mapping table change (their own table over NORMAL), nothing else — a
       // pointer or grid session that pressed the button keeps its keys.
       guard case .normal = state else { return (state, []) }
-      return (.visual, [.setMappingScope(.visual), .renderSurface])
+      return (hold.mode, [.setMappingScope(hold.mappingScope), .renderSurface])
 
-    case .exitVisual:
-      guard case .visual = state else { return (state, []) }
+    case .buttonReleased:
+      guard state.buttonHold != nil else { return (state, []) }
       return (.normal, [.setMappingScope(.normal), .renderSurface])
     }
   }
@@ -181,7 +182,7 @@ enum ModeReducer {
         .prepareModeEntry, .setMappingScope(.terminal), .clearTransientHintState,
         .hideOverlayIfIdle, .renderSurface,
       ]
-    case .hyper, .visual:
+    case .hyper, .visual, .drag:
       // Keep the NORMAL mapping scope and the hint session. The pill is the
       // only thing that changes; Carbon registrations stay put so a hold does
       // not churn hotkey registrations.
@@ -208,7 +209,8 @@ enum ModeReducer {
     case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
     case .hyper: return (.disabled, enterEffects(for: .disabled, targetPID: targetPID))
     case .disabled: return (state, [])
-    case .normal, .insert, .visual: preconditionFailure("Enabled mode has disabled eligibility")
+    case .normal, .insert, .visual, .drag:
+      preconditionFailure("Enabled mode has disabled eligibility")
     }
   }
 }

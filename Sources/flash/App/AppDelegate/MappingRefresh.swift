@@ -13,8 +13,8 @@ extension AppDelegate {
     MainThreadActivity.note("effective_mappings")
     let context = pluginSelectorContext(fallbackBundleID: bundleID)
     let effective = effectiveMode(for: context)
-    overlay?.normalModeMappings =
-      modeStore.mode.isVisual ? effective.compiledVisual : effective.compiledNormal
+    overlay?.normalModeMappings = Self.interpreterTable(
+      for: modeStore.mode.buttonHold?.mappingScope ?? .normal, in: effective)
     overlay?.hyperModeMappings = effective.compiledHyper
     // The cache hands back one value per selector key, so a focus change
     // that lands on the key already applied skips the six-table compare.
@@ -39,10 +39,19 @@ extension AppDelegate {
   /// sequence belongs to the table it was typed against, so a switch drops it.
   func applyInterpreterTable(for scope: MappingScope) {
     guard let overlay, let effective = lastAppliedMappingMode else { return }
-    let table = scope == .visual ? effective.compiledVisual : effective.compiledNormal
+    let table = Self.interpreterTable(for: scope, in: effective)
     guard overlay.normalModeMappings != table else { return }
     overlay.normalModeMappings = table
     resetPendingNormalSequence(reason: "mapping_scope")
+  }
+
+  /// VISUAL's and DRAG's own tables; NORMAL's for every other scope.
+  static func interpreterTable(for scope: MappingScope, in mode: Config.Mode) -> CompiledMappings {
+    switch scope {
+    case .visual: return mode.compiledVisual
+    case .drag: return mode.compiledDrag
+    case .normal, .insert, .command, .terminal: return mode.compiledNormal
+    }
   }
 
   /// Drop cached effective modes and force the next refresh to re-apply the
@@ -84,6 +93,6 @@ extension AppDelegate {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
       || old.command != new.command || old.terminal != new.terminal || old.hyper != new.hyper
-      || old.visual != new.visual
+      || old.visual != new.visual || old.drag != new.drag
   }
 }

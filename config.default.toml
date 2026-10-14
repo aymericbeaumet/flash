@@ -564,9 +564,9 @@ app_directories = [
 
 [mode]
 # Mode labels shown after the active app name in the persistent status bar
-# when advanced mode is enabled. `terminal`, `hyper` and `visual` (defaults
-# TERMINAL, HYPER, VISUAL) label the popup, the held leader and the held
-# mouse button.
+# when advanced mode is enabled. `terminal`, `hyper`, `visual` and `drag`
+# (defaults TERMINAL, HYPER, VISUAL, DRAG) label the popup, the held leader,
+# a visual selection and a drag.
 labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
@@ -729,10 +729,12 @@ hyper = "<leader>"
 "mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
 "ms" = ["flash", "mouse_bigram", "--move"]
-# Hold the primary button where the pointer is and enter VISUAL; `v` again,
-# Escape, leave_mode or a committed gesture releases it. Moves drag meanwhile,
-# and `ms` lands one point right of its letter so the selection ends on it.
-"v" = ["flash", "mouse_button", "--state=toggle"]
+# `v` starts a visual selection where the pointer is (VISUAL) and ends it,
+# leaving the text selected. `D` grabs what is under the pointer with the left
+# button (DRAG) and drops it; `cD` drags with the right button.
+"v" = ["flash", "mouse_button", "--state=toggle", "--mode=visual"]
+"D" = ["flash", "mouse_button", "--state=toggle", "--mode=drag"]
+"cD" = ["flash", "mouse_button", "--state=toggle", "--secondary", "--mode=drag"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
 "ds" = ["flash", "mouse_bigram", "--double"]
@@ -824,20 +826,47 @@ hyper = "<leader>"
 "shift+-" = ["flash", "function_key", "--key=f11"]
 "shift+=" = ["flash", "function_key", "--key=f12"]
 
-# VISUAL is NORMAL with a mouse button held (`v`). These keys are read before
-# NORMAL's while the button is down; every other key keeps its NORMAL
-# meaning. As in Vim's visual mode, j / k / h / l move the pointer one text
-# line or one character, measured from the text under it, so the held
-# button's drag extends the selection. Scrolls (ctrl+e, ctrl+y, ctrl+d,
-# ctrl+u) and gg / G extend it too.
+# VISUAL is a visual selection (`v`): text is selected from where it began to
+# the cursor, and motions extend it as in Vim. These keys are read before
+# NORMAL's; any other key keeps its NORMAL meaning, and a key here hides the
+# NORMAL sequences it starts. j / k / h / l move one text line or character,
+# measured from the text under the pointer, and a picked target (f, F, s)
+# extends the selection to it instead of clicking. Scrolls (ctrl+e, ctrl+y,
+# ctrl+d, ctrl+u) and gg / G extend it too. Escape ends it, leaving the text
+# selected.
 [mode.visual.mappings]
 "j" = ["flash", "mouse_step", "--direction=down"]
 "k" = ["flash", "mouse_step", "--direction=up"]
 "h" = ["flash", "mouse_step", "--direction=left"]
 "l" = ["flash", "mouse_step", "--direction=right"]
+"f" = ["flash", "mouse_target", "--move"]
+"F" = ["flash", "mouse_grid", "--move"]
+"s" = ["flash", "mouse_bigram", "--move"]
+"<esc>" = ["flash", "mouse_button", "--state=release", "--mode=visual"]
+
+# DRAG is a drag with a mouse button held: `D` grabs with the left button,
+# `cD` with the right. These keys are read before NORMAL's, as for VISUAL.
+# h / j / k / l nudge what is dragged by 16 points and H / J / K / L by 96, a
+# picked target (f, F, s) is where it goes, Return or D drops it there, and
+# Escape puts it back where it was grabbed.
+[mode.drag.mappings]
+"h" = ["flash", "mouse_nudge", "--direction=left", "--distance=16"]
+"j" = ["flash", "mouse_nudge", "--direction=down", "--distance=16"]
+"k" = ["flash", "mouse_nudge", "--direction=up", "--distance=16"]
+"l" = ["flash", "mouse_nudge", "--direction=right", "--distance=16"]
+"H" = ["flash", "mouse_nudge", "--direction=left", "--distance=96"]
+"J" = ["flash", "mouse_nudge", "--direction=down", "--distance=96"]
+"K" = ["flash", "mouse_nudge", "--direction=up", "--distance=96"]
+"L" = ["flash", "mouse_nudge", "--direction=right", "--distance=96"]
+"f" = ["flash", "mouse_target", "--move"]
+"F" = ["flash", "mouse_grid", "--move"]
+"s" = ["flash", "mouse_bigram", "--move"]
+"<return>" = ["flash", "mouse_button", "--state=release", "--mode=drag"]
+"D" = ["flash", "mouse_button", "--state=release", "--mode=drag"]
+"<esc>" = ["flash", "mouse_button", "--state=cancel", "--mode=drag"]
 
 # Override mappings for one exact, case-sensitive bundle ID. Supported scopes
-# are all, normal, insert, command, terminal, hyper, and visual. `false` removes an
+# are all, normal, insert, command, terminal, hyper, visual, and drag. `false` removes an
 # inherited mapping only while that app is focused. See docs/configuration.md.
 # [mode.apps."com.apple.Safari".normal.mappings]
 # "f" = ["flash", "mouse_target", "--search"]

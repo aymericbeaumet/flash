@@ -32,6 +32,8 @@ extension URLCommand {
       let area = request.area == .window ? "the focused window" : "the screen"
       let edge = request.edge == .center ? "the centre" : "the \(request.edge.rawValue) edge"
       return "Moves the pointer to \(edge) of \(area)."
+    case .mouseNudge(let direction, let distance):
+      return "Moves the pointer \(distance) points \(direction.rawValue)."
     case .mouseStep(let direction):
       switch direction {
       case .up, .down:
@@ -302,13 +304,26 @@ private func buttonExplanation(_ request: MouseButtonRequest) -> String {
   case .secondary: button = "right"
   case .middle: button = "middle"
   }
-  switch request.state {
-  case .down:
-    return "Holds the \(button) mouse button at the pointer."
-  case .up:
-    return "Releases the \(button) mouse button."
-  case .toggle:
-    return "Toggles the \(button) mouse button at the pointer."
+  switch (request.hold, request.state) {
+  case (.visual, .down):
+    return "Starts a visual selection at the pointer."
+  case (.visual, .up):
+    return "Ends the visual selection, leaving the text selected."
+  case (.visual, .toggle):
+    return "Starts a visual selection at the pointer, or ends the one in progress."
+  case (.drag, .down):
+    return "Grabs what is under the pointer with the \(button) mouse button."
+  case (.drag, .up):
+    return "Drops what the \(button) mouse button is dragging, where the pointer is."
+  case (.drag, .toggle):
+    return
+      "Grabs what is under the pointer with the \(button) mouse button, or drops what it drags."
+  case (.visual, .release):
+    return "Ends the visual selection, leaving the text selected."
+  case (.drag, .release):
+    return "Drops what is being dragged, where the pointer is."
+  case (_, .cancel):
+    return "Puts a drag back where it started and lets go."
   }
 }
 

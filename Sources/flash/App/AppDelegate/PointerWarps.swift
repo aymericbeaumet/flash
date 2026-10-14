@@ -97,6 +97,21 @@ extension AppDelegate {
     }
   }
 
+  /// `mouse_nudge`: the pointer moves `distance` points; while a button is
+  /// held (DRAG) the move drags.
+  func performMouseNudge(_ direction: TextStep.Direction, distance: Int) {
+    let pointer = NSEvent.mouseLocation
+    let step = CGFloat(distance)
+    let target: CGPoint
+    switch direction {
+    case .up: target = CGPoint(x: pointer.x, y: pointer.y + step)
+    case .down: target = CGPoint(x: pointer.x, y: pointer.y - step)
+    case .left: target = CGPoint(x: pointer.x - step, y: pointer.y)
+    case .right: target = CGPoint(x: pointer.x + step, y: pointer.y)
+    }
+    _ = ActionDispatcher.moveCursor(to: target)
+  }
+
   /// The display a screen warp uses: the focused window's, else the
   /// pointer's, else the first.
   static func warpScreenFrame(

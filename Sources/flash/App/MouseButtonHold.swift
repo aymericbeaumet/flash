@@ -37,12 +37,21 @@ enum MouseButtonState: String, CaseIterable, Hashable {
   case down
   case up
   case toggle
+  /// Let go of whichever button is held, where the pointer is: a drag drops
+  /// there, a visual selection ends and stays selected.
+  case release
+  /// Put a drag back: the pointer drags to where the button went down, then
+  /// lets go there.
+  case cancel
 }
 
-/// `mouse_button --state=<state> [--secondary|--middle]`.
+/// `mouse_button --state=<state> [--secondary|--middle] [--mode=visual|drag]`.
+/// `hold` is what the held button means: a visual selection or a drag (the
+/// default), which is the mode it enters.
 struct MouseButtonRequest: Hashable {
   var state: MouseButtonState
   var button: MouseButtonKind
+  var hold: ButtonHold
 
   var argTokens: [String] {
     var tokens = ["--state=\(state.rawValue)"]
@@ -51,6 +60,7 @@ struct MouseButtonRequest: Hashable {
     case .secondary: tokens.append("--secondary")
     case .middle: tokens.append("--middle")
     }
+    tokens.append("--mode=\(hold.rawValue)")
     return tokens
   }
 }
@@ -66,20 +76,35 @@ struct MouseButtonHold: Equatable {
     case release(MouseButtonKind)
   }
 
-  private(set) var held: MouseButtonKind?
+  /// The held button, what it is for, and where it went down (NSScreen).
+  struct Held: Equatable {
+    var button: MouseButtonKind
+    var purpose: ButtonHold
+    var origin: CGPoint
+  }
 
-  mutating func apply(_ state: MouseButtonState, _ button: MouseButtonKind) -> [Effect] {
+  private(set) var held: Held?
+
+  mutating func apply(
+    _ state: MouseButtonState, _ button: MouseButtonKind, for purpose: ButtonHold,
+    at origin: CGPoint
+  ) -> [Effect] {
     switch state {
     case .down:
-      guard held != button else { return [] }
+      guard held?.button != button else { return [] }
       let effects = release() + [.press(button)]
-      held = button
+      held = Held(button: button, purpose: purpose, origin: origin)
       return effects
     case .up:
-      guard held == button else { return [] }
+      guard held?.button == button else { return [] }
+      return release()
+    case .release:
+      return release()
+    case .cancel:
+      // The caller drags back to `held.origin` first; any held button goes.
       return release()
     case .toggle:
-      return apply(held == button ? .up : .down, button)
+      return apply(held?.button == button ? .up : .down, button, for: purpose, at: origin)
     }
   }
 
@@ -88,6 +113,6 @@ struct MouseButtonHold: Equatable {
   mutating func release() -> [Effect] {
     guard let held else { return [] }
     self.held = nil
-    return [.release(held)]
+    return [.release(held.button)]
   }
 }

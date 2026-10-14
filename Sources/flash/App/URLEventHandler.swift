@@ -47,8 +47,11 @@ indirect enum URLCommand: Hashable {
   /// window or its screen.
   case mouseWarp(MouseWarpRequest)
   /// `mouse_step`: the pointer moves one text line or one character from the
-  /// text under it; in VISUAL the held button drags, extending the selection.
+  /// text under it; in VISUAL that extends the selection.
   case mouseStep(TextStep.Direction)
+  /// `mouse_nudge`: the pointer moves a fixed distance; in DRAG the held
+  /// button drags what it grabbed.
+  case mouseNudge(TextStep.Direction, distance: Int)
   /// `mouse_position`: the saved pointer positions — save, hint, cycle,
   /// forget.
   case mousePosition(MousePositionRequest)
@@ -822,6 +825,15 @@ final class URLEventHandler: NSObject {
       parse: { a in
         a.value("direction").flatMap(TextStep.Direction.init(rawValue:)).map { .mouseStep($0) }
       }),
+    "mouse_nudge": .init(
+      [.text("direction", "up|down|left|right", required: true), .text("distance", "points")],
+      parse: { a in
+        guard let direction = a.value("direction").flatMap(TextStep.Direction.init(rawValue:))
+        else { return nil }
+        guard let raw = a.value("distance") else { return .mouseNudge(direction, distance: 16) }
+        guard let distance = Int(raw), (1...2000).contains(distance) else { return nil }
+        return .mouseNudge(direction, distance: distance)
+      }),
     "mouse_position": .init(
       [.text("action", "save|unsave|clear|hints|next|previous", required: true)]
         + clickParameters,
@@ -872,16 +884,25 @@ final class URLEventHandler: NSObject {
 
     "mouse_button": .init(
       [
-        .text("state", "down|up|toggle", required: true), .flag("secondary"), .flag("middle"),
+        .text("state", "down|up|toggle|release|cancel", required: true), .flag("secondary"),
+        .flag("middle"), .text("mode", "visual|drag"),
       ],
       parse: { a in
         guard let state = a.value("state").flatMap(MouseButtonState.init(rawValue:)) else {
           return nil
         }
+        let hold: ButtonHold
+        if let mode = a.value("mode") {
+          guard let parsed = ButtonHold(rawValue: mode) else { return nil }
+          hold = parsed
+        } else {
+          hold = .drag
+        }
         switch (a.bool("secondary"), a.bool("middle")) {
-        case (false, false): return .mouseButton(.init(state: state, button: .primary))
-        case (true, false): return .mouseButton(.init(state: state, button: .secondary))
-        case (false, true): return .mouseButton(.init(state: state, button: .middle))
+        case (false, false): return .mouseButton(.init(state: state, button: .primary, hold: hold))
+        case (true, false):
+          return .mouseButton(.init(state: state, button: .secondary, hold: hold))
+        case (false, true): return .mouseButton(.init(state: state, button: .middle, hold: hold))
         case (true, true): return nil
         }
       }),
@@ -1198,8 +1219,9 @@ extension URLEventHandler {
       hints, cycles and forgets pointer positions. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
       the status items) and `mouse_notifications` (Notification Center's
       banners, alerts and buttons) hint surfaces outside the focused window.
-      `mouse_button --state=down|up|toggle` holds a button where the pointer
-      is, so Flash's pointer moves drag until it is released.
+      `mouse_button --state=toggle --mode=visual|drag` starts a visual
+      selection (VISUAL) or a drag (DRAG); `release` drops or ends it and
+      `cancel` puts a drag back. `mouse_nudge` moves the pointer a few points.
 
       `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode` and
       `enter_terminal_mode` select a mode; `leave_mode` leaves the current

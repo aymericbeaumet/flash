@@ -147,7 +147,7 @@ extension AppDelegate {
         // window list.
         applyModeOverlay(
           reusesWindowFrame: previous.isHyper != next.isHyper
-            || previous.isVisual != next.isVisual)
+            || previous.buttonHold != next.buttonHold)
       case .scheduleRecapture:
         scheduleNormalModeRecapture()
       case .activateFocusedApp(let pid):
@@ -160,9 +160,12 @@ extension AppDelegate {
     // The one reset point for the hold: every exit from HYPER ends it here,
     // whichever event caused the exit.
     overlay.hyperHold.modeChanged(from: previous, to: next)
-    // VISUAL is the held button: leaving it any other way (`enter_normal_mode`,
-    // INSERT, the command line, advanced mode turning off) lets the button go.
-    if previous.isVisual, !next.isVisual { releaseHeldMouseButton(reason: "visual_exit") }
+    // VISUAL and DRAG are the held button: leaving them any other way
+    // (`enter_normal_mode`, INSERT, the command line, advanced mode turning
+    // off) lets the button go.
+    if let hold = previous.buttonHold, next.buttonHold == nil {
+      releaseHeldMouseButton(reason: "\(hold.rawValue)_exit")
+    }
     if next.isHyper != previous.isHyper {
       setHyperHoldWatch(armed: next.isHyper)
     }
@@ -213,7 +216,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .terminal, .hyper, .visual:
+    case .command, .terminal, .hyper, .visual, .drag:
       break
     }
   }
@@ -254,6 +257,7 @@ extension AppDelegate {
     case .terminal: return config.mode.labels.terminal
     case .hyper: return config.mode.labels.hyper
     case .visual: return config.mode.labels.visual
+    case .drag: return config.mode.labels.drag
     }
   }
 
@@ -1264,6 +1268,8 @@ extension AppDelegate {
       performMouseWarp(request)
     case .mouseStep(let direction):
       for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseStep(direction) }
+    case .mouseNudge(let direction, let distance):
+      performMouseNudge(direction, distance: distance * normalizedRepeatCount(repeatCount))
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):

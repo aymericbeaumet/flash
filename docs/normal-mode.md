@@ -230,51 +230,62 @@ on both sides, or on `return`; the other grid keys work as above.
 pointer, on the pointer's display, stopping while one selection remains;
 Backspace walks back out.
 
-## Holding a mouse button: VISUAL
+## Visual selection: VISUAL
 
-`mouse_button --state=down|up|toggle [--secondary|--middle]` presses or
-releases a button where the pointer is; `v` ships bound to the primary
-toggle. While a button is held, every pointer move Flash makes drags it —
-`mf`, `mF`, `ms`, `mouse_pointer` movement, grid cursor-follow — so a
-keyboard drag or a text selection works in any app:
+VISUAL selects text the way Vim's visual mode does. `v` starts a selection
+where the pointer is; from then on the text from that point to the cursor is
+selected, and every motion extends it:
+
+- `j` / `k` move one text line down / up, keeping the column, and `h` / `l`
+  one character left / right, measured from the glyph under the pointer.
+- `f`, `F` and `s` pick a target, a grid cell or a letter and extend the
+  selection to it instead of clicking. `s` lands just past its letter, so the
+  selection takes it.
+- `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` scroll the page, and the
+  selection follows the text that scrolled under the cursor. This differs
+  from Vim, where `ctrl+e` scrolls without moving the cursor: in Flash the
+  cursor stays put on screen. `gg` / `G` extend to the first / last line.
+
+`v` again or Escape ends VISUAL and leaves the text selected, ready for a
+copy or a cut. The badge is orange and shows `mode.labels.visual` (default
+`VISUAL`). `[mode.visual.mappings]` holds these keys; any key it leaves alone
+keeps its NORMAL meaning, and a key it binds hides the NORMAL sequences it
+starts, so it fires at once.
+
+## Dragging: DRAG
+
+DRAG drags something with a mouse button held down: `D` grabs what is under
+the pointer with the left button, `cD` with the right one. Then:
+
+- `h` `j` `k` `l` nudge it 16 points, `H` `J` `K` `L` 96 points.
+- `f`, `F` and `s` pick where it goes: a target, a grid cell or a letter.
+- Return or `D` drops it where the pointer is; Escape puts it back where it
+  was grabbed and lets go.
+
+The badge is yellow and shows `mode.labels.drag` (default `DRAG`). The keys
+live in `[mode.drag.mappings]`, read before NORMAL's like VISUAL's.
 
 ```toml
 [mode.normal.mappings]
-"v" = ["flash", "mouse_button", "--state=toggle"]
+"v" = ["flash", "mouse_button", "--state=toggle", "--mode=visual"]
+"D" = ["flash", "mouse_button", "--state=toggle", "--mode=drag"]
+"cD" = ["flash", "mouse_button", "--state=toggle", "--secondary", "--mode=drag"]
 ```
 
-Press `v` over what to grab, `mf` (or `mF`, `ms`) to the drop point, then `v`
-again to drop. `mouse_pointer`'s `v` toggles the same held button.
-Cancelling a Flash overlay (Escape), `leave_mode` and quitting Flash release
-it, as does a committed click, drag or selection.
+### How Flash does it
 
-The held button is a mode: VISUAL, named after `v`, shown in orange with
-`mode.labels.visual` (default `VISUAL`). It is NORMAL with the button down —
-the same keys and mappings — and it follows the hold exactly: whichever path
-presses the button from NORMAL enters it, whichever releases the button
-leaves it, and leaving it any other way (`enter_normal_mode`, INSERT, the
-command line) releases the button. In VISUAL, `s` and `ms` land one point
-right of their letter instead of one point left, so the selection the held
-button draws ends on that letter: `v` at the start, `ms` plus a letter, and
-the text up to and including it is selected.
-
-`[mode.visual.mappings]` is read before NORMAL while the button is held;
-any key it leaves alone keeps its NORMAL meaning. As in Vim's visual mode,
-`j` / `k` move the pointer one text line down / up in its column and `h` /
-`l` one character left / right (`mouse_step`), measured from the glyph under
-the pointer, so the held drag extends the selection by a line or a
-character. A half-typed NORMAL sequence is dropped when the button goes down
-or up, since the tables differ.
-
-Scrolls extend the selection the way a Vim motion extends it from the
-cursor. `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` move the page under the
-pointer, and Flash re-posts the held button's drag where the pointer is, once
-after the scroll and once after the app's own smooth scroll settles, so the
-app selects up to the text now under it. This differs from Vim, where
-`ctrl+e` scrolls without moving the cursor: in Flash the pointer is the
-cursor and stays put on screen, so the text under it changes. `gg` / `G` also
-drag the pointer to the window's top / bottom edge, in its column, so the
-selection reaches the first / last line.
+Both modes are a mouse button Flash holds down (`mouse_button`): VISUAL holds
+the primary button where the selection starts, and every pointer move Flash
+makes while a button is held is a drag of it. The mode follows the hold
+exactly: whichever path presses the button from NORMAL enters the mode named
+by `--mode`, whichever releases it leaves, and leaving the mode any other way
+(`enter_normal_mode`, INSERT, the command line, `leave_mode`, quitting
+Flash, a committed click) releases the button. `mouse_pointer`'s `v` holds a
+drag the same way. A half-typed NORMAL sequence is dropped when the button
+goes down or up, since the tables differ. After a scroll Flash re-posts the
+held button's drag where the pointer is, once after the scroll and once after
+the app's own smooth scroll settles, so the app sees the pointer over what
+scrolled under it.
 
 ## Movement history
 

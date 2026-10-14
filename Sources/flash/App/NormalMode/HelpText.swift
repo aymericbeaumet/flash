@@ -92,11 +92,12 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
-        - `v` (`mouse_button --state=toggle`) holds the primary button at the
-          pointer and enters VISUAL, so moves (`mf`, `mF`, `ms`,
-          `mouse_pointer`) drag; `v` again, Escape, `leave_mode` or a committed
-          gesture releases it. In VISUAL, `s` and `ms` land one point right of
-          their letter, so the selection ends on it.
+        - `v` starts a visual selection (VISUAL): `j` `k` `h` `l`, `f`, `F`,
+          `s` and the scrolls extend it as in Vim; `v` again or Escape ends it,
+          leaving the text selected.
+        - `D` grabs what is under the pointer with the left button (DRAG),
+          `cD` with the right: `h` `j` `k` `l` nudge it, `f`, `F`, `s` pick
+          where it goes, Return drops it and Escape puts it back.
 
         ## Mouse Grid
 
@@ -246,6 +247,7 @@ extension NormalModeDispatcher {
     (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
       + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
       + mappingRows(scope: "visual", mappings: Config.Mode.resolveMappings(mode.visual))
+      + mappingRows(scope: "drag", mappings: Config.Mode.resolveMappings(mode.drag))
       + mappingRows(scope: "hyper", mappings: Config.Mode.resolveMappings(mode.hyper))
       + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))
       + mappingRows(scope: "terminal", mappings: mode.effectiveTerminalMappings)

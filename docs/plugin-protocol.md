@@ -667,7 +667,7 @@ Section semantics:
   set that drives mode, border and focus. The bundled `defaults` plugin
   declares Notes.
 - **`mappings`** — key bindings in any mode a config can map: `all | normal |
-  insert | terminal | command | hyper | visual` (default `normal`), under the
+  insert | terminal | command | hyper | visual | drag` (default `normal`), under the
   config's key rules (a `command` key is one modified chord); `command` is an
   argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence

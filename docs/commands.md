@@ -39,9 +39,11 @@ flash mouse_warp --area=window --edge=center # jump the pointer to a window or s
 flash mouse_step --direction=down        # move the pointer one text line (up, down) or character (left, right)
 flash mouse_position --action=save       # remember the pointer position (hints, next, previous, unsave, clear)
 flash mouse_position --action=hints --move # label the saved positions and move to the one you pick
-flash mouse_button --state=down          # press the primary button where the pointer is
-flash mouse_button --state=up            # release it
-flash mouse_button --state=toggle --secondary # press or release the secondary button (or --middle)
+flash mouse_button --state=toggle --mode=visual # start or end a visual selection (VISUAL)
+flash mouse_button --state=toggle --mode=drag   # grab or drop with the left button (DRAG; --secondary, --middle)
+flash mouse_button --state=release       # drop a drag, or end a selection, where the pointer is
+flash mouse_button --state=cancel        # put a drag back where it was grabbed
+flash mouse_nudge --direction=down --distance=16 # move the pointer (and a drag) a few points
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position (keyboard-shaped grid)
@@ -136,8 +138,14 @@ not applied.
 
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
 
-`mouse_button --state=down|up|toggle` presses or releases a button where the
-pointer is, the primary one unless `--secondary` or `--middle` says otherwise.
+`mouse_button --state=down|up|toggle|release|cancel [--mode=visual|drag]`
+starts a visual selection (`--mode=visual`, VISUAL) or a drag (`--mode=drag`,
+the default, DRAG) by holding a button where the pointer is, the primary one
+unless `--secondary` or `--middle` says otherwise. `release` lets go of
+whichever button is held, dropping a drag or ending a selection; `cancel`
+first drags back to where the button went down. `mouse_nudge
+--direction=up|down|left|right [--distance=<points>]` moves the pointer,
+16 points by default, dragging in DRAG.
 While it is held, every pointer move Flash makes is a drag of that button:
 `mouse_target --move` (`mf`), `mouse_grid --move` (`mF`), `mouse_pointer`
 movement and grid cursor-follow. So a keyboard drag in any app is `down`, a

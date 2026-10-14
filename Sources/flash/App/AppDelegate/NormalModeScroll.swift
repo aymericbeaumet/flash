@@ -69,14 +69,16 @@ extension AppDelegate {
     }
   }
 
-  /// VISUAL (a held button): the scroll extends the selection, as a Vim
-  /// motion extends it from the cursor. `gg` / `G` drag the pointer to the
-  /// window's top / bottom edge, so the selection reaches the first / last
-  /// line; every scroll then re-posts the drag where the pointer is, so the
-  /// app selects up to the text now under it. Without a held button, nothing.
+  /// VISUAL: the scroll extends the selection, as a Vim motion extends it
+  /// from the cursor. `gg` / `G` drag the pointer to the window's top /
+  /// bottom edge, so the selection reaches the first / last line. In VISUAL
+  /// and DRAG every scroll then re-posts the held button's drag where the
+  /// pointer is, so the app sees the pointer over what scrolled under it.
+  /// Without a held button, nothing.
   func extendHeldSelection(after kind: NormalModeDispatcher.ScrollKind) {
     guard ActionDispatcher.heldButton != nil else { return }
-    if kind == .top || kind == .bottom,
+    // Only a selection extends to the first / last line; a drag stays put.
+    if kind == .top || kind == .bottom, modeStore.mode.isVisual,
       let window = normalModeContext()?.frontWindowFrame, !window.isNull, !window.isEmpty
     {
       ActionDispatcher.moveCursor(

@@ -23,6 +23,7 @@ final class ModeReducerTests: XCTestCase {
     .terminal(restoreTo: .disabled, returnPID: nil),
     .hyper(restoreTo: .normal),
     .visual,
+    .drag,
   ]
 
   // Representative events covering every case.
@@ -45,8 +46,9 @@ final class ModeReducerTests: XCTestCase {
     .focusedAppChanged(pid: 7),
     .enterHyper,
     .exitHyper,
-    .enterVisual,
-    .exitVisual,
+    .buttonHeld(.visual),
+    .buttonHeld(.drag),
+    .buttonReleased,
   ]
 
   // MARK: Hyper hold
@@ -158,7 +160,7 @@ final class ModeReducerTests: XCTestCase {
       let (next, effects) = ModeReducer.reduce(state, .focusedAppChanged(pid: 99))
       XCTAssertEqual(next, state, "focusedAppChanged must not change \(state)")
       switch state {
-      case .normal, .command, .hyper, .visual:
+      case .normal, .command, .hyper, .visual, .drag:
         XCTAssertEqual(effects, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         XCTAssertTrue(effects.isEmpty)
@@ -204,12 +206,14 @@ final class ModeReducerTests: XCTestCase {
       .insert)
     XCTAssertEqual(
       ModeReducer.reduce(.normal, .clickResolved(entersInsert: false, targetPID: 7)).0, .normal)
-    // A click while a button is held (VISUAL) still enters INSERT on an input.
-    XCTAssertEqual(
-      ModeReducer.reduce(.visual, .clickResolved(entersInsert: true, targetPID: 7)).0,
-      .insert)
+    // A click while a button is held (VISUAL, DRAG) still enters INSERT on an
+    // input.
+    for held in [Mode.visual, .drag] {
+      XCTAssertEqual(
+        ModeReducer.reduce(held, .clickResolved(entersInsert: true, targetPID: 7)).0, .insert)
+    }
     // From any other state, a click cannot change the mode.
-    for state in allStates where !state.isNormal && !state.isVisual {
+    for state in allStates where !state.isNormal && state.buttonHold == nil {
       XCTAssertEqual(
         ModeReducer.reduce(state, .clickResolved(entersInsert: true, targetPID: 7)).0, state)
     }
@@ -519,41 +523,51 @@ final class ModeReducerTests: XCTestCase {
   /// VISUAL is the held mouse button over NORMAL: entered only from NORMAL,
   /// left when the button goes, NORMAL in every projection, and `leave_mode`
   /// or an explicit base mode leaves it too.
-  func testVisualFollowsTheHeldButtonOverNormal() {
-    let entered = ModeReducer.reduce(.normal, .enterVisual)
-    XCTAssertEqual(entered.0, .visual)
-    // The held button switches the mapping table: VISUAL's own keys first.
-    XCTAssertEqual(entered.1, [.setMappingScope(.visual), .renderSurface])
-    let left = ModeReducer.reduce(.visual, .exitVisual)
-    XCTAssertEqual(left.0, .normal)
-    XCTAssertEqual(left.1, [.setMappingScope(.normal), .renderSurface])
-    for state in allStates where state != .normal {
-      XCTAssertEqual(ModeReducer.reduce(state, .enterVisual).0, state, "\(state) ignores the hold")
+  /// VISUAL (a visual selection) and DRAG (a drag) are what a held button is
+  /// for: each enters from NORMAL with its own mapping table, and the
+  /// release returns to NORMAL, whichever path let go.
+  func testAHeldButtonEntersVisualOrDragByItsPurpose() {
+    for (hold, mode) in [(ButtonHold.visual, Mode.visual), (.drag, .drag)] {
+      let entered = ModeReducer.reduce(.normal, .buttonHeld(hold))
+      XCTAssertEqual(entered.0, mode)
+      XCTAssertEqual(entered.1, [.setMappingScope(hold.mappingScope), .renderSurface])
+      XCTAssertEqual(mode.buttonHold, hold)
+      let left = ModeReducer.reduce(mode, .buttonReleased)
+      XCTAssertEqual(left.0, .normal)
+      XCTAssertEqual(left.1, [.setMappingScope(.normal), .renderSurface])
+      for state in allStates where state != .normal {
+        XCTAssertEqual(
+          ModeReducer.reduce(state, .buttonHeld(hold)).0, state, "\(state) ignores the hold")
+      }
+      XCTAssertEqual(mode.flashMode, .normal)
+      XCTAssertEqual(mode.asReturnMode, .normal)
+      XCTAssertTrue(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
+      XCTAssertEqual(mode.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
+      XCTAssertEqual(ModeReducer.reduce(mode, .leaveMode(hasHints: false)).0, .normal)
+      XCTAssertEqual(ModeReducer.reduce(mode, .enterNormal).0, .normal)
+      XCTAssertEqual(ModeReducer.reduce(mode, .enterInsert(targetPID: 7)).0, .insert)
+      XCTAssertEqual(
+        ModeReducer.reduce(mode, .clickResolved(entersInsert: false, targetPID: 7)).0, mode)
+      XCTAssertEqual(
+        ModeReducer.reduce(mode, .openCommand(restoreMode: true)).0, .command(restoreTo: .normal))
+      XCTAssertEqual(
+        ModeReducer.reduce(mode, .focusedAppChanged(pid: 7)).1, [.scheduleRecapture])
     }
-    for state in allStates where state != .visual {
-      XCTAssertEqual(ModeReducer.reduce(state, .exitVisual).0, state)
+    for state in allStates where state.buttonHold == nil {
+      XCTAssertEqual(ModeReducer.reduce(state, .buttonReleased).0, state)
     }
-    XCTAssertEqual(Mode.visual.flashMode, .normal)
-    XCTAssertEqual(Mode.visual.asReturnMode, .normal)
-    XCTAssertTrue(Mode.visual.ownsKeyboard(hasHints: false, activationInFlight: false))
-    XCTAssertEqual(
-      Mode.visual.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
-    XCTAssertEqual(ModeReducer.reduce(.visual, .leaveMode(hasHints: false)).0, .normal)
-    XCTAssertEqual(ModeReducer.reduce(.visual, .enterNormal).0, .normal)
-    XCTAssertEqual(ModeReducer.reduce(.visual, .enterInsert(targetPID: 7)).0, .insert)
-    XCTAssertEqual(
-      ModeReducer.reduce(.visual, .clickResolved(entersInsert: false, targetPID: 7)).0, .visual)
-    XCTAssertEqual(
-      ModeReducer.reduce(.visual, .openCommand(restoreMode: true)).0,
-      .command(restoreTo: .normal))
-    XCTAssertEqual(
-      ModeReducer.reduce(.visual, .focusedAppChanged(pid: 7)).1, [.scheduleRecapture])
     XCTAssertEqual(FlashStatusReport.modeName(.visual), "visual")
+    XCTAssertEqual(FlashStatusReport.modeName(.drag), "drag")
+    XCTAssertEqual(Mode.visual.label, .visual)
+    XCTAssertEqual(Mode.drag.label, .drag)
+    XCTAssertEqual(Mode.drag.badgeStyle, .drag)
     let labels = ConfigLoader.parse(
-      "[mode]\nlabels = { normal = \"N\", insert = \"I\", command = \"C\", visual = \"V\" }"
+      "[mode]\nlabels = { normal = \"N\", insert = \"I\", command = \"C\", visual = \"V\", drag = \"D\" }"
     )
     XCTAssertEqual(labels.mode.labels.visual, "V")
+    XCTAssertEqual(labels.mode.labels.drag, "D")
     XCTAssertEqual(Config().mode.labels.visual, "VISUAL")
+    XCTAssertEqual(Config().mode.labels.drag, "DRAG")
   }
 
   func testHyperIsALeaderHoldOnNormal() {
@@ -770,9 +784,16 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       normal.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("h")!)?.action,
       .flashCommand(.scroll(.left)))
-    // NORMAL's `f` answers in VISUAL too.
+    // A key VISUAL leaves alone keeps NORMAL's meaning; a picked target
+    // extends the selection instead of clicking.
+    let t = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("t"))
+    XCTAssertEqual(visual.mapping(for: t)?.action, normal.mapping(for: t)?.action)
     let f = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("f"))
-    XCTAssertEqual(visual.mapping(for: f)?.action, normal.mapping(for: f)?.action)
+    XCTAssertEqual(visual.mapping(for: f)?.action, .flashCommand(.mouseTarget(.move)))
+    // `false` in VISUAL removes NORMAL's key there only.
+    let x = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("x"))
+    XCTAssertNil(visual.mapping(for: x))
+    XCTAssertNotNil(normal.mapping(for: x))
     // A VISUAL chord wins over NORMAL's only while the button is held.
     let chord = try XCTUnwrap(ModeMapping.parseNativeHotkey("ctrl+o"))
     XCTAssertEqual(
@@ -784,6 +805,55 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       ConfigLoader.parse("[mode.apps.\"com.example.app\".visual.mappings]\n\"q\" = false")
         .diagnostics, [])
+  }
+
+  /// DRAG moves what the button grabbed: `h` `j` `k` `l` nudge it, Return
+  /// and `D` drop it, Escape puts it back, and `f` picks where it goes. `D`
+  /// and `cD` grab with the left and right buttons from NORMAL.
+  func testDragMappingsMoveDropAndCancel() throws {
+    let config = ConfigLoader.parse("")
+    func key(_ raw: String) throws -> String {
+      try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey(raw))
+    }
+    let drag = config.mode.compiledDrag
+    XCTAssertEqual(
+      drag.mapping(for: try key("j"))?.action, .flashCommand(.mouseNudge(.down, distance: 16)))
+    XCTAssertEqual(
+      drag.mapping(for: try key("L"))?.action, .flashCommand(.mouseNudge(.right, distance: 96)))
+    XCTAssertEqual(
+      drag.mapping(for: try key("<return>"))?.action,
+      .flashCommand(.mouseButton(.init(state: .release, button: .primary, hold: .drag))))
+    XCTAssertEqual(
+      drag.mapping(for: try key("<esc>"))?.action,
+      .flashCommand(.mouseButton(.init(state: .cancel, button: .primary, hold: .drag))))
+    XCTAssertEqual(drag.mapping(for: try key("f"))?.action, .flashCommand(.mouseTarget(.move)))
+    let normal = config.mode.compiledNormal
+    XCTAssertEqual(
+      normal.mapping(for: try key("D"))?.action,
+      .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .drag))))
+    XCTAssertEqual(
+      normal.mapping(for: try key("cD"))?.action,
+      .flashCommand(.mouseButton(.init(state: .toggle, button: .secondary, hold: .drag))))
+    XCTAssertEqual(
+      normal.mapping(for: try key("v"))?.action,
+      .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .visual))))
+  }
+
+  /// A held mode's own key hides every NORMAL binding it starts, so it fires
+  /// at once instead of waiting for the sequence timeout.
+  func testAHeldModeKeyHidesTheNormalSequencesItStarts() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.drag.mappings]
+      "d" = ["flash", "scroll_top"]
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    let d = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("d"))
+    let df = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("df"))
+    XCTAssertNil(config.mode.compiledDrag.mapping(for: df))
+    XCTAssertFalse(config.mode.compiledDrag.hasStrictPrefix(d))
+    XCTAssertNotNil(config.mode.compiledNormal.mapping(for: df))
+    XCTAssertNotNil(config.mode.compiledVisual.mapping(for: df), "VISUAL keeps NORMAL's df")
   }
 
   // MARK: Structural purity

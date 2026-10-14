@@ -1182,7 +1182,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, or visual"
+          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, visual, or drag"
         ))
     }
   }

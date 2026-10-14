@@ -796,6 +796,7 @@ struct Config {
       var command: [ModeMapping] = []
       var hyper: [ModeMapping] = []
       var visual: [ModeMapping] = []
+      var drag: [ModeMapping] = []
       var unmapped: [ModeScope: Set<String>] = [:]
 
       func mappings(for scope: ModeScope) -> [ModeMapping] {
@@ -807,6 +808,7 @@ struct Config {
         case .command: return command
         case .hyper: return hyper
         case .visual: return visual
+        case .drag: return drag
         }
       }
 
@@ -845,6 +847,9 @@ struct Config {
         case .visual:
           visual.removeAll(where: sameKey)
           visual.insert(mapping, at: 0)
+        case .drag:
+          drag.removeAll(where: sameKey)
+          drag.insert(mapping, at: 0)
         }
       }
 
@@ -862,6 +867,7 @@ struct Config {
         case .command: command.removeAll(where: matches)
         case .hyper: hyper.removeAll(where: matches)
         case .visual: visual.removeAll(where: matches)
+        case .drag: drag.removeAll(where: matches)
         }
       }
     }
@@ -873,9 +879,12 @@ struct Config {
       var terminal: String = "TERMINAL"
       var hyper: String = "HYPER"
       var visual: String = "VISUAL"
+      var drag: String = "DRAG"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count, terminal.count, hyper.count, visual.count)
+        max(
+          normal.count, insert.count, command.count, terminal.count, hyper.count, visual.count,
+          drag.count)
       }
     }
 
@@ -887,9 +896,12 @@ struct Config {
     /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
     /// a hyper binding replaces NORMAL for that key for the duration of the hold.
     var hyper: [ModeMapping] = Self.defaultHyperMappings
-    /// Keys read before NORMAL while a mouse button is held (VISUAL). A key
-    /// with no entry here is NORMAL's.
+    /// Keys read before NORMAL in VISUAL (a visual selection). A key with no
+    /// entry here is NORMAL's.
     var visual: [ModeMapping] = Self.defaultVisualMappings
+    /// Keys read before NORMAL in DRAG (a held button dragging). A key with
+    /// no entry here is NORMAL's.
+    var drag: [ModeMapping] = Self.defaultDragMappings
     /// Exact focused-app bundle identifier to per-scope additions/removals.
     var appMappings: [String: AppMappings] = [:]
     /// Keys a `"<key>" = false` entry removed, per table, after every layer.
@@ -1006,20 +1018,52 @@ struct Config {
     /// Vim's visual motions while a button is held: `j` `k` `h` `l` move the
     /// pointer one text line or character, so the held button's drag extends
     /// the selection. Every other key is NORMAL's.
-    static let defaultVisualMappings: [ModeMapping] = {
-      let bindings: [(String, URLCommand)] = [
+    static let defaultVisualMappings: [ModeMapping] = makeDefaultMappings(
+      "visual",
+      [
         ("j", .mouseStep(.down)),
         ("k", .mouseStep(.up)),
         ("h", .mouseStep(.left)),
         ("l", .mouseStep(.right)),
-      ]
-      return bindings.map { key, command in
+        // Picking a target extends the selection to it instead of clicking.
+        ("f", .mouseTarget(.move)),
+        ("F", .mouseGrid(.init(.move))),
+        ("s", .mouseBigram(.move)),
+        ("<esc>", .mouseButton(.init(state: .release, button: .primary, hold: .visual))),
+      ])
+
+    /// DRAG moves what the held button grabbed: `h` `j` `k` `l` nudge it,
+    /// `H` `J` `K` `L` further, a picked target is where it goes, Return or
+    /// `D` drops it and Escape puts it back.
+    static let defaultDragMappings: [ModeMapping] = makeDefaultMappings(
+      "drag",
+      [
+        ("h", .mouseNudge(.left, distance: 16)),
+        ("j", .mouseNudge(.down, distance: 16)),
+        ("k", .mouseNudge(.up, distance: 16)),
+        ("l", .mouseNudge(.right, distance: 16)),
+        ("H", .mouseNudge(.left, distance: 96)),
+        ("J", .mouseNudge(.down, distance: 96)),
+        ("K", .mouseNudge(.up, distance: 96)),
+        ("L", .mouseNudge(.right, distance: 96)),
+        ("f", .mouseTarget(.move)),
+        ("F", .mouseGrid(.init(.move))),
+        ("s", .mouseBigram(.move)),
+        ("<return>", .mouseButton(.init(state: .release, button: .primary, hold: .drag))),
+        ("D", .mouseButton(.init(state: .release, button: .primary, hold: .drag))),
+        ("<esc>", .mouseButton(.init(state: .cancel, button: .primary, hold: .drag))),
+      ])
+
+    private static func makeDefaultMappings(
+      _ table: String, _ bindings: [(String, URLCommand)]
+    ) -> [ModeMapping] {
+      bindings.map { key, command in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
-          preconditionFailure("invalid default visual mapping: \(key)")
+          preconditionFailure("invalid default \(table) mapping: \(key)")
         }
         return ModeMapping(key: canonical, action: .flashCommand(command))
       }
-    }()
+    }
 
     static let defaultTerminalMappings: [ModeMapping] = {
       let bindings: [(String, URLCommand)] = [
@@ -1089,7 +1133,9 @@ struct Config {
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
         ("ms", .flashCommand(.mouseBigram(.move))),
-        ("v", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary)))),
+        ("v", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .visual)))),
+        ("D", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .drag)))),
+        ("cD", .flashCommand(.mouseButton(.init(state: .toggle, button: .secondary, hold: .drag)))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("ds", .flashCommand(.mouseBigram(.click(.doubleClick, modifiers: [])))),
@@ -1149,9 +1195,24 @@ struct Config {
     private(set) var compiledInsert = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
     private(set) var compiledHyper = CompiledMappings()
-    /// VISUAL's own entries, then NORMAL's: the table the interpreter reads
-    /// while a button is held.
+    /// The tables the interpreter reads in VISUAL and DRAG (`heldMappings`).
     private(set) var compiledVisual = CompiledMappings()
+    private(set) var compiledDrag = CompiledMappings()
+
+    /// What a held-button mode reads: its own entries, then the NORMAL and
+    /// all-mode ones it leaves alone. An own key hides every NORMAL key it
+    /// starts (VISUAL's `d` must not wait on NORMAL's `df`), and `false` in
+    /// its table removes a NORMAL key there.
+    func heldMappings(_ hold: ButtonHold) -> [ModeMapping] {
+      let scope: ModeScope = hold == .visual ? .visual : .drag
+      let own = hold == .visual ? visual : drag
+      let separator = String(NormalModeInterpreter.keyAtomSeparator)
+      let inherited = mappings(for: .normal).filter { base in
+        !removes(base, in: scope)
+          && !own.contains { base.key == $0.key || base.key.hasPrefix($0.key + separator) }
+      }
+      return Self.resolveMappings(own + inherited)
+    }
 
     var effectiveTerminalMappings: [ModeMapping] {
       var claimed = Set<String>()
@@ -1174,7 +1235,8 @@ struct Config {
       compiledInsert = CompiledMappings(mappings(for: .insert))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
       compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
-      compiledVisual = CompiledMappings(Self.resolveMappings(visual + normal + all))
+      compiledVisual = CompiledMappings(heldMappings(.visual))
+      compiledDrag = CompiledMappings(heldMappings(.drag))
     }
 
     /// One mapping-key atom, or nil. `"<leader>"` becomes the leader atom, and
@@ -1208,6 +1270,7 @@ struct Config {
       }
       normal = normal.map(resolvingLeader)
       visual = visual.map(resolvingLeader)
+      drag = drag.map(resolvingLeader)
     }
 
     var containsNormalModeMapping: Bool {
@@ -1547,6 +1610,7 @@ struct Config {
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
         "visual": mode.labels.visual,
+        "drag": mode.labels.drag,
       ],
       "hyper": mode.hyper.map(Self.mappingJSONValue),
       "hyper_key": mode.hyperKey,
@@ -1743,6 +1807,7 @@ struct Config {
     add(mode.command, at: ["mode", "command"])
     add(mode.hyper, at: ["mode", "hyper"])
     add(mode.visual, at: ["mode", "visual"])
+    add(mode.drag, at: ["mode", "drag"])
     for (bundle, app) in mode.appMappings {
       for scope in ModeScope.allCases {
         add(app.mappings(for: scope), at: ["mode", "apps", bundle, scope.rawValue])
@@ -1833,6 +1898,8 @@ extension URLCommand {
     case .mouseScreens: return verb("mouse_screens")
     case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
     case .mouseStep(let direction): return verb("mouse_step", ["--direction=\(direction.rawValue)"])
+    case .mouseNudge(let direction, let distance):
+      return verb("mouse_nudge", ["--direction=\(direction.rawValue)", "--distance=\(distance)"])
     case .mousePosition(let request): return verb("mouse_position", request.argTokens)
     case .mouseGrid(let command):
       return verb("mouse_grid", command.argTokens)

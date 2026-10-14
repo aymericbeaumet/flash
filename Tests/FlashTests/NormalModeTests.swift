@@ -110,7 +110,8 @@ final class NormalModeTests: XCTestCase {
       for prefix in ["c", "d", "m"] {
         XCTAssertEqual(
           mappingKeys.contains(key("\(prefix)\(letter)")),
-          letter == "F",
+          // `F` is the grid finisher; `cD` drags with the right button.
+          letter == "F" || (prefix == "c" && letter == "D"),
           "\(prefix)\(letter)")
       }
     }

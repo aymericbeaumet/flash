@@ -164,7 +164,7 @@ enum HelpDocs {
       the command list. The page focuses its search when it opens. Press `?`
       in NORMAL or run `:mappings` to open it. Above the list, your layout is
       drawn with what each key does in the mode picked under it: NORMAL,
-      VISUAL, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
+      VISUAL, DRAG, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
       dashed. Modifier buttons show the chord layers, a prefix key opens what
       can follow it, and picking a key keeps its bindings in the list, each
       with the TOML that rebinds or removes it. The keyboard can show the hint
@@ -477,12 +477,14 @@ enum HelpDocs {
       Return commits immediately; otherwise it commits when the region is
       small enough.
 
-      ## Hold a button or steer the pointer
+      ## Select, drag or steer the pointer
 
-      `mouse_pointer` opens keyboard pointer control. `mouse_button --state=toggle`
-      holds or releases a mouse button where the pointer is. While held, Flash
-      pointer moves drag it, including `mf` and `mF`. Toggle again to drop.
-      Escape, leaving the mode and quitting release the held button.
+      `v` starts a visual selection (VISUAL): motions such as `j`, `k`, `f`
+      and `s` extend it, and `v` or Escape ends it with the text selected. `D`
+      drags what is under the pointer with the left button (DRAG), `cD` with
+      the right: `h` `j` `k` `l` nudge it, `f` picks where it goes, Return
+      drops it and Escape puts it back. `mouse_pointer` opens keyboard
+      pointer control.
 
       See [commands](/commands) for exact flags and [mappings](/mappings)
       for the shortcuts effective in this running instance.

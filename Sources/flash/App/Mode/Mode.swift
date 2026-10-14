@@ -40,18 +40,45 @@ enum Mode: Equatable {
   /// INSERT exit can activate an app a popup once covered.
   case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
 
-  /// NORMAL with a mouse button held down: `v` (`mouse_button --state=toggle`)
-  /// enters it and the hold's release — `v` again, Escape in an overlay,
-  /// `leave_mode`, a committed gesture, quit — returns to NORMAL. NORMAL's
-  /// keys and mappings apply; `s` lands one point right of a letter instead
-  /// of one left, so the selection the held button draws ends on that letter.
+  /// Visual selection (`v`): text is selected from where VISUAL began to
+  /// where the cursor is, and motions extend it as in Vim. Flash draws the
+  /// selection with a held primary button at the pointer; leaving VISUAL ends
+  /// the selection and leaves it selected. `[mode.visual.mappings]` is read
+  /// before NORMAL's.
   case visual
+
+  /// Dragging with a mouse button held (`D` the left one, `cD` the right):
+  /// pointer moves drag what was grabbed, Return drops it where the pointer
+  /// is and Escape puts it back. `[mode.drag.mappings]` is read before
+  /// NORMAL's.
+  case drag
 
   /// Momentary layer while `mode.normal.hyper` is physically held. The default
   /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
   /// the key returns to `restoreTo` (NORMAL). A clean tap of the leader still
   /// arms a `<leader>` sequence.
   case hyper(restoreTo: ReturnMode)
+}
+
+/// What a held mouse button means, which is the mode it enters: a visual
+/// selection, or a drag. The button is the mechanism for both.
+enum ButtonHold: String, CaseIterable, Equatable {
+  case visual
+  case drag
+
+  var mode: Mode {
+    switch self {
+    case .visual: return .visual
+    case .drag: return .drag
+    }
+  }
+
+  var mappingScope: MappingScope {
+    switch self {
+    case .visual: return .visual
+    case .drag: return .drag
+    }
+  }
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.
@@ -77,7 +104,7 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal, .visual: return .normal
+    case .normal, .visual, .drag: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(let restoreTo), .hyper(let restoreTo):
       return restoreTo
@@ -105,6 +132,17 @@ extension Mode {
   }
 
   var isVisual: Bool { self == .visual }
+
+  var isDrag: Bool { self == .drag }
+
+  /// The held button's purpose in VISUAL and DRAG; nil in every other mode.
+  var buttonHold: ButtonHold? {
+    switch self {
+    case .visual: return .visual
+    case .drag: return .drag
+    default: return nil
+    }
+  }
 
   var isTerminal: Bool {
     if case .terminal = self { return true }

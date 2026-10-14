@@ -78,7 +78,7 @@ extension AppDelegate {
     case .toggleDrag:
       // The same hold as `mouse_button --state=toggle`: a button another
       // press left down is released first.
-      ActionDispatcher.setMouseButton(.toggle, .primary, at: location)
+      ActionDispatcher.setMouseButton(.toggle, .primary, for: .drag, at: location)
       overlay.movePointerMarker(to: location)
       FlashLog.trace("[pointer_mode] drag held=\(ActionDispatcher.heldButton != nil)")
     case .commitClick:
@@ -174,9 +174,10 @@ extension AppDelegate {
   /// is released here, by Escape in a Flash overlay, `leave_mode` or quit.
   func performMouseButton(_ request: MouseButtonRequest) {
     let effects = ActionDispatcher.setMouseButton(
-      request.state, request.button, at: NSEvent.mouseLocation)
+      request.state, request.button, for: request.hold, at: NSEvent.mouseLocation)
     FlashLog.debug(
       "[mouse_button] state=\(request.state.rawValue) button=\(request.button.rawValue) "
+        + "mode=\(request.hold.rawValue) "
         + "effects=\(effects.count) held=\(ActionDispatcher.heldButton?.rawValue ?? "none")")
   }
 

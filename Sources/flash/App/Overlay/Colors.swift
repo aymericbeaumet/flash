@@ -96,6 +96,11 @@ extension OverlayPanel {
     bottomCG: nordAuroraOrangeCG,
     foregroundCG: nordPolarNight0CG,
     borderCG: nordAuroraYellowCG)
+  static let dragPalette = ModeBadgePalette(
+    topCG: lifted(nordAuroraYellow, by: 0.12).cgColor,
+    bottomCG: nordAuroraYellowCG,
+    foregroundCG: nordPolarNight0CG,
+    borderCG: nordAuroraOrangeCG)
   static let commandInputPaletteValue = ModeBadgePalette(
     topCG: nordPolarNight0CG,
     bottomCG: nordPolarNight0CG,
@@ -109,6 +114,7 @@ extension OverlayPanel {
     case .command: return Self.commandPaletteValue
     case .hyper: return Self.hyperPalette
     case .visual: return Self.visualPalette
+    case .drag: return Self.dragPalette
     }
   }
 
