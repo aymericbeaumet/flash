@@ -49,6 +49,11 @@ indirect enum URLCommand: Hashable {
   /// `mouse_step`: the pointer moves one text line or one character from the
   /// text under it; in VISUAL that extends the selection.
   case mouseStep(TextStep.Direction)
+  /// `mouse_step --to`: Vim's word and line jumps on the text under the
+  /// pointer (`w`, `b`, `e`, `0`, `$`).
+  case mouseJump(TextStep.Jump)
+  /// `selection`: act on the selected text, ending a visual selection first.
+  case selection(SelectionAction)
   /// `mouse_nudge`: the pointer moves a fixed distance; in DRAG the held
   /// button drags what it grabbed.
   case mouseNudge(TextStep.Direction, distance: Int)
@@ -313,6 +318,13 @@ struct MouseGridRequest: Hashable {
     if let zoomToDepth { tokens.append("--zoom-to-depth=\(zoomToDepth)") }
     return tokens
   }
+}
+
+/// `selection --action`: what to do with the selected text. Copy and paste
+/// go through `yank_selection` and `paste`, cut through the focused app's
+/// own action; change cuts and enters INSERT to type the replacement.
+enum SelectionAction: String, CaseIterable, Hashable {
+  case copy, cut, change, paste
 }
 
 /// `mouse_warp`: where the pointer jumps. `area` is the focused window or
@@ -821,9 +833,25 @@ final class URLEventHandler: NSObject {
         return .mouseWarp(request)
       }),
     "mouse_step": .init(
-      [.text("direction", "up|down|left|right", required: true)],
+      [
+        .text("direction", "up|down|left|right"),
+        .text("to", "next_word|previous_word|word_end|line_start|line_end"),
+      ],
       parse: { a in
-        a.value("direction").flatMap(TextStep.Direction.init(rawValue:)).map { .mouseStep($0) }
+        // Exactly one of a one-step direction or a jump.
+        switch (a.value("direction"), a.value("to")) {
+        case (let direction?, nil):
+          return TextStep.Direction(rawValue: direction).map { .mouseStep($0) }
+        case (nil, let to?):
+          return TextStep.Jump(rawValue: to).map { .mouseJump($0) }
+        case (_?, _?), (nil, nil):
+          return nil
+        }
+      }),
+    "selection": .init(
+      [.text("action", "copy|cut|change|paste", required: true)],
+      parse: { a in
+        a.value("action").flatMap(SelectionAction.init(rawValue:)).map { .selection($0) }
       }),
     "mouse_nudge": .init(
       [.text("direction", "up|down|left|right", required: true), .text("distance", "points")],

@@ -1270,6 +1270,10 @@ extension AppDelegate {
       for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseStep(direction) }
     case .mouseNudge(let direction, let distance):
       performMouseNudge(direction, distance: distance * normalizedRepeatCount(repeatCount))
+    case .mouseJump(let jump):
+      for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseJump(jump) }
+    case .selection(let action):
+      performSelection(action)
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):

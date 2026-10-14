@@ -596,6 +596,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMouseStep(direction)
     case .mouseNudge(let direction, let distance):
       performMouseNudge(direction, distance: distance)
+    case .mouseJump(let jump):
+      performMouseJump(jump)
+    case .selection(let action):
+      performSelection(action)
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):

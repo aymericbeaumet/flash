@@ -855,7 +855,8 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertNil(config.mode.compiledDrag.mapping(for: df))
     XCTAssertFalse(config.mode.compiledDrag.hasStrictPrefix(d))
     XCTAssertNotNil(config.mode.compiledNormal.mapping(for: df))
-    XCTAssertNotNil(config.mode.compiledVisual.mapping(for: df), "VISUAL keeps NORMAL's df")
+    XCTAssertNil(
+      config.mode.compiledVisual.mapping(for: df), "VISUAL's own d (cut) hides NORMAL's df too")
   }
 
   // MARK: Structural purity

@@ -32,6 +32,21 @@ extension URLCommand {
       let area = request.area == .window ? "the focused window" : "the screen"
       let edge = request.edge == .center ? "the centre" : "the \(request.edge.rawValue) edge"
       return "Moves the pointer to \(edge) of \(area)."
+    case .mouseJump(let jump):
+      switch jump {
+      case .nextWord: return "Moves the cursor to the start of the next word."
+      case .previousWord: return "Moves the cursor to the start of this or the previous word."
+      case .wordEnd: return "Moves the cursor to the end of this or the next word."
+      case .lineStart: return "Moves the cursor to the start of its line."
+      case .lineEnd: return "Moves the cursor to the end of its line."
+      }
+    case .selection(let action):
+      switch action {
+      case .copy: return "Copies the selected text, ending a visual selection."
+      case .cut: return "Cuts the selected text, ending a visual selection."
+      case .change: return "Cuts the selected text and enters INSERT to type its replacement."
+      case .paste: return "Pastes over the selected text, ending a visual selection."
+      }
     case .mouseNudge(let direction, let distance):
       return "Moves the pointer \(distance) points \(direction.rawValue)."
     case .mouseStep(let direction):

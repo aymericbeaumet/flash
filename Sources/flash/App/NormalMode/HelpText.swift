@@ -92,9 +92,10 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
-        - `v` starts a visual selection (VISUAL): `j` `k` `h` `l`, `f`, `F`,
-          `s` and the scrolls extend it as in Vim; `v` again or Escape ends it,
-          leaving the text selected.
+        - `v` starts a visual selection (VISUAL): `j` `k` `h` `l`, `w` `b`
+          `e`, `0` `$`, `f`, `F`, `s` and the scrolls extend it as in Vim; `y`
+          copies it, `d` cuts it, `c` changes it, `p` pastes over it; `v` again
+          or Escape ends it, leaving the text selected.
         - `D` grabs what is under the pointer with the left button (DRAG),
           `cD` with the right: `h` `j` `k` `l` nudge it, `f`, `F`, `s` pick
           where it goes, Return drops it and Escape puts it back.

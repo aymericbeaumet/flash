@@ -2,6 +2,8 @@ import CoreGraphics
 import FlashCore
 import XCTest
 
+@testable import flash
+
 /// `mouse_step`: one text line or one character from the glyph under the
 /// pointer, in Accessibility's top-left coordinates.
 final class TextStepTests: XCTestCase {
@@ -58,5 +60,75 @@ final class TextStepTests: XCTestCase {
 
   func testDirectionsParseFromTheirNames() {
     XCTAssertEqual(TextStep.Direction.allCases.map(\.rawValue), ["up", "down", "left", "right"])
+  }
+
+  // MARK: Word and line jumps
+
+  /// Vim's `w`, `b` and `e` on one run of text, in UTF-16 indexes.
+  func testWordJumpsFollowVim() {
+    let text = "foo bar  baz"
+    XCTAssertEqual(TextStep.wordTarget(in: text, from: 1, jump: .nextWord), 4)
+    XCTAssertEqual(TextStep.wordTarget(in: text, from: 4, jump: .nextWord), 9)
+    XCTAssertNil(TextStep.wordTarget(in: text, from: 9, jump: .nextWord), "no word after the last")
+    XCTAssertEqual(
+      TextStep.wordTarget(in: text, from: 5, jump: .previousWord), 4, "inside: its start")
+    XCTAssertEqual(TextStep.wordTarget(in: text, from: 4, jump: .previousWord), 0, "at a start")
+    XCTAssertNil(TextStep.wordTarget(in: text, from: 0, jump: .previousWord))
+    XCTAssertEqual(TextStep.wordTarget(in: text, from: 4, jump: .wordEnd), 6)
+    XCTAssertEqual(
+      TextStep.wordTarget(in: text, from: 6, jump: .wordEnd), 11, "at an end: the next")
+    XCTAssertEqual(TextStep.wordTarget(in: text, from: 3, jump: .wordEnd), 6, "from a space")
+  }
+
+  /// `0` and `$`: the first and last glyph of the pointer's line, across a
+  /// gap no wider than a couple of glyphs.
+  func testLineEdgesScanThePointersLine() {
+    var glyphs: [CGRect] = (0..<10).map {
+      CGRect(x: 50 + CGFloat($0) * 10, y: 100, width: 10, height: 16)
+    }
+    glyphs.remove(at: 4)  // a space with no glyph
+    func glyphAt(_ point: CGPoint) -> CGRect? { glyphs.first { $0.contains(point) } }
+    let landing: (CGRect) -> CGPoint = { CGPoint(x: $0.midX, y: $0.midY) }
+    XCTAssertEqual(
+      TextStep.lineEdge(
+        pointer: CGPoint(x: 83, y: 108), toEnd: false, glyphAt: glyphAt, landing: landing),
+      CGPoint(x: 55, y: 108))
+    XCTAssertEqual(
+      TextStep.lineEdge(
+        pointer: CGPoint(x: 83, y: 108), toEnd: true, glyphAt: glyphAt, landing: landing),
+      CGPoint(x: 145, y: 108))
+    XCTAssertNil(
+      TextStep.lineEdge(
+        pointer: CGPoint(x: 500, y: 500), toEnd: true, glyphAt: glyphAt, landing: landing),
+      "off text there is no line")
+  }
+
+  func testJumpsParseFromTheirNames() {
+    XCTAssertEqual(
+      TextStep.Jump.allCases.map(\.rawValue),
+      ["next_word", "previous_word", "word_end", "line_start", "line_end"])
+  }
+
+  func testTheVerbsParseAndRoundTrip() {
+    func parse(_ verb: String, _ args: [String: String]) -> URLCommand? {
+      URLEventHandler.parse(verb: verb, args: args)
+    }
+    XCTAssertEqual(parse("mouse_step", ["to": "word_end"]), .mouseJump(.wordEnd))
+    XCTAssertEqual(parse("mouse_step", ["direction": "up"]), .mouseStep(.up))
+    XCTAssertNil(parse("mouse_step", ["direction": "up", "to": "word_end"]), "one or the other")
+    XCTAssertNil(parse("mouse_step", [:]))
+    XCTAssertNil(parse("mouse_step", ["to": "paragraph"]))
+    XCTAssertEqual(parse("selection", ["action": "change"]), .selection(.change))
+    XCTAssertNil(parse("selection", ["action": "delete"]))
+    XCTAssertEqual(
+      URLCommand.mouseJump(.lineEnd).diagnosticDescription, "flash mouse_step --to=line_end")
+    XCTAssertEqual(
+      URLCommand.selection(.copy).diagnosticDescription, "flash selection --action=copy")
+    let visual = ConfigLoader.parse("").mode.compiledVisual
+    XCTAssertEqual(visual.mapping(for: "w")?.action, .flashCommand(.mouseJump(.nextWord)))
+    XCTAssertEqual(visual.mapping(for: "$")?.action, .flashCommand(.mouseJump(.lineEnd)))
+    XCTAssertEqual(visual.mapping(for: "y")?.action, .flashCommand(.selection(.copy)))
+    XCTAssertEqual(visual.mapping(for: "d")?.action, .flashCommand(.selection(.cut)))
+    XCTAssertFalse(visual.hasStrictPrefix("d"), "VISUAL's d does not wait on NORMAL's df")
   }
 }

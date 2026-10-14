@@ -1025,6 +1025,17 @@ struct Config {
         ("k", .mouseStep(.up)),
         ("h", .mouseStep(.left)),
         ("l", .mouseStep(.right)),
+        ("w", .mouseJump(.nextWord)),
+        ("b", .mouseJump(.previousWord)),
+        ("e", .mouseJump(.wordEnd)),
+        ("0", .mouseJump(.lineStart)),
+        ("$", .mouseJump(.lineEnd)),
+        // Operators act on the selection and end it.
+        ("y", .selection(.copy)),
+        ("d", .selection(.cut)),
+        ("x", .selection(.cut)),
+        ("c", .selection(.change)),
+        ("p", .selection(.paste)),
         // Picking a target extends the selection to it instead of clicking.
         ("f", .mouseTarget(.move)),
         ("F", .mouseGrid(.init(.move))),
@@ -1898,6 +1909,8 @@ extension URLCommand {
     case .mouseScreens: return verb("mouse_screens")
     case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
     case .mouseStep(let direction): return verb("mouse_step", ["--direction=\(direction.rawValue)"])
+    case .mouseJump(let jump): return verb("mouse_step", ["--to=\(jump.rawValue)"])
+    case .selection(let action): return verb("selection", ["--action=\(action.rawValue)"])
     case .mouseNudge(let direction, let distance):
       return verb("mouse_nudge", ["--direction=\(direction.rawValue)", "--distance=\(distance)"])
     case .mousePosition(let request): return verb("mouse_position", request.argTokens)

@@ -80,8 +80,118 @@ public enum TextStep {
     pointer: CGPoint, direction: Direction, landing: (CGRect) -> CGPoint,
     messagingTimeout: Float = 0.25
   ) -> CGPoint {
-    let systemWide = AXUIElementCreateSystemWide()
-    AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
+    let probe = Probe(messagingTimeout: messagingTimeout)
+    let under = probe.character(at: pointer)
+    return target(
+      pointer: pointer, direction: direction, glyphAt: { probe.character(at: $0)?.rect },
+      neighbour: { offset in
+        guard let under, under.index + offset >= 0 else { return nil }
+        return bounds(under.element, location: under.index + offset)
+      },
+      landing: landing)
+  }
+
+  // MARK: Jumps
+
+  /// Vim's word and line jumps: `w`, `b`, `e`, `0`, `$`.
+  public enum Jump: String, CaseIterable, Hashable {
+    case nextWord = "next_word"
+    case previousWord = "previous_word"
+    case wordEnd = "word_end"
+    case lineStart = "line_start"
+    case lineEnd = "line_end"
+  }
+
+  /// The UTF-16 index a word jump lands on in `text`, from `index`: the next
+  /// word's start (`w`), the start of the word the index is in or of the one
+  /// before (`b`), or the end of the word, or of the next one when already at
+  /// an end (`e`). Nil when there is no such word in `text`.
+  public static func wordTarget(in text: String, from index: Int, jump: Jump) -> Int? {
+    let words = WordMatcher.words(in: text)
+    switch jump {
+    case .nextWord:
+      return words.first { $0.location > index }?.location
+    case .previousWord:
+      return words.last { $0.location < index }?.location
+    case .wordEnd:
+      return words.map { $0.location + $0.length - 1 }.first { $0 > index }
+    case .lineStart, .lineEnd:
+      return nil
+    }
+  }
+
+  /// The first (`toEnd` false) or last glyph of the line through `pointer`,
+  /// scanning glyph by glyph and stepping over gaps of up to two glyphs
+  /// (spaces some apps draw no glyph for). Nil off text.
+  public static func lineEdge(
+    pointer: CGPoint, toEnd: Bool, glyphAt: (CGPoint) -> CGRect?, landing: (CGRect) -> CGPoint
+  ) -> CGPoint? {
+    guard let here = glyphAt(pointer) else { return nil }
+    let step = max(here.width, 4) * (toEnd ? 1 : -1)
+    var edge = here
+    var x = here.midX + step
+    var misses = 0
+    var scanned = 0
+    while misses <= 2, scanned < 400 {
+      scanned += 1
+      if let glyph = glyphAt(CGPoint(x: x, y: here.midY)),
+        abs(glyph.midY - here.midY) < here.height / 2
+      {
+        edge = glyph
+        misses = 0
+        x = glyph.midX + step
+      } else {
+        misses += 1
+        x += step
+      }
+    }
+    return CGPoint(x: landing(edge).x, y: pointer.y)
+  }
+
+  /// A jump from `pointer` read from Accessibility. Off text, or with no word
+  /// to jump to in the element under it, the pointer moves one column the
+  /// jump's way, so the motion is never a silent no-op.
+  public static func target(
+    pointer: CGPoint, jump: Jump, landing: (CGRect) -> CGPoint, messagingTimeout: Float = 0.25
+  ) -> CGPoint {
+    let probe = Probe(messagingTimeout: messagingTimeout)
+    let backward = jump == .previousWord || jump == .lineStart
+    let fallback = CGPoint(
+      x: pointer.x + (backward ? -fallbackColumn : fallbackColumn), y: pointer.y)
+    switch jump {
+    case .lineStart, .lineEnd:
+      return lineEdge(
+        pointer: pointer, toEnd: jump == .lineEnd, glyphAt: { probe.character(at: $0)?.rect },
+        landing: landing) ?? fallback
+    case .nextWord, .previousWord, .wordEnd:
+      guard let under = probe.character(at: pointer),
+        let text = stringValue(under.element),
+        let index = wordTarget(in: text, from: under.index, jump: jump),
+        let rect = bounds(under.element, location: index)
+      else { return fallback }
+      return landing(rect)
+    }
+  }
+
+  /// The element's text, the string its UTF-16 indexes count in.
+  private static func stringValue(_ element: AXUIElement) -> String? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success
+    else { return nil }
+    return raw as? String
+  }
+
+  /// One character under a point, through the system-wide element.
+  private struct Probe {
+    let systemWide: AXUIElement
+    let messagingTimeout: Float
+
+    init(messagingTimeout: Float) {
+      systemWide = AXUIElementCreateSystemWide()
+      self.messagingTimeout = messagingTimeout
+      AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
+    }
+
     func character(at point: CGPoint) -> (element: AXUIElement, index: Int, rect: CGRect)? {
       var hit: AXUIElement?
       guard
@@ -99,24 +209,16 @@ public enum TextStep {
       else { return nil }
       var range = CFRange()
       guard AXValueGetValue(raw as! AXValue, .cfRange, &range), range.location >= 0,
-        let rect = bounds(element, location: range.location)
+        let rect = TextStep.bounds(element, location: range.location)
       else { return nil }
       // Accessibility answers the nearest character, which can sit well away
       // from a point in blank space; only a glyph under the point counts.
       guard rect.insetBy(dx: -1, dy: -1).contains(point) else { return nil }
       return (element, range.location, rect)
     }
-    let under = character(at: pointer)
-    return target(
-      pointer: pointer, direction: direction, glyphAt: { character(at: $0)?.rect },
-      neighbour: { offset in
-        guard let under, under.index + offset >= 0 else { return nil }
-        return bounds(under.element, location: under.index + offset)
-      },
-      landing: landing)
   }
 
-  private static func bounds(_ element: AXUIElement, location: Int) -> CGRect? {
+  fileprivate static func bounds(_ element: AXUIElement, location: Int) -> CGRect? {
     var range = CFRange(location: location, length: 1)
     guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
     var raw: CFTypeRef?

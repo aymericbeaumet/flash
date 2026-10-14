@@ -97,6 +97,49 @@ extension AppDelegate {
     }
   }
 
+  /// `mouse_step --to`: a word or line jump from the glyph under the pointer,
+  /// read on the geometry queue. In VISUAL it lands just past the glyph's
+  /// centre, so the selection takes that character.
+  func performMouseJump(_ jump: TextStep.Jump) {
+    let primaryH = ActionDispatcher.primaryScreenHeight()
+    let pointer = NSEvent.mouseLocation
+    let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
+    let selectingThrough = modeStore.mode.isVisual
+    monitor.geometryQueue.async {
+      let target = TextStep.target(
+        pointer: topLeft, jump: jump,
+        landing: { BigramMatcher.clickPoint(in: $0, selectingThrough: selectingThrough) })
+      DispatchQueue.main.async {
+        _ = ActionDispatcher.moveCursor(to: CGPoint(x: target.x, y: primaryH - target.y))
+      }
+    }
+  }
+
+  /// How long a released selection settles before the action that reads it:
+  /// the app sees the button go up first.
+  static let selectionSettleMs = 60
+
+  /// `selection`: end a visual selection (the held button lets go, leaving
+  /// the text selected), then copy, cut, change or paste over it.
+  func performSelection(_ action: SelectionAction) {
+    let held = ActionDispatcher.heldButton != nil
+    if held { releaseHeldMouseButton(reason: "selection_\(action.rawValue)") }
+    let act = { [weak self] in
+      guard let self else { return }
+      switch action {
+      case .copy: self.performMappedCommand(.yankSelection(register: nil))
+      case .cut: self.performMappedCommand(.clipboardCut)
+      case .paste: self.performMappedCommand(.paste(register: nil))
+      case .change:
+        self.performMappedCommand(.clipboardCut)
+        self.enterInsertMode(reason: .explicitCommand)
+      }
+    }
+    guard held else { return act() }
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.selectionSettleMs), execute: act)
+  }
+
   /// `mouse_nudge`: the pointer moves `distance` points; while a button is
   /// held (DRAG) the move drags.
   func performMouseNudge(_ direction: TextStep.Direction, distance: Int) {

@@ -44,6 +44,8 @@ flash mouse_button --state=toggle --mode=drag   # grab or drop with the left but
 flash mouse_button --state=release       # drop a drag, or end a selection, where the pointer is
 flash mouse_button --state=cancel        # put a drag back where it was grabbed
 flash mouse_nudge --direction=down --distance=16 # move the pointer (and a drag) a few points
+flash mouse_step --to=next_word          # jump to a word or line edge (previous_word, word_end, line_start, line_end)
+flash selection --action=copy            # copy the selection, ending VISUAL (cut, change, paste)
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position (keyboard-shaped grid)
@@ -186,7 +188,10 @@ focused window (`--area=window`, the default) or of its display
 (`--area=screen`), a few points inside the edge. `mouse_step` moves it one
 text line up or down, in its column, or one character left or right,
 measured from the glyph Accessibility reports under it; off text it moves a
-fixed line height or column. VISUAL binds it to `j` `k` `h` `l`. `mouse_position` keeps a
+fixed line height or column. `mouse_step --to=next_word|previous_word|word_end|line_start|line_end`
+jumps as Vim's `w`, `b`, `e`, `0` and `$` do. VISUAL binds them to those keys.
+`selection --action=copy|cut|change|paste` ends a visual selection and acts on
+it; change cuts and enters INSERT. `mouse_position` keeps a
 bounded list of saved pointer positions, per app with `[hints]
 position_history_scope = "app"`: `save`, `unsave` the one under the pointer,
 `clear`, `next` and `previous` cycle from the one the pointer is on, and

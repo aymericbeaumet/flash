@@ -238,6 +238,8 @@ selected, and every motion extends it:
 
 - `j` / `k` move one text line down / up, keeping the column, and `h` / `l`
   one character left / right, measured from the glyph under the pointer.
+- `w` / `b` move to the next word's start or back to a word's start, `e` to
+  a word's end, and `0` / `$` to the start / end of the line.
 - `f`, `F` and `s` pick a target, a grid cell or a letter and extend the
   selection to it instead of clicking. `s` lands just past its letter, so the
   selection takes it.
@@ -246,8 +248,10 @@ selected, and every motion extends it:
   from Vim, where `ctrl+e` scrolls without moving the cursor: in Flash the
   cursor stays put on screen. `gg` / `G` extend to the first / last line.
 
-`v` again or Escape ends VISUAL and leaves the text selected, ready for a
-copy or a cut. The badge is orange and shows `mode.labels.visual` (default
+Operators act on the selection and end it, as in Vim: `y` copies it, `d`
+and `x` cut it, `c` cuts it and enters INSERT to type its replacement, and
+`p` pastes over it (`selection --action=copy|cut|change|paste`). `v` again or
+Escape ends VISUAL and leaves the text selected. The badge is orange and shows `mode.labels.visual` (default
 `VISUAL`). `[mode.visual.mappings]` holds these keys; any key it leaves alone
 keeps its NORMAL meaning, and a key it binds hides the NORMAL sequences it
 starts, so it fires at once.

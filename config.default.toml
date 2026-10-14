@@ -835,15 +835,27 @@ hyper = "<leader>"
 # the cursor, and motions extend it as in Vim. These keys are read before
 # NORMAL's; any other key keeps its NORMAL meaning, and a key here hides the
 # NORMAL sequences it starts. j / k / h / l move one text line or character,
-# measured from the text under the pointer, and a picked target (f, F, s)
-# extends the selection to it instead of clicking. Scrolls (ctrl+e, ctrl+y,
-# ctrl+d, ctrl+u) and gg / G extend it too. Escape ends it, leaving the text
-# selected.
+# w / b / e to the next word, back a word, or to a word's end, 0 / $ to the
+# line's start / end, all measured from the text under the pointer. A picked
+# target (f, F, s) extends the selection to it instead of clicking. Scrolls
+# (ctrl+e, ctrl+y, ctrl+d, ctrl+u) and gg / G extend it too. y copies the
+# selection, d / x cut it, c cuts it and enters INSERT, p pastes over it; each
+# ends the selection. Escape ends it, leaving the text selected.
 [mode.visual.mappings]
 "j" = ["flash", "mouse_step", "--direction=down"]
 "k" = ["flash", "mouse_step", "--direction=up"]
 "h" = ["flash", "mouse_step", "--direction=left"]
 "l" = ["flash", "mouse_step", "--direction=right"]
+"w" = ["flash", "mouse_step", "--to=next_word"]
+"b" = ["flash", "mouse_step", "--to=previous_word"]
+"e" = ["flash", "mouse_step", "--to=word_end"]
+"0" = ["flash", "mouse_step", "--to=line_start"]
+"$" = ["flash", "mouse_step", "--to=line_end"]
+"y" = ["flash", "selection", "--action=copy"]
+"d" = ["flash", "selection", "--action=cut"]
+"x" = ["flash", "selection", "--action=cut"]
+"c" = ["flash", "selection", "--action=change"]
+"p" = ["flash", "selection", "--action=paste"]
 "f" = ["flash", "mouse_target", "--move"]
 "F" = ["flash", "mouse_grid", "--move"]
 "s" = ["flash", "mouse_bigram", "--move"]
