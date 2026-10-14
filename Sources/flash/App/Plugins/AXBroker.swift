@@ -115,7 +115,7 @@ final class AXBroker {
       // Y-flip reference: AX reports top-left origins, NSScreen is
       // bottom-left. Resolved once per snapshot so every node's frame uses
       // the same basis. Only needed when geometry is requested.
-      let screenH = geometry ? self.primaryScreenHeight() : 0
+      let screenH = geometry ? ScreenSpace.primaryHeight : 0
       let app = AXApp.make(pid: pid)
       let response = self.withAccessibilityTree(pid: pid, app: app) { app -> [String: Any] in
         let roots: [AXUIElement]
@@ -408,12 +408,8 @@ final class AXBroker {
     var sz = CGSize.zero
     AXValueGetValue(pos, .cgPoint, &origin)
     AXValueGetValue(size, .cgSize, &sz)
-    let flippedY = screenH - origin.y - sz.height
-    return [Double(origin.x), Double(flippedY), Double(sz.width), Double(sz.height)]
-  }
-
-  private func primaryScreenHeight() -> CGFloat {
-    ScreenSpace.primaryHeight
+    let frame = ScreenSpace.flip(CGRect(origin: origin, size: sz), height: screenH)
+    return [Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height)]
   }
 
   // MARK: - Param coercion

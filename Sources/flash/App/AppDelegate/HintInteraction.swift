@@ -72,7 +72,7 @@ extension AppDelegate {
   ) {
     guard !activationLifecycle.inFlight else { return }
     let token = activationLifecycle.begin()
-    let topLeft = CGPoint(x: point.x, y: ActionDispatcher.primaryScreenHeight() - point.y)
+    let topLeft = CGPoint(x: point.x, y: ScreenSpace.primaryHeight - point.y)
     monitor.geometryQueue.async { [weak self] in
       let entersInsert = AXTextInputProbe.isTextInput(at: topLeft)
       DispatchQueue.main.async {

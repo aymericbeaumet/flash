@@ -1536,9 +1536,7 @@ enum WindowMover {
   static func nsRectFromAX(
     position: CGPoint, size: CGSize, primaryHeight: CGFloat
   ) -> CGRect {
-    CGRect(
-      x: position.x, y: primaryHeight - position.y - size.height,
-      width: size.width, height: size.height)
+    ScreenSpace.flip(CGRect(origin: position, size: size), height: primaryHeight)
   }
 
   /// Map a `WindowPosition` onto a slot of the supplied usable frame

@@ -46,7 +46,7 @@ extension AppMonitor {
   {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     let entries = WindowSnapshot.windowList(opts).map {
-      WindowSnapshot.entries(from: $0, primaryH: primaryScreenHeight())
+      WindowSnapshot.entries(from: $0, primaryH: ScreenSpace.primaryHeight)
     }
     let base: AppContext?
     if let context = currentContext(), context.bundleIdentifier != ignoredBundleIdentifier {
@@ -92,7 +92,7 @@ extension AppMonitor {
     guard
       let entry = WindowSnapshot.topInteractionEntry(
         at: point,
-        entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()),
+        entries: WindowSnapshot.entries(from: info, primaryH: ScreenSpace.primaryHeight),
         ignoringPids: [getpid()])
     else { return nil }
     guard let app = NSRunningApplication(processIdentifier: entry.pid),
@@ -122,10 +122,6 @@ extension AppMonitor {
     var out: CGRect = .null
     for rect in rects { out = out.union(rect) }
     return out
-  }
-
-  func primaryScreenHeight() -> CGFloat {
-    ScreenSpace.primaryHeight
   }
 
   /// Push runtime config that should take effect on the next activation.
@@ -164,7 +160,7 @@ extension AppMonitor {
   }
 
   private func topWindowFrame(for pid: pid_t) -> CGRect? {
-    Self.topWindowFrame(for: pid, primaryH: primaryScreenHeight())
+    Self.topWindowFrame(for: pid, primaryH: ScreenSpace.primaryHeight)
   }
 
   /// Thread-safe (pure WindowServer + `WindowSnapshot`) so callers can resolve
@@ -191,7 +187,7 @@ extension AppMonitor {
   }
 
   private func topApplicationWindowFrame(for pid: pid_t) -> CGRect? {
-    Self.topApplicationWindowFrame(for: pid, primaryH: primaryScreenHeight())
+    Self.topApplicationWindowFrame(for: pid, primaryH: ScreenSpace.primaryHeight)
   }
 
   /// Thread-safe counterpart of `appWindowContext(for:)`'s frame lookup.
@@ -211,7 +207,7 @@ extension AppMonitor {
     guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
     return topVisibleWindowContext(
-      entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()),
+      entries: WindowSnapshot.entries(from: info, primaryH: ScreenSpace.primaryHeight),
       excludingBundleIdentifier: ignoredBundleIdentifier)
   }
 
@@ -259,7 +255,8 @@ extension AppMonitor {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = WindowSnapshot.windowList(opts) else { return nil }
     return coveringInteractionContext(
-      inFrontOf: front, entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+      inFrontOf: front,
+      entries: WindowSnapshot.entries(from: info, primaryH: ScreenSpace.primaryHeight)
     )
   }
 

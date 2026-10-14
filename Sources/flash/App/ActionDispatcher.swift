@@ -64,13 +64,6 @@ enum ActionDispatcher {
     clickQueue.async { wheelGeneration &+= 1 }
   }
 
-  /// Height of the primary screen (the one whose origin is (0,0)), used for the
-  /// AX(top-left) → NSScreen(bottom-left) Y-flip. `NSScreen` is main-affine, so
-  /// callers must invoke this on the main thread.
-  static func primaryScreenHeight() -> CGFloat {
-    ScreenSpace.primaryHeight
-  }
-
   /// Where the pointer is left once a committed gesture has been posted.
   enum PointerRestore: Equatable {
     /// On the gesture's last point, as a hardware click leaves it.
@@ -113,7 +106,7 @@ enum ActionDispatcher {
     releaseHeldButtonBeforeGesture()
     // NSScreen / NSWorkspace are main-affine; resolve them on the calling thread
     // (callers invoke this on main) and hand the constants down to the queue.
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     clickQueue.async {
       let start = postSynthesizedClick(
@@ -316,7 +309,7 @@ enum ActionDispatcher {
     completion: (() -> Void)? = nil
   ) -> Bool {
     releaseHeldButtonBeforeGesture()
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     clickQueue.async {
       let start = postSynthesizedDrag(from: from, to: to, screenH: screenH, modifiers: modifiers)
       restorePointer(restore, gestureStart: start, screenH: screenH)
@@ -402,7 +395,7 @@ enum ActionDispatcher {
     completion: (() -> Void)? = nil
   ) -> Bool {
     releaseHeldButtonBeforeGesture()
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     clickQueue.async {
       let start = postSynthesizedClick(
@@ -478,7 +471,7 @@ enum ActionDispatcher {
     _ effects: [MouseButtonHold.Effect], at screenPoint: CGPoint
   ) {
     guard !effects.isEmpty else { return }
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     clickQueue.async {
       let source = SyntheticEventSources.session
@@ -557,7 +550,7 @@ enum ActionDispatcher {
   /// so pointer mode, `--move` commits and grid cursor-follow all drag.
   @discardableResult
   static func moveCursor(to screenPoint: CGPoint) -> Bool {
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     if let held = heldButton {
       clickQueue.async {

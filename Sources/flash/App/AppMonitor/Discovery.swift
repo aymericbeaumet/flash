@@ -407,7 +407,7 @@ extension AppMonitor {
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
-    let primaryH = primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     // Screen + per-app contexts resolve on the calling (main) thread —
     // NSScreen and NSRunningApplication are main-affine.
     let screenFrame =
@@ -511,7 +511,7 @@ extension AppMonitor {
     context: AppContext, completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
-    let primaryH = primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     axQueue.async { [weak self] in
       guard let self else { return }
       self.configureRuntime(for: cfg)
@@ -664,7 +664,7 @@ extension AppMonitor {
     completion: @escaping (DiscoveryResult) -> Void
   ) {
     let cfg = snapshotConfig()
-    let primaryH = primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     axQueue.async { [weak self] in
       guard let self else { return }
       let result = self.runAndAssign(

@@ -54,7 +54,7 @@ extension AppDelegate {
     hintSession.prefix = ""
     hintSession.sourceAppPID = context.processID
     applyModeOverlay()
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     bigramSearcher.start(
       context: context, screenH: screenH,
       discoverFrame: { [weak self] context in

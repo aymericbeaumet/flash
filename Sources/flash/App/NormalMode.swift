@@ -621,11 +621,7 @@ enum NormalModeDispatcher {
       size.width > 0,
       size.height > 0
     else { return nil }
-    return CGRect(
-      x: origin.x,
-      y: screenH - origin.y - size.height,
-      width: size.width,
-      height: size.height)
+    return ScreenSpace.flip(CGRect(origin: origin, size: size), height: screenH)
   }
 
   static func pointAttribute(_ element: AXUIElement, _ name: String) -> CGPoint? {

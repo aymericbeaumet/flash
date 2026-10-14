@@ -448,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         let context = self.normalModeDispatchContext()
       else { return nil }
       let window = HintWindowSnapshot.current(
-        pid: context.processID, primaryHeight: self.monitor.primaryScreenHeight())
+        pid: context.processID, primaryHeight: ScreenSpace.primaryHeight)
       return (
         pid: context.processID, bundleID: context.bundleIdentifier, windowID: window?.number
       )

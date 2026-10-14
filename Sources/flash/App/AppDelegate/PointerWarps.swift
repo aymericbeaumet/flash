@@ -80,7 +80,7 @@ extension AppDelegate {
   /// In VISUAL a horizontal step lands one point past the character's centre
   /// (as `s` does), so the held button's selection takes that character.
   func performMouseStep(_ direction: TextStep.Direction) {
-    let primaryH = ActionDispatcher.primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     let pointer = NSEvent.mouseLocation
     let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
     let selectingThrough = modeStore.mode.isVisual
@@ -101,7 +101,7 @@ extension AppDelegate {
   /// read on the geometry queue. In VISUAL it lands just past the glyph's
   /// centre, so the selection takes that character.
   func performMouseJump(_ jump: TextStep.Jump) {
-    let primaryH = ActionDispatcher.primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     let pointer = NSEvent.mouseLocation
     let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
     let selectingThrough = modeStore.mode.isVisual

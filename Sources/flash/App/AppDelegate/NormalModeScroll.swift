@@ -50,7 +50,7 @@ extension AppDelegate {
     let pid = context.processID
     let bundleID = context.bundleIdentifier
     let fallbackFrame = context.frontWindowFrame
-    let primaryH = monitor.primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     let monitor: AppMonitor = self.monitor
     monitor.axQueue.async {
       let windowFrame = AppMonitor.topWindowFrame(for: pid, primaryH: primaryH) ?? fallbackFrame

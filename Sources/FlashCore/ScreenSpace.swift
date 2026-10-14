@@ -18,6 +18,14 @@ public enum ScreenSpace {
     return refresh()
   }
 
+  /// `rect` flipped between AppKit's bottom-left and Quartz / Accessibility
+  /// top-left coordinates about `height`, the primary display's height. The
+  /// flip is its own inverse, so one function converts both ways.
+  public static func flip(_ rect: CGRect, height: CGFloat) -> CGRect {
+    CGRect(
+      x: rect.minX, y: height - rect.minY - rect.height, width: rect.width, height: rect.height)
+  }
+
   /// Keep the cached height current. Call once, on main, at launch.
   public static func startObserving() {
     guard observer == nil else { return }

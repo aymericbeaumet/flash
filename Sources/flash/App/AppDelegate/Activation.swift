@@ -497,7 +497,7 @@ extension AppDelegate {
     let token = activationLifecycle.begin()
     applyModeOverlay()
     let pid = context.processID
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let targets = NormalModeDispatcher.scrollAreaTargets(
         pid: pid, screenH: screenH, bundleIdentifier: context.bundleIdentifier)

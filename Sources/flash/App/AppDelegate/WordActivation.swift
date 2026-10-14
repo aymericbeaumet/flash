@@ -43,7 +43,7 @@ extension AppDelegate {
     overlay.debugConfig = config.debug
     let token = activationLifecycle.begin()
     applyModeOverlay()
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     monitor.axQueue.async { [weak self] in
       guard let self else { return }
       let corpus = BigramTextCollector.collect(in: context, screenH: screenH)

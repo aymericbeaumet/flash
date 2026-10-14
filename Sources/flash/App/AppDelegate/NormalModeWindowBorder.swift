@@ -113,7 +113,7 @@ extension AppDelegate {
     guard read.generation == activeWindowBorderUpdateGeneration else { return }
     let startedAt = DispatchTime.now().uptimeNanoseconds
     let frame = AppMonitor.topApplicationWindowFrame(
-      for: read.pid, primaryH: monitor.primaryScreenHeight())
+      for: read.pid, primaryH: ScreenSpace.primaryHeight)
     FlashLog.trace(
       "[mode] active_border_frame reason=\(read.reason) pid=\(read.pid) "
         + "read_ms=\(Self.elapsedMs(startedAt, DispatchTime.now().uptimeNanoseconds)) "
@@ -163,7 +163,7 @@ extension AppDelegate {
     if !borderVisible { hideActiveWindowBorder(reason: "hidden_\(notification)") }
     activeWindowBorderUpdateGeneration &+= 1
     let generation = activeWindowBorderUpdateGeneration
-    let primaryHeight = monitor.primaryScreenHeight()
+    let primaryHeight = ScreenSpace.primaryHeight
     monitor.geometryQueue.async { [weak self] in
       let frame = WindowMover.readWindowFrameInNSCoords(
         window: window, primaryHeight: primaryHeight)

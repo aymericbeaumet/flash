@@ -503,7 +503,7 @@ final class AppMonitor {
     let entries =
       windowEntries
       ?? WindowSnapshot.windowList().map {
-        WindowSnapshot.entries(from: $0, primaryH: primaryScreenHeight())
+        WindowSnapshot.entries(from: $0, primaryH: ScreenSpace.primaryHeight)
       }
     let occlusion = entries.flatMap { entries -> WindowSnapshot.OcclusionSignature? in
       let snapshot = WindowSnapshot.build(

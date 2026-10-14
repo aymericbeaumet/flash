@@ -1,4 +1,5 @@
 import ApplicationServices
+import FlashCore
 import Foundation
 
 /// Typed AX attribute accessors shared across the codebase.
@@ -127,9 +128,7 @@ public enum AXAttribute {
     var rect = CGRect.zero
     guard AXValueGetValue(axValue, .cgRect, &rect), rect.width > 0, rect.height > 0
     else { return nil }
-    return CGRect(
-      x: rect.minX, y: screenH - rect.minY - rect.height,
-      width: rect.width, height: rect.height)
+    return ScreenSpace.flip(rect, height: screenH)
   }
 
   /// The on-screen character range, when the element publishes one. A range

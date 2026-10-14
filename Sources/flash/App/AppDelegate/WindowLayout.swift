@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 
 extension AppDelegate {
   /// The semantic window restore runs off-main. Repaint only after each
@@ -30,7 +31,7 @@ extension AppDelegate {
     case .direction(let direction):
       windowLayoutManager.focusWindow(direction, targetPID: targetPID)
     case .cycle(let cycle):
-      let primaryH = ActionDispatcher.primaryScreenHeight()
+      let primaryH = ScreenSpace.primaryHeight
       let info = WindowSnapshot.windowList([.optionOnScreenOnly, .excludeDesktopElements]) ?? []
       let zOrder = WindowSnapshot.entries(from: info, primaryH: primaryH)
         .filter { $0.layer == 0 && $0.pid != getpid() }

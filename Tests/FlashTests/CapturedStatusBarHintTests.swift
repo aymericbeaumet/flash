@@ -128,7 +128,7 @@ final class CapturedStatusBarHintTests: XCTestCase {
     _ view: StatusBarClickView, timestamp: TimeInterval, synthetic: Bool = false,
     between: () -> Void = {}
   ) throws {
-    let point = CGPoint(x: 30, y: ActionDispatcher.primaryScreenHeight() - 12)
+    let point = CGPoint(x: 30, y: ScreenSpace.primaryHeight - 12)
     let downCG = try XCTUnwrap(
       CGEvent(
         mouseEventSource: nil, mouseType: .leftMouseDown,

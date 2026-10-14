@@ -708,7 +708,7 @@ public final class AccessibilityProvider: FlashSource {
       _ = AXUIElementSetAttributeValue(
         app, "AXManualAccessibility" as CFString, trueRef)
     }
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
 
     // The clip rect is supplied by AppMonitor from its single
     // WindowServer visibility snapshot. This is stricter than the screen
@@ -859,11 +859,7 @@ public final class AccessibilityProvider: FlashSource {
         size.width > 0, size.height > 0
       else { return nil }
       // Accessibility is top-left; Flash's frames are NSScreen bottom-left.
-      return (
-        menu,
-        CGRect(
-          x: origin.x, y: screenH - origin.y - size.height, width: size.width, height: size.height)
-      )
+      return (menu, ScreenSpace.flip(CGRect(origin: origin, size: size), height: screenH))
     }
   }
 
@@ -1412,10 +1408,6 @@ public final class AccessibilityProvider: FlashSource {
     case keepWithoutInsert
   }
 
-  private func primaryScreenHeight() -> CGFloat {
-    ScreenSpace.primaryHeight
-  }
-
   /// Whether `value` is an extension document URL. A scheme prefix test on
   /// the raw string: this runs for every walked node, and parsing a `URL`
   /// per node cost more than the rest of the node's CPU work.
@@ -1508,7 +1500,6 @@ public final class AccessibilityProvider: FlashSource {
     // 3x3 is the conservative threshold that drops them without
     // touching real icon-only buttons (16x16+).
     if sz.width < 3 || sz.height < 3 { return nil }
-    let flippedY = screenH - origin.y - sz.height
-    return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
+    return ScreenSpace.flip(CGRect(origin: origin, size: sz), height: screenH)
   }
 }

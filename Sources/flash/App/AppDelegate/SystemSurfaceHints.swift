@@ -58,7 +58,7 @@ extension AppDelegate {
       return
     }
     let pid = dock.processIdentifier
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let token = activationLifecycle.begin()
     applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -77,7 +77,7 @@ extension AppDelegate {
     guard prepareHintActivation(.menuBar) else { return }
     let token = activationLifecycle.begin()
     let ownPID = ProcessInfo.processInfo.processIdentifier
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let screens = NSScreen.screens.map(\.frame)
     // The flashlight or the command bar may hold activation; the menus on
     // screen belong to the app that owns the menu bar.
@@ -118,7 +118,7 @@ extension AppDelegate {
       return
     }
     let pid = center.processIdentifier
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let token = activationLifecycle.begin()
     applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in

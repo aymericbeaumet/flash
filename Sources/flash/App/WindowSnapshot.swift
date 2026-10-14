@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import Foundation
 
 /// Z-order snapshot of every on-screen window, with each window's
@@ -159,12 +160,7 @@ struct WindowSnapshot {
       // anything and can't host hints.
       if cgBounds.width <= 0 || cgBounds.height <= 0 { continue }
       let layer = (w[layerKey] as? Int) ?? 0
-      let ns = CGRect(
-        x: cgBounds.minX,
-        y: primaryH - cgBounds.minY - cgBounds.height,
-        width: cgBounds.width,
-        height: cgBounds.height
-      )
+      let ns = ScreenSpace.flip(cgBounds, height: primaryH)
       let alpha = (w[alphaKey] as? Double) ?? 1
       entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns, alpha: alpha))
     }
