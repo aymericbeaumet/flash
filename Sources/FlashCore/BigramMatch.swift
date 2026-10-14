@@ -36,6 +36,17 @@ public enum BigramMatcher {
     selectingThrough ? CGPoint(x: frame.midX + 1, y: frame.midY) : clickPoint(in: frame)
   }
 
+  /// The commit re-reads the glyph's bounds. `preferred` is the landing the
+  /// caller chose on the `captured` rect (left of centre, or right of it in
+  /// VISUAL); the same offset from the centre carries onto `bounds`.
+  public static func clickPoint(
+    in bounds: CGRect, keeping preferred: CGPoint, from captured: CGRect
+  ) -> CGPoint {
+    let half = bounds.width / 2
+    let offset = min(max(preferred.x - captured.midX, -half), half)
+    return CGPoint(x: bounds.midX + offset, y: bounds.midY)
+  }
+
   /// Unshifted and Shift characters of one US-ANSI key, letters excluded
   /// because case folding already pairs those. Same pairs as
   /// `KeyboardLayout.usANSI`.
@@ -127,8 +138,11 @@ public enum BigramMatcher {
 
   /// Where each match sits inside `lines`. A trailing newline does not take a
   /// column. A match that is not inside a line is omitted.
+  /// `advances` is the run's face, when it reported one this Mac can load:
+  /// a match then sits at its share of the line's advance rather than of its
+  /// character count.
   public static func glyphRects(
-    in text: String, query: String, lines: [BigramLineBox]
+    in text: String, query: String, lines: [BigramLineBox], advances: GlyphAdvances? = nil
   ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
     guard query.count == 1 else { return [] }
     let haystack = text as NSString
@@ -140,10 +154,12 @@ public enum BigramMatcher {
         with: NSRange(location: line.location, length: line.length))
       let columns = utf16LengthDroppingTrailingBreaks(slice)
       guard columns > 0 else { continue }
+      let measured = measuredLine(slice, columns: columns, advances: advances)
       for hit in occurrences(in: slice, query: query) {
         guard
-          let rect = proportionalRect(
-            frame: line.bounds, location: hit.location, length: hit.length, totalUTF16: columns)
+          let rect = rangeRect(
+            frame: line.bounds, location: hit.location, length: hit.length, columns: columns,
+            measured: measured)
         else { continue }
         placed.append(
           (
@@ -228,6 +244,40 @@ public enum BigramMatcher {
     frame.height > 0 && frame.height <= 64 && !text.contains("\n")
   }
 
+  /// The first `columns` of `slice` laid out in `advances`' face, or nil
+  /// when there is no face to measure with.
+  public static func measuredLine(
+    _ slice: String, columns: Int, advances: GlyphAdvances?
+  ) -> GlyphAdvances.Line? {
+    guard let advances else { return nil }
+    let ns = slice as NSString
+    return advances.line(ns.substring(to: min(columns, ns.length)))
+  }
+
+  /// A UTF-16 range of one line inside `frame`: from the measured advances
+  /// when there are some, else by character count.
+  public static func rangeRect(
+    frame: CGRect, location: Int, length: Int, columns: Int, measured: GlyphAdvances.Line?
+  ) -> CGRect? {
+    guard let measured else {
+      return proportionalRect(
+        frame: frame, location: location, length: length, totalUTF16: columns)
+    }
+    guard columns > 0, length > 0, location >= 0, location + length <= columns else { return nil }
+    let span = measured.span(location: location, length: length)
+    return spanRect(frame: frame, start: span.start, extent: span.end - span.start)
+  }
+
+  /// One run's glyph estimated in its frame, for a run without line layout.
+  public static func estimatedRect(
+    frame: CGRect, text: String, location: Int, length: Int, advances: GlyphAdvances?
+  ) -> CGRect? {
+    let columns = (text as NSString).length
+    return rangeRect(
+      frame: frame, location: location, length: length, columns: columns,
+      measured: measuredLine(text, columns: columns, advances: advances))
+  }
+
   /// A slice of `frame` in proportion to a UTF-16 range, at least 4pt wide
   /// and clamped so it stays inside the frame.
   public static func proportionalRect(
@@ -238,8 +288,18 @@ public enum BigramMatcher {
       frame.minX.isFinite, frame.minY.isFinite
     else { return nil }
     let total = CGFloat(totalUTF16)
-    let width = min(frame.width, max(4, CGFloat(length) / total * frame.width))
-    let proposed = frame.minX + CGFloat(location) / total * frame.width
+    return spanRect(
+      frame: frame, start: CGFloat(location) / total, extent: CGFloat(length) / total)
+  }
+
+  /// The part of `frame` from `start` across `extent`, both fractions of its
+  /// width, at least 4pt wide and clamped so it stays inside the frame.
+  static func spanRect(frame: CGRect, start: CGFloat, extent: CGFloat) -> CGRect? {
+    guard frame.width > 0, frame.height > 0, frame.minX.isFinite, frame.minY.isFinite,
+      start.isFinite, extent.isFinite
+    else { return nil }
+    let width = min(frame.width, max(4, extent * frame.width))
+    let proposed = frame.minX + start * frame.width
     let maxX = frame.maxX - width
     let x = min(max(proposed, frame.minX), max(frame.minX, maxX))
     return CGRect(x: x, y: frame.minY, width: width, height: frame.height)

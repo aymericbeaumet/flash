@@ -89,6 +89,74 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertLessThan(v[0].rect.minX, e[2].rect.minX)
   }
 
+  // MARK: Glyph advances
+
+  /// Narrow letters before a wide one: by character count the `W` would sit
+  /// at nine tenths of the line, but its glyph starts much earlier.
+  func testAKnownFontPlacesALetterByItsAdvancesNotItsIndex() throws {
+    let advances = try XCTUnwrap(GlyphAdvances(TextFont(name: "Helvetica", size: 13)))
+    let line = BigramMatcher.BigramLineBox(
+      location: 0, length: 10, bounds: CGRect(x: 0, y: 0, width: 100, height: 16))
+    let counted = try XCTUnwrap(
+      BigramMatcher.glyphRects(in: "iiiiiiiiiW", query: "w", lines: [line]).first)
+    XCTAssertEqual(counted.rect.minX, 90, accuracy: 0.01)
+    let measured = try XCTUnwrap(
+      BigramMatcher.glyphRects(
+        in: "iiiiiiiiiW", query: "w", lines: [line], advances: advances
+      ).first)
+    XCTAssertLessThan(measured.rect.minX, 75)
+    XCTAssertGreaterThan(measured.rect.width, 25)
+    XCTAssertEqual(measured.rect.maxX, 100, accuracy: 0.5)
+  }
+
+  func testAMonospacedFontKeepsTheColumnPlacement() throws {
+    let advances = try XCTUnwrap(GlyphAdvances(TextFont(name: "Menlo-Regular", size: 12)))
+    let line = BigramMatcher.BigramLineBox(
+      location: 0, length: 10, bounds: CGRect(x: 0, y: 0, width: 100, height: 16))
+    let hit = try XCTUnwrap(
+      BigramMatcher.glyphRects(
+        in: "iiiiiiiiiW", query: "w", lines: [line], advances: advances
+      ).first)
+    XCTAssertEqual(hit.rect.minX, 90, accuracy: 0.01)
+    XCTAssertEqual(hit.rect.width, 10, accuracy: 0.01)
+  }
+
+  func testWordsUseTheSameAdvances() throws {
+    let advances = try XCTUnwrap(GlyphAdvances(TextFont(name: "Helvetica", size: 13)))
+    let line = BigramMatcher.BigramLineBox(
+      location: 0, length: 12, bounds: CGRect(x: 0, y: 0, width: 120, height: 16))
+    let words = WordMatcher.wordRects(in: "iiiiiiiii WW", lines: [line], advances: advances)
+    XCTAssertEqual(words.map(\.occurrence.location), [0, 10])
+    XCTAssertLessThan(words[1].rect.minX, 80)
+  }
+
+  /// The system UI face is reported under a private dotted name; a font that
+  /// is not installed would be substituted, so it measures nothing.
+  func testOnlyAnInstalledOrSystemFontMeasures() {
+    XCTAssertNotNil(GlyphAdvances(TextFont(name: ".SFNS-Regular", size: 13)))
+    XCTAssertNotNil(GlyphAdvances(TextFont(name: "Helvetica Neue", size: 13)))
+    XCTAssertNil(GlyphAdvances(TextFont(name: "NoSuchFace-Regular", size: 13)))
+    XCTAssertNil(GlyphAdvances(TextFont(name: "Helvetica", size: 0)))
+  }
+
+  /// The commit re-reads the glyph's bounds and keeps the landing the caller
+  /// chose on the captured rect: one point left of centre in NORMAL, one
+  /// point right in VISUAL.
+  func testTheCommitKeepsTheCallersLandingOnTheReReadGlyph() {
+    let captured = CGRect(x: 10, y: 0, width: 8, height: 10)
+    let reread = CGRect(x: 100, y: 20, width: 6, height: 10)
+    XCTAssertEqual(
+      BigramMatcher.clickPoint(
+        in: reread,
+        keeping: BigramMatcher.clickPoint(in: captured, selectingThrough: true), from: captured),
+      CGPoint(x: 104, y: 25))
+    XCTAssertEqual(
+      BigramMatcher.clickPoint(
+        in: reread,
+        keeping: BigramMatcher.clickPoint(in: captured, selectingThrough: false), from: captured),
+      CGPoint(x: 102, y: 25))
+  }
+
   func testATrailingNewlineDoesNotTakeAColumn() {
     let line = BigramMatcher.BigramLineBox(
       location: 0, length: 3, bounds: CGRect(x: 0, y: 0, width: 20, height: 10))

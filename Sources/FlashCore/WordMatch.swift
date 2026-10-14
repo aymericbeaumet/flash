@@ -57,7 +57,7 @@ public enum WordMatcher {
   /// Where each word sits inside `lines`, as `BigramMatcher.glyphRects` does
   /// for a letter, from the same measured line boxes.
   public static func wordRects(
-    in text: String, lines: [BigramMatcher.BigramLineBox]
+    in text: String, lines: [BigramMatcher.BigramLineBox], advances: GlyphAdvances? = nil
   ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
     let haystack = text as NSString
     var placed: [(occurrence: BigramOccurrence, rect: CGRect)] = []
@@ -68,11 +68,12 @@ public enum WordMatcher {
         with: NSRange(location: line.location, length: line.length))
       let columns = BigramMatcher.columns(of: slice)
       guard columns > 0 else { continue }
+      let measured = BigramMatcher.measuredLine(slice, columns: columns, advances: advances)
       for word in words(in: slice) {
         guard
-          let rect = BigramMatcher.proportionalRect(
-            frame: line.bounds, location: word.location, length: word.length,
-            totalUTF16: columns)
+          let rect = BigramMatcher.rangeRect(
+            frame: line.bounds, location: word.location, length: word.length, columns: columns,
+            measured: measured)
         else { continue }
         placed.append(
           (

@@ -1,4 +1,5 @@
 import ApplicationServices
+import FlashCore
 import Foundation
 
 /// Typed AX attribute accessors shared across the codebase.
@@ -130,6 +131,30 @@ public enum AXAttribute {
     return CGRect(
       x: rect.minX, y: screenH - rect.minY - rect.height,
       width: rect.width, height: rect.height)
+  }
+
+  /// The face drawing the character at `location`, from the parameterized
+  /// `kAXAttributedStringForRangeParameterizedAttribute`'s `AXFont`. Nil when
+  /// the element does not publish attributed text or names no face.
+  public static func font(_ element: AXUIElement, location: Int) -> TextFont? {
+    var range = CFRange(location: location, length: 1)
+    guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyParameterizedAttributeValue(
+        element, kAXAttributedStringForRangeParameterizedAttribute as CFString, rangeValue, &raw)
+        == .success,
+      let raw, CFGetTypeID(raw) == CFAttributedStringGetTypeID()
+    else { return nil }
+    let attributed = raw as! NSAttributedString
+    guard attributed.length > 0,
+      let face = attributed.attribute(
+        NSAttributedString.Key("AXFont"), at: 0, effectiveRange: nil)
+        as? [String: Any],
+      let name = face["AXFontName"] as? String,
+      let size = (face["AXFontSize"] as? NSNumber).map({ CGFloat($0.doubleValue) })
+    else { return nil }
+    return TextFont(name: name, size: size)
   }
 
   /// The on-screen character range, when the element publishes one. A range

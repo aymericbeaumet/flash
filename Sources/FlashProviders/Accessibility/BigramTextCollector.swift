@@ -9,9 +9,11 @@ import Foundation
 /// text never reaches `f`. This walk is separate and on demand: it keeps every
 /// visible run of at least one character. A single-line run places glyphs from
 /// its frame. A tall run measures each visible line once while collecting, and
-/// the letter is then a string search over those lines. It does not read pixels
-/// and it does not ask Accessibility for every match: a common letter would
-/// otherwise wait on one bounds query per glyph.
+/// the letter is then a string search over those lines. Each run's face is read
+/// once too, so a glyph sits at its share of the line's advance rather than of
+/// its character count. It does not read pixels and it does not ask
+/// Accessibility for every match: a common letter would otherwise wait on one
+/// bounds query per glyph.
 public enum BigramTextCollector {
   public static let providerID = "bigram"
 
@@ -31,6 +33,9 @@ public enum BigramTextCollector {
     let subrole: String?
     let frame: CGRect
     let layout: GlyphLayout
+    /// The run's face, read once while collecting; nil keeps the
+    /// character-count placement.
+    let advances: GlyphAdvances?
   }
 
   public struct Corpus {
@@ -222,7 +227,8 @@ public enum BigramTextCollector {
       Run(
         element: element, text: text, role: role, subrole: nodes[index].subrole, frame: frame,
         layout: glyphLayout(
-          element: element, text: text, frame: frame, screenH: screenH, clip: clip)))
+          element: element, text: text, frame: frame, screenH: screenH, clip: clip),
+        advances: advances(element, text: text)))
     markEmitted(&nodes, index)
   }
 
@@ -291,17 +297,35 @@ public enum BigramTextCollector {
     return raw as? [AXUIElement]
   }
 
+  /// The face of the run's first drawn character, once per run: glyphs are
+  /// then placed by their advances in that face.
+  private static func advances(_ element: AXUIElement, text: String) -> GlyphAdvances? {
+    let ns = text as NSString
+    var first = 0
+    while first < ns.length,
+      let scalar = Unicode.Scalar(ns.character(at: first)),
+      CharacterSet.whitespacesAndNewlines.contains(scalar)
+    {
+      first += 1
+    }
+    guard first < ns.length, let face = AXAttribute.font(element, location: first) else {
+      return nil
+    }
+    return GlyphAdvances(face)
+  }
+
   /// Glyph rects for one run. The layout was measured while collecting, so
   /// this is a string search whatever the letter is.
   private static func glyphHits(
     _ run: Run, query: String
   ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
-    BigramMatcher.glyphRects(in: run.text, query: query, lines: lineBoxes(run))
+    BigramMatcher.glyphRects(
+      in: run.text, query: query, lines: lineBoxes(run), advances: run.advances)
   }
 
   /// Word rects for one run, from the same measured lines.
   private static func wordHits(_ run: Run) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
-    WordMatcher.wordRects(in: run.text, lines: lineBoxes(run))
+    WordMatcher.wordRects(in: run.text, lines: lineBoxes(run), advances: run.advances)
   }
 
   private static func lineBoxes(_ run: Run) -> [BigramMatcher.BigramLineBox] {
@@ -476,7 +500,9 @@ public enum BigramTextCollector {
         BigramMatcher.sliceMatches(
           text: text, location: hit.location, length: hit.length, query: query)
       },
-      point: BigramMatcher.clickPoint)
+      point: { bounds, preferred in
+        BigramMatcher.clickPoint(in: bounds, keeping: preferred, from: rect)
+      })
   }
 
   public static let wordProviderID = "words"
@@ -497,22 +523,24 @@ public enum BigramTextCollector {
         return haystack.substring(with: NSRange(location: hit.location, length: hit.length))
           == expected
       },
-      point: WordMatcher.clickPoint)
+      point: { bounds, _ in WordMatcher.clickPoint(in: bounds) })
   }
 
   /// A target on a range of one run's text. `stillMatches` judges the string
-  /// read back at commit time; `point` places the click in the range's rect.
+  /// read back at commit time; `point` places the click in the range's rect,
+  /// given the point the caller chose on the captured rect.
   private static func textTarget(
     id: String, providerID: String, hit: Hit, rect: CGRect, run: Run, pid: pid_t,
     bundleIdentifier: String, screenH: CGFloat, clip: CGRect,
-    stillMatches: @escaping (String) -> Bool, point: @escaping (CGRect) -> CGPoint
+    stillMatches: @escaping (String) -> Bool, point: @escaping (CGRect, CGPoint) -> CGPoint
   ) -> JumpTarget {
     let element = run.element
     let role = run.role
     let location = hit.location
     let length = hit.length
     let capturedFrame = run.frame
-    let resolve: (CGPoint) -> CGPoint? = { _ in
+    let advances = run.advances
+    let resolve: (CGPoint) -> CGPoint? = { preferred in
       GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { _ in
         let title = copiedText(element, kAXTitleAttribute as String)
         let value = copiedText(element, kAXValueAttribute as String)
@@ -524,17 +552,16 @@ public enum BigramTextCollector {
         {
           let center = CGPoint(x: bounds.midX, y: bounds.midY)
           guard clip.containsInclusive(center) else { return nil }
-          return point(bounds)
+          return point(bounds, preferred)
         }
         let frame = currentFrame(of: element, screenH: screenH) ?? capturedFrame
         guard BigramMatcher.allowsProportionalFallback(text: text, frame: frame),
-          let estimated = BigramMatcher.proportionalRect(
-            frame: frame, location: location, length: length,
-            totalUTF16: (text as NSString).length)
+          let estimated = BigramMatcher.estimatedRect(
+            frame: frame, text: text, location: location, length: length, advances: advances)
         else { return nil }
         let center = CGPoint(x: estimated.midX, y: estimated.midY)
         guard clip.containsInclusive(center) else { return nil }
-        return point(estimated)
+        return point(estimated, preferred)
       }
     }
     return JumpTarget(
