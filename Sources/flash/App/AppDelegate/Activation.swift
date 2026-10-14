@@ -511,12 +511,21 @@ extension AppDelegate {
     return trusted
   }
 
-  func cancelOverlay() {
+  /// `departure` is what a dismissal observer saw. A commit that raised its
+  /// target is waiting for exactly that app's activation, and for the focus
+  /// loss the raise causes: those are its handoff, not the user leaving, so
+  /// the gesture keeps its ownership and posts. Every other departure, and a
+  /// cancel with no departure (Escape, a config reload), cancels as before.
+  func cancelOverlay(departure: ActivationLifecycle<HintActivationRequest>.Departure? = nil) {
     FlashLog.trace(
       "[overlay] cancel hints=\(hintSession.hints.count) in_flight=\(activationInFlight) "
         + "mode=\(flashMode) gen=\(activationGen) input=\(overlay.inputMode)")
     if overlay.inputMode == .commandLine {
       finishCommandLineInteraction(reason: "cancel_overlay")
+      return
+    }
+    if let departure, activationLifecycle.isHandoff(departure) {
+      FlashLog.trace("[overlay] cancel_skipped reason=commit_handoff departure=\(departure)")
       return
     }
     // Dismissal observers fire on every app switch, including when no

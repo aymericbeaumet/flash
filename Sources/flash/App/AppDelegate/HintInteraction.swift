@@ -275,7 +275,7 @@ extension AppDelegate {
     completion: @escaping (AppDelegate) -> Void
   ) {
     MainThreadActivity.note("hint_commit")
-    guard let token = activationLifecycle.prepareCommit() else { return }
+    guard let token = activationLifecycle.prepareCommit(handoffTo: awaitedPID) else { return }
     applyModeOverlay(captureOverride: false)
     let feedbackPoint = feedbackPoint ?? click?.point
     let start = { [weak self] in

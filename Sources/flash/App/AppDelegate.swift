@@ -771,7 +771,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.setSessionSuspended(
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
         self.applyFocusedApplicationChange(app, reason: "focus_changed", emitFocusEvent: true)
-        self.cancelOverlay()
+        self.cancelOverlay(departure: .activated(app.processIdentifier))
         // Move the stroke on the activation itself rather than waiting for the
         // new app's first AX geometry notification. `app` is authoritative
         // here; the workspace's frontmost pointer is not yet. The recovery
@@ -784,7 +784,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
       } else {
         self.statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
-        self.cancelOverlay()
+        self.cancelOverlay(departure: .focusLost)
         if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
           self.scheduleNormalModeRecapture()
         }
@@ -797,7 +797,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] _ in
       guard let self else { return }
       self.reconcileFrontmostApplication(reason: "space_changed")
-      self.cancelOverlay()
+      // Raising a commit's target can switch Spaces: that is its handoff.
+      self.cancelOverlay(departure: .focusLost)
       self.overlay.reassertStatusBar(reason: "space_changed")
       self.scheduleActiveWindowBorderReconciliation(
         delaysMs: [0] + Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
@@ -1002,7 +1003,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // so terminal chords such as tmux's `cmd+shift+[` leaked to Alacritty.
       self.reconcileFrontmostApplication(reason: "resign_key")
       if !self.hintSession.hints.isEmpty {
-        self.cancelOverlay()
+        // A key-window session's commit raises its target, which resigns
+        // the panel: that is the commit's handoff, not the user leaving.
+        self.cancelOverlay(departure: .focusLost)
         return
       }
       if self.flashMode == .normal {

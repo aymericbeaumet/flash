@@ -279,7 +279,12 @@ Activation progresses through `idle`, `discovering`, `pendingCommit`, and
 `committing`. Discovery and a not-yet-started commit may be replaced immediately.
 An active gesture retains ownership until release; the latest replacement waits
 behind it. Old completions neither clear a newer activation nor apply stale mode
-or navigation effects. Pointer-session reset consumes a held-button release once.
+or navigation effects. A commit whose target is not frontmost raises it and
+waits for that app's activation before posting; the commit carries that pid as
+its handoff, so the activation it waits for, Flash resigning key and the Space
+change the raise can cause are the handoff, not a cancellation, before and
+during the gesture alike. Activating any other app still cancels, and the
+handoff timeout still posts. Pointer-session reset consumes a held-button release once.
 Shutdown lets already-started finite mouse synthesis finish.
 
 Hints retain the target captured by discovery. Before a commit, AX targets
