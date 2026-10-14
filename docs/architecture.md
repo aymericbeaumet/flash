@@ -169,7 +169,8 @@ fixed timing of an interaction in progress (synthesized key, scroll and click
 spacing, sequence and hover-dwell timeouts, recapture and caret re-arm turns,
 toast and click-feedback expiry, a popup's first frame, terminal frame pacing)
 and a bounded fan-out of settle passes after one event (screen-change
-recovery, window-border reconciliation, the Accessibility-grant re-check).
+recovery, window-border reconciliation, the Accessibility-grant re-check,
+VISUAL's selection catch-up after a scroll).
 `Scripts/check-guardrails.sh` rejects any other timer source, and blocking
 sleeps outside the three single operations it names.
 

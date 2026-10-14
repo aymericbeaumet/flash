@@ -488,7 +488,32 @@ enum ActionDispatcher {
         event.setIntegerValueField(.mouseEventClickState, value: 1)
         event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
         event.post(tap: .cghidEventTap)
+        postedHeldButton = pressed ? button : nil
         FlashLog.trace("[mouse_button] \(pressed ? "press" : "release") button=\(button.rawValue)")
+      }
+    }
+  }
+
+  /// The button whose press `clickQueue` posted and whose release it has
+  /// not, confined to `clickQueue`. A delayed drag reads this rather than
+  /// the main-thread hold, so it never lands after the release it follows.
+  private static var postedHeldButton: MouseButtonKind?
+
+  /// VISUAL after a scroll: the page moved under a pointer that did not, and
+  /// an app extends a drag selection only on a drag event. Re-posts the held
+  /// button's drag where the pointer is, after the scroll's wheel steps and
+  /// again once the app's own smooth scroll settles
+  /// (`VisualSelection.catchUpDelays`). Nothing is posted once released.
+  static func catchUpHeldSelection(afterScrollMs scrollMs: Int) {
+    let start = DispatchTime.now()
+    for delay in VisualSelection.catchUpDelays(scrollMs: scrollMs) {
+      clickQueue.asyncAfter(deadline: start + .milliseconds(delay)) {
+        guard let held = postedHeldButton, let location = CGEvent(source: nil)?.location else {
+          return
+        }
+        pointerMoveEvent(
+          to: location, from: location, holding: held, source: SyntheticEventSources.session)?
+          .post(tap: .cghidEventTap)
       }
     }
   }

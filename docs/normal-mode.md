@@ -257,6 +257,16 @@ right of their letter instead of one point left, so the selection the held
 button draws ends on that letter: `v` at the start, `ms` plus a letter, and
 the text up to and including it is selected.
 
+Scrolls extend the selection the way a Vim motion extends it from the
+cursor. `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` move the page under the
+pointer, and Flash re-posts the held button's drag where the pointer is, once
+after the scroll and once after the app's own smooth scroll settles, so the
+app selects up to the text now under it. This differs from Vim, where
+`ctrl+e` scrolls without moving the cursor: in Flash the pointer is the
+cursor and stays put on screen, so the text under it changes. `gg` / `G` also
+drag the pointer to the window's top / bottom edge, in its column, so the
+selection reaches the first / last line.
+
 ## Movement history
 
 `ctrl+o` and `ctrl+i` move backward and forward across apps and source locations,
