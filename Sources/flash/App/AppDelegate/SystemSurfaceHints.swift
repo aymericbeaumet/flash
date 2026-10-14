@@ -30,13 +30,17 @@ extension AppDelegate {
   /// sits on its top-left corner, where the close button appears on hover.
   /// A bigram's chip sits beside the letters, and the pointer lands one
   /// point left of the glyph centre.
-  static func hintCommitPoint(for hint: AssignedHint, fontSize: CGFloat) -> CGPoint {
+  /// `selectingThrough` (VISUAL) lands a bigram one point right of its glyph
+  /// centre instead of one left, so the held button's selection ends on it.
+  static func hintCommitPoint(
+    for hint: AssignedHint, fontSize: CGFloat, selectingThrough: Bool = false
+  ) -> CGPoint {
     let provider = hint.target.providerID
     if provider == menuBarProviderID || provider == notificationsProviderID {
       return CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
     }
     if provider == BigramTextCollector.providerID {
-      return BigramMatcher.clickPoint(in: hint.target.frame)
+      return BigramMatcher.clickPoint(in: hint.target.frame, selectingThrough: selectingThrough)
     }
     let chip = OverlayPanel.chipFrame(for: hint, fontSize: fontSize)
     return CGPoint(x: chip.midX, y: chip.midY)

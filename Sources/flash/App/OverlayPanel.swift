@@ -8,6 +8,7 @@ enum OverlayModeBadgeStyle {
   case normal
   case command
   case hyper
+  case visual
 }
 
 /// What the overlay shows for the current mode, as one value. Only the mode

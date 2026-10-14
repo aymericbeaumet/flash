@@ -564,7 +564,9 @@ app_directories = [
 
 [mode]
 # Mode labels shown after the active app name in the persistent status bar
-# when advanced mode is enabled.
+# when advanced mode is enabled. `terminal`, `hyper` and `visual` (defaults
+# TERMINAL, HYPER, VISUAL) label the popup, the held leader and the held
+# mouse button.
 labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
@@ -727,6 +729,10 @@ hyper = "<leader>"
 "mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
 "ms" = ["flash", "mouse_bigram", "--move"]
+# Hold the primary button where the pointer is and enter VISUAL; `v` again,
+# Escape, leave_mode or a committed gesture releases it. Moves drag meanwhile,
+# and `ms` lands one point right of its letter so the selection ends on it.
+"v" = ["flash", "mouse_button", "--state=toggle"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
 "ds" = ["flash", "mouse_bigram", "--double"]

@@ -141,9 +141,12 @@ extension AppDelegate {
         resetModeInputState()
         clearTransientHintState(reason: "mode_enter")
       case .renderSurface:
-        // A HYPER hold toggles the pill over the same app and window: the
-        // border keeps its frame instead of re-reading the window list.
-        applyModeOverlay(reusesWindowFrame: previous.isHyper != next.isHyper)
+        // A HYPER hold, or a held button, toggles the pill over the same app
+        // and window: the border keeps its frame instead of re-reading the
+        // window list.
+        applyModeOverlay(
+          reusesWindowFrame: previous.isHyper != next.isHyper
+            || previous.isVisual != next.isVisual)
       case .scheduleRecapture:
         scheduleNormalModeRecapture()
       case .activateFocusedApp(let pid):
@@ -156,6 +159,9 @@ extension AppDelegate {
     // The one reset point for the hold: every exit from HYPER ends it here,
     // whichever event caused the exit.
     overlay.hyperHold.modeChanged(from: previous, to: next)
+    // VISUAL is the held button: leaving it any other way (`enter_normal_mode`,
+    // INSERT, the command line, advanced mode turning off) lets the button go.
+    if previous.isVisual, !next.isVisual { releaseHeldMouseButton(reason: "visual_exit") }
     if next.isHyper != previous.isHyper {
       setHyperHoldWatch(armed: next.isHyper)
     }
@@ -206,7 +212,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .terminal, .hyper:
+    case .command, .terminal, .hyper, .visual:
       break
     }
   }
@@ -246,6 +252,7 @@ extension AppDelegate {
     case .command: return config.mode.labels.command
     case .terminal: return config.mode.labels.terminal
     case .hyper: return config.mode.labels.hyper
+    case .visual: return config.mode.labels.visual
     }
   }
 

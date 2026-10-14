@@ -23,8 +23,17 @@ public enum BigramMatcher {
   /// Where `s` puts the pointer: one point left of the glyph centre.
   /// The pointer still sits on the letter. The lead keeps a later
   /// selection's anchor on this glyph's leading side.
+  /// One point left of the glyph centre, still on the letter, so a later
+  /// selection can start on its leading side.
   public static func clickPoint(in frame: CGRect) -> CGPoint {
     CGPoint(x: frame.midX - 1, y: frame.midY)
+  }
+
+  /// `selectingThrough` — VISUAL, a button held — lands one point right of
+  /// the glyph centre instead, so the selection the held button draws ends
+  /// on that letter.
+  public static func clickPoint(in frame: CGRect, selectingThrough: Bool) -> CGPoint {
+    selectingThrough ? CGPoint(x: frame.midX + 1, y: frame.midY) : clickPoint(in: frame)
   }
 
   /// Unshifted and Shift characters of one US-ANSI key, letters excluded

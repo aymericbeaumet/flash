@@ -252,7 +252,8 @@ extension AppDelegate {
       return
     }
     let preferredPoint = Self.hintCommitPoint(
-      for: hint, fontSize: CGFloat(config.overlay.fontSize))
+      for: hint, fontSize: CGFloat(config.overlay.fontSize),
+      selectingThrough: modeStore.mode.isVisual)
     switch hintSession.command {
     case .adjust:
       guard case .labels = hintSession.phase else { return }
@@ -317,7 +318,12 @@ extension AppDelegate {
       cancelOverlay()
       return
     }
-    let selections = path.map { ($0.target, Self.hintCommitPoint(for: $0, fontSize: fontSize)) }
+    let selections = path.map {
+      (
+        $0.target,
+        Self.hintCommitPoint(for: $0, fontSize: fontSize, selectingThrough: modeStore.mode.isVisual)
+      )
+    }
     resolveHintPoints(selections) { owner, points in
       owner.postPathClicks(hints: path, at: points, clickModifiers: held)
     }
@@ -375,7 +381,8 @@ extension AppDelegate {
   /// hint carried, without moving the pointer into the menu-bar band.
   private func commitStatusBarHint(_ hint: AssignedHint) {
     let point = Self.statusBarHintPoint(
-      hint.target.frame, bigram: hintSession.isBigramCapture)
+      hint.target.frame, bigram: hintSession.isBigramCapture,
+      selectingThrough: modeStore.mode.isVisual)
     let popup = hintSession.statusBarPopupSnapshots[hint.target.id]
     let commit = Self.statusBarHintCommit(
       command: hintSession.command, url: hint.target.url.flatMap { URL(string: $0) })

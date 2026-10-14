@@ -429,6 +429,12 @@ enum ActionDispatcher {
 
   static var heldButton: MouseButtonKind? { buttonHold.held }
 
+  /// Told, on main, each time the held button changes, with the button now
+  /// held: the mode follows the hold (VISUAL), whichever path pressed or
+  /// released it — `mouse_button`, pointer mode's `v`, an overlay cancel, a
+  /// committed gesture freeing the buttons, quit.
+  static var heldButtonDidChange: ((MouseButtonKind?) -> Void)?
+
   /// Press, release or toggle `button` at `screenPoint` (NSScreen; the
   /// pointer's location for `mouse_button`). Returns what was posted.
   @discardableResult
@@ -437,6 +443,7 @@ enum ActionDispatcher {
   ) -> [MouseButtonHold.Effect] {
     let effects = buttonHold.apply(state, button)
     postButtonEffects(effects, at: screenPoint)
+    if !effects.isEmpty { heldButtonDidChange?(buttonHold.held) }
     return effects
   }
 
@@ -446,6 +453,7 @@ enum ActionDispatcher {
   static func releaseHeldButton(at screenPoint: CGPoint) -> Bool {
     let effects = buttonHold.release()
     postButtonEffects(effects, at: screenPoint)
+    if !effects.isEmpty { heldButtonDidChange?(nil) }
     return !effects.isEmpty
   }
 

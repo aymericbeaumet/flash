@@ -214,6 +214,15 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertEqual(
       targets[0].resolvedClickPoint(preferred: .zero),
       BigramMatcher.clickPoint(in: targets[0].frame))
+    // VISUAL lands one point right instead, so a held button's selection
+    // ends on the letter rather than before it.
+    let frame = targets[0].frame
+    XCTAssertEqual(
+      BigramMatcher.clickPoint(in: frame, selectingThrough: true),
+      CGPoint(x: frame.midX + 1, y: frame.midY))
+    XCTAssertEqual(
+      BigramMatcher.clickPoint(in: frame, selectingThrough: false),
+      CGPoint(x: frame.midX - 1, y: frame.midY))
     XCTAssertEqual(targets[0].frame.minX, window.minX, accuracy: 0.01)
     XCTAssertEqual(
       targets[0].frame.maxY, window.maxY, accuracy: 0.01,

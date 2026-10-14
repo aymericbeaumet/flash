@@ -304,8 +304,12 @@ extension AppDelegate {
 
   /// Where a status-bar hint acts. `f` uses the span's centre. `s` uses the
   /// same point as a window letter: one point left of the glyph centre.
-  static func statusBarHintPoint(_ frame: CGRect, bigram: Bool) -> CGPoint {
-    bigram ? BigramMatcher.clickPoint(in: frame) : CGPoint(x: frame.midX, y: frame.midY)
+  static func statusBarHintPoint(
+    _ frame: CGRect, bigram: Bool, selectingThrough: Bool = false
+  ) -> CGPoint {
+    bigram
+      ? BigramMatcher.clickPoint(in: frame, selectingThrough: selectingThrough)
+      : CGPoint(x: frame.midX, y: frame.midY)
   }
 
   /// A primary click follows a link or range. A right-click pins the popup.

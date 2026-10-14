@@ -1673,12 +1673,13 @@ enum ConfigLoader {
         (1...32).contains(insert.count),
         (1...32).contains(command.count),
         (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count),
-        (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count)
+        (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count),
+        (1...32).contains((parsed["visual"] ?? config.mode.labels.visual).count)
       {
         for key in parsed.keys
-        where !["normal", "insert", "command", "terminal", "hyper"].contains(key) {
+        where !["normal", "insert", "command", "terminal", "hyper", "visual"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, visual)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
@@ -1686,7 +1687,8 @@ enum ConfigLoader {
           insert: insert,
           command: command,
           terminal: parsed["terminal"] ?? config.mode.labels.terminal,
-          hyper: parsed["hyper"] ?? config.mode.labels.hyper)
+          hyper: parsed["hyper"] ?? config.mode.labels.hyper,
+          visual: parsed["visual"] ?? config.mode.labels.visual)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(

@@ -866,9 +866,10 @@ struct Config {
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
       var hyper: String = "HYPER"
+      var visual: String = "VISUAL"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count, terminal.count, hyper.count)
+        max(normal.count, insert.count, command.count, terminal.count, hyper.count, visual.count)
       }
     }
 
@@ -1061,6 +1062,7 @@ struct Config {
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
         ("ms", .flashCommand(.mouseBigram(.move))),
+        ("v", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary)))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("ds", .flashCommand(.mouseBigram(.click(.doubleClick, modifiers: [])))),
@@ -1512,6 +1514,7 @@ struct Config {
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
+        "visual": mode.labels.visual,
       ],
       "hyper": mode.hyper.map(Self.mappingJSONValue),
       "hyper_key": mode.hyperKey,

@@ -13,6 +13,7 @@ enum ModeLabel: Equatable {
   case command
   case terminal
   case hyper
+  case visual
 }
 
 extension Mode {
@@ -24,7 +25,7 @@ extension Mode {
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert, .terminal: return .insert
-    case .normal, .command, .hyper: return .normal
+    case .normal, .command, .hyper, .visual: return .normal
     }
   }
 
@@ -45,7 +46,7 @@ extension Mode {
     switch self {
     case .disabled, .insert, .terminal:
       return false
-    case .normal, .hyper:
+    case .normal, .hyper, .visual:
       return !hasHints && !activationInFlight
     case .command:
       return true
@@ -66,7 +67,7 @@ extension Mode {
     // only governs cursor visibility / routing for when capture later resumes.
     if nativeSurfaceSuspended {
       switch self {
-      case .normal, .hyper: return .normal
+      case .normal, .hyper, .visual: return .normal
       default: break
       }
     }
@@ -75,7 +76,7 @@ extension Mode {
       return hasHints || activationInFlight ? .hints : .passive
     case .terminal:
       return .normal
-    case .normal, .hyper:
+    case .normal, .hyper, .visual:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
     case .command:
@@ -91,6 +92,7 @@ extension Mode {
     case .command: return .command
     case .terminal: return .terminal
     case .hyper: return .hyper
+    case .visual: return .visual
     }
   }
 
@@ -104,6 +106,7 @@ extension Mode {
     case .command: return .command
     case .terminal: return .command
     case .hyper: return .hyper
+    case .visual: return .visual
     }
   }
 }

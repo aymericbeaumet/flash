@@ -92,9 +92,11 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
-        - `mouse_button --state=down|up|toggle` holds a button at the pointer,
-          so moves (`mf`, `mF`, `mouse_pointer`) drag; Escape, `leave_mode`
-          or `--state=up` releases it.
+        - `v` (`mouse_button --state=toggle`) holds the primary button at the
+          pointer and enters VISUAL, so moves (`mf`, `mF`, `ms`,
+          `mouse_pointer`) drag; `v` again, Escape, `leave_mode` or a committed
+          gesture releases it. In VISUAL, `s` and `ms` land one point right of
+          their letter, so the selection ends on it.
 
         ## Mouse Grid
 

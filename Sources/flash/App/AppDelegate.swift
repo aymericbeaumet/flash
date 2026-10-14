@@ -380,6 +380,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
+    // The held mouse button is the VISUAL mode: whichever path presses or
+    // releases it, the mode follows the hold, and only from NORMAL.
+    ActionDispatcher.heldButtonDidChange = { [weak self] held in
+      guard let self else { return }
+      if held != nil, self.modeStore.mode == .normal {
+        self.dispatchMode(.enterVisual)
+      } else if held == nil, self.modeStore.mode.isVisual {
+        self.dispatchMode(.exitVisual)
+      }
+    }
     // Every observed AX notification reaches plugins exactly once, here.
     monitor.focusedElementDidChange = { [weak self] pid, bundleID, notification in
       if notification == kAXTitleChangedNotification as String {

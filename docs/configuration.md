@@ -303,6 +303,11 @@ key is the leader, a key with no hyper mapping can still complete a NORMAL
 `<leader>` sequence. A tap that presses nothing else arms that prefix on
 release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
+Holding a mouse button (`v`, `mouse_button --state=toggle`) enters VISUAL,
+NORMAL with the button down, until the button is released; the status pill
+turns orange and shows `mode.labels.visual` (default `VISUAL`). See the
+[mode guide](normal-mode.md#holding-a-mouse-button-visual).
+
 ```toml
 [mode.normal]
 hyper = "<leader>"

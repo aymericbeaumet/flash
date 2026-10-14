@@ -86,7 +86,9 @@ mappings.
   screen (the surfaces `f` reaches). A letter on a status-bar link or popup
   does what `f` does there; a letter on plain bar text moves the pointer onto
   it. The click and the move land one point left of the glyph's centre, still
-  on the letter, so a later selection can start on that glyph's leading side.
+  on the letter, so a later selection can start on that glyph's leading side;
+  in VISUAL they land one point right of it, so the selection a held button
+  draws ends on that letter.
   Hint labels are uppercase and accept either case. Backspace
   edits the letter, Escape cancels, and no match stays silent. Holding the
   hyper key, or any other key that enters a mode, ends the jump and enters
@@ -222,22 +224,33 @@ on both sides, or on `return`; the other grid keys work as above.
 pointer, on the pointer's display, stopping while one selection remains;
 Backspace walks back out.
 
-## Holding a mouse button
+## Holding a mouse button: VISUAL
 
 `mouse_button --state=down|up|toggle [--secondary|--middle]` presses or
-releases a button where the pointer is; it ships unbound. While a button is
-held, every pointer move Flash makes drags it — `mf`, `mF`, `mouse_pointer`
-movement, grid cursor-follow — so a keyboard drag works in any app:
+releases a button where the pointer is; `v` ships bound to the primary
+toggle. While a button is held, every pointer move Flash makes drags it —
+`mf`, `mF`, `ms`, `mouse_pointer` movement, grid cursor-follow — so a
+keyboard drag or a text selection works in any app:
 
 ```toml
 [mode.normal.mappings]
-"<leader>v" = ["flash", "mouse_button", "--state=toggle"]
+"v" = ["flash", "mouse_button", "--state=toggle"]
 ```
 
-Press `<leader>v` over what to grab, `mf` (or `mF`) to the drop point, then
-`<leader>v` again to drop. `mouse_pointer`'s `v` toggles the same held
-button. Cancelling a Flash overlay (Escape), `leave_mode` and quitting Flash
-release it, as does a committed click, drag or selection.
+Press `v` over what to grab, `mf` (or `mF`, `ms`) to the drop point, then `v`
+again to drop. `mouse_pointer`'s `v` toggles the same held button.
+Cancelling a Flash overlay (Escape), `leave_mode` and quitting Flash release
+it, as does a committed click, drag or selection.
+
+The held button is a mode: VISUAL, named after `v`, shown in orange with
+`mode.labels.visual` (default `VISUAL`). It is NORMAL with the button down —
+the same keys and mappings — and it follows the hold exactly: whichever path
+presses the button from NORMAL enters it, whichever releases the button
+leaves it, and leaving it any other way (`enter_normal_mode`, INSERT, the
+command line) releases the button. In VISUAL, `s` and `ms` land one point
+right of their letter instead of one point left, so the selection the held
+button draws ends on that letter: `v` at the start, `ms` plus a letter, and
+the text up to and including it is selected.
 
 ## Movement history
 

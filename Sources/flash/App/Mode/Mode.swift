@@ -40,6 +40,13 @@ enum Mode: Equatable {
   /// INSERT exit can activate an app a popup once covered.
   case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
 
+  /// NORMAL with a mouse button held down: `v` (`mouse_button --state=toggle`)
+  /// enters it and the hold's release — `v` again, Escape in an overlay,
+  /// `leave_mode`, a committed gesture, quit — returns to NORMAL. NORMAL's
+  /// keys and mappings apply; `s` lands one point right of a letter instead
+  /// of one left, so the selection the held button draws ends on that letter.
+  case visual
+
   /// Momentary layer while `mode.normal.hyper` is physically held. The default
   /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
   /// the key returns to `restoreTo` (NORMAL). A clean tap of the leader still
@@ -70,7 +77,7 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal: return .normal
+    case .normal, .visual: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(let restoreTo), .hyper(let restoreTo):
       return restoreTo
@@ -96,6 +103,8 @@ extension Mode {
     if case .hyper = self { return true }
     return false
   }
+
+  var isVisual: Bool { self == .visual }
 
   var isTerminal: Bool {
     if case .terminal = self { return true }

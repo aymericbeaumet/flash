@@ -1077,6 +1077,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .insert: modeText = labels.insert
     case .command: modeText = labels.command
     case .hyper: modeText = labels.hyper
+    case .visual: modeText = labels.visual
     }
     redraw(
       surface, document: StatusFormatDocument.parse(source), columns: columns, notch: notch,
@@ -1099,6 +1100,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .insert: palette = OverlayPanel.insertPalette
     case .command: palette = OverlayPanel.commandPaletteValue
     case .hyper: palette = OverlayPanel.hyperPalette
+    case .visual: palette = OverlayPanel.visualPalette
     }
     surface.render(
       document: document,

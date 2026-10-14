@@ -55,6 +55,13 @@ enum ModeEvent: Equatable {
   /// insert↔normal (mode is global and sticky).
   case focusedAppChanged(pid: pid_t)
 
+  /// A mouse button is now held (`mouse_button`, pointer mode's `v`). Only
+  /// accepted from `.normal`.
+  case enterVisual
+
+  /// The held button was released. Ignored unless the current mode is `.visual`.
+  case exitVisual
+
   /// The hyper key went down. Only accepted from `.normal`.
   case enterHyper
 

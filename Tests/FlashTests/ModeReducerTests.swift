@@ -22,6 +22,7 @@ final class ModeReducerTests: XCTestCase {
     .terminal(restoreTo: .insert, returnPID: nil),
     .terminal(restoreTo: .disabled, returnPID: nil),
     .hyper(restoreTo: .normal),
+    .visual,
   ]
 
   // Representative events covering every case.
@@ -44,6 +45,8 @@ final class ModeReducerTests: XCTestCase {
     .focusedAppChanged(pid: 7),
     .enterHyper,
     .exitHyper,
+    .enterVisual,
+    .exitVisual,
   ]
 
   // MARK: Hyper hold
@@ -155,7 +158,7 @@ final class ModeReducerTests: XCTestCase {
       let (next, effects) = ModeReducer.reduce(state, .focusedAppChanged(pid: 99))
       XCTAssertEqual(next, state, "focusedAppChanged must not change \(state)")
       switch state {
-      case .normal, .command, .hyper:
+      case .normal, .command, .hyper, .visual:
         XCTAssertEqual(effects, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         XCTAssertTrue(effects.isEmpty)
@@ -201,8 +204,12 @@ final class ModeReducerTests: XCTestCase {
       .insert)
     XCTAssertEqual(
       ModeReducer.reduce(.normal, .clickResolved(entersInsert: false, targetPID: 7)).0, .normal)
-    // From any non-normal state, a click cannot change the mode.
-    for state in allStates where !state.isNormal {
+    // A click while a button is held (VISUAL) still enters INSERT on an input.
+    XCTAssertEqual(
+      ModeReducer.reduce(.visual, .clickResolved(entersInsert: true, targetPID: 7)).0,
+      .insert)
+    // From any other state, a click cannot change the mode.
+    for state in allStates where !state.isNormal && !state.isVisual {
       XCTAssertEqual(
         ModeReducer.reduce(state, .clickResolved(entersInsert: true, targetPID: 7)).0, state)
     }
@@ -505,6 +512,47 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.disabled.badgeStyle, .insert)
     XCTAssertEqual(Mode.hyper(restoreTo: .normal).badgeStyle, .hyper)
     XCTAssertEqual(Mode.hyper(restoreTo: .normal).label, .hyper)
+    XCTAssertEqual(Mode.visual.badgeStyle, .visual)
+    XCTAssertEqual(Mode.visual.label, .visual)
+  }
+
+  /// VISUAL is the held mouse button over NORMAL: entered only from NORMAL,
+  /// left when the button goes, NORMAL in every projection, and `leave_mode`
+  /// or an explicit base mode leaves it too.
+  func testVisualFollowsTheHeldButtonOverNormal() {
+    let entered = ModeReducer.reduce(.normal, .enterVisual)
+    XCTAssertEqual(entered.0, .visual)
+    XCTAssertEqual(entered.1, [.renderSurface])
+    let left = ModeReducer.reduce(.visual, .exitVisual)
+    XCTAssertEqual(left.0, .normal)
+    XCTAssertEqual(left.1, [.renderSurface])
+    for state in allStates where state != .normal {
+      XCTAssertEqual(ModeReducer.reduce(state, .enterVisual).0, state, "\(state) ignores the hold")
+    }
+    for state in allStates where state != .visual {
+      XCTAssertEqual(ModeReducer.reduce(state, .exitVisual).0, state)
+    }
+    XCTAssertEqual(Mode.visual.flashMode, .normal)
+    XCTAssertEqual(Mode.visual.asReturnMode, .normal)
+    XCTAssertTrue(Mode.visual.ownsKeyboard(hasHints: false, activationInFlight: false))
+    XCTAssertEqual(
+      Mode.visual.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
+    XCTAssertEqual(ModeReducer.reduce(.visual, .leaveMode(hasHints: false)).0, .normal)
+    XCTAssertEqual(ModeReducer.reduce(.visual, .enterNormal).0, .normal)
+    XCTAssertEqual(ModeReducer.reduce(.visual, .enterInsert(targetPID: 7)).0, .insert)
+    XCTAssertEqual(
+      ModeReducer.reduce(.visual, .clickResolved(entersInsert: false, targetPID: 7)).0, .visual)
+    XCTAssertEqual(
+      ModeReducer.reduce(.visual, .openCommand(restoreMode: true)).0,
+      .command(restoreTo: .normal))
+    XCTAssertEqual(
+      ModeReducer.reduce(.visual, .focusedAppChanged(pid: 7)).1, [.scheduleRecapture])
+    XCTAssertEqual(FlashStatusReport.modeName(.visual), "visual")
+    let labels = ConfigLoader.parse(
+      "[mode]\nlabels = { normal = \"N\", insert = \"I\", command = \"C\", visual = \"V\" }"
+    )
+    XCTAssertEqual(labels.mode.labels.visual, "V")
+    XCTAssertEqual(Config().mode.labels.visual, "VISUAL")
   }
 
   func testHyperIsALeaderHoldOnNormal() {
