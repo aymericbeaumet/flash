@@ -4,7 +4,7 @@ enabled = true
 # The bar is one line: the template's newlines are dropped, so each lane can
 # sit on its own lines.
 template = """
-#[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.aymericbeaumet.com]#[label]aggr#[default] #{flash.plugin.feed.label}#[nolink]#[nopopup]
+#[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.aymericbeaumet.com]#[label]aggr#[default]#[nolink]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}#[nopopup]
 # The centre lane is the notch: a housing at the middle of the bar.
 #[align=centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
 #[align=right]#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default] ,}
@@ -60,10 +60,15 @@ text = "#{flash.plugin.power.details}"
 [popup.date]
 text = "#{flash.calendar}"
 
-# Hover of the aggr name and its headline. The plugin prints the headline only.
+# Hover of the aggr name: the recent-items list. The plugin prints the headline only.
 [popup.feed]
 command = ["newsboat", "-u", "urls", "-C", "config"]
 persistent = true
+cwd = "."
+
+# Hover of the headline. Fresh, so each showing receives the item link.
+[popup.feed-article]
+command = ["newsboat-article", "$FLASH_STATUS_LINK"]
 cwd = "."
 
 [plugin.feed]

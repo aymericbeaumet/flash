@@ -92,7 +92,11 @@ Commands use the shared [environment and path resolution](configuration.md#execu
 the login-shell environment, `$VAR` and a leading `~` expanded on every argument
 and `cwd`, and only the executable and `cwd` resolved against the defining
 file. Set `cwd = "."` for arguments relative to that file. Shell syntax needs
-an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Every session
+an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. A fresh popup
+whose command contains `$FLASH_STATUS_LINK` is not prewarmed. When a hover
+starts it, that variable is the `#[link]` on the hovered span, and `$FLASH_STATUS_LINK`
+in an argument expands to it. A persistent popup starts before any hover, so it
+does not receive the hovered link. Every session
 exports `TERM=xterm-256color` and `COLORTERM=truecolor`; the inherited
 `NO_COLOR` is removed, and an explicit `env = { NO_COLOR = "1" }` opts that
 popup out. The configured colours apply before the process starts, so its

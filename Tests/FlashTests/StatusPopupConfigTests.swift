@@ -216,4 +216,22 @@ final class StatusPopupConfigTests: XCTestCase {
     XCTAssertTrue(hidden.prewarmedPopupNames.isEmpty, "a hidden bar opens nothing")
     XCTAssertTrue(Config().prewarmedPopupNames.isEmpty, "nothing maps the shell by default")
   }
+
+  func testAPopupThatReadsTheHoveredLinkIsNotPrewarmed() {
+    let config = ConfigLoader.parse(
+      """
+      [statusbar]
+      enabled = true
+      template = "#[popup=feed]aggr#[nopopup] #[popup=feed-article]headline#[nopopup]"
+      [popup.feed]
+      command = ["newsboat"]
+      persistent = true
+      [popup.feed-article]
+      command = ["newsboat-article", "$FLASH_STATUS_LINK"]
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    XCTAssertTrue(config.referencedPopupNames.contains("feed-article"))
+    XCTAssertEqual(config.prewarmedPopupNames, [])
+    XCTAssertTrue(config.terminalPopups["feed-article"]?.readsHoveredLink == true)
+  }
 }

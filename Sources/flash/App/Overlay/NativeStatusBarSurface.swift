@@ -695,10 +695,13 @@ final class NativeStatusBarSurface {
           abs(previous.rect.maxX - bounds.minX) < 0.01
         {
           previous.rect.size.width += bounds.width
+          if previous.link == nil { previous.link = run.segment.link }
           popups[popups.count - 1] = previous
         } else {
           popups.append(
-            .init(rect: bounds, name: name, content: content, document: popupDocuments[name]))
+            .init(
+              rect: bounds, name: name, content: content, document: popupDocuments[name],
+              link: run.segment.link))
         }
       }
     }

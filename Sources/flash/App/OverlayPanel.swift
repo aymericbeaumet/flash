@@ -205,7 +205,7 @@ final class OverlayPanel: NSPanel {
   var statusBarActionHandler: ((String) -> Void)?
   /// The argument requests restoring the previous app; false switches popups in place.
   var statusBarPopupDismissHandler: ((Bool) -> Void)?
-  var statusBarTerminalPrepareHandler: ((String) -> Bool)?
+  var statusBarTerminalPrepareHandler: ((String, String?) -> Bool)?
   /// Whether hovering `name` would have to fork a terminal child (a declared
   /// terminal popup with no running session). Such popups dwell before they
   /// spawn; see `showStatusBarPopup`.

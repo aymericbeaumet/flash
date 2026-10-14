@@ -758,4 +758,17 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertEqual(session.frame?.foreground.red, 0xab)
     XCTAssertEqual(session.frame?.background.red, 0x65)
   }
+
+  func testHoveredLinkExpandsIntoThePopupCommand() {
+    let definition = Config.Terminal(command: ["newsboat-article", "$FLASH_STATUS_LINK"])
+    let launch = StatusTerminalRegistry.configuration(
+      for: definition, environment: ["PATH": "/usr/bin"],
+      link: "https://aggr.example/items/one")
+    XCTAssertEqual(launch.command, ["newsboat-article", "https://aggr.example/items/one"])
+    XCTAssertEqual(launch.environment["FLASH_STATUS_LINK"], "https://aggr.example/items/one")
+    let untouched = StatusTerminalRegistry.configuration(
+      for: definition, environment: ["PATH": "/usr/bin"])
+    XCTAssertEqual(untouched.command, ["newsboat-article", "$FLASH_STATUS_LINK"])
+    XCTAssertNil(untouched.environment["FLASH_STATUS_LINK"])
+  }
 }

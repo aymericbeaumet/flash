@@ -238,8 +238,9 @@ startup_timeout = 5
 # top_count = 5 # rows per table, 1-20
 
 # RSS headlines from the last 24 hours. No requests run until a URL is set.
-# The template owns the name and the hover:
-#   #[popup=feed]#[label]NEWS#[default] #{flash.plugin.feed.label}
+# The template owns the name and the hovers. The name and the headline can
+# open different popups; `$FLASH_STATUS_LINK` is the headline's item link:
+#   #[popup=feed]#[label]NEWS#[default]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}
 # `label` is the rotating headline. `summary` adds archive and source links
 # and an inline article preview. Neither segment prints a section name.
 # [plugin.feed]

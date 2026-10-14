@@ -47,6 +47,9 @@ struct StatusBarPopupRegion: Equatable {
   /// bar's height: the bounds the hover wash hugs. Nil when no bar measured
   /// the span.
   var textBounds: CGRect? = nil
+  /// The first `#[link]` on the span. A fresh popup whose command names
+  /// `$FLASH_STATUS_LINK` receives it when the hover starts the process.
+  var link: String? = nil
 
   /// What the popup hangs from (`OverlayPanel.statusBarPopupFrame`).
   var anchor: CGRect { textBounds ?? rect }
@@ -562,7 +565,8 @@ extension OverlayPanel {
           height: barFrame.height),
         name: run.name,
         content: run.content,
-        document: run.document ?? statusBarPopupDocuments[run.name])
+        document: run.document ?? statusBarPopupDocuments[run.name],
+        link: run.link)
     }
   }
 
@@ -659,7 +663,7 @@ extension OverlayPanel {
     if let current = statusPopupController.presentation.name, current != popup.name {
       hideStatusBarPopup(reason: "anchor_changed")
     }
-    guard statusBarTerminalPrepareHandler?(popup.name) ?? true else {
+    guard statusBarTerminalPrepareHandler?(popup.name, popup.link) ?? true else {
       hideStatusBarPopup(reason: "terminal_missing")
       return
     }

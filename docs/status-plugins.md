@@ -263,11 +263,15 @@ template writes the name, its colour, the link on that name, and the hover:
 
 ```toml
 [statusbar]
-template = "#[align=left]#[popup=feed]#[link=https://example.com]#[label]aggr#[default] #{flash.plugin.feed.label}#[nolink]#[nopopup]"
+template = "#[align=left]#[popup=feed]#[link=https://example.com]#[label]aggr#[default]#[nolink]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}#[nopopup]"
 
 [popup.feed]
 command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]
 persistent = true
+cwd = "."
+
+[popup.feed-article]
+command = ["newsboat-article", "$FLASH_STATUS_LINK"]
 cwd = "."
 ```
 
@@ -300,7 +304,9 @@ its preview, so the title, domain, and arrow share one popup region.
 preview. Its title and domain form one link to the feed item rather than three
 separate targets. A `#[popup=…]` around that segment is the hover, so the
 configuration points it at any command it likes — a feed reader, a script,
-anything. The plugin does not decide what hovering a headline shows. A template
+anything. The plugin does not decide what hovering a headline shows. When that
+command contains `$FLASH_STATUS_LINK`, Flash expands it to the item link as
+the process starts. A template
 link around the name addresses the feed itself: clicking the name opens the
 feed, clicking the headline or its domain opens that item.
 

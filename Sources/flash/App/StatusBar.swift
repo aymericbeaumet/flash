@@ -111,6 +111,10 @@ struct FlashStatusPopupRun: Equatable {
   var name: String
   var content: String
   var document: [FlashStatusTextSegment]? = nil
+  /// The first `#[link]` on the span. A headline hover passes it to a fresh
+  /// popup as `FLASH_STATUS_LINK`. Adjacent runs stay one span; a later
+  /// different link does not split it.
+  var link: String? = nil
 }
 
 enum FlashStatusBarSDKValue: Equatable {

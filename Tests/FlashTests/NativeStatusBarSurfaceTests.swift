@@ -178,6 +178,20 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(hits.hints[2].textBounds, cpu.textBounds)
   }
 
+  func testHeadlinePopupCarriesTheArticleLinkAndTheNamePopupDoesNot() throws {
+    let surface = render(
+      "#[popup=feed]#[link=https://aggr.example]aggr#[nolink]#[nopopup] "
+        + "#[popup=feed-article]#[link=https://article.example/a]Headline#[nopopup]",
+      columns: 40)
+    let hits = surface.interactionRects(
+      panelFrame: .zero, popupTexts: ["feed": "", "feed-article": ""], popupDocuments: [:])
+    let name = try XCTUnwrap(hits.popups.first { $0.name == "feed" })
+    let headline = try XCTUnwrap(hits.popups.first { $0.name == "feed-article" })
+    XCTAssertEqual(name.link, "https://aggr.example")
+    XCTAssertEqual(headline.link, "https://article.example/a")
+    XCTAssertGreaterThan(headline.rect.minX, name.rect.maxX)
+  }
+
   func testWideHoverWashRemainsSubtle() {
     let title = String(repeating: "a", count: NativeStatusBarSurface.wideHoverCells + 1)
     let surface = render(title, columns: 40)

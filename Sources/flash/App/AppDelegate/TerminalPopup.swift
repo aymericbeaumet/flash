@@ -70,10 +70,10 @@ extension AppDelegate {
       return self.config.terminalPopupNames.contains(name)
         && self.overlay.statusTerminals.session(named: name) == nil
     }
-    overlay.statusBarTerminalPrepareHandler = { [weak self] name in
+    overlay.statusBarTerminalPrepareHandler = { [weak self] name, link in
       guard let self else { return false }
       guard self.config.terminalPopupNames.contains(name) else { return true }
-      return self.overlay.statusTerminals.open(name) != nil
+      return self.overlay.statusTerminals.open(name, link: link) != nil
     }
     overlay.statusTerminals.gridResolver = { [weak self] size in
       guard let self else { return size.unplacedGrid }

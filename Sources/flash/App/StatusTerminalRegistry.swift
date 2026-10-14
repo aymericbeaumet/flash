@@ -205,15 +205,18 @@ final class StatusTerminalRegistry {
   /// Attach a showing to `name`'s terminal: its running process — a
   /// persistent one, or a fresh one started ahead — or a new one. nil when
   /// `name` is not a terminal popup.
+  /// `link` is the hovered span's `#[link]`. It is exported as
+  /// `FLASH_STATUS_LINK` only when this call starts the process. A session
+  /// that is already running keeps the link it started with.
   @discardableResult
-  func open(_ name: String) -> TerminalSession? {
+  func open(_ name: String, link: String? = nil) -> TerminalSession? {
     dispatchPrecondition(condition: .onQueue(.main))
     guard let definition = definitions[name] else { return nil }
     if let entry = entries[name] {
       prewarmedNames.remove(name)
       return entry.session
     }
-    start(name, definition)
+    start(name, definition, link: link)
     didChange?()
     return entries[name]?.session
   }
@@ -350,13 +353,13 @@ final class StatusTerminalRegistry {
     }
   }
 
-  private func start(_ name: String, _ definition: Config.Terminal) {
+  private func start(_ name: String, _ definition: Config.Terminal, link: String? = nil) {
     let grid = gridResolver(definition.size)
     launch(
       name, kind: .terminal(definition),
       configuration: Self.configuration(
         for: definition, environment: processEnvironment.environment, columns: grid.columns,
-        rows: grid.rows))
+        rows: grid.rows, link: link))
   }
 
   @discardableResult
@@ -663,8 +666,11 @@ final class StatusTerminalRegistry {
   /// expand `$VAR` and a leading `~` against the resolved environment.
   static func configuration(
     for definition: Config.Terminal, environment base: [String: String],
-    columns: Int? = nil, rows: Int? = nil, scrollbackLines: Int? = nil
+    columns: Int? = nil, rows: Int? = nil, scrollbackLines: Int? = nil,
+    link: String? = nil
   ) -> TerminalConfiguration {
+    var base = base
+    if let link, !link.isEmpty { base["FLASH_STATUS_LINK"] = link }
     let resolved = CommandLaunchConfiguration(
       command: definition.command,
       workingDirectory: definition.workingDirectory, overrides: definition.environment,

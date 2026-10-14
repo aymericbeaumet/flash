@@ -219,6 +219,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(runs.count, 1)
     XCTAssertEqual(runs[0].name, "quota")
     XCTAssertEqual(runs[0].content, "#[fg=colour178,bold]Claude#[default]\n5-hour 75% remaining")
+    XCTAssertNil(runs[0].link)
     XCTAssertGreaterThan(runs[0].xOffset, 0)
     XCTAssertGreaterThan(runs[0].width, 0)
     XCTAssertGreaterThan(total, runs[0].xOffset + runs[0].width)
@@ -249,6 +250,18 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(total, popupRuns[0].xOffset + popupRuns[0].width)
     XCTAssertEqual(linkRuns.count, 1)
     XCTAssertEqual(linkRuns[0].url, "https://example.com")
+    XCTAssertEqual(popupRuns[0].link, "https://example.com")
+  }
+
+  func testSeparatePopupsKeepTheLinkOnTheirOwnSpan() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "#[popup=feed]#[link=https://aggr.example]aggr#[nolink]#[nopopup] "
+      + "#[popup=feed-article]#[link=https://article.example/a]Headline#[nopopup]"
+    let (runs, _) = FlashStatusBarRenderer.popupRuns(
+      from: raw, font: font, popupTexts: ["feed": "", "feed-article": ""])
+    XCTAssertEqual(runs.map(\.name), ["feed", "feed-article"])
+    XCTAssertEqual(runs.map(\.link), ["https://aggr.example", "https://article.example/a"])
   }
 
   func testInlinePopupContentOverridesNamedTemplateOnlyForItsSpan() {

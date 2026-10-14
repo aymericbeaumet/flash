@@ -84,7 +84,9 @@ Hidden persistent processes skip frame extraction, drawing, and cursor blinking.
 
 Feed headlines rotate newest first through the last 24 hours, sliding upward
 every 30 seconds. The `#[label]aggr` name stays still because the template
-writes it. Hover runs `[popup.feed]`. Bind `#{flash.plugin.feed.summary}`
+writes it. Hovering the name runs `[popup.feed]`. Hovering the headline runs
+`[popup.feed-article]`, whose command can read `$FLASH_STATUS_LINK`, the item
+URL. Bind `#{flash.plugin.feed.summary}`
 instead when a headline should carry its own excerpt popup.
 
 See [popups](../../popups.md) for kinds, lifecycles and verbs.

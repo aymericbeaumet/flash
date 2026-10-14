@@ -199,7 +199,7 @@ final class StatusBarHoverTests: XCTestCase {
       unionFrame: screen, mainFrame: screen, mainScale: 1, mainVisibleFrame: screen,
       nativeStatusBarFallbackHeight: 0)
     var events: [String] = []
-    panel.statusBarTerminalPrepareHandler = { name in
+    panel.statusBarTerminalPrepareHandler = { name, _ in
       events.append("prepare " + name)
       return true
     }
@@ -436,7 +436,7 @@ final class StatusBarHoverTests: XCTestCase {
       panel.hideStatusBarPopup()
     }
     let previews = PreviewRecorder()
-    panel.statusBarTerminalPrepareHandler = { name in
+    panel.statusBarTerminalPrepareHandler = { name, _ in
       previews.names.append(name)
       return false
     }

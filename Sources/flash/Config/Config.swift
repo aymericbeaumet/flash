@@ -582,6 +582,15 @@ struct Config {
     var environment: [String: String] = [:]
     var size: PopupSize = .default
     var lifecycle: PopupLifecycle = .fresh
+
+    /// The command reads the hovered span's `#[link]` (`$FLASH_STATUS_LINK`).
+    /// A prewarmed process would start before any hover, so it is left to
+    /// start when shown.
+    var readsHoveredLink: Bool {
+      command.contains { argument in
+        argument.contains("$FLASH_STATUS_LINK") || argument.contains("${FLASH_STATUS_LINK}")
+      }
+    }
   }
 
   /// A `[popup.<name>]` table: exactly one of `text` or `command`.
@@ -1247,7 +1256,10 @@ struct Config {
   /// showing one attaches to a live process: the referenced ones.
   var prewarmedPopupNames: Set<String> {
     let terminals = terminalPopups
-    return referencedPopupNames.filter { terminals[$0]?.lifecycle == .fresh }
+    return referencedPopupNames.filter { name in
+      guard let terminal = terminals[name], terminal.lifecycle == .fresh else { return false }
+      return !terminal.readsHoveredLink
+    }
   }
 
   /// Plugin id → the status segments a live surface shows: the enabled bar
