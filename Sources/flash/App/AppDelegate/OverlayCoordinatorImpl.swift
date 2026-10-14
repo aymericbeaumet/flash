@@ -698,9 +698,9 @@ extension AppDelegate {
     noteContextMenuInteraction(reason: reason)
     // Record the native surface as mode context and let the single
     // projection-driven writer set inputMode + capture — no direct `overlay.*`
-    // pokes, so the badge and routing can't drift from the mode. Cleared when
-    // capture is re-established (recapture / a mode transition).
-    nativeSurfaceSuspended = true
+    // pokes, so the badge and routing can't drift from the mode. Ended by the
+    // surface closing, a mode transition, or another app coming forward.
+    nativeSurfaceOwnership.begin()
     applyModeOverlay()
   }
 

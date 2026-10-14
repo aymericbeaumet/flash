@@ -195,9 +195,9 @@ extension AppDelegate {
 
   /// Per-base-mode bookkeeping that must run before the surface is rendered.
   private func applyEnterBookkeeping(_ next: Mode) {
-    // Any base-mode transition ends a transient native-surface suspension; clear
+    // Any base-mode transition ends a transient native-surface suspension; end
     // it before the surface renders so capture isn't pinned off afterward.
-    nativeSurfaceSuspended = false
+    nativeSurfaceOwnership.end()
     switch next {
     case .normal:
       // Identity only: the target pid needs no WindowServer geometry.
@@ -694,10 +694,15 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=about_window")
       return
     }
-    if Self.contextMenuInteractionRecaptureSuppressionIsActive(
+    // A native surface the user still holds open keeps the keyboard. The
+    // bounded window stands in for a close signal only for a surface Flash
+    // never saw open; one it saw open stays owned until it closes.
+    let contextMenuWindowActive = Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
-    {
-      FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
+    guard nativeSurfaceOwnership.recaptureRequested(windowActive: contextMenuWindowActive) else {
+      FlashLog.trace(
+        "[mode] recapture_skip reason="
+          + (nativeSurfaceSuspended ? "native_surface_owned" : "context_menu_interaction"))
       return
     }
     if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
@@ -706,10 +711,6 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
       return
     }
-    // Reaching here means no suppression is active — any native surface (context
-    // menu) has dismissed — so clear the suspend flag before re-establishing
-    // capture, otherwise the projection keeps capture pinned off.
-    nativeSurfaceSuspended = false
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
     guard shouldCaptureNormalModeInput else {

@@ -266,14 +266,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
   }
   var pointerInsertHandoffToken: UInt64 = 0
-  /// True while a native surface (context menu / OS popup) owns the keyboard.
-  /// The sole non-base-mode input to the capture projection — set by
-  /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
-  /// re-established (recapture or any mode transition). Keeps `overlay.inputMode`
-  /// and the badge's capture flag from drifting away from the mode.
-  var nativeSurfaceSuspended = false {
-    didSet { if oldValue != nativeSurfaceSuspended { refreshOverlayInputRouting() } }
+  /// Whether a native surface (context menu / OS popup) owns the keyboard.
+  /// The sole non-base-mode input to the capture projection — begun by
+  /// `suspendNormalCaptureForNativeSurface`, ended by the surface's close
+  /// notification, an explicit mode entry, another app coming forward, or a
+  /// recapture after the bounded window for a surface Flash never saw open.
+  /// Keeps `overlay.inputMode` and the badge's capture flag from drifting
+  /// away from the mode.
+  var nativeSurfaceOwnership = NativeSurfaceOwnership() {
+    didSet {
+      if oldValue.isOwned != nativeSurfaceOwnership.isOwned { refreshOverlayInputRouting() }
+    }
   }
+  var nativeSurfaceSuspended: Bool { nativeSurfaceOwnership.isOwned }
   var aboutWindowVisible = false {
     didSet { if oldValue != aboutWindowVisible { refreshOverlayInputRouting() } }
   }
@@ -379,6 +384,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     monitor.focusedElementDidChange = { [weak self] pid, bundleID, notification in
       if notification == kAXTitleChangedNotification as String {
         self?.windowLayoutManager.observedTitleChanged(pid: pid)
+      }
+      // A native menu's own open and close are the evidence that decides how
+      // long it keeps the keyboard (`NativeSurfaceOwnership`).
+      if notification == kAXMenuOpenedNotification as String {
+        self?.nativeSurfaceOwnership.menuOpened()
+      } else if notification == kAXMenuClosedNotification as String, let self,
+        self.nativeSurfaceSuspended
+      {
+        self.nativeSurfaceOwnership.end()
+        if self.flashMode == .normal { self.scheduleNormalModeRecapture() }
       }
       guard let self, self.pluginManager.hasListener(for: PluginProtocol.axChangedEvent) else {
         return
@@ -1077,6 +1092,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     emitFocusEvent: Bool
   ) {
     observedFocusedAppPID = app.processIdentifier
+    // Another app coming forward ends any native surface of the previous one.
+    nativeSurfaceOwnership.end()
     refreshFocusDependentState(for: app)
     debugStateDidChange()
     if emitFocusEvent, focusEmissionGate.shouldEmit(pid: app.processIdentifier) {

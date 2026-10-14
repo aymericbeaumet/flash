@@ -383,6 +383,11 @@ Advanced-mode eligibility follows the base mode through command, finder, and
 terminal surfaces. Opening a surface while disabled cannot enable NORMAL.
 Changing the enabling binding while a surface is open updates its return mode:
 enabling returns to NORMAL, and disabling returns to the disabled base mode.
+A context menu Flash saw open keeps the keyboard until it closes: a recapture
+a system event asks for — an app launching, a Space change, the panel resigning
+key — never ends it, while its close notification, an explicit mode entry or
+another app coming forward does. A surface that posts no menu notifications
+keeps the bounded window that stood in for a close signal.
 A label or configuration refresh preserves native-menu capture suspension; only an explicit
 mode entry resets that interaction context. Reentrant events wait until the
 current mode effect batch finishes, preserving transition order.

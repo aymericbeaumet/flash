@@ -344,6 +344,10 @@ final class AppMonitor {
     kAXUIElementDestroyedNotification,
     kAXRowExpandedNotification,
     kAXRowCollapsedNotification,
+    // A context menu opening and closing: the evidence that decides how long
+    // a native surface keeps the keyboard (`NativeSurfaceOwnership`).
+    kAXMenuOpenedNotification,
+    kAXMenuClosedNotification,
   ]
 
   /// Reduced set for apps excluded from automatic model warming

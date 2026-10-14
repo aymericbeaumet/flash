@@ -288,9 +288,13 @@ pub mod ax_notifications {
     pub const UI_ELEMENT_DESTROYED: &str = "AXUIElementDestroyed";
     pub const ROW_EXPANDED: &str = "AXRowExpanded";
     pub const ROW_COLLAPSED: &str = "AXRowCollapsed";
+    /// A context menu opened; the host reads it as a native surface owning
+    /// the keyboard until `MENU_CLOSED`.
+    pub const MENU_OPENED: &str = "AXMenuOpened";
+    pub const MENU_CLOSED: &str = "AXMenuClosed";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 19] = [
+    pub const ALL: [&str; 21] = [
         FOCUSED_UI_ELEMENT_CHANGED,
         FOCUSED_WINDOW_CHANGED,
         MAIN_WINDOW_CHANGED,
@@ -310,6 +314,8 @@ pub mod ax_notifications {
         UI_ELEMENT_DESTROYED,
         ROW_EXPANDED,
         ROW_COLLAPSED,
+        MENU_OPENED,
+        MENU_CLOSED,
     ];
 }
 
