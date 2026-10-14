@@ -37,6 +37,7 @@ extension AppDelegate {
     let generation = finder.sessionGeneration
     finder.fetchedNonLocationSourceIDs.removeAll()
     finder.deferredNonLocationSnapshots.removeAll()
+    finder.snapshotOrdering = CandidateSnapshotOrdering()
     finder.resetInitialSnapshot()
     finder.submissionDeferral.cancel()
     finder.candidates = []
@@ -378,13 +379,16 @@ extension AppDelegate {
     generation: UInt64
   ) {
     let sourceID = source.identifier
+    // Stamped before the preparation that may reorder replies for one source.
+    let stamp = finder.snapshotOrdering.stamp(sourceID)
     finder.preparationQueue.async { [weak self] in
       let prepared = CandidateFinder.prepare(candidates)
       DispatchQueue.main.async { [weak self] in
         self?.receivePreparedCandidateSnapshot(
           prepared,
           sourceID: sourceID,
-          generation: generation)
+          generation: generation,
+          stamp: stamp)
       }
     }
   }
@@ -392,9 +396,14 @@ extension AppDelegate {
   private func receivePreparedCandidateSnapshot(
     _ candidates: [Candidate],
     sourceID: String,
-    generation: UInt64
+    generation: UInt64,
+    stamp: UInt64
   ) {
     guard generation == finder.sessionGeneration else { return }
+    guard finder.snapshotOrdering.accept(sourceID, stamp: stamp) else {
+      FlashLog.trace("[candidate_finder] merge_superseded source=\(sourceID) stamp=\(stamp)")
+      return
+    }
     switch overlay.inputMode {
     case .commandLine: break
     default: return

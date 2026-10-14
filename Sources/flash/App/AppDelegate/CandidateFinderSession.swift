@@ -177,6 +177,8 @@ final class CandidateFinderSession {
   /// that first snapshot instead of being overwritten or causing an extra
   /// intermediate render.
   var deferredNonLocationSnapshots: [String: [Candidate]] = [:]
+  /// Which reply may stand for each source; see `CandidateSnapshotOrdering`.
+  var snapshotOrdering = CandidateSnapshotOrdering()
   /// Non-location sources remain lazy and may reply in a burst after the user
   /// explicitly selects one. Coalesce those opt-in updates within a runloop
   /// turn; the initial location snapshot never uses this incremental path.
