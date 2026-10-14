@@ -434,8 +434,9 @@ another app coming forward does. A surface that posts no menu notifications
 keeps the bounded window that stood in for a close signal.
 While a context menu is open its app's NORMAL mappings still fire, so `f`
 labels the menu's items rather than the window behind it: the walk starts at
-the app's open menus (submenus included) and keeps targets inside their
-frames. The hint session takes the keyboard back from the menu while it runs,
+the menus the app reported opening (submenus included; a browser's context
+menu is reachable no other way) and keeps targets inside their frames. A
+submenu closing leaves the menu it hangs from in charge of the keyboard. The hint session takes the keyboard back from the menu while it runs,
 so labels and Escape reach Flash, and gives it back when it ends. This needs
 the session tap: Flash's key-window fallback would close the menu by becoming
 key, so under secure input `f` walks the window as before.

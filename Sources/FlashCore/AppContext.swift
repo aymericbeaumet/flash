@@ -38,6 +38,9 @@ public struct AppContext: @unchecked Sendable {
   /// The `.focusedWindow` element the frame step already resolved, so the
   /// walk starts there without asking the app for its focused window again.
   public let walkedWindow: AXUIElement?
+  /// The `.openMenus` walk's roots: the menus the app reported opening, plus
+  /// any `AXMenu` child of its application element.
+  public let menus: [AXUIElement]
 
   public init(
     bundleIdentifier: String,
@@ -46,7 +49,8 @@ public struct AppContext: @unchecked Sendable {
     frontWindowFrame: CGRect,
     allScreensFrame: CGRect,
     walkRoot: WalkRoot = .focusedWindow,
-    walkedWindow: AXUIElement? = nil
+    walkedWindow: AXUIElement? = nil,
+    menus: [AXUIElement] = []
   ) {
     self.bundleIdentifier = bundleIdentifier
     self.processID = processID
@@ -55,5 +59,6 @@ public struct AppContext: @unchecked Sendable {
     self.allScreensFrame = allScreensFrame
     self.walkRoot = walkRoot
     self.walkedWindow = walkedWindow
+    self.menus = menus
   }
 }

@@ -751,7 +751,7 @@ public final class AccessibilityProvider: FlashSource {
     case .elementsInFrame:
       roots = Self.topLevelElements(in: app, meeting: clip, screenH: screenH)
     case .openMenus:
-      roots = Self.openMenus(in: app, screenH: screenH).map(\.element)
+      roots = context.menus
     }
 
     var state = WalkState()
@@ -841,20 +841,26 @@ public final class AccessibilityProvider: FlashSource {
     }
   }
 
-  /// The app's open menus with their frames: a context menu and any open
-  /// submenu are `AXMenu` children of the application element.
-  public static func openMenus(in app: AXUIElement, screenH: CGFloat) -> [(
-    element: AXUIElement, frame: CGRect
-  )] {
-    AXAttribute.children(app).compactMap { child in
-      guard AXAttribute.role(child) == (kAXMenuRole as String),
-        let origin = AXAttribute.point(child, kAXPositionAttribute as String),
-        let size = AXAttribute.size(child, kAXSizeAttribute as String),
+  /// The open menus to walk, with their frames: `recorded` (the menus the
+  /// app reported opening; Firefox's context menu is reachable no other way)
+  /// and any `AXMenu` child of the application element (Cocoa's), each once.
+  /// A menu with no on-screen frame has closed and is dropped.
+  public static func openMenus(
+    in app: AXUIElement, recorded: [AXUIElement], screenH: CGFloat
+  ) -> [(element: AXUIElement, frame: CGRect)] {
+    let children = AXAttribute.children(app).filter {
+      AXAttribute.role($0) == (kAXMenuRole as String)
+    }
+    var seen: [AXUIElement] = []
+    for menu in recorded + children where !seen.contains(menu) { seen.append(menu) }
+    return seen.compactMap { menu in
+      guard let origin = AXAttribute.point(menu, kAXPositionAttribute as String),
+        let size = AXAttribute.size(menu, kAXSizeAttribute as String),
         size.width > 0, size.height > 0
       else { return nil }
       // Accessibility is top-left; Flash's frames are NSScreen bottom-left.
       return (
-        child,
+        menu,
         CGRect(
           x: origin.x, y: screenH - origin.y - size.height, width: size.width, height: size.height)
       )

@@ -50,6 +50,10 @@ final class AppMonitor {
   /// Every observed AX notification: the app's pid, its bundle id as known
   /// at observer install, and the notification name.
   var focusedElementDidChange: ((pid_t, String?, String) -> Void)?
+  /// A menu of app `pid` opened (`true`) or closed, with the element the
+  /// notification named: the one handle on a menu that is not a child of
+  /// its application element (Firefox's context menus).
+  var menuDidChange: ((pid_t, Bool, AXUIElement) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var activeWindowMayHaveChanged: ((pid_t, String, AXUIElement?) -> Void)?
   var focusedWindowDidResolve: ((pid_t, AXUIElement) -> Void)?
@@ -270,13 +274,17 @@ final class AppMonitor {
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
     guard let monitor = ctx.monitor else { return }
     let isFocusedWindow = ctx.isFocusedWindow(element)
+    let name = notification as String
+    let isMenu =
+      name == kAXMenuOpenedNotification as String || name == kAXMenuClosedNotification as String
     monitor.enqueueAXEvent(
       PendingAXEvent(
         pid: ctx.pid,
         bundleIdentifier: ctx.bundleIdentifier,
-        notification: notification as String,
+        notification: name,
         observedElementIsFocusedWindow: isFocusedWindow,
-        observedWindow: isFocusedWindow ? element : nil))
+        observedWindow: isFocusedWindow ? element : nil,
+        menu: isMenu ? element : nil))
   }
 
   struct PendingAXEvent {
@@ -285,6 +293,8 @@ final class AppMonitor {
     var notification: String
     var observedElementIsFocusedWindow: Bool
     var observedWindow: AXUIElement?
+    /// The menu an `AXMenuOpened` / `AXMenuClosed` names.
+    var menu: AXUIElement? = nil
   }
 
   private let pendingAXEventsLock = NSLock()
@@ -315,7 +325,8 @@ final class AppMonitor {
         bundleIdentifier: event.bundleIdentifier,
         notification: event.notification,
         observedElementIsFocusedWindow: event.observedElementIsFocusedWindow,
-        observedWindow: event.observedWindow)
+        observedWindow: event.observedWindow,
+        menu: event.menu)
     }
   }
 

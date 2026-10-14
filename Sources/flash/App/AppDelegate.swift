@@ -393,20 +393,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.dispatchMode(.exitVisual)
       }
     }
+    // A native menu's own open and close are the evidence that decides how
+    // long it keeps the keyboard (`NativeSurfaceOwnership`), and the menus
+    // they name are what `f` walks while one is open.
+    monitor.menuDidChange = { [weak self] pid, opened, menu in
+      guard let self else { return }
+      if opened {
+        self.nativeSurfaceOwnership.menuOpened(pid: pid, menu: menu)
+      } else if self.nativeSurfaceOwnership.menuClosed(menu), self.flashMode == .normal {
+        self.scheduleNormalModeRecapture()
+      }
+    }
     // Every observed AX notification reaches plugins exactly once, here.
     monitor.focusedElementDidChange = { [weak self] pid, bundleID, notification in
       if notification == kAXTitleChangedNotification as String {
         self?.windowLayoutManager.observedTitleChanged(pid: pid)
-      }
-      // A native menu's own open and close are the evidence that decides how
-      // long it keeps the keyboard (`NativeSurfaceOwnership`).
-      if notification == kAXMenuOpenedNotification as String {
-        self?.nativeSurfaceOwnership.menuOpened(pid: pid)
-      } else if notification == kAXMenuClosedNotification as String, let self,
-        self.nativeSurfaceSuspended
-      {
-        self.nativeSurfaceOwnership.end()
-        if self.flashMode == .normal { self.scheduleNormalModeRecapture() }
       }
       guard let self, self.pluginManager.hasListener(for: PluginProtocol.axChangedEvent) else {
         return

@@ -104,7 +104,8 @@ extension AppMonitor {
     bundleIdentifier: String? = nil,
     notification: String,
     observedElementIsFocusedWindow: Bool,
-    observedWindow: AXUIElement?
+    observedWindow: AXUIElement?,
+    menu: AXUIElement? = nil
   ) {
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
@@ -123,6 +124,9 @@ extension AppMonitor {
     }
     if Self.notificationMayChangeFocusedElement(notification) {
       focusedElementMayHaveChanged?(pid)
+    }
+    if let menu {
+      menuDidChange?(pid, notification == kAXMenuOpenedNotification as String, menu)
     }
     focusedElementDidChange?(pid, bundleIdentifier, notification)
   }

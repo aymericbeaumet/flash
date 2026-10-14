@@ -117,7 +117,8 @@ extension AppMonitor {
       frontWindowFrame: frame.isNull ? context.frontWindowFrame : frame,
       allScreensFrame: context.allScreensFrame,
       walkRoot: context.walkRoot,
-      walkedWindow: walkedWindow ?? context.walkedWindow
+      walkedWindow: walkedWindow ?? context.walkedWindow,
+      menus: context.menus
     )
   }
 

@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 
 /// Who owns the keyboard while NORMAL capture is suspended for a native
@@ -12,10 +13,17 @@ import Foundation
 /// signal before: without a sighting, a recapture after that window ends the
 /// ownership as it always did, and a recapture inside it is skipped.
 struct NativeSurfaceOwnership: Equatable {
+  /// The menus one app reported opening, outermost first: the elements its
+  /// `AXMenuOpened` notifications named.
+  struct OpenMenus: Equatable {
+    var pid: pid_t
+    var menus: [AXUIElement]
+  }
+
   enum State: Equatable {
     case none
-    /// `menuPID` is the app whose menu reported opening; nil until one did.
-    case owned(menuPID: pid_t?)
+    /// `open` is the app whose menus reported opening; nil until one did.
+    case owned(open: OpenMenus?)
   }
 
   private(set) var state: State = .none
@@ -23,18 +31,46 @@ struct NativeSurfaceOwnership: Equatable {
   var isOwned: Bool { state != .none }
 
   /// Capture was suspended for a native surface.
-  mutating func begin() { state = .owned(menuPID: nil) }
+  mutating func begin() { state = .owned(open: nil) }
 
-  /// App `pid` reported a menu opening while the surface is owned.
-  mutating func menuOpened(pid: pid_t) {
-    if case .owned = state { state = .owned(menuPID: pid) }
+  /// App `pid` reported `menu` opening while the surface is owned: a context
+  /// menu, or a submenu of one. Another app's menu replaces the record.
+  mutating func menuOpened(pid: pid_t, menu: AXUIElement) {
+    guard case .owned(let open) = state else { return }
+    var record = open?.pid == pid ? open! : OpenMenus(pid: pid, menus: [])
+    if !record.menus.contains(menu) { record.menus.append(menu) }
+    state = .owned(open: record)
+  }
+
+  /// `menu` reported closing. Returns true when that ended the surface: the
+  /// last recorded menu closed, or a menu Flash never recorded did. A
+  /// submenu closing leaves the menu it hangs from, and the keyboard, open.
+  mutating func menuClosed(_ menu: AXUIElement) -> Bool {
+    guard case .owned(let open) = state else { return false }
+    guard var record = open, let index = record.menus.firstIndex(of: menu) else {
+      state = .none
+      return true
+    }
+    record.menus.remove(at: index)
+    if record.menus.isEmpty {
+      state = .none
+      return true
+    }
+    state = .owned(open: record)
+    return false
   }
 
   /// The app whose menu is open, once it reported opening: `f` walks that
   /// menu instead of the window behind it.
   var openMenuPID: pid_t? {
-    if case .owned(let pid) = state { return pid }
+    if case .owned(let open) = state { return open?.pid }
     return nil
+  }
+
+  /// The open menus `f` walks, outermost first.
+  var openMenus: [AXUIElement] {
+    if case .owned(let open) = state { return open?.menus ?? [] }
+    return []
   }
 
   /// Whether the native surface keeps the keyboard. A hint session started
@@ -59,9 +95,9 @@ struct NativeSurfaceOwnership: Equatable {
     switch state {
     case .none:
       return !windowActive
-    case .owned(.some):
+    case .owned(open: .some):
       return false
-    case .owned(nil):
+    case .owned(open: nil):
       if windowActive { return false }
       state = .none
       return true

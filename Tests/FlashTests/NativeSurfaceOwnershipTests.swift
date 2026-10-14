@@ -1,15 +1,20 @@
+import ApplicationServices
 import FlashCore
 import XCTest
 
 @testable import flash
 
 final class NativeSurfaceOwnershipTests: XCTestCase {
+  /// Distinct AX elements to stand in for menus; never messaged.
+  private let menu = AXUIElementCreateApplication(1)
+  private let submenu = AXUIElementCreateApplication(2)
+
   /// A context menu Flash saw open keeps the keyboard until it closes: a
   /// recapture a system event asks for, however late, does not end it.
   func testASurfaceSeenOpenEndsOnlyWithItsClose() {
     var ownership = NativeSurfaceOwnership()
     ownership.begin()
-    ownership.menuOpened(pid: 42)
+    ownership.menuOpened(pid: 42, menu: menu)
     XCTAssertFalse(ownership.recaptureRequested(windowActive: true))
     XCTAssertFalse(
       ownership.recaptureRequested(windowActive: false), "two seconds in, an app launched")
@@ -35,7 +40,7 @@ final class NativeSurfaceOwnershipTests: XCTestCase {
   /// and the window alone still skips a recapture, surface or not.
   func testTheWindowAloneStillSkipsARecapture() {
     var ownership = NativeSurfaceOwnership()
-    ownership.menuOpened(pid: 42)
+    ownership.menuOpened(pid: 42, menu: menu)
     XCTAssertFalse(ownership.isOwned)
     XCTAssertFalse(ownership.recaptureRequested(windowActive: true))
     XCTAssertTrue(ownership.recaptureRequested(windowActive: false))
@@ -48,7 +53,7 @@ final class NativeSurfaceOwnershipTests: XCTestCase {
     XCTAssertNil(ownership.openMenuPID)
     ownership.begin()
     XCTAssertNil(ownership.openMenuPID, "suspended, but no menu seen yet")
-    ownership.menuOpened(pid: 42)
+    ownership.menuOpened(pid: 42, menu: menu)
     XCTAssertEqual(ownership.openMenuPID, 42)
     ownership.end()
     XCTAssertNil(ownership.openMenuPID)
@@ -90,5 +95,33 @@ final class NativeSurfaceOwnershipTests: XCTestCase {
     XCTAssertEqual(
       AppContext.WalkRoot.activation(openMenuPID: nil, targetPID: 42, tapLive: true),
       .focusedWindow)
+  }
+
+  /// The menus an app reported opening are what `f` walks: Firefox's context
+  /// menu is not a child of the application element, so the element the
+  /// notification names is the one way to reach it. A submenu closing leaves
+  /// the menu it hangs from open, and the keyboard with it.
+  func testOpenMenusAreTheNotifiedElementsAndCloseOneByOne() {
+    var ownership = NativeSurfaceOwnership()
+    ownership.begin()
+    ownership.menuOpened(pid: 42, menu: menu)
+    ownership.menuOpened(pid: 42, menu: submenu)
+    ownership.menuOpened(pid: 42, menu: submenu)
+    XCTAssertEqual(ownership.openMenus, [menu, submenu])
+    XCTAssertFalse(ownership.menuClosed(submenu), "the parent menu is still open")
+    XCTAssertTrue(ownership.isOwned)
+    XCTAssertEqual(ownership.openMenus, [menu])
+    XCTAssertTrue(ownership.menuClosed(menu), "the last menu closed")
+    XCTAssertFalse(ownership.isOwned)
+    XCTAssertEqual(ownership.openMenus, [])
+  }
+
+  /// A close naming no menu Flash recorded is still the surface going away.
+  func testACloseNamingAnUnknownMenuEndsTheSurface() {
+    var ownership = NativeSurfaceOwnership()
+    ownership.begin()
+    ownership.menuOpened(pid: 42, menu: menu)
+    XCTAssertTrue(ownership.menuClosed(submenu))
+    XCTAssertFalse(ownership.isOwned)
   }
 }

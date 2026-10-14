@@ -517,7 +517,9 @@ extension AppMonitor {
       self.configureRuntime(for: cfg)
       let menus = GeckoAccessibility.withTree(
         pid: context.processID, bundleIdentifier: context.bundleIdentifier
-      ) { app in AccessibilityProvider.openMenus(in: app, screenH: primaryH) }
+      ) { app in
+        AccessibilityProvider.openMenus(in: app, recorded: context.menus, screenH: primaryH)
+      }
       let frames = menus.map(\.frame)
       let region = self.union(of: frames)
       let providers = self.registry.hintProviderPlan(for: context).activationProviders.filter {
@@ -525,7 +527,11 @@ extension AppMonitor {
       }
       var hints: [AssignedHint] = []
       if !frames.isEmpty, !providers.isEmpty {
-        let menuContext = self.clip(context, to: region)
+        let menuContext = AppContext(
+          bundleIdentifier: context.bundleIdentifier, processID: context.processID,
+          runningApp: context.runningApp, frontWindowFrame: region,
+          allScreensFrame: context.allScreensFrame, walkRoot: .openMenus,
+          menus: menus.map(\.element))
         let collection = Self.collectFocusedTargets(context: menuContext, providers: providers)
         let finalized = TargetFinalizer.finalizeWithStats(
           collection.targets, visibleRegions: frames)
