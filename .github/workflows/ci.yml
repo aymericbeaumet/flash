@@ -181,6 +181,12 @@ jobs:
       - name: Install inspector deps
         working-directory: Inspector
         run: pnpm install --frozen-lockfile
+      - name: Type-check inspector
+        working-directory: Inspector
+        run: pnpm check
+      - name: Run inspector unit tests
+        working-directory: Inspector
+        run: node --test *.test.ts
       - name: Build inspector bundle
         working-directory: Inspector
         run: pnpm build

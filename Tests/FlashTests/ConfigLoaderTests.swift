@@ -1759,7 +1759,11 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
-    XCTAssertEqual(c.mode.hyper.map(\.key).sorted(), ["+", "-"])
+    // Entries extend the default function row and arrows; `-` replaces the
+    // default volume-down binding.
+    let keys = Set(c.mode.hyper.map(\.key))
+    XCTAssertTrue(keys.isSuperset(of: ["+", "-"]))
+    XCTAssertEqual(c.mode.hyper.filter { $0.key == "-" }.count, 1)
     XCTAssertEqual(
       c.mode.compiledHyper.mapping(for: "-")?.action.command,
       .pluginCommand(command: "media", subcommand: "volumedown", args: []))

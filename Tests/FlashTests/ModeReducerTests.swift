@@ -706,13 +706,15 @@ final class ModeReducerTests: XCTestCase {
 
   func testConfigPreparesTheHyperMatcherAndLeaderAtom() {
     var mode = Config.Mode()
-    mode.normalLeader = "space"
+    // As configured: a bare `space` would be five keys, not the space bar.
+    mode.normalLeader = "<space>"
     mode.hyperKey = "<leader>"
     mode.refreshLeaderDerivedDefaults()
     XCTAssertEqual(mode.resolvedHyperKey, "space")
     XCTAssertEqual(mode.resolvedHyperMatcher?.atom, "space")
     XCTAssertEqual(mode.resolvedHyperMatcher?.chord, HyperKeyChord.parse("space"))
-    XCTAssertEqual(mode.resolvedLeaderAtom, NormalModeInterpreter.translateLeader("space"))
+    XCTAssertEqual(mode.resolvedLeaderAtom, NormalModeInterpreter.translateLeader("<space>"))
+    XCTAssertEqual(mode.resolvedLeaderAtom, "space")
     mode.normalLeader = nil
     mode.refreshLeaderDerivedDefaults()
     XCTAssertNil(mode.resolvedHyperMatcher)
