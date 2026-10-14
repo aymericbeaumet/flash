@@ -35,6 +35,37 @@ final class FormatCommandJobTests: XCTestCase {
     }
   }
 
+  /// A command that backgrounds a child and exits completes as soon as the
+  /// leader does: the child's end of the pipe is closed by signalling the
+  /// group while the leader still holds its id, never after the reap, when
+  /// that id may already belong to someone else.
+  func testBackgroundedChildIsSignalledBeforeTheLeaderIsReaped() throws {
+    let queue = DispatchQueue(label: "test.status-format.background")
+    let completed = expectation(description: "leader exit completes the job")
+    var job: StatusFormatCommandJob?
+    let started = ProcessInfo.processInfo.systemUptime
+    try queue.sync {
+      job = try StatusFormatCommandJob(
+        queue: queue,
+        argv: ["/bin/sh", "-c", "sleep 30 & echo leader-done; exit 0"],
+        environment: ["PATH": "/usr/bin:/bin"], timeoutSeconds: 10,
+        onLine: { _ in },
+        onCompletion: { status, output in
+          XCTAssertEqual(status, 0)
+          XCTAssertEqual(output, "leader-done\n")
+          completed.fulfill()
+        })
+    }
+    wait(for: [completed], timeout: 5)
+    XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 3)
+    queue.sync {
+      if let job {
+        XCTAssertEqual(kill(-job.processIdentifier, 0), -1, "the group is gone")
+      }
+      job = nil
+    }
+  }
+
   func testContinuousProducerYieldsQueueAndShutdownReapsItsGroup() throws {
     let queue = DispatchQueue(label: "test.status-format.continuous")
     let output = expectation(description: "producer is running")

@@ -380,8 +380,9 @@ drains at most 256 KiB before yielding its utility queue. Reload and quit
 terminate owned process groups with one bounded batch deadline and reap their
 leaders; every wait there ends on the kernel's exit events for each group's
 members (`ProcessExit`), so the grace period ends as soon as the groups leave
-and nothing sleeps between checks. Successful shell completion also terminates
-residual group children.
+and nothing sleeps between checks. A completed command's residual group
+children are terminated before its leader is reaped, while the leader still
+holds the group id.
 
 Unicode is pinned to **utf8proc 2.12.0 / Unicode 18.0**, with tmux 3.7c's width
 overrides. Flash's data is modified into 482 compact non-unit width intervals,
