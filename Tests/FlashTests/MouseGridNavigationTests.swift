@@ -259,14 +259,27 @@ final class MouseGridCoordinatorTests: XCTestCase {
     delegate.hintSession.surface = .grid
     delegate.hintSession.gridShape = shape
     delegate.displayMouseGrid(MouseGrid.Navigation(root: root, screenIndex: 0))
-    XCTAssertEqual(delegate.hintSession.hints.map(\.label).joined(), "12345qwertasdfgzxcvb")
+    // The step's own cells carry the monograms; the preview underneath spells
+    // every next step as a bigram and never answers a key.
+    let primaries = delegate.hintSession.hints.filter {
+      $0.target.role != MouseGrid.previewCellRole
+    }
+    let previews = delegate.hintSession.hints.filter {
+      $0.target.role == MouseGrid.previewCellRole
+    }
+    XCTAssertEqual(primaries.map(\.label).joined(), "12345qwertasdfgzxcvb")
+    XCTAssertEqual(previews.count, 20 * 20)
+    XCTAssertTrue(previews.allSatisfy { $0.label.count == 2 })
+    XCTAssertEqual(delegate.hintSession.gridCellIndex.count, 20)
     XCTAssertEqual(delegate.overlay.hintKeyRoute, .grid(shape, cursorFollows: false))
 
     // `t` is the right end of the top letter row.
     delegate.overlayDidGrid(.cell("t", []))
     let t = CGRect(x: 1200, y: 500, width: 300, height: 250)
     XCTAssertEqual(delegate.hintSession.grid?.current, .init(region: t, depth: 1))
-    XCTAssertEqual(delegate.hintSession.hints.first?.target.frame.maxY, t.maxY)
+    XCTAssertEqual(
+      delegate.hintSession.hints.first { $0.target.role != MouseGrid.previewCellRole }?
+        .target.frame.maxY, t.maxY)
     delegate.overlayDidGrid(.move(.left))
     XCTAssertEqual(
       delegate.hintSession.grid?.current.region, t.offsetBy(dx: -300, dy: 0))
