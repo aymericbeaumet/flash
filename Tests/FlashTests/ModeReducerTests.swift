@@ -18,23 +18,23 @@ final class ModeReducerTests: XCTestCase {
     .command(restoreTo: .normal),
     .command(restoreTo: .insert),
     .command(restoreTo: .disabled),
-    .terminal(restoreTo: .normal),
-    .terminal(restoreTo: .insert),
-    .terminal(restoreTo: .disabled),
+    .terminal(restoreTo: .normal, returnPID: nil),
+    .terminal(restoreTo: .insert, returnPID: nil),
+    .terminal(restoreTo: .disabled, returnPID: nil),
     .hyper(restoreTo: .normal),
   ]
 
   // Representative events covering every case.
   private let allEvents: [ModeEvent] = [
     .enterInsert(targetPID: 7),
-    .enterNormal(targetPID: 7),
-    .leaveMode(hasHints: false, targetPID: nil),
-    .leaveMode(hasHints: true, targetPID: 7),
+    .enterNormal,
+    .leaveMode(hasHints: false),
+    .leaveMode(hasHints: true),
     .openCommand(restoreMode: false),
     .openCommand(restoreMode: true),
     .closeCommand(reason: "submit"),
-    .openTerminal,
-    .closeTerminal(targetPID: nil),
+    .openTerminal(returnPID: nil),
+    .closeTerminal(restoresApp: false),
     .clickResolved(entersInsert: true, targetPID: 7),
     .clickResolved(entersInsert: false, targetPID: 7),
     .advancedModeChanged(enabled: true),
@@ -145,7 +145,7 @@ final class ModeReducerTests: XCTestCase {
 
   func testOnlyKeyboardAndConfigLeaveInsert() {
     XCTAssertEqual(
-      ModeReducer.reduce(.insert, .enterNormal(targetPID: 7)).0, .normal)
+      ModeReducer.reduce(.insert, .enterNormal).0, .normal)
     XCTAssertEqual(
       ModeReducer.reduce(.insert, .advancedModeChanged(enabled: false)).0, .disabled)
   }
@@ -164,15 +164,15 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testEnteredNormalPersistsAcrossFocusHintsAndCommandSubmissions() {
-    var mode = ModeReducer.reduce(.insert, .enterNormal(targetPID: 7)).0
+    var mode = ModeReducer.reduce(.insert, .enterNormal).0
     XCTAssertEqual(mode, .normal)
 
     for event in [
       ModeEvent.focusedAppChanged(pid: 42),
       .focusedAppChanged(pid: 7),
-      .leaveMode(hasHints: true, targetPID: 42),
+      .leaveMode(hasHints: true),
       .advancedModeChanged(enabled: true),
-      .leaveMode(hasHints: false, targetPID: 42),
+      .leaveMode(hasHints: false),
     ] {
       let (next, effects) = ModeReducer.reduce(mode, event)
       XCTAssertEqual(next, .normal, "\(event) must preserve explicit NORMAL")
@@ -189,7 +189,7 @@ final class ModeReducerTests: XCTestCase {
 
     mode = ModeReducer.reduce(mode, .enterInsert(targetPID: 7)).0
     XCTAssertEqual(mode, .insert)
-    mode = ModeReducer.reduce(mode, .leaveMode(hasHints: false, targetPID: 7)).0
+    mode = ModeReducer.reduce(mode, .leaveMode(hasHints: false)).0
     XCTAssertEqual(mode, .normal)
   }
 
@@ -211,7 +211,7 @@ final class ModeReducerTests: XCTestCase {
   // MARK: Advanced gate
 
   func testAdvancedGateRefusesNormalWhenDisabled() {
-    XCTAssertEqual(ModeReducer.reduce(.disabled, .enterNormal(targetPID: 7)).0, .disabled)
+    XCTAssertEqual(ModeReducer.reduce(.disabled, .enterNormal).0, .disabled)
     XCTAssertEqual(
       ModeReducer.reduce(.disabled, .enterInsert(targetPID: 7)).0,
       .disabled)
@@ -252,7 +252,7 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testLeaveModeReturnsInsertToNormal() {
-    let (next, effects) = ModeReducer.reduce(.insert, .leaveMode(hasHints: false, targetPID: nil))
+    let (next, effects) = ModeReducer.reduce(.insert, .leaveMode(hasHints: false))
     XCTAssertEqual(next, .normal)
     XCTAssertEqual(effects, ModeReducer.enterEffects(for: .normal, targetPID: nil))
   }
@@ -264,7 +264,7 @@ final class ModeReducerTests: XCTestCase {
           let (opened, _) = ModeReducer.reduce(
             origin, .openCommand(restoreMode: restoreMode))
           let expected = ModeReducer.reduce(opened, .closeCommand(reason: "cancel"))
-          let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: nil))
+          let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false))
           XCTAssertEqual(actual.0, expected.0)
           XCTAssertEqual(actual.1, expected.1)
           XCTAssertTrue(actual.1.contains(.clearTransientHintState))
@@ -275,17 +275,49 @@ final class ModeReducerTests: XCTestCase {
 
   func testLeaveModeKeepsNormalAndDisabled() {
     for state in [Mode.normal, .disabled] {
-      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: false, targetPID: nil))
+      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: false))
       XCTAssertEqual(next, state)
       XCTAssertTrue(effects.isEmpty)
     }
   }
 
+  /// The app a popup covers is part of the TERMINAL value: an explicit close
+  /// activates it, a focus loss does not, and nothing of it outlives the
+  /// mode — the next popup captures its own, and leaving INSERT with hints
+  /// up activates no app a popup once covered.
+  func testTerminalReturnAppLivesOnlyInTerminalMode() {
+    let first = ModeReducer.reduce(.normal, .openTerminal(returnPID: 42)).0
+    XCTAssertEqual(first, .terminal(restoreTo: .normal, returnPID: 42))
+    let silent = ModeReducer.reduce(first, .closeTerminal(restoresApp: false))
+    XCTAssertEqual(silent.0, .normal)
+    XCTAssertFalse(
+      silent.1.contains {
+        if case .activateFocusedApp = $0 { return true }
+        return false
+      }, "a focus loss activates nothing")
+
+    let second = ModeReducer.reduce(silent.0, .openTerminal(returnPID: 7)).0
+    XCTAssertEqual(second.terminalReturnPID, 7)
+    let left = ModeReducer.reduce(second, .leaveMode(hasHints: false))
+    XCTAssertTrue(left.1.contains(.activateFocusedApp(pid: 7)))
+    XCTAssertFalse(left.1.contains(.activateFocusedApp(pid: 42)), "the first popup's app is gone")
+    XCTAssertEqual(
+      Array(ModeReducer.reduce(second, .enterNormal).1.prefix(2)),
+      [.hideTerminalPopup, .activateFocusedApp(pid: 7)])
+    XCTAssertEqual(
+      ModeReducer.reduce(second, .openTerminal(returnPID: 99)).0, second,
+      "a popup focused from TERMINAL keeps the app captured first")
+
+    let hints = ModeReducer.reduce(.insert, .leaveMode(hasHints: true))
+    XCTAssertEqual(hints.0, .insert)
+    XCTAssertTrue(hints.1.contains(.activateFocusedApp(pid: nil)))
+  }
+
   func testLeaveModeRestoresTerminalAndPreviousApplication() {
     for origin in [Mode.normal, .insert, .disabled] {
-      let (opened, _) = ModeReducer.reduce(origin, .openTerminal)
-      let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: 42))
-      let expected = ModeReducer.reduce(opened, .closeTerminal(targetPID: 42))
+      let (opened, _) = ModeReducer.reduce(origin, .openTerminal(returnPID: 42))
+      let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false))
+      let expected = ModeReducer.reduce(opened, .closeTerminal(restoresApp: true))
       XCTAssertEqual(actual.0, origin)
       XCTAssertEqual(actual.1, expected.1)
       XCTAssertTrue(actual.1.contains(.hideTerminalPopup))
@@ -295,9 +327,9 @@ final class ModeReducerTests: XCTestCase {
 
   func testLeaveModeWithHintsDismissesThemAndKeepsTheBaseMode() {
     for state in [Mode.disabled, .normal, .insert] {
-      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: true, targetPID: 7))
+      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: true))
       XCTAssertEqual(next, state)
-      XCTAssertEqual(effects, ModeReducer.enterEffects(for: state, targetPID: 7))
+      XCTAssertEqual(effects, ModeReducer.enterEffects(for: state, targetPID: nil))
       XCTAssertTrue(effects.contains(.clearTransientHintState))
     }
   }
@@ -315,7 +347,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertTrue(expectedEffects.contains(.clearTransientHintState))
 
     for state in commandStates {
-      let (next, effects) = ModeReducer.reduce(state, .enterNormal(targetPID: nil))
+      let (next, effects) = ModeReducer.reduce(state, .enterNormal)
       XCTAssertEqual(next, .normal)
       XCTAssertEqual(effects, expectedEffects)
     }
@@ -327,15 +359,15 @@ final class ModeReducerTests: XCTestCase {
     let surfaces: [ModeEvent] = [
       .openCommand(restoreMode: false),
       .openCommand(restoreMode: true),
-      .openTerminal,
+      .openTerminal(returnPID: nil),
     ]
     for open in surfaces {
-      for request in [ModeEvent.enterNormal(targetPID: nil), .enterInsert(targetPID: nil)] {
+      for request in [ModeEvent.enterNormal, .enterInsert(targetPID: nil)] {
         let opened = ModeReducer.reduce(.disabled, open).0
         let closed = ModeReducer.reduce(opened, request).0
         XCTAssertEqual(closed, .disabled, "\(open), \(request)")
         XCTAssertEqual(
-          ModeReducer.reduce(closed, .leaveMode(hasHints: false, targetPID: nil)).0, .disabled)
+          ModeReducer.reduce(closed, .leaveMode(hasHints: false)).0, .disabled)
       }
     }
   }
@@ -344,12 +376,12 @@ final class ModeReducerTests: XCTestCase {
     for open in [
       ModeEvent.openCommand(restoreMode: false),
       .openCommand(restoreMode: true),
-      .openTerminal,
+      .openTerminal(returnPID: nil),
     ] {
       let opened = ModeReducer.reduce(.disabled, open).0
       let enabled = ModeReducer.reduce(opened, .advancedModeChanged(enabled: true)).0
       XCTAssertEqual(
-        ModeReducer.reduce(enabled, .leaveMode(hasHints: false, targetPID: nil)).0, .normal)
+        ModeReducer.reduce(enabled, .leaveMode(hasHints: false)).0, .normal)
     }
   }
 
@@ -357,7 +389,7 @@ final class ModeReducerTests: XCTestCase {
     let states: [Mode] = [
       .insert,
       .command(restoreTo: .insert),
-      .terminal(restoreTo: .insert),
+      .terminal(restoreTo: .insert, returnPID: nil),
     ]
     for state in states {
       let (refreshed, effects) = ModeReducer.reduce(state, .advancedModeChanged(enabled: true))
@@ -365,7 +397,7 @@ final class ModeReducerTests: XCTestCase {
       XCTAssertEqual(effects, [.renderSurface])
       if !state.isInsert {
         XCTAssertEqual(
-          ModeReducer.reduce(refreshed, .leaveMode(hasHints: false, targetPID: nil)).0, .insert)
+          ModeReducer.reduce(refreshed, .leaveMode(hasHints: false)).0, .insert)
       }
     }
   }
@@ -493,7 +525,7 @@ final class ModeReducerTests: XCTestCase {
       ModeReducer.reduce(.command(restoreTo: .normal), .enterHyper).0, .command(restoreTo: .normal))
     XCTAssertEqual(ModeReducer.reduce(.normal, .exitHyper).0, .normal)
     XCTAssertEqual(
-      ModeReducer.reduce(.hyper(restoreTo: .normal), .leaveMode(hasHints: false, targetPID: nil)).0,
+      ModeReducer.reduce(.hyper(restoreTo: .normal), .leaveMode(hasHints: false)).0,
       .normal)
     let command = ModeReducer.reduce(.hyper(restoreTo: .normal), .openCommand(restoreMode: true)).0
     XCTAssertEqual(command, .command(restoreTo: .normal))

@@ -44,11 +44,13 @@ extension AppDelegate {
     popup.willFocus = { [weak self] in
       guard let self else { return }
       self.terminalInputMappings?.flush()
-      self.terminalReturnApplicationPID =
-        self.terminalReturnApplicationPID
+      // The app the popup covers, captured as the mode is entered and
+      // forgotten with it; a popup focused from TERMINAL keeps the current.
+      let returnPID =
+        self.modeStore.mode.terminalReturnPID
         ?? self.currentNonFlashRunningApplication()?.processIdentifier
         ?? self.normalModeTargetPID
-      self.dispatchMode(.openTerminal)
+      self.dispatchMode(.openTerminal(returnPID: returnPID))
     }
     popup.onFocusLost = { [weak self] in
       self?.overlay.relinquishShownStatusPopup(reason: "focus_lost")
@@ -57,10 +59,8 @@ extension AppDelegate {
     popup.didDismissFocus = { [weak self] reason in
       guard let self else { return }
       if case .terminal = self.modeStore.mode {
-        let targetPID = reason == "terminal_removed" ? self.terminalReturnApplicationPID : nil
-        self.dispatchMode(.closeTerminal(targetPID: targetPID))
+        self.dispatchMode(.closeTerminal(restoresApp: reason == "terminal_removed"))
       }
-      self.terminalReturnApplicationPID = nil
     }
     overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
       self?.dismissPopup(restoreApplication: restoreApplication)
@@ -169,13 +169,11 @@ extension AppDelegate {
 
   func dismissPopup(restoreApplication: Bool = true) {
     suppressDismissedPopupHover()
-    let returnPID = terminalReturnApplicationPID
     if case .terminal = modeStore.mode {
-      dispatchMode(.closeTerminal(targetPID: restoreApplication ? returnPID : nil))
+      dispatchMode(.closeTerminal(restoresApp: restoreApplication))
     } else {
       overlay.hideStatusBarPopup(reason: "dismiss_popup")
     }
-    if !restoreApplication { terminalReturnApplicationPID = returnPID }
   }
 
   func restartPopup(named name: String?) {

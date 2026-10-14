@@ -34,8 +34,11 @@ enum Mode: Equatable {
 
   /// A popup's local terminal view owns keyboard input; global mappings are
   /// suspended. Entered by `enter_terminal_mode` or by focusing a popup, and
-  /// left by `leave_mode`, which closes the popup.
-  case terminal(restoreTo: ReturnMode)
+  /// left by `leave_mode`, which closes the popup. `returnPID` is the app the
+  /// popup covers, captured as the mode is entered: an explicit close
+  /// activates it, and it is forgotten with the mode, so no later popup or
+  /// INSERT exit can activate an app a popup once covered.
+  case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
 
   /// Momentary layer while `mode.normal.hyper` is physically held. The default
   /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
@@ -69,9 +72,17 @@ extension Mode {
     case .insert: return .insert
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(let restoreTo), .terminal(let restoreTo), .hyper(let restoreTo):
+    case .command(let restoreTo), .hyper(let restoreTo):
+      return restoreTo
+    case .terminal(let restoreTo, _):
       return restoreTo
     }
+  }
+
+  /// The app the focused popup covers; nil outside TERMINAL.
+  var terminalReturnPID: pid_t? {
+    if case .terminal(_, let returnPID) = self { return returnPID }
+    return nil
   }
 
   var isInsert: Bool {

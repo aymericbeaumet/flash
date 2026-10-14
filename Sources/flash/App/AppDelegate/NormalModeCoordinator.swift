@@ -64,7 +64,7 @@ extension AppDelegate {
         + "in_flight=\(activationInFlight)")
     returnActivationIfClosingCommandBar(reason: "enter_normal")
     overlay.dismissEphemeralStatusBarPopup(reason: "enter_normal_mode")
-    dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
+    dispatchMode(.enterNormal)
   }
 
   func leaveMode() {
@@ -78,10 +78,7 @@ extension AppDelegate {
     if overlay.statusPopupController.isVisible { dismissPopup() }
     returnActivationIfClosingCommandBar(reason: "leave_mode")
     overlay.resignCommandTextFieldFocus()
-    dispatchMode(
-      .leaveMode(
-        hasHints: hintSession.isActive || activationInFlight,
-        targetPID: terminalReturnApplicationPID))
+    dispatchMode(.leaveMode(hasHints: hintSession.isActive || activationInFlight))
   }
 
   /// A mode mapping that closes the open command bar is a cancel: nothing ran,

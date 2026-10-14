@@ -632,7 +632,9 @@ Local mappings run before native copy/paste and terminal key encoding. Text
 popups use the same focus mode for selection, copying, and scrolling. Leaving via
 `enter_normal_mode` dismisses the popup and activates the captured external app
 before NORMAL recapture. Losing popup focus restores the prior base mode without
-activating a different app. A popup's lifecycle, not its focus or visibility,
+activating a different app. The app captured on entry is part of the TERMINAL
+mode value and is forgotten with it: the next popup captures its own, and no
+other exit can activate an app a popup once covered. A popup's lifecycle, not its focus or visibility,
 decides how long its process lives; see [popups](popups.md#lifecycles).
 
 `leave_mode` provides one configured exit across surfaces. It dismisses a popup,

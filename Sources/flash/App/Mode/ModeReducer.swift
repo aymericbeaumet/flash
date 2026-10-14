@@ -21,29 +21,29 @@ enum ModeReducer {
       let next = Mode.insert
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
-    case .enterNormal(let targetPID):
+    case .enterNormal:
       // The advanced gate: cannot enter NORMAL when the feature is off.
-      guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: targetPID) }
+      guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: nil) }
       let departure: [ModeEffect] =
         state.isTerminal
-        ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
-      return (.normal, departure + enterEffects(for: .normal, targetPID: targetPID))
+        ? [.hideTerminalPopup, .activateFocusedApp(pid: state.terminalReturnPID)] : []
+      return (.normal, departure + enterEffects(for: .normal, targetPID: nil))
 
-    case .leaveMode(let hasHints, let targetPID):
+    case .leaveMode(let hasHints):
       switch state {
       case .terminal:
-        return reduce(state, .closeTerminal(targetPID: targetPID))
+        return reduce(state, .closeTerminal(restoresApp: true))
       case .command:
         return reduce(state, .closeCommand(reason: "leave_mode"))
       case .insert where !hasHints:
-        return reduce(state, .enterNormal(targetPID: targetPID))
+        return reduce(state, .enterNormal)
       case .hyper:
         return reduce(state, .exitHyper)
       case .insert, .normal, .disabled:
         // Active hints are dismissed in place; without hints there is no
         // enclosing mode to leave, so nothing re-renders.
         guard hasHints else { return (state, []) }
-        return (state, enterEffects(for: state, targetPID: targetPID))
+        return (state, enterEffects(for: state, targetPID: nil))
       }
 
     case .openCommand(let restoreMode):
@@ -51,18 +51,21 @@ enum ModeReducer {
       let next = Mode.command(restoreTo: restoreTo)
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: nil))
 
-    case .openTerminal:
+    case .openTerminal(let returnPID):
+      // A popup focused from TERMINAL replaces the shown one and keeps the
+      // app captured first: the mode value already holds it.
       guard !state.isTerminal else { return (state, []) }
-      let next = Mode.terminal(restoreTo: state.asReturnMode)
+      let next = Mode.terminal(restoreTo: state.asReturnMode, returnPID: returnPID)
       return (next, enterEffects(for: next, targetPID: nil))
 
-    case .closeTerminal(let targetPID):
-      guard case .terminal(let restoreTo) = state else { return (state, []) }
+    case .closeTerminal(let restoresApp):
+      guard case .terminal(let restoreTo, let returnPID) = state else { return (state, []) }
       let effects = enterEffects(for: restoreTo.mode, targetPID: nil).filter {
         if case .activateFocusedApp = $0 { return false }
         return true
       }
-      let activation: [ModeEffect] = targetPID.map { [.activateFocusedApp(pid: $0)] } ?? []
+      let activation: [ModeEffect] =
+        restoresApp ? returnPID.map { [.activateFocusedApp(pid: $0)] } ?? [] : []
       return (restoreTo.mode, [.hideTerminalPopup] + activation + effects)
 
     case .closeCommand:
@@ -86,11 +89,11 @@ enum ModeReducer {
         let base: ReturnMode = enabled ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
         return (.command(restoreTo: base), [.renderSurface])
       }
-      if case .terminal(let restoreTo) = state {
+      if case .terminal(let restoreTo, let returnPID) = state {
         let base: ReturnMode =
           enabled
           ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
-        return (.terminal(restoreTo: base), [.renderSurface])
+        return (.terminal(restoreTo: base, returnPID: returnPID), [.renderSurface])
       }
       if enabled {
         // Enabling advanced mode starts persistent NORMAL, as startup does.
@@ -187,7 +190,7 @@ enum ModeReducer {
   private static func closeDisabledSurface(_ state: Mode, targetPID: pid_t?) -> (Mode, [ModeEffect])
   {
     switch state {
-    case .terminal: return reduce(state, .closeTerminal(targetPID: targetPID))
+    case .terminal: return reduce(state, .closeTerminal(restoresApp: true))
     case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
     case .hyper: return (.disabled, enterEffects(for: .disabled, targetPID: targetPID))
     case .disabled: return (state, [])

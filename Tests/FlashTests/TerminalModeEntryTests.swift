@@ -63,7 +63,8 @@ final class TerminalModeEntryTests: XCTestCase {
     XCTAssertTrue(registry.isPager("details"))
     popup.focus()
     waitUntil("focused pager enters TERMINAL") { delegate.modeStore.mode.isTerminal }
-    XCTAssertEqual(delegate.modeStore.mode, .terminal(restoreTo: .normal))
+    XCTAssertTrue(delegate.modeStore.mode.isTerminal)
+    XCTAssertEqual(delegate.modeStore.mode.asReturnMode, .normal)
     XCTAssertEqual(popup.focusedName, "details")
 
     XCTAssertTrue(delegate.handleURLCommand(.leaveMode))
@@ -86,7 +87,8 @@ final class TerminalModeEntryTests: XCTestCase {
     }
 
     XCTAssertTrue(delegate.handleURLCommand(.terminalMode(name: "scratch")))
-    XCTAssertEqual(delegate.modeStore.mode, .terminal(restoreTo: .normal))
+    XCTAssertTrue(delegate.modeStore.mode.isTerminal)
+    XCTAssertEqual(delegate.modeStore.mode.asReturnMode, .normal)
     XCTAssertEqual(popup.presentation, .standalone(name: "scratch"))
     let scratch = try XCTUnwrap(registry.session(named: "scratch"))
     let generation = registry.inputGenerations["scratch"]
@@ -94,14 +96,16 @@ final class TerminalModeEntryTests: XCTestCase {
     // The popup already in TERMINAL mode stays as it is: a fresh popup
     // would otherwise stop its process and start another.
     delegate.handleURLCommand(.terminalMode(name: "scratch"))
-    XCTAssertEqual(delegate.modeStore.mode, .terminal(restoreTo: .normal))
+    XCTAssertTrue(delegate.modeStore.mode.isTerminal)
+    XCTAssertEqual(delegate.modeStore.mode.asReturnMode, .normal)
     XCTAssertEqual(popup.presentation, .standalone(name: "scratch"))
     XCTAssertTrue(registry.session(named: "scratch") === scratch)
     XCTAssertEqual(registry.inputGenerations["scratch"], generation)
 
     // Another popup replaces it and keeps TERMINAL over the same base mode.
     delegate.handleURLCommand(.terminalMode(name: "top"))
-    XCTAssertEqual(delegate.modeStore.mode, .terminal(restoreTo: .normal))
+    XCTAssertTrue(delegate.modeStore.mode.isTerminal)
+    XCTAssertEqual(delegate.modeStore.mode.asReturnMode, .normal)
     XCTAssertEqual(popup.presentation, .standalone(name: "top"))
     XCTAssertEqual(popup.focusedName, "top")
     waitUntil("replaced fresh popup stopped") { registry.session(named: "scratch") !== scratch }
@@ -124,6 +128,7 @@ final class TerminalModeEntryTests: XCTestCase {
     }
     delegate.handleURLCommand(.terminalMode(name: nil))
     XCTAssertEqual(popup.presentation, .standalone(name: "terminal"))
-    XCTAssertEqual(delegate.modeStore.mode, .terminal(restoreTo: .normal))
+    XCTAssertTrue(delegate.modeStore.mode.isTerminal)
+    XCTAssertEqual(delegate.modeStore.mode.asReturnMode, .normal)
   }
 }
