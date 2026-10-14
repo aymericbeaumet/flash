@@ -451,7 +451,7 @@ final class OverlayPanel: NSPanel {
 
   static let defaultNotchWidth: CGFloat = 185
 
-  private static var snapshotLock = os_unfair_lock_s()
+  private static let snapshotLock = OSAllocatedUnfairLock()
   private static var cachedSnapshot: ScreenSnapshot?
   /// Native menu bar heights per display. They change only with the display
   /// topology, so a Space switch or wake rebuilds the snapshot from these
@@ -459,16 +459,16 @@ final class OverlayPanel: NSPanel {
   private static var cachedNativeMenuBarHeights: [CGDirectDisplayID: CGFloat]?
 
   static func currentScreenSnapshot() -> ScreenSnapshot {
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     if let cached = cachedSnapshot {
-      os_unfair_lock_unlock(&snapshotLock)
+      snapshotLock.unlock()
       return cached
     }
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     let snapshot = buildScreenSnapshot()
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     cachedSnapshot = snapshot
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     return snapshot
   }
 
@@ -477,19 +477,19 @@ final class OverlayPanel: NSPanel {
   private(set) static var screenSnapshotRevision: UInt64 = 0
 
   static func invalidateScreenSnapshot(remeasuringNativeMenuBars: Bool = false) {
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     cachedSnapshot = nil
     if remeasuringNativeMenuBars { cachedNativeMenuBarHeights = nil }
     screenSnapshotRevision &+= 1
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
   }
 
   /// Re-read every display's native menu bar, invalidating the snapshot only
   /// when a height moved. Returns whether one did. Main thread.
   static func remeasureNativeMenuBars() -> Bool {
     let measured = measureNativeMenuBarHeights()
-    os_unfair_lock_lock(&snapshotLock)
-    defer { os_unfair_lock_unlock(&snapshotLock) }
+    snapshotLock.lock()
+    defer { snapshotLock.unlock() }
     guard measured != cachedNativeMenuBarHeights else { return false }
     cachedNativeMenuBarHeights = measured
     cachedSnapshot = nil
@@ -498,14 +498,14 @@ final class OverlayPanel: NSPanel {
   }
 
   private static func nativeMenuBarHeightsByDisplay() -> [CGDirectDisplayID: CGFloat] {
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     let cached = cachedNativeMenuBarHeights
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     if let cached { return cached }
     let measured = measureNativeMenuBarHeights()
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     cachedNativeMenuBarHeights = measured
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     return measured
   }
 

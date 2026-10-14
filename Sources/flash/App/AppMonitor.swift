@@ -53,14 +53,11 @@ final class AppMonitor {
   // writes via `updateConfig` when the user edits flash.toml; axQueue
   // reads via `snapshotConfig` at the start of each walk.
 
-  private var config: Config
-  private var configLock = os_unfair_lock_s()
+  private let config: OSAllocatedUnfairLock<Config>
   var configRevision: UInt64 = 0
 
   func snapshotConfig() -> Config {
-    os_unfair_lock_lock(&configLock)
-    defer { os_unfair_lock_unlock(&configLock) }
-    return config
+    config.withLock { $0 }
   }
 
   /// Called by the AppDelegate config file-watcher whenever
@@ -68,9 +65,7 @@ final class AppMonitor {
   /// config, then invalidates the prepared model on main so labels and
   /// provider debug settings refresh together.
   func updateConfig(_ cfg: Config) {
-    os_unfair_lock_lock(&configLock)
-    config = cfg
-    os_unfair_lock_unlock(&configLock)
+    config.withLock { $0 = cfg }
 
     MainThreadHopper.runOrAsync { [weak self] in
       guard let self else { return }
@@ -139,7 +134,7 @@ final class AppMonitor {
 
   init(registry: SourceRegistry, config: Config, pollScheduler: PollScheduler = .shared) {
     self.registry = registry
-    self.config = config
+    self.config = OSAllocatedUnfairLock(initialState: config)
     self.pollScheduler = pollScheduler
   }
 
