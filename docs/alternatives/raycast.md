@@ -17,7 +17,7 @@ clipboard history.
 | Launcher | Apps, files, calculator, extensions, AI chat | flashlight: apps, browser tabs, tmux windows, native windows, emoji, math, units, currency, plugin data |
 | Hints, modes | None | Hints in every app, NORMAL mode |
 | Windows | Built-in window management; custom commands need Pro | Named positions, proportional frames, placement rules, directional focus |
-| Clipboard | History, 3 months free | History plugin, 50 entries, local |
+| Clipboard | History, 3 months free | History plugin, 1000 entries by default, local |
 | Extensions | TypeScript and React store, "thousands" | Plugins in any language over JSON lines, sandboxed; a Rust SDK |
 | Configuration | GUI; cloud sync in Pro | One TOML file in your dotfiles |
 | Footprint | 350 to 450 MB of memory for v2, by Raycast's own figure | A resident Swift app plus plugin child processes; see [performance](../performance.md) |

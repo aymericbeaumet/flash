@@ -295,6 +295,11 @@ startup_timeout = 5
 # refresh_interval = 300 # seconds between feed requests
 # cycle_interval = 30    # seconds per headline; Flash rotates the carousel
 
+# Clipboard history, newest first. Lowering it drops the oldest entries (and
+# their images) the next time the plugin starts.
+# [plugin.clipboard]
+# history_size = 1000 # entries kept, 1..10000
+
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
 # visibility — it is independent of advanced mode (enter_normal_mode/leave_mode

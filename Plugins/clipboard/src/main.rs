@@ -2,12 +2,17 @@ use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flash_plugin::{CommandRequest, Context, Event, PerformResponse, run};
 use tokio::io::AsyncWriteExt;
 
 const HISTORY_FILE: &str = "history.json";
-const HISTORY_CAP: usize = 50;
+/// `[plugin.clipboard] history_size`: entries kept, newest first.
+const DEFAULT_HISTORY_SIZE: usize = 1000;
+const MAX_HISTORY_SIZE: u64 = 10_000;
+/// The shown history stays well inside one protocol frame (10 MiB).
+const HISTORY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const PREVIEW_CHARS: usize = 80;
 /// Plain text above this size is dropped. A rich copy keeps its image or
 /// HTML and truncates only the plain fallback, which the host already capped.
@@ -20,6 +25,20 @@ const STORE_FILE_MODE: u32 = 0o600;
 
 struct Clipboard {
     history: Mutex<Vec<StoredEntry>>,
+    /// How many entries the history keeps (`history_size`).
+    capacity: AtomicUsize,
+}
+
+/// `history_size`: an integer in 1..=10000; 1000 when unset.
+fn history_size(value: Option<serde_json::Value>) -> Result<usize, &'static str> {
+    match value {
+        None => Ok(DEFAULT_HISTORY_SIZE),
+        Some(value) => value
+            .as_u64()
+            .filter(|size| (1..=MAX_HISTORY_SIZE).contains(size))
+            .map(|size| size as usize)
+            .ok_or("history_size must be an integer in 1..10000"),
+    }
 }
 
 flash_plugin::plugin!(Clipboard);
@@ -29,12 +48,25 @@ impl FlashPlugin for Clipboard {
         // Enforce the store's modes now, not only on the next capture, so an
         // idle history never sits readable by other users.
         restrict_store(&ctx.share_dir(), HISTORY_FILE).await;
-        let (loaded, migrated) = load_history(&ctx).await;
+        let capacity = history_size(ctx.config_json("history_size")).unwrap_or_else(|error| {
+            ctx.log(
+                "warn",
+                &format!("[clipboard] invalid configuration: {error}"),
+            );
+            DEFAULT_HISTORY_SIZE
+        });
+        self.capacity.store(capacity, Ordering::Relaxed);
+        let (mut loaded, migrated) = load_history(&ctx).await;
+        // A smaller history_size drops the oldest entries, and their images.
+        let dropped: Vec<StoredEntry> = loaded.drain(capacity.min(loaded.len())..).collect();
         if let Ok(mut hist) = self.history.lock() {
             *hist = loaded.clone();
         }
-        if migrated {
+        if migrated || !dropped.is_empty() {
             write_state(&ctx, HISTORY_FILE, &loaded).await;
+        }
+        for entry in dropped {
+            remove_image_files(&ctx, &entry.id).await;
         }
     }
 
@@ -111,7 +143,7 @@ impl Clipboard {
             let previous: Vec<String> = hist.iter().map(|entry| entry.id.clone()).collect();
             hist.retain(|entry| entry.id != incoming.id);
             hist.insert(0, incoming);
-            hist.truncate(HISTORY_CAP);
+            hist.truncate(self.capacity.load(Ordering::Relaxed));
             for id in previous {
                 if !hist.iter().any(|entry| entry.id == id) {
                     drop_ids.push(id);
@@ -125,11 +157,23 @@ impl Clipboard {
         let Ok(hist) = self.history.lock() else {
             return PerformResponse::fail("clipboard history unavailable");
         };
-        let entries: Vec<HistoryEntry> = hist.iter().map(HistoryEntry::from).collect();
-        match serde_json::to_string(&entries) {
-            Ok(json) => PerformResponse::ok().message(json),
-            Err(err) => PerformResponse::fail(format!("encode history: {err}")),
+        // Newest first while they fit the budget; the rest stay stored.
+        let mut json = String::from("[");
+        for entry in hist.iter() {
+            let encoded = match serde_json::to_string(&HistoryEntry::from(entry)) {
+                Ok(encoded) => encoded,
+                Err(err) => return PerformResponse::fail(format!("encode history: {err}")),
+            };
+            if json.len() + encoded.len() + 2 > HISTORY_RESPONSE_BYTES {
+                break;
+            }
+            if json.len() > 1 {
+                json.push(',');
+            }
+            json.push_str(&encoded);
         }
+        json.push(']');
+        PerformResponse::ok().message(json)
     }
 
     async fn delete(&self, ctx: &Context, args: &[String]) -> PerformResponse {
@@ -517,6 +561,7 @@ async fn restrict_store(dir: &Path, name: &str) {
 fn main() {
     run(Clipboard {
         history: Mutex::new(Vec::new()),
+        capacity: AtomicUsize::new(DEFAULT_HISTORY_SIZE),
     });
 }
 
@@ -536,6 +581,7 @@ mod tests {
     fn plugin() -> Clipboard {
         Clipboard {
             history: Mutex::new(Vec::new()),
+            capacity: AtomicUsize::new(DEFAULT_HISTORY_SIZE),
         }
     }
 
@@ -570,6 +616,68 @@ mod tests {
             .await;
         assert!(response.is_ok());
         serde_json::from_str(response.toast_message().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn history_size_defaults_to_a_thousand_and_rejects_nonsense() {
+        assert_eq!(history_size(None), Ok(1000));
+        assert_eq!(history_size(Some(serde_json::json!(25))), Ok(25));
+        assert_eq!(history_size(Some(serde_json::json!(10000))), Ok(10000));
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(10001),
+            serde_json::json!(-3),
+            serde_json::json!("100"),
+            serde_json::json!(2.5),
+        ] {
+            assert!(history_size(Some(bad)).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_history_keeps_the_configured_number_of_entries() {
+        let harness = flash_plugin::testing::Harness::with_config(
+            "clipboard",
+            serde_json::json!({"history_size": 3}),
+        );
+        let ctx = harness.context();
+        let clipboard = plugin();
+        clipboard.on_start(ctx.clone()).await;
+        for index in 0..5u8 {
+            let mut event = changed("text", &id(index + 1));
+            event.text = Some(format!("copy {index}"));
+            clipboard.on_event(ctx.clone(), event).await;
+        }
+        let shown = show(&clipboard, &ctx).await;
+        let values: Vec<&str> = shown
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["value"].as_str().unwrap())
+            .collect();
+        assert_eq!(values, ["copy 4", "copy 3", "copy 2"]);
+        tokio::fs::remove_dir_all(ctx.data_dir()).await.unwrap();
+    }
+
+    /// A long history of large copies would not fit one protocol frame: the
+    /// newest entries are shown while they fit the budget, the rest stay
+    /// stored.
+    #[test]
+    fn the_shown_history_stays_inside_its_byte_budget() {
+        let clipboard = plugin();
+        let big = "x".repeat(MAX_ENTRY_BYTES);
+        {
+            let mut hist = clipboard.history.lock().unwrap();
+            for index in 0..120u64 {
+                hist.push(text_entry(index, big.clone()).unwrap());
+            }
+        }
+        let response = clipboard.history_response();
+        let json = response.toast_message().unwrap();
+        assert!(json.len() <= HISTORY_RESPONSE_BYTES, "{} bytes", json.len());
+        let shown: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+        assert!(!shown.is_empty() && shown.len() < 120);
+        assert_eq!(clipboard.history.lock().unwrap().len(), 120);
     }
 
     #[tokio::test]
