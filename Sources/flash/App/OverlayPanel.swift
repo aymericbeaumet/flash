@@ -358,26 +358,33 @@ final class OverlayPanel: NSPanel {
   var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var hyperModeMappings: CompiledMappings = CompiledMappings()
-  /// Sequence state for keys typed while the leader is held. Separate from
-  /// `normalModePending` so a hyper sequence cannot leak into NORMAL.
-  var hyperPending: String = "" {
-    didSet {
-      if hyperPending.isEmpty { hyperPendingUpdatedAt = nil }
-    }
+  /// The HYPER hold as one value (`HyperHoldState`); the properties below
+  /// are its fields, so the mode transition resets them together.
+  var hyperHold = HyperHoldState()
+  var hyperPending: String {
+    get { hyperHold.pending }
+    set { hyperHold.pending = newValue }
   }
-  var hyperPendingUpdatedAt: Date?
-  /// NORMAL `<leader>` sequence continued by a key pressed while the leader
-  /// is still down. Nil when the hold is not inside that fallback.
+  var hyperPendingUpdatedAt: Date? {
+    get { hyperHold.pendingUpdatedAt }
+    set { hyperHold.pendingUpdatedAt = newValue }
+  }
   var leaderFallbackPending: String? {
-    didSet {
-      if leaderFallbackPending == nil { leaderFallbackUpdatedAt = nil }
-    }
+    get { hyperHold.fallbackPending }
+    set { hyperHold.fallbackPending = newValue }
   }
-  var leaderFallbackUpdatedAt: Date?
-  var leaderHold = LeaderHold()
-  /// Samples of a latched hold whose key-up the tap may have dropped.
-  /// Reset when HYPER is entered or left.
-  var hyperHoldWatch = HyperHoldWatch()
+  var leaderFallbackUpdatedAt: Date? {
+    get { hyperHold.fallbackUpdatedAt }
+    set { hyperHold.fallbackUpdatedAt = newValue }
+  }
+  var leaderHold: LeaderHold {
+    get { hyperHold.leaderHold }
+    set { hyperHold.leaderHold = newValue }
+  }
+  var hyperHoldWatch: HyperHoldWatch {
+    get { hyperHold.watch }
+    set { hyperHold.watch = newValue }
+  }
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }

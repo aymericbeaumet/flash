@@ -46,6 +46,36 @@ final class ModeReducerTests: XCTestCase {
     .exitHyper,
   ]
 
+  // MARK: Hyper hold
+
+  /// Every exit from HYPER ends the hold — the release, `leave_mode`, the
+  /// command line, a focus change — because the transition itself is the
+  /// reset point. A stale hold would swallow the next leader press and carry
+  /// a pending sequence into NORMAL.
+  func testEveryExitFromHyperEndsTheHold() {
+    let hyper = Mode.hyper(restoreTo: .normal)
+    for event in allEvents {
+      var hold = HyperHoldState()
+      XCTAssertEqual(hold.leaderHold.step(.leaderDown), .enter)
+      XCTAssertEqual(hold.leaderHold.step(.otherKey), .key)
+      hold.pending = "x"
+      hold.fallbackPending = "<leader>"
+      let next = ModeReducer.reduce(hyper, event).0
+      hold.modeChanged(from: hyper, to: next)
+      if next.isHyper {
+        XCTAssertTrue(hold.leaderHold.holding, "staying in HYPER keeps the hold: \(event)")
+        XCTAssertEqual(hold.pending, "x")
+      } else {
+        XCTAssertEqual(hold, HyperHoldState(), "leaving HYPER by \(event) ends the hold")
+        XCTAssertEqual(hold.leaderHold.step(.leaderDown), .enter, "the next press enters")
+      }
+    }
+    var hold = HyperHoldState()
+    hold.pending = "x"
+    hold.modeChanged(from: .normal, to: .insert)
+    XCTAssertEqual(hold.pending, "x", "a change between other modes is not an exit")
+  }
+
   // MARK: Initialization
 
   func testStartupPicksInitialMode() {

@@ -156,6 +156,9 @@ extension AppDelegate {
       }
     }
     refreshOverlayInputRouting()
+    // The one reset point for the hold: every exit from HYPER ends it here,
+    // whichever event caused the exit.
+    overlay.hyperHold.modeChanged(from: previous, to: next)
     if next.isHyper != previous.isHyper {
       setHyperHoldWatch(armed: next.isHyper)
     }
@@ -307,8 +310,13 @@ extension AppDelegate {
         leaderContinuesPending: leaderDownContinuesPending(overlay.normalModePending, event: event),
         isRepeat: event.isARepeat)
     else { return false }
+    // A hold still latched here never had its exit reset, which the mode
+    // transition makes unreachable; it must not enter HYPER as if fresh.
+    guard case .enter = overlay.leaderHold.step(.leaderDown) else {
+      FlashLog.warn("[mode] hyper_enter_skipped reason=stale_hold")
+      return true
+    }
     overlay.normalModePending = ""
-    _ = overlay.leaderHold.step(.leaderDown)
     FlashLog.trace("[mode] hyper enter")
     dispatchMode(.enterHyper)
     return true
@@ -552,8 +560,7 @@ extension AppDelegate {
   private func resetModeInputState() {
     cancelCandidateFinderSessionWork()
     resetPendingNormalSequence(reason: "mode_enter")
-    overlay.leaderHold = LeaderHold()
-    overlay.hyperHoldWatch = HyperHoldWatch()
+    overlay.hyperHold = HyperHoldState()
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     finder.candidates = []

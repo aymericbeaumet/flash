@@ -584,7 +584,10 @@ modifier in a chord such as `cmd+space`) and leaves once the key has been up
 for two ticks. Combined session state is the wrong table: a swallowed press
 can look up there. The next key sees the same reading, leaves first, and is
 routed as a NORMAL key. A delivered key-up still leaves immediately. The
-watch is registered only while the mode is HYPER.
+watch is registered only while the mode is HYPER. Leaving HYPER any other
+way — `leave_mode`, opening the command line, a focus change — ends the hold
+and drops its pending keys the same way: the mode transition is the one
+reset point, so no exit can leave a latched hold behind.
 
 If nothing else was pressed and the hyper key is the leader, that tap arms
 the `<leader>` prefix: press it,
