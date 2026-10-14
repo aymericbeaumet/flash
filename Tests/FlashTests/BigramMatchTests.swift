@@ -89,54 +89,55 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertLessThan(v[0].rect.minX, e[2].rect.minX)
   }
 
-  // MARK: Glyph advances
+  // MARK: Measured glyphs
 
-  /// Narrow letters before a wide one: by character count the `W` would sit
-  /// at nine tenths of the line, but its glyph starts much earlier.
-  func testAKnownFontPlacesALetterByItsAdvancesNotItsIndex() throws {
-    let advances = try XCTUnwrap(GlyphAdvances(TextFont(name: "Helvetica", size: 13)))
-    let line = BigramMatcher.BigramLineBox(
-      location: 0, length: 10, bounds: CGRect(x: 0, y: 0, width: 100, height: 16))
-    let counted = try XCTUnwrap(
-      BigramMatcher.glyphRects(in: "iiiiiiiiiW", query: "w", lines: [line]).first)
-    XCTAssertEqual(counted.rect.minX, 90, accuracy: 0.01)
-    let measured = try XCTUnwrap(
-      BigramMatcher.glyphRects(
-        in: "iiiiiiiiiW", query: "w", lines: [line], advances: advances
-      ).first)
-    XCTAssertLessThan(measured.rect.minX, 75)
-    XCTAssertGreaterThan(measured.rect.width, 25)
-    XCTAssertEqual(measured.rect.maxX, 100, accuracy: 0.5)
+  /// A run's frame can be far wider than its text (a list cell), so a label
+  /// sits where the app says the glyph is drawn, not where the frame puts it.
+  func testAMatchSitsOnTheGlyphTheAppReports() {
+    let clip = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+    let estimate = CGRect(x: 726, y: 300, width: 14, height: 17)
+    let exact = CGRect(x: 623, y: 301, width: 6, height: 15)
+    let placed = BigramMatcher.placeMeasured(
+      [(estimate: estimate, exact: exact, group: 0, value: "s")], clip: clip)
+    XCTAssertEqual(placed.map(\.rect), [exact])
+    XCTAssertEqual(placed.map(\.value), ["s"])
   }
 
-  func testAMonospacedFontKeepsTheColumnPlacement() throws {
-    let advances = try XCTUnwrap(GlyphAdvances(TextFont(name: "Menlo-Regular", size: 12)))
-    let line = BigramMatcher.BigramLineBox(
-      location: 0, length: 10, bounds: CGRect(x: 0, y: 0, width: 100, height: 16))
-    let hit = try XCTUnwrap(
-      BigramMatcher.glyphRects(
-        in: "iiiiiiiiiW", query: "w", lines: [line], advances: advances
-      ).first)
-    XCTAssertEqual(hit.rect.minX, 90, accuracy: 0.01)
-    XCTAssertEqual(hit.rect.width, 10, accuracy: 0.01)
+  func testAnAppWithoutGlyphBoundsKeepsTheEstimate() {
+    let clip = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+    let estimate = CGRect(x: 10, y: 10, width: 8, height: 16)
+    let placed = BigramMatcher.placeMeasured(
+      [(estimate: estimate, exact: nil, group: 0, value: 1)], clip: clip)
+    XCTAssertEqual(placed.map(\.rect), [estimate])
   }
 
-  func testWordsUseTheSameAdvances() throws {
-    let advances = try XCTUnwrap(GlyphAdvances(TextFont(name: "Helvetica", size: 13)))
-    let line = BigramMatcher.BigramLineBox(
-      location: 0, length: 12, bounds: CGRect(x: 0, y: 0, width: 120, height: 16))
-    let words = WordMatcher.wordRects(in: "iiiiiiiii WW", lines: [line], advances: advances)
-    XCTAssertEqual(words.map(\.occurrence.location), [0, 10])
-    XCTAssertLessThan(words[1].rect.minX, 80)
+  /// Characters cut off by an ellipsis all report the ellipsis glyph; none of
+  /// them is visible, so none is labelled. Another run's glyph is unaffected.
+  func testMatchesCollapsedUnderAnEllipsisAreNotLabelled() {
+    let clip = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+    let ellipsis = CGRect(x: 729, y: 335, width: 9, height: 15)
+    let visible = CGRect(x: 672, y: 335, width: 6, height: 15)
+    let estimate = CGRect(x: 1, y: 1, width: 4, height: 4)
+    let placed = BigramMatcher.placeMeasured(
+      [
+        (estimate: estimate, exact: visible, group: 0, value: "a26"),
+        (estimate: estimate, exact: ellipsis, group: 0, value: "a52"),
+        (estimate: estimate, exact: ellipsis, group: 0, value: "a77"),
+        (estimate: estimate, exact: ellipsis, group: 1, value: "other run"),
+      ], clip: clip)
+    XCTAssertEqual(placed.map(\.value), ["a26", "other run"])
   }
 
-  /// The system UI face is reported under a private dotted name; a font that
-  /// is not installed would be substituted, so it measures nothing.
-  func testOnlyAnInstalledOrSystemFontMeasures() {
-    XCTAssertNotNil(GlyphAdvances(TextFont(name: ".SFNS-Regular", size: 13)))
-    XCTAssertNotNil(GlyphAdvances(TextFont(name: "Helvetica Neue", size: 13)))
-    XCTAssertNil(GlyphAdvances(TextFont(name: "NoSuchFace-Regular", size: 13)))
-    XCTAssertNil(GlyphAdvances(TextFont(name: "Helvetica", size: 0)))
+  func testAGlyphDrawnOutsideTheWindowIsNotLabelled() {
+    let clip = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let placed = BigramMatcher.placeMeasured(
+      [
+        (
+          estimate: CGRect(x: 10, y: 10, width: 4, height: 4),
+          exact: CGRect(x: 300, y: 10, width: 6, height: 12), group: 0, value: 1
+        )
+      ], clip: clip)
+    XCTAssertTrue(placed.isEmpty)
   }
 
   /// The commit re-reads the glyph's bounds and keeps the landing the caller

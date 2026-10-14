@@ -95,10 +95,11 @@ mappings.
   that mode instead of typing into it. `mouse_bigram --move`
   moves the pointer without clicking. The text comes from Accessibility.
   Each visible line is measured once, so a common letter costs the same as a
-  rare one. The face of each run of text is read once too: a label sits on
-  its glyph by that face's advances, so narrow and wide letters do not push
-  it off. A face this Mac does not have falls back to an even spread of the
-  characters across the line. The click re-reads the glyph's exact bounds.
+  rare one. Each match then asks Accessibility where its glyph is drawn, so a
+  label sits on its letter even when the text is narrower than its element;
+  an app that does not answer keeps an even spread of the characters across
+  the line. Characters truncated behind an ellipsis get no label. The click
+  re-reads the glyph's bounds.
   A terminal whose tree has no text uses the tmux grid of the client attached
   to that window: pane text, the tmux status line, and each pane-border title,
   measured on the same window `f` and `cf` use. Those two label the same

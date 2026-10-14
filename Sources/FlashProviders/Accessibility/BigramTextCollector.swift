@@ -9,11 +9,9 @@ import Foundation
 /// text never reaches `f`. This walk is separate and on demand: it keeps every
 /// visible run of at least one character. A single-line run places glyphs from
 /// its frame. A tall run measures each visible line once while collecting, and
-/// the letter is then a string search over those lines. Each run's face is read
-/// once too, so a glyph sits at its share of the line's advance rather than of
-/// its character count. It does not read pixels and it does not ask
-/// Accessibility for every match: a common letter would otherwise wait on one
-/// bounds query per glyph.
+/// the letter is then a string search over those lines, placed first by that
+/// estimate. Each match then asks Accessibility for its glyph's bounds, since a
+/// run's frame can be far wider than its text. It does not read pixels.
 public enum BigramTextCollector {
   public static let providerID = "bigram"
 
@@ -33,9 +31,6 @@ public enum BigramTextCollector {
     let subrole: String?
     let frame: CGRect
     let layout: GlyphLayout
-    /// The run's face, read once while collecting; nil keeps the
-    /// character-count placement.
-    let advances: GlyphAdvances?
   }
 
   public struct Corpus {
@@ -47,14 +42,42 @@ public enum BigramTextCollector {
 
     public var runCount: Int { runs.count }
 
+    /// Each hit on the bounds the app reports for its glyphs, one query per
+    /// hit up to `maxMeasuredHits`; the line estimate stands in past that and
+    /// for a run whose element answers no bounds (asked once per run). The
+    /// frame of a run can be far wider than its text, so the estimate alone
+    /// would put a label letters away from its glyph.
+    private func measured(
+      _ located: [(rect: CGRect, value: Hit)]
+    ) -> [(rect: CGRect, value: Hit)] {
+      let exact: [CGRect?] = GeckoAccessibility.withTree(
+        pid: pid, bundleIdentifier: bundleIdentifier
+      ) { _ in
+        var unsupported = Set<Int>()
+        return located.enumerated().map { index, item in
+          let run = item.value.runIndex
+          guard index < BigramTextCollector.maxMeasuredHits, !unsupported.contains(run) else {
+            return nil
+          }
+          let bounds = AXAttribute.boundsForRange(
+            runs[run].element, location: item.value.location, length: item.value.length,
+            screenH: screenH)
+          if bounds == nil { unsupported.insert(run) }
+          return bounds
+        }
+      }
+      return BigramMatcher.placeMeasured(
+        zip(located, exact).map { item, exact in
+          (estimate: item.rect, exact: exact, group: item.value.runIndex, value: item.value)
+        }, clip: clip)
+    }
+
     public func targets(matching query: String) -> [JumpTarget] {
       guard query.count == 1 else { return [] }
       var located: [(rect: CGRect, value: Hit)] = []
       for (index, run) in runs.enumerated() {
         let haystack = run.text as NSString
         for (occurrence, rect) in BigramTextCollector.glyphHits(run, query: query) {
-          let center = CGPoint(x: rect.midX, y: rect.midY)
-          guard clip.containsInclusive(center) else { continue }
           let label = haystack.substring(
             with: NSRange(location: occurrence.location, length: occurrence.length))
           located.append(
@@ -66,7 +89,7 @@ public enum BigramTextCollector {
             ))
         }
       }
-      let kept = BigramMatcher.dedupe(located)
+      let kept = BigramMatcher.dedupe(measured(located))
       let targets = kept.enumerated().map { ordinal, item in
         BigramTextCollector.target(
           hit: item.value, rect: item.rect, run: runs[item.value.runIndex], query: query,
@@ -85,8 +108,6 @@ public enum BigramTextCollector {
       for (index, run) in runs.enumerated() {
         let haystack = run.text as NSString
         for (occurrence, rect) in BigramTextCollector.wordHits(run) {
-          let center = CGPoint(x: rect.midX, y: rect.midY)
-          guard clip.containsInclusive(center) else { continue }
           let label = haystack.substring(
             with: NSRange(location: occurrence.location, length: occurrence.length))
           located.append(
@@ -100,7 +121,7 @@ public enum BigramTextCollector {
         }
         if located.count >= limit { break }
       }
-      let kept = BigramMatcher.dedupe(located)
+      let kept = BigramMatcher.dedupe(measured(located))
       let targets = kept.enumerated().map { ordinal, item in
         BigramTextCollector.wordTarget(
           hit: item.value, rect: item.rect, run: runs[item.value.runIndex],
@@ -111,6 +132,10 @@ public enum BigramTextCollector {
         targets, bundleIdentifier: bundleIdentifier)
     }
   }
+
+  /// Bounds queries per letter or word session. At about 0.2 ms each this
+  /// keeps the slowest common letter near a tenth of a second.
+  static let maxMeasuredHits = 600
 
   public static func collect(in context: AppContext, screenH: CGFloat) -> Corpus {
     let clip = context.frontWindowFrame
@@ -227,8 +252,7 @@ public enum BigramTextCollector {
       Run(
         element: element, text: text, role: role, subrole: nodes[index].subrole, frame: frame,
         layout: glyphLayout(
-          element: element, text: text, frame: frame, screenH: screenH, clip: clip),
-        advances: advances(element, text: text)))
+          element: element, text: text, frame: frame, screenH: screenH, clip: clip)))
     markEmitted(&nodes, index)
   }
 
@@ -297,35 +321,17 @@ public enum BigramTextCollector {
     return raw as? [AXUIElement]
   }
 
-  /// The face of the run's first drawn character, once per run: glyphs are
-  /// then placed by their advances in that face.
-  private static func advances(_ element: AXUIElement, text: String) -> GlyphAdvances? {
-    let ns = text as NSString
-    var first = 0
-    while first < ns.length,
-      let scalar = Unicode.Scalar(ns.character(at: first)),
-      CharacterSet.whitespacesAndNewlines.contains(scalar)
-    {
-      first += 1
-    }
-    guard first < ns.length, let face = AXAttribute.font(element, location: first) else {
-      return nil
-    }
-    return GlyphAdvances(face)
-  }
-
   /// Glyph rects for one run. The layout was measured while collecting, so
   /// this is a string search whatever the letter is.
   private static func glyphHits(
     _ run: Run, query: String
   ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
-    BigramMatcher.glyphRects(
-      in: run.text, query: query, lines: lineBoxes(run), advances: run.advances)
+    BigramMatcher.glyphRects(in: run.text, query: query, lines: lineBoxes(run))
   }
 
   /// Word rects for one run, from the same measured lines.
   private static func wordHits(_ run: Run) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
-    WordMatcher.wordRects(in: run.text, lines: lineBoxes(run), advances: run.advances)
+    WordMatcher.wordRects(in: run.text, lines: lineBoxes(run))
   }
 
   private static func lineBoxes(_ run: Run) -> [BigramMatcher.BigramLineBox] {
@@ -539,7 +545,6 @@ public enum BigramTextCollector {
     let location = hit.location
     let length = hit.length
     let capturedFrame = run.frame
-    let advances = run.advances
     let resolve: (CGPoint) -> CGPoint? = { preferred in
       GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { _ in
         let title = copiedText(element, kAXTitleAttribute as String)
@@ -556,8 +561,9 @@ public enum BigramTextCollector {
         }
         let frame = currentFrame(of: element, screenH: screenH) ?? capturedFrame
         guard BigramMatcher.allowsProportionalFallback(text: text, frame: frame),
-          let estimated = BigramMatcher.estimatedRect(
-            frame: frame, text: text, location: location, length: length, advances: advances)
+          let estimated = BigramMatcher.proportionalRect(
+            frame: frame, location: location, length: length,
+            totalUTF16: (text as NSString).length)
         else { return nil }
         let center = CGPoint(x: estimated.midX, y: estimated.midY)
         guard clip.containsInclusive(center) else { return nil }

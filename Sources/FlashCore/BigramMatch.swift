@@ -138,11 +138,8 @@ public enum BigramMatcher {
 
   /// Where each match sits inside `lines`. A trailing newline does not take a
   /// column. A match that is not inside a line is omitted.
-  /// `advances` is the run's face, when it reported one this Mac can load:
-  /// a match then sits at its share of the line's advance rather than of its
-  /// character count.
   public static func glyphRects(
-    in text: String, query: String, lines: [BigramLineBox], advances: GlyphAdvances? = nil
+    in text: String, query: String, lines: [BigramLineBox]
   ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
     guard query.count == 1 else { return [] }
     let haystack = text as NSString
@@ -154,12 +151,10 @@ public enum BigramMatcher {
         with: NSRange(location: line.location, length: line.length))
       let columns = utf16LengthDroppingTrailingBreaks(slice)
       guard columns > 0 else { continue }
-      let measured = measuredLine(slice, columns: columns, advances: advances)
       for hit in occurrences(in: slice, query: query) {
         guard
-          let rect = rangeRect(
-            frame: line.bounds, location: hit.location, length: hit.length, columns: columns,
-            measured: measured)
+          let rect = proportionalRect(
+            frame: line.bounds, location: hit.location, length: hit.length, totalUTF16: columns)
         else { continue }
         placed.append(
           (
@@ -244,40 +239,6 @@ public enum BigramMatcher {
     frame.height > 0 && frame.height <= 64 && !text.contains("\n")
   }
 
-  /// The first `columns` of `slice` laid out in `advances`' face, or nil
-  /// when there is no face to measure with.
-  public static func measuredLine(
-    _ slice: String, columns: Int, advances: GlyphAdvances?
-  ) -> GlyphAdvances.Line? {
-    guard let advances else { return nil }
-    let ns = slice as NSString
-    return advances.line(ns.substring(to: min(columns, ns.length)))
-  }
-
-  /// A UTF-16 range of one line inside `frame`: from the measured advances
-  /// when there are some, else by character count.
-  public static func rangeRect(
-    frame: CGRect, location: Int, length: Int, columns: Int, measured: GlyphAdvances.Line?
-  ) -> CGRect? {
-    guard let measured else {
-      return proportionalRect(
-        frame: frame, location: location, length: length, totalUTF16: columns)
-    }
-    guard columns > 0, length > 0, location >= 0, location + length <= columns else { return nil }
-    let span = measured.span(location: location, length: length)
-    return spanRect(frame: frame, start: span.start, extent: span.end - span.start)
-  }
-
-  /// One run's glyph estimated in its frame, for a run without line layout.
-  public static func estimatedRect(
-    frame: CGRect, text: String, location: Int, length: Int, advances: GlyphAdvances?
-  ) -> CGRect? {
-    let columns = (text as NSString).length
-    return rangeRect(
-      frame: frame, location: location, length: length, columns: columns,
-      measured: measuredLine(text, columns: columns, advances: advances))
-  }
-
   /// A slice of `frame` in proportion to a UTF-16 range, at least 4pt wide
   /// and clamped so it stays inside the frame.
   public static func proportionalRect(
@@ -288,21 +249,51 @@ public enum BigramMatcher {
       frame.minX.isFinite, frame.minY.isFinite
     else { return nil }
     let total = CGFloat(totalUTF16)
-    return spanRect(
-      frame: frame, start: CGFloat(location) / total, extent: CGFloat(length) / total)
-  }
-
-  /// The part of `frame` from `start` across `extent`, both fractions of its
-  /// width, at least 4pt wide and clamped so it stays inside the frame.
-  static func spanRect(frame: CGRect, start: CGFloat, extent: CGFloat) -> CGRect? {
-    guard frame.width > 0, frame.height > 0, frame.minX.isFinite, frame.minY.isFinite,
-      start.isFinite, extent.isFinite
-    else { return nil }
-    let width = min(frame.width, max(4, extent * frame.width))
-    let proposed = frame.minX + start * frame.width
+    let width = min(frame.width, max(4, CGFloat(length) / total * frame.width))
+    let proposed = frame.minX + CGFloat(location) / total * frame.width
     let maxX = frame.maxX - width
     let x = min(max(proposed, frame.minX), max(frame.minX, maxX))
     return CGRect(x: x, y: frame.minY, width: width, height: frame.height)
+  }
+
+  /// Matches placed on the glyph bounds the app reported (`exact`), falling
+  /// back to the line estimate when it reported none. A run's frame can be far
+  /// wider than its text, so the estimate is only a fallback. A reported glyph
+  /// whose centre is outside `clip` is not visible and is dropped, as are
+  /// matches of one run (`group`) that report the same rect: an ellipsis
+  /// glyph standing in for characters truncated away.
+  public static func placeMeasured<Payload>(
+    _ items: [(estimate: CGRect, exact: CGRect?, group: Int, value: Payload)], clip: CGRect
+  ) -> [(rect: CGRect, value: Payload)] {
+    func key(_ group: Int, _ rect: CGRect) -> ReportedGlyph {
+      ReportedGlyph(
+        group: group, x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+    }
+    var reported: [ReportedGlyph: Int] = [:]
+    for item in items {
+      if let exact = item.exact { reported[key(item.group, exact), default: 0] += 1 }
+    }
+    var placed: [(rect: CGRect, value: Payload)] = []
+    placed.reserveCapacity(items.count)
+    for item in items {
+      guard let exact = item.exact else {
+        if clip.containsInclusive(CGPoint(x: item.estimate.midX, y: item.estimate.midY)) {
+          placed.append((item.estimate, item.value))
+        }
+        continue
+      }
+      guard clip.containsInclusive(CGPoint(x: exact.midX, y: exact.midY)),
+        reported[key(item.group, exact)] == 1
+      else { continue }
+      placed.append((exact, item.value))
+    }
+    return placed
+  }
+
+  /// One run's reported glyph rect, to find matches sharing it.
+  private struct ReportedGlyph: Hashable {
+    let group: Int
+    let x, y, width, height: CGFloat
   }
 
   /// Drops later rects whose centers sit within `duplicateCenterDistance` of
