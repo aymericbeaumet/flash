@@ -303,16 +303,10 @@ key is the leader, a key with no hyper mapping can still complete a NORMAL
 `<leader>` sequence. A tap that presses nothing else arms that prefix on
 release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
-VISUAL is a visual selection (`v`): text is selected from where it began to
-the cursor, and Vim's motions extend it. DRAG is a drag with a mouse button
-held (`D` the left button, `cD` the right): pointer moves carry what was
-grabbed, Return drops it and Escape puts it back. Their status pills are
-orange and yellow and show `mode.labels.visual` and `mode.labels.drag`
-(defaults `VISUAL`, `DRAG`). `[mode.visual.mappings]` and
-`[mode.drag.mappings]` are read before NORMAL's in their mode, modified
-chords included; every other key keeps its NORMAL meaning, and a key they
-bind hides the NORMAL sequences it starts. See the
-[mode guide](normal-mode.md#visual-selection-visual) and
+VISUAL (`v`, a visual selection) and DRAG (`D` / `cD`, a drag with a mouse
+button held) read `[mode.visual.mappings]` and `[mode.drag.mappings]` before
+NORMAL's; their labels are `mode.labels.visual` and `mode.labels.drag`. The
+[mode guide](normal-mode.md#visual-selection-visual) describes their keys and
 [dragging](normal-mode.md#dragging-drag).
 
 ```toml
